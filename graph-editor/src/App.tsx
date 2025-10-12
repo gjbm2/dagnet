@@ -136,6 +136,9 @@ export default function App() {
       try {
         const updatedJson = JSON.stringify(graph, null, 2);
 
+        console.log('Form POST to:', appsScriptUrl);
+        console.log('Data length:', updatedJson.length);
+
         // Build a hidden form that POSTs to Apps Script
         const form = document.createElement('form');
         form.method = 'POST';
@@ -156,9 +159,12 @@ export default function App() {
         addField('graphData', updatedJson);
 
         document.body.appendChild(form);
+        
+        alert('Submitting form to: ' + appsScriptUrl + '\n\nData length: ' + updatedJson.length + ' chars');
+        
         form.submit();
 
-        alert('Graph saved. Returning to Google Sheets...');
+        alert('Form submitted! Returning to Google Sheets...');
         setTimeout(() => window.close(), 1200);
         return;
       } catch (error) {

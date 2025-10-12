@@ -665,7 +665,7 @@ function openDagnetFromCell(cellAddress = null, resultCellAddress = null) {
     const sheetId = sheet.getParent().getId();
     
     // Get the Apps Script web app URL (you'll need to set this after deploying)
-    const appsScriptUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'https://script.google.com/macros/s/AKfycbypxBzpD6O3jKCPWRGTlG0mT4awCChN4eOoVO2OiXmLGRLalU5r6Kwlu-2RNl5eF1rS/exec';
+    const appsScriptUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'https://script.google.com/macros/s/AKfycbx8JHCwP6vLJCcRhK0bqttxricDXQAEvsfkZjh4XYe29NEuXoucPV1jkhejLtpKRk1k/exec';
     
     const appUrl = `${DAGNET_APP_URL}?data=${plainData}&session=${sessionId}&outputCell=${resultCellAddress}&sheetId=${sheetId}&appsScriptUrl=${encodeURIComponent(appsScriptUrl)}`;
     
@@ -1212,7 +1212,7 @@ function testWebAppEndpoint() {
     const testData = JSON.stringify({ test: "data", timestamp: new Date().toISOString() });
     const encodedData = encodeURIComponent(testData);
     
-    const webAppUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'https://script.google.com/macros/s/AKfycbypxBzpD6O3jKCPWRGTlG0mT4awCChN4eOoVO2OiXmLGRLalU5r6Kwlu-2RNl5eF1rS/exec';
+    const webAppUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'https://script.google.com/macros/s/AKfycbx8JHCwP6vLJCcRhK0bqttxricDXQAEvsfkZjh4XYe29NEuXoucPV1jkhejLtpKRk1k/exec';
     
     const testUrl = `${webAppUrl}?sessionId=test123&graphData=${encodedData}&outputCell=A1&sheetId=${sheetId}`;
     
