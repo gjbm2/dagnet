@@ -538,24 +538,26 @@ function openDagnetFromCell(cellAddress = null, resultCellAddress = null) {
     
     // No validation - the app will handle it
     
+    // Generate unique session ID for this operation
+    const sessionId = Utilities.getUuid();
+    
     // Store the result cell for updates (async to not block)
     SCRIPT_PROPERTIES.setProperty('dagnet_result_cell', resultCellAddress);
     SCRIPT_PROPERTIES.setProperty('dagnet_source_cell', cellAddress);
     SCRIPT_PROPERTIES.setProperty('dagnet_session_id', sessionId);
     SCRIPT_PROPERTIES.setProperty('dagnet_start_time', new Date().getTime().toString());
     
-    // Set initial status in result cell
-    const sheet = SpreadsheetApp.getActiveSheet();
-    sheet.getRange(resultCellAddress).setValue('Opening Dagnet app...');
+    // Don't overwrite the original data - just show a status message in a different cell if needed
+    // sheet.getRange(resultCellAddress).setValue('Opening Dagnet app...');
     
     // Use plain JSON encoding for now
     const plainData = encodeURIComponent(graphData);
     
     // Get the current sheet ID
-    const sheetId = SpreadsheetApp.getActiveSheet().getParent().getId();
+    const sheetId = sheet.getParent().getId();
     
     // Get the Apps Script web app URL (you'll need to set this after deploying)
-    const appsScriptUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'YOUR_WEB_APP_URL_HERE';
+    const appsScriptUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'https://script.google.com/a/macros/nous.co/s/AKfycbw5JMIzSCXQVftSO2wNHXkanOJpn5JrWfgJJoEn3Qw9aPNLt5dySpRdPo7CCxEmqgey/exec';
     
     const appUrl = `${DAGNET_APP_URL}?data=${plainData}&session=${sessionId}&outputCell=${resultCellAddress}&sheetId=${sheetId}&appsScriptUrl=${encodeURIComponent(appsScriptUrl)}`;
     
@@ -1046,25 +1048,44 @@ function fixCell(cellAddress = "A1") {
 
 /**
  * Web app endpoint for Dagnet app to write data back to sheets
- * This function receives POST requests from the Dagnet app when user saves
+ * This function receives GET requests from the Dagnet app when user saves
+ * Using GET to avoid CORS issues
  */
-function doPost(e) {
+function doGet(e) {
   try {
-    const data = JSON.parse(e.postData.contents);
-    const { sessionId, graphData, outputCell, sheetId } = data;
+    console.log('doGet called with:', e.parameter);
+    const { sessionId, graphData, outputCell, sheetId } = e.parameter;
+    
+    if (!sessionId || !graphData || !outputCell || !sheetId) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ success: false, error: 'Missing parameters' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
     
     console.log('Received data from Dagnet app:', { sessionId, outputCell, sheetId });
     
+    // Parse the graph data (it comes as a string in GET parameters)
+    const parsedGraphData = JSON.parse(graphData);
+    console.log('Graph data length:', JSON.stringify(parsedGraphData).length);
+    
     // Write to the specified cell
     const sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
-    sheet.getRange(outputCell).setValue(JSON.stringify(graphData, null, 2));
+    const cell = sheet.getRange(outputCell);
+    const jsonString = JSON.stringify(parsedGraphData, null, 2);
+    cell.setValue(jsonString);
     
     console.log('Successfully updated cell ' + outputCell + ' with graph data');
+    console.log('New cell value length:', jsonString.length);
     
-    return ContentService.createTextOutput(JSON.stringify({ success: true }));
+    // Return success response
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: true }))
+      .setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
-    console.error('Error in doPost:', error);
-    return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.message }));
+    console.error('Error in doGet:', error);
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: false, error: error.message }))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
