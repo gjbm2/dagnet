@@ -13,11 +13,6 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
-  // Debug selection state
-  console.log('App - selectedNodeId:', selectedNodeId);
-  console.log('App - selectedEdgeId:', selectedEdgeId);
-  console.log('App - graph nodes:', graph?.nodes?.map((n: any) => n.id));
-  console.log('App - graph edges:', graph?.edges?.map((e: any) => e.id));
 
   // Load schema validator once
   useEffect(() => {
@@ -132,6 +127,37 @@ export default function App() {
     a.click();
   };
 
+  const handleDoubleClickNode = (id: string, field: string) => {
+    setSelectedNodeId(id);
+    setSelectedEdgeId(null);
+    // Focus the field after a short delay to ensure the properties panel has updated
+    setTimeout(() => {
+      const input = document.querySelector(`input[data-field="${field}"]`) as HTMLInputElement;
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }, 100);
+  };
+
+  const handleDoubleClickEdge = (id: string, field: string) => {
+    setSelectedEdgeId(id);
+    setSelectedNodeId(null);
+    // Focus the field after a short delay to ensure the properties panel has updated
+    setTimeout(() => {
+      const input = document.querySelector(`input[data-field="${field}"]`) as HTMLInputElement;
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }, 100);
+  };
+
+  const handleSelectEdge = (id: string) => {
+    setSelectedEdgeId(id);
+    setSelectedNodeId(null);
+  };
+
   return (
     <div style={{ 
       display: 'grid', 
@@ -144,6 +170,9 @@ export default function App() {
         <GraphCanvas 
           onSelectedNodeChange={setSelectedNodeId}
           onSelectedEdgeChange={setSelectedEdgeId}
+          onDoubleClickNode={handleDoubleClickNode}
+          onDoubleClickEdge={handleDoubleClickEdge}
+          onSelectEdge={handleSelectEdge}
         />
       </div>
 

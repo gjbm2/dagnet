@@ -20,6 +20,11 @@ export default function PropertiesPanel({
   // Local state for form inputs to prevent eager updates
   const [localNodeData, setLocalNodeData] = useState<any>({});
   const [localEdgeData, setLocalEdgeData] = useState<any>({});
+  
+  // JSON edit modal state
+  const [showJsonEdit, setShowJsonEdit] = useState(false);
+  const [jsonEditContent, setJsonEditContent] = useState('');
+  const [jsonEditError, setJsonEditError] = useState<string | null>(null);
 
   // Auto-switch tabs based on selection
   useEffect(() => {
@@ -42,6 +47,8 @@ export default function PropertiesPanel({
           slug: node.slug || '',
           description: node.description || '',
           absorbing: node.absorbing || false,
+          outcome_type: node.outcome_type,
+          tags: node.tags || [],
           entry: node.entry || {},
         });
       }
@@ -56,7 +63,11 @@ export default function PropertiesPanel({
       if (edge) {
         setLocalEdgeData({
           probability: edge.p?.mean || 0,
+          stdev: edge.p?.stdev || 0,
+          locked: edge.p?.locked || false,
           description: edge.description || '',
+          costs: edge.costs || {},
+          weight_default: edge.weight_default || 0,
         });
       }
     }
@@ -65,6 +76,12 @@ export default function PropertiesPanel({
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle shortcuts when user is typing in form fields
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+      
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedEdgeId && activeTab === 'edge') {
           e.preventDefault();
@@ -120,6 +137,14 @@ export default function PropertiesPanel({
     if (edgeIndex >= 0) {
       if (field === 'probability') {
         next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, mean: value };
+      } else if (field === 'stdev') {
+        next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, stdev: value };
+      } else if (field === 'locked') {
+        next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, locked: value };
+      } else if (field.startsWith('costs.')) {
+        const costField = field.split('.')[1];
+        if (!next.edges[edgeIndex].costs) next.edges[edgeIndex].costs = {};
+        next.edges[edgeIndex].costs[costField] = value;
       } else {
         next.edges[edgeIndex][field] = value;
       }
@@ -129,6 +154,60 @@ export default function PropertiesPanel({
       setGraph(next);
     }
   }, [selectedEdgeId, graph, setGraph]);
+
+  // JSON edit functions
+  const openJsonEdit = useCallback(() => {
+    setJsonEditContent(JSON.stringify(graph, null, 2));
+    setJsonEditError(null);
+    setShowJsonEdit(true);
+  }, [graph]);
+
+  const closeJsonEdit = useCallback(() => {
+    setShowJsonEdit(false);
+    setJsonEditContent('');
+    setJsonEditError(null);
+  }, []);
+
+  const applyJsonEdit = useCallback(() => {
+    try {
+      const parsed = JSON.parse(jsonEditContent);
+      
+      // Basic validation - check required fields
+      if (!parsed.nodes || !Array.isArray(parsed.nodes)) {
+        throw new Error('Missing or invalid "nodes" array');
+      }
+      if (!parsed.edges || !Array.isArray(parsed.edges)) {
+        throw new Error('Missing or invalid "edges" array');
+      }
+      if (!parsed.policies || typeof parsed.policies !== 'object') {
+        throw new Error('Missing or invalid "policies" object');
+      }
+      if (!parsed.metadata || typeof parsed.metadata !== 'object') {
+        throw new Error('Missing or invalid "metadata" object');
+      }
+      
+      // Validate nodes have required fields
+      for (let i = 0; i < parsed.nodes.length; i++) {
+        const node = parsed.nodes[i];
+        if (!node.id || !node.slug) {
+          throw new Error(`Node ${i} missing required "id" or "slug" field`);
+        }
+      }
+      
+      // Validate edges have required fields
+      for (let i = 0; i < parsed.edges.length; i++) {
+        const edge = parsed.edges[i];
+        if (!edge.id || !edge.from || !edge.to) {
+          throw new Error(`Edge ${i} missing required "id", "from", or "to" field`);
+        }
+      }
+      
+      setGraph(parsed);
+      closeJsonEdit();
+    } catch (error) {
+      setJsonEditError(error instanceof Error ? error.message : 'Invalid JSON');
+    }
+  }, [jsonEditContent, setGraph, closeJsonEdit]);
 
   if (!graph) return null;
 
@@ -143,7 +222,11 @@ export default function PropertiesPanel({
       display: 'flex', 
       flexDirection: 'column',
       background: '#fff',
-      borderLeft: '1px solid #e9ecef'
+      borderLeft: '1px solid #e9ecef',
+      width: '350px',
+      minWidth: '350px',
+      maxWidth: '350px',
+      boxSizing: 'border-box'
     }}>
       {/* Header */}
       <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef', background: '#f8f9fa' }}>
@@ -173,7 +256,13 @@ export default function PropertiesPanel({
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, padding: '16px', overflow: 'auto' }}>
+      <div style={{ 
+        flex: 1, 
+        padding: '12px', 
+        overflow: 'auto',
+        boxSizing: 'border-box',
+        width: '100%'
+      }}>
         {activeTab === 'graph' && (
           <div>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
@@ -182,7 +271,13 @@ export default function PropertiesPanel({
             <input
               value={graph.metadata?.version || ''}
               onChange={(e) => updateGraph(['metadata', 'version'], e.target.value)}
-              style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+              style={{ 
+                width: '100%', 
+                padding: '8px', 
+                border: '1px solid #ddd', 
+                borderRadius: '4px',
+                boxSizing: 'border-box'
+              }}
             />
           </div>
         )}
@@ -194,22 +289,36 @@ export default function PropertiesPanel({
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Label</label>
                   <input
+                    data-field="label"
                     value={localNodeData.label || ''}
                     onChange={(e) => setLocalNodeData({...localNodeData, label: e.target.value})}
                     onBlur={() => updateNode('label', localNodeData.label)}
                     onKeyDown={(e) => e.key === 'Enter' && updateNode('label', localNodeData.label)}
-                    style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
                   />
                 </div>
 
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Slug</label>
                   <input
+                    data-field="slug"
                     value={localNodeData.slug || ''}
                     onChange={(e) => setLocalNodeData({...localNodeData, slug: e.target.value})}
                     onBlur={() => updateNode('slug', localNodeData.slug)}
                     onKeyDown={(e) => e.key === 'Enter' && updateNode('slug', localNodeData.slug)}
-                    style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
                   />
                 </div>
 
@@ -275,17 +384,77 @@ export default function PropertiesPanel({
                       }
                     }}
                     placeholder="e.g. 1.0"
-                    style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Outcome Type</label>
+                  <select
+                    value={localNodeData.outcome_type || ''}
+                    onChange={(e) => {
+                      const newValue = e.target.value === '' ? undefined : e.target.value;
+                      setLocalNodeData({...localNodeData, outcome_type: newValue});
+                      updateNode('outcome_type', newValue);
+                    }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
+                  >
+                    <option value="">None</option>
+                    <option value="success">Success</option>
+                    <option value="failure">Failure</option>
+                    <option value="error">Error</option>
+                    <option value="neutral">Neutral</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Tags</label>
+                  <input
+                    value={localNodeData.tags?.join(', ') || ''}
+                    onChange={(e) => setLocalNodeData({
+                      ...localNodeData, 
+                      tags: e.target.value.split(',').map(t => t.trim()).filter(t => t)
+                    })}
+                    onBlur={() => updateNode('tags', localNodeData.tags)}
+                    placeholder="tag1, tag2, tag3"
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
                   />
                 </div>
 
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Description</label>
                   <textarea
+                    data-field="description"
                     value={localNodeData.description || ''}
                     onChange={(e) => setLocalNodeData({...localNodeData, description: e.target.value})}
                     onBlur={() => updateNode('description', localNodeData.description)}
-                    style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', minHeight: '60px' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px', 
+                      minHeight: '60px',
+                      boxSizing: 'border-box'
+                    }}
                   />
                 </div>
               </div>
@@ -304,25 +473,246 @@ export default function PropertiesPanel({
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Probability</label>
                   <input
+                    data-field="probability"
+                    type="text"
+                    value={localEdgeData.probability || 0}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setLocalEdgeData({...localEdgeData, probability: value});
+                    }}
+                    onBlur={() => {
+                      const numValue = parseFloat(localEdgeData.probability) || 0;
+                      setLocalEdgeData({...localEdgeData, probability: numValue});
+                      updateEdge('probability', numValue);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const numValue = parseFloat(localEdgeData.probability) || 0;
+                        setLocalEdgeData({...localEdgeData, probability: numValue});
+                        updateEdge('probability', numValue);
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    placeholder="0.0"
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Standard Deviation</label>
+                  <input
+                    data-field="stdev"
+                    type="text"
+                    value={localEdgeData.stdev || 0}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setLocalEdgeData({...localEdgeData, stdev: value});
+                    }}
+                    onBlur={() => {
+                      const numValue = parseFloat(localEdgeData.stdev) || 0;
+                      setLocalEdgeData({...localEdgeData, stdev: numValue});
+                      updateEdge('stdev', numValue);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const numValue = parseFloat(localEdgeData.stdev) || 0;
+                        setLocalEdgeData({...localEdgeData, stdev: numValue});
+                        updateEdge('stdev', numValue);
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    placeholder="Optional"
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={localEdgeData.locked || false}
+                      onChange={(e) => {
+                        const newValue = e.target.checked;
+                        setLocalEdgeData({...localEdgeData, locked: newValue});
+                        updateEdge('locked', newValue);
+                      }}
+                    />
+                    <span>Locked Probability</span>
+                  </label>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Weight Default</label>
+                  <input
                     type="number"
                     min="0"
-                    max="1"
-                    step="0.01"
-                    value={localEdgeData.probability || 0}
-                    onChange={(e) => setLocalEdgeData({...localEdgeData, probability: parseFloat(e.target.value) || 0})}
-                    onBlur={() => updateEdge('probability', localEdgeData.probability)}
-                    onKeyDown={(e) => e.key === 'Enter' && updateEdge('probability', localEdgeData.probability)}
-                    style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    step="0.1"
+                    value={localEdgeData.weight_default || 0}
+                    onChange={(e) => setLocalEdgeData({...localEdgeData, weight_default: parseFloat(e.target.value) || 0})}
+                    onBlur={() => updateEdge('weight_default', localEdgeData.weight_default)}
+                    onKeyDown={(e) => e.key === 'Enter' && updateEdge('weight_default', localEdgeData.weight_default)}
+                    placeholder="For residual distribution"
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
                   />
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Costs</label>
+                  
+                  <div style={{ 
+                    background: '#f8f9fa', 
+                    padding: '12px', 
+                    borderRadius: '4px', 
+                    border: '1px solid #e9ecef',
+                    marginBottom: '12px'
+                  }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11px', marginBottom: '4px', color: '#666', fontWeight: '500' }}>Monetary Cost</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={localEdgeData.costs?.monetary || ''}
+                          onChange={(e) => setLocalEdgeData({
+                            ...localEdgeData, 
+                            costs: {...localEdgeData.costs, monetary: parseFloat(e.target.value) || undefined}
+                          })}
+                          onBlur={() => updateEdge('costs.monetary', localEdgeData.costs?.monetary)}
+                          placeholder="0.00"
+                          style={{ 
+                            width: '100%', 
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '3px', 
+                            fontSize: '12px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                      </div>
+                      
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11px', marginBottom: '4px', color: '#666', fontWeight: '500' }}>Time Cost</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={localEdgeData.costs?.time || ''}
+                          onChange={(e) => setLocalEdgeData({
+                            ...localEdgeData, 
+                            costs: {...localEdgeData.costs, time: parseFloat(e.target.value) || undefined}
+                          })}
+                          onBlur={() => updateEdge('costs.time', localEdgeData.costs?.time)}
+                          placeholder="0.00"
+                          style={{ 
+                            width: '100%', 
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '3px', 
+                            fontSize: '12px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                      </div>
+                      
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11px', marginBottom: '4px', color: '#666', fontWeight: '500' }}>Units</label>
+                        <input
+                          type="text"
+                          maxLength="32"
+                          value={localEdgeData.costs?.units || ''}
+                          onChange={(e) => setLocalEdgeData({
+                            ...localEdgeData, 
+                            costs: {...localEdgeData.costs, units: e.target.value}
+                          })}
+                          onBlur={() => updateEdge('costs.units', localEdgeData.costs?.units)}
+                          placeholder="GBP, hours, etc."
+                          style={{ 
+                            width: '100%', 
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '3px', 
+                            fontSize: '12px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* Clear costs button */}
+                    {(localEdgeData.costs?.monetary || localEdgeData.costs?.time || localEdgeData.costs?.units) && (
+                      <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #e9ecef' }}>
+                        <button
+                          onClick={() => {
+                            const clearedCosts = {};
+                            setLocalEdgeData({
+                              ...localEdgeData,
+                              costs: clearedCosts
+                            });
+                            // Update the graph with cleared costs
+                            if (!graph || !selectedEdgeId) return;
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((e: any) => 
+                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                            );
+                            if (edgeIndex >= 0) {
+                              next.edges[edgeIndex].costs = clearedCosts;
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                            }
+                          }}
+                          style={{
+                            background: '#dc3545',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '3px',
+                            padding: '4px 8px',
+                            fontSize: '11px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Clear All Costs
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Description</label>
                   <textarea
+                    data-field="description"
                     value={localEdgeData.description || ''}
                     onChange={(e) => setLocalEdgeData({...localEdgeData, description: e.target.value})}
                     onBlur={() => updateEdge('description', localEdgeData.description)}
-                    style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', minHeight: '60px' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px', 
+                      minHeight: '60px',
+                      boxSizing: 'border-box'
+                    }}
                   />
                 </div>
 
@@ -362,8 +752,29 @@ export default function PropertiesPanel({
 
         {activeTab === 'json' && (
           <div>
-            <div style={{ marginBottom: '12px', fontSize: '12px', color: '#666' }}>
-              Current graph JSON (read-only):
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              marginBottom: '12px' 
+            }}>
+              <div style={{ fontSize: '12px', color: '#666' }}>
+                Current graph JSON:
+              </div>
+              <button
+                onClick={openJsonEdit}
+                style={{
+                  background: '#007bff',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                Edit JSON
+              </button>
             </div>
             <pre style={{ 
               background: '#f8f9fa', 
@@ -371,7 +782,7 @@ export default function PropertiesPanel({
               borderRadius: '4px', 
               fontSize: '11px',
               overflow: 'auto',
-              maxHeight: 'calc(100vh - 250px)',
+              maxHeight: 'calc(100vh - 300px)',
               border: '1px solid #e9ecef',
               fontFamily: 'monospace',
               lineHeight: '1.5',
@@ -383,6 +794,117 @@ export default function PropertiesPanel({
           </div>
         )}
       </div>
+
+      {/* JSON Edit Modal */}
+      {showJsonEdit && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '8px',
+            padding: '20px',
+            width: '80%',
+            maxWidth: '800px',
+            maxHeight: '80vh',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '16px'
+            }}>
+              <h3 style={{ margin: 0, fontSize: '18px' }}>Edit Graph JSON</h3>
+              <button
+                onClick={closeJsonEdit}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '20px',
+                  cursor: 'pointer',
+                  color: '#666'
+                }}
+              >
+                ×
+              </button>
+            </div>
+            
+            {jsonEditError && (
+              <div style={{
+                background: '#f8d7da',
+                color: '#721c24',
+                padding: '8px 12px',
+                borderRadius: '4px',
+                marginBottom: '12px',
+                fontSize: '12px'
+              }}>
+                Error: {jsonEditError}
+              </div>
+            )}
+            
+            <textarea
+              value={jsonEditContent}
+              onChange={(e) => setJsonEditContent(e.target.value)}
+              style={{
+                flex: 1,
+                fontFamily: 'monospace',
+                fontSize: '12px',
+                padding: '12px',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                resize: 'none',
+                minHeight: '400px'
+              }}
+              placeholder="Paste your JSON here..."
+            />
+            
+            <div style={{
+              display: 'flex',
+              gap: '8px',
+              marginTop: '16px',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                onClick={closeJsonEdit}
+                style={{
+                  background: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '8px 16px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={applyJsonEdit}
+                style={{
+                  background: '#28a745',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '8px 16px',
+                  cursor: 'pointer'
+                }}
+              >
+                Apply Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import type { Edge, Node } from 'reactflow';
 
-export function toFlow(graph: any): { nodes: Node[]; edges: Edge[] } {
+export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void }): { nodes: Node[]; edges: Edge[] } {
   if (!graph) return { nodes: [], edges: [] };
   
   const nodes: Node[] = (graph.nodes || []).map((n: any) => ({
@@ -8,12 +8,16 @@ export function toFlow(graph: any): { nodes: Node[]; edges: Edge[] } {
     type: 'conversion',
     position: { x: n.layout?.x ?? 0, y: n.layout?.y ?? 0 },
     data: { 
+      id: n.id,
       label: n.label || n.slug,
       slug: n.slug,
       absorbing: n.absorbing,
       outcome_type: n.outcome_type,
       description: n.description,
       entry: n.entry,
+      onUpdate: callbacks?.onUpdateNode,
+      onDelete: callbacks?.onDeleteNode,
+      onDoubleClick: callbacks?.onDoubleClickNode,
     },
   }));
 
@@ -25,8 +29,17 @@ export function toFlow(graph: any): { nodes: Node[]; edges: Edge[] } {
     sourceHandle: e.fromHandle,
     targetHandle: e.toHandle,
     data: {
+      id: e.id || `${e.from}->${e.to}`,
       probability: e.p?.mean ?? 0.5,
+      stdev: e.p?.stdev,
+      locked: e.p?.locked,
       description: e.description,
+      costs: e.costs,
+      weight_default: e.weight_default,
+      onUpdate: callbacks?.onUpdateEdge,
+      onDelete: callbacks?.onDeleteEdge,
+      onDoubleClick: callbacks?.onDoubleClickEdge,
+      onSelect: callbacks?.onSelectEdge,
     },
   }));
 
@@ -57,8 +70,14 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
       to: e.target,
       fromHandle: e.sourceHandle,
       toHandle: e.targetHandle,
-      p: { mean: e.data?.probability ?? 0.5 },
+      p: { 
+        mean: e.data?.probability ?? 0.5,
+        stdev: e.data?.stdev,
+        locked: e.data?.locked,
+      },
       description: e.data?.description ?? '',
+      costs: e.data?.costs,
+      weight_default: e.data?.weight_default,
     })),
   };
 }
