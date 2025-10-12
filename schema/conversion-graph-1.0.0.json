@@ -89,6 +89,16 @@
           "minLength": 1, 
           "$comment": "Node id or slug; runner canonicalizes to id and checks existence." 
         },
+        "fromHandle": {
+          "type": "string",
+          "enum": ["left", "right", "top", "bottom", "left-out", "right-out", "top-out", "bottom-out"],
+          "description": "Handle on source node where edge originates"
+        },
+        "toHandle": {
+          "type": "string", 
+          "enum": ["left", "right", "top", "bottom"],
+          "description": "Handle on target node where edge terminates"
+        },
         "description": { "type": "string" },
         "p": { "$ref": "#/$defs/ProbabilityParam" },
         "weight_default": {
