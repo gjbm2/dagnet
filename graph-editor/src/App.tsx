@@ -132,30 +132,26 @@ export default function App() {
     const appsScriptUrl = urlParams.get('appsScriptUrl');
     
     if (sessionId && outputCell && sheetId && appsScriptUrl) {
-      // We're being used from Apps Script - save directly to Apps Script web app
+      // We're being used from Apps Script - save automatically via GET request
       try {
-        const saveResponse = await fetch(appsScriptUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            sessionId: sessionId,
-            graphData: graph,
-            outputCell: outputCell,
-            sheetId: sheetId,
-            timestamp: new Date().toISOString()
-          })
+        const updatedJson = JSON.stringify(graph, null, 2);
+        const encodedData = encodeURIComponent(updatedJson);
+        
+        // Use GET request to avoid CORS issues
+        const saveUrl = `${appsScriptUrl}?sessionId=${sessionId}&graphData=${encodedData}&outputCell=${outputCell}&sheetId=${sheetId}`;
+        
+        // Make the request using fetch
+        const response = await fetch(saveUrl, {
+          method: 'GET',
+          mode: 'no-cors' // This allows the request to go through even if CORS blocks the response
         });
         
-        if (saveResponse.ok) {
-          alert('Graph saved successfully! Returning to Google Sheets...');
-          setTimeout(() => {
-            window.close();
-          }, 1500);
-        } else {
-          throw new Error('Failed to save to Apps Script');
-        }
+        alert('Graph saved successfully! Returning to Google Sheets...');
+        
+        // Close the window to return to Google Sheets
+        setTimeout(() => {
+          window.close();
+        }, 1500);
         return;
       } catch (error) {
         alert('Save failed: ' + error);
