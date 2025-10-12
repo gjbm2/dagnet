@@ -81,15 +81,46 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [setGraph]);
 
   const handleDeleteNode = useCallback((id: string) => {
-    setGraph((prevGraph) => {
-      if (!prevGraph) return prevGraph;
-      const nextGraph = structuredClone(prevGraph);
-      nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== id);
-      nextGraph.edges = nextGraph.edges.filter(e => e.from !== id && e.to !== id);
-      nextGraph.metadata.updated_at = new Date().toISOString();
-      return nextGraph;
+    console.log('=== DELETING NODE ===', id);
+    
+    if (!graph) {
+      console.log('No graph, aborting delete');
+      return;
+    }
+    
+    console.log('BEFORE DELETE:', {
+      nodes: graph.nodes.length,
+      edges: graph.edges.length,
+      hasPolicies: !!graph.policies,
+      hasMetadata: !!graph.metadata
     });
-  }, [setGraph]);
+    
+    const nextGraph = structuredClone(graph);
+    nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== id);
+    nextGraph.edges = nextGraph.edges.filter(e => e.from !== id && e.to !== id);
+    
+    // Ensure metadata exists and update it
+    if (!nextGraph.metadata) {
+      nextGraph.metadata = {};
+    }
+    nextGraph.metadata.updated_at = new Date().toISOString();
+    
+    console.log('AFTER DELETE:', {
+      nodes: nextGraph.nodes.length,
+      edges: nextGraph.edges.length,
+      hasPolicies: !!nextGraph.policies,
+      hasMetadata: !!nextGraph.metadata
+    });
+    
+    // Clear the sync flag to allow graph->ReactFlow sync
+    isSyncingRef.current = false;
+    
+    // Update the graph (this will trigger the graph->ReactFlow sync which will update lastSyncedGraphRef)
+    setGraph(nextGraph);
+    
+    // Clear selection when node is deleted
+    onSelectedNodeChange(null);
+  }, [graph, setGraph, onSelectedNodeChange]);
 
   const handleUpdateEdge = useCallback((id: string, data: any) => {
     setGraph((prevGraph) => {
@@ -105,22 +136,67 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [setGraph]);
 
   const handleDeleteEdge = useCallback((id: string) => {
-    setGraph((prevGraph) => {
-      if (!prevGraph) return prevGraph;
-      const nextGraph = structuredClone(prevGraph);
-      nextGraph.edges = nextGraph.edges.filter(e => e.id !== id);
-      nextGraph.metadata.updated_at = new Date().toISOString();
-      return nextGraph;
+    console.log('=== DELETING EDGE ===', id);
+    
+    if (!graph) {
+      console.log('No graph, aborting delete');
+      return;
+    }
+    
+    const nextGraph = structuredClone(graph);
+    nextGraph.edges = nextGraph.edges.filter(e => e.id !== id);
+    
+    // Ensure metadata exists and update it
+    if (!nextGraph.metadata) {
+      nextGraph.metadata = {};
+    }
+    nextGraph.metadata.updated_at = new Date().toISOString();
+    
+    // Clear the sync flag to allow graph->ReactFlow sync
+    isSyncingRef.current = false;
+    
+    // Update the graph (this will trigger the graph->ReactFlow sync which will update lastSyncedGraphRef)
+    setGraph(nextGraph);
+    
+    // Clear selection when edge is deleted
+    onSelectedEdgeChange(null);
+  }, [graph, setGraph, onSelectedEdgeChange]);
+
+  // Delete selected elements
+  const deleteSelected = useCallback(() => {
+    const selectedNodes = nodes.filter(n => n.selected);
+    const selectedEdges = edges.filter(e => e.selected);
+    
+    console.log('deleteSelected called with:', selectedNodes.length, 'nodes and', selectedEdges.length, 'edges');
+    
+    // Delete selected nodes (which will cascade delete their edges)
+    selectedNodes.forEach(node => {
+      console.log('Deleting node:', node.id);
+      handleDeleteNode(node.id);
     });
-  }, [setGraph]);
+    
+    // Delete any remaining selected edges
+    selectedEdges.forEach(edge => {
+      console.log('Deleting edge:', edge.id);
+      handleDeleteEdge(edge.id);
+    });
+  }, [nodes, edges, handleDeleteNode, handleDeleteEdge]);
 
   // Sync FROM graph TO ReactFlow when graph changes externally
   useEffect(() => {
-    if (!graph || isSyncingRef.current) return;
+    if (!graph) return;
+    if (isSyncingRef.current) {
+      console.log('Skipping graph->ReactFlow sync (isSyncingRef=true)');
+      return;
+    }
     
     const graphJson = JSON.stringify(graph);
-    if (graphJson === lastSyncedGraphRef.current) return;
+    if (graphJson === lastSyncedGraphRef.current) {
+      console.log('Skipping graph->ReactFlow sync (no changes)');
+      return;
+    }
     
+    console.log('=== Syncing graph -> ReactFlow ===');
     lastSyncedGraphRef.current = graphJson;
     const { nodes: newNodes, edges: newEdges } = toFlow(graph, {
       onUpdateNode: handleUpdateNode,
@@ -133,18 +209,29 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
     setNodes(newNodes);
     setEdges(newEdges);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge]);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge]);
   
   // Sync FROM ReactFlow TO graph when user makes changes
   useEffect(() => {
-    if (!graph || isSyncingRef.current) return;
-    if (nodes.length === 0 && graph.nodes.length > 0) return; // Still initializing
+    if (!graph) return;
+    if (isSyncingRef.current) {
+      console.log('Skipping ReactFlow->graph sync (isSyncingRef=true)');
+      return;
+    }
+    if (nodes.length === 0 && graph.nodes.length > 0) {
+      console.log('Skipping ReactFlow->graph sync (still initializing)');
+      return;
+    }
     
     const updatedGraph = fromFlow(nodes, edges, graph);
     if (updatedGraph) {
       const updatedJson = JSON.stringify(updatedGraph);
-      if (updatedJson === lastSyncedGraphRef.current) return; // No real changes
+      if (updatedJson === lastSyncedGraphRef.current) {
+        console.log('Skipping ReactFlow->graph sync (no changes)');
+        return;
+      }
       
+      console.log('=== Syncing ReactFlow -> graph ===');
       isSyncingRef.current = true;
       lastSyncedGraphRef.current = updatedJson;
       setGraph(updatedGraph);
@@ -219,6 +306,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Handle new connections
   const onConnect = useCallback((connection: Connection) => {
+    // Check for valid connection
+    if (!connection.source || !connection.target) {
+      return;
+    }
+    
     // Prevent self-referencing edges
     if (connection.source === connection.target) {
       alert('Cannot create an edge from a node to itself.');
@@ -267,6 +359,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Shift') {
         setIsShiftHeld(true);
+      }
+      
+      // Handle Delete key for selected elements (only when not editing)
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Don't handle if user is typing in form fields
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+          return;
+        }
+        
+        const selectedNodes = nodes.filter(n => n.selected);
+        const selectedEdges = edges.filter(e => e.selected);
+        
+        console.log('Delete key pressed, selected nodes:', selectedNodes.length, 'selected edges:', selectedEdges.length);
+        
+        if (selectedNodes.length > 0 || selectedEdges.length > 0) {
+          e.preventDefault();
+          if (confirm(`Delete ${selectedNodes.length} node(s) and ${selectedEdges.length} edge(s)?`)) {
+            console.log('Calling deleteSelected');
+            deleteSelected();
+          }
+        }
       }
     };
 
@@ -411,7 +525,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       window.removeEventListener('mousemove', handleMouseMove, true);
       window.removeEventListener('mouseup', handleMouseUp, true);
     };
-  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes]);
+  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected]);
 
 
   // Track selected nodes for probability calculation
@@ -545,10 +659,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setNodes((nds) => [...nds, newNode]);
   }, [nodes.length, setNodes, handleUpdateNode, handleDeleteNode]);
 
-  // Delete selected elements
-  const deleteSelected = useCallback(() => {
-    deleteElements({ nodes: [], edges: [] });
-  }, [deleteElements]);
 
   if (!graph) {
     return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -576,7 +686,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         elementsSelectable
         panOnDrag={!isLassoSelecting}
         style={{ background: '#f8f9fa' }}
-        deleteKeyCode={['Backspace', 'Delete']}
         onInit={() => setTimeout(() => fitView(), 100)}
       >
         <Background />

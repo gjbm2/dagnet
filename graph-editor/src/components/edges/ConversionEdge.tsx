@@ -46,6 +46,50 @@ export default function ConversionEdge({
     targetPosition,
   });
 
+  // Calculate the arrow position at 75% along the path
+  const arrowPosition = React.useMemo(() => {
+    try {
+      // Extract first 8 numbers from the path: M sx,sy C c1x,c1y c2x,c2y ex,ey
+      const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+      if (!nums || nums.length < 8) return { x: targetX, y: targetY, angle: 0 };
+      const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
+
+      const t = 0.75; // position arrow at 75% of the curve
+
+      const lerp = (a: number, b: number, tt: number) => a + (b - a) * tt;
+
+      // De Casteljau to get point and tangent at t
+      const p0x = sx, p0y = sy;
+      const p1x = c1x, p1y = c1y;
+      const p2x = c2x, p2y = c2y;
+      const p3x = ex, p3y = ey;
+
+      const p01x = lerp(p0x, p1x, t);
+      const p01y = lerp(p0y, p1y, t);
+      const p12x = lerp(p1x, p2x, t);
+      const p12y = lerp(p1y, p2y, t);
+      const p23x = lerp(p2x, p3x, t);
+      const p23y = lerp(p2y, p3y, t);
+
+      const p012x = lerp(p01x, p12x, t);
+      const p012y = lerp(p01y, p12y, t);
+      const p123x = lerp(p12x, p23x, t);
+      const p123y = lerp(p12y, p23y, t);
+
+      const p0123x = lerp(p012x, p123x, t);
+      const p0123y = lerp(p012y, p123y, t);
+
+      // Calculate tangent for arrow direction
+      const tangentX = p123x - p012x;
+      const tangentY = p123y - p012y;
+      const angle = Math.atan2(tangentY, tangentX) * (180 / Math.PI);
+
+      return { x: p0123x, y: p0123y, angle };
+    } catch {
+      return { x: targetX, y: targetY, angle: 0 };
+    }
+  }, [edgePath, targetX, targetY]);
+
 
 
 
@@ -110,7 +154,7 @@ export default function ConversionEdge({
           markerHeight="10"
           refX="9"
           refY="3"
-          orient="auto"
+          orient={arrowPosition.angle}
           markerUnits="strokeWidth"
         >
           <path
@@ -132,7 +176,6 @@ export default function ConversionEdge({
         }}
         className="react-flow__edge-path"
         d={edgePath}
-        markerEnd={`url(#arrow-${id})`}
         onContextMenu={handleContextMenu}
         onDoubleClick={handleDoubleClick}
       />
@@ -150,6 +193,14 @@ export default function ConversionEdge({
         className="react-flow__edge-path"
         d={edgePath}
         onDoubleClick={handleDoubleClick}
+      />
+      
+      {/* Custom arrow at 75% position */}
+      <polygon
+        points={`${arrowPosition.x - 4},${arrowPosition.y - 3} ${arrowPosition.x - 4},${arrowPosition.y + 3} ${arrowPosition.x + 4},${arrowPosition.y}`}
+        fill={selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999'}
+        transform={`rotate(${arrowPosition.angle} ${arrowPosition.x} ${arrowPosition.y})`}
+        style={{ zIndex: selected ? 1000 : 1 }}
       />
       
       <EdgeLabelRenderer>
