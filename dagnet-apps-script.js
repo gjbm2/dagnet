@@ -468,6 +468,7 @@ function onOpen() {
     .addItem('Open Dagnet with Sheet Data', 'openWithSheetData')
     .addItem('Test Integration', 'testFromSheet')
     .addItem('Check Save Status', 'checkSaveStatusFromSheet')
+    .addItem('Mark Save Complete', 'markSaveComplete')
     .addToUi();
 }
 
@@ -648,6 +649,25 @@ function checkSaveStatusFromSheet() {
 }
 
 /**
+ * Manual function to update result cell when user returns from Dagnet
+ * Call this after editing and saving in the Dagnet app
+ */
+function markSaveComplete() {
+  try {
+    const resultCell = SCRIPT_PROPERTIES.getProperty('dagnet_result_cell');
+    if (resultCell) {
+      const sheet = SpreadsheetApp.getActiveSheet();
+      sheet.getRange(resultCell).setValue('Save completed at ' + new Date().toLocaleString());
+      SpreadsheetApp.getUi().alert('Save status updated in cell ' + resultCell);
+    } else {
+      SpreadsheetApp.getUi().alert('No active session found. Please run the integration first.');
+    }
+  } catch (error) {
+    SpreadsheetApp.getUi().alert('Error updating save status: ' + error.message);
+  }
+}
+
+/**
  * Starts monitoring for save completion
  */
 function startSaveMonitoring() {
@@ -666,6 +686,15 @@ function startSaveMonitoring() {
  */
 function checkSaveAndUpdate() {
   try {
+    const sessionId = SCRIPT_PROPERTIES.getProperty('dagnet_session_id');
+    if (!sessionId) {
+      console.log('No active session to check');
+      return;
+    }
+    
+    // Check localStorage for save status (this won't work from Apps Script directly)
+    // Instead, we'll use a different approach - check if the user has returned to the sheet
+    
     const status = checkSaveStatus();
     
     if (status.status === 'completed') {
