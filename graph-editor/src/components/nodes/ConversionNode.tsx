@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { Handle, Position, NodeProps } from 'reactflow';
+import React, { useState, useCallback, useEffect } from 'react';
+import { Handle, Position, NodeProps, useReactFlow } from 'reactflow';
 
 interface ConversionNodeData {
   id: string;
@@ -11,30 +11,29 @@ interface ConversionNodeData {
   entry?: { is_start?: boolean; entry_weight?: number };
   onUpdate: (id: string, data: Partial<ConversionNodeData>) => void;
   onDelete: (id: string) => void;
+  onDoubleClick?: (id: string, field: string) => void;
 }
 
 export default function ConversionNode({ data, selected }: NodeProps<ConversionNodeData>) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [label, setLabel] = useState(data.label);
+  const { getEdges, setNodes } = useReactFlow();
 
-  const handleLabelChange = useCallback((newLabel: string) => {
-    setLabel(newLabel);
-    data.onUpdate(data.id, { label: newLabel });
-  }, [data]);
-
-  const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      setIsEditing(false);
-    }
-    if (e.key === 'Escape') {
-      setLabel(data.label);
-      setIsEditing(false);
-    }
-  }, [data.label]);
 
   const handleDoubleClick = useCallback(() => {
-    setIsEditing(true);
-  }, []);
+    // Programmatically select this node to focus the properties panel
+    setNodes((nodes) => 
+      nodes.map((node) => ({
+        ...node,
+        selected: node.id === data.id
+      }))
+    );
+    
+    // Trigger the double-click callback to focus and select text in the label field
+    if (data.onDoubleClick) {
+      data.onDoubleClick(data.id, 'label');
+    }
+    
+    console.log('Node double-clicked and selected:', data.id);
+  }, [data.id, data.onDoubleClick, setNodes]);
 
   const handleDelete = useCallback(() => {
     if (confirm('Delete this node?')) {
@@ -42,18 +41,44 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     }
   }, [data]);
 
+  // Calculate probability mass for outgoing edges
+  const getProbabilityMass = useCallback(() => {
+    const edges = getEdges();
+    const outgoingEdges = edges.filter(edge => edge.source === data.id);
+    
+    if (outgoingEdges.length === 0) return null;
+    
+    const totalProbability = outgoingEdges.reduce((sum, edge) => {
+      const prob = edge.data?.probability;
+      return sum + (typeof prob === 'number' ? prob : 0);
+    }, 0);
+    
+    return {
+      total: totalProbability,
+      missing: 1.0 - totalProbability,
+      isComplete: Math.abs(totalProbability - 1.0) < 0.001,
+      edgeCount: outgoingEdges.length
+    };
+  }, [data.id, getEdges]);
+
+  const probabilityMass = getProbabilityMass();
+
   return (
     <div 
       className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''}`}
       style={{
         padding: '12px',
-        border: selected ? '2px solid #007bff' : '2px solid #ddd',
+        border: selected ? '2px solid #007bff' : 
+                (probabilityMass && !probabilityMass.isComplete) ? '2px solid #ff6b6b' : 
+                '2px solid #ddd',
         borderRadius: '8px',
         background: data.absorbing ? '#ffebee' : '#fff',
         minWidth: '120px',
         textAlign: 'center',
         cursor: 'pointer',
-        boxShadow: selected ? '0 4px 8px rgba(0,123,255,0.3)' : '0 2px 4px rgba(0,0,0,0.1)',
+        boxShadow: selected ? '0 4px 8px rgba(0,123,255,0.3)' : 
+                   (probabilityMass && !probabilityMass.isComplete) ? '0 2px 4px rgba(255,107,107,0.3)' :
+                   '0 2px 4px rgba(0,0,0,0.1)',
         transition: 'all 0.2s ease'
       }}
     >
@@ -83,34 +108,13 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         style={{ background: '#555', width: '8px', height: '8px' }} 
       />
       
-      {isEditing ? (
-        <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          onBlur={() => {
-            handleLabelChange(label);
-            setIsEditing(false);
-          }}
-          onKeyDown={handleKeyPress}
-          style={{
-            border: 'none',
-            background: 'transparent',
-            textAlign: 'center',
-            fontWeight: 'bold',
-            width: '100%',
-            outline: 'none',
-            fontSize: '14px'
-          }}
-          autoFocus
-        />
-      ) : (
-        <div 
-          style={{ fontWeight: 'bold', marginBottom: '4px', fontSize: '14px' }}
-          onDoubleClick={handleDoubleClick}
-        >
-          {label}
-        </div>
-      )}
+      <div 
+        style={{ fontWeight: 'bold', marginBottom: '4px', fontSize: '14px', cursor: 'pointer' }}
+        onDoubleClick={handleDoubleClick}
+        title="Double-click to edit in properties panel"
+      >
+        {data.label}
+      </div>
       
       {data.absorbing && (
         <div style={{ fontSize: '10px', color: '#666', marginTop: '4px' }}>
@@ -127,6 +131,22 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       {data.entry?.is_start && (
         <div style={{ fontSize: '10px', color: '#16a34a', marginTop: '2px', fontWeight: 'bold' }}>
           START
+        </div>
+      )}
+
+      {/* Probability mass warning */}
+      {probabilityMass && !probabilityMass.isComplete && (
+        <div style={{ 
+          fontSize: '9px', 
+          color: '#ff6b6b', 
+          marginTop: '2px',
+          background: '#fff5f5',
+          padding: '2px 4px',
+          borderRadius: '3px',
+          border: '1px solid #ff6b6b',
+          fontWeight: 'bold'
+        }}>
+          ⚠️ Missing {Math.round(probabilityMass.missing * 100)}%
         </div>
       )}
       

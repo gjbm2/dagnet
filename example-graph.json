@@ -42,18 +42,24 @@
     "id": "aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
     "from": "landing",
     "to": "add_to_basket",
+    "fromHandle": "right",
+    "toHandle": "left",
     "p": { "mean": 0.7 }
     },
     {
     "id": "aaaaaaa2-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
     "from": "add_to_basket",
     "to": "purchase",
+    "fromHandle": "right",
+    "toHandle": "left",
     "p": { "mean": 0.25 }
     },
     {
     "id": "aaaaaaa3-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
     "from": "add_to_basket",
     "to": "save_for_later",
+    "fromHandle": "top",
+    "toHandle": "bottom",
     "p": { "mean": 0.3 }
     }
     ],

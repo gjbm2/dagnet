@@ -4,10 +4,20 @@ import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, 
 interface ConversionEdgeData {
   id: string;
   probability: number;
+  stdev?: number;
+  locked?: boolean;
   description?: string;
+  costs?: {
+    monetary?: number;
+    time?: number;
+    units?: string;
+  };
+  weight_default?: number;
   onUpdate: (id: string, data: Partial<ConversionEdgeData>) => void;
   onDelete: (id: string) => void;
   onReconnect?: (id: string, newSource?: string, newTarget?: string) => void;
+  onDoubleClick?: (id: string, field: string) => void;
+  onSelect?: (id: string) => void;
 }
 
 export default function ConversionEdge({
@@ -23,10 +33,9 @@ export default function ConversionEdge({
   source,
   target,
 }: EdgeProps<ConversionEdgeData>) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [probability, setProbability] = useState(data?.probability || 0);
   const [showContextMenu, setShowContextMenu] = useState(false);
-  const { deleteElements } = useReactFlow();
+  const { deleteElements, setEdges } = useReactFlow();
+
 
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
@@ -37,12 +46,8 @@ export default function ConversionEdge({
     targetPosition,
   });
 
-  const handleProbabilityChange = useCallback((newProb: number) => {
-    setProbability(newProb);
-    if (data?.onUpdate) {
-      data.onUpdate(id, { probability: newProb });
-    }
-  }, [data, id]);
+
+
 
   const handleDelete = useCallback(() => {
     if (confirm('Delete this edge?')) {
@@ -51,18 +56,16 @@ export default function ConversionEdge({
   }, [id, deleteElements]);
 
   const handleDoubleClick = useCallback(() => {
-    setIsEditing(true);
-  }, []);
-
-  const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      setIsEditing(false);
+    // First select the edge to update the properties panel
+    if (data?.onSelect) {
+      data.onSelect(id);
     }
-    if (e.key === 'Escape') {
-      setProbability(data?.probability || 0);
-      setIsEditing(false);
+    
+    // Then focus the probability field
+    if (data?.onDoubleClick) {
+      data.onDoubleClick(id, 'probability');
     }
-  }, [data?.probability]);
+  }, [id, data]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -112,7 +115,7 @@ export default function ConversionEdge({
         >
           <path
             d="M0,0 L0,6 L9,3 z"
-            fill={selected ? '#007bff' : '#999'}
+            fill={selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999'}
           />
         </marker>
       </defs>
@@ -120,16 +123,18 @@ export default function ConversionEdge({
       <path
         id={id}
         style={{
-          stroke: selected ? '#007bff' : '#999',
-          strokeWidth: selected ? 3 : 2,
+          stroke: selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999',
+          strokeWidth: selected ? 3 : (data?.probability === undefined || data?.probability === null) ? 3 : 2,
           fill: 'none',
           cursor: 'pointer',
           zIndex: selected ? 1000 : 1,
+          strokeDasharray: (data?.probability === undefined || data?.probability === null) ? '5,5' : 'none',
         }}
         className="react-flow__edge-path"
         d={edgePath}
         markerEnd={`url(#arrow-${id})`}
         onContextMenu={handleContextMenu}
+        onDoubleClick={handleDoubleClick}
       />
       
       {/* Invisible wider path for easier selection */}
@@ -144,6 +149,7 @@ export default function ConversionEdge({
         }}
         className="react-flow__edge-path"
         d={edgePath}
+        onDoubleClick={handleDoubleClick}
       />
       
       <EdgeLabelRenderer>
@@ -164,35 +170,55 @@ export default function ConversionEdge({
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
           }}
           onDoubleClick={handleDoubleClick}
+          title="Double-click to edit probability in properties panel"
         >
-          {isEditing ? (
-            <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.01"
-              value={probability}
-              onChange={(e) => setProbability(parseFloat(e.target.value) || 0)}
-              onBlur={() => {
-                handleProbabilityChange(probability);
-                setIsEditing(false);
-              }}
-              onKeyDown={handleKeyPress}
-              style={{
-                border: 'none',
-                background: 'transparent',
+          <div style={{ textAlign: 'center' }}>
+            {(data?.probability === undefined || data?.probability === null) ? (
+              <div style={{ 
+                fontWeight: 'bold', 
+                color: '#ff6b6b',
+                fontSize: '11px',
+                background: '#fff5f5',
+                padding: '2px 6px',
+                borderRadius: '3px',
+                border: '1px solid #ff6b6b'
+              }}>
+                ⚠️ No Probability
+              </div>
+            ) : (
+              <div style={{ fontWeight: 'bold' }}>
+                {Math.round((data?.probability || 0) * 100)}%
+                {data?.stdev && data.stdev > 0 && (
+                  <span style={{ fontSize: '10px', color: '#666', marginLeft: '4px' }}>
+                    ±{Math.round(data.stdev * 100)}%
+                  </span>
+                )}
+              </div>
+            )}
+            {data?.costs && (data.costs.monetary || data.costs.time) && (
+              <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
+                {data.costs.monetary && (
+                  <div>£{data.costs.monetary}{data.costs.units && ` ${data.costs.units}`}</div>
+                )}
+                {data.costs.time && (
+                  <div>{data.costs.time}h{data.costs.units && ` ${data.costs.units}`}</div>
+                )}
+              </div>
+            )}
+            {data?.description && (
+              <div style={{ 
+                fontSize: '9px', 
+                color: '#888', 
+                marginTop: '2px',
+                fontStyle: 'italic',
+                maxWidth: '80px',
                 textAlign: 'center',
-                width: '100%',
-                outline: 'none',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                color: selected ? '#fff' : '#333',
-              }}
-              autoFocus
-            />
-          ) : (
-            <span>{Math.round(probability * 100)}%</span>
-          )}
+                lineHeight: '1.2'
+              }}>
+                {data.description}
+              </div>
+            )}
+          </div>
         </div>
       </EdgeLabelRenderer>
       
