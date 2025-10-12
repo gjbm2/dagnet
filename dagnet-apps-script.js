@@ -463,7 +463,7 @@ function cleanupSession() {
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('Dagnet Integration')
-    .addItem('Open Dagnet with JSON from Cell', 'openDagnetFromCell')
+    .addItem('Edit Selected Cell in Dagnet', 'openDagnetFromCell')
     .addItem('Open Dagnet with Sample Graph', 'openSampleGraph')
     .addItem('Open Dagnet with Sheet Data', 'openWithSheetData')
     .addItem('Test Integration', 'testFromSheet')
@@ -481,9 +481,21 @@ function onOpen() {
  * @param {string} cellAddress - Cell address containing JSON (e.g., "A1")
  * @param {string} resultCellAddress - Cell to update with results (e.g., "B1")
  */
-function openDagnetFromCell(cellAddress = "A1", resultCellAddress = "B1") {
+function openDagnetFromCell(cellAddress = null, resultCellAddress = null) {
   try {
     const sheet = SpreadsheetApp.getActiveSheet();
+    
+    // If no cell specified, use the currently selected cell
+    if (!cellAddress) {
+      const activeRange = sheet.getActiveRange();
+      cellAddress = activeRange.getA1Notation();
+    }
+    
+    // If no result cell specified, use the same cell (edit in place)
+    if (!resultCellAddress) {
+      resultCellAddress = cellAddress;
+    }
+    
     const cell = sheet.getRange(cellAddress);
     
     // Try multiple methods to get the cell content
@@ -934,6 +946,13 @@ function openFromA2() {
  */
 function openFromA3() {
   openDagnetFromCell("A3", "B3");
+}
+
+/**
+ * Edit the currently selected cell in Dagnet (edit in place)
+ */
+function editSelectedCell() {
+  openDagnetFromCell(); // Uses selected cell by default
 }
 
 /**
