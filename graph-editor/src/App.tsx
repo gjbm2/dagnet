@@ -140,13 +140,18 @@ export default function App() {
         // Use GET request to avoid CORS issues
         const saveUrl = `${appsScriptUrl}?sessionId=${sessionId}&graphData=${encodedData}&outputCell=${outputCell}&sheetId=${sheetId}`;
         
+        console.log('Sending request to:', saveUrl);
+        console.log('Data length:', updatedJson.length);
+        
         // Make the request using fetch
         const response = await fetch(saveUrl, {
           method: 'GET',
           mode: 'no-cors' // This allows the request to go through even if CORS blocks the response
         });
         
-        alert('Graph saved successfully! Returning to Google Sheets...');
+        console.log('Request sent, response:', response);
+        
+        alert('Graph saved successfully! Returning to Google Sheets...\n\nRequest URL: ' + saveUrl.substring(0, 100) + '...');
         
         // Close the window to return to Google Sheets
         setTimeout(() => {
@@ -154,6 +159,7 @@ export default function App() {
         }, 1500);
         return;
       } catch (error) {
+        console.error('Save error:', error);
         alert('Save failed: ' + error);
         return;
       }

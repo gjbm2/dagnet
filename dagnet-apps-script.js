@@ -16,6 +16,69 @@ const DAGNET_APP_URL = 'https://dagnet-nine.vercel.app/';
 const SCRIPT_PROPERTIES = PropertiesService.getScriptProperties();
 
 /**
+ * Web app endpoint - MUST BE FIRST FUNCTION
+ */
+function doGet(e) {
+  try {
+    if (!e.parameter || Object.keys(e.parameter).length === 0) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ success: true, message: "doGet is working!" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    const { sessionId, graphData, outputCell, sheetId } = e.parameter;
+    
+    if (!sessionId || !graphData || !outputCell || !sheetId) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ success: false, error: 'Missing parameters' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Show modal dialog to confirm the function was called
+    try {
+      const sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
+      const ui = SpreadsheetApp.getUi();
+      
+      // Show the JSON data in a modal
+      const jsonPreview = graphData.length > 500 ? graphData.substring(0, 500) + '...' : graphData;
+      ui.alert(
+        'DAGNET SAVE DETECTED!', 
+        'doGet function was called!\n\n' +
+        'Session ID: ' + sessionId + '\n' +
+        'Output Cell: ' + outputCell + '\n' +
+        'Sheet ID: ' + sheetId + '\n\n' +
+        'JSON Data (first 500 chars):\n' + jsonPreview,
+        ui.ButtonSet.OK
+      );
+      
+      // Write to the specified cell
+      const cell = sheet.getRange(outputCell);
+      const jsonString = JSON.stringify(JSON.parse(graphData), null, 2);
+      cell.setValue(jsonString);
+      
+      // Show success dialog
+      ui.alert('SUCCESS!', 'Cell ' + outputCell + ' has been updated with the new JSON data!', ui.ButtonSet.OK);
+      
+    } catch (dialogError) {
+      console.error('Error showing dialog:', dialogError);
+      // Still try to write the cell even if dialog fails
+      const sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
+      const cell = sheet.getRange(outputCell);
+      const jsonString = JSON.stringify(JSON.parse(graphData), null, 2);
+      cell.setValue(jsonString);
+    }
+    
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: true, message: "Cell updated successfully!" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: false, error: error.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
  * Simple compression for Google Apps Script
  * Since we can't use LZ-string, we'll use base64 encoding which should work
  */
@@ -557,7 +620,7 @@ function openDagnetFromCell(cellAddress = null, resultCellAddress = null) {
     const sheetId = sheet.getParent().getId();
     
     // Get the Apps Script web app URL (you'll need to set this after deploying)
-    const appsScriptUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'https://script.google.com/a/macros/nous.co/s/AKfycbw5JMIzSCXQVftSO2wNHXkanOJpn5JrWfgJJoEn3Qw9aPNLt5dySpRdPo7CCxEmqgey/exec';
+    const appsScriptUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'https://script.google.com/macros/s/AKfycbypxBzpD6O3jKCPWRGTlG0mT4awCChN4eOoVO2OiXmLGRLalU5r6Kwlu-2RNl5eF1rS/exec';
     
     const appUrl = `${DAGNET_APP_URL}?data=${plainData}&session=${sessionId}&outputCell=${resultCellAddress}&sheetId=${sheetId}&appsScriptUrl=${encodeURIComponent(appsScriptUrl)}`;
     
@@ -814,6 +877,13 @@ function importUpdatedData() {
  * Starts monitoring for save completion
  */
 function startSaveMonitoring() {
+  // Check if we already have a trigger running
+  const existingTriggerId = SCRIPT_PROPERTIES.getProperty('dagnet_trigger_id');
+  if (existingTriggerId) {
+    console.log('Save monitoring already active, skipping trigger creation');
+    return;
+  }
+  
   // Set up a trigger to check save status every 2 seconds
   const trigger = ScriptApp.newTrigger('checkSaveAndUpdate')
     .timeBased()
@@ -1046,48 +1116,6 @@ function fixCell(cellAddress = "A1") {
   }
 }
 
-/**
- * Web app endpoint for Dagnet app to write data back to sheets
- * This function receives GET requests from the Dagnet app when user saves
- * Using GET to avoid CORS issues
- */
-function doGet(e) {
-  try {
-    console.log('doGet called with:', e.parameter);
-    const { sessionId, graphData, outputCell, sheetId } = e.parameter;
-    
-    if (!sessionId || !graphData || !outputCell || !sheetId) {
-      return ContentService
-        .createTextOutput(JSON.stringify({ success: false, error: 'Missing parameters' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    console.log('Received data from Dagnet app:', { sessionId, outputCell, sheetId });
-    
-    // Parse the graph data (it comes as a string in GET parameters)
-    const parsedGraphData = JSON.parse(graphData);
-    console.log('Graph data length:', JSON.stringify(parsedGraphData).length);
-    
-    // Write to the specified cell
-    const sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
-    const cell = sheet.getRange(outputCell);
-    const jsonString = JSON.stringify(parsedGraphData, null, 2);
-    cell.setValue(jsonString);
-    
-    console.log('Successfully updated cell ' + outputCell + ' with graph data');
-    console.log('New cell value length:', jsonString.length);
-    
-    // Return success response
-    return ContentService
-      .createTextOutput(JSON.stringify({ success: true }))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    console.error('Error in doGet:', error);
-    return ContentService
-      .createTextOutput(JSON.stringify({ success: false, error: error.message }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
 
 /**
  * Set the web app URL for the Dagnet integration
@@ -1097,4 +1125,77 @@ function setWebAppUrl(webAppUrl) {
   SCRIPT_PROPERTIES.setProperty('dagnet_web_app_url', webAppUrl);
   console.log('Web app URL set to:', webAppUrl);
   SpreadsheetApp.getUi().alert('Web app URL set successfully!');
+}
+
+/**
+ * Clean up all triggers to avoid the "too many triggers" error
+ */
+function cleanupAllTriggers() {
+  try {
+    const triggers = ScriptApp.getProjectTriggers();
+    console.log('Found ' + triggers.length + ' triggers to delete');
+    
+    triggers.forEach(trigger => {
+      console.log('Deleting trigger:', trigger.getHandlerFunction(), trigger.getTriggerSource());
+      ScriptApp.deleteTrigger(trigger);
+    });
+    
+    console.log('All triggers cleaned up');
+    SpreadsheetApp.getUi().alert('All triggers cleaned up successfully!');
+  } catch (error) {
+    console.error('Error cleaning up triggers:', error);
+    SpreadsheetApp.getUi().alert('Error cleaning up triggers: ' + error.message);
+  }
+}
+
+/**
+ * Simple test function for web app deployment
+ */
+function testWebApp() {
+  return ContentService
+    .createTextOutput(JSON.stringify({ success: true, message: "Web app is working!" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+/**
+ * Test function to verify the web app endpoint is working
+ */
+function testWebAppEndpoint() {
+  try {
+    const sheetId = SpreadsheetApp.getActiveSheet().getParent().getId();
+    const testData = JSON.stringify({ test: "data", timestamp: new Date().toISOString() });
+    const encodedData = encodeURIComponent(testData);
+    
+    const webAppUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'https://script.google.com/macros/s/AKfycbypxBzpD6O3jKCPWRGTlG0mT4awCChN4eOoVO2OiXmLGRLalU5r6Kwlu-2RNl5eF1rS/exec';
+    
+    const testUrl = `${webAppUrl}?sessionId=test123&graphData=${encodedData}&outputCell=A1&sheetId=${sheetId}`;
+    
+    console.log('Testing web app endpoint with URL:', testUrl);
+    
+    // Use muteHttpExceptions to see the full response
+    const response = UrlFetchApp.fetch(testUrl, {
+      muteHttpExceptions: true
+    });
+    
+    const responseText = response.getContentText();
+    const responseCode = response.getResponseCode();
+    
+    console.log('Response status:', responseCode);
+    console.log('Response text:', responseText);
+    
+    if (responseCode === 302) {
+      SpreadsheetApp.getUi().alert('ERROR: Web app is redirecting (302). This means the deployment is not configured correctly.\n\nYou need to:\n1. Go to Deploy → Manage deployments\n2. Click the pencil icon to edit\n3. Make sure "Execute as" is set to "Me"\n4. Make sure "Who has access" is set to "Anyone"\n5. Click Deploy to update');
+    } else if (responseCode === 200) {
+      SpreadsheetApp.getUi().alert('SUCCESS: Web app is working!\n\nResponse: ' + responseText);
+    } else {
+      SpreadsheetApp.getUi().alert('Web app returned status ' + responseCode + '\n\nResponse: ' + responseText);
+    }
+    
+    return { success: responseCode === 200, response: responseText, status: responseCode };
+  } catch (error) {
+    console.error('Test failed:', error);
+    SpreadsheetApp.getUi().alert('Test failed: ' + error.message);
+    return { success: false, error: error.message };
+  }
 }
