@@ -469,9 +469,10 @@ function onOpen() {
     .addItem('Test Integration', 'testFromSheet')
     .addItem('Check Save Status', 'checkSaveStatusFromSheet')
     .addItem('Mark Save Complete', 'markSaveComplete')
+    .addItem('Import Updated Data', 'importUpdatedData')
     .addToUi();
     
-  // Check for save completion when sheet opens
+  // Check for save completion when sheet opens (this runs every time user returns to sheet)
   checkForSaveCompletion();
 }
 
@@ -528,13 +529,26 @@ function openDagnetFromCell(cellAddress = "A1", resultCellAddress = "B1") {
     // Store the result cell for updates (async to not block)
     SCRIPT_PROPERTIES.setProperty('dagnet_result_cell', resultCellAddress);
     SCRIPT_PROPERTIES.setProperty('dagnet_source_cell', cellAddress);
+    SCRIPT_PROPERTIES.setProperty('dagnet_session_id', sessionId);
+    SCRIPT_PROPERTIES.setProperty('dagnet_start_time', new Date().getTime().toString());
+    
+    // Set initial status in result cell
+    const sheet = SpreadsheetApp.getActiveSheet();
+    sheet.getRange(resultCellAddress).setValue('Opening Dagnet app...');
     
     // Use plain JSON encoding for now
     const plainData = encodeURIComponent(graphData);
-    const sessionId = Utilities.getUuid();
-    const appUrl = `${DAGNET_APP_URL}?data=${plainData}&session=${sessionId}`;
+    
+    // Get the current sheet ID
+    const sheetId = SpreadsheetApp.getActiveSheet().getParent().getId();
+    
+    // Get the Apps Script web app URL (you'll need to set this after deploying)
+    const appsScriptUrl = SCRIPT_PROPERTIES.getProperty('dagnet_web_app_url') || 'YOUR_WEB_APP_URL_HERE';
+    
+    const appUrl = `${DAGNET_APP_URL}?data=${plainData}&session=${sessionId}&outputCell=${resultCellAddress}&sheetId=${sheetId}&appsScriptUrl=${encodeURIComponent(appsScriptUrl)}`;
     
     console.log('Plain data length:', plainData.length);
+    console.log('App URL:', appUrl);
     
     console.log('URL generated, opening dialog...');
     
@@ -572,11 +586,6 @@ function openDagnetFromCell(cellAddress = "A1", resultCellAddress = "B1") {
     
     // Start monitoring for save completion (async)
     startSaveMonitoring();
-    
-    // Also set up a simple check when the user returns to the sheet
-    setTimeout(() => {
-      checkForSaveCompletion();
-    }, 2000);
     
   } catch (error) {
     SpreadsheetApp.getUi().alert('Error: ' + error.message);
@@ -663,20 +672,52 @@ function checkForSaveCompletion() {
   try {
     const sessionId = SCRIPT_PROPERTIES.getProperty('dagnet_session_id');
     const resultCell = SCRIPT_PROPERTIES.getProperty('dagnet_result_cell');
+    const startTime = SCRIPT_PROPERTIES.getProperty('dagnet_start_time');
     
     if (!sessionId || !resultCell) {
       return; // No active session
     }
     
-    // Check if save was completed (this is a simple approach)
-    // The user will have returned to the sheet after saving
+    // Only check if we started a session recently (within last 10 minutes)
+    if (startTime) {
+      const sessionStart = parseInt(startTime);
+      const now = new Date().getTime();
+      const timeDiff = now - sessionStart;
+      
+      // Only check if session started within last 10 minutes
+      if (timeDiff > 10 * 60 * 1000) { // 10 minutes
+        return;
+      }
+    }
+    
     const sheet = SpreadsheetApp.getActiveSheet();
     const currentValue = sheet.getRange(resultCell).getValue();
     
-    // If the cell is still empty or shows "waiting", assume save completed
-    if (!currentValue || currentValue.toString().includes('waiting') || currentValue.toString().includes('opening')) {
+    // Check if the cell shows we're still opening or waiting
+    const isWaiting = !currentValue || 
+                     currentValue.toString().includes('Opening Dagnet app') ||
+                     currentValue.toString().includes('waiting') ||
+                     currentValue.toString().includes('opening');
+    
+    if (isWaiting) {
+      // User has returned to sheet, assume they saved and closed the app
       sheet.getRange(resultCell).setValue('Save completed at ' + new Date().toLocaleString());
       console.log('Save completion detected and updated');
+      
+      // Show a dialog asking user to paste the updated data
+      const sourceCell = SCRIPT_PROPERTIES.getProperty('dagnet_source_cell');
+      if (sourceCell) {
+        SpreadsheetApp.getUi().alert(
+          'Save completed! The updated JSON has been copied to your clipboard. Please paste it into cell ' + sourceCell + ' to update your data.'
+        );
+      }
+      
+      // Clean up the session
+      SCRIPT_PROPERTIES.deleteProperty('dagnet_session_id');
+      SCRIPT_PROPERTIES.deleteProperty('dagnet_result_cell');
+      SCRIPT_PROPERTIES.deleteProperty('dagnet_start_time');
+      SCRIPT_PROPERTIES.deleteProperty('dagnet_source_cell');
+      SCRIPT_PROPERTIES.deleteProperty('dagnet_graph_data');
     }
     
   } catch (error) {
@@ -704,16 +745,69 @@ function markSaveComplete() {
 }
 
 /**
+ * Import updated data from Dagnet app
+ * This opens the app again to get the current data and updates the source cell
+ */
+function importUpdatedData() {
+  try {
+    const sourceCell = SCRIPT_PROPERTIES.getProperty('dagnet_source_cell');
+    const resultCell = SCRIPT_PROPERTIES.getProperty('dagnet_result_cell');
+    
+    if (!sourceCell || !resultCell) {
+      SpreadsheetApp.getUi().alert('No active session found. Please run the integration first.');
+      return;
+    }
+    
+    // Open Dagnet app again to get the current data
+    const sessionId = Utilities.getUuid();
+    const appUrl = `${DAGNET_APP_URL}?session=${sessionId}&import=true`;
+    
+    // Store the session for import
+    SCRIPT_PROPERTIES.setProperty('dagnet_import_session', sessionId);
+    SCRIPT_PROPERTIES.setProperty('dagnet_import_source', sourceCell);
+    SCRIPT_PROPERTIES.setProperty('dagnet_import_result', resultCell);
+    
+    // Open the app
+    const htmlOutput = HtmlService.createHtmlOutput(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Importing Data...</title></head>
+        <body style="text-align: center; padding: 20px; font-family: Arial, sans-serif;">
+          <h2>📥 Importing Updated Data...</h2>
+          <p>Opening Dagnet app to get current data...</p>
+          <button onclick="window.open('${appUrl}', '_blank'); google.script.host.close();" 
+                  style="background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">
+            Open Dagnet App
+          </button>
+          <script>
+            setTimeout(() => {
+              window.open('${appUrl}', '_blank');
+              google.script.host.close();
+            }, 1000);
+          </script>
+        </body>
+      </html>
+    `).setWidth(400).setHeight(200);
+    
+    SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Importing Data...');
+    
+  } catch (error) {
+    SpreadsheetApp.getUi().alert('Error importing data: ' + error.message);
+  }
+}
+
+/**
  * Starts monitoring for save completion
  */
 function startSaveMonitoring() {
-  // Set up a trigger to check save status every 5 seconds
+  // Set up a trigger to check save status every 2 seconds
   const trigger = ScriptApp.newTrigger('checkSaveAndUpdate')
     .timeBased()
-    .everyMinutes(1) // Check every minute
+    .everyMinutes(1) // Minimum is 1 minute, but we'll check more frequently in the function
     .create();
   
   SCRIPT_PROPERTIES.setProperty('dagnet_trigger_id', trigger.getUniqueId());
+  SCRIPT_PROPERTIES.setProperty('dagnet_start_time', new Date().getTime().toString());
   console.log('Save monitoring started');
 }
 
@@ -929,4 +1023,38 @@ function fixCell(cellAddress = "A1") {
   } catch (error) {
     SpreadsheetApp.getUi().alert('Error fixing cell: ' + error.message);
   }
+}
+
+/**
+ * Web app endpoint for Dagnet app to write data back to sheets
+ * This function receives POST requests from the Dagnet app when user saves
+ */
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const { sessionId, graphData, outputCell, sheetId } = data;
+    
+    console.log('Received data from Dagnet app:', { sessionId, outputCell, sheetId });
+    
+    // Write to the specified cell
+    const sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
+    sheet.getRange(outputCell).setValue(JSON.stringify(graphData, null, 2));
+    
+    console.log('Successfully updated cell ' + outputCell + ' with graph data');
+    
+    return ContentService.createTextOutput(JSON.stringify({ success: true }));
+  } catch (error) {
+    console.error('Error in doPost:', error);
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * Set the web app URL for the Dagnet integration
+ * Call this after deploying your Apps Script as a web app
+ */
+function setWebAppUrl(webAppUrl) {
+  SCRIPT_PROPERTIES.setProperty('dagnet_web_app_url', webAppUrl);
+  console.log('Web app URL set to:', webAppUrl);
+  SpreadsheetApp.getUi().alert('Web app URL set successfully!');
 }

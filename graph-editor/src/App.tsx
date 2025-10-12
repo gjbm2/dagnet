@@ -21,6 +21,24 @@ export default function App() {
 
   // Initial load: from ?data or from Sheet
   useEffect(() => {
+    // Check if this is a data request from Apps Script
+    const urlParams = new URLSearchParams(window.location.search);
+    const getData = urlParams.get('getdata');
+    const sessionId = urlParams.get('session');
+    
+    if (getData === 'true' && sessionId) {
+      // This is a request from Apps Script to get the current data
+      const currentData = localStorage.getItem('dagnet_graph_data_' + sessionId);
+      if (currentData) {
+        // Return the data as plain text
+        document.body.innerHTML = currentData;
+        return;
+      } else {
+        document.body.innerHTML = 'null';
+        return;
+      }
+    }
+    
     const decoded = decodeStateFromUrl();
     if (decoded) { 
       setGraph(decoded); 
@@ -109,28 +127,35 @@ export default function App() {
     // Check if we're being used from Apps Script
     const urlParams = new URLSearchParams(window.location.search);
     const sessionId = urlParams.get('session');
+    const outputCell = urlParams.get('outputCell');
+    const sheetId = urlParams.get('sheetId');
+    const appsScriptUrl = urlParams.get('appsScriptUrl');
     
-    if (sessionId) {
-      // We're being used from Apps Script - send data back
+    if (sessionId && outputCell && sheetId && appsScriptUrl) {
+      // We're being used from Apps Script - save directly to Apps Script web app
       try {
-        // Store the save status in localStorage for Apps Script to detect
-        localStorage.setItem('dagnet_save_status_' + sessionId, 'completed');
-        localStorage.setItem('dagnet_graph_data_' + sessionId, JSON.stringify(graph));
-        
-        // Try to notify the parent window if possible
-        if (window.opener) {
-          window.opener.postMessage({
-            type: 'dagnet_save_complete',
+        const saveResponse = await fetch(appsScriptUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
             sessionId: sessionId,
-            graphData: graph
-          }, '*');
-        }
+            graphData: graph,
+            outputCell: outputCell,
+            sheetId: sheetId,
+            timestamp: new Date().toISOString()
+          })
+        });
         
-        // Also try to close the window and return to the sheet
-        alert('Graph saved successfully! Returning to Google Sheets...');
-        setTimeout(() => {
-          window.close();
-        }, 1500);
+        if (saveResponse.ok) {
+          alert('Graph saved successfully! Returning to Google Sheets...');
+          setTimeout(() => {
+            window.close();
+          }, 1500);
+        } else {
+          throw new Error('Failed to save to Apps Script');
+        }
         return;
       } catch (error) {
         alert('Save failed: ' + error);
