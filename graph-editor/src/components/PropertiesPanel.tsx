@@ -211,10 +211,11 @@ export default function PropertiesPanel({
 
   if (!graph) return null;
 
-  const selectedNode = graph.nodes.find((n: any) => n.id === selectedNodeId);
-  const selectedEdge = graph.edges.find((e: any) => 
+  // Add null checks to prevent crashes when nodes/edges are deleted
+  const selectedNode = selectedNodeId && graph.nodes ? graph.nodes.find((n: any) => n.id === selectedNodeId) : null;
+  const selectedEdge = selectedEdgeId && graph.edges ? graph.edges.find((e: any) => 
     e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-  );
+  ) : null;
 
   return (
     <div style={{ 
