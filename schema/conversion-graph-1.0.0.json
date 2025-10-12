@@ -1,5 +1,5 @@
 {
-"$id": "",
+"$id": "https://raw.githubusercontent.com/gjbm2/dagnet/refs/heads/main/schema/conversion-graph-1.0.0.json",
 "$schema": "https://json-schema.org/draft/2020-12/schema",
 "title": "Conversion Funnel Graph",
 "$comment": "Graph JSON for a conversion funnel DAG with inlined parameters and editor hints. Core semantics: nodes are states; edges are conditional transitions; probabilities are conditional on source node; outgoing edges form a partition that may leave residual routed to a default outcome unless overridden. Acyclicity, absorbing-node constraints, and per-source probability policies are validated by the runner.",
