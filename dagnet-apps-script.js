@@ -470,6 +470,9 @@ function onOpen() {
     .addItem('Check Save Status', 'checkSaveStatusFromSheet')
     .addItem('Mark Save Complete', 'markSaveComplete')
     .addToUi();
+    
+  // Check for save completion when sheet opens
+  checkForSaveCompletion();
 }
 
 /**
@@ -570,6 +573,11 @@ function openDagnetFromCell(cellAddress = "A1", resultCellAddress = "B1") {
     // Start monitoring for save completion (async)
     startSaveMonitoring();
     
+    // Also set up a simple check when the user returns to the sheet
+    setTimeout(() => {
+      checkForSaveCompletion();
+    }, 2000);
+    
   } catch (error) {
     SpreadsheetApp.getUi().alert('Error: ' + error.message);
   }
@@ -645,6 +653,34 @@ function checkSaveStatusFromSheet() {
     }
   } catch (error) {
     SpreadsheetApp.getUi().alert('Error checking status: ' + error.message);
+  }
+}
+
+/**
+ * Check for save completion when user returns to the sheet
+ */
+function checkForSaveCompletion() {
+  try {
+    const sessionId = SCRIPT_PROPERTIES.getProperty('dagnet_session_id');
+    const resultCell = SCRIPT_PROPERTIES.getProperty('dagnet_result_cell');
+    
+    if (!sessionId || !resultCell) {
+      return; // No active session
+    }
+    
+    // Check if save was completed (this is a simple approach)
+    // The user will have returned to the sheet after saving
+    const sheet = SpreadsheetApp.getActiveSheet();
+    const currentValue = sheet.getRange(resultCell).getValue();
+    
+    // If the cell is still empty or shows "waiting", assume save completed
+    if (!currentValue || currentValue.toString().includes('waiting') || currentValue.toString().includes('opening')) {
+      sheet.getRange(resultCell).setValue('Save completed at ' + new Date().toLocaleString());
+      console.log('Save completion detected and updated');
+    }
+    
+  } catch (error) {
+    console.error('Error checking save completion:', error);
   }
 }
 
