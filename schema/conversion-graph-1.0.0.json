@@ -1,103 +1,174 @@
 {
-"$id": "https://raw.githubusercontent.com/gjbm2/dagnet/refs/heads/main/schema/conversion-graph-1.0.0.json",
-"$schema": "https://json-schema.org/draft/2020-12/schema",
-"title": "Conversion Funnel Graph",
-"$comment": "Graph JSON for a conversion funnel DAG with inlined parameters and editor hints. Core semantics: nodes are states; edges are conditional transitions; probabilities are conditional on source node; outgoing edges form a partition that may leave residual routed to a default outcome unless overridden. Acyclicity, absorbing-node constraints, and per-source probability policies are validated by the runner.",
-"type": "object",
-"required": ["nodes", "edges", "policies", "metadata"],
-"additionalProperties": false,
-"properties": {
-"nodes": {
-"type": "array",
-"minItems": 1,
-"items": { "$ref": "#/$defs/Node" }
-},
-"edges": {
-"type": "array",
-"minItems": 0,
-"items": { "$ref": "#/$defs/Edge" }
-},
-"policies": { "$ref": "#/$defs/Policies" },
-"metadata": { "$ref": "#/$defs/Metadata" }
-},
-"$defs": {
-"UUID": { "type": "string", "format": "uuid" },
-"Slug": { "type": "string", "minLength": 1, "maxLength": 128 },
+  "$id": "https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/conversion-graph-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Conversion Funnel Graph",
+  "$comment": "Graph JSON for a conversion funnel DAG with inlined parameters and editor hints. Core semantics: nodes are states; edges are conditional transitions; probabilities are conditional on source node; outgoing edges form a partition that may leave residual routed to a default outcome unless overridden. Acyclicity, absorbing-node constraints, and per-source probability policies are validated by the runner.",
+  "type": "object",
+  "required": ["nodes", "edges", "policies", "metadata"],
+  "additionalProperties": false,
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/Node" }
+    },
+    "edges": {
+      "type": "array",
+      "minItems": 0,
+      "items": { "$ref": "#/$defs/Edge" }
+    },
+    "policies": { "$ref": "#/$defs/Policies" },
+    "metadata": { "$ref": "#/$defs/Metadata" }
+  },
+  "$defs": {
+    "UUID": { "type": "string", "format": "uuid" },
+    "Slug": { "type": "string", "minLength": 1, "maxLength": 128 },
 
+    "Node": {
+      "type": "object",
+      "required": ["id", "slug"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/UUID" },
+        "slug": { "$ref": "#/$defs/Slug" },
+        "label": { "type": "string", "maxLength": 256 },
+        "description": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "absorbing": { 
+          "type": "boolean", 
+          "default": false, 
+          "$comment": "If true, node is terminal and MUST have zero outgoing edges; runner enforces." 
+        },
+        "outcome_type": {
+          "type": "string",
+          "enum": ["success", "failure", "error", "neutral", "other"],
+          "description": "Classification for absorbing outcomes; optional"
+        },
+        "entry": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "is_start": { "type": "boolean", "default": false },
+            "entry_weight": { "type": "number", "minimum": 0 }
+          }
+        },
+        "costs": { "$ref": "#/$defs/Costs" },
+        "residual_behavior": { "$ref": "#/$defs/ResidualBehavior" },
+        "layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "rank": { "type": "integer", "minimum": 0 },
+            "group": { "type": "string", "maxLength": 128 },
+            "color": { "type": "string", "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" }
+          }
+        }
+      }
+    },
 
-"Node": {
-"type": "object",
-"required": ["id", "slug"],
-"additionalProperties": false,
-"properties": {
-"id": { "$ref": "#/$defs/UUID" },
-"slug": { "$ref": "#/$defs/Slug" },
-"label": { "type": "string", "maxLength": 256 },
-"description": { "type": "string" },
-"tags": {
-"type": "array",
-"items": { "type": "string" },
-"uniqueItems": true
-},
-"absorbing": { "type": "boolean", "default": false, "$comment": "If true, node is terminal and MUST have zero outgoing edges; runner enforces." },
-"outcome_type": {
-"type": "string",
-"enum": ["success", "failure", "error", "neutral", "other"],
-"description": "Classification for absorbing outcomes; optional"
-},
-"entry": {
-"type": "object",
-"additionalProperties": false,
-"properties": {
-"is_start": { "type": "boolean", "default": false },
-"entry_weight": { "type": "number", "minimum": 0 }
-}
-},
-"costs": { "$ref": "#/$defs/Costs" },
-"residual_behavior": { "$ref": "#/$defs/ResidualBehavior" },
-"layout": {
-"type": "object",
-"additionalProperties": false,
-"properties": {
-"x": { "type": "number" },
-"y": { "type": "number" },
-"rank": { "type": "integer", "minimum": 0 },
-"group": { "type": "string", "maxLength": 128 },
-"color": { "type": "string", "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" }
-}
-}
-}
-},
+    "Edge": {
+      "type": "object",
+      "required": ["id", "from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/UUID" },
+        "slug": { "$ref": "#/$defs/Slug" },
+        "from": { 
+          "type": "string", 
+          "minLength": 1, 
+          "$comment": "Node id or slug; runner canonicalizes to id and checks existence." 
+        },
+        "to": { 
+          "type": "string", 
+          "minLength": 1, 
+          "$comment": "Node id or slug; runner canonicalizes to id and checks existence." 
+        },
+        "description": { "type": "string" },
+        "p": { "$ref": "#/$defs/ProbabilityParam" },
+        "weight_default": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Used to distribute residual among free edges from the same source; proportional with others."
+        },
+        "costs": { "$ref": "#/$defs/Costs" }
+      }
+    },
 
+    "ProbabilityParam": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "p.mean is P(to|from). If absent, edge is \"free\" and may be filled by complement/uniform/weighted policy. If stdev provided, runner clips implied bounds to [0,1] as needed.",
+      "properties": {
+        "mean": { "type": "number", "minimum": 0, "maximum": 1 },
+        "stdev": { "type": "number", "minimum": 0 },
+        "locked": { "type": "boolean", "default": false }
+      }
+    },
 
-"Edge": {
-"type": "object",
-"required": ["id", "from", "to"],
-"additionalProperties": false,
-"properties": {
-"id": { "$ref": "#/$defs/UUID" },
-"slug": { "$ref": "#/$defs/Slug" },
-"from": { "type": "string", "minLength": 1, "$comment": "Node id or slug; runner canonicalizes to id and checks existence." },
-"to": { "type": "string", "minLength": 1, "$comment": "Node id or slug; runner canonicalizes to id and checks existence." },
-"description": { "type": "string" },
-"p": { "$ref": "#/$defs/ProbabilityParam" },
-"weight_default": {
-"type": "number",
-"minimum": 0,
-"description": "Used to distribute residual among free edges from the same source; proportional with others."
-},
-"costs": { "$ref": "#/$defs/Costs" }
-}
-},
+    "Costs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "monetary": { "type": "number", "minimum": 0 },
+        "time": { "type": "number", "minimum": 0 },
+        "units": { "type": "string", "maxLength": 32 }
+      }
+    },
 
+    "ResidualBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_outcome": { "type": "string", "minLength": 1 },
+        "overflow_policy": {
+          "type": "string",
+          "enum": ["error", "normalize", "cap"],
+          "default": "error"
+        }
+      }
+    },
 
-"ProbabilityParam": {
-"type": "object",
-"additionalProperties": false,
-"$comment": "p.mean is P(to|from). If absent, edge is \"free\" and may be filled by complement/uniform/weighted policy. If stdev provided, runner clips implied bounds to [0,1] as needed.",
-"properties": {
-"mean": { "type": "number", "minimum": 0, "maximum": 1 },
-"stdev": { "type": "number", "minimum": 0 },
-"locked": { "type": "boolean", "default": false },
-"dist": {
+    "Policies": {
+      "type": "object",
+      "required": ["default_outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "default_outcome": { "type": "string", "minLength": 1 },
+        "overflow_policy": {
+          "type": "string",
+          "enum": ["error", "normalize", "cap"],
+          "default": "error"
+        },
+        "free_edge_policy": {
+          "type": "string",
+          "enum": ["complement", "uniform", "weighted"],
+          "default": "complement"
+        }
+      }
+    },
+
+    "Metadata": {
+      "type": "object",
+      "required": ["version", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "author": { "type": "string", "maxLength": 256 },
+        "description": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
 }
