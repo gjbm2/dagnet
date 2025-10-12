@@ -117,7 +117,7 @@ export default function App() {
         localStorage.setItem('dagnet_save_status_' + sessionId, 'completed');
         localStorage.setItem('dagnet_graph_data_' + sessionId, JSON.stringify(graph));
         
-        // Also try to notify the parent window if possible
+        // Try to notify the parent window if possible
         if (window.opener) {
           window.opener.postMessage({
             type: 'dagnet_save_complete',
@@ -126,7 +126,11 @@ export default function App() {
           }, '*');
         }
         
-        alert('Graph saved successfully! Data sent back to Google Sheets.');
+        // Also try to close the window and return to the sheet
+        alert('Graph saved successfully! Returning to Google Sheets...');
+        setTimeout(() => {
+          window.close();
+        }, 1500);
         return;
       } catch (error) {
         alert('Save failed: ' + error);
