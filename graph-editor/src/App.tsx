@@ -105,6 +105,36 @@ export default function App() {
       alert('Fix schema errors before save.'); 
       return; 
     }
+    
+    // Check if we're being used from Apps Script
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionId = urlParams.get('session');
+    
+    if (sessionId) {
+      // We're being used from Apps Script - send data back
+      try {
+        // Store the save status in localStorage for Apps Script to detect
+        localStorage.setItem('dagnet_save_status_' + sessionId, 'completed');
+        localStorage.setItem('dagnet_graph_data_' + sessionId, JSON.stringify(graph));
+        
+        // Also try to notify the parent window if possible
+        if (window.opener) {
+          window.opener.postMessage({
+            type: 'dagnet_save_complete',
+            sessionId: sessionId,
+            graphData: graph
+          }, '*');
+        }
+        
+        alert('Graph saved successfully! Data sent back to Google Sheets.');
+        return;
+      } catch (error) {
+        alert('Save failed: ' + error);
+        return;
+      }
+    }
+    
+    // Original save logic for normal usage
     try {
       await saveToSheet(graph);
       alert('Saved to Sheet.');
