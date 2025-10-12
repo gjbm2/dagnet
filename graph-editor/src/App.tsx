@@ -10,6 +10,14 @@ export default function App() {
   const { graph, setGraph } = useGraphStore();
   const [ajvValidate, setAjvValidate] = useState<any>(null);
   const [errors, setErrors] = useState<string[]>([]);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+
+  // Debug selection state
+  console.log('App - selectedNodeId:', selectedNodeId);
+  console.log('App - selectedEdgeId:', selectedEdgeId);
+  console.log('App - graph nodes:', graph?.nodes?.map((n: any) => n.id));
+  console.log('App - graph edges:', graph?.edges?.map((e: any) => e.id));
 
   // Load schema validator once
   useEffect(() => {
@@ -19,8 +27,71 @@ export default function App() {
   // Initial load: from ?data or from Sheet
   useEffect(() => {
     const decoded = decodeStateFromUrl();
-    if (decoded) { setGraph(decoded); return; }
-    loadFromSheet().then(g => g && setGraph(g)).catch(e => setErrors([String(e)]));
+    if (decoded) { 
+      setGraph(decoded); 
+      return; 
+    }
+    
+    loadFromSheet().then(g => {
+      if (g) {
+        setGraph(g);
+      } else {
+        // Create a default empty graph if no data is available
+        const defaultGraph = {
+          nodes: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440001",
+              slug: "start",
+              label: "Start",
+              absorbing: false,
+              entry: { is_start: true, entry_weight: 1.0 },
+              layout: { x: 100, y: 100, rank: 0 }
+            }
+          ],
+          edges: [],
+          policies: {
+            default_outcome: "abandon",
+            overflow_policy: "error",
+            free_edge_policy: "complement"
+          },
+          metadata: {
+            version: "1.0.0",
+            created_at: new Date().toISOString(),
+            author: "Graph Editor",
+            description: "Default empty graph"
+          }
+        };
+        setGraph(defaultGraph);
+      }
+    }).catch(e => {
+      console.warn('Failed to load from sheet, using default graph:', e);
+      // Create default graph on error too
+      const defaultGraph = {
+        nodes: [
+          {
+            id: "550e8400-e29b-41d4-a716-446655440001",
+            slug: "start",
+            label: "Start",
+            absorbing: false,
+            entry: { is_start: true, entry_weight: 1.0 },
+            layout: { x: 100, y: 100, rank: 0 }
+          }
+        ],
+        edges: [],
+        policies: {
+          default_outcome: "abandon",
+          overflow_policy: "error",
+          free_edge_policy: "complement"
+        },
+        metadata: {
+          version: "1.0.0",
+          created_at: new Date().toISOString(),
+          author: "Graph Editor",
+          description: "Default empty graph"
+        }
+      };
+      setGraph(defaultGraph);
+    });
   }, [setGraph]);
 
   const validateNow = useMemo(() => {
@@ -35,9 +106,16 @@ export default function App() {
 
   const onSave = async () => {
     const errs = validateNow();
-    if (errs.length) { alert('Fix schema errors before save.'); return; }
-    await saveToSheet(graph);
-    alert('Saved to Sheet.');
+    if (errs.length) { 
+      alert('Fix schema errors before save.'); 
+      return; 
+    }
+    try {
+      await saveToSheet(graph);
+      alert('Saved to Sheet.');
+    } catch (error) {
+      alert('Save failed: ' + error);
+    }
   };
 
   const onShare = () => {
@@ -55,19 +133,133 @@ export default function App() {
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', height: '100%' }}>
-      <GraphCanvas onValidate={validateNow} />
-      <div style={{ borderLeft: '1px solid #eee', padding: 12, overflow: 'auto' }}>
-        <h3>Graph Inspector</h3>
-        <button onClick={onSave}>Save to Sheet</button>
-        <button onClick={onDownload} style={{ marginLeft: 8 }}>Download JSON</button>
-        <button onClick={onShare} style={{ marginLeft: 8 }}>Share URL</button>
-        <h4 style={{ marginTop: 16 }}>Schema errors</h4>
-        {errors.length ? (
-          <ul>{errors.map((e, i) => <li key={i} style={{ color: 'crimson' }}>{e}</li>)}</ul>
-        ) : <div>None</div>}
-        <PropertiesPanel />
+    <div style={{ 
+      display: 'grid', 
+      gridTemplateColumns: '1fr 350px', 
+      height: '100vh',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }}>
+      {/* Main Graph Area */}
+      <div style={{ position: 'relative' }}>
+        <GraphCanvas 
+          onSelectedNodeChange={setSelectedNodeId}
+          onSelectedEdgeChange={setSelectedEdgeId}
+        />
       </div>
+
+      {/* Properties Panel */}
+        <PropertiesPanel 
+          selectedNodeId={selectedNodeId} 
+          onSelectedNodeChange={setSelectedNodeId}
+          selectedEdgeId={selectedEdgeId}
+          onSelectedEdgeChange={setSelectedEdgeId}
+        />
+
+      {/* Floating Action Bar */}
+      <div style={{
+        position: 'fixed',
+        top: '20px',
+        right: '370px',
+        zIndex: 1000,
+        display: 'flex',
+        gap: '8px',
+        background: 'rgba(255, 255, 255, 0.95)',
+        padding: '8px 12px',
+        borderRadius: '8px',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+        backdropFilter: 'blur(10px)',
+      }}>
+        <button
+          onClick={onSave}
+          style={{
+            padding: '8px 16px',
+            background: '#007bff',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: '500',
+            transition: 'background-color 0.2s',
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.background = '#0056b3'}
+          onMouseLeave={(e) => e.currentTarget.style.background = '#007bff'}
+        >
+          Save
+        </button>
+        <button
+          onClick={onDownload}
+          style={{
+            padding: '8px 16px',
+            background: '#28a745',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: '500',
+            transition: 'background-color 0.2s',
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.background = '#1e7e34'}
+          onMouseLeave={(e) => e.currentTarget.style.background = '#28a745'}
+        >
+          Download
+        </button>
+        <button
+          onClick={onShare}
+          style={{
+            padding: '8px 16px',
+            background: '#6c757d',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: '500',
+            transition: 'background-color 0.2s',
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.background = '#545b62'}
+          onMouseLeave={(e) => e.currentTarget.style.background = '#6c757d'}
+        >
+          Share
+        </button>
+      </div>
+
+      {/* Schema Errors Overlay */}
+      {errors.length > 0 && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          left: '20px',
+          right: '370px',
+          zIndex: 1000,
+          background: '#f8d7da',
+          border: '1px solid #f5c6cb',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+        }}>
+          <div style={{ 
+            fontWeight: '600', 
+            color: '#721c24', 
+            marginBottom: '8px',
+            fontSize: '14px'
+          }}>
+            Schema Errors:
+          </div>
+          <ul style={{ 
+            margin: 0, 
+            paddingLeft: '16px', 
+            color: '#721c24',
+            fontSize: '12px',
+            lineHeight: '1.4'
+          }}>
+            {errors.map((e, i) => (
+              <li key={i}>{e}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
