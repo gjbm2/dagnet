@@ -638,7 +638,7 @@ export default function PropertiesPanel({
                         <label style={{ display: 'block', fontSize: '11px', marginBottom: '4px', color: '#666', fontWeight: '500' }}>Units</label>
                         <input
                           type="text"
-                          maxLength="32"
+                          maxLength={32}
                           value={localEdgeData.costs?.units || ''}
                           onChange={(e) => setLocalEdgeData({
                             ...localEdgeData, 
