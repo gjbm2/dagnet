@@ -79,6 +79,51 @@ function doGet(e) {
 }
 
 /**
+ * Web app POST endpoint (form POSTs are not blocked by CORS)
+ * Expects fields: sessionId, sheetId, outputCell, graphData
+ */
+function doPost(e) {
+  try {
+    // Support both form-urlencoded and JSON payloads
+    var body = {};
+    if (e && e.postData && e.postData.type === 'application/json') {
+      body = JSON.parse(e.postData.contents || '{}');
+    } else if (e && e.parameter) {
+      body = e.parameter; // form fields
+    }
+
+    var sessionId = body.sessionId;
+    var sheetId = body.sheetId;
+    var outputCell = body.outputCell;
+    var graphData = body.graphData; // stringified JSON
+
+    if (!sessionId || !sheetId || !outputCell || !graphData) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ success: false, error: 'Missing fields', received: body }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Write JSON to the target cell
+    var sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
+    var cell = sheet.getRange(outputCell);
+    var jsonString = typeof graphData === 'string' ? graphData : JSON.stringify(graphData, null, 2);
+    // If form-url-encoded, graphData may be a string that itself contains JSON
+    try {
+      jsonString = JSON.stringify(JSON.parse(jsonString), null, 2);
+    } catch (ignore) {}
+    cell.setValue(jsonString);
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: false, error: error.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
  * Simple compression for Google Apps Script
  * Since we can't use LZ-string, we'll use base64 encoding which should work
  */

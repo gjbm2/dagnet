@@ -132,34 +132,36 @@ export default function App() {
     const appsScriptUrl = urlParams.get('appsScriptUrl');
     
     if (sessionId && outputCell && sheetId && appsScriptUrl) {
-      // We're being used from Apps Script - save automatically via GET request
+      // We're being used from Apps Script - save automatically via form POST (bypasses CORS)
       try {
         const updatedJson = JSON.stringify(graph, null, 2);
-        const encodedData = encodeURIComponent(updatedJson);
-        
-        // Use GET request to avoid CORS issues
-        const saveUrl = `${appsScriptUrl}?sessionId=${sessionId}&graphData=${encodedData}&outputCell=${outputCell}&sheetId=${sheetId}`;
-        
-        console.log('Sending request to:', saveUrl);
-        console.log('Data length:', updatedJson.length);
-        
-        // Make the request using fetch
-        const response = await fetch(saveUrl, {
-          method: 'GET',
-          mode: 'no-cors' // This allows the request to go through even if CORS blocks the response
-        });
-        
-        console.log('Request sent, response:', response);
-        
-        alert('Graph saved successfully! Returning to Google Sheets...\n\nRequest URL: ' + saveUrl.substring(0, 100) + '...');
-        
-        // Close the window to return to Google Sheets
-        setTimeout(() => {
-          window.close();
-        }, 1500);
+
+        // Build a hidden form that POSTs to Apps Script
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = appsScriptUrl; // doPost in Apps Script
+        form.style.display = 'none';
+
+        const addField = (name: string, value: string) => {
+          const input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = name;
+          input.value = value;
+          form.appendChild(input);
+        };
+
+        addField('sessionId', sessionId);
+        addField('sheetId', sheetId);
+        addField('outputCell', outputCell);
+        addField('graphData', updatedJson);
+
+        document.body.appendChild(form);
+        form.submit();
+
+        alert('Graph saved. Returning to Google Sheets...');
+        setTimeout(() => window.close(), 1200);
         return;
       } catch (error) {
-        console.error('Save error:', error);
         alert('Save failed: ' + error);
         return;
       }
