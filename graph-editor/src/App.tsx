@@ -162,10 +162,12 @@ export default function App() {
         
         alert('Submitting form to: ' + appsScriptUrl + '\n\nData length: ' + updatedJson.length + ' chars');
         
+        // Add a target to open in a new window so we can see what happens
+        form.target = '_blank';
         form.submit();
 
-        alert('Form submitted! Returning to Google Sheets...');
-        setTimeout(() => window.close(), 1200);
+        alert('Form submitted! Check the new tab to see the response. Returning to Google Sheets...');
+        setTimeout(() => window.close(), 2000);
         return;
       } catch (error) {
         alert('Save failed: ' + error);
