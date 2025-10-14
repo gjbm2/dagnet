@@ -304,6 +304,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     return false;
   }, [nodes]);
 
+  // Generate a sensible slug for an edge based on node slugs
+  const generateEdgeSlug = useCallback((sourceId: string, targetId: string) => {
+    if (!graph?.nodes) return `${sourceId}-to-${targetId}`;
+    
+    // Find source and target nodes to get their slugs
+    const sourceNode = graph.nodes.find((n: any) => n.id === sourceId);
+    const targetNode = graph.nodes.find((n: any) => n.id === targetId);
+    
+    const sourceSlug = sourceNode?.slug || sourceNode?.id || sourceId;
+    const targetSlug = targetNode?.slug || targetNode?.id || targetId;
+    
+    return `${sourceSlug}-to-${targetSlug}`;
+  }, [graph]);
+
   // Handle new connections
   const onConnect = useCallback((connection: Connection) => {
     // Check for valid connection
@@ -332,20 +346,25 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
 
+    // Generate a sensible slug for the edge
+    const edgeSlug = generateEdgeSlug(connection.source, connection.target);
+    const edgeId = `${connection.source}->${connection.target}`;
+
     setEdges((eds) => addEdge({
         ...connection,
         type: 'conversion',
-      id: `${connection.source}->${connection.target}`,
+      id: edgeId,
       sourceHandle: connection.sourceHandle,
       targetHandle: connection.targetHandle,
       data: { 
-        id: `${connection.source}->${connection.target}`,
+        id: edgeId,
+        slug: edgeSlug,
         probability: 0.5,
         onUpdate: handleUpdateEdge,
         onDelete: handleDeleteEdge,
       },
     }, eds));
-  }, [setEdges, handleUpdateEdge, handleDeleteEdge, edges]);
+  }, [setEdges, handleUpdateEdge, handleDeleteEdge, edges, generateEdgeSlug]);
 
 
   // Handle Shift+Drag lasso selection

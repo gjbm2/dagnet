@@ -30,6 +30,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     targetHandle: e.toHandle,
     data: {
       id: e.id || `${e.from}->${e.to}`,
+      slug: e.slug,
       probability: e.p?.mean ?? 0.5,
       stdev: e.p?.stdev,
       locked: e.p?.locked,
@@ -66,6 +67,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
     })),
     edges: edges.map((e) => ({
       id: e.id,
+      slug: e.data?.slug,
       from: e.source,
       to: e.target,
       fromHandle: e.sourceHandle,

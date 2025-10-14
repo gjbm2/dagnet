@@ -153,17 +153,74 @@ function onOpen() {
     SpreadsheetApp.getUi()
       .createMenu('Dagnet')
       .addItem('Initialize', 'initialize')
-      .addItem('Edit graph', 'editGraph')
+      .addItem('Enable Sidebar', 'requestSidebarPermissions')
+      .addSeparator()
+      .addItem('Create Graph', 'createNewGraph')
+      .addItem('Edit Selected Cell in Dagnet', 'openDagnetFromCell')
+      .addSeparator()
+      .addItem('Edit in Dagnet (Menu)', 'menuEditInDagnet')
+      .addItem('Extract Parameters (Menu)', 'menuExtractParameters')
+      .addItem('Add Scenario (Menu)', 'menuAddScenario')
+      .addItem('View History (Menu)', 'menuViewHistory')
+      .addSeparator()
+      .addItem('Show Sidebar', 'showSidebarWithPolling')
+      .addItem('Test Sidebar', 'testSidebar')
       .addToUi();
+    
+    // Check if we have sidebar permissions without actually showing sidebar
+    checkSidebarPermissions();
   } catch (e) {
     SpreadsheetApp.getUi().alert('Error in onOpen: ' + e.message);
   }
 }
 
+/**
+ * Check sidebar permissions without showing sidebar
+ */
+function checkSidebarPermissions() {
+  try {
+    // Try to create a simple HTML output (this requires container.ui permission)
+    var testHtml = HtmlService.createHtmlOutput('<html><body>test</body></html>');
+    // If we get here, permissions are OK - show sidebar automatically
+    showSimpleSidebar();
+  } catch (e) {
+    if (e.message.includes('container.ui')) {
+      // Show a notification that sidebar needs authorization
+      SpreadsheetApp.getUi().alert(
+        'Dagnet Sidebar Ready!\n\n' +
+        'To enable the automatic sidebar:\n' +
+        '1. Go to Dagnet menu\n' +
+        '2. Click "Enable Sidebar" (fast!)\n' +
+        '3. Authorize when prompted\n\n' +
+        'Or use "Show Sidebar" from the menu.'
+      );
+    }
+  }
+}
 
+/**
+ * Lightweight permission request - just for sidebar (fast!)
+ */
+function requestSidebarPermissions() {
+  var ui = SpreadsheetApp.getUi();
+  
+  try {
+    showSimpleSidebar();
+  } catch (e) {
+    ui.alert('❌ Permission error: ' + e.message + '\n\nPlease authorize the script when prompted.');
+  }
+}
 
 function initialize() {
   var ui = SpreadsheetApp.getUi();
+  
+  // Step 1: Request permissions by trying to show sidebar
+  try {
+    showSimpleSidebar();
+  } catch (e) {
+    ui.alert('Permission error: ' + e.message + '\n\nPlease authorize the script when prompted.');
+    return;
+  }
   
   // Step 2: Check/Update web app URL
   var currentUrl = getCurrentWebAppUrl();
@@ -230,17 +287,25 @@ function testWebAppUrl(url) {
 /**
  * Open Dagnet with JSON from the currently selected cell. Edit-in-place by default.
  */
-function editGraph() {
+function openDagnetFromCell() {
   const sheet = SpreadsheetApp.getActiveSheet();
   const activeRange = sheet.getActiveRange();
   const cellA1 = activeRange.getA1Notation();
   let cellValue = activeRange.getDisplayValue() || activeRange.getValue();
-  
-  // If cell is empty, pass empty string to Vercel app
-  let jsonString = '';
-  if (cellValue && cellValue.toString().trim() !== '') {
-    jsonString = cellValue.toString();
+  if (!cellValue || cellValue.toString().trim() === '') {
+    SpreadsheetApp.getUi().alert('Selected cell is empty. Put a graph:// reference or JSON in the cell and try again.');
+    return;
   }
+  
+  // Check if this is a graph:// protocol cell
+  if (cellValue.toString().startsWith('graph://')) {
+    const graphId = cellValue.toString().replace('graph://', '').split('?')[0]; // Extract graph ID (ignore params for now)
+    openDagnetFromPointer(activeRange, graphId);
+    return;
+  }
+  
+  // Otherwise treat as JSON
+  let jsonString = cellValue;
 
   const sessionId = Utilities.getUuid();
   const sheetId = sheet.getParent().getId();
@@ -350,11 +415,249 @@ function createGraphCell(cell, graphId) {
 /**
  * Show sidebar with automatic polling
  */
+function showSidebarWithPolling() {
+  console.log('showSidebarWithPolling: Starting...');
+  var html = HtmlService.createHtmlOutput(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <base target="_top">
+      <style>
+        body { font-family: Arial, sans-serif; padding: 16px; margin: 0; }
+        .header { font-weight: bold; color: #1a73e8; margin-bottom: 16px; }
+        .action-button { 
+          display: block; 
+          width: 100%; 
+          padding: 8px 12px; 
+          margin: 4px 0; 
+          background: #1a73e8; 
+          color: white; 
+          border: none; 
+          border-radius: 4px; 
+          cursor: pointer;
+          text-align: left;
+        }
+        .action-button:hover { background: #1557b0; }
+        .info { background: #f8f9fa; padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 12px; }
+        .section { margin: 16px 0; }
+        .section-title { font-weight: bold; color: #333; margin-bottom: 8px; }
+        .no-selection { color: #666; font-style: italic; }
+      </style>
+    </head>
+    <body>
+      <div class="header">📊 Graph Actions</div>
+      <div class="info">Automatically detecting selection...</div>
+      
+      <div id="content">
+        <div class="no-selection">Select a graph cell to see actions</div>
+      </div>
+      
+      <div id="debug-info" style="margin-top: 20px; padding: 10px; background: #f0f0f0; border-radius: 4px; font-size: 11px;">
+        <strong>Debug Info:</strong><br>
+        <div id="current-cell">Current Cell: Detecting...</div>
+        <div id="cell-note">Cell Note: Detecting...</div>
+        <div id="polling-status">Polling: Starting...</div>
+      </div>
+      
+      <script>
+        var currentGraphId = null;
+        
+        function updateContent(selectionInfo) {
+          console.log('Update content called with:', selectionInfo);
+          
+          // Update debug info
+          document.getElementById('current-cell').textContent = 'Current Cell: ' + (selectionInfo.cellRef || 'Unknown');
+          document.getElementById('cell-note').textContent = 'Cell Note: ' + (selectionInfo.cellNote || 'None');
+          document.getElementById('polling-status').textContent = 'Polling: Active (Last: ' + new Date().toLocaleTimeString() + ')';
+          
+          if (selectionInfo && selectionInfo.isGraphCell) {
+            if (currentGraphId !== selectionInfo.graphId) {
+              currentGraphId = selectionInfo.graphId;
+              showGraphActions(selectionInfo);
+            }
+          } else {
+            if (currentGraphId !== null) {
+              currentGraphId = null;
+              showNoSelection();
+            }
+          }
+        }
+        
+        function showGraphActions(selectionInfo) {
+          var html = '<div class="section">';
+          html += '<div class="section-title">Graph Management</div>';
+          html += '<button class="action-button" onclick="editGraph()">✏️ Edit in Dagnet</button>';
+          html += '<button class="action-button" onclick="extractParams()">📋 Extract Parameters</button>';
+          html += '<button class="action-button" onclick="addScenario()">➕ Add Scenario</button>';
+          html += '<button class="action-button" onclick="viewHistory()">📚 View History</button>';
+          html += '<button class="action-button" onclick="createNew()">➕ Create New Graph</button>';
+          html += '</div>';
+          document.getElementById('content').innerHTML = html;
+        }
+        
+        function showNoSelection() {
+          document.getElementById('content').innerHTML = '<div class="no-selection">Select a graph cell to see actions</div>';
+        }
+        
+        function editGraph() {
+          google.script.run.editGraphFromSidebar(currentGraphId);
+        }
+        
+        function extractParams() {
+          google.script.run.extractParamsFromSidebar(currentGraphId);
+        }
+        
+        function addScenario() {
+          google.script.run.addScenarioFromSidebar(currentGraphId);
+        }
+        
+        function viewHistory() {
+          google.script.run.viewHistoryFromSidebar(currentGraphId);
+        }
+        
+        function createNew() {
+          google.script.run.createNewGraphFromSidebar();
+        }
+        
+        // Start polling immediately
+        console.log('Starting polling...');
+        setInterval(function() {
+          google.script.run
+            .withSuccessHandler(updateContent)
+            .withFailureHandler(function(error) {
+              console.log('Polling error:', error);
+              document.getElementById('polling-status').textContent = 'Polling: Error - ' + error.message;
+            })
+            .getCurrentSelectionInfo();
+        }, 2000);
+        
+        // Initial call
+        google.script.run
+          .withSuccessHandler(updateContent)
+          .getCurrentSelectionInfo();
+      </script>
+    </body>
+    </html>
+  `).setTitle('Graph Actions').setWidth(350);
+  
+  SpreadsheetApp.getUi().showSidebar(html);
+}
 
 /**
  * Simple fallback sidebar
  */
+function showSimpleSidebar() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    var html = HtmlService.createHtmlOutput(`
+      <!DOCTYPE html>
+      <html>
+      <head><base target="_top"></head>
+      <body>
+        <h3>📊 Graph Actions</h3>
+        <div id="content">
+          <p>Use the menu to access graph functions.</p>
+          <button onclick="google.script.run.createNewGraphFromSidebar()">Create Graph</button>
+        </div>
+        
+        <div id="debug-info" style="margin-top: 20px; padding: 10px; background: #f0f0f0; border-radius: 4px; font-size: 11px;">
+          <strong>Debug Info:</strong><br>
+          <div id="current-cell">Current Cell: Detecting...</div>
+          <div id="cell-note">Cell Note: Detecting...</div>
+          <div id="polling-status">Polling: Starting...</div>
+        </div>
+        
+        <script>
+          var currentGraphId = null;
+          
+          function updateDebugInfo(selectionInfo) {
+            // Update debug info
+            document.getElementById('current-cell').textContent = 'Current Cell: ' + (selectionInfo.cellRef || 'Unknown');
+            document.getElementById('cell-note').textContent = 'Cell Note: ' + (selectionInfo.cellNote || 'None');
+            document.getElementById('polling-status').textContent = 'Polling: Active (Last: ' + new Date().toLocaleTimeString() + ')';
+            
+            // Update content based on selection
+            if (selectionInfo && selectionInfo.isGraphCell) {
+              if (currentGraphId !== selectionInfo.graphId) {
+                currentGraphId = selectionInfo.graphId;
+                showGraphActions(selectionInfo);
+              }
+            } else {
+              if (currentGraphId !== null) {
+                currentGraphId = null;
+                showNoSelection();
+              }
+            }
+          }
+          
+          function showGraphActions(selectionInfo) {
+            var html = '<div style="margin: 10px 0;">';
+            html += '<h4>Graph Management</h4>';
+            html += '<button onclick="editGraph()" style="display: block; width: 100%; padding: 8px; margin: 4px 0; background: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer;">✏️ Edit in Dagnet</button>';
+            html += '<button onclick="extractParams()" style="display: block; width: 100%; padding: 8px; margin: 4px 0; background: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer;">📋 Extract Parameters</button>';
+            html += '<button onclick="addScenario()" style="display: block; width: 100%; padding: 8px; margin: 4px 0; background: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer;">➕ Add Scenario</button>';
+            html += '<button onclick="viewHistory()" style="display: block; width: 100%; padding: 8px; margin: 4px 0; background: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer;">📚 View History</button>';
+            html += '</div>';
+            document.getElementById('content').innerHTML = html;
+          }
+          
+          function showNoSelection() {
+            document.getElementById('content').innerHTML = '<p>Use the menu to access graph functions.</p><button onclick="google.script.run.createNewGraphFromSidebar()">Create Graph</button>';
+          }
+          
+          function editGraph() {
+            google.script.run.editGraphFromSidebar(currentGraphId);
+          }
+          
+          function extractParams() {
+            google.script.run.extractParamsFromSidebar(currentGraphId);
+          }
+          
+          function addScenario() {
+            google.script.run.addScenarioFromSidebar(currentGraphId);
+          }
+          
+          function viewHistory() {
+            google.script.run.viewHistoryFromSidebar(currentGraphId);
+          }
+          
+          // Start polling immediately
+          setInterval(function() {
+            google.script.run
+              .withSuccessHandler(updateDebugInfo)
+              .withFailureHandler(function(error) {
+                document.getElementById('polling-status').textContent = 'Polling: Error - ' + error.message;
+              })
+              .getCurrentSelectionInfo();
+          }, 1000);
+          
+          // Initial call
+          google.script.run
+            .withSuccessHandler(updateDebugInfo)
+            .getCurrentSelectionInfo();
+        </script>
+      </body>
+      </html>
+    `).setTitle('Graph Actions').setWidth(350);
+    
+    ui.showSidebar(html);
+  } catch (e) {
+    // If sidebar fails due to permissions, show a dialog instead
+    if (e.message.includes('permissions') || e.message.includes('container.ui')) {
+      SpreadsheetApp.getUi().alert('Sidebar requires additional permissions. Please run "Enable Sidebar" from the menu to authorize the script.');
+    } else {
+      SpreadsheetApp.getUi().alert('Error showing sidebar: ' + e.message);
+    }
+  }
+}
 
+/**
+ * Setup sidebar polling for automatic updates (DISABLED FOR NOW)
+ */
+function setupSidebarPolling() {
+  // Create a persistent sidebar that polls for selection changes
+  var html = HtmlService.createHtmlOutput(`
     <!DOCTYPE html>
     <html>
     <head>
@@ -669,6 +972,31 @@ function onEdit(e) {
  * Manual function to show sidebar for selected cell
  * (Google Apps Script doesn't support automatic onSelectionChange triggers)
  */
+function showSidebarForSelectedCell() {
+  try {
+    var sheet = SpreadsheetApp.getActiveSheet();
+    var cell = sheet.getActiveRange();
+    var note = cell.getNote();
+    
+    if (note && note.includes('DAGNET_GRAPH:')) {
+      // This is a graph cell - show sidebar
+      showGraphSidebar(cell, note);
+    } else {
+      // Check if this cell is within a graph's named range
+      var graphInfo = findGraphFromNamedRange(cell);
+      if (graphInfo) {
+        // This is within a graph's parameter range - show sidebar
+        showGraphSidebar(cell, graphInfo.note);
+      } else {
+        // Not a graph cell or parameter range
+        SpreadsheetApp.getUi().alert('Please select a graph cell (one with 📊 icon) or a cell within a graph\'s parameter range.');
+      }
+    }
+  } catch (err) {
+    console.log('Error in showSidebarForSelectedCell:', err);
+    SpreadsheetApp.getUi().alert('Error showing sidebar: ' + err.message);
+  }
+}
 
 /**
  * Show sidebar with graph actions
@@ -778,13 +1106,35 @@ function showGraphSidebar(cell, note) {
 /**
  * Hide sidebar
  */
+function hideSidebar() {
+  // Note: Apps Script doesn't have a direct way to hide sidebar
+  // The sidebar will remain visible until user closes it manually
+}
 
 /**
  * Sidebar action handlers
  */
+function editGraphFromSidebar(graphId) {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var range = sheet.getActiveRange();
+  openDagnetFromPointer(range, graphId);
+}
 
+function extractParamsFromSidebar(graphId) {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var range = sheet.getActiveRange();
+  extractParametersToNamedRange(range, graphId);
+}
 
+function viewHistoryFromSidebar(graphId) {
+  showHistoryForGraph(graphId);
+}
 
+function addScenarioFromSidebar(graphId) {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var range = sheet.getActiveRange();
+  addScenarioToGraph(range, graphId);
+}
 
 function runStandardAnalytics(graphId, operation) {
   var sheet = SpreadsheetApp.getActiveSheet();
@@ -798,6 +1148,9 @@ function runCustomAnalytics(graphId) {
   runCustomAnalyticsOnGraph(range, graphId);
 }
 
+function createNewGraphFromSidebar() {
+  createNewGraph();
+}
 
 
 /**
@@ -2370,6 +2723,7 @@ function doPost(e) {
     var sheetId = body.sheetId;
     var outputCell = body.outputCell;
     var graphData = body.graphData;
+    var graphId = body.graphId;
 
     if (!sheetId || !outputCell || !graphData) {
 			return ContentService.createTextOutput(JSON.stringify({ success:false, error:'Missing fields', received:body }))
@@ -2381,8 +2735,38 @@ function doPost(e) {
     var jsonString = typeof graphData === 'string' ? graphData : JSON.stringify(graphData);
     try { jsonString = JSON.stringify(JSON.parse(jsonString), null, 2); } catch (ignore) {}
     
-    // Simply update the cell with the returned JSON
-    cell.setValue(jsonString);
+    // ALWAYS store in history and create/update pointer
+    var historySheet = getOrCreateHistorySheet();
+    var narrative = 'Graph updated via Dagnet';
+    
+    // Extract narrative from graph metadata if available
+    try {
+      var graph = JSON.parse(jsonString);
+      if (graph.metadata && graph.metadata.narrative) {
+        narrative = graph.metadata.narrative;
+      }
+    } catch (e) {}
+    
+    // Add to history
+    var newGraphId = addHistoryEntry(historySheet, graphId, JSON.parse(jsonString), narrative);
+    
+    // Update cell to use graph:// protocol
+    cell.setValue('graph://' + newGraphId);
+    
+    // Update named range if it exists
+    try {
+      var params = extractNamedParameters(JSON.parse(jsonString));
+      var namedRangeName = getNamedRangeFromGraphCell(cell);
+      if (namedRangeName) {
+        var namedRange = sheet.getParent().getRangeByName(namedRangeName);
+        if (namedRange) {
+          // Update existing named range with intelligent parameter management
+          updateParameterTableWithScenarios(namedRange, params);
+        }
+      }
+    } catch (parseErr) {
+      console.log('Could not update named range:', parseErr);
+    }
 
 		return ContentService.createTextOutput(JSON.stringify({ success:true, received:body }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -2511,6 +2895,16 @@ function normalizeWebAppUrl(url) {
 /**
  * Test function to manually show sidebar
  */
+function testSidebar() {
+  console.log('testSidebar: Starting...');
+  try {
+    showSimpleSidebar();
+    console.log('testSidebar: Completed successfully');
+  } catch (e) {
+    console.log('testSidebar error:', e);
+    SpreadsheetApp.getUi().alert('Error in testSidebar: ' + e.message);
+  }
+}
 
 /**
  * Force refresh the menu - run this if new menu items don't appear
