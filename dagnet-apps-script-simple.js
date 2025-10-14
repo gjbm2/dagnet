@@ -255,17 +255,21 @@ function editGraph() {
     <html><body style="font-family:Arial;padding:16px;text-align:center">
       <h3>Opening Dagnet…</h3>
       <p>If it doesn't open, <a href="${appUrl}" target="_blank">click here</a>.</p>
-      <button onclick="google.script.host.close()" style="margin-top:10px;padding:8px 16px">Close</button>
+      <p style="font-size:12px;color:#666;margin-top:10px;">This dialog will close automatically when you save in Dagnet.</p>
+      <button onclick="google.script.host.close()" style="margin-top:10px;padding:8px 16px;background:#1a73e8;color:white;border:none;border-radius:4px;cursor:pointer">Close Dialog</button>
       <script>
         (function(){
           var w = window.open(${JSON.stringify(appUrl)}, '_blank');
           if (w) {
-            setTimeout(function(){ google.script.host.close(); }, 10000);
+            // Close dialog after 3 seconds to allow Dagnet to load
+            setTimeout(function(){ 
+              google.script.host.close(); 
+            }, 5000);
           }
         })();
       </script>
     </body></html>
-  `).setWidth(380).setHeight(180);
+  `).setWidth(380).setHeight(200);
 
   SpreadsheetApp.getUi().showModalDialog(html, 'Dagnet');
 }
