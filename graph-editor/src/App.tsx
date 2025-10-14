@@ -134,7 +134,19 @@ export default function App() {
     if (sessionId && outputCell && sheetId && appsScriptUrl) {
       // We're being used from Apps Script - save automatically via form POST (bypasses CORS)
       try {
-        const updatedJson = JSON.stringify(graph, null, 2);
+        // Reorder JSON to put metadata first with description at the top
+        const reorderedGraph = {
+          metadata: {
+            description: graph.metadata?.description || 'Graph created in Dagnet',
+            ...graph.metadata
+          },
+          nodes: graph.nodes,
+          edges: graph.edges,
+          policies: graph.policies
+        };
+        
+        // Stringify without line breaks for better cell readability
+        const updatedJson = JSON.stringify(reorderedGraph);
 
         console.log('Form POST to:', appsScriptUrl);
         console.log('Data length:', updatedJson.length);
