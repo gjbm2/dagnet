@@ -160,14 +160,11 @@ export default function App() {
 
         document.body.appendChild(form);
         
-        alert('Submitting form to: ' + appsScriptUrl + '\n\nData length: ' + updatedJson.length + ' chars');
-        
-        // Add a target to open in a new window so we can see what happens
-        form.target = '_blank';
+        // Submit the form (this will POST to Apps Script and update the cell)
         form.submit();
 
-        alert('Form submitted! Check the new tab to see the response. Returning to Google Sheets...');
-        setTimeout(() => window.close(), 2000);
+        // Close the window after a short delay to allow the POST to complete
+        setTimeout(() => window.close(), 1000);
         return;
       } catch (error) {
         alert('Save failed: ' + error);

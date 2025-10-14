@@ -64,11 +64,40 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const lastSyncedGraphRef = useRef<string>('');
   const isSyncingRef = useRef(false);
   
+  // Check if a slug is unique across all nodes and edges
+  const isSlugUnique = useCallback((slug: string, excludeId?: string) => {
+    if (!graph) return true;
+    
+    // Check nodes
+    const nodeConflict = graph.nodes.some((node: any) => 
+      node.slug === slug && node.id !== excludeId
+    );
+    if (nodeConflict) return false;
+    
+    // Check edges
+    const edgeConflict = graph.edges.some((edge: any) => 
+      edge.slug === slug && edge.id !== excludeId
+    );
+    if (edgeConflict) return false;
+    
+    return true;
+  }, [graph]);
+  
   // Callback functions for node/edge updates
   const handleUpdateNode = useCallback((id: string, data: any) => {
     console.log('handleUpdateNode called:', { id, data });
     setGraph((prevGraph) => {
       if (!prevGraph) return prevGraph;
+      
+      // Check for slug uniqueness if slug is being updated
+      if (data.slug) {
+        const isUnique = isSlugUnique(data.slug, id);
+        if (!isUnique) {
+          alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
+          return prevGraph;
+        }
+      }
+      
       const nextGraph = structuredClone(prevGraph);
       const nodeIndex = nextGraph.nodes.findIndex(n => n.id === id);
       if (nodeIndex >= 0) {
@@ -78,7 +107,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
       return nextGraph;
     });
-  }, [setGraph]);
+  }, [setGraph, isSlugUnique]);
 
   const handleDeleteNode = useCallback((id: string) => {
     console.log('=== DELETING NODE ===', id);
@@ -125,6 +154,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const handleUpdateEdge = useCallback((id: string, data: any) => {
     setGraph((prevGraph) => {
       if (!prevGraph) return prevGraph;
+      
+      // Check for slug uniqueness if slug is being updated
+      if (data.slug) {
+        const isUnique = isSlugUnique(data.slug, id);
+        if (!isUnique) {
+          alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
+          return prevGraph;
+        }
+      }
+      
       const nextGraph = structuredClone(prevGraph);
       const edgeIndex = nextGraph.edges.findIndex(e => e.id === id);
       if (edgeIndex >= 0) {
@@ -133,7 +172,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
       return nextGraph;
     });
-  }, [setGraph]);
+  }, [setGraph, isSlugUnique]);
 
   const handleDeleteEdge = useCallback((id: string) => {
     console.log('=== DELETING EDGE ===', id);
@@ -304,7 +343,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     return false;
   }, [nodes]);
 
-  // Generate a sensible slug for an edge based on node slugs
+  // Generate a unique slug for an edge based on node slugs
   const generateEdgeSlug = useCallback((sourceId: string, targetId: string) => {
     if (!graph?.nodes) return `${sourceId}-to-${targetId}`;
     
@@ -315,8 +354,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const sourceSlug = sourceNode?.slug || sourceNode?.id || sourceId;
     const targetSlug = targetNode?.slug || targetNode?.id || targetId;
     
-    return `${sourceSlug}-to-${targetSlug}`;
-  }, [graph]);
+    let baseSlug = `${sourceSlug}-to-${targetSlug}`;
+    let slug = baseSlug;
+    let counter = 1;
+    
+    // Ensure uniqueness by appending a number if needed
+    while (!isSlugUnique(slug)) {
+      slug = `${baseSlug}-${counter}`;
+      counter++;
+    }
+    
+    return slug;
+  }, [graph, isSlugUnique]);
 
   // Handle new connections
   const onConnect = useCallback((connection: Connection) => {
@@ -662,6 +711,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Add new node
   const addNode = useCallback(() => {
     const newId = crypto.randomUUID();
+    
+    // Generate a unique slug for the node
+    let baseSlug = `node_${nodes.length + 1}`;
+    let slug = baseSlug;
+    let counter = 1;
+    
+    while (!isSlugUnique(slug)) {
+      slug = `${baseSlug}_${counter}`;
+      counter++;
+    }
+    
     const newNode: Node = {
       id: newId,
       type: 'conversion',
@@ -669,14 +729,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       data: {
         id: newId,
         label: `Node ${nodes.length + 1}`,
-        slug: `node_${nodes.length + 1}`,
+        slug: slug,
         absorbing: false,
         onUpdate: handleUpdateNode,
         onDelete: handleDeleteNode,
       },
     };
     setNodes((nds) => [...nds, newNode]);
-  }, [nodes.length, setNodes, handleUpdateNode, handleDeleteNode]);
+  }, [nodes.length, setNodes, handleUpdateNode, handleDeleteNode, isSlugUnique]);
 
 
   if (!graph) {
