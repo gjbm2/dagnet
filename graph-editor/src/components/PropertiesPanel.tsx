@@ -62,6 +62,7 @@ export default function PropertiesPanel({
       );
       if (edge) {
         setLocalEdgeData({
+          slug: edge.slug || '',
           probability: edge.p?.mean || 0,
           stdev: edge.p?.stdev || 0,
           locked: edge.p?.locked || false,
@@ -266,20 +267,61 @@ export default function PropertiesPanel({
       }}>
         {activeTab === 'graph' && (
           <div>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
-              Version
-            </label>
-            <input
-              value={graph.metadata?.version || ''}
-              onChange={(e) => updateGraph(['metadata', 'version'], e.target.value)}
-              style={{ 
-                width: '100%', 
-                padding: '8px', 
-                border: '1px solid #ddd', 
-                borderRadius: '4px',
-                boxSizing: 'border-box'
-              }}
-            />
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                Description
+              </label>
+              <textarea
+                value={graph.metadata?.description || ''}
+                onChange={(e) => updateGraph(['metadata', 'description'], e.target.value)}
+                placeholder="Enter graph description..."
+                style={{ 
+                  width: '100%', 
+                  padding: '8px', 
+                  border: '1px solid #ddd', 
+                  borderRadius: '4px',
+                  boxSizing: 'border-box',
+                  minHeight: '60px',
+                  resize: 'vertical'
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                Version
+              </label>
+              <input
+                value={graph.metadata?.version || ''}
+                onChange={(e) => updateGraph(['metadata', 'version'], e.target.value)}
+                placeholder="1.0.0"
+                style={{ 
+                  width: '100%', 
+                  padding: '8px', 
+                  border: '1px solid #ddd', 
+                  borderRadius: '4px',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                Author
+              </label>
+              <input
+                value={graph.metadata?.author || ''}
+                onChange={(e) => updateGraph(['metadata', 'author'], e.target.value)}
+                placeholder="Your name"
+                style={{ 
+                  width: '100%', 
+                  padding: '8px', 
+                  border: '1px solid #ddd', 
+                  borderRadius: '4px',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
           </div>
         )}
 
@@ -471,6 +513,25 @@ export default function PropertiesPanel({
           <div>
             {selectedEdge ? (
               <div>
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Slug</label>
+                  <input
+                    data-field="slug"
+                    value={localEdgeData.slug || ''}
+                    onChange={(e) => setLocalEdgeData({...localEdgeData, slug: e.target.value})}
+                    onBlur={() => updateEdge('slug', localEdgeData.slug)}
+                    onKeyDown={(e) => e.key === 'Enter' && updateEdge('slug', localEdgeData.slug)}
+                    placeholder="edge-slug"
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Probability</label>
                   <input
