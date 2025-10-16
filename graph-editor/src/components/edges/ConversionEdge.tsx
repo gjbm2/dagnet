@@ -18,6 +18,7 @@ interface ConversionEdgeData {
   onReconnect?: (id: string, newSource?: string, newTarget?: string) => void;
   onDoubleClick?: (id: string, field: string) => void;
   onSelect?: (id: string) => void;
+  calculateWidth?: () => number;
 }
 
 export default function ConversionEdge({
@@ -46,7 +47,169 @@ export default function ConversionEdge({
     targetPosition,
   });
 
-  // Calculate the arrow position at 75% along the path
+  // Helper function to get point on Bézier curve at parameter t
+  const getBezierPoint = (t: number, sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number) => {
+    const mt = 1 - t;
+    const mt2 = mt * mt;
+    const mt3 = mt2 * mt;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    
+    return {
+      x: mt3 * sx + 3 * mt2 * t * c1x + 3 * mt * t2 * c2x + t3 * ex,
+      y: mt3 * sy + 3 * mt2 * t * c1y + 3 * mt * t2 * c2y + t3 * ey
+    };
+  };
+
+  // Helper function to calculate arc length of a cubic Bézier curve up to parameter tMax
+  const calculateBezierLengthToT = (sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number, tMax: number): number => {
+    const steps = 100;
+    let length = 0;
+    const actualSteps = Math.floor(steps * tMax);
+    
+    for (let i = 0; i < actualSteps; i++) {
+      const t1 = i / steps;
+      const t2 = (i + 1) / steps;
+      
+      const p1 = getBezierPoint(t1, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
+      const p2 = getBezierPoint(t2, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
+      
+      length += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+    }
+    
+    return length;
+  };
+
+  // Helper function to calculate arc length of a cubic Bézier curve (full length)
+  const calculateBezierLength = (sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number): number => {
+    return calculateBezierLengthToT(sx, sy, c1x, c1y, c2x, c2y, ex, ey, 1.0);
+  };
+
+  // Calculate arrow positions along the path
+  const arrowPositions = React.useMemo(() => {
+    if (!data?.calculateWidth) return [];
+    
+    try {
+      // Extract first 8 numbers from the path: M sx,sy C c1x,c1y c2x,c2y ex,ey
+      const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+      if (!nums || nums.length < 8) return [];
+      const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
+
+      const lerp = (a: number, b: number, tt: number) => a + (b - a) * tt;
+
+      // Calculate multiple positions along the curve using correct algorithmic approach
+      const positions: { x: number; y: number; angle: number }[] = [];
+      
+      // Calculate actual arc length of the Bézier curve (not just Euclidean distance)
+      const pathLength = calculateBezierLength(sx, sy, c1x, c1y, c2x, c2y, ex, ey);
+      
+      // Algorithm: Place arrows at L/2 +/- nY (while avoiding first X and last X pixels)
+      const excludePixels = 14; // Exclude 14 pixels from each end (20 * 0.7)
+      const arrowSpacing = 28; // Y = spacing between arrows (40 * 0.7)
+      const L = pathLength;
+      const L_half = L / 2;
+      
+      console.log(`Edge ${id}: L=${L.toFixed(1)}px, L/2=${L_half.toFixed(1)}px, excludePixels=${excludePixels}px`);
+      
+      // Helper function to find t value for a given arc length distance
+      const findTForArcLength = (targetLength: number): number => {
+        if (targetLength <= 0) return 0;
+        if (targetLength >= L) return 1;
+        
+        // Binary search for the t value that gives us the target arc length
+        let t = targetLength / L; // Initial guess (linear approximation)
+        let low = 0;
+        let high = 1;
+        
+        for (let i = 0; i < 20; i++) { // 20 iterations should be enough
+          const currentLength = calculateBezierLengthToT(sx, sy, c1x, c1y, c2x, c2y, ex, ey, t);
+          
+          if (Math.abs(currentLength - targetLength) < 0.1) {
+            return t; // Close enough
+          }
+          
+          if (currentLength < targetLength) {
+            low = t;
+            t = (t + high) / 2;
+          } else {
+            high = t;
+            t = (low + t) / 2;
+          }
+        }
+        
+        return t;
+      };
+      
+      // Place arrows at L/2 +/- nY, but only if they're within valid range
+      let n = 0;
+      while (true) {
+        // Calculate positions: L/2 + nY and L/2 - nY
+        const pos1 = L_half + (n * arrowSpacing);
+        const pos2 = L_half - (n * arrowSpacing);
+        
+        // Check if positions are valid (not in excluded areas)
+        const pos1Valid = pos1 >= excludePixels && pos1 <= (L - excludePixels);
+        const pos2Valid = pos2 >= excludePixels && pos2 <= (L - excludePixels);
+        
+        // If neither position is valid, we're done
+        if (!pos1Valid && !pos2Valid) break;
+        
+        // Add valid positions
+        if (pos1Valid) {
+          const t1 = findTForArcLength(pos1);
+          const point1 = calculatePointOnCurve(t1, sx, sy, c1x, c1y, c2x, c2y, ex, ey, lerp);
+          if (point1) positions.push(point1);
+        }
+        
+        if (pos2Valid && n > 0) { // Don't duplicate the center arrow
+          const t2 = findTForArcLength(pos2);
+          const point2 = calculatePointOnCurve(t2, sx, sy, c1x, c1y, c2x, c2y, ex, ey, lerp);
+          if (point2) positions.push(point2);
+        }
+        
+        n++;
+      }
+      
+      console.log(`Edge ${id}: placed ${positions.length} arrows`);
+      
+      // Helper function to calculate point and angle on curve
+      function calculatePointOnCurve(t: number, sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number, lerp: (a: number, b: number, tt: number) => number) {
+        // De Casteljau to get point and tangent at t
+        const p0x = sx, p0y = sy;
+        const p1x = c1x, p1y = c1y;
+        const p2x = c2x, p2y = c2y;
+        const p3x = ex, p3y = ey;
+
+        const p01x = lerp(p0x, p1x, t);
+        const p01y = lerp(p0y, p1y, t);
+        const p12x = lerp(p1x, p2x, t);
+        const p12y = lerp(p1y, p2y, t);
+        const p23x = lerp(p2x, p3x, t);
+        const p23y = lerp(p2y, p3y, t);
+
+        const p012x = lerp(p01x, p12x, t);
+        const p012y = lerp(p01y, p12y, t);
+        const p123x = lerp(p12x, p23x, t);
+        const p123y = lerp(p12y, p23y, t);
+
+        const p0123x = lerp(p012x, p123x, t);
+        const p0123y = lerp(p012y, p123y, t);
+
+        // Calculate tangent for arrow direction
+        const tangentX = p123x - p012x;
+        const tangentY = p123y - p012y;
+        const angle = Math.atan2(tangentY, tangentX) * (180 / Math.PI);
+
+        return { x: p0123x, y: p0123y, angle };
+      }
+      
+      return positions;
+    } catch {
+      return [];
+    }
+  }, [edgePath, targetX, targetY, data?.calculateWidth]);
+
+  // Calculate the arrow position at 75% along the path (for single arrow mode)
   const arrowPosition = React.useMemo(() => {
     try {
       // Extract first 8 numbers from the path: M sx,sy C c1x,c1y c2x,c2y ex,ey
@@ -159,7 +322,7 @@ export default function ConversionEdge({
         >
           <path
             d="M0,0 L0,6 L9,3 z"
-            fill={selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999'}
+            fill="#000000"
           />
         </marker>
       </defs>
@@ -168,11 +331,12 @@ export default function ConversionEdge({
         id={id}
         style={{
           stroke: selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999',
-          strokeWidth: selected ? 3 : (data?.probability === undefined || data?.probability === null) ? 3 : 2,
+          strokeWidth: data?.calculateWidth ? data.calculateWidth() : (selected ? 3 : (data?.probability === undefined || data?.probability === null) ? 3 : 2),
           fill: 'none',
           cursor: 'pointer',
           zIndex: selected ? 1000 : 1,
           strokeDasharray: (data?.probability === undefined || data?.probability === null) ? '5,5' : 'none',
+          markerEnd: data?.calculateWidth ? 'none' : `url(#arrow-${id})`,
         }}
         className="react-flow__edge-path"
         d={edgePath}
@@ -195,20 +359,37 @@ export default function ConversionEdge({
         onDoubleClick={handleDoubleClick}
       />
       
-      {/* Custom arrow at 75% position */}
-      <polygon
-        points={`${arrowPosition.x - 4},${arrowPosition.y - 3} ${arrowPosition.x - 4},${arrowPosition.y + 3} ${arrowPosition.x + 4},${arrowPosition.y}`}
-        fill={selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999'}
-        transform={`rotate(${arrowPosition.angle} ${arrowPosition.x} ${arrowPosition.y})`}
-        style={{ zIndex: selected ? 1000 : 1 }}
-      />
+      {/* Repeating arrows along the path - only show when using custom scaling */}
+      {data?.calculateWidth && arrowPositions.map((pos, index) => (
+        <g key={index}>
+          {/* Arrow background (canvas color) */}
+          <polygon
+            points={`${pos.x - 6},${pos.y - 4} ${pos.x - 6},${pos.y + 4} ${pos.x + 6},${pos.y}`}
+            fill="#f8f9fa"
+            stroke={selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999'}
+            strokeWidth="1"
+            transform={`rotate(${pos.angle} ${pos.x} ${pos.y})`}
+            style={{ zIndex: selected ? 1000 : 1001 }}
+          />
+        </g>
+      ))}
+      
+      {/* Single arrow at 75% position - only show when NOT using custom scaling */}
+      {!data?.calculateWidth && (
+        <polygon
+          points={`${arrowPosition.x - 4},${arrowPosition.y - 3} ${arrowPosition.x - 4},${arrowPosition.y + 3} ${arrowPosition.x + 4},${arrowPosition.y}`}
+          fill={selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999'}
+          transform={`rotate(${arrowPosition.angle} ${arrowPosition.x} ${arrowPosition.y})`}
+          style={{ zIndex: selected ? 1000 : 1 }}
+        />
+      )}
       
       <EdgeLabelRenderer>
         <div
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-            background: selected ? '#007bff' : '#fff',
+            background: selected ? '#007bff' : 'rgba(255, 255, 255, 0.85)',
             color: selected ? '#fff' : '#333',
             padding: '4px 8px',
             borderRadius: '4px',

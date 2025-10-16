@@ -21,6 +21,7 @@ import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
 import { useGraphStore } from '@/lib/useGraphStore';
 import { toFlow, fromFlow } from '@/lib/transform';
+import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -36,9 +37,10 @@ interface GraphCanvasProps {
   onDoubleClickNode?: (id: string, field: string) => void;
   onDoubleClickEdge?: (id: string, field: string) => void;
   onSelectEdge?: (id: string) => void;
+  edgeScalingMode: 'uniform' | 'local-mass' | 'global-mass';
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -47,40 +49,154 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onDoubleClickNode={onDoubleClickNode}
         onDoubleClickEdge={onDoubleClickEdge}
         onSelectEdge={onSelectEdge}
+        edgeScalingMode={edgeScalingMode}
       />
     </ReactFlowProvider>
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode }: GraphCanvasProps) {
   const { graph, setGraph } = useGraphStore();
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+  // Edge width calculation based on scaling mode
+  const calculateEdgeWidth = useCallback((edge: any, allEdges: any[], allNodes: any[]) => {
+    // MAX_WIDTH = node height - 2x corner radius = 60 - 16 = 44px
+    const MAX_WIDTH = 44; // Node height (60px) minus 2x corner radius (8px each = 16px)
+    const MIN_WIDTH = 2;
+    
+    console.log(`calculateEdgeWidth called for edge ${edge.id}, mode=${edgeScalingMode}`);
+    
+    if (edgeScalingMode === 'uniform') {
+      return edge.selected ? 3 : 2;
+    }
+    
+    if (edgeScalingMode === 'local-mass') {
+      // Find all edges from the same source node
+      const sourceEdges = allEdges.filter(e => e.source === edge.source);
+      const totalProbability = sourceEdges.reduce((sum, e) => sum + (e.data?.probability || 0), 0);
+      
+      if (totalProbability === 0) return MIN_WIDTH;
+      
+      const edgeProbability = edge.data?.probability || 0;
+      const proportion = edgeProbability / totalProbability;
+      // Use a more dramatic scaling for better visibility
+      const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
+      const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
+      
+      console.log(`Local mass edge ${edge.id}: prob=${edgeProbability}, total=${totalProbability}, proportion=${proportion.toFixed(2)}, width=${finalWidth.toFixed(1)} (MAX_WIDTH=${MAX_WIDTH})`);
+      return finalWidth;
+    }
+    
+    if (edgeScalingMode === 'global-mass') {
+      // Global mass: scale based on residual probability as graph is traversed from start
+      // Find the start node (node with entry.is_start = true or entry.entry_weight > 0)
+      const startNode = allNodes.find(n => 
+        n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
+      );
+      
+      console.log(`Global mass mode: startNode=`, startNode);
+      
+      if (!startNode) {
+        console.log(`No start node found, falling back to local mass for edge ${edge.id}`);
+        // Fallback to local mass if no clear start node
+        const sourceEdges = allEdges.filter(e => e.source === edge.source);
+        const totalProbability = sourceEdges.reduce((sum, e) => sum + (e.data?.probability || 0), 0);
+        if (totalProbability === 0) return MIN_WIDTH;
+        const edgeProbability = edge.data?.probability || 0;
+        const proportion = edgeProbability / totalProbability;
+        const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
+        return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
+      }
+      
+      // Calculate residual probability at the source node
+      const residualAtSource = calculateResidualProbability(edge.source, allEdges, startNode.id);
+      
+      if (residualAtSource === 0) return MIN_WIDTH;
+      
+      // Sankey-style: actual mass flowing through this edge = p(source) × edge_probability
+      const edgeProbability = edge.data?.probability || 0;
+      const actualMassFlowing = residualAtSource * edgeProbability;
+      
+      // Width scales directly with actual mass flowing through
+      const scaledWidth = MIN_WIDTH + (actualMassFlowing * (MAX_WIDTH - MIN_WIDTH));
+      const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
+      
+      console.log(`Global mass edge ${edge.id}: p(source)=${residualAtSource.toFixed(2)}, edgeProb=${edgeProbability.toFixed(2)}, actualMass=${actualMassFlowing.toFixed(2)}, width=${finalWidth.toFixed(1)} (MAX_WIDTH=${MAX_WIDTH})`);
+      return finalWidth;
+    }
+    
+    // Helper function to calculate residual probability
+    function calculateResidualProbability(targetNode: string, allEdges: any[], startNode: string): number {
+      // Build adjacency list and reverse adjacency list
+      const outgoing: { [key: string]: any[] } = {};
+      const incoming: { [key: string]: any[] } = {};
+      allEdges.forEach(e => {
+        if (!outgoing[e.source]) outgoing[e.source] = [];
+        if (!incoming[e.target]) incoming[e.target] = [];
+        outgoing[e.source].push(e);
+        incoming[e.target].push(e);
+      });
+      
+      // Use topological sort to calculate residual probability at each node
+      const residualAtNode: { [key: string]: number } = {};
+      const visited = new Set<string>();
+      
+      function dfs(node: string): number {
+        if (visited.has(node)) {
+          return residualAtNode[node] || 0;
+        }
+        visited.add(node);
+        
+        // If this is the start node, residual is 1.0
+        if (node === startNode) {
+          residualAtNode[node] = 1.0;
+          return 1.0;
+        }
+        
+        // Sum up probability mass from all incoming edges
+        let totalIncoming = 0;
+        const incomingEdges = incoming[node] || [];
+        incomingEdges.forEach(edge => {
+          const sourceResidual = dfs(edge.source);
+          const edgeProbability = edge.data?.probability || 0;
+          totalIncoming += sourceResidual * edgeProbability;
+        });
+        
+        residualAtNode[node] = totalIncoming;
+        return totalIncoming;
+      }
+      
+      // Calculate residual for target node
+      return dfs(targetNode);
+    }
+    
+    return edge.selected ? 3 : 2;
+  }, [edgeScalingMode]);
   
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
   const isSyncingRef = useRef(false);
   
-  // Check if a slug is unique across all nodes and edges
-  const isSlugUnique = useCallback((slug: string, excludeId?: string) => {
-    if (!graph) return true;
+  // Get all existing slugs (nodes and edges) for uniqueness checking
+  const getAllExistingSlugs = useCallback((excludeId?: string) => {
+    if (!graph) return [];
     
-    // Check nodes
-    const nodeConflict = graph.nodes.some((node: any) => 
-      node.slug === slug && node.id !== excludeId
-    );
-    if (nodeConflict) return false;
+    const nodeSlugs = graph.nodes
+      .filter((node: any) => node.id !== excludeId)
+      .map((node: any) => node.slug)
+      .filter(Boolean);
     
-    // Check edges
-    const edgeConflict = graph.edges.some((edge: any) => 
-      edge.slug === slug && edge.id !== excludeId
-    );
-    if (edgeConflict) return false;
+    const edgeSlugs = graph.edges
+      .filter((edge: any) => edge.id !== excludeId)
+      .map((edge: any) => edge.slug)
+      .filter(Boolean);
     
-    return true;
+    return [...nodeSlugs, ...edgeSlugs];
   }, [graph]);
   
   // Callback functions for node/edge updates
@@ -91,8 +207,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Check for slug uniqueness if slug is being updated
       if (data.slug) {
-        const isUnique = isSlugUnique(data.slug, id);
-        if (!isUnique) {
+        const existingSlugs = getAllExistingSlugs(id);
+        if (existingSlugs.includes(data.slug)) {
           alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
           return prevGraph;
         }
@@ -107,7 +223,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
       return nextGraph;
     });
-  }, [setGraph, isSlugUnique]);
+  }, [setGraph, getAllExistingSlugs]);
 
   const handleDeleteNode = useCallback((id: string) => {
     console.log('=== DELETING NODE ===', id);
@@ -157,8 +273,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Check for slug uniqueness if slug is being updated
       if (data.slug) {
-        const isUnique = isSlugUnique(data.slug, id);
-        if (!isUnique) {
+        const existingSlugs = getAllExistingSlugs(id);
+        if (existingSlugs.includes(data.slug)) {
           alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
           return prevGraph;
         }
@@ -172,7 +288,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
       return nextGraph;
     });
-  }, [setGraph, isSlugUnique]);
+  }, [setGraph, getAllExistingSlugs]);
 
   const handleDeleteEdge = useCallback((id: string) => {
     console.log('=== DELETING EDGE ===', id);
@@ -246,11 +362,38 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onDoubleClickEdge: onDoubleClickEdge,
       onSelectEdge: onSelectEdge,
     });
+    
+    // Add edge width calculation to each edge
+    const edgesWithWidth = newEdges.map(edge => ({
+      ...edge,
+      data: {
+        ...edge.data,
+        calculateWidth: () => calculateEdgeWidth(edge, newEdges, newNodes)
+      }
+    }));
+    
     setNodes(newNodes);
-    setEdges(newEdges);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge]);
+    setEdges(edgesWithWidth);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, calculateEdgeWidth]);
+
+  // Update edge widths when scaling mode changes
+  useEffect(() => {
+    if (edges.length === 0) return;
+    
+    // Force re-render of edges by updating their data
+    setEdges(prevEdges => 
+      prevEdges.map(edge => ({
+        ...edge,
+        data: {
+          ...edge.data,
+          calculateWidth: () => calculateEdgeWidth(edge, prevEdges, nodes)
+        }
+      }))
+    );
+  }, [edgeScalingMode, calculateEdgeWidth, nodes]);
   
-  // Sync FROM ReactFlow TO graph when user makes changes
+  // Sync FROM ReactFlow TO graph when user makes changes in the canvas
+  // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
   useEffect(() => {
     if (!graph) return;
     if (isSyncingRef.current) {
@@ -280,7 +423,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         isSyncingRef.current = false;
       }, 0);
     }
-  }, [nodes, edges, graph, setGraph]);
+  }, [nodes, edges]); // Removed 'graph' and 'setGraph' from dependencies
 
   // Function to check if adding an edge would create a cycle
   const wouldCreateCycle = useCallback((source: string, target: string, currentEdges: any[]) => {
@@ -359,16 +502,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     let counter = 1;
     
     // Ensure uniqueness by appending a number if needed
-    while (!isSlugUnique(slug)) {
-      slug = `${baseSlug}-${counter}`;
-      counter++;
-    }
+    const existingSlugs = getAllExistingSlugs();
+    const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
     
-    return slug;
-  }, [graph, isSlugUnique]);
+    return uniqueSlug;
+  }, [graph, getAllExistingSlugs]);
 
   // Handle new connections
   const onConnect = useCallback((connection: Connection) => {
+    if (!graph) return;
+    
     // Check for valid connection
     if (!connection.source || !connection.target) {
       return;
@@ -381,16 +524,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
 
     // Prevent duplicate edges
-    const existingEdge = edges.find(edge => 
-      edge.source === connection.source && edge.target === connection.target
+    const existingEdge = graph.edges.find(edge => 
+      edge.from === connection.source && edge.to === connection.target
     );
     if (existingEdge) {
       alert('An edge already exists between these nodes.');
       return;
     }
 
-    // Check for circular dependencies
-    if (wouldCreateCycle(connection.source, connection.target, edges)) {
+    // Check for circular dependencies (convert graph edges to ReactFlow format for check)
+    const reactFlowEdges = graph.edges.map(e => ({ source: e.from, target: e.to }));
+    if (wouldCreateCycle(connection.source, connection.target, reactFlowEdges)) {
       alert('Cannot create this connection as it would create a circular dependency.');
       return;
     }
@@ -399,21 +543,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const edgeSlug = generateEdgeSlug(connection.source, connection.target);
     const edgeId = `${connection.source}->${connection.target}`;
 
-    setEdges((eds) => addEdge({
-        ...connection,
-        type: 'conversion',
+    // Add edge directly to graph state (not ReactFlow state)
+    const nextGraph = structuredClone(graph);
+    nextGraph.edges.push({
       id: edgeId,
-      sourceHandle: connection.sourceHandle,
-      targetHandle: connection.targetHandle,
-      data: { 
-        id: edgeId,
-        slug: edgeSlug,
-        probability: 0.5,
-        onUpdate: handleUpdateEdge,
-        onDelete: handleDeleteEdge,
-      },
-    }, eds));
-  }, [setEdges, handleUpdateEdge, handleDeleteEdge, edges, generateEdgeSlug]);
+      slug: edgeSlug,
+      from: connection.source,
+      to: connection.target,
+      fromHandle: connection.sourceHandle,
+      toHandle: connection.targetHandle,
+      p: {
+        mean: 0.5
+      }
+    });
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Update graph state - this will trigger graph->ReactFlow sync
+    setGraph(nextGraph);
+    
+    // Select the new edge after a brief delay to allow sync to complete
+    setTimeout(() => {
+      onSelectedEdgeChange(edgeId);
+    }, 50);
+  }, [graph, setGraph, generateEdgeSlug, wouldCreateCycle, onSelectedEdgeChange]);
 
 
   // Handle Shift+Drag lasso selection
@@ -710,33 +865,43 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Add new node
   const addNode = useCallback(() => {
+    if (!graph) return;
+    
     const newId = crypto.randomUUID();
     
-    // Generate a unique slug for the node
-    let baseSlug = `node_${nodes.length + 1}`;
-    let slug = baseSlug;
-    let counter = 1;
+    // Generate initial label and slug
+    const label = `Node ${graph.nodes.length + 1}`;
+    const baseSlug = generateSlugFromLabel(label);
     
-    while (!isSlugUnique(slug)) {
-      slug = `${baseSlug}_${counter}`;
-      counter++;
+    // Get all existing slugs to ensure uniqueness from the graph state
+    const existingSlugs = getAllExistingSlugs();
+    const slug = generateUniqueSlug(baseSlug, existingSlugs);
+    
+    // Add node directly to graph state (not ReactFlow state)
+    const nextGraph = structuredClone(graph);
+    nextGraph.nodes.push({
+      id: newId,
+      slug: slug,
+      label: label,
+      absorbing: false,
+      layout: {
+        x: Math.random() * 400 + 100,
+        y: Math.random() * 300 + 100
+      }
+    });
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
     }
     
-    const newNode: Node = {
-      id: newId,
-      type: 'conversion',
-      position: { x: Math.random() * 400 + 100, y: Math.random() * 300 + 100 },
-      data: {
-        id: newId,
-        label: `Node ${nodes.length + 1}`,
-        slug: slug,
-        absorbing: false,
-        onUpdate: handleUpdateNode,
-        onDelete: handleDeleteNode,
-      },
-    };
-    setNodes((nds) => [...nds, newNode]);
-  }, [nodes.length, setNodes, handleUpdateNode, handleDeleteNode, isSlugUnique]);
+    // Update graph state - this will trigger graph->ReactFlow sync
+    setGraph(nextGraph);
+    
+    // Select the new node after a brief delay to allow sync to complete
+    setTimeout(() => {
+      onSelectedNodeChange(newId);
+    }, 50);
+  }, [graph, setGraph, generateSlugFromLabel, generateUniqueSlug, getAllExistingSlugs, onSelectedNodeChange]);
 
 
   if (!graph) {
