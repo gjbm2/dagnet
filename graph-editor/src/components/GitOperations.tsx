@@ -85,7 +85,17 @@ export default function GitOperations({
     try {
       const result = await graphGitService.getGraph(graphName, selectedBranch);
       if (result.success && result.data) {
-        onGraphLoad(result.data.content);
+        // Add the graph name to the metadata
+        const graphData = {
+          ...result.data.content,
+          metadata: {
+            ...result.data.content.metadata,
+            name: graphName,
+            source: 'git',
+            branch: selectedBranch
+          }
+        };
+        onGraphLoad(graphData);
         showMessage('success', `Loaded graph ${graphName} from ${selectedBranch}`);
         setShowGraphList(false);
       } else {
