@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import GraphCanvas from './components/GraphCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
+import GitOperations from './components/GitOperations';
 import { loadFromSheet, saveToSheet } from './lib/sheetsClient';
 import { decodeStateFromUrl, encodeStateToUrl } from './lib/shareUrl';
 import { useGraphStore } from './lib/useGraphStore';
@@ -260,13 +261,37 @@ export default function App() {
         />
       </div>
 
-      {/* Properties Panel */}
-        <PropertiesPanel 
-          selectedNodeId={selectedNodeId} 
-          onSelectedNodeChange={setSelectedNodeId}
-          selectedEdgeId={selectedEdgeId}
-          onSelectedEdgeChange={setSelectedEdgeId}
-        />
+      {/* Right Sidebar */}
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        height: '100vh',
+        background: '#fff',
+        borderLeft: '1px solid #e9ecef'
+      }}>
+        {/* Git Operations */}
+        <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
+          <GitOperations 
+            onGraphLoad={setGraph}
+            onGraphSave={async (graphName, graphData) => {
+              // This is a placeholder - the actual save is handled in GitOperations
+              return true;
+            }}
+            currentGraph={graph}
+            currentGraphName={graph?.metadata?.name || 'untitled'}
+          />
+        </div>
+
+        {/* Properties Panel */}
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <PropertiesPanel 
+            selectedNodeId={selectedNodeId} 
+            onSelectedNodeChange={setSelectedNodeId}
+            selectedEdgeId={selectedEdgeId}
+            onSelectedEdgeChange={setSelectedEdgeId}
+          />
+        </div>
+      </div>
 
       {/* Floating Action Bar */}
       <div style={{

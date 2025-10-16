@@ -125,10 +125,49 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "monetary": { "type": "number", "minimum": 0 },
-        "time": { "type": "number", "minimum": 0 },
-        "units": { "type": "string", "maxLength": 32 }
+        "monetary": { "$ref": "#/$defs/MonetaryCost" },
+        "time": { "$ref": "#/$defs/TimeCost" }
       }
+    },
+
+    "MonetaryCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": "number", "minimum": 0 },
+        "stdev": { "type": "number", "minimum": 0 },
+        "distribution": { 
+          "type": "string", 
+          "enum": ["normal", "lognormal", "gamma", "uniform"],
+          "default": "normal"
+        },
+        "currency": { 
+          "type": "string", 
+          "enum": ["GBP", "USD", "EUR"],
+          "default": "GBP"
+        }
+      },
+      "required": ["value"]
+    },
+
+    "TimeCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": "number", "minimum": 0 },
+        "stdev": { "type": "number", "minimum": 0 },
+        "distribution": { 
+          "type": "string", 
+          "enum": ["normal", "lognormal", "gamma", "uniform"],
+          "default": "lognormal"
+        },
+        "units": { 
+          "type": "string", 
+          "enum": ["days", "hours", "weeks"],
+          "default": "days"
+        }
+      },
+      "required": ["value"]
     },
 
     "ResidualBehavior": {

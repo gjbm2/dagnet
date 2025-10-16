@@ -665,13 +665,72 @@ function flattenEdgeParameters(edge) {
     }
   }
   
-  // Handle costs parameters
+  // Handle costs parameters (new structure)
   if (edge.costs) {
-    for (var key in edge.costs) {
-      if (edge.costs[key] > 0) { // Only include non-zero costs
+    // Handle monetary costs
+    if (edge.costs.monetary) {
+      if (typeof edge.costs.monetary === 'object' && edge.costs.monetary.value > 0) {
         params.push({
-          name: 'e.' + edgeIdentifier + '.costs.' + key,
-          value: edge.costs[key]
+          name: 'e.' + edgeIdentifier + '.costs.monetary.value',
+          value: edge.costs.monetary.value
+        });
+        if (edge.costs.monetary.stdev && edge.costs.monetary.stdev > 0) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.stdev',
+            value: edge.costs.monetary.stdev
+          });
+        }
+        if (edge.costs.monetary.currency && edge.costs.monetary.currency !== 'GBP') {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.currency',
+            value: edge.costs.monetary.currency
+          });
+        }
+        if (edge.costs.monetary.distribution && edge.costs.monetary.distribution !== 'normal') {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.distribution',
+            value: edge.costs.monetary.distribution
+          });
+        }
+      } else if (typeof edge.costs.monetary === 'number' && edge.costs.monetary > 0) {
+        // Backward compatibility with old structure
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.monetary',
+          value: edge.costs.monetary
+        });
+      }
+    }
+    
+    // Handle time costs
+    if (edge.costs.time) {
+      if (typeof edge.costs.time === 'object' && edge.costs.time.value > 0) {
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.time.value',
+          value: edge.costs.time.value
+        });
+        if (edge.costs.time.stdev && edge.costs.time.stdev > 0) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.stdev',
+            value: edge.costs.time.stdev
+          });
+        }
+        if (edge.costs.time.units && edge.costs.time.units !== 'days') {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.units',
+            value: edge.costs.time.units
+          });
+        }
+        if (edge.costs.time.distribution && edge.costs.time.distribution !== 'lognormal') {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.distribution',
+            value: edge.costs.time.distribution
+          });
+        }
+      } else if (typeof edge.costs.time === 'number' && edge.costs.time > 0) {
+        // Backward compatibility with old structure
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.time',
+          value: edge.costs.time
         });
       }
     }
@@ -997,13 +1056,74 @@ function flattenAllEdgeParameters(edge) {
     }
   }
   
-  // Handle costs parameters (include all, even zeros)
+  // Handle costs parameters (include all, even zeros) - new structure
   if (edge.costs) {
-    for (var key in edge.costs) {
-      params.push({
-        name: 'e.' + edgeIdentifier + '.costs.' + key,
-        value: edge.costs[key]
-      });
+    // Handle monetary costs
+    if (edge.costs.monetary) {
+      if (typeof edge.costs.monetary === 'object') {
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.monetary.value',
+          value: edge.costs.monetary.value || 0
+        });
+        if (edge.costs.monetary.stdev !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.stdev',
+            value: edge.costs.monetary.stdev
+          });
+        }
+        if (edge.costs.monetary.currency !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.currency',
+            value: edge.costs.monetary.currency
+          });
+        }
+        if (edge.costs.monetary.distribution !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.distribution',
+            value: edge.costs.monetary.distribution
+          });
+        }
+      } else {
+        // Backward compatibility with old structure
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.monetary',
+          value: edge.costs.monetary
+        });
+      }
+    }
+    
+    // Handle time costs
+    if (edge.costs.time) {
+      if (typeof edge.costs.time === 'object') {
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.time.value',
+          value: edge.costs.time.value || 0
+        });
+        if (edge.costs.time.stdev !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.stdev',
+            value: edge.costs.time.stdev
+          });
+        }
+        if (edge.costs.time.units !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.units',
+            value: edge.costs.time.units
+          });
+        }
+        if (edge.costs.time.distribution !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.distribution',
+            value: edge.costs.time.distribution
+          });
+        }
+      } else {
+        // Backward compatibility with old structure
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.time',
+          value: edge.costs.time
+        });
+      }
     }
   }
   
@@ -1583,7 +1703,15 @@ function calculateCost(graph, startNode, endNodes) {
       
       for (var i = 0; i < outgoingEdges.length; i++) {
         var edge = outgoingEdges[i];
-        var edgeCost = edge.costs && edge.costs.monetary ? edge.costs.monetary : 0;
+        // Handle new cost structure: edge.costs.monetary.value
+        var edgeCost = 0;
+        if (edge.costs && edge.costs.monetary && typeof edge.costs.monetary === 'object') {
+          edgeCost = edge.costs.monetary.value || 0;
+        } else if (edge.costs && typeof edge.costs.monetary === 'number') {
+          // Backward compatibility with old structure
+          edgeCost = edge.costs.monetary;
+        }
+        
         var edgeProb = edge.p && edge.p.mean ? edge.p.mean : 0.5;
         var targetCost = dfs(edge.to);
         totalCost += edgeProb * (edgeCost + targetCost);
@@ -1618,14 +1746,29 @@ function calculateTime(graph, startNode, endNodes) {
       var totalTime = 0;
       
       var outgoingEdges = graph.edges.filter(function(edge) {
-        return edge.source === nodeId;
+        return edge.from === nodeId;
       });
       
       for (var i = 0; i < outgoingEdges.length; i++) {
         var edge = outgoingEdges[i];
-        var edgeTime = edge.data && edge.data.time ? edge.data.time : 0;
-        var edgeProb = edge.data && edge.data.probability ? edge.data.probability : 0.5;
-        var targetTime = dfs(edge.target);
+        // Handle new cost structure: edge.costs.time.value (in days)
+        var edgeTime = 0;
+        if (edge.costs && edge.costs.time && typeof edge.costs.time === 'object') {
+          edgeTime = edge.costs.time.value || 0;
+          // Convert to days if needed
+          if (edge.costs.time.units === 'hours') {
+            edgeTime = edgeTime / 24; // Convert hours to days
+          } else if (edge.costs.time.units === 'weeks') {
+            edgeTime = edgeTime * 7; // Convert weeks to days
+          }
+          // If units is 'days' or undefined, use as-is
+        } else if (edge.costs && typeof edge.costs.time === 'number') {
+          // Backward compatibility with old structure (assume days)
+          edgeTime = edge.costs.time;
+        }
+        
+        var edgeProb = edge.p && edge.p.mean ? edge.p.mean : 0.5;
+        var targetTime = dfs(edge.to);
         totalTime += edgeProb * (edgeTime + targetTime);
       }
       

@@ -1,0 +1,289 @@
+# Parameter Definition Schema
+# This schema defines the structure for individual parameter definitions
+# in the Dagnet parameter registry system.
+
+type: object
+required: [id, name, type, value, metadata]
+additionalProperties: false
+
+properties:
+  id:
+    type: string
+    pattern: '^[a-z0-9-]+$'
+    minLength: 3
+    maxLength: 64
+    description: "Unique parameter identifier (slug) - lowercase, alphanumeric, hyphens only"
+    examples: ["conversion-rate-baseline", "email-campaign-cost", "checkout-duration"]
+  
+  name:
+    type: string
+    minLength: 3
+    maxLength: 128
+    description: "Human-readable parameter name"
+    examples: ["Baseline Conversion Rate", "Email Campaign Cost", "Checkout Duration"]
+  
+  type:
+    type: string
+    enum: [probability, monetary_cost, time_cost, standard_deviation]
+    description: "Parameter type classification"
+  
+  value:
+    oneOf:
+      - type: number
+        description: "Single numeric value"
+      - type: object
+        description: "Distribution parameters"
+        required: [value]
+        properties:
+          value:
+            type: number
+            description: "Mean/expected value"
+          stdev:
+            type: number
+            minimum: 0
+            description: "Standard deviation (optional)"
+          distribution:
+            type: string
+            enum: [normal, beta, gamma, lognormal, uniform]
+            default: "normal"
+            description: "Statistical distribution type"
+          min:
+            type: number
+            description: "Minimum possible value"
+          max:
+            type: number
+            description: "Maximum possible value"
+          # For monetary costs
+          currency:
+            type: string
+            enum: [GBP, USD, EUR]
+            default: "GBP"
+            description: "Currency for monetary costs"
+          # For time costs
+          units:
+            type: string
+            enum: [days, hours, weeks]
+            default: "days"
+            description: "Time units for time costs"
+        additionalProperties: false
+  
+  metadata:
+    type: object
+    required: [description, created_at, author, version]
+    properties:
+      description:
+        type: string
+        minLength: 10
+        maxLength: 500
+        description: "Detailed description of the parameter"
+      
+      units:
+        type: string
+        maxLength: 32
+        description: "Units of measurement"
+        examples: ["probability", "USD", "seconds", "days", "percentage"]
+      
+      constraints:
+        type: object
+        properties:
+          min:
+            type: number
+            description: "Minimum allowed value"
+          max:
+            type: number
+            description: "Maximum allowed value"
+          discrete:
+            type: boolean
+            default: false
+            description: "Whether parameter takes discrete values only"
+          step:
+            type: number
+            minimum: 0
+            description: "Step size for discrete parameters"
+        additionalProperties: false
+      
+      data_source:
+        type: object
+        properties:
+          type:
+            type: string
+            enum: [sheets, api, file, manual, calculated]
+            description: "Source type for parameter updates"
+          url:
+            type: string
+            format: uri
+            description: "URL or path to data source"
+          refresh_frequency:
+            type: string
+            pattern: '^\\d+[smhd]$'
+            description: "How often to refresh from source (e.g., '1h', '6h', '1d')"
+          authentication:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [none, token, oauth, basic]
+              token:
+                type: string
+                description: "Authentication token (if applicable)"
+            additionalProperties: false
+        additionalProperties: false
+      
+      analytics:
+        type: object
+        properties:
+          bayesian_prior:
+            type: object
+            description: "Bayesian prior parameters"
+            properties:
+              alpha:
+                type: number
+                minimum: 0
+                description: "Alpha parameter for beta distribution"
+              beta:
+                type: number
+                minimum: 0
+                description: "Beta parameter for beta distribution"
+              mu:
+                type: number
+                description: "Mean for normal distribution"
+              sigma:
+                type: number
+                minimum: 0
+                description: "Standard deviation for normal distribution"
+            additionalProperties: false
+          
+          mcmc_config:
+            type: object
+            description: "MCMC sampling configuration"
+            properties:
+              samples:
+                type: integer
+                minimum: 1000
+                default: 10000
+                description: "Number of MCMC samples"
+              burn_in:
+                type: integer
+                minimum: 100
+                default: 1000
+                description: "Number of burn-in samples"
+              chains:
+                type: integer
+                minimum: 1
+                default: 4
+                description: "Number of MCMC chains"
+            additionalProperties: false
+          
+          update_frequency:
+            type: string
+            pattern: '^\\d+[smhd]$'
+            description: "How often to update parameter via analytics"
+          
+          dependencies:
+            type: array
+            items:
+              type: string
+            description: "List of parameter IDs this parameter depends on"
+        additionalProperties: false
+      
+      tags:
+        type: array
+        items:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+        uniqueItems: true
+        maxItems: 10
+        description: "Tags for categorization and search"
+        examples: [["conversion", "checkout", "baseline"], ["email", "marketing", "cost"]]
+      
+      created_at:
+        type: string
+        format: date-time
+        description: "ISO 8601 timestamp when parameter was created"
+      
+      updated_at:
+        type: string
+        format: date-time
+        description: "ISO 8601 timestamp when parameter was last updated"
+      
+      author:
+        type: string
+        minLength: 2
+        maxLength: 64
+        description: "Author or team responsible for this parameter"
+      
+      version:
+        type: string
+        pattern: '^\\d+\\.\\d+\\.\\d+$'
+        description: "Semantic version of this parameter definition"
+        examples: ["1.0.0", "1.2.3", "2.0.0"]
+      
+      status:
+        type: string
+        enum: [active, deprecated, draft, archived]
+        default: "active"
+        description: "Current status of the parameter"
+      
+      aliases:
+        type: array
+        items:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+        uniqueItems: true
+        description: "Alternative identifiers for this parameter"
+      
+      references:
+        type: array
+        items:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [paper, article, dataset, documentation]
+            title:
+              type: string
+            url:
+              type: string
+              format: uri
+            doi:
+              type: string
+          required: [type, title]
+          additionalProperties: false
+        description: "References to sources or documentation"
+    additionalProperties: false
+
+# Example valid parameter definition
+examples:
+  - id: conversion-rate-baseline
+    name: "Baseline Conversion Rate"
+    type: probability
+    value:
+      mean: 0.15
+      stdev: 0.03
+      distribution: "beta"
+    metadata:
+      description: "Baseline conversion rate for e-commerce checkout processes"
+      units: "probability"
+      constraints:
+        min: 0.0
+        max: 1.0
+        discrete: false
+      data_source:
+        type: "sheets"
+        url: "https://docs.google.com/spreadsheets/d/example"
+        refresh_frequency: "1d"
+      analytics:
+        bayesian_prior:
+          alpha: 2.0
+          beta: 8.0
+        mcmc_config:
+          samples: 10000
+          burn_in: 1000
+        update_frequency: "1w"
+      tags: ["conversion", "checkout", "baseline"]
+      created_at: "2025-01-15T10:00:00Z"
+      updated_at: "2025-01-15T10:00:00Z"
+      author: "data-team"
+      version: "1.0.0"
+      status: "active"
+      aliases: ["baseline-conversion", "checkout-rate"]

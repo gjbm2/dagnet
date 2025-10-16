@@ -44,7 +44,11 @@
     "to": "add_to_basket",
     "fromHandle": "right",
     "toHandle": "left",
-    "p": { "mean": 0.7 }
+    "p": { "mean": 0.7 },
+    "costs": {
+      "monetary": { "value": 0.50, "currency": "GBP" },
+      "time": { "value": 0.1, "units": "days" }
+    }
     },
     {
     "id": "aaaaaaa2-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
@@ -52,7 +56,11 @@
     "to": "purchase",
     "fromHandle": "right",
     "toHandle": "left",
-    "p": { "mean": 0.25 }
+    "p": { "mean": 0.25 },
+    "costs": {
+      "monetary": { "value": 2.00, "currency": "GBP" },
+      "time": { "value": 1.5, "stdev": 0.5, "distribution": "lognormal", "units": "days" }
+    }
     },
     {
     "id": "aaaaaaa3-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
@@ -60,7 +68,11 @@
     "to": "save_for_later",
     "fromHandle": "top",
     "toHandle": "bottom",
-    "p": { "mean": 0.3 }
+    "p": { "mean": 0.3 },
+    "costs": {
+      "monetary": { "value": 0.10, "currency": "GBP" },
+      "time": { "value": 0.05, "units": "days" }
+    }
     }
     ],
     "policies": {

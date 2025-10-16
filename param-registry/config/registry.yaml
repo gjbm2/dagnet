@@ -1,0 +1,167 @@
+# Parameter Registry Configuration
+# This file contains configuration settings for the parameter registry system
+
+registry:
+  root_path: "./param-registry"
+  
+  git:
+    remote_url: "https://github.com/your-org/param-registry.git"
+    branch: "main"
+    auth:
+      type: "token"  # or "ssh"
+      token: "${PARAM_REGISTRY_TOKEN}"
+    
+    # Git operation settings
+    auto_commit: false
+    commit_message_template: "Update parameter: {parameter_id} - {change_type}"
+    require_clean_working_directory: true
+  
+  validation:
+    strict_mode: true
+    require_metadata: true
+    allow_deprecated: false
+    validate_dependencies: true
+    check_data_source_connectivity: true
+  
+  analytics:
+    enabled: true
+    data_sources:
+      - type: "sheets"
+        url: "https://docs.google.com/spreadsheets/d/1ABC123DEF456GHI789JKL"
+        refresh_interval: "1h"
+        authentication:
+          type: "oauth"
+      
+      - type: "api"
+        url: "https://api.your-platform.com/parameters"
+        refresh_interval: "6h"
+        authentication:
+          type: "token"
+          token: "${API_TOKEN}"
+    
+    # Analytics processing settings
+    mcmc_defaults:
+      samples: 10000
+      burn_in: 1000
+      chains: 4
+    
+    bayesian_defaults:
+      prior_type: "beta"  # for probabilities
+      prior_alpha: 2.0
+      prior_beta: 8.0
+  
+  ui:
+    show_analytics: true
+    allow_inline_creation: true
+    require_approval: false
+    show_confidence_intervals: true
+    show_parameter_history: true
+    
+    # UI customization
+    theme: "light"  # or "dark"
+    default_view: "grid"  # or "list", "tree"
+    items_per_page: 20
+  
+  security:
+    # Access control
+    read_only_users: []
+    admin_users: ["data-team", "admin"]
+    
+    # Validation requirements
+    require_author_approval: false
+    require_data_source_validation: true
+    allow_parameter_deletion: true
+    
+    # Audit settings
+    log_all_changes: true
+    retention_days: 365
+    export_audit_log: true
+
+# Graph Editor Integration Configuration
+graph_editor:
+  parameter_registry:
+    enabled: true
+    auto_sync: true
+    show_parameter_metadata: true
+    cache_duration: "1h"
+    
+  parameter_association:
+    allow_override: true
+    require_justification: false
+    show_confidence_intervals: true
+    show_parameter_history: true
+    
+  parameter_creation:
+    auto_commit: false
+    require_review: true
+    default_author: "${USER_NAME}"
+    default_version: "1.0.0"
+    
+    # Creation workflow settings
+    validate_before_creation: true
+    suggest_similar_parameters: true
+    auto_generate_aliases: true
+
+# Data Source Configuration
+data_sources:
+  sheets:
+    enabled: true
+    default_refresh_interval: "1h"
+    max_retries: 3
+    timeout_seconds: 30
+  
+  api:
+    enabled: true
+    default_refresh_interval: "6h"
+    max_retries: 3
+    timeout_seconds: 60
+    rate_limit_requests_per_minute: 100
+  
+  file:
+    enabled: true
+    supported_formats: ["csv", "json", "yaml"]
+    max_file_size_mb: 10
+  
+  manual:
+    enabled: true
+    require_justification: true
+    max_age_days: 30
+
+# Notification Settings
+notifications:
+  enabled: true
+  
+  email:
+    enabled: false
+    smtp_server: "smtp.company.com"
+    from_address: "noreply@company.com"
+  
+  slack:
+    enabled: false
+    webhook_url: "${SLACK_WEBHOOK_URL}"
+    channel: "#data-alerts"
+  
+  # Notification triggers
+  triggers:
+    parameter_updated: true
+    validation_failed: true
+    data_source_error: true
+    dependency_broken: true
+
+# Performance Settings
+performance:
+  # Caching
+  cache_enabled: true
+  cache_ttl_seconds: 3600
+  max_cache_size_mb: 100
+  
+  # Background processing
+  background_sync_enabled: true
+  sync_interval_minutes: 15
+  max_concurrent_syncs: 3
+  
+  # Database settings (if using database backend)
+  database:
+    connection_pool_size: 10
+    query_timeout_seconds: 30
+    enable_query_logging: false

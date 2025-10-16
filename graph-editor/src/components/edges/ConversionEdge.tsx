@@ -8,9 +8,18 @@ interface ConversionEdgeData {
   locked?: boolean;
   description?: string;
   costs?: {
-    monetary?: number;
-    time?: number;
-    units?: string;
+    monetary?: {
+      value: number;
+      stdev?: number;
+      distribution?: string;
+      currency?: string;
+    };
+    time?: {
+      value: number;
+      stdev?: number;
+      distribution?: string;
+      units?: string;
+    };
   };
   weight_default?: number;
   onUpdate: (id: string, data: Partial<ConversionEdgeData>) => void;
@@ -430,10 +439,16 @@ export default function ConversionEdge({
             {data?.costs && (data.costs.monetary || data.costs.time) && (
               <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
                 {data.costs.monetary && (
-                  <div>£{data.costs.monetary}{data.costs.units && ` ${data.costs.units}`}</div>
+                  <div>
+                    £{typeof data.costs.monetary === 'object' ? data.costs.monetary.value : data.costs.monetary}
+                    {typeof data.costs.monetary === 'object' && data.costs.monetary.currency && ` ${data.costs.monetary.currency}`}
+                  </div>
                 )}
                 {data.costs.time && (
-                  <div>{data.costs.time}h{data.costs.units && ` ${data.costs.units}`}</div>
+                  <div>
+                    {typeof data.costs.time === 'object' ? data.costs.time.value : data.costs.time}
+                    {typeof data.costs.time === 'object' ? (data.costs.time.units || 'days') : 'days'}
+                  </div>
                 )}
               </div>
             )}
