@@ -60,7 +60,7 @@ class GitService {
       ...options.headers,
     };
 
-    if (this.config.githubToken) {
+    if (this.config.githubToken && this.config.githubToken.trim() !== '') {
       headers['Authorization'] = `token ${this.config.githubToken}`;
     }
 

@@ -14,10 +14,10 @@ export interface GitConfig {
 // Default configuration
 const defaultConfig: GitConfig = {
   repoOwner: 'gjbm2',
-  repoName: 'dagnet',
+  repoName: '<private-repo>',
   branch: 'main',
   graphsPath: 'graphs',
-  paramsPath: 'param-registry',
+  paramsPath: 'params',
   githubApiBase: 'https://api.github.com',
   githubToken: undefined,
   devMode: true,
@@ -40,6 +40,13 @@ export function loadGitConfig(): GitConfig {
 
   if (config.debugGitOperations) {
     console.log('Git Configuration:', config);
+    console.log('Environment variables available:', {
+      VITE_GIT_REPO_OWNER: import.meta.env.VITE_GIT_REPO_OWNER,
+      VITE_GIT_REPO_NAME: import.meta.env.VITE_GIT_REPO_NAME,
+      VITE_GIT_REPO_BRANCH: import.meta.env.VITE_GIT_REPO_BRANCH,
+      VITE_GIT_GRAPHS_PATH: import.meta.env.VITE_GIT_GRAPHS_PATH,
+      VITE_GITHUB_TOKEN: import.meta.env.VITE_GITHUB_TOKEN ? '***SET***' : 'NOT SET',
+    });
   }
 
   return config;
