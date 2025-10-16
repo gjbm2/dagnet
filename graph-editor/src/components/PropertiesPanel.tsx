@@ -25,6 +25,9 @@ export default function PropertiesPanel({
   // Track if user has manually edited the slug to prevent auto-generation
   const [slugManuallyEdited, setSlugManuallyEdited] = useState<boolean>(false);
   
+  // Track if this node has ever had its label committed (to prevent slug regeneration)
+  const hasLabelBeenCommittedRef = useRef<{ [nodeId: string]: boolean }>({});
+  
   // JSON edit modal state
   const [showJsonEdit, setShowJsonEdit] = useState(false);
   const [jsonEditContent, setJsonEditContent] = useState('');
@@ -71,10 +74,16 @@ export default function PropertiesPanel({
     }
   }, [selectedNodeId, graph]);
 
-  // Auto-generate slug from label when label changes (only if slug hasn't been manually edited)
+  // Auto-generate slug from label when label changes (only on FIRST commit)
   // This updates the LOCAL state only, not the graph state
   useEffect(() => {
     if (selectedNodeId && graph && localNodeData.label && !slugManuallyEdited) {
+      // Check if this node has already had its label committed
+      if (hasLabelBeenCommittedRef.current[selectedNodeId]) {
+        // Slug is now immutable, don't regenerate
+        return;
+      }
+      
       // Check if the node actually exists in the graph to prevent race conditions
       const nodeExists = graph.nodes.some((n: any) => n.id === selectedNodeId);
       if (!nodeExists) {
@@ -399,10 +408,12 @@ export default function PropertiesPanel({
                       const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
                       if (nodeIndex >= 0) {
                         next.nodes[nodeIndex].label = localNodeData.label;
-                        // Also update slug if it was auto-generated
-                        if (!slugManuallyEdited && localNodeData.slug) {
+                        // Also update slug if it was auto-generated (ONLY on first commit)
+                        if (!slugManuallyEdited && localNodeData.slug && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
                           next.nodes[nodeIndex].slug = localNodeData.slug;
                         }
+                        // Mark this node's label as committed (slug is now immutable)
+                        hasLabelBeenCommittedRef.current[selectedNodeId] = true;
                         if (next.metadata) {
                           next.metadata.updated_at = new Date().toISOString();
                         }
@@ -417,10 +428,12 @@ export default function PropertiesPanel({
                         const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
                         if (nodeIndex >= 0) {
                           next.nodes[nodeIndex].label = localNodeData.label;
-                          // Also update slug if it was auto-generated
-                          if (!slugManuallyEdited && localNodeData.slug) {
+                          // Also update slug if it was auto-generated (ONLY on first commit)
+                          if (!slugManuallyEdited && localNodeData.slug && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
                             next.nodes[nodeIndex].slug = localNodeData.slug;
                           }
+                          // Mark this node's label as committed (slug is now immutable)
+                          hasLabelBeenCommittedRef.current[selectedNodeId] = true;
                           if (next.metadata) {
                             next.metadata.updated_at = new Date().toISOString();
                           }
