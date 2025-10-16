@@ -47,6 +47,8 @@ export function loadGitConfig(): GitConfig {
     VITE_GIT_GRAPHS_PATH: import.meta.env.VITE_GIT_GRAPHS_PATH,
     VITE_GITHUB_TOKEN: import.meta.env.VITE_GITHUB_TOKEN ? '***SET***' : 'NOT SET',
   });
+  console.log('Raw VITE_GITHUB_TOKEN:', import.meta.env.VITE_GITHUB_TOKEN);
+  console.log('All import.meta.env:', import.meta.env);
 
   return config;
 }
