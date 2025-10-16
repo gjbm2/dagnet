@@ -14,7 +14,7 @@ export interface GitConfig {
 // Default configuration
 const defaultConfig: GitConfig = {
   repoOwner: 'gjbm2',
-  repoName: '<private-repo>',
+  repoName: '<private-repo>', // Updated repository name
   branch: 'main',
   graphsPath: 'graphs',
   paramsPath: 'params',
