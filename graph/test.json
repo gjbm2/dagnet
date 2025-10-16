@@ -1,0 +1,78 @@
+{
+  "nodes": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001",
+      "slug": "start",
+      "label": "Start",
+      "absorbing": false,
+      "entry": {
+        "is_start": true,
+        "entry_weight": 1
+      },
+      "layout": {
+        "x": 14,
+        "y": -123
+      }
+    },
+    {
+      "id": "3138628c-50b0-40df-a46f-bf27945fac24",
+      "slug": "success",
+      "label": "Success",
+      "absorbing": true,
+      "outcome_type": "success",
+      "layout": {
+        "x": 318,
+        "y": -179
+      }
+    },
+    {
+      "id": "af133a58-b2f8-4322-841d-fcbe8e89d801",
+      "slug": "failure",
+      "label": "Failure",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": {
+        "x": 318,
+        "y": -60
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001->3138628c-50b0-40df-a46f-bf27945fac24",
+      "slug": "start-to-success",
+      "from": "550e8400-e29b-41d4-a716-446655440001",
+      "to": "3138628c-50b0-40df-a46f-bf27945fac24",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.5
+      },
+      "description": ""
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001->af133a58-b2f8-4322-841d-fcbe8e89d801",
+      "slug": "start-to-failure",
+      "from": "550e8400-e29b-41d4-a716-446655440001",
+      "to": "af133a58-b2f8-4322-841d-fcbe8e89d801",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.5
+      },
+      "description": ""
+    }
+  ],
+  "policies": {
+    "default_outcome": "abandon",
+    "overflow_policy": "error",
+    "free_edge_policy": "complement"
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created_at": "2025-10-16T22:14:49.473Z",
+    "author": "Graph Editor",
+    "description": "Default empty graph",
+    "updated_at": "2025-10-16T22:15:41.417Z"
+  }
+}
