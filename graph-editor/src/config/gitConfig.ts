@@ -14,7 +14,7 @@ export interface GitConfig {
 // Default configuration
 const defaultConfig: GitConfig = {
   repoOwner: 'gjbm2',
-  repoName: 'nous-conversion',
+  repoName: 'nous-conversion', // Updated repository name
   branch: 'main',
   graphsPath: 'graphs',
   paramsPath: 'params',
