@@ -13,6 +13,7 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass'>('uniform');
+  const [autoReroute, setAutoReroute] = useState(false);
 
 
   // Load schema validator once
@@ -255,6 +256,7 @@ export default function App() {
           onDoubleClickEdge={handleDoubleClickEdge}
           onSelectEdge={handleSelectEdge}
           edgeScalingMode={edgeScalingMode}
+          autoReroute={autoReroute}
         />
       </div>
 
@@ -302,6 +304,23 @@ export default function App() {
             <option value="local-mass">Local Mass</option>
             <option value="global-mass">Global Mass</option>
           </select>
+        </div>
+        
+        {/* Auto Re-route Toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <label style={{ fontSize: '12px', fontWeight: '500', color: '#495057' }}>
+            Auto Re-route:
+          </label>
+          <input
+            type="checkbox"
+            checked={autoReroute}
+            onChange={(e) => setAutoReroute(e.target.checked)}
+            style={{
+              width: '16px',
+              height: '16px',
+              cursor: 'pointer',
+            }}
+          />
         </div>
         <button
           onClick={onSave}

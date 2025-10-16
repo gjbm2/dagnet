@@ -38,9 +38,10 @@ interface GraphCanvasProps {
   onDoubleClickEdge?: (id: string, field: string) => void;
   onSelectEdge?: (id: string) => void;
   edgeScalingMode: 'uniform' | 'local-mass' | 'global-mass';
+  autoReroute: boolean;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -50,18 +51,49 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onDoubleClickEdge={onDoubleClickEdge}
         onSelectEdge={onSelectEdge}
         edgeScalingMode={edgeScalingMode}
+        autoReroute={autoReroute}
       />
     </ReactFlowProvider>
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute }: GraphCanvasProps) {
   const { graph, setGraph } = useGraphStore();
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  
+  // Trigger flag for re-routing
+  const [shouldReroute, setShouldReroute] = useState(0);
+  
+  // Custom onNodesChange handler to detect position changes for auto re-routing
+  const onNodesChange = useCallback((changes: any[]) => {
+    console.log('onNodesChange called:', { 
+      changeCount: changes.length, 
+      autoReroute, 
+      changeTypes: changes.map(c => ({ type: c.type, dragging: c.dragging }))
+    });
+    
+    // Call the base handler first
+    onNodesChangeBase(changes);
+    
+    // Check if any position changes occurred (when user finishes dragging)
+    if (autoReroute) {
+      const positionChanges = changes.filter(change => change.type === 'position' && change.dragging === false);
+      console.log('Filtered position changes:', positionChanges.length);
+      if (positionChanges.length > 0) {
+        console.log('Position changes detected (dragging finished):', positionChanges);
+        console.log('Setting shouldReroute flag');
+        // Trigger re-routing by incrementing the flag
+        setShouldReroute(prev => {
+          console.log('shouldReroute incrementing from', prev, 'to', prev + 1);
+          return prev + 1;
+        });
+      }
+    }
+  }, [onNodesChangeBase, autoReroute]);
 
   // Edge width calculation based on scaling mode
   const calculateEdgeWidth = useCallback((edge: any, allEdges: any[], allNodes: any[]) => {
@@ -181,6 +213,215 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
   const isSyncingRef = useRef(false);
+  
+  // Re-route feature state
+  const lastNodePositionsRef = useRef<{ [nodeId: string]: { x: number; y: number } }>({});
+  
+  // Calculate optimal handles between two nodes
+  const calculateOptimalHandles = useCallback((sourceNode: any, targetNode: any) => {
+    const sourceX = sourceNode.position.x;
+    const sourceY = sourceNode.position.y;
+    const targetX = targetNode.position.x;
+    const targetY = targetNode.position.y;
+    
+    // Node dimensions (from layout.ts: width: 160, height: 60)
+    const nodeWidth = 160;
+    const nodeHeight = 60;
+    
+    // Calculate relative positions
+    const deltaX = targetX - sourceX;
+    const deltaY = targetY - sourceY;
+    
+    // Determine optimal source handle based on direction
+    let sourceHandle: string;
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      // Horizontal movement dominates
+      sourceHandle = deltaX > 0 ? 'right-out' : 'left-out';
+    } else {
+      // Vertical movement dominates
+      sourceHandle = deltaY > 0 ? 'bottom-out' : 'top-out';
+    }
+    
+    // Determine optimal target handle based on direction
+    let targetHandle: string;
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      // Horizontal movement dominates
+      targetHandle = deltaX > 0 ? 'left' : 'right';
+    } else {
+      // Vertical movement dominates
+      targetHandle = deltaY > 0 ? 'top' : 'bottom';
+    }
+    
+    return { sourceHandle, targetHandle };
+  }, []);
+  
+  // Perform immediate re-route of ALL edges (used when toggling on)
+  const performImmediateReroute = useCallback(() => {
+    if (!graph) {
+      console.log('No graph, skipping immediate re-route');
+      return;
+    }
+    
+    console.log('Performing immediate re-route of ALL edges');
+    
+    const nextGraph = structuredClone(graph);
+    let updatedCount = 0;
+    
+    // Re-route ALL edges
+    nextGraph.edges.forEach((graphEdge: any) => {
+      const sourceNode = nodes.find(n => n.id === graphEdge.from);
+      const targetNode = nodes.find(n => n.id === graphEdge.to);
+      
+      if (sourceNode && targetNode) {
+        const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
+        
+        console.log(`Re-routing edge ${graphEdge.id}:`, {
+          from: graphEdge.from,
+          to: graphEdge.to,
+          oldFromHandle: graphEdge.fromHandle,
+          newFromHandle: sourceHandle,
+          oldToHandle: graphEdge.toHandle,
+          newToHandle: targetHandle
+        });
+        
+        graphEdge.fromHandle = sourceHandle;
+        graphEdge.toHandle = targetHandle;
+        updatedCount++;
+      }
+    });
+    
+    console.log(`Updated ${updatedCount} edges`);
+    
+    if (updatedCount > 0) {
+      if (nextGraph.metadata) {
+        nextGraph.metadata.updated_at = new Date().toISOString();
+      }
+      
+      console.log('Updating graph with immediate re-route changes');
+      setGraph(nextGraph);
+    }
+  }, [graph, nodes, calculateOptimalHandles, setGraph]);
+  
+  // Auto re-route edges when nodes move
+  const performAutoReroute = useCallback(() => {
+    if (!autoReroute || !graph) {
+      console.log('Auto re-route skipped:', { autoReroute, hasGraph: !!graph });
+      return;
+    }
+    
+    const currentPositions: { [nodeId: string]: { x: number; y: number } } = {};
+    const movedNodes: string[] = [];
+    
+    // Check which nodes have moved
+    nodes.forEach(node => {
+      const currentPos = { x: node.position.x, y: node.position.y };
+      const lastPos = lastNodePositionsRef.current[node.id];
+      
+      currentPositions[node.id] = currentPos;
+      
+      if (lastPos && (Math.abs(currentPos.x - lastPos.x) > 5 || Math.abs(currentPos.y - lastPos.y) > 5)) {
+        movedNodes.push(node.id);
+        console.log(`Node ${node.id} moved:`, { 
+          from: lastPos, 
+          to: currentPos, 
+          deltaX: currentPos.x - lastPos.x, 
+          deltaY: currentPos.y - lastPos.y 
+        });
+      }
+    });
+    
+    if (movedNodes.length === 0) {
+      console.log('No nodes moved, skipping re-route');
+      return;
+    }
+    
+    console.log('Moved nodes:', movedNodes);
+    
+    // Update last positions
+    lastNodePositionsRef.current = currentPositions;
+    
+    // Find edges that need re-routing
+    const edgesToReroute = edges.filter(edge => 
+      movedNodes.includes(edge.source) || movedNodes.includes(edge.target)
+    );
+    
+    console.log('Edges to re-route:', edgesToReroute.map(e => e.id));
+    
+    if (edgesToReroute.length === 0) return;
+    
+    // Update graph with new handle positions
+    const nextGraph = structuredClone(graph);
+    
+    edgesToReroute.forEach(edge => {
+      const sourceNode = nodes.find(n => n.id === edge.source);
+      const targetNode = nodes.find(n => n.id === edge.target);
+      
+      if (sourceNode && targetNode) {
+        const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
+        
+        console.log(`Re-routing edge ${edge.id}:`, { 
+          oldFromHandle: edge.sourceHandle, 
+          newFromHandle: sourceHandle,
+          oldToHandle: edge.targetHandle,
+          newToHandle: targetHandle
+        });
+        
+        // Find the edge in the graph and update its handles
+        const graphEdge = nextGraph.edges.find(e => e.id === edge.id);
+        if (graphEdge) {
+          graphEdge.fromHandle = sourceHandle;
+          graphEdge.toHandle = targetHandle;
+        }
+      }
+    });
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    console.log('Updating graph with new handle positions');
+    setGraph(nextGraph);
+  }, [autoReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
+  
+  // Reset position tracking and perform immediate re-route when autoReroute is toggled ON
+  useEffect(() => {
+    console.log('Auto re-route toggled:', autoReroute);
+    if (autoReroute) {
+      // Initialize position tracking when enabling
+      console.log('Initializing position tracking and performing immediate re-route');
+      const initialPositions: { [nodeId: string]: { x: number; y: number } } = {};
+      nodes.forEach(node => {
+        initialPositions[node.id] = { x: node.position.x, y: node.position.y };
+      });
+      lastNodePositionsRef.current = initialPositions;
+      
+      // Perform immediate re-route when toggling on (with a small delay to ensure state is ready)
+      console.log('Triggering immediate re-route on toggle');
+      if (graph && nodes.length > 0 && edges.length > 0) {
+        // Use setTimeout to break out of the render cycle
+        setTimeout(() => {
+          performImmediateReroute();
+        }, 50);
+      }
+    } else {
+      // Clear position tracking when disabling
+      lastNodePositionsRef.current = {};
+    }
+  }, [autoReroute]); // ONLY depend on autoReroute, not nodes/edges/graph!
+  
+  // Perform re-routing when shouldReroute flag changes (with small delay after node movement)
+  useEffect(() => {
+    if (shouldReroute > 0 && autoReroute) {
+      console.log('Re-route triggered by flag change:', shouldReroute);
+      // Add a small delay to ensure node positions are fully updated
+      const timeoutId = setTimeout(() => {
+        console.log('Executing delayed re-route after node movement');
+        performAutoReroute();
+      }, 100); // 100ms delay after user finishes dragging
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [shouldReroute, autoReroute, performAutoReroute]);
   
   // Get all existing slugs (nodes and edges) for uniqueness checking
   const getAllExistingSlugs = useCallback((excludeId?: string) => {
