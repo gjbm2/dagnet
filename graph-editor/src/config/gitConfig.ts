@@ -38,16 +38,15 @@ export function loadGitConfig(): GitConfig {
     debugGitOperations: import.meta.env.VITE_DEBUG_GIT_OPERATIONS === 'true' || defaultConfig.debugGitOperations,
   };
 
-  if (config.debugGitOperations) {
-    console.log('Git Configuration:', config);
-    console.log('Environment variables available:', {
-      VITE_GIT_REPO_OWNER: import.meta.env.VITE_GIT_REPO_OWNER,
-      VITE_GIT_REPO_NAME: import.meta.env.VITE_GIT_REPO_NAME,
-      VITE_GIT_REPO_BRANCH: import.meta.env.VITE_GIT_REPO_BRANCH,
-      VITE_GIT_GRAPHS_PATH: import.meta.env.VITE_GIT_GRAPHS_PATH,
-      VITE_GITHUB_TOKEN: import.meta.env.VITE_GITHUB_TOKEN ? '***SET***' : 'NOT SET',
-    });
-  }
+  // Always log for debugging
+  console.log('Git Configuration:', config);
+  console.log('Environment variables available:', {
+    VITE_GIT_REPO_OWNER: import.meta.env.VITE_GIT_REPO_OWNER,
+    VITE_GIT_REPO_NAME: import.meta.env.VITE_GIT_REPO_NAME,
+    VITE_GIT_REPO_BRANCH: import.meta.env.VITE_GIT_REPO_BRANCH,
+    VITE_GIT_GRAPHS_PATH: import.meta.env.VITE_GIT_GRAPHS_PATH,
+    VITE_GITHUB_TOKEN: import.meta.env.VITE_GITHUB_TOKEN ? '***SET***' : 'NOT SET',
+  });
 
   return config;
 }
