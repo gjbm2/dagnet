@@ -60,6 +60,9 @@ class GitService {
       ...options.headers,
     };
 
+    console.log('GitService config:', this.config);
+    console.log('GitService githubToken:', this.config.githubToken ? 'SET' : 'NOT SET');
+
     if (this.config.githubToken && this.config.githubToken.trim() !== '') {
       headers['Authorization'] = `token ${this.config.githubToken}`;
     }
