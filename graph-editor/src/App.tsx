@@ -12,6 +12,7 @@ export default function App() {
   const [errors, setErrors] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass'>('uniform');
 
 
   // Load schema validator once
@@ -253,6 +254,7 @@ export default function App() {
           onDoubleClickNode={handleDoubleClickNode}
           onDoubleClickEdge={handleDoubleClickEdge}
           onSelectEdge={handleSelectEdge}
+          edgeScalingMode={edgeScalingMode}
         />
       </div>
 
@@ -277,7 +279,30 @@ export default function App() {
         borderRadius: '8px',
         boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
         backdropFilter: 'blur(10px)',
+        alignItems: 'center',
       }}>
+        {/* Edge Scaling Dropdown */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <label style={{ fontSize: '12px', fontWeight: '500', color: '#495057' }}>
+            Edge Scaling:
+          </label>
+          <select
+            value={edgeScalingMode}
+            onChange={(e) => setEdgeScalingMode(e.target.value as 'uniform' | 'local-mass' | 'global-mass')}
+            style={{
+              padding: '4px 8px',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              fontSize: '12px',
+              background: 'white',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="uniform">Uniform</option>
+            <option value="local-mass">Local Mass</option>
+            <option value="global-mass">Global Mass</option>
+          </select>
+        </div>
         <button
           onClick={onSave}
           style={{

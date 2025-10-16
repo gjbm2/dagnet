@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useGraphStore } from '@/lib/useGraphStore';
+import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 
 interface PropertiesPanelProps {
   selectedNodeId: string | null;
@@ -21,6 +22,9 @@ export default function PropertiesPanel({
   const [localNodeData, setLocalNodeData] = useState<any>({});
   const [localEdgeData, setLocalEdgeData] = useState<any>({});
   
+  // Track if user has manually edited the slug to prevent auto-generation
+  const [slugManuallyEdited, setSlugManuallyEdited] = useState<boolean>(false);
+  
   // JSON edit modal state
   const [showJsonEdit, setShowJsonEdit] = useState(false);
   const [jsonEditContent, setJsonEditContent] = useState('');
@@ -37,40 +41,93 @@ export default function PropertiesPanel({
     }
   }, [selectedNodeId, selectedEdgeId]);
 
-  // Load local data when selection changes
+  // Track the last loaded node to prevent reloading on every graph change
+  const lastLoadedNodeRef = useRef<string | null>(null);
+  
+  // Load local data when selection changes (but not on every graph update)
   useEffect(() => {
     if (selectedNodeId && graph) {
-      const node = graph.nodes.find((n: any) => n.id === selectedNodeId);
-      if (node) {
-        setLocalNodeData({
-          label: node.label || '',
-          slug: node.slug || '',
-          description: node.description || '',
-          absorbing: node.absorbing || false,
-          outcome_type: node.outcome_type,
-          tags: node.tags || [],
-          entry: node.entry || {},
-        });
+      // Only reload if we're switching to a different node
+      if (lastLoadedNodeRef.current !== selectedNodeId) {
+        const node = graph.nodes.find((n: any) => n.id === selectedNodeId);
+        if (node) {
+          setLocalNodeData({
+            label: node.label || '',
+            slug: node.slug || '',
+            description: node.description || '',
+            absorbing: node.absorbing || false,
+            outcome_type: node.outcome_type,
+            tags: node.tags || [],
+            entry: node.entry || {},
+          });
+          // Reset manual edit flag when switching to a different node
+          setSlugManuallyEdited(false);
+          lastLoadedNodeRef.current = selectedNodeId;
+        }
       }
+    } else if (!selectedNodeId) {
+      // Clear the ref when no node is selected
+      lastLoadedNodeRef.current = null;
     }
   }, [selectedNodeId, graph]);
 
+  // Auto-generate slug from label when label changes (only if slug hasn't been manually edited)
+  // This updates the LOCAL state only, not the graph state
+  useEffect(() => {
+    if (selectedNodeId && graph && localNodeData.label && !slugManuallyEdited) {
+      // Check if the node actually exists in the graph to prevent race conditions
+      const nodeExists = graph.nodes.some((n: any) => n.id === selectedNodeId);
+      if (!nodeExists) {
+        return;
+      }
+      
+      const baseSlug = generateSlugFromLabel(localNodeData.label);
+      if (baseSlug && baseSlug !== localNodeData.slug) {
+        // Get all existing slugs (excluding current node)
+        const existingSlugs = graph.nodes
+          .filter((n: any) => n.id !== selectedNodeId)
+          .map((n: any) => n.slug)
+          .filter(Boolean);
+        
+        const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
+        
+        // Only update LOCAL state if the slug is actually different
+        if (uniqueSlug !== localNodeData.slug) {
+          setLocalNodeData(prev => ({
+            ...prev,
+            slug: uniqueSlug
+          }));
+        }
+      }
+    }
+  }, [localNodeData.label, selectedNodeId, graph, slugManuallyEdited]);
+
+  // Track the last loaded edge to prevent reloading on every graph change
+  const lastLoadedEdgeRef = useRef<string | null>(null);
+  
   useEffect(() => {
     if (selectedEdgeId && graph) {
-      const edge = graph.edges.find((e: any) => 
-        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-      );
-      if (edge) {
-        setLocalEdgeData({
-          slug: edge.slug || '',
-          probability: edge.p?.mean || 0,
-          stdev: edge.p?.stdev || 0,
-          locked: edge.p?.locked || false,
-          description: edge.description || '',
-          costs: edge.costs || {},
-          weight_default: edge.weight_default || 0,
-        });
+      // Only reload if we're switching to a different edge
+      if (lastLoadedEdgeRef.current !== selectedEdgeId) {
+        const edge = graph.edges.find((e: any) => 
+          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+        );
+        if (edge) {
+          setLocalEdgeData({
+            slug: edge.slug || '',
+            probability: edge.p?.mean || 0,
+            stdev: edge.p?.stdev || 0,
+            locked: edge.p?.locked || false,
+            description: edge.description || '',
+            costs: edge.costs || {},
+            weight_default: edge.weight_default || 0,
+          });
+          lastLoadedEdgeRef.current = selectedEdgeId;
+        }
       }
+    } else if (!selectedEdgeId) {
+      // Clear the ref when no edge is selected
+      lastLoadedEdgeRef.current = null;
     }
   }, [selectedEdgeId, graph]);
 
@@ -335,8 +392,42 @@ export default function PropertiesPanel({
                     data-field="label"
                     value={localNodeData.label || ''}
                     onChange={(e) => setLocalNodeData({...localNodeData, label: e.target.value})}
-                    onBlur={() => updateNode('label', localNodeData.label)}
-                    onKeyDown={(e) => e.key === 'Enter' && updateNode('label', localNodeData.label)}
+                    onBlur={() => {
+                      // Update both label and slug in a single graph update to avoid race conditions
+                      if (!graph || !selectedNodeId) return;
+                      const next = structuredClone(graph);
+                      const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                      if (nodeIndex >= 0) {
+                        next.nodes[nodeIndex].label = localNodeData.label;
+                        // Also update slug if it was auto-generated
+                        if (!slugManuallyEdited && localNodeData.slug) {
+                          next.nodes[nodeIndex].slug = localNodeData.slug;
+                        }
+                        if (next.metadata) {
+                          next.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(next);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        // Update both label and slug in a single graph update to avoid race conditions
+                        if (!graph || !selectedNodeId) return;
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        if (nodeIndex >= 0) {
+                          next.nodes[nodeIndex].label = localNodeData.label;
+                          // Also update slug if it was auto-generated
+                          if (!slugManuallyEdited && localNodeData.slug) {
+                            next.nodes[nodeIndex].slug = localNodeData.slug;
+                          }
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                        }
+                      }
+                    }}
                     style={{ 
                       width: '100%', 
                       padding: '8px', 
@@ -352,7 +443,10 @@ export default function PropertiesPanel({
                   <input
                     data-field="slug"
                     value={localNodeData.slug || ''}
-                    onChange={(e) => setLocalNodeData({...localNodeData, slug: e.target.value})}
+                    onChange={(e) => {
+                      setLocalNodeData({...localNodeData, slug: e.target.value});
+                      setSlugManuallyEdited(true); // Mark as manually edited
+                    }}
                     onBlur={() => updateNode('slug', localNodeData.slug)}
                     onKeyDown={(e) => e.key === 'Enter' && updateNode('slug', localNodeData.slug)}
                     style={{ 
