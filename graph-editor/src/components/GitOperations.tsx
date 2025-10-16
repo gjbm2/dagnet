@@ -22,7 +22,7 @@ export default function GitOperations({
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [showGraphList, setShowGraphList] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
-  const [saveGraphName, setSaveGraphName] = useState('');
+  const [saveGraphName, setSaveGraphName] = useState(currentGraphName || '');
   const [saveCommitMessage, setSaveCommitMessage] = useState('');
 
   // Load available graphs and branches on mount
@@ -30,6 +30,13 @@ export default function GitOperations({
     loadBranches();
     loadAvailableGraphs();
   }, []);
+
+  // Update saveGraphName when currentGraphName changes (e.g., when a graph is loaded)
+  useEffect(() => {
+    if (currentGraphName) {
+      setSaveGraphName(currentGraphName);
+    }
+  }, [currentGraphName]);
 
   const showMessage = (type: 'success' | 'error' | 'info', text: string) => {
     setMessage({ type, text });
@@ -372,7 +379,7 @@ export default function GitOperations({
                 type="text"
                 value={saveGraphName}
                 onChange={(e) => setSaveGraphName(e.target.value)}
-                placeholder="my-graph"
+                placeholder={currentGraphName ? currentGraphName : "my-graph"}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
