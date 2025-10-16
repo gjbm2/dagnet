@@ -11,10 +11,10 @@ export interface GitConfig {
   debugGitOperations: boolean;
 }
 
-// Default configuration
+// Default configuration - FORCE VERCEL REBUILD
 const defaultConfig: GitConfig = {
   repoOwner: 'gjbm2',
-  repoName: 'nous-conversion', // Updated repository name
+  repoName: 'nous-conversion', // FORCE VERCEL REBUILD
   branch: 'main',
   graphsPath: 'graphs',
   paramsPath: 'params',
@@ -49,6 +49,9 @@ export function loadGitConfig(): GitConfig {
   });
   console.log('Raw VITE_GITHUB_TOKEN:', import.meta.env.VITE_GITHUB_TOKEN);
   console.log('All import.meta.env:', import.meta.env);
+  console.log('=== FORCE VERCEL REBUILD - CHECKING REPO NAME ===');
+  console.log('Final repoName:', config.repoName);
+  console.log('Final repoOwner:', config.repoOwner);
 
   return config;
 }
