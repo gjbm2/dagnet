@@ -13,7 +13,7 @@ export default function App() {
   const [errors, setErrors] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass'>('uniform');
+  const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass'>('uniform');
   const [autoReroute, setAutoReroute] = useState(false);
 
 
@@ -315,7 +315,7 @@ export default function App() {
           </label>
           <select
             value={edgeScalingMode}
-            onChange={(e) => setEdgeScalingMode(e.target.value as 'uniform' | 'local-mass' | 'global-mass')}
+            onChange={(e) => setEdgeScalingMode(e.target.value as 'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass')}
             style={{
               padding: '4px 8px',
               border: '1px solid #ced4da',
@@ -328,6 +328,7 @@ export default function App() {
             <option value="uniform">Uniform</option>
             <option value="local-mass">Local Mass</option>
             <option value="global-mass">Global Mass</option>
+            <option value="global-log-mass">Global Log Mass</option>
           </select>
         </div>
         
