@@ -37,7 +37,7 @@ interface GraphCanvasProps {
   onDoubleClickNode?: (id: string, field: string) => void;
   onDoubleClickEdge?: (id: string, field: string) => void;
   onSelectEdge?: (id: string) => void;
-  edgeScalingMode: 'uniform' | 'local-mass' | 'global-mass';
+  edgeScalingMode: 'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass';
   autoReroute: boolean;
 }
 
@@ -94,6 +94,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
     }
   }, [onNodesChangeBase, autoReroute]);
+
+  // Log transformation function for Global Log Mass scaling
+  const logMassTransform = useCallback((probability: number, maxWidth: number): number => {
+    if (probability <= 0) return 0;
+    if (probability >= 1) return maxWidth;
+    
+    // Use log base 10 with scaling to preserve visual mass
+    // Formula: width = maxWidth * (1 - log10(1/probability) / log10(1/minProb))
+    // Where minProb is the minimum probability we want to show (e.g., 0.01)
+    
+    const minProb = 0.01; // Minimum probability to show
+    const logBase = 10;
+    
+    // Clamp probability to avoid log(0)
+    const clampedProb = Math.max(probability, minProb);
+    
+    // Calculate the log transformation
+    const logRatio = Math.log10(1 / clampedProb) / Math.log10(1 / minProb);
+    const width = maxWidth * (1 - logRatio);
+    
+    return Math.max(0, Math.min(maxWidth, width));
+  }, []);
 
   // Edge width calculation based on scaling mode
   const calculateEdgeWidth = useCallback((edge: any, allEdges: any[], allNodes: any[]) => {
@@ -162,6 +184,44 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return finalWidth;
     }
     
+    if (edgeScalingMode === 'global-log-mass') {
+      // Global Log Mass: same as global-mass but with logarithmic transformation
+      // Find the start node (node with entry.is_start = true or entry.entry_weight > 0)
+      const startNode = allNodes.find(n => 
+        n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
+      );
+      
+      console.log(`Global log mass mode: startNode=`, startNode);
+      
+      if (!startNode) {
+        console.log(`No start node found, falling back to local mass for edge ${edge.id}`);
+        // Fallback to local mass if no clear start node
+        const sourceEdges = allEdges.filter(e => e.source === edge.source);
+        const totalProbability = sourceEdges.reduce((sum, e) => sum + (e.data?.probability || 0), 0);
+        if (totalProbability === 0) return MIN_WIDTH;
+        const edgeProbability = edge.data?.probability || 0;
+        const proportion = edgeProbability / totalProbability;
+        const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
+        return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
+      }
+      
+      // Calculate residual probability at the source node
+      const residualAtSource = calculateResidualProbability(edge.source, allEdges, startNode.id);
+      
+      if (residualAtSource === 0) return MIN_WIDTH;
+      
+      // Sankey-style: actual mass flowing through this edge = p(source) × edge_probability
+      const edgeProbability = edge.data?.probability || 0;
+      const actualMassFlowing = residualAtSource * edgeProbability;
+      
+      // Apply logarithmic transformation to preserve visual mass for lower probabilities
+      const logTransformedWidth = logMassTransform(actualMassFlowing, MAX_WIDTH - MIN_WIDTH);
+      const finalWidth = MIN_WIDTH + logTransformedWidth;
+      
+      console.log(`Global log mass edge ${edge.id}: p(source)=${residualAtSource.toFixed(2)}, edgeProb=${edgeProbability.toFixed(2)}, actualMass=${actualMassFlowing.toFixed(2)}, logWidth=${logTransformedWidth.toFixed(1)}, finalWidth=${finalWidth.toFixed(1)} (MAX_WIDTH=${MAX_WIDTH})`);
+      return finalWidth;
+    }
+    
     // Helper function to calculate residual probability
     function calculateResidualProbability(targetNode: string, allEdges: any[], startNode: string): number {
       // Build adjacency list and reverse adjacency list
@@ -208,8 +268,76 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     return edge.selected ? 3 : 2;
+  }, [edgeScalingMode, logMassTransform]);
+
+  // Calculate edge offsets for Sankey-style visualization
+  const calculateEdgeOffsets = useCallback((edgesWithWidth: any[], allNodes: any[]) => {
+    // Group edges by source node
+    const edgesBySource: { [sourceId: string]: any[] } = {};
+    edgesWithWidth.forEach(edge => {
+      if (!edgesBySource[edge.source]) {
+        edgesBySource[edge.source] = [];
+      }
+      edgesBySource[edge.source].push(edge);
+    });
+
+    // Calculate offsets for each source node
+    const edgesWithOffsets = edgesWithWidth.map(edge => {
+      const sourceEdges = edgesBySource[edge.source] || [];
+      
+      // Only apply offsets for mass-based scaling modes
+      if (!['local-mass', 'global-mass', 'global-log-mass'].includes(edgeScalingMode)) {
+        return { ...edge, offsetX: 0, offsetY: 0 };
+      }
+
+      // Calculate total visual width of all edges from this source
+      const totalWidth = sourceEdges.reduce((sum, e) => {
+        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+        return sum + width;
+      }, 0);
+
+      if (totalWidth === 0) {
+        return { ...edge, offsetX: 0, offsetY: 0 };
+      }
+
+      // Calculate cumulative width up to this edge
+      const edgeIndex = sourceEdges.findIndex(e => e.id === edge.id);
+      const cumulativeWidth = sourceEdges.slice(0, edgeIndex).reduce((sum, e) => {
+        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+        return sum + width;
+      }, 0);
+
+      // Calculate this edge's width
+      const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
+
+      // Calculate offset: center of this edge's width within the total width
+      const offsetFromStart = cumulativeWidth + (edgeWidth / 2);
+      const normalizedOffset = (offsetFromStart / totalWidth) - 0.5; // -0.5 to 0.5 range
+
+      // Find the source node to determine its dimensions
+      const sourceNode = allNodes.find(n => n.id === edge.source);
+      if (!sourceNode) {
+        return { ...edge, offsetX: 0, offsetY: 0 };
+      }
+
+      // Calculate offset in pixels (assuming node is roughly 60px wide/tall)
+      const nodeSize = 60;
+      const maxOffset = nodeSize * 0.4; // 40% of node size for maximum offset
+      const offsetX = normalizedOffset * maxOffset;
+      const offsetY = normalizedOffset * maxOffset;
+
+      console.log(`Edge ${edge.id}: totalWidth=${totalWidth.toFixed(1)}, cumulative=${cumulativeWidth.toFixed(1)}, edgeWidth=${edgeWidth.toFixed(1)}, offset=${normalizedOffset.toFixed(2)}, pixels=(${offsetX.toFixed(1)}, ${offsetY.toFixed(1)})`);
+
+      return { 
+        ...edge, 
+        offsetX: offsetX,
+        offsetY: offsetY
+      };
+    });
+
+    return edgesWithOffsets;
   }, [edgeScalingMode]);
-  
+
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
   const isSyncingRef = useRef(false);

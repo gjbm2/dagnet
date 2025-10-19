@@ -1382,8 +1382,17 @@ function dagParams() {
     for (var i = 0; i < args.length; i++) {
       var arg = args[i];
       
+      // Check if it's a 2D array (range values)
+      if (Array.isArray(arg) && arg.length > 0 && Array.isArray(arg[0])) {
+        // It's a 2D array from a range - flatten it
+        for (var row = 0; row < arg.length; row++) {
+          for (var col = 0; col < arg[row].length; col++) {
+            allValues.push(arg[row][col]);
+          }
+        }
+      }
       // Check if it's a range reference (contains colon)
-      if (typeof arg === 'string' && arg.includes(':')) {
+      else if (typeof arg === 'string' && arg.includes(':')) {
         // It's a range reference - get all values from the range
         var range = SpreadsheetApp.getActiveSheet().getRange(arg);
         var values = range.getValues();
@@ -1628,9 +1637,25 @@ function dagCalc(input, operation, startNode, endNode, customParams) {
     if (operation === PROBABILITY || operation === 'probability') {
       return calculateProbability(graph, startNodeObj, endNodes);
     } else if (operation === COST || operation === 'cost') {
-      return calculateCost(graph, startNodeObj, endNodes);
+      var totalExpectedCost = calculateCost(graph, startNodeObj, endNodes);
+      var successProbability = calculateProbability(graph, startNodeObj, endNodes);
+      
+      if (successProbability === 0) {
+        return "Error: No path to success - cost per success is undefined";
+      }
+      
+      // Return cost per successful conversion
+      return totalExpectedCost / successProbability;
     } else if (operation === TIME || operation === 'time') {
-      return calculateTime(graph, startNodeObj, endNodes);
+      var totalExpectedTime = calculateTime(graph, startNodeObj, endNodes);
+      var successProbability = calculateProbability(graph, startNodeObj, endNodes);
+      
+      if (successProbability === 0) {
+        return "Error: No path to success - time per success is undefined";
+      }
+      
+      // Return time per successful conversion
+      return totalExpectedTime / successProbability;
     } else {
       return "Error: Unknown operation '" + operation + "'";
     }
@@ -1684,25 +1709,38 @@ function calculateProbability(graph, startNode, endNodes) {
  */
 function calculateCost(graph, startNode, endNodes) {
   try {
-    var visited = new Set();
-    var costs = new Map();
+    var visited = [];
+    var costs = {};
     
     function dfs(nodeId) {
-      if (visited.has(nodeId)) return costs.get(nodeId) || 0;
-      if (endNodes.some(function(end) { return end.id === nodeId; })) {
-        costs.set(nodeId, 0);
-        return 0;
+      // Check if already visited
+      for (var i = 0; i < visited.length; i++) {
+        if (visited[i] === nodeId) {
+          return costs[nodeId] || 0;
+        }
       }
       
-      visited.add(nodeId);
+      // Check if it's an end node
+      for (var j = 0; j < endNodes.length; j++) {
+        if (endNodes[j].id === nodeId) {
+          costs[nodeId] = 0;
+          return 0;
+        }
+      }
+      
+      visited.push(nodeId);
       var totalCost = 0;
       
-      var outgoingEdges = graph.edges.filter(function(edge) {
-        return edge.from === nodeId;
-      });
+      var outgoingEdges = [];
+      for (var k = 0; k < graph.edges.length; k++) {
+        if (graph.edges[k].from === nodeId) {
+          outgoingEdges.push(graph.edges[k]);
+        }
+      }
       
       for (var i = 0; i < outgoingEdges.length; i++) {
         var edge = outgoingEdges[i];
+        
         // Handle new cost structure: edge.costs.monetary.value
         var edgeCost = 0;
         if (edge.costs && edge.costs.monetary && typeof edge.costs.monetary === 'object') {
@@ -1717,7 +1755,7 @@ function calculateCost(graph, startNode, endNodes) {
         totalCost += edgeProb * (edgeCost + targetCost);
       }
       
-      costs.set(nodeId, totalCost);
+      costs[nodeId] = totalCost;
       return totalCost;
     }
     
@@ -1732,22 +1770,34 @@ function calculateCost(graph, startNode, endNodes) {
  */
 function calculateTime(graph, startNode, endNodes) {
   try {
-    var visited = new Set();
-    var times = new Map();
+    var visited = [];
+    var times = {};
     
     function dfs(nodeId) {
-      if (visited.has(nodeId)) return times.get(nodeId) || 0;
-      if (endNodes.some(function(end) { return end.id === nodeId; })) {
-        times.set(nodeId, 0);
-        return 0;
+      // Check if already visited
+      for (var i = 0; i < visited.length; i++) {
+        if (visited[i] === nodeId) {
+          return times[nodeId] || 0;
+        }
       }
       
-      visited.add(nodeId);
+      // Check if it's an end node
+      for (var j = 0; j < endNodes.length; j++) {
+        if (endNodes[j].id === nodeId) {
+          times[nodeId] = 0;
+          return 0;
+        }
+      }
+      
+      visited.push(nodeId);
       var totalTime = 0;
       
-      var outgoingEdges = graph.edges.filter(function(edge) {
-        return edge.from === nodeId;
-      });
+      var outgoingEdges = [];
+      for (var k = 0; k < graph.edges.length; k++) {
+        if (graph.edges[k].from === nodeId) {
+          outgoingEdges.push(graph.edges[k]);
+        }
+      }
       
       for (var i = 0; i < outgoingEdges.length; i++) {
         var edge = outgoingEdges[i];
@@ -1772,7 +1822,7 @@ function calculateTime(graph, startNode, endNodes) {
         totalTime += edgeProb * (edgeTime + targetTime);
       }
       
-      times.set(nodeId, totalTime);
+      times[nodeId] = totalTime;
       return totalTime;
     }
     
