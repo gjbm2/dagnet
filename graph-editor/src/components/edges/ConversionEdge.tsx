@@ -28,6 +28,11 @@ interface ConversionEdgeData {
   onDoubleClick?: (id: string, field: string) => void;
   onSelect?: (id: string) => void;
   calculateWidth?: () => number;
+  sourceOffsetX?: number;
+  sourceOffsetY?: number;
+  targetOffsetX?: number;
+  targetOffsetY?: number;
+  scaledWidth?: number;
 }
 
 export default function ConversionEdge({
@@ -47,12 +52,29 @@ export default function ConversionEdge({
   const { deleteElements, setEdges } = useReactFlow();
 
 
+  // Apply offsets to source and target positions for Sankey-style visualization
+  const sourceOffsetX = data?.sourceOffsetX || 0;
+  const sourceOffsetY = data?.sourceOffsetY || 0;
+  const targetOffsetX = data?.targetOffsetX || 0;
+  const targetOffsetY = data?.targetOffsetY || 0;
+  
+  const adjustedSourceX = sourceX + sourceOffsetX;
+  const adjustedSourceY = sourceY + sourceOffsetY;
+  const adjustedTargetX = targetX + targetOffsetX;
+  const adjustedTargetY = targetY + targetOffsetY;
+
+  // Debug logging for offset application
+  if (Math.abs(sourceOffsetX) > 0.1 || Math.abs(sourceOffsetY) > 0.1 || Math.abs(targetOffsetX) > 0.1 || Math.abs(targetOffsetY) > 0.1) {
+    console.log(`Edge ${id}: source offset=(${sourceOffsetX.toFixed(1)}, ${sourceOffsetY.toFixed(1)}), target offset=(${targetOffsetX.toFixed(1)}, ${targetOffsetY.toFixed(1)})`);
+  }
+
+
   const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
+    sourceX: adjustedSourceX,
+    sourceY: adjustedSourceY,
     sourcePosition,
-    targetX,
-    targetY,
+    targetX: adjustedTargetX,
+    targetY: adjustedTargetY,
     targetPosition,
   });
 
@@ -216,14 +238,14 @@ export default function ConversionEdge({
     } catch {
       return [];
     }
-  }, [edgePath, targetX, targetY, data?.calculateWidth]);
+  }, [edgePath, adjustedTargetX, adjustedTargetY, data?.calculateWidth]);
 
   // Calculate the arrow position at 75% along the path (for single arrow mode)
   const arrowPosition = React.useMemo(() => {
     try {
       // Extract first 8 numbers from the path: M sx,sy C c1x,c1y c2x,c2y ex,ey
       const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
-      if (!nums || nums.length < 8) return { x: targetX, y: targetY, angle: 0 };
+      if (!nums || nums.length < 8) return { x: adjustedTargetX, y: adjustedTargetY, angle: 0 };
       const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
 
       const t = 0.75; // position arrow at 75% of the curve
@@ -258,9 +280,9 @@ export default function ConversionEdge({
 
       return { x: p0123x, y: p0123y, angle };
     } catch {
-      return { x: targetX, y: targetY, angle: 0 };
+      return { x: adjustedTargetX, y: adjustedTargetY, angle: 0 };
     }
-  }, [edgePath, targetX, targetY]);
+  }, [edgePath, adjustedTargetX, adjustedTargetY]);
 
 
 
@@ -340,7 +362,7 @@ export default function ConversionEdge({
         id={id}
         style={{
           stroke: selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999',
-          strokeWidth: data?.calculateWidth ? data.calculateWidth() : (selected ? 3 : (data?.probability === undefined || data?.probability === null) ? 3 : 2),
+          strokeWidth: data?.scaledWidth || (data?.calculateWidth ? data.calculateWidth() : (selected ? 3 : (data?.probability === undefined || data?.probability === null) ? 3 : 2)),
           fill: 'none',
           cursor: 'pointer',
           zIndex: selected ? 1000 : 1,
@@ -499,8 +521,8 @@ export default function ConversionEdge({
           <div
             style={{
               position: 'absolute',
-              left: sourceX - 6,
-              top: sourceY - 6,
+              left: adjustedSourceX - 6,
+              top: adjustedSourceY - 6,
               width: '12px',
               height: '12px',
               background: '#007bff',
@@ -517,8 +539,8 @@ export default function ConversionEdge({
           <div
             style={{
               position: 'absolute',
-              left: targetX - 6,
-              top: targetY - 6,
+              left: adjustedTargetX - 6,
+              top: adjustedTargetY - 6,
               width: '12px',
               height: '12px',
               background: '#28a745',

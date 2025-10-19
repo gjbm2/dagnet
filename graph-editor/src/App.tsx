@@ -13,7 +13,7 @@ export default function App() {
   const [errors, setErrors] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass'>('uniform');
+  const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass'>('global-log-mass');
   const [autoReroute, setAutoReroute] = useState(false);
 
 

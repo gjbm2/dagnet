@@ -13,7 +13,7 @@ export function applyAutoLayout(nodes: Node[], edges: Edge[], direction: 'LR' | 
   });
   g.setDefaultEdgeLabel(() => ({}));
 
-  nodes.forEach(n => g.setNode(String(n.id), { width: 160, height: 60 }));
+  nodes.forEach(n => g.setNode(String(n.id), { width: 120, height: 120 }));
   edges.forEach(e => g.setEdge(String(e.source), String(e.target)));
   dagre.layout(g);
 
