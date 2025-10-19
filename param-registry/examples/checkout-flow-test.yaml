@@ -1,0 +1,85 @@
+parameter_id: case-checkout-flow-001
+parameter_type: case
+name: Checkout Flow A/B Test
+description: Testing new streamlined checkout vs original flow
+
+# Case metadata
+case:
+  id: case_001
+  slug: checkout-flow-test
+  status: active
+  created_at: 2025-01-15T10:00:00Z
+  updated_at: 2025-01-20T14:30:00Z
+  
+  # Experiment platform integration (future)
+  platform:
+    type: statsig
+    experiment_id: exp_checkout_streamline
+    project_id: nous-conversion
+    api_key_ref: STATSIG_API_KEY
+  
+  # Current variant configuration
+  variants:
+    - name: control
+      weight: 0.5
+      description: Original checkout flow
+      statsig_variant_id: control
+      
+    - name: treatment
+      weight: 0.5
+      description: New streamlined checkout
+      statsig_variant_id: treatment
+  
+  # Time-based configurations (optional)
+  schedules:
+    - start_date: 2025-01-15T00:00:00Z
+      end_date: 2025-02-15T23:59:59Z
+      variants:
+        control: 0.5
+        treatment: 0.5
+      
+    - start_date: 2025-02-16T00:00:00Z
+      end_date: 2025-03-15T23:59:59Z
+      variants:
+        control: 0.2
+        treatment: 0.8
+      note: Increased treatment after positive results
+
+# Historical snapshots
+history:
+  - date: 2025-01-15
+    status: active
+    variants:
+      control: 0.5
+      treatment: 0.5
+  
+  - date: 2025-02-16
+    status: active
+    variants:
+      control: 0.2
+      treatment: 0.8
+
+# Which graphs use this case parameter
+applies_to:
+  - graph: conversion-base
+    node_id: case_checkout_001
+    node_slug: case-checkout
+  
+  - graph: conversion-mobile
+    node_id: case_checkout_mobile_001
+    node_slug: case-checkout-mobile
+
+# Metadata
+tags:
+  - checkout
+  - conversion
+  - ui-test
+  - high-priority
+
+owner: product-team
+contacts:
+  - email: product@example.com
+    role: owner
+  - email: data@example.com
+    role: analyst
+

@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Handle, Position, NodeProps, useReactFlow } from 'reactflow';
+import { useGraphStore } from '@/lib/useGraphStore';
 
 interface ConversionNodeData {
   id: string;
@@ -9,13 +10,25 @@ interface ConversionNodeData {
   outcome_type?: string;
   description?: string;
   entry?: { is_start?: boolean; entry_weight?: number };
+  type?: 'normal' | 'case';
+  case?: {
+    id: string;
+    parameter_id?: string;
+    status: 'active' | 'paused' | 'completed';
+    variants: Array<{
+      name: string;
+      weight: number;
+      description?: string;
+    }>;
+  };
   onUpdate: (id: string, data: Partial<ConversionNodeData>) => void;
   onDelete: (id: string) => void;
   onDoubleClick?: (id: string, field: string) => void;
 }
 
 export default function ConversionNode({ data, selected }: NodeProps<ConversionNodeData>) {
-  const { getEdges, setNodes } = useReactFlow();
+  const { getEdges, getNodes, setNodes } = useReactFlow();
+  const { whatIfAnalysis } = useGraphStore();
 
 
   const handleDoubleClick = useCallback(() => {
@@ -44,11 +57,33 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   // Calculate probability mass for outgoing edges
   const getProbabilityMass = useCallback(() => {
     const edges = getEdges();
+    const nodes = getNodes();
     const outgoingEdges = edges.filter(edge => edge.source === data.id);
     
     if (outgoingEdges.length === 0) return null;
     
     const totalProbability = outgoingEdges.reduce((sum, edge) => {
+      // For case edges, calculate effective probability (variant weight × sub-route probability)
+      if (edge.data?.case_id && edge.data?.case_variant) {
+        const caseNode = nodes.find((n: any) => n.data?.case?.id === edge.data.case_id);
+        if (caseNode) {
+          const variant = caseNode.data?.case?.variants?.find((v: any) => v.name === edge.data.case_variant);
+          if (variant) {
+            let variantWeight = variant.weight || 0;
+            
+            // Apply what-if analysis override
+            if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode.id) {
+              variantWeight = edge.data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
+            }
+            
+            const subRouteProbability = edge.data?.probability ?? 1.0;
+            return sum + (variantWeight * subRouteProbability);
+          }
+        }
+        return sum;
+      }
+      
+      // For normal edges, use probability as-is
       const prob = edge.data?.probability;
       return sum + (typeof prob === 'number' ? prob : 0);
     }, 0);
@@ -59,22 +94,44 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       isComplete: Math.abs(totalProbability - 1.0) < 0.001,
       edgeCount: outgoingEdges.length
     };
-  }, [data.id, getEdges]);
+  }, [data.id, getEdges, getNodes, whatIfAnalysis]);
 
   const probabilityMass = getProbabilityMass();
+  const isCaseNode = data.type === 'case';
+  
+  // Case node styling
+  const caseNodeStyle = isCaseNode ? {
+    width: '96px', // 80% of normal size
+    height: '96px',
+    background: '#8B5CF6', // purple-500
+    border: selected ? '2px solid #7C3AED' : '2px solid #7C3AED', // purple-600
+    color: '#FFFFFF', // white text
+    fontSize: '11px' // slightly smaller font
+  } : {};
+
+  // Status indicator color for case nodes
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'active': return '#10B981'; // green-500
+      case 'paused': return '#F59E0B'; // yellow-500
+      case 'completed': return '#6B7280'; // gray-500
+      default: return '#6B7280';
+    }
+  };
 
   return (
     <div 
-      className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''}`}
+      className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''} ${isCaseNode ? 'case-node' : ''}`}
       style={{
         padding: '8px',
-        border: selected ? '2px solid #007bff' : 
+        border: isCaseNode ? (selected ? '2px solid #7C3AED' : '2px solid #7C3AED') :
+                selected ? '2px solid #007bff' : 
                 (probabilityMass && !probabilityMass.isComplete) ? '2px solid #ff6b6b' : 
                 '2px solid #ddd',
         borderRadius: '8px',
-        background: data.absorbing ? '#ffebee' : '#fff',
-        width: '120px',
-        height: '120px',
+        background: isCaseNode ? '#8B5CF6' : (data.absorbing ? '#ffebee' : '#fff'),
+        width: isCaseNode ? '96px' : '120px',
+        height: isCaseNode ? '96px' : '120px',
         textAlign: 'center',
         cursor: 'pointer',
         boxShadow: selected ? '0 4px 8px rgba(0,123,255,0.3)' : 
@@ -85,7 +142,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         flexDirection: 'column',
         justifyContent: 'center',
         alignItems: 'center',
-        boxSizing: 'border-box'
+        boxSizing: 'border-box',
+        color: isCaseNode ? '#FFFFFF' : 'inherit',
+        fontSize: isCaseNode ? '11px' : 'inherit'
       }}
     >
       {/* Input handles - all sides */}
@@ -148,6 +207,45 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       {data.entry?.is_start && (
         <div style={{ fontSize: '10px', color: '#16a34a', marginTop: '2px', fontWeight: 'bold' }}>
           START
+        </div>
+      )}
+
+      {/* Case node status indicator */}
+      {isCaseNode && data.case && (
+        <div style={{ 
+          position: 'absolute',
+          top: '4px',
+          right: '4px',
+          width: '8px',
+          height: '8px',
+          borderRadius: '50%',
+          backgroundColor: getStatusColor(data.case.status),
+          border: '1px solid #FFFFFF'
+        }} title={`Status: ${data.case.status}`} />
+      )}
+
+      {/* Case node variant info */}
+      {isCaseNode && data.case && (
+        <div style={{ 
+          fontSize: '9px', 
+          color: '#FFFFFF', 
+          marginTop: '2px',
+          opacity: 0.9
+        }}>
+          {data.case.variants.length} variant{data.case.variants.length > 1 ? 's' : ''}
+        </div>
+      )}
+
+      {/* What-If Analysis Indicator */}
+      {isCaseNode && whatIfAnalysis && whatIfAnalysis.caseNodeId === data.id && (
+        <div style={{
+          position: 'absolute',
+          top: '4px',
+          left: '4px',
+          fontSize: '16px',
+          animation: 'pulse 2s infinite'
+        }} title={`What-If Mode: ${whatIfAnalysis.selectedVariant} @ 100%`}>
+          🔬
         </div>
       )}
 
