@@ -118,10 +118,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, []);
 
   // Edge width calculation based on scaling mode
+  const MAX_WIDTH = 104; // Node height (120px) minus 2x corner radius (8px each = 16px)
+  const MIN_WIDTH = 2;
+  
   const calculateEdgeWidth = useCallback((edge: any, allEdges: any[], allNodes: any[]) => {
-    // MAX_WIDTH = node height - 2x corner radius = 60 - 16 = 44px
-    const MAX_WIDTH = 44; // Node height (60px) minus 2x corner radius (8px each = 16px)
-    const MIN_WIDTH = 2;
     
     console.log(`calculateEdgeWidth called for edge ${edge.id}, mode=${edgeScalingMode}`);
     
@@ -271,8 +271,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [edgeScalingMode, logMassTransform]);
 
   // Calculate edge offsets for Sankey-style visualization
-  const calculateEdgeOffsets = useCallback((edgesWithWidth: any[], allNodes: any[]) => {
-    // Group edges by source node
+  const calculateEdgeOffsets = useCallback((edgesWithWidth: any[], allNodes: any[], maxWidth: number) => {
+    
+    // Group edges by source node (for source offsets)
     const edgesBySource: { [sourceId: string]: any[] } = {};
     edgesWithWidth.forEach(edge => {
       if (!edgesBySource[edge.source]) {
@@ -281,57 +282,222 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       edgesBySource[edge.source].push(edge);
     });
 
-    // Calculate offsets for each source node
+    // Group edges by target node (for target offsets)
+    const edgesByTarget: { [targetId: string]: any[] } = {};
+    edgesWithWidth.forEach(edge => {
+      if (!edgesByTarget[edge.target]) {
+        edgesByTarget[edge.target] = [];
+      }
+      edgesByTarget[edge.target].push(edge);
+    });
+
+    // Calculate offsets for each edge (both source and target)
     const edgesWithOffsets = edgesWithWidth.map(edge => {
-      const sourceEdges = edgesBySource[edge.source] || [];
-      
       // Only apply offsets for mass-based scaling modes
       if (!['local-mass', 'global-mass', 'global-log-mass'].includes(edgeScalingMode)) {
-        return { ...edge, offsetX: 0, offsetY: 0 };
+        return { 
+          ...edge, 
+          sourceOffsetX: 0, 
+          sourceOffsetY: 0,
+          targetOffsetX: 0,
+          targetOffsetY: 0
+        };
       }
 
-      // Calculate total visual width of all edges from this source
-      const totalWidth = sourceEdges.reduce((sum, e) => {
-        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-        return sum + width;
-      }, 0);
+      const sourceEdges = edgesBySource[edge.source] || [];
+      const targetEdges = edgesByTarget[edge.target] || [];
 
-      if (totalWidth === 0) {
-        return { ...edge, offsetX: 0, offsetY: 0 };
-      }
-
-      // Calculate cumulative width up to this edge
-      const edgeIndex = sourceEdges.findIndex(e => e.id === edge.id);
-      const cumulativeWidth = sourceEdges.slice(0, edgeIndex).reduce((sum, e) => {
-        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-        return sum + width;
-      }, 0);
-
-      // Calculate this edge's width
-      const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-
-      // Calculate offset: center of this edge's width within the total width
-      const offsetFromStart = cumulativeWidth + (edgeWidth / 2);
-      const normalizedOffset = (offsetFromStart / totalWidth) - 0.5; // -0.5 to 0.5 range
-
-      // Find the source node to determine its dimensions
+      // Find the source and target nodes to determine edge direction
       const sourceNode = allNodes.find(n => n.id === edge.source);
-      if (!sourceNode) {
-        return { ...edge, offsetX: 0, offsetY: 0 };
+      const targetNode = allNodes.find(n => n.id === edge.target);
+      
+      if (!sourceNode || !targetNode) {
+        return { 
+          ...edge, 
+          sourceOffsetX: 0, 
+          sourceOffsetY: 0,
+          targetOffsetX: 0,
+          targetOffsetY: 0
+        };
       }
 
-      // Calculate offset in pixels (assuming node is roughly 60px wide/tall)
-      const nodeSize = 60;
-      const maxOffset = nodeSize * 0.4; // 40% of node size for maximum offset
-      const offsetX = normalizedOffset * maxOffset;
-      const offsetY = normalizedOffset * maxOffset;
+      // Get the actual connection handles from the edge data
+      // These tell us which face of each node the edge connects to
+      const sourceHandle = edge.sourceHandle || 'right-out';
+      const targetHandle = edge.targetHandle || 'left';
+      
+      // Extract face from handle (e.g., 'right-out' → 'right', 'left' → 'left')
+      const sourceFace = sourceHandle.split('-')[0]; // 'right', 'left', 'top', 'bottom'
+      const targetFace = targetHandle.split('-')[0]; // 'right', 'left', 'top', 'bottom'
 
-      console.log(`Edge ${edge.id}: totalWidth=${totalWidth.toFixed(1)}, cumulative=${cumulativeWidth.toFixed(1)}, edgeWidth=${edgeWidth.toFixed(1)}, offset=${normalizedOffset.toFixed(2)}, pixels=(${offsetX.toFixed(1)}, ${offsetY.toFixed(1)})`);
+      // ===== Calculate SOURCE offsets =====
+      // Filter to only edges exiting from the SAME FACE of this source node
+      const sameFaceSourceEdges = sourceEdges.filter(e => {
+        const eSourceHandle = e.sourceHandle || 'right-out';
+        const eSourceFace = eSourceHandle.split('-')[0];
+        return eSourceFace === sourceFace;
+      });
+
+      // Sort edges from this face by visual position of their targets
+      const sortedSourceEdges = [...sameFaceSourceEdges].sort((a, b) => {
+        const aTarget = allNodes.find(n => n.id === a.target);
+        const bTarget = allNodes.find(n => n.id === b.target);
+        if (!aTarget || !bTarget) return 0;
+        
+        // For left/right faces: sort by Y (top to bottom)
+        // For top/bottom faces: sort by X (left to right)
+        if (sourceFace === 'left' || sourceFace === 'right') {
+          return (aTarget.position?.y || 0) - (bTarget.position?.y || 0);
+        } else {
+          return (aTarget.position?.x || 0) - (bTarget.position?.x || 0);
+        }
+      });
+
+      // Calculate total visual width of all edges on this face
+      const sourceTotalWidth = sortedSourceEdges.reduce((sum, e) => {
+        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+        return sum + width;
+      }, 0);
+
+      let sourceOffsetX = 0;
+      let sourceOffsetY = 0;
+
+      if (sourceTotalWidth > 0) {
+        // For Global Log Mass: scale down if total width exceeds maxWidth
+        let scaleFactor = 1.0;
+        if (edgeScalingMode === 'global-log-mass' && sourceTotalWidth > maxWidth) {
+          scaleFactor = maxWidth / sourceTotalWidth;
+        }
+
+        const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id);
+        if (sourceEdgeIndex !== -1) {
+          const sourceCumulativeWidth = sortedSourceEdges.slice(0, sourceEdgeIndex).reduce((sum, e) => {
+            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+            return sum + width;
+          }, 0);
+
+          const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
+          
+          // Apply scaling to cumulative width and edge width
+          const scaledCumulativeWidth = sourceCumulativeWidth * scaleFactor;
+          const scaledEdgeWidth = edgeWidth * scaleFactor;
+          const scaledTotalWidth = sourceTotalWidth * scaleFactor;
+          
+          const sourceCenterInStack = scaledCumulativeWidth + (scaledEdgeWidth / 2);
+          const sourceStackCenter = scaledTotalWidth / 2;
+          const sourceOffsetFromCenter = sourceCenterInStack - sourceStackCenter;
+
+          // Apply offset to the correct axis based on face
+          if (sourceFace === 'left' || sourceFace === 'right') {
+            // Left/right faces: offset vertically (Y)
+            sourceOffsetY = sourceOffsetFromCenter;
+          } else {
+            // Top/bottom faces: offset horizontally (X)
+            sourceOffsetX = sourceOffsetFromCenter;
+          }
+        }
+      }
+
+      // ===== Calculate TARGET offsets =====
+      // Filter to only edges entering from the SAME FACE of this target node
+      const sameFaceTargetEdges = targetEdges.filter(e => {
+        const eTargetHandle = e.targetHandle || 'left';
+        const eTargetFace = eTargetHandle.split('-')[0];
+        return eTargetFace === targetFace;
+      });
+
+      // Sort edges to this target face by visual position of their sources
+      const sortedTargetEdges = [...sameFaceTargetEdges].sort((a, b) => {
+        const aSource = allNodes.find(n => n.id === a.source);
+        const bSource = allNodes.find(n => n.id === b.source);
+        if (!aSource || !bSource) return 0;
+        
+        // For left/right faces: sort by source Y (top to bottom)
+        // For top/bottom faces: sort by source X (left to right)
+        if (targetFace === 'left' || targetFace === 'right') {
+          return (aSource.position?.y || 0) - (bSource.position?.y || 0);
+        } else {
+          return (aSource.position?.x || 0) - (bSource.position?.x || 0);
+        }
+      });
+
+      // Calculate total visual width of all edges on this target face
+      const targetTotalWidth = sortedTargetEdges.reduce((sum, e) => {
+        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+        return sum + width;
+      }, 0);
+
+      let targetOffsetX = 0;
+      let targetOffsetY = 0;
+
+      if (targetTotalWidth > 0) {
+        // For Global Log Mass: scale down if total width exceeds maxWidth
+        let scaleFactor = 1.0;
+        if (edgeScalingMode === 'global-log-mass' && targetTotalWidth > maxWidth) {
+          scaleFactor = maxWidth / targetTotalWidth;
+        }
+
+        const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id);
+        if (targetEdgeIndex !== -1) {
+          const targetCumulativeWidth = sortedTargetEdges.slice(0, targetEdgeIndex).reduce((sum, e) => {
+            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+            return sum + width;
+          }, 0);
+
+          const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
+          
+          // Apply scaling to cumulative width and edge width
+          const scaledCumulativeWidth = targetCumulativeWidth * scaleFactor;
+          const scaledEdgeWidth = edgeWidth * scaleFactor;
+          const scaledTotalWidth = targetTotalWidth * scaleFactor;
+          
+          const targetCenterInStack = scaledCumulativeWidth + (scaledEdgeWidth / 2);
+          const targetStackCenter = scaledTotalWidth / 2;
+          const targetOffsetFromCenter = targetCenterInStack - targetStackCenter;
+
+          // Apply offset to the correct axis based on face
+          if (targetFace === 'left' || targetFace === 'right') {
+            // Left/right faces: offset vertically (Y)
+            targetOffsetY = targetOffsetFromCenter;
+          } else {
+            // Top/bottom faces: offset horizontally (X)
+            targetOffsetX = targetOffsetFromCenter;
+          }
+        }
+      }
+
+      // Debug logging for offset calculation
+      if (Math.abs(sourceOffsetX) > 0.1 || Math.abs(sourceOffsetY) > 0.1 || Math.abs(targetOffsetX) > 0.1 || Math.abs(targetOffsetY) > 0.1) {
+        const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
+        const sourceScaleFactor = (edgeScalingMode === 'global-log-mass' && sourceTotalWidth > maxWidth) ? maxWidth / sourceTotalWidth : 1.0;
+        const targetScaleFactor = (edgeScalingMode === 'global-log-mass' && targetTotalWidth > maxWidth) ? maxWidth / targetTotalWidth : 1.0;
+        
+        const finalScaleFactor = Math.min(sourceScaleFactor, targetScaleFactor);
+        const scaledWidth = edgeWidth * finalScaleFactor;
+        
+        console.log(`Edge ${edge.id} (${edge.source} → ${edge.target}):`);
+        console.log(`  Original Width: ${edgeWidth.toFixed(1)} → Scaled Width: ${scaledWidth.toFixed(1)} (scale=${finalScaleFactor.toFixed(2)})`);
+        console.log(`  Source: face=${sourceFace}, ${sameFaceSourceEdges.length}/${sourceEdges.length} edges, totalWidth=${sourceTotalWidth.toFixed(1)}, scale=${sourceScaleFactor.toFixed(2)}, offset=(${sourceOffsetX.toFixed(1)}, ${sourceOffsetY.toFixed(1)})`);
+        console.log(`  Target: face=${targetFace}, ${sameFaceTargetEdges.length}/${targetEdges.length} edges, totalWidth=${targetTotalWidth.toFixed(1)}, scale=${targetScaleFactor.toFixed(2)}, offset=(${targetOffsetX.toFixed(1)}, ${targetOffsetY.toFixed(1)})`);
+      }
+
+      // Apply scaling to the edge width for Global Log Mass
+      let scaledWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
+      if (edgeScalingMode === 'global-log-mass') {
+        // Use the more restrictive scaling factor (smaller of source/target)
+        const sourceScaleFactor = sourceTotalWidth > maxWidth ? maxWidth / sourceTotalWidth : 1.0;
+        const targetScaleFactor = targetTotalWidth > maxWidth ? maxWidth / targetTotalWidth : 1.0;
+        const finalScaleFactor = Math.min(sourceScaleFactor, targetScaleFactor);
+        scaledWidth = scaledWidth * finalScaleFactor;
+      }
 
       return { 
         ...edge, 
-        offsetX: offsetX,
-        offsetY: offsetY
+        sourceOffsetX: sourceOffsetX,
+        sourceOffsetY: sourceOffsetY,
+        targetOffsetX: targetOffsetX,
+        targetOffsetY: targetOffsetY,
+        scaledWidth: scaledWidth
       };
     });
 
@@ -352,9 +518,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const targetX = targetNode.position.x;
     const targetY = targetNode.position.y;
     
-    // Node dimensions (from layout.ts: width: 160, height: 60)
-    const nodeWidth = 160;
-    const nodeHeight = 60;
+    // Node dimensions (from layout.ts: width: 120, height: 120)
+    const nodeWidth = 120;
+    const nodeHeight = 120;
     
     // Calculate relative positions
     const deltaX = targetX - sourceX;
@@ -741,25 +907,57 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
     }));
     
+    // Calculate edge offsets for Sankey-style visualization
+    const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, newNodes, MAX_WIDTH);
+    
+    // Attach offsets to edge data for the ConversionEdge component
+    const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
+      ...edge,
+      data: {
+        ...edge.data,
+        sourceOffsetX: edge.sourceOffsetX,
+        sourceOffsetY: edge.sourceOffsetY,
+        targetOffsetX: edge.targetOffsetX,
+        targetOffsetY: edge.targetOffsetY,
+        scaledWidth: edge.scaledWidth
+      }
+    }));
+    
     setNodes(newNodes);
-    setEdges(edgesWithWidth);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, calculateEdgeWidth]);
+    setEdges(edgesWithOffsetData);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, calculateEdgeWidth, calculateEdgeOffsets]);
 
   // Update edge widths when scaling mode changes
   useEffect(() => {
     if (edges.length === 0) return;
     
-    // Force re-render of edges by updating their data
-    setEdges(prevEdges => 
-      prevEdges.map(edge => ({
+    // Force re-render of edges by updating their data and recalculating offsets
+    setEdges(prevEdges => {
+      const edgesWithWidth = prevEdges.map(edge => ({
         ...edge,
         data: {
           ...edge.data,
           calculateWidth: () => calculateEdgeWidth(edge, prevEdges, nodes)
         }
-      }))
-    );
-  }, [edgeScalingMode, calculateEdgeWidth, nodes]);
+      }));
+      
+      // Recalculate offsets for mass-based scaling modes
+      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodes, MAX_WIDTH);
+      
+      // Attach offsets to edge data for the ConversionEdge component
+      return edgesWithOffsets.map(edge => ({
+        ...edge,
+        data: {
+          ...edge.data,
+          sourceOffsetX: edge.sourceOffsetX,
+          sourceOffsetY: edge.sourceOffsetY,
+          targetOffsetX: edge.targetOffsetX,
+          targetOffsetY: edge.targetOffsetY,
+          scaledWidth: edge.scaledWidth
+        }
+      }));
+    });
+  }, [edgeScalingMode, calculateEdgeWidth, calculateEdgeOffsets, nodes]);
   
   // Sync FROM ReactFlow TO graph when user makes changes in the canvas
   // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
@@ -1129,49 +1327,158 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
     const selectedNodeIds = selectedNodesForAnalysis.map(n => n.id);
     
-    // Find all edges between selected nodes
+    // Special case: exactly 2 nodes selected - calculate path analysis
+    if (selectedNodesForAnalysis.length === 2) {
+      const [nodeA, nodeB] = selectedNodesForAnalysis;
+      
+      // Find direct edge between the two nodes (A → B)
+      const directEdge = edges.find(edge => 
+        edge.source === nodeA.id && edge.target === nodeB.id
+      );
+      
+      // Find reverse edge (B → A) 
+      const reverseEdge = edges.find(edge => 
+        edge.source === nodeB.id && edge.target === nodeA.id
+      );
+      
+      // Find path through intermediate nodes (A → ... → B) using dagCalc logic
+      const findPathThroughIntermediates = (startId: string, endId: string): { path: any[], probability: number, expectedCosts: any } => {
+        const visited = new Set<string>();
+        const costs: { [nodeId: string]: { monetary: number, time: number, units: string } } = {};
+        
+        const dfs = (nodeId: string): { monetary: number, time: number, units: string } => {
+          // Check if already visited (cycle detection)
+          if (visited.has(nodeId)) {
+            return costs[nodeId] || { monetary: 0, time: 0, units: '' };
+          }
+          
+          // Check if it's the end node
+          if (nodeId === endId) {
+            costs[nodeId] = { monetary: 0, time: 0, units: '' };
+            return costs[nodeId];
+          }
+          
+          visited.add(nodeId);
+          let totalCost = { monetary: 0, time: 0, units: '' };
+          
+          // Find all outgoing edges from current node
+          const outgoingEdges = edges.filter(edge => edge.source === nodeId);
+          
+          for (const edge of outgoingEdges) {
+            const edgeProbability = edge.data?.probability || 0;
+            const edgeCosts = edge.data?.costs;
+            
+            // Get cost from target node (recursive)
+            const targetCost = dfs(edge.target);
+            
+            // Calculate probability-weighted cost (dagCalc logic)
+            const edgeCost = {
+              monetary: edgeCosts?.monetary?.value || 0,
+              time: edgeCosts?.time?.value || 0,
+              units: edgeCosts?.time?.units || ''
+            };
+            
+            totalCost.monetary += edgeProbability * (edgeCost.monetary + targetCost.monetary);
+            totalCost.time += edgeProbability * (edgeCost.time + targetCost.time);
+            totalCost.units = totalCost.units || edgeCost.units;
+          }
+          
+          costs[nodeId] = totalCost;
+          return totalCost;
+        };
+        
+        const expectedCosts = dfs(startId);
+        
+        // Calculate total probability using the same DFS approach
+        const calculateProbability = (nodeId: string): number => {
+          if (nodeId === endId) return 1;
+          
+          let totalProbability = 0;
+          const outgoingEdges = edges.filter(edge => edge.source === nodeId);
+          
+          for (const edge of outgoingEdges) {
+            const edgeProbability = edge.data?.probability || 0;
+            const targetProbability = calculateProbability(edge.target);
+            totalProbability += edgeProbability * targetProbability;
+          }
+          
+          return totalProbability;
+        };
+        
+        const pathProbability = calculateProbability(startId);
+        
+        return { 
+          path: [], // We don't need the actual path for cost calculation
+          probability: pathProbability, 
+          expectedCosts 
+        };
+      };
+      
+      // Calculate direct path (if exists) - for direct paths, cost is just the edge cost
+      const directPathProbability = directEdge?.data?.probability || 0;
+      const directPathCosts = {
+        monetary: directEdge?.data?.costs?.monetary?.value || 0,
+        time: directEdge?.data?.costs?.time?.value || 0,
+        units: directEdge?.data?.costs?.time?.units || ''
+      };
+      
+      // Calculate path through intermediates using dagCalc logic
+      const intermediatePath = findPathThroughIntermediates(nodeA.id, nodeB.id);
+      
+      // Use the path with higher probability (direct vs intermediate)
+      const useDirectPath = directEdge && directPathProbability >= intermediatePath.probability;
+      const finalPath = useDirectPath ? {
+        probability: directPathProbability,
+        costs: directPathCosts,
+        isDirect: true,
+        pathEdges: directEdge ? [directEdge] : []
+      } : {
+        probability: intermediatePath.probability,
+        costs: intermediatePath.expectedCosts,
+        isDirect: false,
+        pathEdges: []
+      };
+      
+      return {
+        type: 'path',
+        nodeA: nodeA,
+        nodeB: nodeB,
+        directEdge: directEdge,
+        reverseEdge: reverseEdge,
+        pathProbability: finalPath.probability,
+        pathCosts: finalPath.costs,
+        hasDirectPath: !!directEdge,
+        hasReversePath: !!reverseEdge,
+        isDirectPath: finalPath.isDirect,
+        pathEdges: finalPath.pathEdges,
+        intermediateNodes: finalPath.pathEdges.length > 1 ? 
+          finalPath.pathEdges.slice(0, -1).map(edge => edge.target) : []
+      };
+    }
+    
+    // General case: multiple nodes selected - existing analysis
     const internalEdges = edges.filter(edge => 
       selectedNodeIds.includes(edge.source) && selectedNodeIds.includes(edge.target)
     );
     
-    // Find edges entering the selection
     const incomingEdges = edges.filter(edge => 
       !selectedNodeIds.includes(edge.source) && selectedNodeIds.includes(edge.target)
     );
     
-    // Find edges leaving the selection (source is in selection, target is not)
     const outgoingEdges = edges.filter(edge => 
       selectedNodeIds.includes(edge.source) && !selectedNodeIds.includes(edge.target)
     );
-    
-    console.log('Edge classification debug:', {
-      selectedNodeIds,
-      allEdges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceInSelection: selectedNodeIds.includes(e.source), targetInSelection: selectedNodeIds.includes(e.target) })),
-      incomingEdges: incomingEdges.map(e => e.id),
-      outgoingEdges: outgoingEdges.map(e => e.id)
-    });
 
-    // Calculate total probability mass
     const totalIncomingProbability = incomingEdges.reduce((sum, edge) => {
       const prob = edge.data?.probability || 0;
-      console.log(`Incoming edge ${edge.id}: probability = ${prob}`);
       return sum + prob;
     }, 0);
     
     const totalOutgoingProbability = outgoingEdges.reduce((sum, edge) => {
       const prob = edge.data?.probability || 0;
-      console.log(`Outgoing edge ${edge.id}: probability = ${prob}`);
       return sum + prob;
     }, 0);
 
-    console.log('Probability calculation:', {
-      totalIncomingProbability,
-      totalOutgoingProbability,
-      incomingEdges: incomingEdges.map(e => ({ id: e.id, prob: e.data?.probability })),
-      outgoingEdges: outgoingEdges.map(e => ({ id: e.id, prob: e.data?.probability }))
-    });
-
-    // Calculate total costs
     const totalCosts = {
       monetary: 0,
       time: 0,
@@ -1180,15 +1487,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
     [...internalEdges, ...outgoingEdges].forEach(edge => {
       if (edge.data?.costs) {
-        totalCosts.monetary += edge.data.costs.monetary || 0;
-        totalCosts.time += edge.data.costs.time || 0;
-        if (edge.data.costs.units && !totalCosts.units) {
-          totalCosts.units = edge.data.costs.units;
+        totalCosts.monetary += edge.data.costs.monetary?.value || 0;
+        totalCosts.time += edge.data.costs.time?.value || 0;
+        if (edge.data.costs.time?.units && !totalCosts.units) {
+          totalCosts.units = edge.data.costs.time.units;
         }
       }
     });
 
     return {
+      type: 'multi',
       selectedNodes: selectedNodesForAnalysis.length,
       internalEdges: internalEdges.length,
       incomingEdges: incomingEdges.length,
@@ -1367,49 +1675,98 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               lineHeight: '1.4'
             }}>
               <h3 style={{ margin: '0 0 12px 0', color: '#007bff', fontSize: '16px' }}>
-                Selection Analysis
+                {analysis.type === 'path' ? 'Path Analysis' : 'Selection Analysis'}
               </h3>
               
-              <div style={{ marginBottom: '8px' }}>
-                <strong>Nodes:</strong> {analysis.selectedNodes} selected
-              </div>
-              
-              <div style={{ marginBottom: '8px' }}>
-                <strong>Edges:</strong> {analysis.internalEdges} internal, {analysis.incomingEdges} incoming, {analysis.outgoingEdges} outgoing
-              </div>
-              
-              <div style={{ marginBottom: '8px' }}>
-                <strong>Probability Flow:</strong>
-                <div style={{ marginLeft: '12px', fontSize: '12px' }}>
-                  In: {Math.round(analysis.totalIncomingProbability * 100)}% → Out: {Math.round(analysis.totalOutgoingProbability * 100)}%
-                </div>
-                {analysis.totalOutgoingProbability === 0 && analysis.totalIncomingProbability > 0 ? (
-                  <div style={{ color: '#16a34a', fontSize: '12px', marginTop: '4px' }}>
-                    ✅ Complete path selected - probability contained within selection
+              {analysis.type === 'path' ? (
+                // Path analysis for exactly 2 nodes
+                <>
+                  <div style={{ marginBottom: '12px' }}>
+                    <strong>Path:</strong> {analysis.nodeA.data?.label || analysis.nodeA.id} → {analysis.nodeB.data?.label || analysis.nodeB.id}
                   </div>
-                ) : !analysis.probabilityConservation ? (
-                  <div style={{ color: '#ff6b6b', fontSize: '12px', marginTop: '4px' }}>
-                    ⚠️ Probability not conserved
+                  
+                  {analysis.pathProbability > 0 ? (
+                    <>
+                      <div style={{ marginBottom: '8px' }}>
+                        <strong>Probability:</strong> {(analysis.pathProbability * 100).toFixed(2)}%
+                        {!analysis.isDirectPath && (analysis.intermediateNodes?.length || 0) > 0 && (
+                          <div style={{ color: '#666', fontSize: '12px', marginTop: '2px' }}>
+                            via {analysis.intermediateNodes?.length || 0} intermediate node{(analysis.intermediateNodes?.length || 0) > 1 ? 's' : ''}
+                          </div>
+                        )}
+                      </div>
+                      
+                      {(analysis.pathCosts.monetary > 0 || analysis.pathCosts.time > 0) && (
+                        <div style={{ marginBottom: '8px' }}>
+                          <strong>Expected Costs:</strong>
+                          <div style={{ marginLeft: '12px', fontSize: '12px' }}>
+                            {analysis.pathCosts.monetary > 0 && (
+                              <div>💰 £{analysis.pathCosts.monetary.toFixed(2)}</div>
+                            )}
+                            {analysis.pathCosts.time > 0 && (
+                              <div>⏱️ {analysis.pathCosts.time.toFixed(1)} {analysis.pathCosts.units || 'units'}</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {analysis.hasReversePath && (
+                        <div style={{ color: '#666', fontSize: '12px', marginTop: '8px' }}>
+                          ℹ️ Bidirectional path exists
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ color: '#ff6b6b', fontSize: '12px' }}>
+                      ⚠️ No connection found (direct or via intermediates)
+                    </div>
+                  )}
+                </>
+              ) : (
+                // Multi-node analysis (existing logic)
+                <>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Nodes:</strong> {analysis.selectedNodes} selected
                   </div>
-                ) : (
-                  <div style={{ color: '#16a34a', fontSize: '12px', marginTop: '4px' }}>
-                    ✅ Probability conserved
+                  
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Edges:</strong> {analysis.internalEdges} internal, {analysis.incomingEdges} incoming, {analysis.outgoingEdges} outgoing
                   </div>
-                )}
-              </div>
-              
-              {(analysis.totalCosts.monetary > 0 || analysis.totalCosts.time > 0) && (
-                <div style={{ marginBottom: '8px' }}>
-                  <strong>Total Costs:</strong>
-                  <div style={{ marginLeft: '12px', fontSize: '12px' }}>
-                    {analysis.totalCosts.monetary > 0 && (
-                      <div>£{analysis.totalCosts.monetary}{analysis.totalCosts.units && ` ${analysis.totalCosts.units}`}</div>
+                  
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Probability Flow:</strong>
+                    <div style={{ marginLeft: '12px', fontSize: '12px' }}>
+                      In: {Math.round((analysis.totalIncomingProbability || 0) * 100)}% → Out: {Math.round((analysis.totalOutgoingProbability || 0) * 100)}%
+                    </div>
+                    {(analysis.totalOutgoingProbability || 0) === 0 && (analysis.totalIncomingProbability || 0) > 0 ? (
+                      <div style={{ color: '#16a34a', fontSize: '12px', marginTop: '4px' }}>
+                        ✅ Complete path selected - probability contained within selection
+                      </div>
+                    ) : !analysis.probabilityConservation ? (
+                      <div style={{ color: '#ff6b6b', fontSize: '12px', marginTop: '4px' }}>
+                        ⚠️ Probability not conserved
+                      </div>
+                    ) : (
+                      <div style={{ color: '#16a34a', fontSize: '12px', marginTop: '4px' }}>
+                        ✅ Probability conserved
+                      </div>
                     )}
-                    {analysis.totalCosts.time > 0 && (
-                      <div>{analysis.totalCosts.time}h{analysis.totalCosts.units && ` ${analysis.totalCosts.units}`}</div>
-                    )}
                   </div>
-                </div>
+                  
+                  {((analysis.totalCosts?.monetary || 0) > 0 || (analysis.totalCosts?.time || 0) > 0) && (
+                    <div style={{ marginBottom: '8px' }}>
+                      <strong>Total Costs:</strong>
+                      <div style={{ marginLeft: '12px', fontSize: '12px' }}>
+                        {(analysis.totalCosts?.monetary || 0) > 0 && (
+                          <div>£{analysis.totalCosts?.monetary}{analysis.totalCosts?.units && ` ${analysis.totalCosts.units}`}</div>
+                        )}
+                        {(analysis.totalCosts?.time || 0) > 0 && (
+                          <div>{analysis.totalCosts?.time}h{analysis.totalCosts?.units && ` ${analysis.totalCosts.units}`}</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </Panel>

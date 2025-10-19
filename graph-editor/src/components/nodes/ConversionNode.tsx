@@ -67,19 +67,25 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     <div 
       className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''}`}
       style={{
-        padding: '12px',
+        padding: '8px',
         border: selected ? '2px solid #007bff' : 
                 (probabilityMass && !probabilityMass.isComplete) ? '2px solid #ff6b6b' : 
                 '2px solid #ddd',
         borderRadius: '8px',
         background: data.absorbing ? '#ffebee' : '#fff',
-        minWidth: '120px',
+        width: '120px',
+        height: '120px',
         textAlign: 'center',
         cursor: 'pointer',
         boxShadow: selected ? '0 4px 8px rgba(0,123,255,0.3)' : 
                    (probabilityMass && !probabilityMass.isComplete) ? '0 2px 4px rgba(255,107,107,0.3)' :
                    '0 2px 4px rgba(0,0,0,0.1)',
-        transition: 'all 0.2s ease'
+        transition: 'all 0.2s ease',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        alignItems: 'center',
+        boxSizing: 'border-box'
       }}
     >
       {/* Input handles - all sides */}
@@ -109,7 +115,18 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       />
       
       <div 
-        style={{ fontWeight: 'bold', marginBottom: '4px', fontSize: '14px', cursor: 'pointer' }}
+        style={{ 
+          fontWeight: 'bold', 
+          marginBottom: '4px', 
+          fontSize: '12px', 
+          cursor: 'pointer',
+          lineHeight: '1.2',
+          wordWrap: 'break-word',
+          overflowWrap: 'break-word',
+          hyphens: 'auto',
+          maxWidth: '100%',
+          textAlign: 'center'
+        }}
         onDoubleClick={handleDoubleClick}
         title="Double-click to edit in properties panel"
       >
