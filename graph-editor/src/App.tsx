@@ -22,12 +22,13 @@ export default function App() {
     getValidator().then(setAjvValidate).catch(e => setErrors([String(e)]));
   }, []);
 
-  // Initial load: from ?data or from Sheet
+  // Initial load: from ?data, ?graph, or from Sheet
   useEffect(() => {
     // Check if this is a data request from Apps Script
     const urlParams = new URLSearchParams(window.location.search);
     const getData = urlParams.get('getdata');
     const sessionId = urlParams.get('session');
+    const graphParam = urlParams.get('graph');
     
     if (getData === 'true' && sessionId) {
       // This is a request from Apps Script to get the current data
@@ -40,6 +41,20 @@ export default function App() {
         document.body.innerHTML = 'null';
         return;
       }
+    }
+    
+    // Check for graph parameter to load from repository
+    if (graphParam) {
+      loadGraphFromRepository(graphParam).then(g => {
+        if (g) {
+          setGraph(g);
+        } else {
+          console.error('Failed to load graph from repository:', graphParam);
+          // Fall back to default graph
+          loadDefaultGraph();
+        }
+      });
+      return;
     }
     
     const decoded = decodeStateFromUrl();
@@ -81,34 +96,58 @@ export default function App() {
       }
     }).catch(e => {
       console.warn('Failed to load from sheet, using default graph:', e);
-      // Create default graph on error too
-      const defaultGraph = {
-        nodes: [
-          {
-            id: "550e8400-e29b-41d4-a716-446655440001",
-            slug: "start",
-            label: "Start",
-            absorbing: false,
-            entry: { is_start: true, entry_weight: 1.0 },
-            layout: { x: 100, y: 100, rank: 0 }
-          }
-        ],
-        edges: [],
-        policies: {
-          default_outcome: "abandon",
-          overflow_policy: "error",
-          free_edge_policy: "complement"
-        },
-        metadata: {
-          version: "1.0.0",
-          created_at: new Date().toISOString(),
-          author: "Graph Editor",
-          description: "Default empty graph"
-        }
-      };
-      setGraph(defaultGraph);
+      loadDefaultGraph();
     });
   }, [setGraph]);
+
+  // Helper function to load default graph
+  const loadDefaultGraph = () => {
+    const defaultGraph = {
+      nodes: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440001",
+          slug: "start",
+          label: "Start",
+          absorbing: false,
+          entry: { is_start: true, entry_weight: 1.0 },
+          layout: { x: 100, y: 100, rank: 0 }
+        }
+      ],
+      edges: [],
+      policies: {
+        default_outcome: "abandon",
+        overflow_policy: "error",
+        free_edge_policy: "complement"
+      },
+      metadata: {
+        version: "1.0.0",
+        created_at: new Date().toISOString(),
+        author: "Graph Editor",
+        description: "Default empty graph"
+      }
+    };
+    setGraph(defaultGraph);
+  };
+
+  // Helper function to load graph from repository
+  const loadGraphFromRepository = async (graphName: string) => {
+    try {
+      // Import the Git service
+      const { graphGitService } = await import('./services/graphGitService');
+      
+      // Load the graph from the default repository
+      const result = await graphGitService.getGraph(graphName, 'main');
+      
+      if (result.success && result.data) {
+        return result.data.content;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error loading graph from repository:', error);
+      return null;
+    }
+  };
 
   const validateNow = useMemo(() => {
     return () => {
