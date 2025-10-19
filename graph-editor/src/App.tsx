@@ -139,7 +139,7 @@ export default function App() {
       const result = await graphGitService.getGraph(graphName, 'main');
       
       if (result.success && result.data) {
-        return result.data.content;
+        return result.data;
       }
       
       return null;
