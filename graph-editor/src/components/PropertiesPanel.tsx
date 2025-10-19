@@ -15,12 +15,22 @@ export default function PropertiesPanel({
   selectedEdgeId, 
   onSelectedEdgeChange 
 }: PropertiesPanelProps) {
-  const { graph, setGraph } = useGraphStore();
+  const { graph, setGraph, whatIfAnalysis, setWhatIfAnalysis } = useGraphStore();
   const [activeTab, setActiveTab] = useState<'graph' | 'node' | 'edge' | 'json'>('graph');
   
   // Local state for form inputs to prevent eager updates
   const [localNodeData, setLocalNodeData] = useState<any>({});
   const [localEdgeData, setLocalEdgeData] = useState<any>({});
+  
+  // Case node state
+  const [nodeType, setNodeType] = useState<'normal' | 'case'>('normal');
+  const [caseMode, setCaseMode] = useState<'manual' | 'registry'>('manual');
+  const [caseData, setCaseData] = useState({
+    id: '',
+    parameter_id: '',
+    status: 'active' as 'active' | 'paused' | 'completed',
+    variants: [] as Array<{ name: string; weight: number; description?: string }>
+  });
   
   // Track if user has manually edited the slug to prevent auto-generation
   const [slugManuallyEdited, setSlugManuallyEdited] = useState<boolean>(false);
@@ -63,6 +73,31 @@ export default function PropertiesPanel({
             tags: node.tags || [],
             entry: node.entry || {},
           });
+          
+          // Handle case node data
+          console.log('Loading node data:', node.type, node.case);
+          if (node.type === 'case' && node.case) {
+            console.log('Loading case node:', node.case);
+            setNodeType('case');
+            setCaseData({
+              id: node.case.id || '',
+              parameter_id: node.case.parameter_id || '',
+              status: node.case.status || 'active',
+              variants: node.case.variants || []
+            });
+            setCaseMode(node.case.parameter_id ? 'registry' : 'manual');
+          } else {
+            console.log('Loading normal node');
+            setNodeType('normal');
+            setCaseData({
+              id: '',
+              parameter_id: '',
+              status: 'active',
+              variants: []
+            });
+            setCaseMode('manual');
+          }
+          
           // Reset manual edit flag when switching to a different node
           setSlugManuallyEdited(false);
           lastLoadedNodeRef.current = selectedNodeId;
@@ -451,6 +486,103 @@ export default function PropertiesPanel({
                   />
                 </div>
 
+                {/* Node Type Selector */}
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Node Type</label>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNodeType('normal');
+                        // Clear case data when switching to normal
+                        setCaseData({
+                          id: '',
+                          parameter_id: '',
+                          status: 'active',
+                          variants: []
+                        });
+                        setCaseMode('manual');
+                        // Update graph
+                        if (graph && selectedNodeId) {
+                          const next = structuredClone(graph);
+                          const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                          if (nodeIndex >= 0) {
+                            delete next.nodes[nodeIndex].type;
+                            delete next.nodes[nodeIndex].case;
+                            if (next.metadata) {
+                              next.metadata.updated_at = new Date().toISOString();
+                            }
+                            setGraph(next);
+                          }
+                        }
+                      }}
+                      style={{
+                        padding: '8px 16px',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px',
+                        background: nodeType === 'normal' ? '#007bff' : '#fff',
+                        color: nodeType === 'normal' ? '#fff' : '#333',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        fontWeight: '600'
+                      }}
+                    >
+                      Normal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNodeType('case');
+                        // Initialize case data if empty
+                        const newCaseData = caseData.variants.length === 0 ? {
+                          id: `case_${Date.now()}`,
+                          parameter_id: '',
+                          status: 'active' as 'active' | 'paused' | 'completed',
+                          variants: [
+                            { name: 'control', weight: 0.5, description: 'Control variant' },
+                            { name: 'treatment', weight: 0.5, description: 'Treatment variant' }
+                          ]
+                        } : caseData;
+                        
+                        setCaseData(newCaseData);
+                        
+                        // Update graph
+                        if (graph && selectedNodeId) {
+                          const next = structuredClone(graph);
+                          const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                          if (nodeIndex >= 0) {
+                            console.log('Converting node to case:', selectedNodeId, newCaseData);
+                            next.nodes[nodeIndex].type = 'case';
+                            next.nodes[nodeIndex].case = {
+                              id: newCaseData.id,
+                              parameter_id: newCaseData.parameter_id,
+                              status: newCaseData.status,
+                              variants: newCaseData.variants
+                            };
+                            if (next.metadata) {
+                              next.metadata.updated_at = new Date().toISOString();
+                            }
+                            console.log('Updated node:', next.nodes[nodeIndex]);
+                            setGraph(next);
+                          }
+                        }
+                      }}
+                      style={{
+                        padding: '8px 16px',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px',
+                        background: nodeType === 'case' ? '#8B5CF6' : '#fff',
+                        color: nodeType === 'case' ? '#fff' : '#333',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        fontWeight: '600'
+                      }}
+                    >
+                      Case
+                    </button>
+                  </div>
+                </div>
+
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Slug</label>
                   <input
@@ -570,6 +702,483 @@ export default function PropertiesPanel({
                   </select>
                 </div>
 
+                {/* Case Node Fields */}
+                {nodeType === 'case' && (
+                  <>
+                    {/* Case Mode Selector */}
+                    <div style={{ marginBottom: '20px' }}>
+                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Mode</label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setCaseMode('manual')}
+                          style={{
+                            padding: '8px 16px',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            background: caseMode === 'manual' ? '#007bff' : '#fff',
+                            color: caseMode === 'manual' ? '#fff' : '#333',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: '600'
+                          }}
+                        >
+                          Manual
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCaseMode('registry')}
+                          style={{
+                            padding: '8px 16px',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            background: caseMode === 'registry' ? '#007bff' : '#fff',
+                            color: caseMode === 'registry' ? '#fff' : '#333',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: '600'
+                          }}
+                        >
+                          Registry
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Quick Variant Selector - What-If Analysis */}
+                    {caseData.variants.length > 0 && (
+                      <div style={{ marginBottom: '20px', padding: '12px', background: '#f0f7ff', borderRadius: '4px', border: '1px solid #c4e0ff' }}>
+                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '12px', color: '#0066cc' }}>
+                          Quick View Variants (What-If Analysis)
+                        </label>
+                        <select
+                          value={whatIfAnalysis?.caseNodeId === selectedNodeId ? whatIfAnalysis.selectedVariant : ""}
+                          onChange={(e) => {
+                            const variantName = e.target.value;
+                            if (variantName && selectedNodeId) {
+                              setWhatIfAnalysis({
+                                caseNodeId: selectedNodeId,
+                                selectedVariant: variantName
+                              });
+                            } else {
+                              setWhatIfAnalysis(null);
+                            }
+                          }}
+                          style={{ 
+                            width: '100%', 
+                            padding: '8px', 
+                            border: whatIfAnalysis?.caseNodeId === selectedNodeId ? '2px solid #0066cc' : '1px solid #c4e0ff', 
+                            borderRadius: '4px',
+                            boxSizing: 'border-box',
+                            fontSize: '12px',
+                            background: whatIfAnalysis?.caseNodeId === selectedNodeId ? '#fff9e6' : 'white',
+                            fontWeight: whatIfAnalysis?.caseNodeId === selectedNodeId ? 'bold' : 'normal'
+                          }}
+                        >
+                          <option value="">All variants (actual weights)</option>
+                          {caseData.variants.map((v, i) => (
+                            <option key={i} value={v.name}>
+                              {v.name} - What if 100%?
+                            </option>
+                          ))}
+                        </select>
+                        {whatIfAnalysis?.caseNodeId === selectedNodeId && (
+                          <div style={{
+                            marginTop: '8px',
+                            padding: '6px 8px',
+                            background: '#fff9e6',
+                            border: '1px solid #ffd700',
+                            borderRadius: '3px',
+                            fontSize: '11px',
+                            color: '#997400',
+                            fontWeight: 'bold'
+                          }}>
+                            🔬 WHAT-IF MODE: {whatIfAnalysis.selectedVariant} @ 100%
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Case ID or Parameter ID */}
+                    <div style={{ marginBottom: '20px' }}>
+                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                        {caseMode === 'registry' ? 'Parameter ID' : 'Case ID'}
+                      </label>
+                      {caseMode === 'registry' ? (
+                        <div>
+                          <select
+                            value={caseData.parameter_id}
+                            onChange={(e) => {
+                              const newParameterId = e.target.value;
+                              setCaseData({...caseData, parameter_id: newParameterId});
+                              // TODO: Load parameter from registry
+                              if (newParameterId) {
+                                // Simulate loading parameter data
+                                setCaseData({
+                                  ...caseData,
+                                  parameter_id: newParameterId,
+                                  id: 'case_001',
+                                  status: 'active',
+                                  variants: [
+                                    { name: 'control', weight: 0.5, description: 'Control variant' },
+                                    { name: 'treatment', weight: 0.5, description: 'Treatment variant' }
+                                  ]
+                                });
+                              }
+                            }}
+                            style={{ 
+                              width: '100%', 
+                              padding: '8px', 
+                              border: '1px solid #ddd', 
+                              borderRadius: '4px',
+                              boxSizing: 'border-box'
+                            }}
+                          >
+                            <option value="">Select parameter...</option>
+                            <option value="case-checkout-flow-001">Checkout Flow Test</option>
+                            <option value="case-pricing-test-001">Pricing Strategy Test</option>
+                            <option value="case-onboarding-test-001">Onboarding Flow Test</option>
+                          </select>
+                          
+                          {/* Registry Info Display */}
+                          {caseData.parameter_id && (
+                            <div style={{ 
+                              marginTop: '8px', 
+                              padding: '8px', 
+                              background: '#f8f9fa', 
+                              borderRadius: '4px',
+                              fontSize: '12px'
+                            }}>
+                              <div style={{ fontWeight: '600', marginBottom: '4px' }}>Registry Info</div>
+                              <div>Name: Checkout Flow A/B Test</div>
+                              <div>Status: ● Active</div>
+                              <div>Platform: Statsig</div>
+                              <div>Last Updated: 2025-01-20</div>
+                              <div style={{ marginTop: '8px' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    // TODO: Refresh from registry
+                                    console.log('Refresh from registry');
+                                  }}
+                                  style={{
+                                    background: '#007bff',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '3px',
+                                    padding: '4px 8px',
+                                    cursor: 'pointer',
+                                    fontSize: '10px',
+                                    marginRight: '8px'
+                                  }}
+                                >
+                                  ↻ Refresh
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    // TODO: Edit in registry
+                                    console.log('Edit in registry');
+                                  }}
+                                  style={{
+                                    background: '#28a745',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '3px',
+                                    padding: '4px 8px',
+                                    cursor: 'pointer',
+                                    fontSize: '10px'
+                                  }}
+                                >
+                                  📝 Edit
+                                </button>
+                              </div>
+                              <div style={{ marginTop: '8px' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCaseMode('manual');
+                                    // Clear parameter_id when switching to manual
+                                    setCaseData({...caseData, parameter_id: ''});
+                                  }}
+                                  style={{
+                                    background: '#6c757d',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '3px',
+                                    padding: '4px 8px',
+                                    cursor: 'pointer',
+                                    fontSize: '10px'
+                                  }}
+                                >
+                                  Override Locally
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <input
+                          value={caseData.id}
+                          onChange={(e) => setCaseData({...caseData, id: e.target.value})}
+                          onBlur={() => {
+                            if (graph && selectedNodeId) {
+                              const next = structuredClone(graph);
+                              const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                              if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                next.nodes[nodeIndex].case.id = caseData.id;
+                                if (next.metadata) {
+                                  next.metadata.updated_at = new Date().toISOString();
+                                }
+                                setGraph(next);
+                              }
+                            }
+                          }}
+                          placeholder="case_001"
+                          style={{ 
+                            width: '100%', 
+                            padding: '8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '4px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                      )}
+                    </div>
+
+                    {/* Case Status */}
+                    <div style={{ marginBottom: '20px' }}>
+                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Status</label>
+                      <select
+                        value={caseData.status}
+                        onChange={(e) => {
+                          const newStatus = e.target.value as 'active' | 'paused' | 'completed';
+                          setCaseData({...caseData, status: newStatus});
+                          if (graph && selectedNodeId) {
+                            const next = structuredClone(graph);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                            if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                              next.nodes[nodeIndex].case.status = newStatus;
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                            }
+                          }
+                        }}
+                        style={{ 
+                          width: '100%', 
+                          padding: '8px', 
+                          border: '1px solid #ddd', 
+                          borderRadius: '4px',
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        <option value="active">Active</option>
+                        <option value="paused">Paused</option>
+                        <option value="completed">Completed</option>
+                      </select>
+                    </div>
+
+                    {/* Variants Section */}
+                    <div style={{ marginBottom: '20px' }}>
+                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variants</label>
+                      {caseData.variants.map((variant, index) => (
+                        <div key={index} style={{ 
+                          marginBottom: '12px', 
+                          padding: '12px', 
+                          border: '1px solid #ddd', 
+                          borderRadius: '4px',
+                          background: '#f9f9f9'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span style={{ fontWeight: '600', fontSize: '12px' }}>Variant {index + 1}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newVariants = caseData.variants.filter((_, i) => i !== index);
+                                setCaseData({...caseData, variants: newVariants});
+                                if (graph && selectedNodeId) {
+                                  const next = structuredClone(graph);
+                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                    next.nodes[nodeIndex].case.variants = newVariants;
+                                    if (next.metadata) {
+                                      next.metadata.updated_at = new Date().toISOString();
+                                    }
+                                    setGraph(next);
+                                  }
+                                }
+                              }}
+                              style={{
+                                background: '#dc3545',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '3px',
+                                padding: '4px 8px',
+                                cursor: 'pointer',
+                                fontSize: '10px'
+                              }}
+                            >
+                              ✕ Remove
+                            </button>
+                          </div>
+                          
+                          <div style={{ marginBottom: '8px' }}>
+                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Name</label>
+                            <input
+                              value={variant.name}
+                              onChange={(e) => {
+                                const newVariants = [...caseData.variants];
+                                newVariants[index].name = e.target.value;
+                                setCaseData({...caseData, variants: newVariants});
+                              }}
+                              onBlur={() => {
+                                if (graph && selectedNodeId) {
+                                  const next = structuredClone(graph);
+                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                    next.nodes[nodeIndex].case.variants = caseData.variants;
+                                    if (next.metadata) {
+                                      next.metadata.updated_at = new Date().toISOString();
+                                    }
+                                    setGraph(next);
+                                  }
+                                }
+                              }}
+                              placeholder="control"
+                              style={{ 
+                                width: '100%', 
+                                padding: '6px', 
+                                border: '1px solid #ddd', 
+                                borderRadius: '3px',
+                                boxSizing: 'border-box',
+                                fontSize: '12px'
+                              }}
+                            />
+                          </div>
+                          
+                          <div style={{ marginBottom: '8px' }}>
+                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Weight (0-1)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="1"
+                              step="0.01"
+                              value={variant.weight}
+                              onChange={(e) => {
+                                const newVariants = [...caseData.variants];
+                                newVariants[index].weight = parseFloat(e.target.value) || 0;
+                                setCaseData({...caseData, variants: newVariants});
+                              }}
+                              onBlur={() => {
+                                if (graph && selectedNodeId) {
+                                  const next = structuredClone(graph);
+                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                    next.nodes[nodeIndex].case.variants = caseData.variants;
+                                    if (next.metadata) {
+                                      next.metadata.updated_at = new Date().toISOString();
+                                    }
+                                    setGraph(next);
+                                  }
+                                }
+                              }}
+                              placeholder="0.5"
+                              style={{ 
+                                width: '100%', 
+                                padding: '6px', 
+                                border: '1px solid #ddd', 
+                                borderRadius: '3px',
+                                boxSizing: 'border-box',
+                                fontSize: '12px'
+                              }}
+                            />
+                          </div>
+                          
+                          <div>
+                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Description</label>
+                            <input
+                              value={variant.description || ''}
+                              onChange={(e) => {
+                                const newVariants = [...caseData.variants];
+                                newVariants[index].description = e.target.value;
+                                setCaseData({...caseData, variants: newVariants});
+                              }}
+                              onBlur={() => {
+                                if (graph && selectedNodeId) {
+                                  const next = structuredClone(graph);
+                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                    next.nodes[nodeIndex].case.variants = caseData.variants;
+                                    if (next.metadata) {
+                                      next.metadata.updated_at = new Date().toISOString();
+                                    }
+                                    setGraph(next);
+                                  }
+                                }
+                              }}
+                              placeholder="Original flow"
+                              style={{ 
+                                width: '100%', 
+                                padding: '6px', 
+                                border: '1px solid #ddd', 
+                                borderRadius: '3px',
+                                boxSizing: 'border-box',
+                                fontSize: '12px'
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newVariants = [...caseData.variants, { name: `variant_${caseData.variants.length + 1}`, weight: 0.1, description: '' }];
+                          setCaseData({...caseData, variants: newVariants});
+                          if (graph && selectedNodeId) {
+                            const next = structuredClone(graph);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                            if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                              next.nodes[nodeIndex].case.variants = newVariants;
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                            }
+                          }
+                        }}
+                        style={{
+                          background: '#28a745',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          padding: '8px 16px',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          width: '100%'
+                        }}
+                      >
+                        + Add Variant
+                      </button>
+                      
+                      {/* Total Weight Display */}
+                      <div style={{ 
+                        marginTop: '8px', 
+                        padding: '8px', 
+                        background: '#f8f9fa', 
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        textAlign: 'center'
+                      }}>
+                        Total Weight: {caseData.variants.reduce((sum, v) => sum + v.weight, 0).toFixed(1)} 
+                        {Math.abs(caseData.variants.reduce((sum, v) => sum + v.weight, 0) - 1.0) < 0.001 ? ' ✓' : ' ⚠️'}
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Tags</label>
                   <input
@@ -639,8 +1248,13 @@ export default function PropertiesPanel({
                   />
                 </div>
 
+                {/* Probability field - shown for all edges, but with different meaning for case edges */}
                 <div style={{ marginBottom: '20px' }}>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Probability</label>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                    {selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) 
+                      ? 'Sub-Route Probability (within variant)' 
+                      : 'Probability'}
+                  </label>
                   <input
                     data-field="probability"
                     type="text"
@@ -662,7 +1276,7 @@ export default function PropertiesPanel({
                         e.currentTarget.blur();
                       }
                     }}
-                    placeholder="0.0"
+                    placeholder={selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) ? "1.0 (for single path)" : "0.0"}
                     style={{ 
                       width: '100%', 
                       padding: '8px', 
@@ -671,41 +1285,49 @@ export default function PropertiesPanel({
                       boxSizing: 'border-box'
                     }}
                   />
+                  {selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) && (
+                    <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                      For single-path variants, leave at 1.0. For multi-path variants, probabilities must sum to 1.0.
+                    </div>
+                  )}
                 </div>
 
-                <div style={{ marginBottom: '20px' }}>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Standard Deviation</label>
-                  <input
-                    data-field="stdev"
-                    type="text"
-                    value={localEdgeData.stdev || 0}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setLocalEdgeData({...localEdgeData, stdev: value});
-                    }}
-                    onBlur={() => {
-                      const numValue = parseFloat(localEdgeData.stdev) || 0;
-                      setLocalEdgeData({...localEdgeData, stdev: numValue});
-                      updateEdge('stdev', numValue);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
+                {/* Only show standard deviation for non-case edges */}
+                {!(selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant)) && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Standard Deviation</label>
+                    <input
+                      data-field="stdev"
+                      type="text"
+                      value={localEdgeData.stdev || 0}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setLocalEdgeData({...localEdgeData, stdev: value});
+                      }}
+                      onBlur={() => {
                         const numValue = parseFloat(localEdgeData.stdev) || 0;
                         setLocalEdgeData({...localEdgeData, stdev: numValue});
                         updateEdge('stdev', numValue);
-                        e.currentTarget.blur();
-                      }
-                    }}
-                    placeholder="Optional"
-                    style={{ 
-                      width: '100%', 
-                      padding: '8px', 
-                      border: '1px solid #ddd', 
-                      borderRadius: '4px',
-                      boxSizing: 'border-box'
-                    }}
-                  />
-                </div>
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const numValue = parseFloat(localEdgeData.stdev) || 0;
+                          setLocalEdgeData({...localEdgeData, stdev: numValue});
+                          updateEdge('stdev', numValue);
+                          e.currentTarget.blur();
+                        }
+                      }}
+                      placeholder="Optional"
+                      style={{ 
+                        width: '100%', 
+                        padding: '8px', 
+                        border: '1px solid #ddd', 
+                        borderRadius: '4px',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                )}
 
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -722,26 +1344,137 @@ export default function PropertiesPanel({
                   </label>
                 </div>
 
-                <div style={{ marginBottom: '20px' }}>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Weight Default</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={localEdgeData.weight_default || 0}
-                    onChange={(e) => setLocalEdgeData({...localEdgeData, weight_default: parseFloat(e.target.value) || 0})}
-                    onBlur={() => updateEdge('weight_default', localEdgeData.weight_default)}
-                    onKeyDown={(e) => e.key === 'Enter' && updateEdge('weight_default', localEdgeData.weight_default)}
-                    placeholder="For residual distribution"
-                    style={{ 
-                      width: '100%', 
-                      padding: '8px', 
-                      border: '1px solid #ddd', 
-                      borderRadius: '4px',
-                      boxSizing: 'border-box'
-                    }}
-                  />
-                </div>
+                {/* Only show weight default for non-case edges */}
+                {!(selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant)) && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Weight Default</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={localEdgeData.weight_default || 0}
+                      onChange={(e) => setLocalEdgeData({...localEdgeData, weight_default: parseFloat(e.target.value) || 0})}
+                      onBlur={() => updateEdge('weight_default', localEdgeData.weight_default)}
+                      onKeyDown={(e) => e.key === 'Enter' && updateEdge('weight_default', localEdgeData.weight_default)}
+                      placeholder="For residual distribution"
+                      style={{ 
+                        width: '100%', 
+                        padding: '8px', 
+                        border: '1px solid #ddd', 
+                        borderRadius: '4px',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                      Used to distribute residual probability among unspecified edges from the same source
+                    </div>
+                  </div>
+                )}
+
+                {/* Case Edge Properties */}
+                {selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) && (() => {
+                  // Find the case node and get the variant weight
+                  const caseNode = graph.nodes.find((n: any) => n.case && n.case.id === selectedEdge.case_id);
+                  const variant = caseNode?.case?.variants?.find((v: any) => v.name === selectedEdge.case_variant);
+                  const variantWeight = variant?.weight || 0;
+                  const subRouteProbability = selectedEdge.p?.mean || 1.0;
+                  const effectiveProbability = variantWeight * subRouteProbability;
+                  
+                  return (
+                    <div style={{ marginBottom: '20px', padding: '12px', background: '#f8f9fa', borderRadius: '4px', border: '1px solid #e9ecef' }}>
+                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: '#8B5CF6' }}>Case Edge Summary</label>
+                      
+                      <div style={{ marginBottom: '12px' }}>
+                        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#666' }}>Case ID</label>
+                        <input
+                          type="text"
+                          value={selectedEdge.case_id || ''}
+                          readOnly
+                          style={{ 
+                            width: '100%', 
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '3px',
+                            background: '#f8f9fa',
+                            fontSize: '12px',
+                            color: '#666'
+                          }}
+                        />
+                      </div>
+                      
+                      <div style={{ marginBottom: '12px' }}>
+                        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#666' }}>Variant</label>
+                        <input
+                          type="text"
+                          value={selectedEdge.case_variant || ''}
+                          readOnly
+                          style={{ 
+                            width: '100%', 
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '3px',
+                            background: '#f8f9fa',
+                            fontSize: '12px',
+                            color: '#666'
+                          }}
+                        />
+                      </div>
+                      
+                      <div style={{ marginBottom: '12px' }}>
+                        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#8B5CF6' }}>Variant Weight (Traffic Split)</label>
+                        <input
+                          type="text"
+                          value={`${(variantWeight * 100).toFixed(1)}% (${variantWeight.toFixed(3)})`}
+                          readOnly
+                          style={{ 
+                            width: '100%', 
+                            padding: '6px 8px', 
+                            border: '1px solid #C4B5FD', 
+                            borderRadius: '3px',
+                            background: '#F3F0FF',
+                            fontSize: '12px',
+                            color: '#8B5CF6',
+                            fontWeight: '600'
+                          }}
+                        />
+                      </div>
+                      
+                      <div style={{ marginBottom: '12px' }}>
+                        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#666' }}>Sub-Route Probability</label>
+                        <input
+                          type="text"
+                          value={`${(subRouteProbability * 100).toFixed(1)}% (${subRouteProbability.toFixed(3)})`}
+                          readOnly
+                          style={{ 
+                            width: '100%', 
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '3px',
+                            background: '#f8f9fa',
+                            fontSize: '12px',
+                            color: '#666',
+                            fontWeight: '600'
+                          }}
+                        />
+                      </div>
+                      
+                      <div style={{ marginBottom: '12px', padding: '8px', background: '#FFF9E6', borderRadius: '3px', border: '1px solid #FFE066' }}>
+                        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#997400', fontWeight: '600' }}>
+                          Effective Probability (Variant × Sub-Route)
+                        </label>
+                        <div style={{ fontSize: '14px', color: '#997400', fontWeight: '700' }}>
+                          {(effectiveProbability * 100).toFixed(1)}% ({effectiveProbability.toFixed(3)})
+                        </div>
+                      </div>
+                      
+                      <div style={{ fontSize: '11px', color: '#666' }}>
+                        <strong>Formula:</strong> Effective Probability = Variant Weight × Sub-Route Probability
+                        <br/>
+                        <strong>Example:</strong> If variant is 50% and sub-route is 50%, then 25% of total traffic flows through this edge.
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Costs</label>

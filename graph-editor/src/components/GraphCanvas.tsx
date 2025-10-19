@@ -58,7 +58,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
 }
 
 function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute }: GraphCanvasProps) {
-  const { graph, setGraph } = useGraphStore();
+  const { graph, setGraph, whatIfAnalysis } = useGraphStore();
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
@@ -125,6 +125,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     console.log(`calculateEdgeWidth called for edge ${edge.id}, mode=${edgeScalingMode}`);
     
+    // Helper function to get effective probability (handles case edges and what-if analysis)
+    const getEffectiveProbability = (e: any) => {
+      // For case edges, multiply variant weight by sub-route probability
+      if (e.data?.case_id && e.data?.case_variant) {
+        const caseNode = allNodes.find((n: any) => n.data?.case?.id === e.data.case_id);
+        const variant = caseNode?.data?.case?.variants?.find((v: any) => v.name === e.data.case_variant);
+        let variantWeight = variant?.weight || 0;
+        
+        // Apply what-if analysis override
+        if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode?.id) {
+          variantWeight = e.data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
+        }
+        
+        const subRouteProbability = e.data?.probability || 1.0; // Default to 1.0 for single-path
+        return variantWeight * subRouteProbability;
+      }
+      // For normal edges, use the probability from edge data
+      return e.data?.probability || 0;
+    };
+    
     if (edgeScalingMode === 'uniform') {
       return edge.selected ? 3 : 2;
     }
@@ -132,11 +152,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (edgeScalingMode === 'local-mass') {
       // Find all edges from the same source node
       const sourceEdges = allEdges.filter(e => e.source === edge.source);
-      const totalProbability = sourceEdges.reduce((sum, e) => sum + (e.data?.probability || 0), 0);
+      const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
       
       if (totalProbability === 0) return MIN_WIDTH;
       
-      const edgeProbability = edge.data?.probability || 0;
+      const edgeProbability = getEffectiveProbability(edge);
       const proportion = edgeProbability / totalProbability;
       // Use a more dramatic scaling for better visibility
       const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
@@ -159,9 +179,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         console.log(`No start node found, falling back to local mass for edge ${edge.id}`);
         // Fallback to local mass if no clear start node
         const sourceEdges = allEdges.filter(e => e.source === edge.source);
-        const totalProbability = sourceEdges.reduce((sum, e) => sum + (e.data?.probability || 0), 0);
+        const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
         if (totalProbability === 0) return MIN_WIDTH;
-        const edgeProbability = edge.data?.probability || 0;
+        const edgeProbability = getEffectiveProbability(edge);
         const proportion = edgeProbability / totalProbability;
         const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
         return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
@@ -173,7 +193,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (residualAtSource === 0) return MIN_WIDTH;
       
       // Sankey-style: actual mass flowing through this edge = p(source) × edge_probability
-      const edgeProbability = edge.data?.probability || 0;
+      const edgeProbability = getEffectiveProbability(edge);
       const actualMassFlowing = residualAtSource * edgeProbability;
       
       // Width scales directly with actual mass flowing through
@@ -197,9 +217,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         console.log(`No start node found, falling back to local mass for edge ${edge.id}`);
         // Fallback to local mass if no clear start node
         const sourceEdges = allEdges.filter(e => e.source === edge.source);
-        const totalProbability = sourceEdges.reduce((sum, e) => sum + (e.data?.probability || 0), 0);
+        const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
         if (totalProbability === 0) return MIN_WIDTH;
-        const edgeProbability = edge.data?.probability || 0;
+        const edgeProbability = getEffectiveProbability(edge);
         const proportion = edgeProbability / totalProbability;
         const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
         return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
@@ -211,7 +231,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (residualAtSource === 0) return MIN_WIDTH;
       
       // Sankey-style: actual mass flowing through this edge = p(source) × edge_probability
-      const edgeProbability = edge.data?.probability || 0;
+      const edgeProbability = getEffectiveProbability(edge);
       const actualMassFlowing = residualAtSource * edgeProbability;
       
       // Apply logarithmic transformation to preserve visual mass for lower probabilities
@@ -255,7 +275,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const incomingEdges = incoming[node] || [];
         incomingEdges.forEach(edge => {
           const sourceResidual = dfs(edge.source);
-          const edgeProbability = edge.data?.probability || 0;
+          const edgeProbability = getEffectiveProbability(edge);
           totalIncoming += sourceResidual * edgeProbability;
         });
         
@@ -268,7 +288,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     return edge.selected ? 3 : 2;
-  }, [edgeScalingMode, logMassTransform]);
+  }, [edgeScalingMode, logMassTransform, whatIfAnalysis]);
 
   // Calculate edge offsets for Sankey-style visualization
   const calculateEdgeOffsets = useCallback((edgesWithWidth: any[], allNodes: any[], maxWidth: number) => {
@@ -907,21 +927,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
     }));
     
-    // Calculate edge offsets for Sankey-style visualization
-    const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, newNodes, MAX_WIDTH);
-    
-    // Attach offsets to edge data for the ConversionEdge component
-    const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
-      ...edge,
-      data: {
-        ...edge.data,
-        sourceOffsetX: edge.sourceOffsetX,
-        sourceOffsetY: edge.sourceOffsetY,
-        targetOffsetX: edge.targetOffsetX,
-        targetOffsetY: edge.targetOffsetY,
-        scaledWidth: edge.scaledWidth
-      }
-    }));
+  // Calculate edge offsets for Sankey-style visualization
+  const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, newNodes, MAX_WIDTH);
+  
+  // Attach offsets to edge data for the ConversionEdge component
+  const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
+    ...edge,
+    data: {
+      ...edge.data,
+      sourceOffsetX: edge.sourceOffsetX,
+      sourceOffsetY: edge.sourceOffsetY,
+      targetOffsetX: edge.targetOffsetX,
+      targetOffsetY: edge.targetOffsetY,
+      scaledWidth: edge.scaledWidth
+    }
+  }));
     
     setNodes(newNodes);
     setEdges(edgesWithOffsetData);
@@ -1090,14 +1110,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
 
-    // Prevent duplicate edges
-    const existingEdge = graph.edges.find(edge => 
-      edge.from === connection.source && edge.to === connection.target
-    );
-    if (existingEdge) {
-      alert('An edge already exists between these nodes.');
-      return;
+    // Check if source is a case node (do this check early)
+    const sourceNode = graph.nodes.find(n => n.id === connection.source);
+    const isCaseNode = sourceNode && sourceNode.type === 'case' && sourceNode.case;
+    
+    // Prevent duplicate edges (but allow multiple edges from case nodes with different variants)
+    if (!isCaseNode) {
+      // For normal nodes, prevent any duplicate edges
+      const existingEdge = graph.edges.find(edge => 
+        edge.from === connection.source && edge.to === connection.target
+      );
+      if (existingEdge) {
+        alert('An edge already exists between these nodes.');
+        return;
+      }
     }
+    // For case nodes, duplication check will happen after variant selection
 
     // Check for circular dependencies (convert graph edges to ReactFlow format for check)
     const reactFlowEdges = graph.edges.map(e => ({ source: e.from, target: e.to }));
@@ -1109,10 +1137,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Generate a sensible slug for the edge
     const edgeSlug = generateEdgeSlug(connection.source, connection.target);
     const edgeId = `${connection.source}->${connection.target}`;
-
+    
+    // If source is a case node with multiple variants, show variant selection modal
+    if (isCaseNode && sourceNode.case && sourceNode.case.variants.length > 1) {
+      setPendingConnection(connection);
+      setCaseNodeVariants(sourceNode.case.variants);
+      setShowVariantModal(true);
+      return; // Don't create the edge yet, wait for variant selection
+    }
+    
     // Add edge directly to graph state (not ReactFlow state)
     const nextGraph = structuredClone(graph);
-    nextGraph.edges.push({
+    const newEdge: any = {
       id: edgeId,
       slug: edgeSlug,
       from: connection.source,
@@ -1122,7 +1158,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       p: {
         mean: 0.5
       }
-    });
+    };
+    
+    // If source is a case node with single variant, automatically assign variant properties
+    if (isCaseNode && sourceNode.case && sourceNode.case.variants.length === 1) {
+      const variant = sourceNode.case.variants[0];
+      newEdge.case_id = sourceNode.case.id;
+      newEdge.case_variant = variant.name;
+      // Set p.mean to 1.0 for single-path case edges (default sub-routing)
+      newEdge.p.mean = 1.0;
+      console.log('Created case edge with single variant:', newEdge);
+    }
+    
+    nextGraph.edges.push(newEdge);
     
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
@@ -1137,7 +1185,66 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 50);
   }, [graph, setGraph, generateEdgeSlug, wouldCreateCycle, onSelectedEdgeChange]);
 
+  // Variant selection modal state
+  const [showVariantModal, setShowVariantModal] = useState(false);
+  const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
+  const [caseNodeVariants, setCaseNodeVariants] = useState<any[]>([]);
 
+  // Handle variant selection for case edges
+  const handleVariantSelection = useCallback((variant: any) => {
+    if (!pendingConnection || !graph) return;
+    
+    const sourceNode = graph.nodes.find(n => n.id === pendingConnection.source);
+    if (!sourceNode || !sourceNode.case) return;
+    
+    // Check if an edge with this variant already exists between these nodes
+    const existingVariantEdge = graph.edges.find(edge => 
+      edge.from === pendingConnection.source && 
+      edge.to === pendingConnection.target &&
+      edge.case_id === sourceNode.case.id &&
+      edge.case_variant === variant.name
+    );
+    
+    if (existingVariantEdge) {
+      alert(`An edge for variant "${variant.name}" already exists between these nodes.`);
+      setShowVariantModal(false);
+      setPendingConnection(null);
+      setCaseNodeVariants([]);
+      return;
+    }
+    
+    // Generate edge properties
+    const edgeSlug = generateEdgeSlug(pendingConnection.source!, pendingConnection.target!);
+    const edgeId = `${pendingConnection.source}-${variant.name}->${pendingConnection.target}`;
+    
+    // Create the edge with variant properties
+    const nextGraph = structuredClone(graph);
+    nextGraph.edges.push({
+      id: edgeId,
+      slug: edgeSlug,
+      from: pendingConnection.source,
+      to: pendingConnection.target,
+      fromHandle: pendingConnection.sourceHandle,
+      toHandle: pendingConnection.targetHandle,
+      case_id: sourceNode.case.id,
+      case_variant: variant.name,
+      p: {
+        mean: 1.0 // Default to 1.0 for single-path case edges
+      }
+    });
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    setGraph(nextGraph);
+    
+    // Close modal and clear state
+    setShowVariantModal(false);
+    setPendingConnection(null);
+    setCaseNodeVariants([]);
+  }, [pendingConnection, graph, setGraph, generateEdgeSlug]);
+  
   // Handle Shift+Drag lasso selection
   const [isLassoSelecting, setIsLassoSelecting] = useState(false);
   const [lassoStart, setLassoStart] = useState<{ x: number; y: number } | null>(null);
@@ -1321,6 +1428,96 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Track selected nodes for probability calculation
   const [selectedNodesForAnalysis, setSelectedNodesForAnalysis] = useState<any[]>([]);
 
+  // Function to find all edges that are part of paths between selected nodes
+  const findPathEdges = useCallback((selectedNodes: any[], allEdges: any[]) => {
+    if (selectedNodes.length < 2) return new Set();
+    
+    const selectedNodeIds = selectedNodes.map(node => node.id);
+    const pathEdges = new Set<string>();
+    
+    // For each pair of selected nodes, find all paths between them
+    for (let i = 0; i < selectedNodeIds.length; i++) {
+      for (let j = i + 1; j < selectedNodeIds.length; j++) {
+        const sourceId = selectedNodeIds[i];
+        const targetId = selectedNodeIds[j];
+        
+        // Find all paths from source to target
+        const paths = findAllPaths(sourceId, targetId, allEdges);
+        
+        // Add all edges from all paths to the set
+        paths.forEach(path => {
+          path.forEach(edgeId => pathEdges.add(edgeId));
+        });
+        
+        // Also find paths in reverse direction (target to source)
+        const reversePaths = findAllPaths(targetId, sourceId, allEdges);
+        reversePaths.forEach(path => {
+          path.forEach(edgeId => pathEdges.add(edgeId));
+        });
+      }
+    }
+    
+    return pathEdges;
+  }, []);
+
+  // DFS function to find all paths between two nodes (with depth limit to prevent infinite loops)
+  const findAllPaths = useCallback((sourceId: string, targetId: string, allEdges: any[], maxDepth: number = 10) => {
+    const paths: string[][] = [];
+    const visited = new Set<string>();
+    
+    const dfs = (currentNodeId: string, currentPath: string[], depth: number) => {
+      // Limit depth to prevent infinite loops in complex graphs
+      if (depth > maxDepth) return;
+      
+      if (currentNodeId === targetId) {
+        paths.push([...currentPath]);
+        return;
+      }
+      
+      if (visited.has(currentNodeId)) return;
+      visited.add(currentNodeId);
+      
+      // Find all outgoing edges from current node
+      const outgoingEdges = allEdges.filter(edge => edge.source === currentNodeId);
+      
+      for (const edge of outgoingEdges) {
+        if (!currentPath.includes(edge.id)) { // Avoid cycles
+          currentPath.push(edge.id);
+          dfs(edge.target, currentPath, depth + 1);
+          currentPath.pop(); // Backtrack
+        }
+      }
+      
+      visited.delete(currentNodeId); // Allow revisiting for other paths
+    };
+    
+    dfs(sourceId, [], 0);
+    return paths;
+  }, []);
+
+  // Update edge highlighting when selection changes
+  useEffect(() => {
+    if (edges.length === 0) return;
+    
+    const pathEdges = findPathEdges(selectedNodesForAnalysis, edges);
+    
+    // Debug logging
+    if (selectedNodesForAnalysis.length >= 2) {
+      console.log('Selected nodes:', selectedNodesForAnalysis.map(n => n.id));
+      console.log('Highlighted edges:', Array.from(pathEdges));
+    }
+    
+    setEdges(prevEdges => 
+      prevEdges.map(edge => ({
+        ...edge,
+        data: {
+          ...edge.data,
+          isHighlighted: pathEdges.has(edge.id)
+        }
+      }))
+    );
+  }, [selectedNodesForAnalysis, setEdges, findPathEdges, edges]);
+
   // Calculate probability and cost for selected nodes
   const calculateSelectionAnalysis = useCallback(() => {
     if (selectedNodesForAnalysis.length === 0) return null;
@@ -1365,7 +1562,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           const outgoingEdges = edges.filter(edge => edge.source === nodeId);
           
           for (const edge of outgoingEdges) {
-            const edgeProbability = edge.data?.probability || 0;
+            // Calculate effective probability (handles case edges and what-if analysis)
+            let edgeProbability = edge.data?.probability || 0;
+            if (edge.data?.case_id && edge.data?.case_variant) {
+              const caseNode = nodes.find((n: any) => n.data?.case?.id === edge.data.case_id);
+              if (caseNode) {
+                const variant = caseNode.data?.case?.variants?.find((v: any) => v.name === edge.data.case_variant);
+                let variantWeight = variant?.weight || 0;
+                
+                // Apply what-if analysis override
+                if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode.id) {
+                  variantWeight = edge.data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
+                }
+                
+                const subRouteProbability = edge.data?.probability || 1.0;
+                edgeProbability = variantWeight * subRouteProbability;
+              }
+            }
+            
             const edgeCosts = edge.data?.costs;
             
             // Get cost from target node (recursive)
@@ -1397,7 +1611,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           const outgoingEdges = edges.filter(edge => edge.source === nodeId);
           
           for (const edge of outgoingEdges) {
-            const edgeProbability = edge.data?.probability || 0;
+            // Calculate effective probability (handles case edges and what-if analysis)
+            let edgeProbability = edge.data?.probability || 0;
+            if (edge.data?.case_id && edge.data?.case_variant) {
+              const caseNode = nodes.find((n: any) => n.data?.case?.id === edge.data.case_id);
+              if (caseNode) {
+                const variant = caseNode.data?.case?.variants?.find((v: any) => v.name === edge.data.case_variant);
+                let variantWeight = variant?.weight || 0;
+                
+                // Apply what-if analysis override
+                if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode.id) {
+                  variantWeight = edge.data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
+                }
+                
+                const subRouteProbability = edge.data?.probability || 1.0;
+                edgeProbability = variantWeight * subRouteProbability;
+              }
+            }
+            
             const targetProbability = calculateProbability(edge.target);
             totalProbability += edgeProbability * targetProbability;
           }
@@ -1415,7 +1646,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       };
       
       // Calculate direct path (if exists) - for direct paths, cost is just the edge cost
-      const directPathProbability = directEdge?.data?.probability || 0;
+      let directPathProbability = directEdge?.data?.probability || 0;
+      // Handle case edges for direct path
+      if (directEdge && directEdge.data?.case_id && directEdge.data?.case_variant) {
+        const caseNode = nodes.find((n: any) => n.data?.case?.id === directEdge.data.case_id);
+        if (caseNode) {
+          const variant = caseNode.data?.case?.variants?.find((v: any) => v.name === directEdge.data.case_variant);
+          let variantWeight = variant?.weight || 0;
+          
+          // Apply what-if analysis override
+          if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode.id) {
+            variantWeight = directEdge.data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
+          }
+          
+          const subRouteProbability = directEdge.data?.probability || 1.0;
+          directPathProbability = variantWeight * subRouteProbability;
+        }
+      }
       const directPathCosts = {
         monetary: directEdge?.data?.costs?.monetary?.value || 0,
         time: directEdge?.data?.costs?.time?.value || 0,
@@ -1439,6 +1686,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         pathEdges: []
       };
       
+      // Calculate expected cost GIVEN that the path occurs (cost per successful conversion)
+      const expectedCostsGivenPath = {
+        monetary: finalPath.probability > 0 ? finalPath.costs.monetary / finalPath.probability : 0,
+        time: finalPath.probability > 0 ? finalPath.costs.time / finalPath.probability : 0,
+        units: finalPath.costs.units
+      };
+      
       return {
         type: 'path',
         nodeA: nodeA,
@@ -1446,7 +1700,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         directEdge: directEdge,
         reverseEdge: reverseEdge,
         pathProbability: finalPath.probability,
-        pathCosts: finalPath.costs,
+        pathCosts: expectedCostsGivenPath, // Use the corrected expected costs
         hasDirectPath: !!directEdge,
         hasReversePath: !!reverseEdge,
         isDirectPath: finalPath.isDirect,
@@ -1506,7 +1760,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       totalCosts,
       probabilityConservation: Math.abs(totalIncomingProbability - totalOutgoingProbability) < 0.001
     };
-  }, [selectedNodesForAnalysis, edges]);
+  }, [selectedNodesForAnalysis, edges, nodes, whatIfAnalysis]);
 
   const analysis = calculateSelectionAnalysis();
 
@@ -1696,15 +1950,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                         )}
                       </div>
                       
-                      {(analysis.pathCosts.monetary > 0 || analysis.pathCosts.time > 0) && (
+                      {((analysis.pathCosts?.monetary || 0) > 0 || (analysis.pathCosts?.time || 0) > 0) && (
                         <div style={{ marginBottom: '8px' }}>
-                          <strong>Expected Costs:</strong>
+                          <strong>Expected Cost (Given Path):</strong>
                           <div style={{ marginLeft: '12px', fontSize: '12px' }}>
-                            {analysis.pathCosts.monetary > 0 && (
-                              <div>💰 £{analysis.pathCosts.monetary.toFixed(2)}</div>
+                            {(analysis.pathCosts?.monetary || 0) > 0 && (
+                              <div>💰 £{(analysis.pathCosts?.monetary || 0).toFixed(2)} per conversion</div>
                             )}
-                            {analysis.pathCosts.time > 0 && (
-                              <div>⏱️ {analysis.pathCosts.time.toFixed(1)} {analysis.pathCosts.units || 'units'}</div>
+                            {(analysis.pathCosts?.time || 0) > 0 && (
+                              <div>⏱️ {(analysis.pathCosts?.time || 0).toFixed(1)} {analysis.pathCosts?.units || 'units'} per conversion</div>
                             )}
                           </div>
                         </div>
@@ -1772,6 +2026,112 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           </Panel>
         )}
       </ReactFlow>
+      
+      {/* Variant Selection Modal */}
+      {showVariantModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            background: 'white',
+            padding: '24px',
+            borderRadius: '8px',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            maxWidth: '400px',
+            width: '90%'
+          }}>
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '600' }}>
+              Select Variant for Case Edge
+            </h3>
+            <p style={{ margin: '0 0 16px 0', color: '#666', fontSize: '14px' }}>
+              Choose which variant this edge represents:
+            </p>
+            
+            <div style={{ marginBottom: '16px' }}>
+              {caseNodeVariants.map((variant, index) => {
+                // Check if this variant already has an edge to the target
+                const sourceNode = graph?.nodes.find(n => n.id === pendingConnection?.source);
+                const hasExistingEdge = graph?.edges.some(edge => 
+                  edge.from === pendingConnection?.source && 
+                  edge.to === pendingConnection?.target &&
+                  edge.case_id === sourceNode?.case?.id &&
+                  edge.case_variant === variant.name
+                );
+                
+                return (
+                  <button
+                    key={index}
+                    onClick={() => handleVariantSelection(variant)}
+                    disabled={hasExistingEdge}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      marginBottom: '8px',
+                      border: hasExistingEdge ? '1px solid #ccc' : '1px solid #ddd',
+                      borderRadius: '4px',
+                      background: hasExistingEdge ? '#e9ecef' : '#f8f9fa',
+                      cursor: hasExistingEdge ? 'not-allowed' : 'pointer',
+                      textAlign: 'left',
+                      fontSize: '14px',
+                      transition: 'all 0.2s ease',
+                      opacity: hasExistingEdge ? 0.6 : 1
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!hasExistingEdge) {
+                        e.currentTarget.style.background = '#e9ecef';
+                        e.currentTarget.style.borderColor = '#8B5CF6';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!hasExistingEdge) {
+                        e.currentTarget.style.background = '#f8f9fa';
+                        e.currentTarget.style.borderColor = '#ddd';
+                      }
+                    }}
+                  >
+                    <div style={{ fontWeight: '600', marginBottom: '4px' }}>
+                      {variant.name}
+                      {hasExistingEdge && <span style={{ color: '#666', fontWeight: 'normal', marginLeft: '8px' }}>✓ Already connected</span>}
+                    </div>
+                    <div style={{ color: '#666', fontSize: '12px' }}>
+                      Weight: {(variant.weight * 100).toFixed(0)}%
+                      {variant.description && ` • ${variant.description}`}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            
+            <button
+              onClick={() => {
+                setShowVariantModal(false);
+                setPendingConnection(null);
+                setCaseNodeVariants([]);
+              }}
+              style={{
+                padding: '8px 16px',
+                background: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

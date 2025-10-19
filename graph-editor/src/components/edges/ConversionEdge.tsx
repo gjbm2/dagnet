@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
+import { useGraphStore } from '@/lib/useGraphStore';
 
 interface ConversionEdgeData {
   id: string;
@@ -22,6 +23,8 @@ interface ConversionEdgeData {
     };
   };
   weight_default?: number;
+  case_variant?: string; // Name of the variant this edge represents
+  case_id?: string; // Reference to parent case node
   onUpdate: (id: string, data: Partial<ConversionEdgeData>) => void;
   onDelete: (id: string) => void;
   onReconnect?: (id: string, newSource?: string, newTarget?: string) => void;
@@ -33,6 +36,7 @@ interface ConversionEdgeData {
   targetOffsetX?: number;
   targetOffsetY?: number;
   scaledWidth?: number;
+  isHighlighted?: boolean;
 }
 
 export default function ConversionEdge({
@@ -49,7 +53,31 @@ export default function ConversionEdge({
   target,
 }: EdgeProps<ConversionEdgeData>) {
   const [showContextMenu, setShowContextMenu] = useState(false);
-  const { deleteElements, setEdges } = useReactFlow();
+  const { deleteElements, setEdges, getNodes } = useReactFlow();
+  const { whatIfAnalysis } = useGraphStore();
+  
+  // Get variant weight for case edges (respecting what-if analysis)
+  const getVariantWeight = () => {
+    if (data?.case_id && data?.case_variant) {
+      const nodes = getNodes();
+      const caseNode = nodes.find((n: any) => n.data?.case?.id === data.case_id);
+      if (caseNode) {
+        const variant = caseNode.data?.case?.variants?.find((v: any) => v.name === data.case_variant);
+        let weight = variant?.weight || 0;
+        
+        // Apply what-if analysis override
+        if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode.id) {
+          weight = data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
+        }
+        
+        return weight;
+      }
+    }
+    return null;
+  };
+  
+  const variantWeight = getVariantWeight();
+  const isCaseEdge = data?.case_id || data?.case_variant;
 
 
   // Apply offsets to source and target positions for Sankey-style visualization
@@ -287,6 +315,15 @@ export default function ConversionEdge({
 
 
 
+  // Edge color logic: purple for case edges, gray for normal, highlight for connected selected nodes
+  const getEdgeColor = () => {
+    if (selected) return '#007bff';
+    if (data?.isHighlighted) return '#ff6b35'; // orange highlight for edges connecting selected nodes
+    if (data?.probability === undefined || data?.probability === null) return '#ff6b6b';
+    if (isCaseEdge) return '#C4B5FD'; // purple-300 for case edges
+    return '#999'; // gray for normal edges
+  };
+
   const handleDelete = useCallback(() => {
     if (confirm('Delete this edge?')) {
       deleteElements({ edges: [{ id }] });
@@ -353,7 +390,7 @@ export default function ConversionEdge({
         >
           <path
             d="M0,0 L0,6 L9,3 z"
-            fill="#000000"
+            fill={getEdgeColor()}
           />
         </marker>
       </defs>
@@ -361,7 +398,7 @@ export default function ConversionEdge({
       <path
         id={id}
         style={{
-          stroke: selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999',
+          stroke: getEdgeColor(),
           strokeWidth: data?.scaledWidth || (data?.calculateWidth ? data.calculateWidth() : (selected ? 3 : (data?.probability === undefined || data?.probability === null) ? 3 : 2)),
           fill: 'none',
           cursor: 'pointer',
@@ -397,7 +434,7 @@ export default function ConversionEdge({
           <polygon
             points={`${pos.x - 6},${pos.y - 4} ${pos.x - 6},${pos.y + 4} ${pos.x + 6},${pos.y}`}
             fill="#f8f9fa"
-            stroke={selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999'}
+            stroke={getEdgeColor()}
             strokeWidth="1"
             transform={`rotate(${pos.angle} ${pos.x} ${pos.y})`}
             style={{ zIndex: selected ? 1000 : 1001 }}
@@ -409,7 +446,7 @@ export default function ConversionEdge({
       {!data?.calculateWidth && (
         <polygon
           points={`${arrowPosition.x - 4},${arrowPosition.y - 3} ${arrowPosition.x - 4},${arrowPosition.y + 3} ${arrowPosition.x + 4},${arrowPosition.y}`}
-          fill={selected ? '#007bff' : (data?.probability === undefined || data?.probability === null) ? '#ff6b6b' : '#999'}
+          fill={getEdgeColor()}
           transform={`rotate(${arrowPosition.angle} ${arrowPosition.x} ${arrowPosition.y})`}
           style={{ zIndex: selected ? 1000 : 1 }}
         />
@@ -447,6 +484,27 @@ export default function ConversionEdge({
                 border: '1px solid #ff6b6b'
               }}>
                 ⚠️ No Probability
+              </div>
+            ) : isCaseEdge && variantWeight !== null ? (
+              // Case edge: show variant weight (purple) and sub-route probability (gray)
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <div style={{ 
+                  fontWeight: 'bold', 
+                  fontSize: '11px',
+                  color: '#8B5CF6',
+                  background: '#F3F0FF',
+                  padding: '2px 4px',
+                  borderRadius: '2px'
+                }}>
+                  {Math.round(variantWeight * 100)}%
+                </div>
+                <div style={{ 
+                  fontWeight: 'bold', 
+                  fontSize: '10px',
+                  color: '#666'
+                }}>
+                  × {Math.round((data?.probability || 1.0) * 100)}%
+                </div>
               </div>
             ) : (
               <div style={{ fontWeight: 'bold' }}>

@@ -132,17 +132,23 @@ export default function App() {
   // Helper function to load graph from repository
   const loadGraphFromRepository = async (graphName: string) => {
     try {
+      console.log('Loading graph from repository:', graphName);
+      
       // Import the Git service
       const { graphGitService } = await import('./services/graphGitService');
       
       // Load the graph from the default repository
       const result = await graphGitService.getGraph(graphName, 'main');
       
-      if (result.success && result.data) {
-        return result.data;
-      }
+      console.log('Graph loading result:', result);
       
-      return null;
+      if (result.success && result.data) {
+        console.log('Successfully loaded graph:', result.data);
+        return result.data;
+      } else {
+        console.error('Failed to load graph:', result.error || result.message);
+        return null;
+      }
     } catch (error) {
       console.error('Error loading graph from repository:', error);
       return null;

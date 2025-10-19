@@ -1203,13 +1203,75 @@ function dagTestParamTable(input) {
 }
 
 /**
+ * dagGetCases function - retrieves case nodes with their details
+ * @param {string} input - Cell reference or JSON string containing graph
+ * @returns {Array<Array>} Multi-row array with case node information
+ * @customfunction
+ */
+function dagGetCases(input) {
+  try {
+    var graph;
+    
+    // Parse input - the input is the actual cell value, not a cell reference
+    if (input && typeof input === 'string') {
+      try {
+        // Try parsing as JSON first
+        graph = JSON.parse(input);
+      } catch (parseError) {
+        // If that fails, it might be double-encoded, try parsing again
+        try {
+          var decoded = JSON.parse(input);
+          graph = JSON.parse(decoded);
+        } catch (secondParseError) {
+          return [["JSON Parse Error: " + parseError.message + "\nInput: " + input.substring(0, 100) + "..."]];
+        }
+      }
+    } else if (input && typeof input === 'object') {
+      // Already parsed JSON object
+      graph = input;
+    } else {
+      return [["Error: Invalid input"]];
+    }
+    
+    if (!graph || !graph.nodes) {
+      return [["Error: Invalid graph format"]];
+    }
+    
+    var results = [];
+    results.push(["Case ID", "Label", "Status", "Variants", "Parameter ID"]);
+    
+    for (var i = 0; i < graph.nodes.length; i++) {
+      var node = graph.nodes[i];
+      
+      // Only include case nodes
+      if (node.type !== 'case' || !node.case) {
+        continue;
+      }
+      
+      var caseId = node.case.id || '';
+      var label = node.label || '';
+      var status = node.case.status || 'active';
+      var variantCount = node.case.variants ? node.case.variants.length : 0;
+      var parameterId = node.case.parameter_id || '';
+      
+      results.push([caseId, label, status, variantCount, parameterId]);
+    }
+    
+    return results;
+  } catch (e) {
+    return [["Error: " + e.message]];
+  }
+}
+
+/**
  * dagGetNodes function - retrieves nodes with their details
  * @param {string} input - Cell reference or JSON string containing graph
  * @param {string} [match] - Optional pattern to match node slugs/IDs (e.g., "start", "node_*")
+ * @param {string} [nodeType] - Filter: 'normal', 'case', or 'all' (default)
  * @returns {Array<Array>} Multi-row array with node information
  * @customfunction
  */
-function dagGetNodes(input, match) {
+function dagGetNodes(input, match, nodeType) {
   try {
     var graph;
     
@@ -1247,6 +1309,13 @@ function dagGetNodes(input, match) {
       var label = node.label || '';
       var type = node.absorbing ? (node.outcome_type || 'terminal') : 'intermediate';
       
+      // Apply node type filter
+      if (nodeType === 'normal' && node.type === 'case') {
+        continue;
+      } else if (nodeType === 'case' && node.type !== 'case') {
+        continue;
+      }
+      
       // Check if node matches the pattern
       if (match && !matchesPattern(nodeIdentifier, match)) {
         continue;
@@ -1280,10 +1349,11 @@ function dagGetNodes(input, match) {
  * dagGetEdges function - retrieves edges with their details
  * @param {string} input - Cell reference or JSON string containing graph
  * @param {string} [match] - Optional pattern to match edge slugs/IDs (e.g., "start-to-*", "edge_*")
+ * @param {string} [edgeType] - Filter: 'normal', 'case', or 'all' (default)
  * @returns {Array<Array>} Multi-row array with edge information
  * @customfunction
  */
-function dagGetEdges(input, match) {
+function dagGetEdges(input, match, edgeType) {
   try {
     var graph;
     
@@ -1318,6 +1388,14 @@ function dagGetEdges(input, match) {
     for (var i = 0; i < graph.edges.length; i++) {
       var edge = graph.edges[i];
       var edgeIdentifier = edge.slug || edge.id;
+      
+      // Apply edge type filter
+      var isCaseEdge = edge.case_variant || edge.case_id;
+      if (edgeType === 'normal' && isCaseEdge) {
+        continue;
+      } else if (edgeType === 'case' && !isCaseEdge) {
+        continue;
+      }
       
       // Convert from/to to human-readable names
       var fromNode = findNodeByIdOrSlug(graph, edge.from);
@@ -1500,6 +1578,35 @@ function applyCustomParameters(graph, customParams) {
 }
 
 /**
+ * Apply case parameter overrides to graph
+ * @param {Object} graph - Graph object
+ * @param {Object} caseOverrides - Case parameter overrides
+ * @returns {Object} Modified graph
+ */
+function applyCaseOverrides(graph, caseOverrides) {
+  try {
+    var modifiedGraph = JSON.parse(JSON.stringify(graph)); // Deep clone
+    
+    // Update case edge probabilities based on variant weights
+    for (var i = 0; i < modifiedGraph.edges.length; i++) {
+      var edge = modifiedGraph.edges[i];
+      if (edge.case_id && caseOverrides[edge.case_id]) {
+        var caseOverride = caseOverrides[edge.case_id];
+        if (caseOverride[edge.case_variant] !== undefined) {
+          if (!edge.p) edge.p = {};
+          edge.p.mean = caseOverride[edge.case_variant];
+        }
+      }
+    }
+    
+    return modifiedGraph;
+  } catch (e) {
+    console.log('Error applying case overrides: ' + e.message);
+    return graph; // Return original graph if there's an error
+  }
+}
+
+/**
  * Set a nested property using an array of keys
  * @param {Object} obj - The object to modify
  * @param {Array} keys - Array of property keys
@@ -1596,6 +1703,11 @@ function dagCalc(input, operation, startNode, endNode, customParams) {
     // Apply custom parameters to graph
     if (customParamsObj) {
       graph = applyCustomParameters(graph, customParamsObj);
+      
+      // Apply case parameter overrides
+      if (customParamsObj.cases) {
+        graph = applyCaseOverrides(graph, customParamsObj.cases);
+      }
     }
     
     // Find start and end nodes
@@ -1666,6 +1778,36 @@ function dagCalc(input, operation, startNode, endNode, customParams) {
 }
 
 /**
+ * Helper function to get effective probability for an edge (handles case edges)
+ */
+function getEffectiveEdgeProbability(graph, edge) {
+  // For case edges, multiply variant weight by sub-route probability
+  if (edge.case_id && edge.case_variant) {
+    // Find the case node
+    var caseNode = graph.nodes.find(function(n) {
+      return n.type === 'case' && n.case && n.case.id === edge.case_id;
+    });
+    
+    if (caseNode && caseNode.case && caseNode.case.variants) {
+      // Find the variant
+      var variant = caseNode.case.variants.find(function(v) {
+        return v.name === edge.case_variant;
+      });
+      
+      if (variant) {
+        var variantWeight = variant.weight || 0;
+        var subRouteProbability = edge.p && edge.p.mean !== undefined ? edge.p.mean : 1.0;
+        return variantWeight * subRouteProbability;
+      }
+    }
+    return 0;
+  }
+  
+  // For normal edges, use the probability from edge data
+  return edge.p && edge.p.mean !== undefined ? edge.p.mean : 0.5;
+}
+
+/**
  * Calculate probability from start to any end node
  */
 function calculateProbability(graph, startNode, endNodes) {
@@ -1689,7 +1831,7 @@ function calculateProbability(graph, startNode, endNodes) {
       
       for (var i = 0; i < outgoingEdges.length; i++) {
         var edge = outgoingEdges[i];
-        var edgeProb = edge.p && edge.p.mean ? edge.p.mean : 0.5;
+        var edgeProb = getEffectiveEdgeProbability(graph, edge);
         var targetProb = dfs(edge.to);
         totalProb += edgeProb * targetProb;
       }
@@ -1750,7 +1892,7 @@ function calculateCost(graph, startNode, endNodes) {
           edgeCost = edge.costs.monetary;
         }
         
-        var edgeProb = edge.p && edge.p.mean ? edge.p.mean : 0.5;
+        var edgeProb = getEffectiveEdgeProbability(graph, edge);
         var targetCost = dfs(edge.to);
         totalCost += edgeProb * (edgeCost + targetCost);
       }
@@ -1817,7 +1959,7 @@ function calculateTime(graph, startNode, endNodes) {
           edgeTime = edge.costs.time;
         }
         
-        var edgeProb = edge.p && edge.p.mean ? edge.p.mean : 0.5;
+        var edgeProb = getEffectiveEdgeProbability(graph, edge);
         var targetTime = dfs(edge.to);
         totalTime += edgeProb * (edgeTime + targetTime);
       }

@@ -15,6 +15,8 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       outcome_type: n.outcome_type,
       description: n.description,
       entry: n.entry,
+      type: n.type, // Add node type (normal/case)
+      case: n.case, // Add case data for case nodes
       onUpdate: callbacks?.onUpdateNode,
       onDelete: callbacks?.onDeleteNode,
       onDoubleClick: callbacks?.onDoubleClickNode,
@@ -37,6 +39,8 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       description: e.description,
       costs: e.costs,
       weight_default: e.weight_default,
+      case_variant: e.case_variant, // Add case variant for case edges
+      case_id: e.case_id, // Add case ID for case edges
       onUpdate: callbacks?.onUpdateEdge,
       onDelete: callbacks?.onDeleteEdge,
       onDoubleClick: callbacks?.onDoubleClickEdge,
@@ -60,6 +64,8 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
       outcome_type: n.data.outcome_type,
       description: n.data.description,
       entry: n.data.entry,
+      type: n.data.type, // Add node type (normal/case)
+      case: n.data.case, // Add case data for case nodes
       layout: {
         x: Math.round(n.position.x),
         y: Math.round(n.position.y),
@@ -80,6 +86,8 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
       description: e.data?.description ?? '',
       costs: e.data?.costs,
       weight_default: e.data?.weight_default,
+      case_variant: e.data?.case_variant, // Add case variant for case edges
+      case_id: e.data?.case_id, // Add case ID for case edges
     })),
   };
 }

@@ -1,0 +1,176 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Case Parameter Schema
+description: Schema for case/experiment parameters
+
+type: object
+required:
+  - parameter_id
+  - parameter_type
+  - name
+  - case
+
+properties:
+  parameter_id:
+    type: string
+    pattern: ^case-[a-z0-9-]+$
+    description: Unique identifier for the case parameter
+    
+  parameter_type:
+    type: string
+    const: case
+    description: Type of parameter (always 'case')
+    
+  name:
+    type: string
+    minLength: 1
+    description: Human-readable name for the case
+    
+  description:
+    type: string
+    description: Optional description of the case
+    
+  case:
+    type: object
+    required:
+      - id
+      - status
+      - variants
+    properties:
+      id:
+        type: string
+        description: Unique case identifier (graph-local)
+        
+      slug:
+        type: string
+        description: URL-friendly identifier
+        
+      status:
+        type: string
+        enum: [active, paused, completed]
+        description: Current status of the case
+        
+      platform:
+        type: object
+        description: Experiment platform integration
+        properties:
+          type:
+            type: string
+            enum: [manual, statsig, optimizely, launchdarkly]
+            description: Platform type
+          experiment_id:
+            type: string
+            description: Platform-specific experiment ID
+          project_id:
+            type: string
+            description: Platform project ID
+          api_key_ref:
+            type: string
+            description: Reference to API key environment variable
+            
+      variants:
+        type: array
+        minItems: 2
+        description: Array of case variants
+        items:
+          type: object
+          required:
+            - name
+            - weight
+          properties:
+            name:
+              type: string
+              description: Variant name
+            weight:
+              type: number
+              minimum: 0
+              maximum: 1
+              description: Traffic allocation weight (0-1)
+            description:
+              type: string
+              description: Optional variant description
+            statsig_variant_id:
+              type: string
+              description: Platform-specific variant ID
+              
+      schedules:
+        type: array
+        description: Time-based variant configurations
+        items:
+          type: object
+          properties:
+            start_date:
+              type: string
+              format: date-time
+              description: Schedule start date
+            end_date:
+              type: string
+              format: date-time
+              description: Schedule end date
+            variants:
+              type: object
+              description: Variant weights for this schedule
+              additionalProperties:
+                type: number
+                minimum: 0
+                maximum: 1
+            note:
+              type: string
+              description: Optional note about this schedule
+              
+  history:
+    type: array
+    description: Historical snapshots of case parameters
+    items:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+          description: Snapshot date
+        status:
+          type: string
+          enum: [active, paused, completed]
+        variants:
+          type: object
+          description: Variant weights at this date
+          additionalProperties:
+            type: number
+            
+  applies_to:
+    type: array
+    description: Which graphs use this case parameter
+    items:
+      type: object
+      properties:
+        graph:
+          type: string
+          description: Graph name
+        node_id:
+          type: string
+          description: Node ID in the graph
+        node_slug:
+          type: string
+          description: Node slug in the graph
+          
+  tags:
+    type: array
+    items:
+      type: string
+    description: Tags for categorization
+    
+  owner:
+    type: string
+    description: Owner of the case parameter
+    
+  contacts:
+    type: array
+    description: Contact information
+    items:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [owner, analyst, developer]
