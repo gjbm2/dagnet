@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Handle, Position, NodeProps, useReactFlow } from 'reactflow';
+import { Handle, Position, NodeProps, useReactFlow, useStore } from 'reactflow';
 import { useGraphStore } from '@/lib/useGraphStore';
+import Tooltip from '@/components/Tooltip';
 
 interface ConversionNodeData {
   id: string;
@@ -29,6 +30,64 @@ interface ConversionNodeData {
 export default function ConversionNode({ data, selected }: NodeProps<ConversionNodeData>) {
   const { getEdges, getNodes, setNodes } = useReactFlow();
   const { whatIfAnalysis } = useGraphStore();
+  
+  // Track hover state
+  const [isHovered, setIsHovered] = useState(false);
+  
+  // Check if user is currently connecting (creating a new edge)
+  const isConnecting = useStore((state) => state.connectionNodeId !== null);
+
+  // Generate tooltip content
+  const getTooltipContent = () => {
+    const lines: string[] = [];
+    
+    // Basic node info
+    lines.push(`Node: ${data.label || data.id}`);
+    lines.push(`Type: ${data.type || 'normal'}`);
+    lines.push(`Absorbing: ${data.absorbing ? 'Yes' : 'No'}`);
+    
+    if (data.slug) {
+      lines.push(`Slug: ${data.slug}`);
+    }
+    
+    if (data.outcome_type) {
+      lines.push(`Outcome Type: ${data.outcome_type}`);
+    }
+    
+    // Case node specific info
+    if (data.type === 'case' && data.case) {
+      lines.push(`\nCase Info:`);
+      lines.push(`  Status: ${data.case.status}`);
+      if (data.case.parameter_id) {
+        lines.push(`  Parameter ID: ${data.case.parameter_id}`);
+      }
+      lines.push(`  Variants:`);
+      data.case.variants.forEach(variant => {
+        lines.push(`    • ${variant.name}: ${(variant.weight * 100).toFixed(1)}%`);
+        if (variant.description) {
+          lines.push(`      ${variant.description}`);
+        }
+      });
+    }
+    
+    // Entry info
+    if (data.entry) {
+      lines.push(`\nEntry Info:`);
+      if (data.entry.is_start) {
+        lines.push(`  Start Node: Yes`);
+      }
+      if (data.entry.entry_weight !== undefined) {
+        lines.push(`  Entry Weight: ${data.entry.entry_weight}`);
+      }
+    }
+    
+    // Description
+    if (data.description) {
+      lines.push(`\nDescription: ${data.description}`);
+    }
+    
+    return lines.join('\n');
+  };
 
 
   const handleDoubleClick = useCallback(() => {
@@ -119,9 +178,15 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     }
   };
 
+  // Determine if handles should be visible
+  const showHandles = isHovered || isConnecting;
+
   return (
-    <div 
-      className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''} ${isCaseNode ? 'case-node' : ''}`}
+    <Tooltip content={getTooltipContent()} position="top" delay={300}>
+      <div 
+        className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''} ${isCaseNode ? 'case-node' : ''}`}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
       style={{
         padding: '8px',
         border: isCaseNode ? (selected ? '2px solid #7C3AED' : '2px solid #7C3AED') :
@@ -129,7 +194,10 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
                 (probabilityMass && !probabilityMass.isComplete) ? '2px solid #ff6b6b' : 
                 '2px solid #ddd',
         borderRadius: '8px',
-        background: isCaseNode ? '#8B5CF6' : (data.absorbing ? '#ffebee' : '#fff'),
+        background: isCaseNode ? '#8B5CF6' : 
+                    (data.outcome_type?.toUpperCase() === 'SUCCESS' ? '#d4f4dd' : // light green for SUCCESS
+                    (data.entry?.is_start ? '#fff9c4' : // light yellow for START
+                    (data.absorbing ? '#ffebee' : '#fff'))), // light pink for other absorbing, white for normal
         width: isCaseNode ? '96px' : '120px',
         height: isCaseNode ? '96px' : '120px',
         textAlign: 'center',
@@ -152,25 +220,49 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         type="target" 
         position={Position.Left} 
         id="left" 
-        style={{ background: '#555', width: '8px', height: '8px' }} 
+        style={{ 
+          background: '#555', 
+          width: '8px', 
+          height: '8px',
+          opacity: showHandles ? 1 : 0,
+          transition: 'opacity 0.2s ease'
+        }} 
       />
       <Handle 
         type="target" 
         position={Position.Top} 
         id="top" 
-        style={{ background: '#555', width: '8px', height: '8px' }} 
+        style={{ 
+          background: '#555', 
+          width: '8px', 
+          height: '8px',
+          opacity: showHandles ? 1 : 0,
+          transition: 'opacity 0.2s ease'
+        }} 
       />
       <Handle 
         type="target" 
         position={Position.Right} 
         id="right" 
-        style={{ background: '#555', width: '8px', height: '8px' }} 
+        style={{ 
+          background: '#555', 
+          width: '8px', 
+          height: '8px',
+          opacity: showHandles ? 1 : 0,
+          transition: 'opacity 0.2s ease'
+        }} 
       />
       <Handle 
         type="target" 
         position={Position.Bottom} 
         id="bottom" 
-        style={{ background: '#555', width: '8px', height: '8px' }} 
+        style={{ 
+          background: '#555', 
+          width: '8px', 
+          height: '8px',
+          opacity: showHandles ? 1 : 0,
+          transition: 'opacity 0.2s ease'
+        }} 
       />
       
       <div 
@@ -270,25 +362,49 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         type="source" 
         position={Position.Left} 
         id="left-out" 
-        style={{ background: '#007bff', width: '8px', height: '8px' }} 
+        style={{ 
+          background: '#007bff', 
+          width: '8px', 
+          height: '8px',
+          opacity: showHandles ? 1 : 0,
+          transition: 'opacity 0.2s ease'
+        }} 
       />
       <Handle 
         type="source" 
         position={Position.Top} 
         id="top-out" 
-        style={{ background: '#007bff', width: '8px', height: '8px' }} 
+        style={{ 
+          background: '#007bff', 
+          width: '8px', 
+          height: '8px',
+          opacity: showHandles ? 1 : 0,
+          transition: 'opacity 0.2s ease'
+        }} 
       />
       <Handle 
         type="source" 
         position={Position.Right} 
         id="right-out" 
-        style={{ background: '#007bff', width: '8px', height: '8px' }} 
+        style={{ 
+          background: '#007bff', 
+          width: '8px', 
+          height: '8px',
+          opacity: showHandles ? 1 : 0,
+          transition: 'opacity 0.2s ease'
+        }} 
       />
       <Handle 
         type="source" 
         position={Position.Bottom} 
         id="bottom-out" 
-        style={{ background: '#007bff', width: '8px', height: '8px' }} 
+        style={{ 
+          background: '#007bff', 
+          width: '8px', 
+          height: '8px',
+          opacity: showHandles ? 1 : 0,
+          transition: 'opacity 0.2s ease'
+        }} 
       />
       
       {selected && (
@@ -316,5 +432,6 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         </div>
       )}
     </div>
+    </Tooltip>
   );
 }

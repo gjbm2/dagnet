@@ -1,4 +1,4 @@
-# Case Node Implementation - Comprehensive Specification
+fiep# Case Node Implementation - Comprehensive Specification
 
 ## Overview
 Complete specification for implementing Case nodes in Dagnet to model A/B tests and traffic experiments. Case nodes represent decision points where traffic is split between different variants with fixed probabilities.

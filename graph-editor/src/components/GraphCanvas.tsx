@@ -19,9 +19,11 @@ import 'reactflow/dist/style.css';
 
 import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
+import LayoutConfirmationModal from './LayoutConfirmationModal';
 import { useGraphStore } from '@/lib/useGraphStore';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
+import { applyAutoLayout, type LayoutOptions } from '@/lib/layout';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -59,7 +61,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
 
 function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute }: GraphCanvasProps) {
   const { graph, setGraph, whatIfAnalysis } = useGraphStore();
-  const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
+  const { deleteElements, fitView, screenToFlowPosition, setCenter, getNodes } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
@@ -68,13 +70,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Trigger flag for re-routing
   const [shouldReroute, setShouldReroute] = useState(0);
   
+  // Layout state
+  const [showLayoutConfirmModal, setShowLayoutConfirmModal] = useState(false);
+  const [layoutHistory, setLayoutHistory] = useState<{ 
+    nodes: Node[]; 
+    edges: Edge[];
+    graph: any; // Save graph state too for complete undo
+  } | null>(null);
+  const [showLayoutDropdown, setShowLayoutDropdown] = useState(false);
+  
   // Custom onNodesChange handler to detect position changes for auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
-    console.log('onNodesChange called:', { 
-      changeCount: changes.length, 
-      autoReroute, 
-      changeTypes: changes.map(c => ({ type: c.type, dragging: c.dragging }))
-    });
+    // onNodesChange called
     
     // Call the base handler first
     onNodesChangeBase(changes);
@@ -82,13 +89,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Check if any position changes occurred (when user finishes dragging)
     if (autoReroute) {
       const positionChanges = changes.filter(change => change.type === 'position' && change.dragging === false);
-      console.log('Filtered position changes:', positionChanges.length);
+      // Filtered position changes
       if (positionChanges.length > 0) {
-        console.log('Position changes detected (dragging finished):', positionChanges);
-        console.log('Setting shouldReroute flag');
+        // Position changes detected (dragging finished)
         // Trigger re-routing by incrementing the flag
         setShouldReroute(prev => {
-          console.log('shouldReroute incrementing from', prev, 'to', prev + 1);
+          // shouldReroute incrementing
           return prev + 1;
         });
       }
@@ -123,7 +129,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   const calculateEdgeWidth = useCallback((edge: any, allEdges: any[], allNodes: any[]) => {
     
-    console.log(`calculateEdgeWidth called for edge ${edge.id}, mode=${edgeScalingMode}`);
+    // calculateEdgeWidth called
     
     // Helper function to get effective probability (handles case edges and what-if analysis)
     const getEffectiveProbability = (e: any) => {
@@ -146,7 +152,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     };
     
     if (edgeScalingMode === 'uniform') {
-      return edge.selected ? 3 : 2;
+      // Use a standard width for all edges, with slight increase for selected edges
+      return edge.selected ? 12 : 10;
     }
     
     if (edgeScalingMode === 'local-mass') {
@@ -162,7 +169,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
       const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
       
-      console.log(`Local mass edge ${edge.id}: prob=${edgeProbability}, total=${totalProbability}, proportion=${proportion.toFixed(2)}, width=${finalWidth.toFixed(1)} (MAX_WIDTH=${MAX_WIDTH})`);
+      // Local mass edge calculation
       return finalWidth;
     }
     
@@ -173,10 +180,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
       );
       
-      console.log(`Global mass mode: startNode=`, startNode);
+      // Global mass mode
       
       if (!startNode) {
-        console.log(`No start node found, falling back to local mass for edge ${edge.id}`);
+        // No start node found, falling back to local mass
         // Fallback to local mass if no clear start node
         const sourceEdges = allEdges.filter(e => e.source === edge.source);
         const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
@@ -200,7 +207,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const scaledWidth = MIN_WIDTH + (actualMassFlowing * (MAX_WIDTH - MIN_WIDTH));
       const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
       
-      console.log(`Global mass edge ${edge.id}: p(source)=${residualAtSource.toFixed(2)}, edgeProb=${edgeProbability.toFixed(2)}, actualMass=${actualMassFlowing.toFixed(2)}, width=${finalWidth.toFixed(1)} (MAX_WIDTH=${MAX_WIDTH})`);
+      // Global mass edge calculation
       return finalWidth;
     }
     
@@ -211,10 +218,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
       );
       
-      console.log(`Global log mass mode: startNode=`, startNode);
+      // Global log mass mode
       
       if (!startNode) {
-        console.log(`No start node found, falling back to local mass for edge ${edge.id}`);
+        // No start node found, falling back to local mass
         // Fallback to local mass if no clear start node
         const sourceEdges = allEdges.filter(e => e.source === edge.source);
         const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
@@ -238,7 +245,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const logTransformedWidth = logMassTransform(actualMassFlowing, MAX_WIDTH - MIN_WIDTH);
       const finalWidth = MIN_WIDTH + logTransformedWidth;
       
-      console.log(`Global log mass edge ${edge.id}: p(source)=${residualAtSource.toFixed(2)}, edgeProb=${edgeProbability.toFixed(2)}, actualMass=${actualMassFlowing.toFixed(2)}, logWidth=${logTransformedWidth.toFixed(1)}, finalWidth=${finalWidth.toFixed(1)} (MAX_WIDTH=${MAX_WIDTH})`);
+      // Global log mass edge calculation
       return finalWidth;
     }
     
@@ -313,8 +320,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
     // Calculate offsets for each edge (both source and target)
     const edgesWithOffsets = edgesWithWidth.map(edge => {
-      // Only apply offsets for mass-based scaling modes
-      if (!['local-mass', 'global-mass', 'global-log-mass'].includes(edgeScalingMode)) {
+      // Only apply offsets for mass-based scaling modes and uniform mode
+      if (!['local-mass', 'global-mass', 'global-log-mass', 'uniform'].includes(edgeScalingMode)) {
         return { 
           ...edge, 
           sourceOffsetX: 0, 
@@ -358,18 +365,50 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return eSourceFace === sourceFace;
       });
 
-      // Sort edges from this face by visual position of their targets
+      // Sort edges from this face by the ANGLE/DIRECTION they're heading
       const sortedSourceEdges = [...sameFaceSourceEdges].sort((a, b) => {
         const aTarget = allNodes.find(n => n.id === a.target);
         const bTarget = allNodes.find(n => n.id === b.target);
         if (!aTarget || !bTarget) return 0;
         
-        // For left/right faces: sort by Y (top to bottom)
-        // For top/bottom faces: sort by X (left to right)
+        // Get source node dimensions
+        const sourceWidth = (sourceNode.data as any)?.type === 'case' ? 96 : 120;
+        const sourceHeight = (sourceNode.data as any)?.type === 'case' ? 96 : 120;
+        const sourceCenterX = sourceNode.position.x + sourceWidth / 2;
+        const sourceCenterY = sourceNode.position.y + sourceHeight / 2;
+        
+        // Get target node dimensions and centers
+        const aTargetWidth = (aTarget.data as any)?.type === 'case' ? 96 : 120;
+        const aTargetHeight = (aTarget.data as any)?.type === 'case' ? 96 : 120;
+        const aTargetCenterX = (aTarget.position?.x || 0) + aTargetWidth / 2;
+        const aTargetCenterY = (aTarget.position?.y || 0) + aTargetHeight / 2;
+        
+        const bTargetWidth = (bTarget.data as any)?.type === 'case' ? 96 : 120;
+        const bTargetHeight = (bTarget.data as any)?.type === 'case' ? 96 : 120;
+        const bTargetCenterX = (bTarget.position?.x || 0) + bTargetWidth / 2;
+        const bTargetCenterY = (bTarget.position?.y || 0) + bTargetHeight / 2;
+        
+        // Calculate direction vectors from source to target
+        const aDx = aTargetCenterX - sourceCenterX;
+        const aDy = aTargetCenterY - sourceCenterY;
+        const bDx = bTargetCenterX - sourceCenterX;
+        const bDy = bTargetCenterY - sourceCenterY;
+        
+        // For left/right faces: sort by angle (more upward = higher in stack)
+        // Use atan2 to get angle, or just compare dy/dx ratios
         if (sourceFace === 'left' || sourceFace === 'right') {
-          return (aTarget.position?.y || 0) - (bTarget.position?.y || 0);
+          // Sort by the angle: atan2(dy, dx)
+          // More negative dy (upward) should be on top
+          // For same dy, more outward (dx magnitude) goes higher
+          const aAngle = Math.atan2(aDy, Math.abs(aDx));
+          const bAngle = Math.atan2(bDy, Math.abs(bDx));
+          return aAngle - bAngle; // Lower angle (more upward) = higher in stack
         } else {
-          return (aTarget.position?.x || 0) - (bTarget.position?.x || 0);
+          // For top/bottom faces: sort by angle in X direction
+          // More negative dx (leftward) should be on left
+          const aAngle = Math.atan2(aDx, Math.abs(aDy));
+          const bAngle = Math.atan2(bDx, Math.abs(bDy));
+          return aAngle - bAngle; // Lower angle (more leftward) = left in stack
         }
       });
 
@@ -426,18 +465,48 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return eTargetFace === targetFace;
       });
 
-      // Sort edges to this target face by visual position of their sources
+      // Sort edges to this target face by the ANGLE/DIRECTION they're arriving from
       const sortedTargetEdges = [...sameFaceTargetEdges].sort((a, b) => {
         const aSource = allNodes.find(n => n.id === a.source);
         const bSource = allNodes.find(n => n.id === b.source);
         if (!aSource || !bSource) return 0;
         
-        // For left/right faces: sort by source Y (top to bottom)
-        // For top/bottom faces: sort by source X (left to right)
+        // Get target node dimensions
+        const targetWidth = (targetNode.data as any)?.type === 'case' ? 96 : 120;
+        const targetHeight = (targetNode.data as any)?.type === 'case' ? 96 : 120;
+        const targetCenterX = targetNode.position.x + targetWidth / 2;
+        const targetCenterY = targetNode.position.y + targetHeight / 2;
+        
+        // Get source node dimensions and centers
+        const aSourceWidth = (aSource.data as any)?.type === 'case' ? 96 : 120;
+        const aSourceHeight = (aSource.data as any)?.type === 'case' ? 96 : 120;
+        const aSourceCenterX = (aSource.position?.x || 0) + aSourceWidth / 2;
+        const aSourceCenterY = (aSource.position?.y || 0) + aSourceHeight / 2;
+        
+        const bSourceWidth = (bSource.data as any)?.type === 'case' ? 96 : 120;
+        const bSourceHeight = (bSource.data as any)?.type === 'case' ? 96 : 120;
+        const bSourceCenterX = (bSource.position?.x || 0) + bSourceWidth / 2;
+        const bSourceCenterY = (bSource.position?.y || 0) + bSourceHeight / 2;
+        
+        // Calculate direction vectors from source to target (arriving direction)
+        const aDx = targetCenterX - aSourceCenterX;
+        const aDy = targetCenterY - aSourceCenterY;
+        const bDx = targetCenterX - bSourceCenterX;
+        const bDy = targetCenterY - bSourceCenterY;
+        
+        // For left/right target faces: sort by angle of arrival
         if (targetFace === 'left' || targetFace === 'right') {
-          return (aSource.position?.y || 0) - (bSource.position?.y || 0);
+          // Sort by the angle: atan2(dy, dx)
+          // Edges arriving from above (source y < target y, positive dy) should be on top
+          const aAngle = Math.atan2(aDy, Math.abs(aDx));
+          const bAngle = Math.atan2(bDy, Math.abs(bDx));
+          return bAngle - aAngle; // REVERSED: Higher angle (from above) = higher in stack
         } else {
-          return (aSource.position?.x || 0) - (bSource.position?.x || 0);
+          // For top/bottom target faces: sort by angle in X direction
+          // Edges arriving from left (source x < target x, positive dx) should be on left
+          const aAngle = Math.atan2(aDx, Math.abs(aDy));
+          const bAngle = Math.atan2(bDx, Math.abs(bDy));
+          return bAngle - aAngle; // REVERSED: Higher angle (from left) = left in stack
         }
       });
 
@@ -495,10 +564,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const finalScaleFactor = Math.min(sourceScaleFactor, targetScaleFactor);
         const scaledWidth = edgeWidth * finalScaleFactor;
         
-        console.log(`Edge ${edge.id} (${edge.source} → ${edge.target}):`);
-        console.log(`  Original Width: ${edgeWidth.toFixed(1)} → Scaled Width: ${scaledWidth.toFixed(1)} (scale=${finalScaleFactor.toFixed(2)})`);
-        console.log(`  Source: face=${sourceFace}, ${sameFaceSourceEdges.length}/${sourceEdges.length} edges, totalWidth=${sourceTotalWidth.toFixed(1)}, scale=${sourceScaleFactor.toFixed(2)}, offset=(${sourceOffsetX.toFixed(1)}, ${sourceOffsetY.toFixed(1)})`);
-        console.log(`  Target: face=${targetFace}, ${sameFaceTargetEdges.length}/${targetEdges.length} edges, totalWidth=${targetTotalWidth.toFixed(1)}, scale=${targetScaleFactor.toFixed(2)}, offset=(${targetOffsetX.toFixed(1)}, ${targetOffsetY.toFixed(1)})`);
+        // Edge offset calculation
       }
 
       // Apply scaling to the edge width for Global Log Mass
@@ -522,11 +588,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
 
     return edgesWithOffsets;
-  }, [edgeScalingMode]);
+  }, [edgeScalingMode, nodes, edges]);
 
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
   const isSyncingRef = useRef(false);
+  const isAutoReroutingRef = useRef(false);
+  const lastEdgeScalingUpdateRef = useRef<string>('');
   
   // Re-route feature state
   const lastNodePositionsRef = useRef<{ [nodeId: string]: { x: number; y: number } }>({});
@@ -572,11 +640,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Perform immediate re-route of ALL edges (used when toggling on)
   const performImmediateReroute = useCallback(() => {
     if (!graph) {
-      console.log('No graph, skipping immediate re-route');
+      // No graph, skipping immediate re-route
       return;
     }
     
-    console.log('Performing immediate re-route of ALL edges');
+    // Performing immediate re-route of ALL edges
     
     const nextGraph = structuredClone(graph);
     let updatedCount = 0;
@@ -589,14 +657,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (sourceNode && targetNode) {
         const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
         
-        console.log(`Re-routing edge ${graphEdge.id}:`, {
-          from: graphEdge.from,
-          to: graphEdge.to,
-          oldFromHandle: graphEdge.fromHandle,
-          newFromHandle: sourceHandle,
-          oldToHandle: graphEdge.toHandle,
-          newToHandle: targetHandle
-        });
+        // Re-routing edge
         
         graphEdge.fromHandle = sourceHandle;
         graphEdge.toHandle = targetHandle;
@@ -604,22 +665,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
     });
     
-    console.log(`Updated ${updatedCount} edges`);
+    // Updated edges
     
     if (updatedCount > 0) {
       if (nextGraph.metadata) {
         nextGraph.metadata.updated_at = new Date().toISOString();
       }
       
-      console.log('Updating graph with immediate re-route changes');
+      // Updating graph with immediate re-route changes
+      isAutoReroutingRef.current = true;
       setGraph(nextGraph);
+      
+      // Reset the flag after a short delay
+      setTimeout(() => {
+        isAutoReroutingRef.current = false;
+      }, 50);
     }
   }, [graph, nodes, calculateOptimalHandles, setGraph]);
   
   // Auto re-route edges when nodes move
-  const performAutoReroute = useCallback(() => {
+  const performAutoReroute = useCallback((forceReroute = false) => {
     if (!autoReroute || !graph) {
-      console.log('Auto re-route skipped:', { autoReroute, hasGraph: !!graph });
+      // Auto re-route skipped
       return;
     }
     
@@ -635,31 +702,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       if (lastPos && (Math.abs(currentPos.x - lastPos.x) > 5 || Math.abs(currentPos.y - lastPos.y) > 5)) {
         movedNodes.push(node.id);
-        console.log(`Node ${node.id} moved:`, { 
-          from: lastPos, 
-          to: currentPos, 
-          deltaX: currentPos.x - lastPos.x, 
-          deltaY: currentPos.y - lastPos.y 
-        });
+        // Node moved
       }
     });
     
-    if (movedNodes.length === 0) {
-      console.log('No nodes moved, skipping re-route');
+    if (movedNodes.length === 0 && !forceReroute) {
+      // No nodes moved, skipping re-route
       return;
     }
     
-    console.log('Moved nodes:', movedNodes);
+    // Moved nodes
     
     // Update last positions
     lastNodePositionsRef.current = currentPositions;
     
     // Find edges that need re-routing
-    const edgesToReroute = edges.filter(edge => 
-      movedNodes.includes(edge.source) || movedNodes.includes(edge.target)
-    );
-    
-    console.log('Edges to re-route:', edgesToReroute.map(e => e.id));
+    let edgesToReroute;
+    if (forceReroute) {
+      // When forcing re-route (e.g., after graph changes), re-route ALL edges
+      edgesToReroute = edges;
+      // Force re-routing ALL edges
+    } else {
+      // Normal case: only re-route edges connected to moved nodes
+      edgesToReroute = edges.filter(edge => 
+        movedNodes.includes(edge.source) || movedNodes.includes(edge.target)
+      );
+      // Edges to re-route
+    }
     
     if (edgesToReroute.length === 0) return;
     
@@ -673,12 +742,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (sourceNode && targetNode) {
         const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
         
-        console.log(`Re-routing edge ${edge.id}:`, { 
-          oldFromHandle: edge.sourceHandle, 
-          newFromHandle: sourceHandle,
-          oldToHandle: edge.targetHandle,
-          newToHandle: targetHandle
-        });
+        // Re-routing edge
         
         // Find the edge in the graph and update its handles
         const graphEdge = nextGraph.edges.find(e => e.id === edge.id);
@@ -693,16 +757,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
     
-    console.log('Updating graph with new handle positions');
+    // Updating graph with new handle positions
+    isAutoReroutingRef.current = true;
     setGraph(nextGraph);
+    
+    // Reset the flag after a short delay
+    setTimeout(() => {
+      isAutoReroutingRef.current = false;
+    }, 50);
   }, [autoReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
   
   // Reset position tracking and perform immediate re-route when autoReroute is toggled ON
   useEffect(() => {
-    console.log('Auto re-route toggled:', autoReroute);
+    // Auto re-route toggled
     if (autoReroute) {
       // Initialize position tracking when enabling
-      console.log('Initializing position tracking and performing immediate re-route');
+      // Initializing position tracking and performing immediate re-route
       const initialPositions: { [nodeId: string]: { x: number; y: number } } = {};
       nodes.forEach(node => {
         initialPositions[node.id] = { x: node.position.x, y: node.position.y };
@@ -710,7 +780,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       lastNodePositionsRef.current = initialPositions;
       
       // Perform immediate re-route when toggling on (with a small delay to ensure state is ready)
-      console.log('Triggering immediate re-route on toggle');
+      // Triggering immediate re-route on toggle
       if (graph && nodes.length > 0 && edges.length > 0) {
         // Use setTimeout to break out of the render cycle
         setTimeout(() => {
@@ -726,16 +796,31 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Perform re-routing when shouldReroute flag changes (with small delay after node movement)
   useEffect(() => {
     if (shouldReroute > 0 && autoReroute) {
-      console.log('Re-route triggered by flag change:', shouldReroute);
+      // Re-route triggered by flag change
       // Add a small delay to ensure node positions are fully updated
       const timeoutId = setTimeout(() => {
-        console.log('Executing delayed re-route after node movement');
+        // Executing delayed re-route after node movement
         performAutoReroute();
       }, 100); // 100ms delay after user finishes dragging
       
       return () => clearTimeout(timeoutId);
     }
   }, [shouldReroute, autoReroute, performAutoReroute]);
+
+  // Auto-reroute when graph changes (edges added/removed, etc.)
+  useEffect(() => {
+    // Skip if auto-reroute is off, no graph, or if this change was caused by auto-reroute itself
+    if (!autoReroute || !graph || isAutoReroutingRef.current) {
+      return;
+    }
+    
+    // Add a small delay to ensure the graph changes are fully processed
+    const timeoutId = setTimeout(() => {
+      performAutoReroute(true); // Force re-route even if no nodes moved
+    }, 200); // 200ms delay after graph changes
+    
+    return () => clearTimeout(timeoutId);
+  }, [graph, autoReroute]);
   
   // Get all existing slugs (nodes and edges) for uniqueness checking
   const getAllExistingSlugs = useCallback((excludeId?: string) => {
@@ -756,7 +841,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Callback functions for node/edge updates
   const handleUpdateNode = useCallback((id: string, data: any) => {
-    console.log('handleUpdateNode called:', { id, data });
+    // handleUpdateNode called
     setGraph((prevGraph) => {
       if (!prevGraph) return prevGraph;
       
@@ -774,26 +859,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (nodeIndex >= 0) {
         nextGraph.nodes[nodeIndex] = { ...nextGraph.nodes[nodeIndex], ...data };
         nextGraph.metadata.updated_at = new Date().toISOString();
-        console.log('Updated node in graph:', nextGraph.nodes[nodeIndex]);
+        // Updated node in graph
       }
       return nextGraph;
     });
   }, [setGraph, getAllExistingSlugs]);
 
   const handleDeleteNode = useCallback((id: string) => {
-    console.log('=== DELETING NODE ===', id);
+    // Deleting node
     
     if (!graph) {
-      console.log('No graph, aborting delete');
+      // No graph, aborting delete
       return;
     }
     
-    console.log('BEFORE DELETE:', {
-      nodes: graph.nodes.length,
-      edges: graph.edges.length,
-      hasPolicies: !!graph.policies,
-      hasMetadata: !!graph.metadata
-    });
+    // Before delete
     
     const nextGraph = structuredClone(graph);
     nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== id);
@@ -805,12 +885,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     nextGraph.metadata.updated_at = new Date().toISOString();
     
-    console.log('AFTER DELETE:', {
-      nodes: nextGraph.nodes.length,
-      edges: nextGraph.edges.length,
-      hasPolicies: !!nextGraph.policies,
-      hasMetadata: !!nextGraph.metadata
-    });
+    // After delete
     
     // Clear the sync flag to allow graph->ReactFlow sync
     isSyncingRef.current = false;
@@ -846,10 +921,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [setGraph, getAllExistingSlugs]);
 
   const handleDeleteEdge = useCallback((id: string) => {
-    console.log('=== DELETING EDGE ===', id);
+    // Deleting edge
     
     if (!graph) {
-      console.log('No graph, aborting delete');
+      // No graph, aborting delete
       return;
     }
     
@@ -872,84 +947,264 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     onSelectedEdgeChange(null);
   }, [graph, setGraph, onSelectedEdgeChange]);
 
+  const handleReconnectEdge = useCallback((id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => {
+    // console.log('=== RECONNECTING EDGE ===', { id, newSource, newTarget, newTargetHandle, newSourceHandle });
+    
+    if (!graph) {
+      // console.log('No graph, aborting reconnect');
+      return;
+    }
+    
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex(e => e.id === id);
+    
+    if (edgeIndex === -1) {
+      // console.log('Edge not found:', id);
+      return;
+    }
+    
+    const edge = nextGraph.edges[edgeIndex];
+    const oldFrom = edge.from;
+    const oldTo = edge.to;
+    
+    // Update source if provided
+    if (newSource) {
+      if (newSource !== edge.from) {
+        // console.log(`Changing source from ${edge.from} to ${newSource}`);
+        edge.from = newSource;
+      }
+      
+      // Update source handle if provided
+      if (newSourceHandle) {
+        edge.fromHandle = `${newSourceHandle}-out`;
+        // console.log(`Setting fromHandle to ${edge.fromHandle}`);
+      }
+    }
+    
+    // Update target if provided
+    if (newTarget) {
+      if (newTarget !== edge.to) {
+        // console.log(`Changing target from ${edge.to} to ${newTarget}`);
+        edge.to = newTarget;
+      }
+      
+      // Update target handle if provided
+      if (newTargetHandle) {
+        edge.toHandle = newTargetHandle;
+        // console.log(`Setting toHandle to ${edge.toHandle}`);
+      }
+    }
+    
+    // Check if connection actually changed (node or handle)
+    const sourceChanged = newSource && (newSource !== oldFrom || newSourceHandle);
+    const targetChanged = newTarget && (newTarget !== oldTo || newTargetHandle);
+    
+    if (!sourceChanged && !targetChanged) {
+      // console.log('No change in edge connection');
+      return;
+    }
+    
+    // Generate new ID that avoids conflicts
+    let newId = `${edge.from}->${edge.to}`;
+    let counter = 1;
+    
+    // Check if edge with this ID already exists (excluding the current edge)
+    while (nextGraph.edges.some((e, idx) => e.id === newId && idx !== edgeIndex)) {
+      newId = `${edge.from}->${edge.to}-${counter}`;
+      counter++;
+    }
+    
+    // console.log(`Updating edge ID from ${edge.id} to ${newId}`);
+    edge.id = newId;
+    
+    // Ensure metadata exists and update it
+    if (!nextGraph.metadata) {
+      nextGraph.metadata = {};
+    }
+    nextGraph.metadata.updated_at = new Date().toISOString();
+    
+    // Clear the sync flag to allow graph->ReactFlow sync
+    isSyncingRef.current = false;
+    
+    // Update the graph (this will trigger the graph->ReactFlow sync which will update lastSyncedGraphRef)
+    setGraph(nextGraph);
+    
+    // console.log('Edge reconnected successfully');
+  }, [graph, setGraph]);
+
   // Delete selected elements
   const deleteSelected = useCallback(() => {
     const selectedNodes = nodes.filter(n => n.selected);
     const selectedEdges = edges.filter(e => e.selected);
     
-    console.log('deleteSelected called with:', selectedNodes.length, 'nodes and', selectedEdges.length, 'edges');
+    // console.log('deleteSelected called with:', selectedNodes.length, 'nodes and', selectedEdges.length, 'edges');
     
     // Delete selected nodes (which will cascade delete their edges)
     selectedNodes.forEach(node => {
-      console.log('Deleting node:', node.id);
+      // console.log('Deleting node:', node.id);
       handleDeleteNode(node.id);
     });
     
     // Delete any remaining selected edges
     selectedEdges.forEach(edge => {
-      console.log('Deleting edge:', edge.id);
+      // console.log('Deleting edge:', edge.id);
       handleDeleteEdge(edge.id);
     });
   }, [nodes, edges, handleDeleteNode, handleDeleteEdge]);
 
-  // Sync FROM graph TO ReactFlow when graph changes externally
+  // Store callback refs for use in sync effect
+  const calculateEdgeWidthRef = useRef(calculateEdgeWidth);
+  const calculateEdgeOffsetsRef = useRef(calculateEdgeOffsets);
+  
   useEffect(() => {
-    if (!graph) return;
-    if (isSyncingRef.current) {
-      console.log('Skipping graph->ReactFlow sync (isSyncingRef=true)');
+    calculateEdgeWidthRef.current = calculateEdgeWidth;
+    calculateEdgeOffsetsRef.current = calculateEdgeOffsets;
+  }, [calculateEdgeWidth, calculateEdgeOffsets]);
+  
+  // Sync FROM graph TO ReactFlow when graph changes externally
+  const syncCountRef = useRef(0);
+  useEffect(() => {
+    console.log('🔄 Sync effect triggered', { hasGraph: !!graph, syncCount: syncCountRef.current });
+    
+    if (!graph) {
+      console.log('  ↳ No graph, skipping');
       return;
     }
     
     const graphJson = JSON.stringify(graph);
+    
+    // Check if this is the same graph we just synced
     if (graphJson === lastSyncedGraphRef.current) {
-      console.log('Skipping graph->ReactFlow sync (no changes)');
+      console.log('  ↳ Same graph, skipping');
       return;
     }
     
-    console.log('=== Syncing graph -> ReactFlow ===');
+    syncCountRef.current++;
+    console.log(`  ↳ Syncing (attempt ${syncCountRef.current}/5)...`);
+    
+    if (syncCountRef.current > 5) {
+      console.error('❌ Sync loop detected (>5 syncs). Stopping.');
+      return;
+    }
+    
     lastSyncedGraphRef.current = graphJson;
-    const { nodes: newNodes, edges: newEdges } = toFlow(graph, {
-      onUpdateNode: handleUpdateNode,
-      onDeleteNode: handleDeleteNode,
-      onUpdateEdge: handleUpdateEdge,
-      onDeleteEdge: handleDeleteEdge,
-      onDoubleClickNode: onDoubleClickNode,
-      onDoubleClickEdge: onDoubleClickEdge,
-      onSelectEdge: onSelectEdge,
+    
+    // Reset counter after a delay
+    setTimeout(() => { syncCountRef.current = 0; }, 500);
+    
+    try {
+      console.log('  ↳ Converting graph to ReactFlow...');
+      const { nodes: newNodes, edges: newEdges } = toFlow(graph, {
+        onUpdateNode: handleUpdateNode,
+        onDeleteNode: handleDeleteNode,
+        onUpdateEdge: handleUpdateEdge,
+        onDeleteEdge: handleDeleteEdge,
+        onDoubleClickNode: onDoubleClickNode,
+        onDoubleClickEdge: onDoubleClickEdge,
+        onSelectEdge: onSelectEdge,
+        onReconnect: handleReconnectEdge,
+      });
+      
+      console.log(`  ↳ Converted: ${newNodes.length} nodes, ${newEdges.length} edges`);
+      
+      // Add edge width calculation to each edge using ref
+      const edgesWithWidth = newEdges.map(edge => ({
+        ...edge,
+        data: {
+          ...edge.data,
+          calculateWidth: () => calculateEdgeWidthRef.current(edge, newEdges, newNodes)
+        }
+      }));
+      
+      console.log('  ↳ Calculating edge offsets...');
+      // Calculate edge offsets for Sankey-style visualization using ref
+      const edgesWithOffsets = calculateEdgeOffsetsRef.current(edgesWithWidth, newNodes, MAX_WIDTH);
+      
+      // Attach offsets to edge data for the ConversionEdge component
+      const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
+        ...edge,
+        data: {
+          ...edge.data,
+          sourceOffsetX: edge.sourceOffsetX,
+          sourceOffsetY: edge.sourceOffsetY,
+          targetOffsetX: edge.targetOffsetX,
+          targetOffsetY: edge.targetOffsetY,
+          scaledWidth: edge.scaledWidth
+        }
+      }));
+      
+      console.log('  ↳ Setting nodes and edges...');
+      setNodes(newNodes);
+      setEdges(edgesWithOffsetData);
+      console.log('✅ Sync complete');
+    } catch (error) {
+      console.error('❌ Error during sync:', error);
+    }
+  }, [graph, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, handleReconnectEdge, setNodes, setEdges]);
+
+  // Fit view when graph is initially loaded (e.g., from git repository)
+  // Track graph metadata to detect actual graph changes (not just re-renders)
+  const lastGraphMetadataRef = useRef<string>('');
+  
+  useEffect(() => {
+    console.log('📐 FitView effect triggered', { 
+      hasGraph: !!graph,
+      graphName: graph?.metadata?.name,
+      lastMetadata: lastGraphMetadataRef.current
     });
     
-    // Add edge width calculation to each edge
-    const edgesWithWidth = newEdges.map(edge => ({
-      ...edge,
-      data: {
-        ...edge.data,
-        calculateWidth: () => calculateEdgeWidth(edge, newEdges, newNodes)
-      }
-    }));
-    
-  // Calculate edge offsets for Sankey-style visualization
-  const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, newNodes, MAX_WIDTH);
-  
-  // Attach offsets to edge data for the ConversionEdge component
-  const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
-    ...edge,
-    data: {
-      ...edge.data,
-      sourceOffsetX: edge.sourceOffsetX,
-      sourceOffsetY: edge.sourceOffsetY,
-      targetOffsetX: edge.targetOffsetX,
-      targetOffsetY: edge.targetOffsetY,
-      scaledWidth: edge.scaledWidth
+    if (!graph) {
+      console.log('  ↳ No graph, skipping fitView');
+      return;
     }
-  }));
     
-    setNodes(newNodes);
-    setEdges(edgesWithOffsetData);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, calculateEdgeWidth, calculateEdgeOffsets]);
+    // Create a stable identifier for the graph using metadata
+    const graphId = graph.metadata?.name || JSON.stringify(graph).slice(0, 100);
+    console.log('  ↳ Current graphId:', graphId);
+    console.log('  ↳ Last graphId:', lastGraphMetadataRef.current);
+    
+    // Check if this is a different graph
+    if (graphId !== lastGraphMetadataRef.current) {
+      console.log('📊 New graph detected, will fit view');
+      lastGraphMetadataRef.current = graphId;
+      
+      // Wait for nodes to be rendered AND measured, then fit view
+      // Using requestAnimationFrame to ensure DOM is updated
+      requestAnimationFrame(() => {
+        console.log('  ↳ requestAnimationFrame fired, scheduling fitView...');
+        setTimeout(() => {
+          console.log('🎯 Fitting view NOW');
+          fitView({ padding: 0.15, duration: 800, maxZoom: 1.5 });
+        }, 500);
+      });
+    } else {
+      console.log('  ↳ Same graph, skipping fitView');
+    }
+  }, [graph, fitView]);
 
-  // Update edge widths when scaling mode changes
+  // Track node positions to detect when they change
+  const nodePositionsRef = useRef<string>('');
+  
+  // Update edge widths and offsets when scaling mode, what-if analysis, or node positions change
+  const edgeUpdateCountRef = useRef(0);
   useEffect(() => {
     if (edges.length === 0) return;
+    
+    // Create a key that includes node positions
+    const currentNodes = getNodes();
+    const nodePositionsKey = currentNodes.map(n => `${n.id}:${n.position.x.toFixed(0)},${n.position.y.toFixed(0)}`).join('|');
+    const updateKey = `${edgeScalingMode}-${whatIfAnalysis?.caseNodeId || ''}-${whatIfAnalysis?.selectedVariant || ''}-${nodePositionsKey}`;
+    
+    if (updateKey === lastEdgeScalingUpdateRef.current) {
+      return; // Skip if nothing relevant changed
+    }
+    lastEdgeScalingUpdateRef.current = updateKey;
+    
+    edgeUpdateCountRef.current++;
+    if (edgeUpdateCountRef.current > 10) {
+      console.warn('⚠️ Edge update loop detected (>10 updates). Stopping.');
+      return;
+    }
     
     // Force re-render of edges by updating their data and recalculating offsets
     setEdges(prevEdges => {
@@ -957,12 +1212,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         ...edge,
         data: {
           ...edge.data,
-          calculateWidth: () => calculateEdgeWidth(edge, prevEdges, nodes)
+          calculateWidth: () => calculateEdgeWidth(edge, prevEdges, currentNodes)
         }
       }));
       
       // Recalculate offsets for mass-based scaling modes
-      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodes, MAX_WIDTH);
+      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, currentNodes, MAX_WIDTH);
       
       // Attach offsets to edge data for the ConversionEdge component
       return edgesWithOffsets.map(edge => ({
@@ -977,30 +1232,25 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }
       }));
     });
-  }, [edgeScalingMode, calculateEdgeWidth, calculateEdgeOffsets, nodes]);
+    
+    // Reset counter after a delay
+    setTimeout(() => { edgeUpdateCountRef.current = 0; }, 1000);
+  }, [edgeScalingMode, whatIfAnalysis]);
   
   // Sync FROM ReactFlow TO graph when user makes changes in the canvas
   // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
   useEffect(() => {
     if (!graph) return;
-    if (isSyncingRef.current) {
-      console.log('Skipping ReactFlow->graph sync (isSyncingRef=true)');
-      return;
-    }
-    if (nodes.length === 0 && graph.nodes.length > 0) {
-      console.log('Skipping ReactFlow->graph sync (still initializing)');
-      return;
-    }
+    if (isSyncingRef.current) return;
+    if (nodes.length === 0 && graph.nodes.length > 0) return;
     
     const updatedGraph = fromFlow(nodes, edges, graph);
     if (updatedGraph) {
       const updatedJson = JSON.stringify(updatedGraph);
       if (updatedJson === lastSyncedGraphRef.current) {
-        console.log('Skipping ReactFlow->graph sync (no changes)');
         return;
       }
       
-      console.log('=== Syncing ReactFlow -> graph ===');
       isSyncingRef.current = true;
       lastSyncedGraphRef.current = updatedJson;
       setGraph(updatedGraph);
@@ -1167,7 +1417,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       newEdge.case_variant = variant.name;
       // Set p.mean to 1.0 for single-path case edges (default sub-routing)
       newEdge.p.mean = 1.0;
-      console.log('Created case edge with single variant:', newEdge);
+      // console.log('Created case edge with single variant:', newEdge);
     }
     
     nextGraph.edges.push(newEdge);
@@ -1269,12 +1519,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const selectedNodes = nodes.filter(n => n.selected);
         const selectedEdges = edges.filter(e => e.selected);
         
-        console.log('Delete key pressed, selected nodes:', selectedNodes.length, 'selected edges:', selectedEdges.length);
+        // console.log('Delete key pressed, selected nodes:', selectedNodes.length, 'selected edges:', selectedEdges.length);
         
         if (selectedNodes.length > 0 || selectedEdges.length > 0) {
           e.preventDefault();
           if (confirm(`Delete ${selectedNodes.length} node(s) and ${selectedEdges.length} edge(s)?`)) {
-            console.log('Calling deleteSelected');
+            // console.log('Calling deleteSelected');
             deleteSelected();
           }
         }
@@ -1342,38 +1592,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                              nodeRect.bottom < lassoRect.top || 
                              nodeRect.top > lassoRect.bottom);
           
-          console.log(`Node ${node.id}:`, {
-            nodeRect: {
-              left: nodeRect.left,
-              top: nodeRect.top,
-              right: nodeRect.right,
-              bottom: nodeRect.bottom
-            },
-            lassoRect: {
-              left: lassoRect.left,
-              top: lassoRect.top,
-              right: lassoRect.right,
-              bottom: lassoRect.bottom
-            },
-            intersects
-          });
+          // Node lasso selection check
 
           return intersects;
         });
 
-        console.log('Lasso selection:', {
-          lassoRect,
-          selectedNodes: selectedNodes.map(n => n.id),
-          allNodes: nodes.map(n => ({ id: n.id, position: n.position })),
-          screenCoords: {
-            start: { x: lassoStart.x, y: lassoStart.y },
-            end: { x: lassoEnd.x, y: lassoEnd.y }
-          },
-          flowCoords: {
-            start: { x: flowStartX, y: flowStartY },
-            end: { x: flowEndX, y: flowEndY }
-          }
-        });
+        // Lasso selection complete
 
         // Store the selected node IDs for persistence
         const selectedNodeIds = selectedNodes.map(n => n.id);
@@ -1430,12 +1654,72 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Function to find all edges that are part of paths between selected nodes
   const findPathEdges = useCallback((selectedNodes: any[], allEdges: any[]) => {
-    if (selectedNodes.length < 2) return new Set();
+    if (selectedNodes.length === 0) return new Set();
     
     const selectedNodeIds = selectedNodes.map(node => node.id);
     const pathEdges = new Set<string>();
     
-    // For each pair of selected nodes, find all paths between them
+    if (selectedNodes.length === 1) {
+      // Single node selected: recursively find upstream and downstream edges with decreasing intensity
+      const nodeId = selectedNodeIds[0];
+      const visitedNodes = new Set<string>();
+      const visitedEdges = new Set<string>();
+      const edgeDepths = new Map<string, number>(); // Track depth for each edge
+      
+      // Recursive function to find downstream edges (edges FROM current node)
+      const findDownstreamEdges = (currentNodeId: string, depth: number = 0) => {
+        if (visitedNodes.has(currentNodeId) || depth > 10) return; // Prevent infinite loops
+        
+        visitedNodes.add(currentNodeId);
+        
+        // Find all downstream edges (edges from this node)
+        const downstreamEdges = allEdges.filter(edge => edge.source === currentNodeId);
+        downstreamEdges.forEach(edge => {
+          if (!visitedEdges.has(edge.id)) {
+            visitedEdges.add(edge.id);
+            pathEdges.add(edge.id);
+            edgeDepths.set(edge.id, depth);
+            // Recursively follow the target node (downstream)
+            findDownstreamEdges(edge.target, depth + 1);
+          }
+        });
+      };
+      
+      // Recursive function to find upstream edges (edges TO current node)
+      const findUpstreamEdges = (currentNodeId: string, depth: number = 0) => {
+        if (visitedNodes.has(currentNodeId) || depth > 10) return; // Prevent infinite loops
+        
+        visitedNodes.add(currentNodeId);
+        
+        // Find all upstream edges (edges to this node)
+        const upstreamEdges = allEdges.filter(edge => edge.target === currentNodeId);
+        upstreamEdges.forEach(edge => {
+          if (!visitedEdges.has(edge.id)) {
+            visitedEdges.add(edge.id);
+            pathEdges.add(edge.id);
+            edgeDepths.set(edge.id, depth);
+            // Recursively follow the source node (upstream)
+            findUpstreamEdges(edge.source, depth + 1);
+          }
+        });
+      };
+      
+      // Find downstream edges (logical flow direction)
+      findDownstreamEdges(nodeId);
+      
+      // Reset visited nodes for upstream traversal
+      visitedNodes.clear();
+      visitedEdges.clear();
+      
+      // Find upstream edges (logical antecedent direction)
+      findUpstreamEdges(nodeId);
+      
+      // Store edge depths for intensity calculation
+      (pathEdges as any).edgeDepths = edgeDepths;
+      return pathEdges;
+    }
+    
+    // Multiple nodes selected: find all paths between them (existing logic)
     for (let i = 0; i < selectedNodeIds.length; i++) {
       for (let j = i + 1; j < selectedNodeIds.length; j++) {
         const sourceId = selectedNodeIds[i];
@@ -1502,19 +1786,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const pathEdges = findPathEdges(selectedNodesForAnalysis, edges);
     
     // Debug logging
-    if (selectedNodesForAnalysis.length >= 2) {
-      console.log('Selected nodes:', selectedNodesForAnalysis.map(n => n.id));
-      console.log('Highlighted edges:', Array.from(pathEdges));
+    if (selectedNodesForAnalysis.length >= 1) {
+      // console.log('Selected nodes:', selectedNodesForAnalysis.map(n => n.id));
+      // console.log('Highlighted edges:', Array.from(pathEdges));
     }
     
     setEdges(prevEdges => 
-      prevEdges.map(edge => ({
-        ...edge,
-        data: {
-          ...edge.data,
-          isHighlighted: pathEdges.has(edge.id)
-        }
-      }))
+      prevEdges.map(edge => {
+        const isHighlighted = pathEdges.has(edge.id);
+        const edgeDepths = (pathEdges as any).edgeDepths;
+        const depth = edgeDepths ? edgeDepths.get(edge.id) : 0;
+        
+        return {
+          ...edge,
+          data: {
+            ...edge.data,
+            isHighlighted,
+            highlightDepth: isHighlighted ? depth : undefined
+          }
+        };
+      })
     );
   }, [selectedNodesForAnalysis, setEdges, findPathEdges, edges]);
 
@@ -1766,17 +2057,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Handle selection changes
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: any) => {
-    console.log('Selection changed:', { 
-      nodes: selectedNodes.map(n => n.id), 
-      edges: selectedEdges.map(e => e.id) 
-    });
+    // Selection changed
     
     // Update selected nodes for analysis
     setSelectedNodesForAnalysis(selectedNodes);
     
     // Don't clear selection if we just finished a lasso selection
     if (isLassoSelecting) {
-      console.log('Ignoring selection change during lasso selection');
+      // console.log('Ignoring selection change during lasso selection');
       return;
     }
     
@@ -1834,6 +2122,115 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 50);
   }, [graph, setGraph, generateSlugFromLabel, generateUniqueSlug, getAllExistingSlugs, onSelectedNodeChange]);
 
+  // Auto-layout functions
+  const handleApplyLayout = useCallback((direction: 'LR' | 'TB' | 'RL' | 'BT', selectedOnly: boolean) => {
+    if (!graph) return;
+    
+    // Save current state for undo (including graph state)
+    setLayoutHistory({ 
+      nodes: [...nodes], 
+      edges: [...edges],
+      graph: structuredClone(graph)
+    });
+    
+    // Get selected node IDs
+    const selectedNodeIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
+    
+    // Apply layout
+    const { nodes: newNodes, edges: newEdges } = applyAutoLayout(nodes, edges, {
+      direction,
+      selectedOnly,
+      selectedNodeIds
+    });
+    
+    // Update nodes and edges in ReactFlow
+    setNodes(newNodes);
+    setEdges(newEdges);
+    
+    // Update graph state: node positions AND edge handles (always re-route after layout)
+    const nextGraph = structuredClone(graph);
+    
+    // Update node positions
+    newNodes.forEach(node => {
+      const graphNode = nextGraph.nodes.find(n => n.id === node.id);
+      if (graphNode && graphNode.layout) {
+        graphNode.layout.x = node.position.x;
+        graphNode.layout.y = node.position.y;
+      }
+    });
+    
+    // Always re-route edges after layout for optimal routing
+    // console.log('Updating edge handles after layout');
+    edges.forEach(edge => {
+      const sourceNode = newNodes.find(n => n.id === edge.source);
+      const targetNode = newNodes.find(n => n.id === edge.target);
+      
+      if (sourceNode && targetNode) {
+        const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
+        
+        // Find the edge in the graph and update its handles
+        const graphEdge = nextGraph.edges.find(e => e.id === edge.id);
+        if (graphEdge) {
+          // console.log(`Re-routing edge ${edge.id}: ${graphEdge.fromHandle} -> ${sourceHandle}, ${graphEdge.toHandle} -> ${targetHandle}`);
+          graphEdge.fromHandle = sourceHandle;
+          graphEdge.toHandle = targetHandle;
+        }
+      }
+    });
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Update graph state with both position and re-route changes in one go
+    // Prevent sync loop by updating lastSyncedGraphRef immediately
+    lastSyncedGraphRef.current = JSON.stringify(nextGraph);
+    setGraph(nextGraph);
+    
+    // Show confirmation modal
+    setShowLayoutConfirmModal(true);
+    setShowLayoutDropdown(false);
+    
+    // Only fit view for full layouts, not partial (selected only)
+    if (!selectedOnly) {
+      setTimeout(() => {
+        fitView({ padding: 0.2, duration: 400 });
+      }, 100);
+    }
+  }, [nodes, edges, graph, setNodes, setEdges, setGraph, fitView, calculateOptimalHandles]);
+
+  const handleConfirmLayout = useCallback(() => {
+    // Clear history and close modal
+    setLayoutHistory(null);
+    setShowLayoutConfirmModal(false);
+  }, []);
+
+  const handleRevertLayout = useCallback(() => {
+    if (layoutHistory) {
+      // Restore nodes and edges
+      setNodes(layoutHistory.nodes);
+      setEdges(layoutHistory.edges);
+      // Restore graph state (this reverts any auto re-route changes too)
+      setGraph(layoutHistory.graph);
+    }
+    setLayoutHistory(null);
+    setShowLayoutConfirmModal(false);
+  }, [layoutHistory, setNodes, setEdges, setGraph]);
+
+  // Close layout dropdown when clicking outside
+  useEffect(() => {
+    if (!showLayoutDropdown) return;
+    
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-layout-dropdown]')) {
+        setShowLayoutDropdown(false);
+      }
+    };
+    
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [showLayoutDropdown]);
 
   if (!graph) {
     return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -1861,7 +2258,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         elementsSelectable
         panOnDrag={!isLassoSelecting}
         style={{ background: '#f8f9fa' }}
-        onInit={() => setTimeout(() => fitView(), 100)}
+        onInit={() => setTimeout(() => fitView({ padding: 0.1, duration: 600 }), 100)}
       >
         <Background />
         <Controls />
@@ -1908,10 +2305,170 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
+              marginRight: '8px',
             }}
           >
             Delete Selected
           </button>
+          
+          <div style={{ position: 'relative', display: 'inline-block' }} data-layout-dropdown>
+            <button
+              onClick={() => setShowLayoutDropdown(!showLayoutDropdown)}
+              style={{
+                padding: '8px 16px',
+                background: '#28a745',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              ⚡ Auto Layout
+              <span style={{ fontSize: '10px' }}>▼</span>
+            </button>
+            
+            {showLayoutDropdown && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                marginTop: '4px',
+                background: 'white',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                zIndex: 1000,
+                minWidth: '200px'
+              }}>
+                <div style={{ padding: '8px 0' }}>
+                  <div style={{
+                    padding: '4px 12px',
+                    fontSize: '11px',
+                    fontWeight: 'bold',
+                    color: '#666',
+                    textTransform: 'uppercase'
+                  }}>
+                    Layout All Nodes
+                  </div>
+                  <button
+                    onClick={() => handleApplyLayout('LR', false)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      background: 'transparent',
+                      border: 'none',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f5f5f5'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    → Left to Right
+                  </button>
+                  <button
+                    onClick={() => handleApplyLayout('TB', false)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      background: 'transparent',
+                      border: 'none',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f5f5f5'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    ↓ Top to Bottom
+                  </button>
+                  <button
+                    onClick={() => handleApplyLayout('RL', false)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      background: 'transparent',
+                      border: 'none',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f5f5f5'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    ← Right to Left
+                  </button>
+                  <button
+                    onClick={() => handleApplyLayout('BT', false)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      background: 'transparent',
+                      border: 'none',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f5f5f5'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    ↑ Bottom to Top
+                  </button>
+                  
+                  {nodes.some(n => n.selected) && (
+                    <>
+                      <div style={{
+                        borderTop: '1px solid #eee',
+                        margin: '4px 0',
+                        padding: '4px 12px',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        color: '#666',
+                        textTransform: 'uppercase'
+                      }}>
+                        Layout Selected Only
+                      </div>
+                      <button
+                        onClick={() => handleApplyLayout('LR', true)}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px',
+                          background: 'transparent',
+                          border: 'none',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          fontSize: '14px'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#f5f5f5'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        → Left to Right (Selected)
+                      </button>
+                      <button
+                        onClick={() => handleApplyLayout('TB', true)}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px',
+                          background: 'transparent',
+                          border: 'none',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          fontSize: '14px'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#f5f5f5'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        ↓ Top to Bottom (Selected)
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </Panel>
 
         {/* Selection Analysis Popup */}
@@ -2132,6 +2689,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           </div>
         </div>
       )}
+      
+      {/* Layout Confirmation Modal */}
+      <LayoutConfirmationModal
+        isOpen={showLayoutConfirmModal}
+        onConfirm={handleConfirmLayout}
+        onRevert={handleRevertLayout}
+      />
     </div>
   );
 }
