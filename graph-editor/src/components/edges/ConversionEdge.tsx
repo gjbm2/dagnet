@@ -1,9 +1,12 @@
 import React, { useState, useCallback } from 'react';
+import ReactDOM from 'react-dom';
 import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
 import { useGraphStore } from '@/lib/useGraphStore';
+import Tooltip from '@/components/Tooltip';
 
 interface ConversionEdgeData {
   id: string;
+  slug?: string;
   probability: number;
   stdev?: number;
   locked?: boolean;
@@ -27,7 +30,7 @@ interface ConversionEdgeData {
   case_id?: string; // Reference to parent case node
   onUpdate: (id: string, data: Partial<ConversionEdgeData>) => void;
   onDelete: (id: string) => void;
-  onReconnect?: (id: string, newSource?: string, newTarget?: string) => void;
+  onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void;
   onDoubleClick?: (id: string, field: string) => void;
   onSelect?: (id: string) => void;
   calculateWidth?: () => number;
@@ -37,6 +40,7 @@ interface ConversionEdgeData {
   targetOffsetY?: number;
   scaledWidth?: number;
   isHighlighted?: boolean;
+  highlightDepth?: number;
 }
 
 export default function ConversionEdge({
@@ -53,7 +57,70 @@ export default function ConversionEdge({
   target,
 }: EdgeProps<ConversionEdgeData>) {
   const [showContextMenu, setShowContextMenu] = useState(false);
-  const { deleteElements, setEdges, getNodes } = useReactFlow();
+  const [isDraggingSource, setIsDraggingSource] = useState(false);
+  const [isDraggingTarget, setIsDraggingTarget] = useState(false);
+  const [dragPosition, setDragPosition] = useState<{ x: number; y: number } | null>(null);
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [adjustedLabelPosition, setAdjustedLabelPosition] = useState<{ x: number; y: number } | null>(null);
+
+  // Generate tooltip content
+  const getTooltipContent = () => {
+    if (!data) return 'No data available';
+    
+    const lines: string[] = [];
+    
+    // Edge slug (more useful than UUID)
+    if (data.slug) {
+      lines.push(`Edge: ${data.slug}`);
+    }
+    
+    // Probability info
+    lines.push(`Probability: ${(data.probability * 100).toFixed(1)}%`);
+    if (data.stdev) {
+      lines.push(`Std Dev: ${(data.stdev * 100).toFixed(1)}%`);
+    }
+    
+    // Case edge specific info - this is the key info for case edges
+    if (data.case_variant) {
+      lines.push(`\nCase Variant: ${data.case_variant}`);
+      if (data.case_id) {
+        lines.push(`Case ID: ${data.case_id}`);
+      }
+    }
+    
+    // Description
+    if (data.description) {
+      lines.push(`\nDescription: ${data.description}`);
+    }
+    
+    // Costs
+    if (data.costs) {
+      lines.push('\nCosts:');
+      if (data.costs.monetary) {
+        const currency = data.costs.monetary.currency || 'USD';
+        lines.push(`  Monetary: ${data.costs.monetary.value} ${currency}`);
+        if (data.costs.monetary.stdev) {
+          lines.push(`    (±${data.costs.monetary.stdev} ${currency})`);
+        }
+      }
+      if (data.costs.time) {
+        const units = data.costs.time.units || 'minutes';
+        lines.push(`  Time: ${data.costs.time.value} ${units}`);
+        if (data.costs.time.stdev) {
+          lines.push(`    (±${data.costs.time.stdev} ${units})`);
+        }
+      }
+    }
+    
+    // Weight default
+    if (data.weight_default !== undefined) {
+      lines.push(`\nDefault Weight: ${data.weight_default}`);
+    }
+    
+    return lines.join('\n');
+  };
+  const { deleteElements, setEdges, getNodes, screenToFlowPosition } = useReactFlow();
   const { whatIfAnalysis } = useGraphStore();
   
   // Get variant weight for case edges (respecting what-if analysis)
@@ -79,7 +146,6 @@ export default function ConversionEdge({
   const variantWeight = getVariantWeight();
   const isCaseEdge = data?.case_id || data?.case_variant;
 
-
   // Apply offsets to source and target positions for Sankey-style visualization
   const sourceOffsetX = data?.sourceOffsetX || 0;
   const sourceOffsetY = data?.sourceOffsetY || 0;
@@ -91,10 +157,6 @@ export default function ConversionEdge({
   const adjustedTargetX = targetX + targetOffsetX;
   const adjustedTargetY = targetY + targetOffsetY;
 
-  // Debug logging for offset application
-  if (Math.abs(sourceOffsetX) > 0.1 || Math.abs(sourceOffsetY) > 0.1 || Math.abs(targetOffsetX) > 0.1 || Math.abs(targetOffsetY) > 0.1) {
-    console.log(`Edge ${id}: source offset=(${sourceOffsetX.toFixed(1)}, ${sourceOffsetY.toFixed(1)}), target offset=(${targetOffsetX.toFixed(1)}, ${targetOffsetY.toFixed(1)})`);
-  }
 
 
   const [edgePath, labelX, labelY] = getBezierPath({
@@ -106,7 +168,7 @@ export default function ConversionEdge({
     targetPosition,
   });
 
-  // Helper function to get point on Bézier curve at parameter t
+  // Helper function to get point on Bézier curve at parameter t (for label positioning)
   const getBezierPoint = (t: number, sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number) => {
     const mt = 1 - t;
     const mt2 = mt * mt;
@@ -168,7 +230,7 @@ export default function ConversionEdge({
       const L = pathLength;
       const L_half = L / 2;
       
-      console.log(`Edge ${id}: L=${L.toFixed(1)}px, L/2=${L_half.toFixed(1)}px, excludePixels=${excludePixels}px`);
+      // Arrow calculation
       
       // Helper function to find t value for a given arc length distance
       const findTForArcLength = (targetLength: number): number => {
@@ -229,7 +291,7 @@ export default function ConversionEdge({
         n++;
       }
       
-      console.log(`Edge ${id}: placed ${positions.length} arrows`);
+      // Arrow placement complete
       
       // Helper function to calculate point and angle on curve
       function calculatePointOnCurve(t: number, sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number, lerp: (a: number, b: number, tt: number) => number) {
@@ -312,16 +374,193 @@ export default function ConversionEdge({
     }
   }, [edgePath, adjustedTargetX, adjustedTargetY]);
 
+  // Collision detection and avoidance for edge labels
+  const { getEdges } = useReactFlow();
+  
+  React.useEffect(() => {
+    // Debounce collision detection to avoid excessive recalculations
+    const timeoutId = setTimeout(() => {
+      const otherEdges = getEdges().filter(e => e.id !== id);
+      const nodes = getNodes();
 
+      // Extract Bézier parameters from this edge's path
+      const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+      if (!nums || nums.length < 8) {
+        setAdjustedLabelPosition(null);
+        return;
+      }
+      const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
 
+      // Try different positions along the curve
+      const candidatePositions = [0.5, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7, 0.25, 0.75];
+      const labelWidth = 60; // Approximate label width
+      const labelHeight = 30; // Approximate label height
+      
+      // Collision weights (higher = worse)
+      const LABEL_COLLISION_WEIGHT = 100;  // Highest priority: avoid other labels
+      const NODE_COLLISION_WEIGHT = 10;    // Second priority: avoid nodes
+      const EDGE_COLLISION_WEIGHT = 1;     // Lowest priority: avoid edge paths
+      
+      // Function to check if two rectangles overlap
+      const rectanglesOverlap = (x1: number, y1: number, w1: number, h1: number,
+                                  x2: number, y2: number, w2: number, h2: number): boolean => {
+        return !(x1 + w1 / 2 < x2 - w2 / 2 || 
+                 x1 - w1 / 2 > x2 + w2 / 2 || 
+                 y1 + h1 / 2 < y2 - h2 / 2 || 
+                 y1 - h1 / 2 > y2 + h2 / 2);
+      };
+      
+      // Function to check if a label position collides with other edge labels
+      const checkLabelCollisions = (lx: number, ly: number): number => {
+        let collisions = 0;
+        for (const edge of otherEdges) {
+          // Get the label element for this edge
+          const labelElements = document.querySelectorAll(`[style*="translate(${edge.id}"]`);
+          for (const labelEl of Array.from(labelElements)) {
+            const rect = (labelEl as HTMLElement).getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              // Convert screen coordinates to flow coordinates (approximate)
+              if (rectanglesOverlap(lx, ly, labelWidth, labelHeight, 
+                                   rect.left + rect.width / 2, rect.top + rect.height / 2, 
+                                   rect.width, rect.height)) {
+                collisions++;
+              }
+            }
+          }
+        }
+        return collisions * LABEL_COLLISION_WEIGHT;
+      };
+      
+      // Function to check if a label position collides with nodes
+      const checkNodeCollisions = (lx: number, ly: number): number => {
+        let collisions = 0;
+        for (const node of nodes) {
+          const nodeWidth = (node.data as any)?.type === 'case' ? 96 : 120;
+          const nodeHeight = (node.data as any)?.type === 'case' ? 96 : 120;
+          const nodeX = node.position.x + nodeWidth / 2;
+          const nodeY = node.position.y + nodeHeight / 2;
+          
+          if (rectanglesOverlap(lx, ly, labelWidth, labelHeight, 
+                               nodeX, nodeY, nodeWidth, nodeHeight)) {
+            collisions++;
+          }
+        }
+        return collisions * NODE_COLLISION_WEIGHT;
+      };
+      
+      // Function to check if a label position collides with an edge path
+      const checkEdgePathCollisions = (lx: number, ly: number): number => {
+        let collisions = 0;
+        for (const edge of otherEdges) {
+          const edgeElement = document.getElementById(edge.id);
+          if (edgeElement) {
+            const pathData = edgeElement.getAttribute('d');
+            if (pathData) {
+              const pathNums = pathData.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+              if (pathNums && pathNums.length >= 8) {
+                const [esx, esy, ec1x, ec1y, ec2x, ec2y, eex, eey] = pathNums.slice(0, 8).map(Number);
+                
+                // Check multiple points along the edge for intersection with label box
+                for (let t = 0; t <= 1; t += 0.1) {
+                  const point = getBezierPoint(t, esx, esy, ec1x, ec1y, ec2x, ec2y, eex, eey);
+                  
+                  if (
+                    point.x >= lx - labelWidth / 2 &&
+                    point.x <= lx + labelWidth / 2 &&
+                    point.y >= ly - labelHeight / 2 &&
+                    point.y <= ly + labelHeight / 2
+                  ) {
+                    collisions++;
+                    break; // One collision per edge is enough
+                  }
+                }
+              }
+            }
+          }
+        }
+        return collisions * EDGE_COLLISION_WEIGHT;
+      };
+
+      // Find position with lowest collision score
+      let bestPosition = { x: labelX, y: labelY };
+      let minScore = Infinity;
+
+      for (const t of candidatePositions) {
+        const point = getBezierPoint(t, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
+        
+        // Calculate weighted collision score
+        const labelCollisions = checkLabelCollisions(point.x, point.y);
+        const nodeCollisions = checkNodeCollisions(point.x, point.y);
+        const edgeCollisions = checkEdgePathCollisions(point.x, point.y);
+        const totalScore = labelCollisions + nodeCollisions + edgeCollisions;
+        
+        if (totalScore < minScore) {
+          minScore = totalScore;
+          bestPosition = point;
+        }
+        
+        // If we found a position with no collisions, use it
+        if (totalScore === 0) break;
+      }
+
+      // Only adjust if we found a better position (score improved)
+      const defaultScore = checkLabelCollisions(labelX, labelY) + 
+                          checkNodeCollisions(labelX, labelY) + 
+                          checkEdgePathCollisions(labelX, labelY);
+      
+      if (minScore < defaultScore && (bestPosition.x !== labelX || bestPosition.y !== labelY)) {
+        setAdjustedLabelPosition(bestPosition);
+      } else {
+        setAdjustedLabelPosition(null);
+      }
+    }, 100); // 100ms debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [edgePath, labelX, labelY, id, getEdges, getNodes]);
+
+  // Use adjusted position if available, otherwise use default
+  const finalLabelX = adjustedLabelPosition?.x ?? labelX;
+  const finalLabelY = adjustedLabelPosition?.y ?? labelY;
 
   // Edge color logic: purple for case edges, gray for normal, highlight for connected selected nodes
   const getEdgeColor = () => {
-    if (selected) return '#007bff';
-    if (data?.isHighlighted) return '#ff6b35'; // orange highlight for edges connecting selected nodes
+    if (selected) return '#007bff'; // bright blue for selections
+    if (data?.isHighlighted) {
+      // Calculate intensity based on depth (10% reduction per step)
+      const depth = data.highlightDepth || 0;
+      const intensity = Math.max(0.1, 1 - (depth * 0.1)); // Minimum 10% intensity
+      
+      // Get the base color for this edge type
+      let baseColor = '#999'; // default gray
+      if (data?.probability === undefined || data?.probability === null) {
+        baseColor = '#ff6b6b';
+      } else if (isCaseEdge) {
+        baseColor = '#C4B5FD'; // purple-300 for case edges
+      }
+      
+      // Blend dark grey highlight with base color based on intensity
+      const highlightColor = { r: 51, g: 51, b: 51 }; // 80% dark grey (#333333)
+      const baseColorRgb = hexToRgb(baseColor);
+      
+      const blendedR = Math.round(highlightColor.r * intensity + baseColorRgb.r * (1 - intensity));
+      const blendedG = Math.round(highlightColor.g * intensity + baseColorRgb.g * (1 - intensity));
+      const blendedB = Math.round(highlightColor.b * intensity + baseColorRgb.b * (1 - intensity));
+      
+      return `rgb(${blendedR}, ${blendedG}, ${blendedB})`;
+    }
     if (data?.probability === undefined || data?.probability === null) return '#ff6b6b';
     if (isCaseEdge) return '#C4B5FD'; // purple-300 for case edges
-    return '#999'; // gray for normal edges
+        return '#b3b3b3'; // 15% lighter gray for normal edges
+  };
+
+  // Helper function to convert hex to RGB
+  const hexToRgb = (hex: string) => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+      r: parseInt(result[1], 16),
+      g: parseInt(result[2], 16),
+      b: parseInt(result[3], 16)
+    } : { r: 153, g: 153, b: 153 }; // fallback to gray
   };
 
   const handleDelete = useCallback(() => {
@@ -367,6 +606,115 @@ export default function ConversionEdge({
     setShowContextMenu(false);
   }, [data, id, target]);
 
+  // Handle source handle drag
+  const handleSourceMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Use the mouse position directly - this avoids coordinate system issues
+    const mouseX = e.clientX;
+    const mouseY = e.clientY;
+    
+    // Source handle mousedown
+    
+    setIsDraggingSource(true);
+    setDragPosition({ x: mouseX, y: mouseY });
+  }, []);
+
+  // Handle target handle drag
+  const handleTargetMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Use the mouse position directly - this avoids coordinate system issues
+    const mouseX = e.clientX;
+    const mouseY = e.clientY;
+    
+    // Target handle mousedown
+    
+    setIsDraggingTarget(true);
+    setDragPosition({ x: mouseX, y: mouseY });
+  }, []);
+
+  // Handle mouse move during drag
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (isDraggingSource || isDraggingTarget) {
+      e.preventDefault();
+      const newPos = { x: e.clientX, y: e.clientY };
+      // Mouse move
+      setDragPosition(newPos);
+    }
+  }, [isDraggingSource, isDraggingTarget]);
+
+  // Handle mouse up to complete drag
+  const handleMouseUp = useCallback((e: MouseEvent) => {
+    if (isDraggingSource || isDraggingTarget) {
+      // Convert screen position to flow position
+      const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      
+      // Find the node at this position
+      const nodes = getNodes();
+      const targetNode = nodes.find(node => {
+        const nodeX = node.position.x;
+        const nodeY = node.position.y;
+        const nodeWidth = 120; // Standard node width (adjust for case nodes if needed)
+        const nodeHeight = 120; // Standard node height
+        
+        return (
+          flowPos.x >= nodeX &&
+          flowPos.x <= nodeX + nodeWidth &&
+          flowPos.y >= nodeY &&
+          flowPos.y <= nodeY + nodeHeight
+        );
+      });
+
+      if (targetNode && data?.onReconnect) {
+        // Calculate which face of the node we're closest to
+        const nodeX = targetNode.position.x;
+        const nodeY = targetNode.position.y;
+        const nodeWidth = 120;
+        const nodeHeight = 120;
+        
+        // Calculate relative position within the node (0 to 1)
+        const relX = (flowPos.x - nodeX) / nodeWidth;
+        const relY = (flowPos.y - nodeY) / nodeHeight;
+        
+        // Determine which handle based on which edge of the node is closest
+        const distToLeft = relX;
+        const distToRight = 1 - relX;
+        const distToTop = relY;
+        const distToBottom = 1 - relY;
+        
+        const minDist = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+        
+        let targetHandle: string;
+        if (minDist === distToLeft) {
+          targetHandle = 'left';
+        } else if (minDist === distToRight) {
+          targetHandle = 'right';
+        } else if (minDist === distToTop) {
+          targetHandle = 'top';
+        } else {
+          targetHandle = 'bottom';
+        }
+        
+        // Drop position analysis complete
+        
+        if (isDraggingSource) {
+          // Reconnecting source
+          data.onReconnect(id, targetNode.id, undefined, undefined, targetHandle);
+        } else if (isDraggingTarget) {
+          // Reconnecting target
+          data.onReconnect(id, undefined, targetNode.id, targetHandle, undefined);
+        }
+      }
+
+      setIsDraggingSource(false);
+      setIsDraggingTarget(false);
+      setDragPosition(null);
+    }
+  }, [isDraggingSource, isDraggingTarget, screenToFlowPosition, getNodes, data, id, source, target]);
+
   // Close context menu when clicking elsewhere
   React.useEffect(() => {
     const handleClickOutside = () => setShowContextMenu(false);
@@ -375,6 +723,18 @@ export default function ConversionEdge({
       return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [showContextMenu]);
+
+  // Add global mouse event listeners for dragging
+  React.useEffect(() => {
+    if (isDraggingSource || isDraggingTarget) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDraggingSource, isDraggingTarget, handleMouseMove, handleMouseUp]);
 
   return (
     <>
@@ -456,7 +816,7 @@ export default function ConversionEdge({
         <div
           style={{
             position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY}px)`,
             background: selected ? '#007bff' : 'rgba(255, 255, 255, 0.85)',
             color: selected ? '#fff' : '#333',
             padding: '4px 8px',
@@ -468,9 +828,17 @@ export default function ConversionEdge({
             minWidth: '40px',
             textAlign: 'center',
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            pointerEvents: 'auto',
           }}
           onDoubleClick={handleDoubleClick}
-          title="Double-click to edit probability in properties panel"
+          onMouseEnter={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
+            setShowTooltip(true);
+          }}
+          onMouseLeave={() => {
+            setShowTooltip(false);
+          }}
         >
           <div style={{ textAlign: 'center' }}>
             {(data?.probability === undefined || data?.probability === null) ? (
@@ -547,70 +915,126 @@ export default function ConversionEdge({
             )}
           </div>
         </div>
+        {selected && (
+          <>
+              {/* Delete button */}
+              <div
+              style={{
+                position: 'absolute',
+                transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY + 20}px)`,
+                background: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: '50%',
+                width: '16px',
+                height: '16px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000,
+              }}
+              onClick={handleDelete}
+              title="Delete edge"
+            >
+              ×
+            </div>
+            
+            {/* Draggable source handle */}
+            <div
+              style={{
+                position: 'absolute',
+                transform: `translate(-50%, -50%) translate(${adjustedSourceX}px,${adjustedSourceY}px)`,
+                width: '12px',
+                height: '12px',
+                background: '#007bff',
+                border: '2px solid #fff',
+                borderRadius: '50%',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                cursor: 'grab',
+                zIndex: 1001,
+                transition: 'all 0.2s ease',
+                pointerEvents: 'auto',
+                visibility: isDraggingSource ? 'hidden' : 'visible',
+              }}
+              onMouseDown={handleSourceMouseDown}
+              title="Drag to reconnect source"
+            />
+            
+            {/* Draggable target handle */}
+            <div
+              style={{
+                position: 'absolute',
+                transform: `translate(-50%, -50%) translate(${adjustedTargetX}px,${adjustedTargetY}px)`,
+                width: '12px',
+                height: '12px',
+                background: '#28a745',
+                border: '2px solid #fff',
+                borderRadius: '50%',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                cursor: 'grab',
+                zIndex: 1001,
+                transition: 'all 0.2s ease',
+                pointerEvents: 'auto',
+                visibility: isDraggingTarget ? 'hidden' : 'visible',
+              }}
+              onMouseDown={handleTargetMouseDown}
+              title="Drag to reconnect target"
+            />
+          </>
+        )}
       </EdgeLabelRenderer>
-      
-      {selected && (
-        <>
-          {/* Delete button */}
-          <div
-            style={{
-              position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY + 20}px)`,
-              background: '#dc3545',
-              color: 'white',
-              border: 'none',
-              borderRadius: '50%',
-              width: '16px',
-              height: '16px',
-              cursor: 'pointer',
-              fontSize: '10px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              zIndex: 1000,
-            }}
-            onClick={handleDelete}
-            title="Delete edge"
-          >
-            ×
-          </div>
-          
-          {/* Draggable source handle */}
-          <div
-            style={{
-              position: 'absolute',
-              left: adjustedSourceX - 6,
-              top: adjustedSourceY - 6,
-              width: '12px',
-              height: '12px',
-              background: '#007bff',
-              border: '2px solid #fff',
-              borderRadius: '50%',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-              cursor: 'grab',
-              zIndex: 1000,
-            }}
-            title="Drag to reconnect source"
-          />
-          
-          {/* Draggable target handle */}
-          <div
-            style={{
-              position: 'absolute',
-              left: adjustedTargetX - 6,
-              top: adjustedTargetY - 6,
-              width: '12px',
-              height: '12px',
-              background: '#28a745',
-              border: '2px solid #fff',
-              borderRadius: '50%',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-              cursor: 'grab',
-              zIndex: 1000,
-            }}
-            title="Drag to reconnect target"
-          />
-        </>
+
+      {/* Dragging handles - rendered as portal to avoid coordinate system issues */}
+      {(isDraggingSource || isDraggingTarget) && dragPosition && ReactDOM.createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: `${dragPosition.x}px`,
+            top: `${dragPosition.y}px`,
+            transform: 'translate(-50%, -50%) scale(1.2)',
+            width: '12px',
+            height: '12px',
+            background: isDraggingSource ? '#0056b3' : '#1e7e34',
+            border: '2px solid #fff',
+            borderRadius: '50%',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.3)',
+            cursor: 'grabbing',
+            zIndex: 10000,
+            pointerEvents: 'none',
+          }}
+        />,
+        document.body
+      )}
+
+      {/* Edge tooltip - rendered as portal */}
+      {showTooltip && ReactDOM.createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: `${tooltipPos.x}px`,
+            top: `${tooltipPos.y}px`,
+            transform: 'translate(-50%, -100%)',
+            marginTop: '-8px',
+            background: '#1a1a1a',
+            color: '#ffffff',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            fontSize: '12px',
+            lineHeight: '1.4',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+            border: '1px solid #333',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxWidth: '300px',
+            zIndex: 10000,
+            pointerEvents: 'none',
+          }}
+        >
+          {getTooltipContent()}
+        </div>,
+        document.body
       )}
 
       {/* Context Menu */}
@@ -618,7 +1042,7 @@ export default function ConversionEdge({
         <div
           style={{
             position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY}px)`,
             background: '#fff',
             border: '1px solid #ddd',
             borderRadius: '4px',
