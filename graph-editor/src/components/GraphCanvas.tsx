@@ -2591,9 +2591,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('Triggering re-route after auto-layout');
       setShouldReroute(prev => prev + 1);
       
-      // Show confirmation modal after re-route completes
+      // Fit view and show confirmation modal after re-route completes
       setTimeout(() => {
-        setShowLayoutModal(true);
+        fitView({ padding: 0.1, duration: 400 });
+        
+        // Show modal after fitView animation
+        setTimeout(() => {
+          setShowLayoutModal(true);
+        }, 500);
       }, 200);
     }, 150);
   }, [graph, setGraph, nodes, edges]);
@@ -2814,7 +2819,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                         <strong>Path:</strong> {analysis.startNode?.data?.label || analysis.startNode?.id || 'Start'} → {analysis.node.data?.label || analysis.node.id}
                       </div>
                       
-                      {analysis.pathProbability > 0 ? (
+                      {(analysis.pathProbability !== undefined && analysis.pathProbability > 0) ? (
                         <>
                           <div style={{ marginBottom: '8px' }}>
                             <strong>Probability:</strong> {(analysis.pathProbability * 100).toFixed(2)}%

@@ -421,7 +421,7 @@ export default function WhatIfAnalysisControl() {
             </div>
           )}
 
-          {filteredCaseNodes.length === 0 && filteredConditionalEdges.length === 0 && (
+          {filteredCaseNodes.length === 0 && conditionalEdges.length === 0 && (
             <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
               {searchTerm ? 'No matching cases or conditional edges' : 'No cases or conditional edges in this graph'}
             </div>
