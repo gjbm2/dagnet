@@ -164,20 +164,22 @@ export default function ConditionalProbabilitiesSection({
                     >
                       <input
                         type="checkbox"
-                        checked={condition.condition.visited.includes(node.id)}
+                        checked={
+                          condition.condition.visited.includes(node.slug) || 
+                          condition.condition.visited.includes(node.id)
+                        }
                         onChange={(e) => {
                           const newConditions = [...conditions];
-                          const visited = [...condition.condition.visited];
+                          let visited = [...condition.condition.visited];
                           
                           if (e.target.checked) {
-                            if (!visited.includes(node.id)) {
-                              visited.push(node.id);
+                            // ALWAYS use slug for new entries (immutable references)
+                            if (!visited.includes(node.slug) && !visited.includes(node.id)) {
+                              visited.push(node.slug);
                             }
                           } else {
-                            const idx = visited.indexOf(node.id);
-                            if (idx > -1) {
-                              visited.splice(idx, 1);
-                            }
+                            // Remove both slug and ID (for backward compatibility)
+                            visited = visited.filter(ref => ref !== node.slug && ref !== node.id);
                           }
                           
                           newConditions[index] = {
