@@ -17,6 +17,7 @@ import ReactFlow, {
   ConnectionMode,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import dagre from 'dagre';
 
 import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
@@ -71,6 +72,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Trigger flag for re-routing
   const [shouldReroute, setShouldReroute] = useState(0);
+  
+  // Auto-layout state
+  const [preLayoutGraph, setPreLayoutGraph] = useState<any>(null);
+  const [showLayoutModal, setShowLayoutModal] = useState(false);
   
   // Custom onNodesChange handler to detect position changes for auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
@@ -2515,6 +2520,97 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 50);
   }, [graph, setGraph, generateSlugFromLabel, generateUniqueSlug, getAllExistingSlugs, onSelectedNodeChange]);
 
+  // Auto-layout function using dagre
+  const performAutoLayout = useCallback(() => {
+    if (!graph) return;
+    
+    // Store current graph for potential undo
+    setPreLayoutGraph(structuredClone(graph));
+    
+    // Determine which nodes to layout
+    const selectedNodes = nodes.filter(n => n.selected);
+    const nodesToLayout = selectedNodes.length > 0 ? selectedNodes : nodes;
+    const nodeIdsToLayout = new Set(nodesToLayout.map(n => n.id));
+    
+    if (nodesToLayout.length === 0) return;
+    
+    // Create a new dagre graph
+    const dagreGraph = new dagre.graphlib.Graph();
+    dagreGraph.setDefaultEdgeLabel(() => ({}));
+    
+    // Configure layout direction and spacing
+    dagreGraph.setGraph({ 
+      rankdir: 'LR', // Left to right
+      nodesep: 80,   // Horizontal spacing between nodes in same rank
+      ranksep: 200,  // Vertical spacing between ranks
+      marginx: 50,
+      marginy: 50,
+    });
+    
+    // Add nodes to dagre graph
+    nodesToLayout.forEach((node) => {
+      // Node dimensions (approximate)
+      const width = node.data?.type === 'case' ? 96 : 100;
+      const height = node.data?.type === 'case' ? 96 : 100;
+      dagreGraph.setNode(node.id, { width, height });
+    });
+    
+    // Add edges to dagre graph (only edges between nodes being laid out)
+    edges.forEach((edge) => {
+      if (nodeIdsToLayout.has(edge.source) && nodeIdsToLayout.has(edge.target)) {
+        dagreGraph.setEdge(edge.source, edge.target);
+      }
+    });
+    
+    // Run the layout algorithm
+    dagre.layout(dagreGraph);
+    
+    // Apply the layout to the graph
+    const nextGraph = structuredClone(graph);
+    dagreGraph.nodes().forEach((nodeId) => {
+      const dagreNode = dagreGraph.node(nodeId);
+      const graphNode = nextGraph.nodes.find((n: any) => n.id === nodeId);
+      
+      if (graphNode) {
+        if (!graphNode.layout) graphNode.layout = {};
+        // Dagre gives us center coordinates, so no need to adjust
+        graphNode.layout.x = dagreNode.x;
+        graphNode.layout.y = dagreNode.y;
+      }
+    });
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Update graph - this will trigger sync
+    setGraph(nextGraph);
+    
+    // ALWAYS trigger re-route after layout (regardless of autoReroute setting)
+    setTimeout(() => {
+      console.log('Triggering re-route after auto-layout');
+      setShouldReroute(prev => prev + 1);
+      
+      // Show confirmation modal after re-route completes
+      setTimeout(() => {
+        setShowLayoutModal(true);
+      }, 200);
+    }, 150);
+  }, [graph, setGraph, nodes, edges]);
+
+  // Handle layout confirmation
+  const handleKeepLayout = useCallback(() => {
+    setShowLayoutModal(false);
+    setPreLayoutGraph(null);
+  }, []);
+
+  const handleRevertLayout = useCallback(() => {
+    if (preLayoutGraph) {
+      setGraph(preLayoutGraph);
+      setPreLayoutGraph(null);
+    }
+    setShowLayoutModal(false);
+  }, [preLayoutGraph, setGraph]);
 
   if (!graph) {
     return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -2596,11 +2692,87 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
+              marginRight: '8px',
             }}
           >
             Delete Selected
           </button>
+          <button
+            onClick={performAutoLayout}
+            style={{
+              padding: '8px 16px',
+              background: '#28a745',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+            title={nodes.filter(n => n.selected).length > 0 ? "Auto-layout selected nodes" : "Auto-layout all nodes"}
+          >
+            🔧 Auto Layout
+          </button>
         </Panel>
+        
+        {/* Layout Confirmation Modal */}
+        {showLayoutModal && (
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+          }}>
+            <div style={{
+              background: 'white',
+              borderRadius: '8px',
+              padding: '24px',
+              maxWidth: '400px',
+              boxShadow: '0 4px 24px rgba(0, 0, 0, 0.3)',
+            }}>
+              <h3 style={{ margin: '0 0 16px 0', fontSize: '18px' }}>
+                Keep new layout?
+              </h3>
+              <p style={{ margin: '0 0 24px 0', color: '#666', fontSize: '14px' }}>
+                The graph has been automatically laid out. Would you like to keep this new layout or revert to the previous one?
+              </p>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={handleRevertLayout}
+                  style={{
+                    padding: '10px 20px',
+                    background: '#6c757d',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                  }}
+                >
+                  Revert
+                </button>
+                <button
+                  onClick={handleKeepLayout}
+                  style={{
+                    padding: '10px 20px',
+                    background: '#28a745',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                  }}
+                >
+                  Keep Layout
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Selection Analysis Popup */}
         {analysis && (
