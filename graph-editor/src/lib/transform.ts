@@ -17,6 +17,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       entry: n.entry,
       type: n.type, // Add node type (normal/case)
       case: n.case, // Add case data for case nodes
+      layout: n.layout, // Add layout object (includes color!)
       onUpdate: callbacks?.onUpdateNode,
       onDelete: callbacks?.onDeleteNode,
       onDoubleClick: callbacks?.onDoubleClickNode,
@@ -68,27 +69,36 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
       type: n.data.type, // Add node type (normal/case)
       case: n.data.case, // Add case data for case nodes
       layout: {
+        ...n.data.layout, // Preserve all layout properties (including color!)
         x: Math.round(n.position.x),
         y: Math.round(n.position.y),
       },
     })),
-    edges: edges.map((e) => ({
-      id: e.id,
-      slug: e.data?.slug,
-      from: e.source,
-      to: e.target,
-      fromHandle: e.sourceHandle,
-      toHandle: e.targetHandle,
-      p: { 
-        mean: e.data?.probability ?? 0.5,
-        stdev: e.data?.stdev,
-        locked: e.data?.locked,
-      },
-      description: e.data?.description ?? '',
-      costs: e.data?.costs,
-      weight_default: e.data?.weight_default,
-      case_variant: e.data?.case_variant, // Add case variant for case edges
-      case_id: e.data?.case_id, // Add case ID for case edges
-    })),
+    edges: edges.map((e) => {
+      // Find the original edge to preserve all its properties
+      const originalEdge = original.edges?.find((oe: any) => 
+        oe.id === e.id || `${oe.from}->${oe.to}` === e.id
+      );
+      
+      return {
+        ...originalEdge, // Preserve ALL original properties (including conditional_p, display)
+        id: e.id,
+        slug: e.data?.slug,
+        from: e.source,
+        to: e.target,
+        fromHandle: e.sourceHandle,
+        toHandle: e.targetHandle,
+        p: { 
+          mean: e.data?.probability ?? 0.5,
+          stdev: e.data?.stdev,
+          locked: e.data?.locked,
+        },
+        description: e.data?.description ?? '',
+        costs: e.data?.costs,
+        weight_default: e.data?.weight_default,
+        case_variant: e.data?.case_variant, // Add case variant for case edges
+        case_id: e.data?.case_id, // Add case ID for case edges
+      };
+    }),
   };
 }

@@ -136,8 +136,9 @@ export default function GitOperations({
       if (result.success) {
         showMessage('success', `Saved graph ${saveGraphName} to ${selectedBranch}`);
         setShowSaveDialog(false);
-        setSaveGraphName('');
-        setSaveCommitMessage('');
+        // Keep the values for next save instead of clearing them
+        // setSaveGraphName('');
+        // setSaveCommitMessage('');
         loadAvailableGraphs(); // Refresh the list
       } else {
         showMessage('error', result.error || 'Failed to save graph');

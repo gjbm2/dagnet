@@ -100,13 +100,34 @@
           "description": "Handle on target node where edge terminates"
         },
         "description": { "type": "string" },
-        "p": { "$ref": "#/$defs/ProbabilityParam" },
+        "p": { 
+          "$ref": "#/$defs/ProbabilityParam",
+          "$comment": "Base probability (fallback when no conditional probabilities match). For case edges, variant weight is used instead."
+        },
+        "conditional_p": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConditionalProbability" },
+          "description": "Optional array of conditional probabilities. Evaluated in order; first match wins. Falls back to p if no matches."
+        },
         "weight_default": {
           "type": "number",
           "minimum": 0,
           "description": "Used to distribute residual among free edges from the same source; proportional with others."
         },
-        "costs": { "$ref": "#/$defs/Costs" }
+        "costs": { "$ref": "#/$defs/Costs" },
+        "case_variant": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Name of the variant this edge represents (for case edges only)"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Reference to parent case node ID (for case edges only)"
+        },
+        "display": { 
+          "$ref": "#/$defs/EdgeDisplay",
+          "description": "Display parameters for editor (colors, grouping)"
+        }
       }
     },
 
@@ -117,7 +138,52 @@
       "properties": {
         "mean": { "type": "number", "minimum": 0, "maximum": 1 },
         "stdev": { "type": "number", "minimum": 0 },
-        "locked": { "type": "boolean", "default": false }
+        "locked": { "type": "boolean", "default": false },
+        "parameter_id": { "type": "string", "description": "Reference to parameter registry" }
+      }
+    },
+    
+    "Condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Condition for conditional probability. Currently supports simple 'visited' array. Future versions may add all_of, any_of, none_of.",
+      "required": ["visited"],
+      "properties": {
+        "visited": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "Array of node IDs that must have been visited for this condition to be met"
+        }
+      }
+    },
+    
+    "ConditionalProbability": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Conditional probability: probability that applies when specific condition is met",
+      "required": ["condition", "p"],
+      "properties": {
+        "condition": { "$ref": "#/$defs/Condition" },
+        "p": { "$ref": "#/$defs/ProbabilityParam" }
+      }
+    },
+    
+    "EdgeDisplay": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Display parameters for edges (not semantic, used by editor)",
+      "properties": {
+        "conditional_color": { 
+          "type": "string", 
+          "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+          "description": "User-selected color override for conditional edges"
+        },
+        "conditional_group": { 
+          "type": "string", 
+          "maxLength": 128,
+          "description": "Optional user-defined group for conditional color assignment"
+        }
       }
     },
 

@@ -1778,9 +1778,63 @@ function dagCalc(input, operation, startNode, endNode, customParams) {
 }
 
 /**
- * Helper function to get effective probability for an edge (handles case edges)
+ * Helper function to get effective probability for an edge (handles case edges and conditional probabilities)
+ * @param {Object} graph - The graph object
+ * @param {Object} edge - The edge object
+ * @param {Object} visitedNodes - Object tracking which nodes have been visited (keys are node IDs)
+ * @returns {number} The effective probability for this edge
  */
-function getEffectiveEdgeProbability(graph, edge) {
+function getEffectiveEdgeProbability(graph, edge, visitedNodes) {
+  visitedNodes = visitedNodes || {};
+  
+  // Check for conditional probabilities first
+  if (edge.conditional_p && edge.conditional_p.length > 0) {
+    // Evaluate conditions in order - first match wins
+    for (var i = 0; i < edge.conditional_p.length; i++) {
+      var conditionalProb = edge.conditional_p[i];
+      var condition = conditionalProb.condition;
+      
+      // Check if all nodes in the condition's visited array have been visited
+      var conditionMet = true;
+      if (condition.visited && condition.visited.length > 0) {
+        for (var j = 0; j < condition.visited.length; j++) {
+          if (!visitedNodes[condition.visited[j]]) {
+            conditionMet = false;
+            break;
+          }
+        }
+      }
+      
+      // If condition is met, use this conditional probability
+      if (conditionMet) {
+        var conditionalProbValue = conditionalProb.p && conditionalProb.p.mean !== undefined 
+          ? conditionalProb.p.mean 
+          : 0;
+          
+        // For case edges with conditional probability, multiply by variant weight
+        if (edge.case_id && edge.case_variant) {
+          var caseNode = graph.nodes.find(function(n) {
+            return n.type === 'case' && n.case && n.case.id === edge.case_id;
+          });
+          
+          if (caseNode && caseNode.case && caseNode.case.variants) {
+            var variant = caseNode.case.variants.find(function(v) {
+              return v.name === edge.case_variant;
+            });
+            
+            if (variant) {
+              return (variant.weight || 0) * conditionalProbValue;
+            }
+          }
+        }
+        
+        return conditionalProbValue;
+      }
+    }
+  }
+  
+  // No matching conditions, fall back to base probability
+  
   // For case edges, multiply variant weight by sub-route probability
   if (edge.case_id && edge.case_variant) {
     // Find the case node
@@ -1809,13 +1863,14 @@ function getEffectiveEdgeProbability(graph, edge) {
 
 /**
  * Calculate probability from start to any end node
+ * Now supports conditional probabilities based on visited nodes
  */
 function calculateProbability(graph, startNode, endNodes) {
   try {
     var visited = new Set();
     var probabilities = new Map();
     
-    function dfs(nodeId) {
+    function dfs(nodeId, visitedNodes) {
       if (visited.has(nodeId)) return probabilities.get(nodeId) || 0;
       if (endNodes.some(function(end) { return end.id === nodeId; })) {
         probabilities.set(nodeId, 1);
@@ -1825,14 +1880,21 @@ function calculateProbability(graph, startNode, endNodes) {
       visited.add(nodeId);
       var totalProb = 0;
       
+      // Mark this node as visited for conditional probability evaluation
+      var newVisitedNodes = {};
+      for (var key in visitedNodes) {
+        newVisitedNodes[key] = visitedNodes[key];
+      }
+      newVisitedNodes[nodeId] = true;
+      
       var outgoingEdges = graph.edges.filter(function(edge) {
         return edge.from === nodeId;
       });
       
       for (var i = 0; i < outgoingEdges.length; i++) {
         var edge = outgoingEdges[i];
-        var edgeProb = getEffectiveEdgeProbability(graph, edge);
-        var targetProb = dfs(edge.to);
+        var edgeProb = getEffectiveEdgeProbability(graph, edge, newVisitedNodes);
+        var targetProb = dfs(edge.to, newVisitedNodes);
         totalProb += edgeProb * targetProb;
       }
       
@@ -1840,7 +1902,8 @@ function calculateProbability(graph, startNode, endNodes) {
       return totalProb;
     }
     
-    return dfs(startNode.id);
+    // Start with empty visited nodes set
+    return dfs(startNode.id, {});
   } catch (e) {
     return "Error calculating probability: " + e.message;
   }
