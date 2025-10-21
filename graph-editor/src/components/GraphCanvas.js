@@ -1082,8 +1082,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             // Target handles: keep as-is ("top", "left", "right", "bottom")
             const sourceHandle = newConnection.sourceHandle ?
                 (newConnection.sourceHandle.endsWith('-out') ? newConnection.sourceHandle : `${newConnection.sourceHandle}-out`) :
-                null;
-            const targetHandle = newConnection.targetHandle || null;
+                undefined;
+            const targetHandle = newConnection.targetHandle || undefined;
             nextGraph.edges[edgeIndex].fromHandle = sourceHandle;
             nextGraph.edges[edgeIndex].toHandle = targetHandle;
             // Generate new ID based on new source/target
@@ -1218,7 +1218,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         // Check if an edge with this variant already exists between these nodes
         const existingVariantEdge = graph.edges.find(edge => edge.from === pendingConnection.source &&
             edge.to === pendingConnection.target &&
-            edge.case_id === sourceNode.case.id &&
+            edge.case_id === sourceNode.case?.id &&
             edge.case_variant === variant.name);
         if (existingVariantEdge) {
             alert(`An edge for variant "${variant.name}" already exists between these nodes.`);
@@ -1237,8 +1237,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             slug: edgeSlug,
             from: pendingConnection.source,
             to: pendingConnection.target,
-            fromHandle: pendingConnection.sourceHandle,
-            toHandle: pendingConnection.targetHandle,
+            fromHandle: pendingConnection.sourceHandle || undefined,
+            toHandle: pendingConnection.targetHandle || undefined,
             case_id: sourceNode.case.id,
             case_variant: variant.name,
             p: {

@@ -1296,9 +1296,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       const originalEdge = { ...nextGraph.edges[edgeIndex] };
       
-      // Update edge source/target and handles
-      nextGraph.edges[edgeIndex].from = newConnection.source;
-      nextGraph.edges[edgeIndex].to = newConnection.target;
+      // Update edge source/target and handles (source and target are guaranteed non-null by earlier check)
+      nextGraph.edges[edgeIndex].from = newConnection.source!;
+      nextGraph.edges[edgeIndex].to = newConnection.target!;
       
       // Map handle IDs to match our node component
       // Source handles: "top" -> "top-out", "left" -> "left-out", etc.
@@ -1492,10 +1492,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     nextGraph.edges.push({
       id: edgeId,
       slug: edgeSlug,
-      from: pendingConnection.source,
-      to: pendingConnection.target,
-      fromHandle: pendingConnection.sourceHandle,
-      toHandle: pendingConnection.targetHandle,
+      from: pendingConnection.source!,
+      to: pendingConnection.target!,
+      fromHandle: pendingConnection.sourceHandle || undefined,
+      toHandle: pendingConnection.targetHandle || undefined,
       case_id: sourceNode.case.id,
       case_variant: variant.name,
       p: {
