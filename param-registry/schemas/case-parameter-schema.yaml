@@ -174,3 +174,4 @@ properties:
         role:
           type: string
           enum: [owner, analyst, developer]
+

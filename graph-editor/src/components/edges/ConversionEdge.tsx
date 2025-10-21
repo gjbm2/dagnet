@@ -1,9 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
 import { useGraphStore } from '@/lib/useGraphStore';
 import Tooltip from '@/components/Tooltip';
 import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors';
+import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 
 interface ConversionEdgeData {
   id: string;
@@ -146,102 +147,25 @@ export default function ConversionEdge({
     return lines.join('\n');
   };
   const { deleteElements, setEdges, getNodes, screenToFlowPosition } = useReactFlow();
-  const { whatIfAnalysis, graph, whatIfOverrides } = useGraphStore();
+  const { whatIfAnalysis, graph } = useGraphStore();
+  // Subscribe to version directly to force re-renders
+  const overridesVersion = useGraphStore(state => state.whatIfOverrides._version);
   
-  // Get the full edge object to check for conditional probabilities
+  // Get the full edge object from graph (needed for tooltips and colors)
   const fullEdge = graph?.edges.find((e: any) => e.id === id);
   
-  // Check if this edge has a what-if conditional override active (explicit or implicit)
-  const getConditionalOverrideProb = () => {
-    if (!fullEdge || !fullEdge.conditional_p) {
-      return null;
-    }
-    
-    // Check for explicit what-if override first
-    if (whatIfOverrides?.conditionalOverrides) {
-      const override = whatIfOverrides.conditionalOverrides.get(id);
-      if (override) {
-        // Find the matching condition
-        for (const conditionalProb of fullEdge.conditional_p) {
-          const conditionMatches = conditionalProb.condition.visited.every(nodeId => override.has(nodeId)) &&
-                                  conditionalProb.condition.visited.length === override.size;
-          if (conditionMatches) {
-            return {
-              probability: conditionalProb.p.mean,
-              conditionNodes: Array.from(override).map(nid => {
-                const node = graph?.nodes.find(n => n.id === nid);
-                return node?.label || node?.slug || nid;
-              }),
-              isExplicit: true
-            };
-          }
-        }
-      }
-    }
-    
-    // Check for implicit auto-apply based on case node what-if
-    if (whatIfAnalysis?.caseNodeId && whatIfAnalysis?.selectedVariant) {
-      // Build set of implicitly visited nodes
-      const implicitlyVisitedNodes = new Set<string>();
-      const allEdges = getNodes().flatMap(n => 
-        getNodes().map(target => ({ source: n.id, target: target.id }))
-      );
-      
-      // This is a simplified check - in reality we'd need to look at actual edges from the graph
-      // For now, check if any conditional matches nodes that would be visited
-      if (graph?.edges) {
-        graph.edges.forEach((edge: any) => {
-          if (edge.case_id === whatIfAnalysis.caseNodeId && 
-              edge.case_variant === whatIfAnalysis.selectedVariant) {
-            implicitlyVisitedNodes.add(edge.to);
-          }
-        });
-      }
-      
-      // Check if any condition is satisfied by implicitly visited nodes
-      for (const conditionalProb of fullEdge.conditional_p) {
-        const allConditionsMet = conditionalProb.condition.visited.every(nodeId => 
-          implicitlyVisitedNodes.has(nodeId)
-        );
-        if (allConditionsMet && conditionalProb.condition.visited.length > 0) {
-          return {
-            probability: conditionalProb.p.mean,
-            conditionNodes: conditionalProb.condition.visited.map(nid => {
-              const node = graph?.nodes.find(n => n.id === nid);
-              return node?.label || node?.slug || nid;
-            }),
-            isExplicit: false // Auto-applied due to case what-if
-          };
-        }
-      }
-    }
-    
-    return null;
-  };
+  // UNIFIED: Compute effective probability using shared logic
+  const effectiveProbability = useMemo(() => {
+    const currentOverrides = useGraphStore.getState().whatIfOverrides;
+    return computeEffectiveEdgeProbability(graph, id, currentOverrides, whatIfAnalysis);
+  }, [graph, id, whatIfAnalysis, overridesVersion]);
   
-  const conditionalOverride = getConditionalOverrideProb();
+  // UNIFIED: Get what-if display info using shared logic
+  const whatIfDisplay = useMemo(() => {
+    const currentOverrides = useGraphStore.getState().whatIfOverrides;
+    return getEdgeWhatIfDisplay(graph, id, currentOverrides, whatIfAnalysis);
+  }, [graph, id, whatIfAnalysis, overridesVersion]);
   
-  // Get variant weight for case edges (respecting what-if analysis)
-  const getVariantWeight = () => {
-    if (data?.case_id && data?.case_variant) {
-      const nodes = getNodes();
-      const caseNode = nodes.find((n: any) => n.data?.case?.id === data.case_id);
-      if (caseNode) {
-        const variant = caseNode.data?.case?.variants?.find((v: any) => v.name === data.case_variant);
-        let weight = variant?.weight || 0;
-        
-        // Apply what-if analysis override
-        if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode.id) {
-          weight = data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
-        }
-        
-        return weight;
-      }
-    }
-    return null;
-  };
-  
-  const variantWeight = getVariantWeight();
   const isCaseEdge = data?.case_id || data?.case_variant;
 
   // Apply offsets to source and target positions for Sankey-style visualization
@@ -974,29 +898,29 @@ export default function ConversionEdge({
               }}>
                 ⚠️ No Probability
               </div>
-            ) : conditionalOverride ? (
-              // Conditional edge with what-if override: show conditional probability
+            ) : whatIfDisplay?.isOverridden ? (
+              // UNIFIED: Any what-if override (conditional or case variant)
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <div style={{ 
                   fontWeight: 'bold', 
                   fontSize: '11px',
-                  color: conditionalOverride.isExplicit ? '#10b981' : '#3b82f6',
-                  background: conditionalOverride.isExplicit ? '#f0fdf4' : '#eff6ff',
+                  color: whatIfDisplay.type === 'conditional' ? '#10b981' : '#8B5CF6',
+                  background: whatIfDisplay.type === 'conditional' ? '#f0fdf4' : '#F3F0FF',
                   padding: '2px 4px',
                   borderRadius: '2px'
                 }}>
-                  {Math.round((conditionalOverride.probability || 0) * 100)}%
+                  {Math.round((effectiveProbability || 0) * 100)}%
                 </div>
                 <div style={{ 
                   fontWeight: 'normal', 
                   fontSize: '9px',
                   color: '#666'
                 }}>
-                  {conditionalOverride.isExplicit ? '🔬 What-If' : '🔗 Auto'}
+                  {whatIfDisplay.displayLabel || '🔬 What-If'}
                 </div>
               </div>
-            ) : isCaseEdge && variantWeight !== null ? (
-              // Case edge: show variant weight (purple) and sub-route probability (gray)
+            ) : isCaseEdge ? (
+              // Case edge without override: show variant weight (purple) and sub-route probability (gray)
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <div style={{ 
                   fontWeight: 'bold', 
@@ -1006,19 +930,19 @@ export default function ConversionEdge({
                   padding: '2px 4px',
                   borderRadius: '2px'
                 }}>
-                  {Math.round(variantWeight * 100)}%
+                  {Math.round((effectiveProbability || 0) * 100)}%
                 </div>
                 <div style={{ 
                   fontWeight: 'bold', 
                   fontSize: '10px',
                   color: '#666'
                 }}>
-                  × {Math.round((data?.probability || 1.0) * 100)}%
+                  variant weight
                 </div>
               </div>
             ) : (
               <div style={{ fontWeight: 'bold' }}>
-                {Math.round((data?.probability || 0) * 100)}%
+                {Math.round((effectiveProbability || 0) * 100)}%
                 {data?.stdev && data.stdev > 0 && (
                   <span style={{ fontSize: '10px', color: '#666', marginLeft: '4px' }}>
                     ±{Math.round(data.stdev * 100)}%

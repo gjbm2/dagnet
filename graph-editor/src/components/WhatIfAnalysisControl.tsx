@@ -350,11 +350,25 @@ export default function WhatIfAnalysisControl() {
                       </div>
                     </div>
                     <select
-                      value={anyActive ? (
-                        whatIfOverrides?.conditionalOverrides?.get(group.edges[0].id) ? 
-                        Array.from(whatIfOverrides.conditionalOverrides.get(group.edges[0].id)!).join(',') : 
-                        ''
-                      ) : ''}
+                      value={(() => {
+                        if (!anyActive || !whatIfOverrides?.conditionalOverrides) return '';
+                        const override = whatIfOverrides.conditionalOverrides.get(group.edges[0].id);
+                        if (!override) return '';
+                        // The override contains IDs, need to find matching option
+                        // Match by comparing resolved IDs
+                        const overrideIds = Array.from(override).sort().join(',');
+                        const matchingCond = group.edges[0]?.conditional_p?.find(cond => {
+                          const condIds = cond.condition.visited.map(ref => {
+                            const nodeById = graph?.nodes.find(n => n.id === ref);
+                            if (nodeById) return nodeById.id;
+                            const nodeBySlug = graph?.nodes.find(n => n.slug === ref);
+                            if (nodeBySlug) return nodeBySlug.id;
+                            return ref;
+                          }).sort().join(',');
+                          return condIds === overrideIds;
+                        });
+                        return matchingCond ? matchingCond.condition.visited.join(',') : '';
+                      })()}
                       onChange={(e) => {
                         const value = e.target.value;
                         // Apply to ALL edges in the group
@@ -362,8 +376,19 @@ export default function WhatIfAnalysisControl() {
                           if (!value) {
                             setConditionalOverride(edge.id, null);
                           } else {
-                            const nodeIds = value.split(',');
-                            setConditionalOverride(edge.id, new Set(nodeIds));
+                            const nodeRefs = value.split(',');
+                            // Resolve all references (could be slugs or IDs) to actual IDs
+                            const resolvedIds = nodeRefs.map(ref => {
+                              // Try to find by ID first
+                              const nodeById = graph?.nodes.find(n => n.id === ref);
+                              if (nodeById) return nodeById.id;
+                              // Try by slug
+                              const nodeBySlug = graph?.nodes.find(n => n.slug === ref);
+                              if (nodeBySlug) return nodeBySlug.id;
+                              // Return as-is if not found
+                              return ref;
+                            });
+                            setConditionalOverride(edge.id, new Set(resolvedIds));
                           }
                         });
                       }}
