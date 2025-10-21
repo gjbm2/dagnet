@@ -72,10 +72,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Trigger flag for re-routing
   const [shouldReroute, setShouldReroute] = useState(0);
+  const [forceReroute, setForceReroute] = useState(false); // Force re-route once (for layout)
   
   // Auto-layout state
   const [preLayoutGraph, setPreLayoutGraph] = useState<any>(null);
   const [showLayoutModal, setShowLayoutModal] = useState(false);
+  const [layoutDirection, setLayoutDirection] = useState<'LR' | 'RL' | 'TB' | 'BT'>('LR');
   
   // Custom onNodesChange handler to detect position changes for auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
@@ -638,35 +640,47 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Auto re-route edges when nodes move
   const performAutoReroute = useCallback(() => {
-    if (!autoReroute || !graph) {
-      console.log('Auto re-route skipped:', { autoReroute, hasGraph: !!graph });
+    // Allow execution if autoReroute is enabled OR if forceReroute is true
+    if ((!autoReroute && !forceReroute) || !graph) {
+      console.log('Auto re-route skipped:', { autoReroute, forceReroute, hasGraph: !!graph });
       return;
     }
     
+    console.log('performAutoReroute executing:', { autoReroute, forceReroute });
+    
     const currentPositions: { [nodeId: string]: { x: number; y: number } } = {};
-    const movedNodes: string[] = [];
+    let movedNodes: string[] = [];
     
-    // Check which nodes have moved
-    nodes.forEach(node => {
-      const currentPos = { x: node.position.x, y: node.position.y };
-      const lastPos = lastNodePositionsRef.current[node.id];
+    // If forceReroute, re-route ALL edges
+    if (forceReroute) {
+      console.log('Force re-route: processing all nodes');
+      movedNodes = nodes.map(n => n.id);
+      nodes.forEach(node => {
+        currentPositions[node.id] = { x: node.position.x, y: node.position.y };
+      });
+    } else {
+      // Check which nodes have moved
+      nodes.forEach(node => {
+        const currentPos = { x: node.position.x, y: node.position.y };
+        const lastPos = lastNodePositionsRef.current[node.id];
+        
+        currentPositions[node.id] = currentPos;
+        
+        if (lastPos && (Math.abs(currentPos.x - lastPos.x) > 5 || Math.abs(currentPos.y - lastPos.y) > 5)) {
+          movedNodes.push(node.id);
+          console.log(`Node ${node.id} moved:`, { 
+            from: lastPos, 
+            to: currentPos, 
+            deltaX: currentPos.x - lastPos.x, 
+            deltaY: currentPos.y - lastPos.y 
+          });
+        }
+      });
       
-      currentPositions[node.id] = currentPos;
-      
-      if (lastPos && (Math.abs(currentPos.x - lastPos.x) > 5 || Math.abs(currentPos.y - lastPos.y) > 5)) {
-        movedNodes.push(node.id);
-        console.log(`Node ${node.id} moved:`, { 
-          from: lastPos, 
-          to: currentPos, 
-          deltaX: currentPos.x - lastPos.x, 
-          deltaY: currentPos.y - lastPos.y 
-        });
+      if (movedNodes.length === 0) {
+        console.log('No nodes moved, skipping re-route');
+        return;
       }
-    });
-    
-    if (movedNodes.length === 0) {
-      console.log('No nodes moved, skipping re-route');
-      return;
     }
     
     console.log('Moved nodes:', movedNodes);
@@ -715,7 +729,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     console.log('Updating graph with new handle positions');
     setGraph(nextGraph);
-  }, [autoReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
+  }, [autoReroute, forceReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
   
   // Reset position tracking and perform immediate re-route when autoReroute is toggled ON
   useEffect(() => {
@@ -745,17 +759,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Perform re-routing when shouldReroute flag changes (with small delay after node movement)
   useEffect(() => {
-    if (shouldReroute > 0 && autoReroute) {
-      console.log('Re-route triggered by flag change:', shouldReroute);
+    if ((shouldReroute > 0 && autoReroute) || forceReroute) {
+      console.log('Re-route triggered:', { shouldReroute, autoReroute, forceReroute });
       // Add a small delay to ensure node positions are fully updated
       const timeoutId = setTimeout(() => {
         console.log('Executing delayed re-route after node movement');
         performAutoReroute();
+        if (forceReroute) {
+          setForceReroute(false); // Reset force flag after execution
+        }
       }, 100); // 100ms delay after user finishes dragging
       
       return () => clearTimeout(timeoutId);
     }
-  }, [shouldReroute, autoReroute, performAutoReroute]);
+  }, [shouldReroute, autoReroute, forceReroute, performAutoReroute]);
   
   // Get all existing slugs (nodes and edges) for uniqueness checking
   const getAllExistingSlugs = useCallback((excludeId?: string) => {
@@ -2540,9 +2557,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Configure layout direction and spacing
     dagreGraph.setGraph({ 
-      rankdir: 'LR', // Left to right
-      nodesep: 80,   // Horizontal spacing between nodes in same rank
-      ranksep: 200,  // Vertical spacing between ranks
+      rankdir: layoutDirection, // User-selected direction
+      nodesep: 80,   // Spacing between nodes in same rank
+      ranksep: 200,  // Spacing between ranks
       marginx: 50,
       marginy: 50,
     });
@@ -2588,8 +2605,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // ALWAYS trigger re-route after layout (regardless of autoReroute setting)
     setTimeout(() => {
-      console.log('Triggering re-route after auto-layout');
-      setShouldReroute(prev => prev + 1);
+      console.log('Triggering FORCED re-route after auto-layout');
+      setForceReroute(true); // Force re-route even if autoReroute is off
       
       // Fit view and show confirmation modal after re-route completes
       setTimeout(() => {
@@ -2601,7 +2618,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }, 500);
       }, 200);
     }, 150);
-  }, [graph, setGraph, nodes, edges]);
+  }, [graph, setGraph, nodes, edges, layoutDirection, fitView]);
 
   // Handle layout confirmation
   const handleKeepLayout = useCallback(() => {
@@ -2702,6 +2719,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           >
             Delete Selected
           </button>
+          <select
+            value={layoutDirection}
+            onChange={(e) => setLayoutDirection(e.target.value as 'LR' | 'RL' | 'TB' | 'BT')}
+            style={{
+              padding: '8px 12px',
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              marginRight: '8px',
+              fontSize: '14px',
+            }}
+            title="Layout direction"
+          >
+            <option value="LR">Left → Right</option>
+            <option value="RL">Right → Left</option>
+            <option value="TB">Top → Bottom</option>
+            <option value="BT">Bottom → Top</option>
+          </select>
           <button
             onClick={performAutoLayout}
             style={{
@@ -2859,7 +2894,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                     )}
                   </div>
                   
-                  {analysis.pathProbability > 0 ? (
+                  {(analysis.pathProbability !== undefined && analysis.pathProbability > 0) ? (
                     <>
                       <div style={{ marginBottom: '8px' }}>
                         <strong>Probability:</strong> {(analysis.pathProbability * 100).toFixed(2)}%
@@ -2892,7 +2927,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                     <strong>Path:</strong> {analysis.nodeA.data?.label || analysis.nodeA.id} → {analysis.nodeB.data?.label || analysis.nodeB.id}
                   </div>
                   
-                  {analysis.pathProbability > 0 ? (
+                  {(analysis.pathProbability !== undefined && analysis.pathProbability > 0) ? (
                     <>
                       <div style={{ marginBottom: '8px' }}>
                         <strong>Probability:</strong> {(analysis.pathProbability * 100).toFixed(2)}%
