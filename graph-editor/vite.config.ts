@@ -14,5 +14,9 @@ export default defineConfig({
     watch: {
       include: ['src/**/*']
     }
+  },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true
   }
 });
