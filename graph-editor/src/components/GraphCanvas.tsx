@@ -275,34 +275,36 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [edgeScalingMode, logMassTransform]);
 
   // Calculate edge sort keys for Sankey stacking
-  // Use edge midpoint perpendicular coordinate - naturally accounts for both position and span
-  // Secondary: span (longer first for consistent ordering when midpoints are equal)
+  // Group edges by neighbor position, then stack longer edges on outside
   const getEdgeSortKey = useCallback((sourceNode: any, targetNode: any, face: string, isSourceFace: boolean = true) => {
-    if (!sourceNode || !targetNode) return [0, 0];
+    if (!sourceNode || !targetNode) return [0, 0, 0];
 
     const sourceX = sourceNode.position?.x || 0;
     const sourceY = sourceNode.position?.y || 0;
     const targetX = targetNode.position?.x || 0;
     const targetY = targetNode.position?.y || 0;
 
-    // Calculate midpoint of the edge (straight line approximation)
-    const midX = (sourceX + targetX) / 2;
-    const midY = (sourceY + targetY) / 2;
-
-    // Flow-axis span
+    // Calculate span along flow axis
     const span = (face === 'right' || face === 'left')
       ? Math.abs(targetX - sourceX)
       : Math.abs(targetY - sourceY);
 
-    // Perpendicular coordinate at edge midpoint
-    // Horizontal faces: sort by midpoint Y
-    // Vertical faces: sort by midpoint X
-    const midPerp = (face === 'right' || face === 'left') ? midY : midX;
+    // Get neighbor's perpendicular coordinate
+    // For source face: where are we going TO (target)?
+    // For target face: where are we coming FROM (source)?
+    const neighborPerp = (face === 'right' || face === 'left')
+      ? (isSourceFace ? targetY : sourceY)
+      : (isSourceFace ? targetX : sourceX);
 
-    // Return [primary, secondary]
-    // primary: midPerp ascending (edges with lower midpoints stack on top)
-    // secondary: -span (longer first for ties)
-    return [midPerp, -span];
+    // Return [primary, secondary, tertiary]
+    // Primary: Group by neighbor perpendicular position
+    // Secondary: Within group, longer edges first (on outside)
+    // Tertiary: For exact ties, use neighbor's flow-axis position for stability
+    const neighborFlow = (face === 'right' || face === 'left')
+      ? (isSourceFace ? targetX : sourceX)
+      : (isSourceFace ? targetY : sourceY);
+
+    return [neighborPerp, -span, neighborFlow];
   }, []);
 
   // Calculate edge offsets for Sankey-style visualization
@@ -365,7 +367,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return eSourceFace === sourceFace;
       });
 
-      // Sort edges from this face by neighbor perpendicular coord, then span
+      // Sort: group by target perp position, longer edges first within each group
       const sortedSourceEdges = [...sameFaceSourceEdges].sort((a, b) => {
         const aTarget = allNodes.find(n => n.id === a.target);
         const bTarget = allNodes.find(n => n.id === b.target);
@@ -374,9 +376,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const aKey = getEdgeSortKey(sourceNode, aTarget, sourceFace, true);
         const bKey = getEdgeSortKey(sourceNode, bTarget, sourceFace, true);
         
-        // Compare [primary (perp asc), secondary (-span desc)]
+        // Compare [primary, secondary, tertiary]
         if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        return aKey[1] - bKey[1];
+        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
+        return aKey[2] - bKey[2];
       });
 
       // Calculate total visual width of all edges on this face
@@ -432,7 +435,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return eTargetFace === targetFace;
       });
 
-      // Sort edges to this target face by neighbor perpendicular coord, then span
+      // Sort: group by source perp position, longer edges first within each group
       const sortedTargetEdges = [...sameFaceTargetEdges].sort((a, b) => {
         const aSource = allNodes.find(n => n.id === a.source);
         const bSource = allNodes.find(n => n.id === b.source);
@@ -441,9 +444,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const aKey = getEdgeSortKey(aSource, targetNode, targetFace, false);
         const bKey = getEdgeSortKey(bSource, targetNode, targetFace, false);
         
-        // Compare [primary (perp asc), secondary (-span desc)]
+        // Compare [primary, secondary, tertiary]
         if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        return aKey[1] - bKey[1];
+        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
+        return aKey[2] - bKey[2];
       });
 
       // Calculate total visual width of all edges on this target face
