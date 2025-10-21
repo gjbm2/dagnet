@@ -26,8 +26,77 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
     
     if (outgoingEdges.length === 0) continue;
 
+    // Check if this is a case node - validate by variant
+    const isCaseNode = node.type === 'case' && node.case;
+    if (isCaseNode) {
+      // Group edges by variant
+      const edgesByVariant = new Map<string, GraphEdge[]>();
+      for (const edge of outgoingEdges) {
+        if (edge.case_variant) {
+          if (!edgesByVariant.has(edge.case_variant)) {
+            edgesByVariant.set(edge.case_variant, []);
+          }
+          edgesByVariant.get(edge.case_variant)!.push(edge);
+        }
+      }
+      
+      // Validate base probability sum for each variant
+      for (const [variantName, variantEdges] of edgesByVariant) {
+        const variantProbSum = variantEdges.reduce((sum, edge) => sum + (edge.p?.mean ?? 0), 0);
+        if (Math.abs(variantProbSum - 1.0) > PROB_SUM_TOLERANCE) {
+          errors.push({
+            type: 'probability_sum',
+            nodeId: node.id,
+            condition: `variant_${variantName}`,
+            message: `Probability sum for variant "${variantName}" from case node "${node.slug || node.id}" is ${variantProbSum.toFixed(3)}, expected 1.0`,
+            sum: variantProbSum,
+          });
+        }
+        
+        // Also validate conditional probabilities for this variant
+        const conditions = collectUniqueConditions(variantEdges, graph.nodes);
+        for (const conditionNodeIdOrSlug of conditions) {
+          let conditionNode = graph.nodes.find(n => n.id === conditionNodeIdOrSlug);
+          if (!conditionNode) {
+            conditionNode = graph.nodes.find(n => n.slug === conditionNodeIdOrSlug);
+          }
+          if (!conditionNode) continue;
+          
+          const conditionNodeId = conditionNode.id;
+          
+          // Calculate conditional probability sum for this variant + condition
+          const condProbSum = variantEdges.reduce((sum, edge) => {
+            if (edge.conditional_p) {
+              for (const cp of edge.conditional_p) {
+                const resolvedConditionNodes = cp.condition.visited.map(ref => 
+                  resolveNodeReference(ref, graph.nodes) || ref
+                );
+                if (resolvedConditionNodes.every(nodeId => nodeId === conditionNodeId)) {
+                  return sum + (cp.p.mean ?? 0);
+                }
+              }
+            }
+            return sum + (edge.p?.mean ?? 0);
+          }, 0);
+          
+          if (Math.abs(condProbSum - 1.0) > PROB_SUM_TOLERANCE) {
+            errors.push({
+              type: 'probability_sum',
+              nodeId: node.id,
+              condition: conditionNodeId,
+              message: `Probability sum for variant "${variantName}" from case node "${node.slug || node.id}" when "${conditionNode.slug || conditionNodeId}" visited is ${condProbSum.toFixed(3)}, expected 1.0`,
+              sum: condProbSum,
+            });
+          }
+        }
+      }
+      
+      // Skip regular validation for case nodes
+      continue;
+    }
+
     // Collect all unique conditions referenced by these edges
-    const conditions = collectUniqueConditions(outgoingEdges);
+    const conditions = collectUniqueConditions(outgoingEdges, graph.nodes);
 
     // Validate base case (no conditions)
     const baseProbSum = calculateBaseProbabilitySum(outgoingEdges, graph.nodes);
@@ -42,18 +111,24 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
     }
 
     // Validate each condition
-    for (const conditionNodeId of conditions) {
-      // Validate that condition node exists
-      const conditionNode = graph.nodes.find(n => n.id === conditionNodeId);
+    for (const conditionNodeIdOrSlug of conditions) {
+      // Validate that condition node exists (try ID first, then slug)
+      let conditionNode = graph.nodes.find(n => n.id === conditionNodeIdOrSlug);
+      if (!conditionNode) {
+        conditionNode = graph.nodes.find(n => n.slug === conditionNodeIdOrSlug);
+      }
       if (!conditionNode) {
         errors.push({
           type: 'missing_node',
           nodeId: node.id,
-          condition: conditionNodeId,
-          message: `Condition references non-existent node: ${conditionNodeId}`,
+          condition: conditionNodeIdOrSlug,
+          message: `Condition references non-existent node: ${conditionNodeIdOrSlug}`,
         });
         continue;
       }
+      
+      // Use the actual node ID for further validation
+      const conditionNodeId = conditionNode.id;
 
       // Validate that condition node is upstream
       if (!isUpstream(conditionNodeId, node.id, graph)) {
@@ -107,16 +182,35 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
 }
 
 /**
- * Collect all unique node IDs referenced in conditions across edges
+ * Resolve a node reference (ID or slug) to a node ID
  */
-function collectUniqueConditions(edges: GraphEdge[]): Set<string> {
+function resolveNodeReference(nodeIdOrSlug: string, nodes: GraphNode[]): string | null {
+  // Try ID first
+  let node = nodes.find(n => n.id === nodeIdOrSlug);
+  if (node) return node.id;
+  
+  // Try slug
+  node = nodes.find(n => n.slug === nodeIdOrSlug);
+  if (node) return node.id;
+  
+  return null;
+}
+
+/**
+ * Collect all unique node IDs referenced in conditions across edges
+ * Resolves slugs to IDs for consistency
+ */
+function collectUniqueConditions(edges: GraphEdge[], nodes: GraphNode[]): Set<string> {
   const conditions = new Set<string>();
   
   for (const edge of edges) {
     if (edge.conditional_p) {
       for (const cp of edge.conditional_p) {
-        for (const nodeId of cp.condition.visited) {
-          conditions.add(nodeId);
+        for (const nodeIdOrSlug of cp.condition.visited) {
+          const resolvedId = resolveNodeReference(nodeIdOrSlug, nodes);
+          if (resolvedId) {
+            conditions.add(resolvedId);
+          }
         }
       }
     }
@@ -156,8 +250,11 @@ function calculateConditionalProbabilitySum(
     // Find matching conditional probability
     if (edge.conditional_p) {
       for (const cp of edge.conditional_p) {
-        // Check if all nodes in condition are in visitedNodes
-        const conditionMet = cp.condition.visited.every(nodeId => visitedNodes.includes(nodeId));
+        // Check if all nodes in condition are in visitedNodes (resolve slugs to IDs)
+        const resolvedConditionNodes = cp.condition.visited.map(ref => 
+          resolveNodeReference(ref, nodes) || ref
+        );
+        const conditionMet = resolvedConditionNodes.every(nodeId => visitedNodes.includes(nodeId));
         
         if (conditionMet) {
           // For case edges, multiply variant weight by conditional probability

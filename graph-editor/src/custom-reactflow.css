@@ -1,0 +1,102 @@
+/* Override ReactFlow control point colors to black */
+.react-flow__edgebutton,
+.react-flow__edgebutton-foreignobject {
+  background: #000 !important;
+}
+
+.react-flow__edgebutton:hover {
+  background: #333 !important;
+}
+
+/* Also override any edge button background colors */
+.react-flow__edge button {
+  background: #000 !important;
+  border-color: #000 !important;
+}
+
+.react-flow__edge button:hover {
+  background: #333 !important;
+  border-color: #333 !important;
+}
+
+/* Override selection styling for edges */
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #333 !important;
+  cursor: default !important;
+  pointer-events: none !important;
+}
+
+/* Unselected edges can have pointer cursor */
+.react-flow__edge:not(.selected) .react-flow__edge-path {
+  cursor: pointer !important;
+}
+
+/* Selected edge invisible interaction area should not interfere */
+.react-flow__edge.selected path {
+  cursor: default !important;
+  pointer-events: none !important;
+}
+
+/* Hide reconnection handles on unselected edges */
+.react-flow__edge:not(.selected) .react-flow__edgeupdater {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+/* Only show reconnection handles on selected edges - make them MUCH bigger and easier to grab */
+.react-flow__edge.selected .react-flow__edgeupdater {
+  display: block !important;
+  pointer-events: auto !important;
+  cursor: move !important;
+  width: 20px !important;
+  height: 20px !important;
+  border: 3px solid white !important;
+  border-radius: 50% !important;
+  background: #007bff !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+  z-index: 1002 !important;
+  position: relative !important;
+}
+
+.react-flow__edge.selected .react-flow__edgeupdater:hover {
+  cursor: move !important;
+  /* Removed transform: scale() to prevent flicker - the scaling causes pointer to fall through intermittently */
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+}
+
+.react-flow__edge.selected .react-flow__edgeupdater-source {
+  background: #28a745 !important;
+}
+
+.react-flow__edge.selected .react-flow__edgeupdater-target {
+  background: #dc3545 !important;
+}
+
+/* Make node handles more visible during active connection only */
+.react-flow__handle.connecting,
+.react-flow__handle.connectingfrom,
+.react-flow__handle.connectingto {
+  background: #007bff !important;
+  transform: scale(1.5) !important;
+  box-shadow: 0 0 0 4px rgba(0, 123, 255, 0.3) !important;
+}
+
+/* Visual feedback when dragging an edge to reconnect */
+.react-flow__connection-path,
+.react-flow__connectionline path {
+  stroke: #007bff !important;
+  stroke-width: 3px !important;
+  stroke-dasharray: 5, 5 !important;
+  animation: dash 0.5s linear infinite !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: none !important;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
+

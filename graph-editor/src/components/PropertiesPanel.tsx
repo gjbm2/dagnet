@@ -117,6 +117,13 @@ export default function PropertiesPanel({
           
           // Reset manual edit flag when switching to a different node
           setSlugManuallyEdited(false);
+          
+          // Mark node as having committed label if it already has a label
+          // This prevents slug from auto-updating on subsequent label edits
+          if (node.label && node.label.trim() !== '') {
+            hasLabelBeenCommittedRef.current[selectedNodeId] = true;
+          }
+          
           lastLoadedNodeRef.current = selectedNodeId;
         }
       }
@@ -1469,7 +1476,6 @@ export default function PropertiesPanel({
                       onBlur={() => {
                         const numValue = parseFloat(localEdgeData.stdev);
                         if (isNaN(numValue)) {
-                          // Remove stdev if empty
                           setLocalEdgeData({...localEdgeData, stdev: undefined});
                           updateEdge('stdev', undefined);
                         } else {

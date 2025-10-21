@@ -481,7 +481,7 @@
               ]
             },
             "p": {
-              "mean": 0.9
+              "mean": 0.3
             }
           }
         ],
@@ -508,7 +508,7 @@
               ]
             },
             "p": {
-              "mean": 0.1
+              "mean": 0.7
             }
           }
         ],
@@ -657,7 +657,7 @@
       "created_at": "2025-10-16T22:14:49.473Z",
       "author": "Graph Editor",
       "description": "Default empty graph",
-      "updated_at": "2025-10-21T08:40:43.626Z",
+      "updated_at": "2025-10-21T12:45:13.848Z",
       "name": "case-conversion-base2.json",
       "source": "git",
       "branch": "main"

@@ -7,6 +7,7 @@ import { loadFromSheet, saveToSheet } from './lib/sheetsClient';
 import { decodeStateFromUrl, encodeStateToUrl } from './lib/shareUrl';
 import { useGraphStore } from './lib/useGraphStore';
 import { getValidator } from './lib/schema';
+import './custom-reactflow.css';
 
 export default function App() {
   const { graph, setGraph } = useGraphStore();
