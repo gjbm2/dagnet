@@ -9,7 +9,9 @@
     "noImplicitAny": false,
     "skipLibCheck": true,
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": { "@/*": ["src/*"] },
+    "outDir": "dist",
+    "noEmit": true
   },
   "include": ["src"]
 }

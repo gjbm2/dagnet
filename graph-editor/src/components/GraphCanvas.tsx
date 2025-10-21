@@ -2778,7 +2778,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         connectionRadius={50}
         snapToGrid={false}
         snapGrid={[1, 1]}
-        style={{ background: '#00ffff'}}
+        style={{ background: '#f8fafc' }}
       >
         <Background />
         <Controls />
