@@ -21,10 +21,39 @@ export interface ProbabilityParam {
   parameter_id?: string; // Reference to parameter registry
 }
 
+// Condition for conditional probability
+export interface Condition {
+  visited: string[]; // Array of node IDs that must be visited
+  // Future v2 enhancements:
+  // all_of?: string[];
+  // any_of?: string[];
+  // none_of?: string[];
+}
+
+// Conditional probability: probability that applies when condition is met
+export interface ConditionalProbability {
+  condition: Condition;
+  p: ProbabilityParam; // Probability when condition is satisfied
+}
+
+export interface MonetaryCost {
+  value: number; // >= 0
+  stdev?: number; // >= 0
+  distribution?: string; // e.g., "normal", "lognormal", "gamma", "uniform"
+  currency?: string; // e.g., "USD", "GBP", "EUR"
+}
+
+export interface TimeCost {
+  value: number; // >= 0
+  stdev?: number; // >= 0
+  distribution?: string; // e.g., "normal", "lognormal", "gamma", "uniform"
+  units?: string; // e.g., "days", "hours", "weeks"
+}
+
 export interface Costs {
-  monetary?: number; // >= 0
-  time?: number; // >= 0
-  units?: string; // <= 32 chars
+  monetary?: MonetaryCost | number; // Support both old (number) and new (object) formats
+  time?: TimeCost | number; // Support both old (number) and new (object) formats
+  units?: string; // Deprecated: for backward compatibility with old format
 }
 
 export interface ResidualBehavior {
@@ -74,6 +103,11 @@ export interface GraphNode {
   case?: CaseData; // Only present when type === 'case'
 }
 
+export interface EdgeDisplay {
+  conditional_color?: string; // Hex color for conditional edges (user override)
+  conditional_group?: string; // Optional user-defined group for color assignment
+}
+
 export interface GraphEdge {
   id: UUID;
   slug?: Slug;
@@ -82,12 +116,15 @@ export interface GraphEdge {
   fromHandle?: string; // handle id (e.g., "right", "bottom", "left", "top")
   toHandle?: string;   // handle id (e.g., "left", "top", "right", "bottom")
   description?: string;
-  p?: ProbabilityParam; // probability (not used for case edges - use variant weight instead)
+  p?: ProbabilityParam; // Base probability (fallback when no conditions match)
+  conditional_p?: ConditionalProbability[]; // Optional array of conditional probabilities
   weight_default?: number; // >= 0 (used for residual behavior)
   costs?: Costs;
   case_variant?: string; // Name of the variant this edge represents
   case_id?: string; // Reference to parent case node
+  display?: EdgeDisplay; // Display parameters (colors, grouping)
   // For case edges: probability comes from case node's variant weight, not from p.mean
+  // For conditional edges: first matching condition in conditional_p wins, fallback to p
 }
 
 export interface Policies {
@@ -113,3 +150,35 @@ export interface ConversionGraph {
 }
 
 export type Graph = ConversionGraph;
+
+// What-If Analysis State (UI-level only, not persisted)
+export interface WhatIfState {
+  // Case node overrides: nodeId -> selected variant name
+  caseOverrides: Map<string, string>;
+  
+  // Conditional edge overrides: edgeId -> set of visited node IDs
+  conditionalOverrides: Map<string, Set<string>>;
+}
+
+// Validation error types
+export interface ValidationError {
+  type: 'probability_sum' | 'invalid_reference' | 'circular_dependency' | 'missing_node';
+  nodeId?: string;
+  edgeId?: string;
+  condition?: string;
+  message: string;
+  sum?: number;
+}
+
+export interface ValidationWarning {
+  type: 'incomplete_conditions' | 'inconsistent_siblings';
+  nodeId?: string;
+  edgeId?: string;
+  message: string;
+}
+
+export interface ValidationResult {
+  errors: ValidationError[];
+  warnings: ValidationWarning[];
+  isValid: boolean;
+}

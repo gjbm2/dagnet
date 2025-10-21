@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useGraphStore } from '@/lib/useGraphStore';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
+import ConditionalProbabilitiesSection from './ConditionalProbabilitiesSection';
+import { getNextAvailableColor } from '@/lib/conditionalColors';
 
 interface PropertiesPanelProps {
   selectedNodeId: string | null;
@@ -38,19 +40,34 @@ export default function PropertiesPanel({
   // Track if this node has ever had its label committed (to prevent slug regeneration)
   const hasLabelBeenCommittedRef = useRef<{ [nodeId: string]: boolean }>({});
   
+  // Local state for conditional probabilities (like variants)
+  const [localConditionalP, setLocalConditionalP] = useState<any[]>([]);
+  const lastLoadedEdgeRef = useRef<string | null>(null);
+  
   // JSON edit modal state
   const [showJsonEdit, setShowJsonEdit] = useState(false);
   const [jsonEditContent, setJsonEditContent] = useState('');
   const [jsonEditError, setJsonEditError] = useState<string | null>(null);
 
-  // Auto-switch tabs based on selection
+  // Track previous selection to detect actual selection changes
+  const prevSelectionRef = useRef({ nodeId: selectedNodeId, edgeId: selectedEdgeId });
+  
+  // Auto-switch tabs based on selection ONLY when selection actually changes
   useEffect(() => {
-    if (selectedNodeId) {
-      setActiveTab('node');
-    } else if (selectedEdgeId) {
-      setActiveTab('edge');
-    } else {
-      setActiveTab('graph');
+    const selectionChanged = 
+      prevSelectionRef.current.nodeId !== selectedNodeId ||
+      prevSelectionRef.current.edgeId !== selectedEdgeId;
+    
+    if (selectionChanged) {
+      if (selectedNodeId) {
+        setActiveTab('node');
+      } else if (selectedEdgeId) {
+        setActiveTab('edge');
+      } else {
+        setActiveTab('graph');
+      }
+      
+      prevSelectionRef.current = { nodeId: selectedNodeId, edgeId: selectedEdgeId };
     }
   }, [selectedNodeId, selectedEdgeId]);
 
@@ -109,6 +126,33 @@ export default function PropertiesPanel({
     }
   }, [selectedNodeId, graph]);
 
+  // Load edge data when selection changes (but not on every graph update)
+  useEffect(() => {
+    if (selectedEdgeId && graph) {
+      // Only reload if we're switching to a different edge
+      if (lastLoadedEdgeRef.current !== selectedEdgeId) {
+        const edge = graph.edges.find((e: any) => 
+          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+        );
+        if (edge) {
+          setLocalEdgeData({
+            slug: edge.slug || '',
+            probability: edge.p?.mean || 0,
+            stdev: edge.p?.stdev || undefined,
+            description: edge.description || '',
+            costs: edge.costs || {},
+            weight_default: edge.weight_default || 0
+          });
+          setLocalConditionalP(edge.conditional_p || []);
+          lastLoadedEdgeRef.current = selectedEdgeId;
+        }
+      }
+    } else if (!selectedEdgeId) {
+      // Clear the ref when no edge is selected
+      lastLoadedEdgeRef.current = null;
+    }
+  }, [selectedEdgeId, graph]);
+
   // Auto-generate slug from label when label changes (only on FIRST commit)
   // This updates the LOCAL state only, not the graph state
   useEffect(() => {
@@ -145,9 +189,6 @@ export default function PropertiesPanel({
       }
     }
   }, [localNodeData.label, selectedNodeId, graph, slugManuallyEdited]);
-
-  // Track the last loaded edge to prevent reloading on every graph change
-  const lastLoadedEdgeRef = useRef<string | null>(null);
   
   useEffect(() => {
     if (selectedEdgeId && graph) {
@@ -240,7 +281,13 @@ export default function PropertiesPanel({
       if (field === 'probability') {
         next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, mean: value };
       } else if (field === 'stdev') {
-        next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, stdev: value };
+        if (value === undefined) {
+          // Remove stdev property if undefined
+          const { stdev, ...pWithoutStdev } = next.edges[edgeIndex].p || {};
+          next.edges[edgeIndex].p = pWithoutStdev;
+        } else {
+          next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, stdev: value };
+        }
       } else if (field === 'locked') {
         next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, locked: value };
       } else if (field.startsWith('costs.')) {
@@ -559,6 +606,13 @@ export default function PropertiesPanel({
                               status: newCaseData.status,
                               variants: newCaseData.variants
                             };
+                            // Auto-assign a fresh color from the palette
+                            if (!next.nodes[nodeIndex].layout) {
+                              next.nodes[nodeIndex].layout = {};
+                            }
+                            if (!next.nodes[nodeIndex].layout!.color) {
+                              next.nodes[nodeIndex].layout!.color = getNextAvailableColor(graph);
+                            }
                             if (next.metadata) {
                               next.metadata.updated_at = new Date().toISOString();
                             }
@@ -745,11 +799,29 @@ export default function PropertiesPanel({
                     </div>
 
                     {/* Quick Variant Selector - What-If Analysis */}
-                    {caseData.variants.length > 0 && (
-                      <div style={{ marginBottom: '20px', padding: '12px', background: '#f0f7ff', borderRadius: '4px', border: '1px solid #c4e0ff' }}>
-                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '12px', color: '#0066cc' }}>
-                          Quick View Variants (What-If Analysis)
-                        </label>
+                    {caseData.variants.length > 0 && (() => {
+                      const currentNodeColor = graph?.nodes.find((n: any) => n.id === selectedNodeId)?.layout?.color || '#e5e7eb';
+                      return (
+                        <div style={{ marginBottom: '20px', padding: '12px', background: '#f0f7ff', borderRadius: '4px', border: `2px solid ${currentNodeColor}` }}>
+                          <label style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '8px',
+                            marginBottom: '8px', 
+                            fontWeight: '600', 
+                            fontSize: '12px', 
+                            color: '#0066cc' 
+                          }}>
+                            <div style={{
+                              width: '16px',
+                              height: '16px',
+                              borderRadius: '2px',
+                              background: currentNodeColor,
+                              border: '1px solid rgba(0,0,0,0.2)',
+                              flexShrink: 0
+                            }} />
+                            Quick View Variants (What-If Analysis)
+                          </label>
                         <select
                           value={whatIfAnalysis?.caseNodeId === selectedNodeId ? whatIfAnalysis.selectedVariant : ""}
                           onChange={(e) => {
@@ -796,7 +868,8 @@ export default function PropertiesPanel({
                           </div>
                         )}
                       </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Case ID or Parameter ID */}
                     <div style={{ marginBottom: '20px' }}>
@@ -977,6 +1050,95 @@ export default function PropertiesPanel({
                         <option value="paused">Paused</option>
                         <option value="completed">Completed</option>
                       </select>
+                    </div>
+
+                    {/* Case Node Color */}
+                    <div style={{ marginBottom: '20px' }}>
+                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Node Color</label>
+                      <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>
+                        Colors are auto-assigned from the palette. Customize:
+                      </div>
+                      <input
+                        type="color"
+                        value={(() => {
+                          const node = graph?.nodes.find((n: any) => n.id === selectedNodeId);
+                          return node?.layout?.color || '#4ade80'; // Default to first palette color if none assigned
+                        })()}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          if (graph && selectedNodeId) {
+                            const next = structuredClone(graph);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                            if (nodeIndex >= 0) {
+                              if (!next.nodes[nodeIndex].layout) {
+                                next.nodes[nodeIndex].layout = {};
+                              }
+                              next.nodes[nodeIndex].layout.color = e.target.value;
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                            }
+                          }
+                        }}
+                        onInput={(e: React.FormEvent<HTMLInputElement>) => {
+                          e.stopPropagation();
+                          const target = e.target as HTMLInputElement;
+                          if (graph && selectedNodeId) {
+                            const next = structuredClone(graph);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                            if (nodeIndex >= 0) {
+                              if (!next.nodes[nodeIndex].layout) {
+                                next.nodes[nodeIndex].layout = {};
+                              }
+                              next.nodes[nodeIndex].layout.color = target.value;
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                            }
+                          }
+                        }}
+                        style={{
+                          width: '60px',
+                          height: '32px',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          cursor: 'pointer'
+                        }}
+                      />
+                      {(() => {
+                        const node = graph?.nodes.find((n: any) => n.id === selectedNodeId);
+                        return node?.layout?.color && (
+                          <button
+                            onClick={() => {
+                              if (graph && selectedNodeId) {
+                                const next = structuredClone(graph);
+                                const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                if (nodeIndex >= 0 && next.nodes[nodeIndex].layout) {
+                                  // Remove color to trigger auto-assignment
+                                  delete next.nodes[nodeIndex].layout.color;
+                                  if (next.metadata) {
+                                    next.metadata.updated_at = new Date().toISOString();
+                                  }
+                                  setGraph(next);
+                                }
+                              }
+                            }}
+                            style={{
+                              marginLeft: '8px',
+                              padding: '6px 12px',
+                              fontSize: '11px',
+                              background: '#f1f1f1',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Reset to Auto
+                          </button>
+                        );
+                      })()}
                     </div>
 
                     {/* Variants Section */}
@@ -1299,21 +1461,32 @@ export default function PropertiesPanel({
                     <input
                       data-field="stdev"
                       type="text"
-                      value={localEdgeData.stdev || 0}
+                      value={localEdgeData.stdev !== undefined ? localEdgeData.stdev : ''}
                       onChange={(e) => {
                         const value = e.target.value;
                         setLocalEdgeData({...localEdgeData, stdev: value});
                       }}
                       onBlur={() => {
-                        const numValue = parseFloat(localEdgeData.stdev) || 0;
-                        setLocalEdgeData({...localEdgeData, stdev: numValue});
-                        updateEdge('stdev', numValue);
+                        const numValue = parseFloat(localEdgeData.stdev);
+                        if (isNaN(numValue)) {
+                          // Remove stdev if empty
+                          setLocalEdgeData({...localEdgeData, stdev: undefined});
+                          updateEdge('stdev', undefined);
+                        } else {
+                          setLocalEdgeData({...localEdgeData, stdev: numValue});
+                          updateEdge('stdev', numValue);
+                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
-                          const numValue = parseFloat(localEdgeData.stdev) || 0;
-                          setLocalEdgeData({...localEdgeData, stdev: numValue});
-                          updateEdge('stdev', numValue);
+                          const numValue = parseFloat(localEdgeData.stdev);
+                          if (isNaN(numValue)) {
+                            setLocalEdgeData({...localEdgeData, stdev: undefined});
+                            updateEdge('stdev', undefined);
+                          } else {
+                            setLocalEdgeData({...localEdgeData, stdev: numValue});
+                            updateEdge('stdev', numValue);
+                          }
                           e.currentTarget.blur();
                         }
                       }}
@@ -1343,6 +1516,49 @@ export default function PropertiesPanel({
                     <span>Locked Probability</span>
                   </label>
                 </div>
+
+                {/* Conditional Probabilities */}
+                {selectedEdge && graph && (
+                  <ConditionalProbabilitiesSection
+                    edge={selectedEdge}
+                    graph={graph}
+                    setGraph={setGraph}
+                    localConditionalP={localConditionalP}
+                    setLocalConditionalP={setLocalConditionalP}
+                    onLocalUpdate={(conditionalP) => {
+                      // Update local state immediately (like variants)
+                      setLocalConditionalP(conditionalP);
+                      // Also update graph
+                      if (graph && selectedEdgeId) {
+                        const nextGraph = structuredClone(graph);
+                        const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          nextGraph.edges[edgeIndex].conditional_p = conditionalP.length > 0 ? conditionalP : undefined;
+                          if (!nextGraph.metadata) nextGraph.metadata = {} as any;
+                          nextGraph.metadata.updated_at = new Date().toISOString();
+                          setGraph(nextGraph);
+                        }
+                      }
+                    }}
+                    onUpdateColor={(color) => {
+                      const nextGraph = structuredClone(graph);
+                      const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                      );
+                      if (edgeIndex >= 0) {
+                        if (!nextGraph.edges[edgeIndex].display) {
+                          nextGraph.edges[edgeIndex].display = {};
+                        }
+                        nextGraph.edges[edgeIndex].display!.conditional_color = color;
+                        if (!nextGraph.metadata) nextGraph.metadata = {} as any;
+                        nextGraph.metadata.updated_at = new Date().toISOString();
+                        setGraph(nextGraph);
+                      }
+                    }}
+                  />
+                )}
 
                 {/* Only show weight default for non-case edges */}
                 {!(selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant)) && (

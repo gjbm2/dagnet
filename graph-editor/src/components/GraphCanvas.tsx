@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -24,6 +24,8 @@ import { useGraphStore } from '@/lib/useGraphStore';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 import { applyAutoLayout, type LayoutOptions } from '@/lib/layout';
+import { getNextAvailableColor } from '@/lib/conditionalColors';
+import { calculateProbabilities, type RunnerOptions } from '@/lib/runner';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -60,12 +62,16 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
 }
 
 function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute }: GraphCanvasProps) {
-  const { graph, setGraph, whatIfAnalysis } = useGraphStore();
-  const { deleteElements, fitView, screenToFlowPosition, setCenter, getNodes } = useReactFlow();
+  const { graph, setGraph, whatIfAnalysis, whatIfOverrides } = useGraphStore();
+  const { deleteElements, fitView, screenToFlowPosition, setCenter, getNodes, getEdges } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  
+  // Runner results for probability and cost calculations
+  const [runnerResults, setRunnerResults] = useState<Map<string, number>>(new Map());
+  const [runnerCosts, setRunnerCosts] = useState<Map<string, { monetary: number; time: number }>>(new Map());
   
   // Trigger flag for re-routing
   const [shouldReroute, setShouldReroute] = useState(0);
@@ -131,8 +137,78 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // calculateEdgeWidth called
     
-    // Helper function to get effective probability (handles case edges and what-if analysis)
+    // Build a set of "visited" nodes based on active case node what-if scenarios (ONCE for all edges)
+    const implicitlyVisitedNodes = new Set<string>();
+    if (whatIfAnalysis?.caseNodeId && whatIfAnalysis?.selectedVariant) {
+      // Find the case node to get its case.id
+      const caseNode = allNodes.find((n: any) => n.id === whatIfAnalysis.caseNodeId);
+      const caseId = caseNode?.data?.case?.id;
+      
+      if (caseId) {
+        console.log(`🎯 Looking for edges with case_id=${caseId}, variant=${whatIfAnalysis.selectedVariant}`);
+        // Find all edges for this case that lead to the selected variant
+        allEdges.forEach(edge => {
+          if (edge.data?.case_id === caseId && 
+              edge.data?.case_variant === whatIfAnalysis.selectedVariant) {
+            // Mark the target node as implicitly visited
+            implicitlyVisitedNodes.add(edge.target);
+            console.log(`  ↳ Found case edge: ${edge.id} → target: ${edge.target}`);
+          }
+        });
+        if (implicitlyVisitedNodes.size > 0) {
+          console.log(`🎯 Implicit visited nodes (global):`, Array.from(implicitlyVisitedNodes));
+        } else {
+          console.warn(`⚠️ No edges found for case_id=${caseId}, variant=${whatIfAnalysis.selectedVariant}`);
+        }
+      } else {
+        console.warn(`⚠️ Could not find case node or case.id for node ${whatIfAnalysis.caseNodeId}`);
+      }
+    }
+    
+    // Helper function to get effective probability (handles case edges, conditional probabilities, and what-if analysis)
     const getEffectiveProbability = (e: any) => {
+      
+      // Check for conditional probability what-if override first (explicit)
+      const edgeFromGraph = graph?.edges.find((ge: any) => 
+        ge.id === e.id || `${ge.from}->${ge.to}` === e.id
+      );
+      
+      if (!edgeFromGraph && (whatIfOverrides?.conditionalOverrides || implicitlyVisitedNodes.size > 0)) {
+        console.warn(`⚠️ Could not find edge in graph for ID: ${e.id}, trying ${e.source}->${e.target}`);
+      }
+      
+      if (edgeFromGraph?.conditional_p && whatIfOverrides?.conditionalOverrides) {
+        const override = whatIfOverrides.conditionalOverrides.get(e.id);
+        if (override) {
+          // Find matching condition
+          for (const conditionalProb of edgeFromGraph.conditional_p) {
+            const conditionMatches = 
+              conditionalProb.condition.visited.every((nodeId: string) => override.has(nodeId)) &&
+              conditionalProb.condition.visited.length === override.size;
+            if (conditionMatches) {
+              console.log(`✅ Explicit conditional for ${e.id}: p=${conditionalProb.p.mean}`);
+              // Use conditional probability when what-if override is active
+              return conditionalProb.p.mean;
+            }
+          }
+        }
+      }
+      
+      // Check for conditional probabilities that should auto-apply based on implicitly visited nodes
+      if (edgeFromGraph?.conditional_p && implicitlyVisitedNodes.size > 0) {
+        for (const conditionalProb of edgeFromGraph.conditional_p) {
+          // Check if all required nodes are in the implicitly visited set
+          const allConditionsMet = conditionalProb.condition.visited.every((nodeId: string) => 
+            implicitlyVisitedNodes.has(nodeId)
+          );
+          if (allConditionsMet && conditionalProb.condition.visited.length > 0) {
+            console.log(`✅ Implicit conditional for ${e.id}: p=${conditionalProb.p.mean} (visited: ${conditionalProb.condition.visited.join(',')})`);
+            // Auto-apply conditional probability based on case what-if scenario
+            return conditionalProb.p.mean;
+          }
+        }
+      }
+      
       // For case edges, multiply variant weight by sub-route probability
       if (e.data?.case_id && e.data?.case_variant) {
         const caseNode = allNodes.find((n: any) => n.data?.case?.id === e.data.case_id);
@@ -295,7 +371,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     return edge.selected ? 3 : 2;
-  }, [edgeScalingMode, logMassTransform, whatIfAnalysis]);
+  }, [edgeScalingMode, logMassTransform, whatIfAnalysis, whatIfOverrides, graph]);
 
   // Calculate edge offsets for Sankey-style visualization
   const calculateEdgeOffsets = useCallback((edgesWithWidth: any[], allNodes: any[], maxWidth: number) => {
@@ -1092,9 +1168,37 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Reset counter after a delay
     setTimeout(() => { syncCountRef.current = 0; }, 500);
     
+    // Auto-assign colors to case nodes that don't have them
+    let graphToUse = graph;
+    const caseNodesWithoutColor = graph.nodes.filter((n: any) => 
+      n.type === 'case' && !n.layout?.color
+    );
+    
+    if (caseNodesWithoutColor.length > 0) {
+      console.log(`  ↳ Auto-assigning colors to ${caseNodesWithoutColor.length} case nodes`);
+      graphToUse = structuredClone(graph);
+      
+      for (const node of caseNodesWithoutColor) {
+        const nodeIndex = graphToUse.nodes.findIndex((n: any) => n.id === node.id);
+        if (nodeIndex >= 0) {
+          if (!graphToUse.nodes[nodeIndex].layout) {
+            graphToUse.nodes[nodeIndex].layout = {};
+          }
+          graphToUse.nodes[nodeIndex].layout.color = getNextAvailableColor(graphToUse);
+          console.log(`    ↳ Assigned ${graphToUse.nodes[nodeIndex].layout.color} to ${node.label || node.slug}`);
+        }
+      }
+      
+      // Update lastSyncedGraphRef to prevent re-sync loop
+      lastSyncedGraphRef.current = JSON.stringify(graphToUse);
+      
+      // Update the graph in the store
+      setGraph(graphToUse);
+    }
+    
     try {
       console.log('  ↳ Converting graph to ReactFlow...');
-      const { nodes: newNodes, edges: newEdges } = toFlow(graph, {
+      const { nodes: newNodes, edges: newEdges } = toFlow(graphToUse, {
         onUpdateNode: handleUpdateNode,
         onDeleteNode: handleDeleteNode,
         onUpdateEdge: handleUpdateEdge,
@@ -1120,9 +1224,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Calculate edge offsets for Sankey-style visualization using ref
       const edgesWithOffsets = calculateEdgeOffsetsRef.current(edgesWithWidth, newNodes, MAX_WIDTH);
       
+      // Get current selected state before updating
+      const currentNodes = getNodes();
+      const currentEdges = getEdges();
+      const selectedNodeIds = new Set(currentNodes.filter(n => n.selected).map(n => n.id));
+      const selectedEdgeIds = new Set(currentEdges.filter(e => e.selected).map(e => e.id));
+      
+      // Preserve selected state in new nodes
+      const nodesWithSelection = newNodes.map(node => ({
+        ...node,
+        selected: selectedNodeIds.has(node.id)
+      }));
+      
       // Attach offsets to edge data for the ConversionEdge component
+      // AND preserve selected state
       const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
         ...edge,
+        selected: selectedEdgeIds.has(edge.id),
         data: {
           ...edge.data,
           sourceOffsetX: edge.sourceOffsetX,
@@ -1134,13 +1252,55 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }));
       
       console.log('  ↳ Setting nodes and edges...');
-      setNodes(newNodes);
+      console.log(`  ↳ Preserving selection: ${selectedNodeIds.size} nodes, ${selectedEdgeIds.size} edges`);
+      setNodes(nodesWithSelection);
       setEdges(edgesWithOffsetData);
       console.log('✅ Sync complete');
     } catch (error) {
       console.error('❌ Error during sync:', error);
     }
-  }, [graph, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, handleReconnectEdge, setNodes, setEdges]);
+  }, [graph, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, handleReconnectEdge, setNodes, setEdges, getNodes, getEdges]);
+
+  // Run the probability calculator when graph or what-if overrides change
+  useEffect(() => {
+    if (!graph) {
+      setRunnerResults(new Map());
+      setRunnerCosts(new Map());
+      return;
+    }
+
+    console.log('🧮 Running probability calculator');
+    
+    try {
+      // Build runner options from what-if state
+      const options: RunnerOptions = {};
+      
+      if (whatIfAnalysis?.caseNodeId && whatIfAnalysis?.selectedVariant) {
+        // whatIfAnalysis.caseNodeId is the NODE id, but we need the CASE id for edges
+        const caseNode = graph.nodes.find((n: any) => n.id === whatIfAnalysis.caseNodeId);
+        const caseId = caseNode?.case?.id;
+        
+        if (caseId) {
+          options.caseOverrides = new Map([[caseId, whatIfAnalysis.selectedVariant]]);
+        }
+      }
+      
+      if (whatIfOverrides?.conditionalOverrides) {
+        options.conditionalOverrides = whatIfOverrides.conditionalOverrides;
+      }
+      
+      // Run the calculator
+      const result = calculateProbabilities(graph, options);
+      setRunnerResults(result.nodeProbabilities);
+      setRunnerCosts(result.nodeCosts);
+      
+      console.log('✅ Probability and cost calculation complete');
+    } catch (error) {
+      console.error('❌ Error running probability calculator:', error);
+      setRunnerResults(new Map());
+      setRunnerCosts(new Map());
+    }
+  }, [graph, whatIfAnalysis, whatIfOverrides]);
 
   // Fit view when graph is initially loaded (e.g., from git repository)
   // Track graph metadata to detect actual graph changes (not just re-renders)
@@ -1190,14 +1350,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   useEffect(() => {
     if (edges.length === 0) return;
     
-    // Create a key that includes node positions
+    // Create a key that includes node positions and what-if overrides
     const currentNodes = getNodes();
     const nodePositionsKey = currentNodes.map(n => `${n.id}:${n.position.x.toFixed(0)},${n.position.y.toFixed(0)}`).join('|');
-    const updateKey = `${edgeScalingMode}-${whatIfAnalysis?.caseNodeId || ''}-${whatIfAnalysis?.selectedVariant || ''}-${nodePositionsKey}`;
+    
+    // Include conditional overrides in the key
+    const conditionalOverridesKey = whatIfOverrides?.conditionalOverrides 
+      ? Array.from(whatIfOverrides.conditionalOverrides.entries())
+          .map(([edgeId, nodeSet]) => `${edgeId}:${Array.from(nodeSet).sort().join(',')}`)
+          .sort()
+          .join('|')
+      : '';
+    
+    const updateKey = `${edgeScalingMode}-${whatIfAnalysis?.caseNodeId || ''}-${whatIfAnalysis?.selectedVariant || ''}-${conditionalOverridesKey}-${nodePositionsKey}`;
+    
+    console.log('📐 Edge scaling effect check:', {
+      updateKey,
+      lastKey: lastEdgeScalingUpdateRef.current,
+      whatIfAnalysis,
+      conditionalOverridesCount: whatIfOverrides?.conditionalOverrides?.size || 0
+    });
     
     if (updateKey === lastEdgeScalingUpdateRef.current) {
+      console.log('  ↳ Keys match, skipping edge update');
       return; // Skip if nothing relevant changed
     }
+    console.log('  ↳ Keys differ, updating edge widths and offsets');
     lastEdgeScalingUpdateRef.current = updateKey;
     
     edgeUpdateCountRef.current++;
@@ -1212,12 +1390,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         ...edge,
         data: {
           ...edge.data,
-          calculateWidth: () => calculateEdgeWidth(edge, prevEdges, currentNodes)
+          calculateWidth: () => calculateEdgeWidthRef.current(edge, prevEdges, currentNodes)
         }
       }));
       
       // Recalculate offsets for mass-based scaling modes
-      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, currentNodes, MAX_WIDTH);
+      const edgesWithOffsets = calculateEdgeOffsetsRef.current(edgesWithWidth, currentNodes, MAX_WIDTH);
       
       // Attach offsets to edge data for the ConversionEdge component
       return edgesWithOffsets.map(edge => ({
@@ -1235,7 +1413,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Reset counter after a delay
     setTimeout(() => { edgeUpdateCountRef.current = 0; }, 1000);
-  }, [edgeScalingMode, whatIfAnalysis]);
+  // Note: getNodes and setEdges are stable ReactFlow hooks, excluded from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edgeScalingMode, whatIfAnalysis, whatIfOverrides, edges.length]);
   
   // Sync FROM ReactFlow TO graph when user makes changes in the canvas
   // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
@@ -1809,15 +1989,78 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     );
   }, [selectedNodesForAnalysis, setEdges, findPathEdges, edges]);
 
+  // Use a ref to cache path calculations and avoid infinite loops
+  const pathCalculationCacheRef = useRef<{
+    key: string;
+    result: { probBgivenA: number; costBgivenA: { monetary: number; time: number } };
+  } | null>(null);
+
   // Calculate probability and cost for selected nodes
-  const calculateSelectionAnalysis = useCallback(() => {
+  const analysis = useMemo(() => {
     if (selectedNodesForAnalysis.length === 0) return null;
 
+    // Get current edges and nodes
+    const edges = getEdges();
+    const nodes = getNodes();
+    
     const selectedNodeIds = selectedNodesForAnalysis.map(n => n.id);
     
     // Special case: exactly 2 nodes selected - calculate path analysis
     if (selectedNodesForAnalysis.length === 2) {
       const [nodeA, nodeB] = selectedNodesForAnalysis;
+      
+      // Get probabilities from runner
+      const probA = runnerResults.get(nodeA.id) || 0;
+      
+      // For p(B|A), we need to re-run the runner with A as the "start" node
+      // Create a cache key to avoid recalculating unnecessarily
+      const cacheKey = `${nodeA.id}→${nodeB.id}|${whatIfAnalysis?.caseNodeId || ''}|${whatIfAnalysis?.selectedVariant || ''}|${whatIfOverrides?.conditionalOverrides?.size || 0}`;
+      
+      let probBgivenA = 0;
+      let costBgivenA = { monetary: 0, time: 0 };
+      
+      // Check cache first
+      if (pathCalculationCacheRef.current?.key === cacheKey) {
+        probBgivenA = pathCalculationCacheRef.current.result.probBgivenA;
+        costBgivenA = pathCalculationCacheRef.current.result.costBgivenA;
+      } else if (probA > 0 && graph) {
+        try {
+          // Create a modified graph with nodeA as the only start node
+          const modifiedGraph = structuredClone(graph);
+          modifiedGraph.nodes = modifiedGraph.nodes.map((n: any) => ({
+            ...n,
+            entry: n.id === nodeA.id ? { is_start: true, entry_weight: 1 } : undefined
+          }));
+          
+          // Build runner options
+          const options: RunnerOptions = {};
+          if (whatIfAnalysis?.caseNodeId && whatIfAnalysis?.selectedVariant) {
+            // whatIfAnalysis.caseNodeId is the NODE id, but we need the CASE id for edges
+            const caseNode = graph.nodes.find((n: any) => n.id === whatIfAnalysis.caseNodeId);
+            const caseId = caseNode?.case?.id;
+            
+            if (caseId) {
+              options.caseOverrides = new Map([[caseId, whatIfAnalysis.selectedVariant]]);
+            }
+          }
+          if (whatIfOverrides?.conditionalOverrides) {
+            options.conditionalOverrides = whatIfOverrides.conditionalOverrides;
+          }
+          
+          // Run from nodeA
+          const resultFromA = calculateProbabilities(modifiedGraph, options);
+          probBgivenA = resultFromA.nodeProbabilities.get(nodeB.id) || 0;
+          costBgivenA = resultFromA.nodeCosts.get(nodeB.id) || { monetary: 0, time: 0 };
+          
+          // Cache the result
+          pathCalculationCacheRef.current = {
+            key: cacheKey,
+            result: { probBgivenA, costBgivenA }
+          };
+        } catch (error) {
+          console.error('Error calculating p(B|A):', error);
+        }
+      }
       
       // Find direct edge between the two nodes (A → B)
       const directEdge = edges.find(edge => 
@@ -1936,52 +2179,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         };
       };
       
-      // Calculate direct path (if exists) - for direct paths, cost is just the edge cost
-      let directPathProbability = directEdge?.data?.probability || 0;
-      // Handle case edges for direct path
-      if (directEdge && directEdge.data?.case_id && directEdge.data?.case_variant) {
-        const caseNode = nodes.find((n: any) => n.data?.case?.id === directEdge.data.case_id);
-        if (caseNode) {
-          const variant = caseNode.data?.case?.variants?.find((v: any) => v.name === directEdge.data.case_variant);
-          let variantWeight = variant?.weight || 0;
-          
-          // Apply what-if analysis override
-          if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode.id) {
-            variantWeight = directEdge.data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
-          }
-          
-          const subRouteProbability = directEdge.data?.probability || 1.0;
-          directPathProbability = variantWeight * subRouteProbability;
-        }
-      }
-      const directPathCosts = {
-        monetary: directEdge?.data?.costs?.monetary?.value || 0,
-        time: directEdge?.data?.costs?.time?.value || 0,
-        units: directEdge?.data?.costs?.time?.units || ''
-      };
+      // Use runner results for both probability and costs
+      // p(B|A) calculated by re-running from A as start node
+      const pathProbability = probBgivenA;
       
-      // Calculate path through intermediates using dagCalc logic
-      const intermediatePath = findPathThroughIntermediates(nodeA.id, nodeB.id);
-      
-      // Use the path with higher probability (direct vs intermediate)
-      const useDirectPath = directEdge && directPathProbability >= intermediatePath.probability;
-      const finalPath = useDirectPath ? {
-        probability: directPathProbability,
-        costs: directPathCosts,
-        isDirect: true,
+      // Get cost from runner (already cost per arrival, not probability-weighted)
+      const finalPath = {
+        probability: pathProbability,
+        costs: costBgivenA, // This is cost per successful arrival at B
+        isDirect: !!directEdge,
         pathEdges: directEdge ? [directEdge] : []
-      } : {
-        probability: intermediatePath.probability,
-        costs: intermediatePath.expectedCosts,
-        isDirect: false,
-        pathEdges: []
       };
       
-      // Calculate expected cost GIVEN that the path occurs (cost per successful conversion)
+      // Runner already returns cost per successful arrival, no need to divide
       const expectedCostsGivenPath = {
-        monetary: finalPath.probability > 0 ? finalPath.costs.monetary / finalPath.probability : 0,
-        time: finalPath.probability > 0 ? finalPath.costs.time / finalPath.probability : 0,
-        units: finalPath.costs.units
+        monetary: finalPath.costs.monetary,
+        time: finalPath.costs.time,
+        units: ''
       };
       
       return {
@@ -2051,9 +2265,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       totalCosts,
       probabilityConservation: Math.abs(totalIncomingProbability - totalOutgoingProbability) < 0.001
     };
-  }, [selectedNodesForAnalysis, edges, nodes, whatIfAnalysis]);
-
-  const analysis = calculateSelectionAnalysis();
+  // Note: Excluding edges/nodes from deps as they change frequently. Using refs/getNodes() inside instead.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNodesForAnalysis, whatIfAnalysis, whatIfOverrides]);
 
   // Handle selection changes
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: any) => {
@@ -2160,7 +2374,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
     
     // Always re-route edges after layout for optimal routing
-    // console.log('Updating edge handles after layout');
+    console.log('🔄 Auto re-routing edges after layout');
+    let reroutedCount = 0;
     edges.forEach(edge => {
       const sourceNode = newNodes.find(n => n.id === edge.source);
       const targetNode = newNodes.find(n => n.id === edge.target);
@@ -2171,21 +2386,29 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         // Find the edge in the graph and update its handles
         const graphEdge = nextGraph.edges.find(e => e.id === edge.id);
         if (graphEdge) {
-          // console.log(`Re-routing edge ${edge.id}: ${graphEdge.fromHandle} -> ${sourceHandle}, ${graphEdge.toHandle} -> ${targetHandle}`);
+          console.log(`  ↳ Edge ${edge.id}: ${graphEdge.fromHandle} → ${sourceHandle}, ${graphEdge.toHandle} → ${targetHandle}`);
           graphEdge.fromHandle = sourceHandle;
           graphEdge.toHandle = targetHandle;
+          reroutedCount++;
         }
       }
     });
+    console.log(`✅ Re-routed ${reroutedCount} edges`);
     
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
     
-    // Update graph state with both position and re-route changes in one go
-    // Prevent sync loop by updating lastSyncedGraphRef immediately
-    lastSyncedGraphRef.current = JSON.stringify(nextGraph);
+    // Update graph state with both position and re-route changes
+    // Let the sync effect apply the changes to ReactFlow
+    console.log('📤 Updating graph with layout + re-route changes');
     setGraph(nextGraph);
+    
+    // The sync effect will now run and update the ReactFlow edges
+    // After sync completes, we'll show the confirmation modal
+    setTimeout(() => {
+      console.log('✅ Layout + re-route complete');
+    }, 100);
     
     // Show confirmation modal
     setShowLayoutConfirmModal(true);
@@ -2496,10 +2719,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                     <strong>Path:</strong> {analysis.nodeA.data?.label || analysis.nodeA.id} → {analysis.nodeB.data?.label || analysis.nodeB.id}
                   </div>
                   
-                  {analysis.pathProbability > 0 ? (
+                  {(analysis.pathProbability ?? 0) > 0 ? (
                     <>
                       <div style={{ marginBottom: '8px' }}>
-                        <strong>Probability:</strong> {(analysis.pathProbability * 100).toFixed(2)}%
+                        <strong>Probability:</strong> {((analysis.pathProbability ?? 0) * 100).toFixed(2)}%
                         {!analysis.isDirectPath && (analysis.intermediateNodes?.length || 0) > 0 && (
                           <div style={{ color: '#666', fontSize: '12px', marginTop: '2px' }}>
                             via {analysis.intermediateNodes?.length || 0} intermediate node{(analysis.intermediateNodes?.length || 0) > 1 ? 's' : ''}

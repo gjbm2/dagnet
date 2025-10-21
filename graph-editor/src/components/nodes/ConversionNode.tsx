@@ -22,6 +22,13 @@ interface ConversionNodeData {
       description?: string;
     }>;
   };
+  layout?: {
+    x?: number;
+    y?: number;
+    rank?: number;
+    group?: string;
+    color?: string;
+  };
   onUpdate: (id: string, data: Partial<ConversionNodeData>) => void;
   onDelete: (id: string) => void;
   onDoubleClick?: (id: string, field: string) => void;
@@ -157,13 +164,35 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
 
   const probabilityMass = getProbabilityMass();
   const isCaseNode = data.type === 'case';
+  const isStartNode = data.entry?.is_start || false;
+  const isTerminalNode = data.absorbing || false;
+  
+  // Determine node shape based on type
+  const getNodeShape = () => {
+    if (isCaseNode) {
+      return {
+        borderRadius: '0px', // Sharp corners for case nodes
+        width: '120px',
+        height: '80px'
+      };
+    } else {
+      return {
+        borderRadius: '8px', // Lightly rounded corners for all non-case nodes
+        width: '120px',
+        height: '80px'
+      };
+    }
+  };
+  
+  const nodeShape = getNodeShape();
+  
+  // Get case node color (from layout, no default)
+  const caseNodeColor = isCaseNode ? (data.layout?.color || null) : null;
   
   // Case node styling
   const caseNodeStyle = isCaseNode ? {
-    width: '96px', // 80% of normal size
-    height: '96px',
-    background: '#8B5CF6', // purple-500
-    border: selected ? '2px solid #7C3AED' : '2px solid #7C3AED', // purple-600
+    background: caseNodeColor || '#8B5CF6', // custom color or purple-500
+    border: selected ? `2px solid ${caseNodeColor || '#7C3AED'}` : `2px solid ${caseNodeColor || '#7C3AED'}`, // purple-600
     color: '#FFFFFF', // white text
     fontSize: '11px' // slightly smaller font
   } : {};
@@ -189,17 +218,15 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         onMouseLeave={() => setIsHovered(false)}
       style={{
         padding: '8px',
-        border: isCaseNode ? (selected ? '2px solid #7C3AED' : '2px solid #7C3AED') :
+        border: isCaseNode ? (selected ? `3px solid ${caseNodeColor || '#7C3AED'}` : `2px solid ${caseNodeColor || '#7C3AED'}`) :
+                (isStartNode || isTerminalNode) ? '3px double #999' : // Double border for start/terminal
                 selected ? '2px solid #007bff' : 
                 (probabilityMass && !probabilityMass.isComplete) ? '2px solid #ff6b6b' : 
                 '2px solid #ddd',
-        borderRadius: '8px',
-        background: isCaseNode ? '#8B5CF6' : 
-                    (data.outcome_type?.toUpperCase() === 'SUCCESS' ? '#d4f4dd' : // light green for SUCCESS
-                    (data.entry?.is_start ? '#fff9c4' : // light yellow for START
-                    (data.absorbing ? '#ffebee' : '#fff'))), // light pink for other absorbing, white for normal
-        width: isCaseNode ? '96px' : '120px',
-        height: isCaseNode ? '96px' : '120px',
+        ...nodeShape, // Apply shape-specific styles
+        background: isCaseNode ? (caseNodeColor || '#e5e7eb') : // Case nodes: custom color or light grey if unassigned
+                    '#fff', // White for all other nodes (including start/terminal)
+        color: isCaseNode && caseNodeColor ? '#fff' : '#333', // White text on colored case nodes for readability
         textAlign: 'center',
         cursor: 'pointer',
         boxShadow: selected ? '0 4px 8px rgba(0,123,255,0.3)' : 
@@ -210,9 +237,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         flexDirection: 'column',
         justifyContent: 'center',
         alignItems: 'center',
-        boxSizing: 'border-box',
-        color: isCaseNode ? '#FFFFFF' : 'inherit',
-        fontSize: isCaseNode ? '11px' : 'inherit'
+        boxSizing: 'border-box'
       }}
     >
       {/* Input handles - all sides */}
@@ -265,44 +290,96 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         }} 
       />
       
-      <div 
-        style={{ 
-          fontWeight: 'bold', 
-          marginBottom: '4px', 
-          fontSize: '12px', 
-          cursor: 'pointer',
-          lineHeight: '1.2',
-          wordWrap: 'break-word',
-          overflowWrap: 'break-word',
-          hyphens: 'auto',
-          maxWidth: '100%',
-          textAlign: 'center'
-        }}
-        onDoubleClick={handleDoubleClick}
-        title="Double-click to edit in properties panel"
-      >
-        {data.label}
+      {/* Content wrapper */}
+      <div style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        alignItems: 'center'
+      }}>
+        {/* Terminal state symbols */}
+        {data.outcome_type && !isCaseNode && (
+          <div style={{ 
+            fontSize: '24px', 
+            marginBottom: '4px',
+            color: data.outcome_type.toLowerCase() === 'success' ? '#10b981' : // green
+                   data.outcome_type.toLowerCase() === 'failure' ? '#ef4444' : // red
+                   data.outcome_type.toLowerCase() === 'error' ? '#f59e0b' : // orange
+                   data.outcome_type.toLowerCase() === 'neutral' ? '#6b7280' : // grey
+                   '#333',
+            fontWeight: 'bold'
+          }}>
+            {data.outcome_type.toLowerCase() === 'success' ? '✓' : 
+             data.outcome_type.toLowerCase() === 'failure' ? '✗' :
+             data.outcome_type.toLowerCase() === 'error' ? '⚠' :
+             data.outcome_type.toLowerCase() === 'neutral' ? '○' :
+             '●'}
+          </div>
+        )}
+        
+        <div 
+          style={{ 
+            fontWeight: 'bold', 
+            marginBottom: '4px', 
+            fontSize: '12px', 
+            cursor: 'pointer',
+            lineHeight: '1.2',
+            wordWrap: 'break-word',
+            overflowWrap: 'break-word',
+            hyphens: 'auto',
+            maxWidth: '100%',
+            textAlign: 'center'
+          }}
+          onDoubleClick={handleDoubleClick}
+          title="Double-click to edit in properties panel"
+        >
+          {data.label}
+        </div>
+        
+        {data.absorbing && !isCaseNode && !data.outcome_type && (
+          <div style={{ fontSize: '10px', color: '#666', marginTop: '4px' }}>
+            TERMINAL
+          </div>
+        )}
+
+        {data.entry?.is_start && !isCaseNode && (
+          <div style={{ fontSize: '10px', color: '#16a34a', marginTop: '2px', fontWeight: 'bold' }}>
+            START
+          </div>
+        )}
+
+        {/* Case node variant info */}
+        {isCaseNode && data.case && (
+          <div style={{ 
+            fontSize: '9px', 
+            color: '#FFFFFF', 
+            marginTop: '2px',
+            opacity: 0.9
+          }}>
+            {data.case.variants.length} variant{data.case.variants.length > 1 ? 's' : ''}
+          </div>
+        )}
+
+        {/* Probability mass warning */}
+        {probabilityMass && !probabilityMass.isComplete && !isCaseNode && (
+          <div style={{ 
+            fontSize: '9px', 
+            color: '#ff6b6b', 
+            marginTop: '2px',
+            background: '#fff5f5',
+            padding: '2px 4px',
+            borderRadius: '3px',
+            border: '1px solid #ff6b6b',
+            fontWeight: 'bold'
+          }}>
+            ⚠️ Missing {Math.round(probabilityMass.missing * 100)}%
+          </div>
+        )}
       </div>
-      
-      {data.absorbing && (
-        <div style={{ fontSize: '10px', color: '#666', marginTop: '4px' }}>
-          TERMINAL
-        </div>
-      )}
-      
-      {data.outcome_type && (
-        <div style={{ fontSize: '10px', color: '#007bff', marginTop: '2px' }}>
-          {data.outcome_type.toUpperCase()}
-        </div>
-      )}
 
-      {data.entry?.is_start && (
-        <div style={{ fontSize: '10px', color: '#16a34a', marginTop: '2px', fontWeight: 'bold' }}>
-          START
-        </div>
-      )}
-
-      {/* Case node status indicator */}
+      {/* Case node status indicator - outside content wrapper to avoid rotation */}
       {isCaseNode && data.case && (
         <div style={{ 
           position: 'absolute',
@@ -316,19 +393,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         }} title={`Status: ${data.case.status}`} />
       )}
 
-      {/* Case node variant info */}
-      {isCaseNode && data.case && (
-        <div style={{ 
-          fontSize: '9px', 
-          color: '#FFFFFF', 
-          marginTop: '2px',
-          opacity: 0.9
-        }}>
-          {data.case.variants.length} variant{data.case.variants.length > 1 ? 's' : ''}
-        </div>
-      )}
-
-      {/* What-If Analysis Indicator */}
+      {/* What-If Analysis Indicator - outside content wrapper */}
       {isCaseNode && whatIfAnalysis && whatIfAnalysis.caseNodeId === data.id && (
         <div style={{
           position: 'absolute',
@@ -338,22 +403,6 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           animation: 'pulse 2s infinite'
         }} title={`What-If Mode: ${whatIfAnalysis.selectedVariant} @ 100%`}>
           🔬
-        </div>
-      )}
-
-      {/* Probability mass warning */}
-      {probabilityMass && !probabilityMass.isComplete && (
-        <div style={{ 
-          fontSize: '9px', 
-          color: '#ff6b6b', 
-          marginTop: '2px',
-          background: '#fff5f5',
-          padding: '2px 4px',
-          borderRadius: '3px',
-          border: '1px solid #ff6b6b',
-          fontWeight: 'bold'
-        }}>
-          ⚠️ Missing {Math.round(probabilityMass.missing * 100)}%
         </div>
       )}
       

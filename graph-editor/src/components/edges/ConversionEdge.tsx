@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom';
 import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
 import { useGraphStore } from '@/lib/useGraphStore';
 import Tooltip from '@/components/Tooltip';
+import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors';
 
 interface ConversionEdgeData {
   id: string;
@@ -81,11 +82,35 @@ export default function ConversionEdge({
       lines.push(`Std Dev: ${(data.stdev * 100).toFixed(1)}%`);
     }
     
-    // Case edge specific info - this is the key info for case edges
+    // Case edge specific info - show variant weight
     if (data.case_variant) {
       lines.push(`\nCase Variant: ${data.case_variant}`);
       if (data.case_id) {
         lines.push(`Case ID: ${data.case_id}`);
+        // Find the case node and get variant weight
+        const sourceNode = graph?.nodes.find((n: any) => n.id === source);
+        if (sourceNode?.type === 'case' && sourceNode?.case?.id === data.case_id) {
+          const variant = sourceNode.case.variants?.find((v: any) => v.name === data.case_variant);
+          if (variant) {
+            lines.push(`Variant Weight: ${(variant.weight * 100).toFixed(1)}%`);
+          }
+        }
+      }
+    }
+    
+    // Conditional probabilities
+    if (fullEdge?.conditional_p && fullEdge.conditional_p.length > 0) {
+      lines.push(`\nConditional Probabilities:`);
+      for (const cond of fullEdge.conditional_p) {
+        const nodeNames = cond.condition.visited.map((nodeId: string) => {
+          const node = graph?.nodes.find((n: any) => n.id === nodeId);
+          return node?.slug || node?.label || nodeId;
+        }).join(', ');
+        const condProb = ((cond.p.mean ?? 0) * 100).toFixed(1);
+        lines.push(`  • p | visited(${nodeNames}): ${condProb}%`);
+        if (cond.p.stdev) {
+          lines.push(`    σ: ${(cond.p.stdev * 100).toFixed(1)}%`);
+        }
       }
     }
     
@@ -121,7 +146,80 @@ export default function ConversionEdge({
     return lines.join('\n');
   };
   const { deleteElements, setEdges, getNodes, screenToFlowPosition } = useReactFlow();
-  const { whatIfAnalysis } = useGraphStore();
+  const { whatIfAnalysis, graph, whatIfOverrides } = useGraphStore();
+  
+  // Get the full edge object to check for conditional probabilities
+  const fullEdge = graph?.edges.find((e: any) => e.id === id);
+  
+  // Check if this edge has a what-if conditional override active (explicit or implicit)
+  const getConditionalOverrideProb = () => {
+    if (!fullEdge || !fullEdge.conditional_p) {
+      return null;
+    }
+    
+    // Check for explicit what-if override first
+    if (whatIfOverrides?.conditionalOverrides) {
+      const override = whatIfOverrides.conditionalOverrides.get(id);
+      if (override) {
+        // Find the matching condition
+        for (const conditionalProb of fullEdge.conditional_p) {
+          const conditionMatches = conditionalProb.condition.visited.every(nodeId => override.has(nodeId)) &&
+                                  conditionalProb.condition.visited.length === override.size;
+          if (conditionMatches) {
+            return {
+              probability: conditionalProb.p.mean,
+              conditionNodes: Array.from(override).map(nid => {
+                const node = graph?.nodes.find(n => n.id === nid);
+                return node?.label || node?.slug || nid;
+              }),
+              isExplicit: true
+            };
+          }
+        }
+      }
+    }
+    
+    // Check for implicit auto-apply based on case node what-if
+    if (whatIfAnalysis?.caseNodeId && whatIfAnalysis?.selectedVariant) {
+      // Build set of implicitly visited nodes
+      const implicitlyVisitedNodes = new Set<string>();
+      const allEdges = getNodes().flatMap(n => 
+        getNodes().map(target => ({ source: n.id, target: target.id }))
+      );
+      
+      // This is a simplified check - in reality we'd need to look at actual edges from the graph
+      // For now, check if any conditional matches nodes that would be visited
+      if (graph?.edges) {
+        graph.edges.forEach((edge: any) => {
+          if (edge.case_id === whatIfAnalysis.caseNodeId && 
+              edge.case_variant === whatIfAnalysis.selectedVariant) {
+            implicitlyVisitedNodes.add(edge.to);
+          }
+        });
+      }
+      
+      // Check if any condition is satisfied by implicitly visited nodes
+      for (const conditionalProb of fullEdge.conditional_p) {
+        const allConditionsMet = conditionalProb.condition.visited.every(nodeId => 
+          implicitlyVisitedNodes.has(nodeId)
+        );
+        if (allConditionsMet && conditionalProb.condition.visited.length > 0) {
+          return {
+            probability: conditionalProb.p.mean,
+            conditionNodes: conditionalProb.condition.visited.map(nid => {
+              const node = graph?.nodes.find(n => n.id === nid);
+              return node?.label || node?.slug || nid;
+            }),
+            isExplicit: false // Auto-applied due to case what-if
+          };
+        }
+      }
+    }
+    
+    return null;
+  };
+  
+  const conditionalOverride = getConditionalOverrideProb();
   
   // Get variant weight for case edges (respecting what-if analysis)
   const getVariantWeight = () => {
@@ -522,35 +620,58 @@ export default function ConversionEdge({
   const finalLabelX = adjustedLabelPosition?.x ?? labelX;
   const finalLabelY = adjustedLabelPosition?.y ?? labelY;
 
-  // Edge color logic: purple for case edges, gray for normal, highlight for connected selected nodes
+  // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
   const getEdgeColor = () => {
     if (selected) return '#007bff'; // bright blue for selections
     if (data?.isHighlighted) {
-      // Calculate intensity based on depth (10% reduction per step)
+      // Calculate black intensity based on depth
+      // Start at 60% black for directly selected/adjacent (depth 0)
+      // Reduce by 10% of prior at each step: depth 1 = 54%, depth 2 = 48.6%, etc.
       const depth = data.highlightDepth || 0;
-      const intensity = Math.max(0.1, 1 - (depth * 0.1)); // Minimum 10% intensity
+      const blackIntensity = 0.6 * Math.pow(0.9, depth); // 60% × 0.9^depth
       
-      // Get the base color for this edge type
-      let baseColor = '#999'; // default gray
+      // Get the base color for this edge type (underlying color)
+      let baseColor = '#b3b3b3'; // default gray
       if (data?.probability === undefined || data?.probability === null) {
         baseColor = '#ff6b6b';
-      } else if (isCaseEdge) {
-        baseColor = '#C4B5FD'; // purple-300 for case edges
+      } else if (fullEdge && isConditionalEdge(fullEdge)) {
+        // Conditional edges get their conditional color
+        baseColor = getConditionalColor(fullEdge) || '#4ade80'; // green-400 fallback
+      } else {
+        // Check if source node is a case node and inherit its color
+        // This applies to both case variant edges AND normal edges downstream
+        const sourceNode = graph?.nodes.find((n: any) => n.id === source);
+        if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
+          baseColor = sourceNode.layout.color;
+        }
       }
       
-      // Blend dark grey highlight with base color based on intensity
-      const highlightColor = { r: 51, g: 51, b: 51 }; // 80% dark grey (#333333)
+      // Blend pure black with base color based on black intensity
+      // blackIntensity = how much black, (1 - blackIntensity) = how much base color
+      const black = { r: 0, g: 0, b: 0 }; // Pure black
       const baseColorRgb = hexToRgb(baseColor);
       
-      const blendedR = Math.round(highlightColor.r * intensity + baseColorRgb.r * (1 - intensity));
-      const blendedG = Math.round(highlightColor.g * intensity + baseColorRgb.g * (1 - intensity));
-      const blendedB = Math.round(highlightColor.b * intensity + baseColorRgb.b * (1 - intensity));
+      const blendedR = Math.round(black.r * blackIntensity + baseColorRgb.r * (1 - blackIntensity));
+      const blendedG = Math.round(black.g * blackIntensity + baseColorRgb.g * (1 - blackIntensity));
+      const blendedB = Math.round(black.b * blackIntensity + baseColorRgb.b * (1 - blackIntensity));
       
       return `rgb(${blendedR}, ${blendedG}, ${blendedB})`;
     }
     if (data?.probability === undefined || data?.probability === null) return '#ff6b6b';
-    if (isCaseEdge) return '#C4B5FD'; // purple-300 for case edges
-        return '#b3b3b3'; // 15% lighter gray for normal edges
+    
+    // Check for conditional edges and apply conditional color
+    if (fullEdge && isConditionalEdge(fullEdge)) {
+      return getConditionalColor(fullEdge) || '#4ade80'; // green-400 fallback
+    }
+    
+    // Check if source node is a case node and inherit its color
+    // This applies to both case variant edges AND normal edges downstream
+    const sourceNode = graph?.nodes.find((n: any) => n.id === source);
+    if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
+      return sourceNode.layout.color;
+    }
+    
+    return '#b3b3b3'; // 15% lighter gray for normal edges
   };
 
   // Helper function to convert hex to RGB
@@ -852,6 +973,27 @@ export default function ConversionEdge({
                 border: '1px solid #ff6b6b'
               }}>
                 ⚠️ No Probability
+              </div>
+            ) : conditionalOverride ? (
+              // Conditional edge with what-if override: show conditional probability
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <div style={{ 
+                  fontWeight: 'bold', 
+                  fontSize: '11px',
+                  color: conditionalOverride.isExplicit ? '#10b981' : '#3b82f6',
+                  background: conditionalOverride.isExplicit ? '#f0fdf4' : '#eff6ff',
+                  padding: '2px 4px',
+                  borderRadius: '2px'
+                }}>
+                  {Math.round((conditionalOverride.probability || 0) * 100)}%
+                </div>
+                <div style={{ 
+                  fontWeight: 'normal', 
+                  fontSize: '9px',
+                  color: '#666'
+                }}>
+                  {conditionalOverride.isExplicit ? '🔬 What-If' : '🔗 Auto'}
+                </div>
               </div>
             ) : isCaseEdge && variantWeight !== null ? (
               // Case edge: show variant weight (purple) and sub-route probability (gray)

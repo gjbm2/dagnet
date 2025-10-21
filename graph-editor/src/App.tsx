@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import GraphCanvas from './components/GraphCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import GitOperations from './components/GitOperations';
+import WhatIfAnalysisControl from './components/WhatIfAnalysisControl';
 import { loadFromSheet, saveToSheet } from './lib/sheetsClient';
 import { decodeStateFromUrl, encodeStateToUrl } from './lib/shareUrl';
 import { useGraphStore } from './lib/useGraphStore';
@@ -325,6 +326,11 @@ export default function App() {
             currentGraph={graph}
             currentGraphName={graph?.metadata?.name || 'untitled'}
           />
+        </div>
+
+        {/* What-If Analysis Control */}
+        <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
+          <WhatIfAnalysisControl />
         </div>
 
         {/* Properties Panel */}
