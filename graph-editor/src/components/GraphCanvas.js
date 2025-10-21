@@ -1074,7 +1074,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                 return;
             }
             const originalEdge = { ...nextGraph.edges[edgeIndex] };
-            // Update edge source/target and handles
+            // Update edge source/target and handles (source and target are guaranteed non-null by earlier check)
             nextGraph.edges[edgeIndex].from = newConnection.source;
             nextGraph.edges[edgeIndex].to = newConnection.target;
             // Map handle IDs to match our node component
