@@ -43,6 +43,7 @@ interface ConversionEdgeData {
   scaledWidth?: number;
   isHighlighted?: boolean;
   highlightDepth?: number;
+  isSingleNodeHighlight?: boolean;
 }
 
 export default function ConversionEdge({
@@ -400,6 +401,12 @@ export default function ConversionEdge({
   const { getEdges } = useReactFlow();
   
   React.useEffect(() => {
+    // Skip collision detection for selected edges (reconnection handles are more important)
+    if (selected) {
+      setAdjustedLabelPosition(null);
+      return;
+    }
+    
     // Debounce collision detection to avoid excessive recalculations
     const timeoutId = setTimeout(() => {
       const otherEdges = getEdges().filter(e => e.id !== id);
@@ -538,7 +545,7 @@ export default function ConversionEdge({
     }, 100); // 100ms debounce
 
     return () => clearTimeout(timeoutId);
-  }, [edgePath, labelX, labelY, id, getEdges, getNodes]);
+  }, [edgePath, labelX, labelY, id, getEdges, getNodes, selected]);
 
   // Use adjusted position if available, otherwise use default
   const finalLabelX = adjustedLabelPosition?.x ?? labelX;
@@ -546,13 +553,24 @@ export default function ConversionEdge({
 
   // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
   const getEdgeColor = () => {
-    if (selected) return '#007bff'; // bright blue for selections
+    if (selected) {
+      // Explicitly selected edge: 80% opacity
+      return 'rgba(0, 123, 255, 0.8)'; // blue at 80%
+    }
     if (data?.isHighlighted) {
-      // Calculate black intensity based on depth
-      // Start at 60% black for directly selected/adjacent (depth 0)
-      // Reduce by 10% of prior at each step: depth 1 = 54%, depth 2 = 48.6%, etc.
-      const depth = data.highlightDepth || 0;
-      const blackIntensity = 0.6 * Math.pow(0.9, depth); // 60% × 0.9^depth
+      // Different opacity for different selection types:
+      // - Single node (isSingleNodeHighlight=true): 30% fading with depth
+      // - Multi-node topological (isSingleNodeHighlight=false): 50% solid
+      let blackIntensity: number;
+      
+      if (data.isSingleNodeHighlight) {
+        // Single node selection: Start at 30%, fade by 10% per hop
+        const depth = data.highlightDepth || 0;
+        blackIntensity = 0.3 * Math.pow(0.9, depth); // 30% × 0.9^depth
+      } else {
+        // Multi-node topological selection: 50% solid
+        blackIntensity = 0.5;
+      }
       
       // Get the base color for this edge type (underlying color)
       let baseColor = '#b3b3b3'; // default gray
@@ -806,7 +824,6 @@ export default function ConversionEdge({
           stroke: getEdgeColor(),
           strokeWidth: data?.scaledWidth || (data?.calculateWidth ? data.calculateWidth() : (selected ? 3 : (data?.probability === undefined || data?.probability === null) ? 3 : 2)),
           fill: 'none',
-          cursor: 'pointer',
           zIndex: selected ? 1000 : 1,
           strokeDasharray: (data?.probability === undefined || data?.probability === null) ? '5,5' : 'none',
           markerEnd: data?.calculateWidth ? 'none' : `url(#arrow-${id})`,
@@ -824,7 +841,6 @@ export default function ConversionEdge({
           stroke: 'transparent',
           strokeWidth: 20,
           fill: 'none',
-          cursor: 'pointer',
           zIndex: selected ? 1000 : 1,
         }}
         className="react-flow__edge-path"
@@ -869,11 +885,10 @@ export default function ConversionEdge({
             fontSize: '12px',
             fontWeight: 'bold',
             border: selected ? 'none' : '1px solid #ddd',
-            cursor: 'pointer',
             minWidth: '40px',
             textAlign: 'center',
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            pointerEvents: 'auto',
+            pointerEvents: selected ? 'none' : 'auto',
           }}
           onDoubleClick={handleDoubleClick}
           onMouseEnter={(e) => {
@@ -994,85 +1009,22 @@ export default function ConversionEdge({
                 borderRadius: '50%',
                 width: '16px',
                 height: '16px',
-                cursor: 'pointer',
                 fontSize: '10px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 zIndex: 1000,
+                pointerEvents: 'none',
               }}
-              onClick={handleDelete}
-              title="Delete edge"
+              title="Delete edge (use context menu)"
             >
               ×
             </div>
             
-            {/* Draggable source handle */}
-            <div
-              style={{
-                position: 'absolute',
-                transform: `translate(-50%, -50%) translate(${adjustedSourceX}px,${adjustedSourceY}px)`,
-                width: '12px',
-                height: '12px',
-                background: '#007bff',
-                border: '2px solid #fff',
-                borderRadius: '50%',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                cursor: 'grab',
-                zIndex: 1001,
-                transition: 'all 0.2s ease',
-                pointerEvents: 'auto',
-                visibility: isDraggingSource ? 'hidden' : 'visible',
-              }}
-              onMouseDown={handleSourceMouseDown}
-              title="Drag to reconnect source"
-            />
-            
-            {/* Draggable target handle */}
-            <div
-              style={{
-                position: 'absolute',
-                transform: `translate(-50%, -50%) translate(${adjustedTargetX}px,${adjustedTargetY}px)`,
-                width: '12px',
-                height: '12px',
-                background: '#28a745',
-                border: '2px solid #fff',
-                borderRadius: '50%',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                cursor: 'grab',
-                zIndex: 1001,
-                transition: 'all 0.2s ease',
-                pointerEvents: 'auto',
-                visibility: isDraggingTarget ? 'hidden' : 'visible',
-              }}
-              onMouseDown={handleTargetMouseDown}
-              title="Drag to reconnect target"
-            />
+            {/* ReactFlow's built-in reconnection handles will appear automatically for selected edges with reconnectable=true */}
           </>
         )}
       </EdgeLabelRenderer>
-
-      {/* Dragging handles - rendered as portal to avoid coordinate system issues */}
-      {(isDraggingSource || isDraggingTarget) && dragPosition && ReactDOM.createPortal(
-        <div
-          style={{
-            position: 'fixed',
-            left: `${dragPosition.x}px`,
-            top: `${dragPosition.y}px`,
-            transform: 'translate(-50%, -50%) scale(1.2)',
-            width: '12px',
-            height: '12px',
-            background: isDraggingSource ? '#0056b3' : '#1e7e34',
-            border: '2px solid #fff',
-            borderRadius: '50%',
-            boxShadow: '0 4px 8px rgba(0,0,0,0.3)',
-            cursor: 'grabbing',
-            zIndex: 10000,
-            pointerEvents: 'none',
-          }}
-        />,
-        document.body
-      )}
 
       {/* Edge tooltip - rendered as portal */}
       {showTooltip && ReactDOM.createPortal(

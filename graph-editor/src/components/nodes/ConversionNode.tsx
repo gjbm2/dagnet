@@ -1,6 +1,7 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Handle, Position, NodeProps, useReactFlow, useStore } from 'reactflow';
 import { useGraphStore } from '@/lib/useGraphStore';
+import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import Tooltip from '@/components/Tooltip';
 
 interface ConversionNodeData {
@@ -36,66 +37,13 @@ interface ConversionNodeData {
 
 export default function ConversionNode({ data, selected }: NodeProps<ConversionNodeData>) {
   const { getEdges, getNodes, setNodes } = useReactFlow();
-  const { whatIfAnalysis } = useGraphStore();
+  const { whatIfAnalysis, graph } = useGraphStore();
   
   // Track hover state
   const [isHovered, setIsHovered] = useState(false);
   
   // Check if user is currently connecting (creating a new edge)
   const isConnecting = useStore((state) => state.connectionNodeId !== null);
-
-  // Generate tooltip content
-  const getTooltipContent = () => {
-    const lines: string[] = [];
-    
-    // Basic node info
-    lines.push(`Node: ${data.label || data.id}`);
-    lines.push(`Type: ${data.type || 'normal'}`);
-    lines.push(`Absorbing: ${data.absorbing ? 'Yes' : 'No'}`);
-    
-    if (data.slug) {
-      lines.push(`Slug: ${data.slug}`);
-    }
-    
-    if (data.outcome_type) {
-      lines.push(`Outcome Type: ${data.outcome_type}`);
-    }
-    
-    // Case node specific info
-    if (data.type === 'case' && data.case) {
-      lines.push(`\nCase Info:`);
-      lines.push(`  Status: ${data.case.status}`);
-      if (data.case.parameter_id) {
-        lines.push(`  Parameter ID: ${data.case.parameter_id}`);
-      }
-      lines.push(`  Variants:`);
-      data.case.variants.forEach(variant => {
-        lines.push(`    • ${variant.name}: ${(variant.weight * 100).toFixed(1)}%`);
-        if (variant.description) {
-          lines.push(`      ${variant.description}`);
-        }
-      });
-    }
-    
-    // Entry info
-    if (data.entry) {
-      lines.push(`\nEntry Info:`);
-      if (data.entry.is_start) {
-        lines.push(`  Start Node: Yes`);
-      }
-      if (data.entry.entry_weight !== undefined) {
-        lines.push(`  Entry Weight: ${data.entry.entry_weight}`);
-      }
-    }
-    
-    // Description
-    if (data.description) {
-      lines.push(`\nDescription: ${data.description}`);
-    }
-    
-    return lines.join('\n');
-  };
-
 
   const handleDoubleClick = useCallback(() => {
     // Programmatically select this node to focus the properties panel
@@ -167,21 +115,103 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const isStartNode = data.entry?.is_start || false;
   const isTerminalNode = data.absorbing || false;
   
+  // Check for conditional probability conservation errors
+  const conditionalValidation = useMemo(() => {
+    if (!graph) return null;
+    const validation = validateConditionalProbabilities(graph);
+    // Find errors for this specific node
+    const nodeErrors = validation.errors.filter(err => err.nodeId === data.id);
+    const nodeWarnings = validation.warnings.filter(warn => warn.nodeId === data.id);
+    
+    // Check if there are CONDITIONAL probability sum errors (not base case)
+    // Base case has condition='base', conditional cases have actual node IDs or 'variant_X'
+    const hasConditionalProbSumError = nodeErrors.some(err => 
+      err.type === 'probability_sum' && err.condition !== 'base' && !err.condition?.startsWith('variant_')
+    );
+    
+    return {
+      hasErrors: nodeErrors.length > 0,
+      hasProbSumError: hasConditionalProbSumError,
+      errors: nodeErrors,
+      warnings: nodeWarnings
+    };
+  }, [graph, data.id]);
+  
+  // Generate tooltip content
+  const getTooltipContent = useCallback(() => {
+    const lines: string[] = [];
+    
+    // Basic node info
+    lines.push(`Node: ${data.label || data.id}`);
+    lines.push(`Type: ${data.type || 'normal'}`);
+    lines.push(`Absorbing: ${data.absorbing ? 'Yes' : 'No'}`);
+    
+    if (data.slug) {
+      lines.push(`Slug: ${data.slug}`);
+    }
+    
+    if (data.outcome_type) {
+      lines.push(`Outcome Type: ${data.outcome_type}`);
+    }
+    
+    // Case node specific info
+    if (data.type === 'case' && data.case) {
+      lines.push(`\nCase Info:`);
+      lines.push(`  Status: ${data.case.status}`);
+      if (data.case.parameter_id) {
+        lines.push(`  Parameter ID: ${data.case.parameter_id}`);
+      }
+      lines.push(`  Variants:`);
+      data.case.variants.forEach(variant => {
+        lines.push(`    • ${variant.name}: ${(variant.weight * 100).toFixed(1)}%`);
+        if (variant.description) {
+          lines.push(`      ${variant.description}`);
+        }
+      });
+    }
+    
+    // Entry info
+    if (data.entry) {
+      lines.push(`\nEntry Info:`);
+      if (data.entry.is_start) {
+        lines.push(`  Start Node: Yes`);
+      }
+      if (data.entry.entry_weight !== undefined) {
+        lines.push(`  Entry Weight: ${data.entry.entry_weight}`);
+      }
+    }
+    
+    // Description
+    if (data.description) {
+      lines.push(`\nDescription: ${data.description}`);
+    }
+    
+    // Conditional probability errors
+    if (conditionalValidation?.errors && conditionalValidation.errors.length > 0) {
+      lines.push(`\n⚠️ Conditional Probability Errors:`);
+      conditionalValidation.errors.forEach(err => {
+        lines.push(`  • ${err.message}`);
+      });
+    }
+    
+    // Conditional probability warnings
+    if (conditionalValidation?.warnings && conditionalValidation.warnings.length > 0) {
+      lines.push(`\n⚠️ Conditional Probability Warnings:`);
+      conditionalValidation.warnings.forEach(warn => {
+        lines.push(`  • ${warn.message}`);
+      });
+    }
+    
+    return lines.join('\n');
+  }, [data, conditionalValidation]);
+  
   // Determine node shape based on type
   const getNodeShape = () => {
-    if (isCaseNode) {
-      return {
-        borderRadius: '0px', // Sharp corners for case nodes
-        width: '120px',
-        height: '80px'
-      };
-    } else {
-      return {
-        borderRadius: '8px', // Lightly rounded corners for all non-case nodes
-        width: '120px',
-        height: '80px'
-      };
-    }
+    return {
+      borderRadius: '0px', // Square corners for all nodes
+      width: '100px',
+      height: '100px'
+    };
   };
   
   const nodeShape = getNodeShape();
@@ -218,21 +248,40 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         onMouseLeave={() => setIsHovered(false)}
       style={{
         padding: '8px',
-        border: isCaseNode ? (selected ? `3px solid ${caseNodeColor || '#7C3AED'}` : `2px solid ${caseNodeColor || '#7C3AED'}`) :
-                (isStartNode || isTerminalNode) ? '3px double #999' : // Double border for start/terminal
-                selected ? '2px solid #007bff' : 
-                (probabilityMass && !probabilityMass.isComplete) ? '2px solid #ff6b6b' : 
+        border: selected ? '5px solid #333' : // Thick dark grey border for all selected nodes
+                ((probabilityMass && !probabilityMass.isComplete) || (conditionalValidation?.hasProbSumError)) ? '2px solid #ff6b6b' : // Red border for probability conservation errors
+                isCaseNode ? `2px solid ${caseNodeColor || '#7C3AED'}` :
                 '2px solid #ddd',
         ...nodeShape, // Apply shape-specific styles
-        background: isCaseNode ? (caseNodeColor || '#e5e7eb') : // Case nodes: custom color or light grey if unassigned
-                    '#fff', // White for all other nodes (including start/terminal)
+        background: isCaseNode ? (caseNodeColor || '#e5e7eb') : '#fff', // Case nodes: custom color, all others white
         color: isCaseNode && caseNodeColor ? '#fff' : '#333', // White text on colored case nodes for readability
         textAlign: 'center',
         cursor: 'pointer',
-        boxShadow: selected ? '0 4px 8px rgba(0,123,255,0.3)' : 
-                   (probabilityMass && !probabilityMass.isComplete) ? '0 2px 4px rgba(255,107,107,0.3)' :
-                   '0 2px 4px rgba(0,0,0,0.1)',
-        transition: 'all 0.2s ease',
+        boxShadow: (() => {
+          // Base shadow
+          const baseShadow = selected ? '0 4px 8px rgba(51,51,51,0.4)' : '0 2px 4px rgba(0,0,0,0.1)';
+          
+          // Inner border for start/end nodes with blur
+          let innerBorder = '';
+          if (isStartNode) {
+            innerBorder = 'inset 0 0 20px 0px rgba(191, 219, 254, 0.6)';
+          } else if (isTerminalNode) {
+            if (data.outcome_type === 'success') {
+              innerBorder = 'inset 0 0 20px 0px rgba(187, 247, 208, 0.6)';
+            } else if (data.outcome_type === 'failure') {
+              innerBorder = 'inset 0 0 20px 0px rgba(254, 202, 202, 0.6)';
+            } else {
+              innerBorder = 'inset 0 0 20px 0px rgba(229, 231, 235, 0.6)';
+            }
+          }
+          
+          // Error shadow
+          if ((probabilityMass && !probabilityMass.isComplete) || (conditionalValidation?.hasProbSumError)) {
+            return innerBorder ? `0 2px 4px rgba(255,107,107,0.3), ${innerBorder}` : '0 2px 4px rgba(255,107,107,0.3)';
+          }
+          
+          return innerBorder ? `${baseShadow}, ${innerBorder}` : baseShadow;
+        })(),
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'center',
@@ -300,24 +349,6 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         alignItems: 'center'
       }}>
         {/* Terminal state symbols */}
-        {data.outcome_type && !isCaseNode && (
-          <div style={{ 
-            fontSize: '24px', 
-            marginBottom: '4px',
-            color: data.outcome_type.toLowerCase() === 'success' ? '#10b981' : // green
-                   data.outcome_type.toLowerCase() === 'failure' ? '#ef4444' : // red
-                   data.outcome_type.toLowerCase() === 'error' ? '#f59e0b' : // orange
-                   data.outcome_type.toLowerCase() === 'neutral' ? '#6b7280' : // grey
-                   '#333',
-            fontWeight: 'bold'
-          }}>
-            {data.outcome_type.toLowerCase() === 'success' ? '✓' : 
-             data.outcome_type.toLowerCase() === 'failure' ? '✗' :
-             data.outcome_type.toLowerCase() === 'error' ? '⚠' :
-             data.outcome_type.toLowerCase() === 'neutral' ? '○' :
-             '●'}
-          </div>
-        )}
         
         <div 
           style={{ 
@@ -377,6 +408,22 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             ⚠️ Missing {Math.round(probabilityMass.missing * 100)}%
           </div>
         )}
+        
+        {/* Conditional probability conservation warning */}
+        {conditionalValidation?.hasProbSumError && (
+          <div style={{ 
+            fontSize: '9px', 
+            color: '#ff6b6b', 
+            marginTop: '2px',
+            background: '#fff5f5',
+            padding: '2px 4px',
+            borderRadius: '3px',
+            border: '1px solid #ff6b6b',
+            fontWeight: 'bold'
+          }}>
+            ⚠️ Conditional P not conserved
+          </div>
+        )}
       </div>
 
       {/* Case node status indicator - outside content wrapper to avoid rotation */}
@@ -406,13 +453,57 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         </div>
       )}
       
+      {/* Start node badge - top-left corner */}
+      {isStartNode && (
+        <div style={{
+          position: 'absolute',
+          top: '6px',
+          left: '6px',
+          width: '18px',
+          height: '18px',
+          borderRadius: '50%',
+          background: '#3b82f6',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '9px',
+          color: '#fff',
+          fontWeight: 'bold',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+        }} title="Start Node">
+          ▶
+        </div>
+      )}
+      
+      {/* End node badge - bottom-right corner */}
+      {isTerminalNode && (
+        <div style={{
+          position: 'absolute',
+          bottom: '6px',
+          right: '6px',
+          width: '18px',
+          height: '18px',
+          borderRadius: '50%',
+          background: data.outcome_type === 'success' ? '#10b981' : data.outcome_type === 'failure' ? '#ef4444' : '#6b7280',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '10px',
+          color: '#fff',
+          fontWeight: 'bold',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+        }} title={`End Node: ${data.outcome_type || 'unknown'}`}>
+          ■
+        </div>
+      )}
+      
       {/* Output handles - all sides */}
       <Handle 
         type="source" 
         position={Position.Left} 
         id="left-out" 
         style={{ 
-          background: '#007bff', 
+          background: '#000', 
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
@@ -424,7 +515,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         position={Position.Top} 
         id="top-out" 
         style={{ 
-          background: '#007bff', 
+          background: '#000', 
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
@@ -436,7 +527,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         position={Position.Right} 
         id="right-out" 
         style={{ 
-          background: '#007bff', 
+          background: '#000', 
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
@@ -448,7 +539,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         position={Position.Bottom} 
         id="bottom-out" 
         style={{ 
-          background: '#007bff', 
+          background: '#000', 
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,

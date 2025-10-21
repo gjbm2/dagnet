@@ -1,6 +1,6 @@
 import type { Edge, Node } from 'reactflow';
 
-export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void }): { nodes: Node[]; edges: Edge[] } {
+export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onEdgeUpdate?: (oldEdge: any, newConnection: any) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void }): { nodes: Node[]; edges: Edge[] } {
   if (!graph) return { nodes: [], edges: [] };
   
   const nodes: Node[] = (graph.nodes || []).map((n: any) => ({
@@ -31,6 +31,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     target: e.to,
     sourceHandle: e.fromHandle,
     targetHandle: e.toHandle,
+    reconnectable: true, // CSS and callback will enforce selection requirement
     data: {
       id: e.id || `${e.from}->${e.to}`,
       slug: e.slug,
@@ -46,6 +47,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       onDelete: callbacks?.onDeleteEdge,
       onDoubleClick: callbacks?.onDoubleClickEdge,
       onSelect: callbacks?.onSelectEdge,
+      onEdgeUpdate: callbacks?.onEdgeUpdate,
       onReconnect: callbacks?.onReconnect,
     },
   }));
