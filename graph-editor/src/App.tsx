@@ -80,21 +80,21 @@ export default function App() {
               entry: { is_start: true, entry_weight: 1.0 },
               layout: { x: 100, y: 100, rank: 0 }
             }
-          ],
-          edges: [],
-          policies: {
-            default_outcome: "abandon",
-            overflow_policy: "error",
-            free_edge_policy: "complement"
-          },
-          metadata: {
-            version: "1.0.0",
-            created_at: new Date().toISOString(),
-            author: "Graph Editor",
-            description: "Default empty graph"
-          }
-        };
-        setGraph(defaultGraph);
+        ],
+        edges: [],
+        policies: {
+          default_outcome: "abandon" as const,
+          overflow_policy: "error" as const,
+          free_edge_policy: "complement" as const
+        },
+        metadata: {
+          version: "1.0.0",
+          created_at: new Date().toISOString(),
+          author: "Graph Editor",
+          description: "Default empty graph"
+        }
+      };
+      setGraph(defaultGraph);
       }
     }).catch(e => {
       console.warn('Failed to load from sheet, using default graph:', e);
@@ -117,9 +117,9 @@ export default function App() {
       ],
       edges: [],
       policies: {
-        default_outcome: "abandon",
-        overflow_policy: "error",
-        free_edge_policy: "complement"
+        default_outcome: "abandon" as const,
+        overflow_policy: "error" as const,
+        free_edge_policy: "complement" as const
       },
       metadata: {
         version: "1.0.0",
@@ -183,6 +183,10 @@ export default function App() {
     
     if (sessionId && outputCell && sheetId && appsScriptUrl) {
       // We're being used from Apps Script - save automatically via form POST (bypasses CORS)
+      if (!graph) {
+        console.error('Cannot save: graph is null');
+        return;
+      }
       try {
         // Reorder JSON to put metadata first with description at the top
         const reorderedGraph = {
@@ -325,7 +329,7 @@ export default function App() {
               return true;
             }}
             currentGraph={graph}
-            currentGraphName={graph?.metadata?.name || 'untitled'}
+            currentGraphName={graph?.metadata?.description || 'untitled'}
           />
         </div>
 

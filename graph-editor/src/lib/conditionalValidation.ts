@@ -226,8 +226,8 @@ function calculateBaseProbabilitySum(edges: GraphEdge[], nodes: GraphNode[]): nu
   return edges.reduce((sum, edge) => {
     // For case edges, use variant weight
     if (edge.case_id && edge.case_variant) {
-      const caseNode = nodes.find(n => n.data?.case?.id === edge.case_id);
-      const variant = caseNode?.data?.case?.variants?.find(v => v.name === edge.case_variant);
+      const caseNode = nodes.find(n => n.case?.id === edge.case_id);
+      const variant = caseNode?.case?.variants?.find(v => v.name === edge.case_variant);
       const variantWeight = variant?.weight || 0;
       const subRouteProb = edge.p?.mean ?? 1.0; // Default to 1.0 for single-path
       return sum + (variantWeight * subRouteProb);
@@ -257,10 +257,10 @@ function calculateConditionalProbabilitySum(
         const conditionMet = resolvedConditionNodes.every(nodeId => visitedNodes.includes(nodeId));
         
         if (conditionMet) {
-          // For case edges, multiply variant weight by conditional probability
-          if (edge.case_id && edge.case_variant) {
-            const caseNode = nodes.find(n => n.data?.case?.id === edge.case_id);
-            const variant = caseNode?.data?.case?.variants?.find(v => v.name === edge.case_variant);
+        // For case edges, multiply variant weight by conditional probability
+        if (edge.case_id && edge.case_variant) {
+          const caseNode = nodes.find(n => n.case?.id === edge.case_id);
+          const variant = caseNode?.case?.variants?.find(v => v.name === edge.case_variant);
             const variantWeight = variant?.weight || 0;
             const condProb = cp.p.mean ?? 1.0;
             return sum + (variantWeight * condProb);
@@ -274,8 +274,8 @@ function calculateConditionalProbabilitySum(
     
     // No matching condition, use base probability
     if (edge.case_id && edge.case_variant) {
-      const caseNode = nodes.find(n => n.data?.case?.id === edge.case_id);
-      const variant = caseNode?.data?.case?.variants?.find(v => v.name === edge.case_variant);
+      const caseNode = nodes.find(n => n.case?.id === edge.case_id);
+      const variant = caseNode?.case?.variants?.find(v => v.name === edge.case_variant);
       const variantWeight = variant?.weight || 0;
       const subRouteProb = edge.p?.mean ?? 1.0;
       return sum + (variantWeight * subRouteProb);
@@ -421,8 +421,8 @@ export function getEffectiveProbability(
 ): number {
   // For case edges, multiply variant weight by probability
   if (edge.case_id && edge.case_variant) {
-    const caseNode = nodes.find(n => n.data?.case?.id === edge.case_id);
-    const variant = caseNode?.data?.case?.variants?.find(v => v.name === edge.case_variant);
+    const caseNode = nodes.find(n => n.case?.id === edge.case_id);
+    const variant = caseNode?.case?.variants?.find(v => v.name === edge.case_variant);
     const variantWeight = variant?.weight || 0;
     
     // Check for conditional probability

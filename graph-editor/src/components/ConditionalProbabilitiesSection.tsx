@@ -334,14 +334,10 @@ export default function ConditionalProbabilitiesSection({
               const newCondition = {
                 condition: { visited: [] },
                 p: { 
-                  mean: edge.p?.mean ?? 0.5
+                  mean: edge.p?.mean ?? 0.5,
+                  ...(edge.p?.stdev !== undefined ? { stdev: edge.p.stdev } : {})
                 }
               };
-              
-              // Only include stdev if it exists on the base probability
-              if (edge.p?.stdev !== undefined) {
-                newCondition.p.stdev = edge.p.stdev;
-              }
               
               // Get all sibling edges (same source node)
               const siblings = getSiblingEdges(edge, graph);
@@ -365,14 +361,10 @@ export default function ConditionalProbabilitiesSection({
                   const conditionForThisEdge = {
                     condition: { visited: [] },
                     p: { 
-                      mean: targetEdge.p?.mean ?? 0.5
+                      mean: targetEdge.p?.mean ?? 0.5,
+                      ...(targetEdge.p?.stdev !== undefined ? { stdev: targetEdge.p.stdev } : {})
                     }
                   };
-                  
-                  // Only include stdev if it exists on the base probability
-                  if (targetEdge.p?.stdev !== undefined) {
-                    conditionForThisEdge.p.stdev = targetEdge.p.stdev;
-                  }
                   
                   // Add condition
                   if (!targetEdge.conditional_p) {
