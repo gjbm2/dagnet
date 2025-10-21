@@ -2194,7 +2194,66 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       };
     }
     
-    // Special case: exactly 2 nodes selected - calculate path analysis
+    // Special case: exactly 2 nodes selected
+    if (selectedNodesForAnalysis.length === 2) {
+      // First check if BOTH are end nodes - if so, show comparison instead of path
+      const allAreEndNodes = selectedNodesForAnalysis.every(node => {
+        const hasOutgoingEdges = edges.some(edge => edge.source === node.id);
+        const isEndNode = node.data?.absorbing === true || !hasOutgoingEdges;
+        console.log(`Multi-end check for ${node.data?.label || node.id}:`, { 
+          absorbing: node.data?.absorbing, 
+          hasOutgoingEdges, 
+          isEndNode 
+        });
+        return isEndNode;
+      });
+      
+      console.log(`Two nodes selected - both are end nodes?`, allAreEndNodes);
+      
+      if (allAreEndNodes) {
+        // Show comparison of these two end nodes
+        const startNodes = findStartNodes(nodes, edges);
+        console.log(`Multi-end: found ${startNodes.length} start nodes`);
+        if (startNodes.length > 0) {
+          const startNode = startNodes[0];
+          
+          const endNodeProbabilities = selectedNodesForAnalysis.map(endNode => {
+            const pathAnalysis = findPathThroughIntermediates(
+              startNode.id, 
+              endNode.id, 
+              [startNode.id, endNode.id], 
+              new Set(), 
+              new Map()
+            );
+            
+            return {
+              node: endNode,
+              probability: pathAnalysis.probability,
+              expectedCosts: pathAnalysis.expectedCosts
+            };
+          });
+          
+          // Sort by probability descending
+          endNodeProbabilities.sort((a, b) => b.probability - a.probability);
+          
+          const totalProbability = endNodeProbabilities.reduce((sum, item) => sum + item.probability, 0);
+          
+          console.log(`Multi-end result:`, { totalProbability, nodeCount: endNodeProbabilities.length });
+          
+          return {
+            type: 'multi_end',
+            endNodeProbabilities,
+            totalProbability,
+            startNode
+          };
+        }
+      }
+      
+      // Otherwise, show standard 2-node path analysis
+      console.log(`Two nodes selected - showing path analysis`);
+    }
+    
+    // Standard 2-node path analysis (if not both end nodes)
     if (selectedNodesForAnalysis.length === 2) {
       // ALWAYS sort topologically first
       const sortedNodeIds = topologicalSort(selectedNodeIds, edges);
@@ -2360,6 +2419,52 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Special case: 3+ nodes - check if topologically sequential OR single start/end
     if (selectedNodesForAnalysis.length >= 3) {
+      // First check if ALL are end nodes - if so, show comparison instead of path
+      const allAreEndNodes = selectedNodesForAnalysis.every(node => {
+        const hasOutgoingEdges = edges.some(edge => edge.source === node.id);
+        const isEndNode = node.data?.absorbing === true || !hasOutgoingEdges;
+        return isEndNode;
+      });
+      
+      console.log(`${selectedNodesForAnalysis.length} nodes selected - all are end nodes?`, allAreEndNodes);
+      
+      if (allAreEndNodes) {
+        // Show comparison of these end nodes
+        const startNodes = findStartNodes(nodes, edges);
+        if (startNodes.length > 0) {
+          const startNode = startNodes[0];
+          
+          const endNodeProbabilities = selectedNodesForAnalysis.map(endNode => {
+            const pathAnalysis = findPathThroughIntermediates(
+              startNode.id, 
+              endNode.id, 
+              [startNode.id, endNode.id], 
+              new Set(), 
+              new Map()
+            );
+            
+            return {
+              node: endNode,
+              probability: pathAnalysis.probability,
+              expectedCosts: pathAnalysis.expectedCosts
+            };
+          });
+          
+          // Sort by probability descending
+          endNodeProbabilities.sort((a, b) => b.probability - a.probability);
+          
+          const totalProbability = endNodeProbabilities.reduce((sum, item) => sum + item.probability, 0);
+          
+          return {
+            type: 'multi_end',
+            endNodeProbabilities,
+            totalProbability,
+            startNode
+          };
+        }
+      }
+      
+      // Otherwise proceed with standard sequential path analysis
       const sortedNodeIds = topologicalSort(selectedNodeIds, edges);
       const isSequential = areNodesTopologicallySequential(sortedNodeIds, edges);
       
@@ -2835,7 +2940,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               lineHeight: '1.4'
             }}>
               <h3 style={{ margin: '0 0 12px 0', color: '#007bff', fontSize: '16px' }}>
-                {analysis.type === 'path' || analysis.type === 'path_sequential' || analysis.type === 'single' ? 'Path Analysis' : 'Selection Analysis'}
+                {analysis.type === 'path' || analysis.type === 'path_sequential' || analysis.type === 'single' || analysis.type === 'multi_end' ? 'Path Analysis' : 'Selection Analysis'}
               </h3>
               
               {analysis.type === 'single' ? (
@@ -2967,6 +3072,83 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                   ) : (
                     <div style={{ color: '#ff6b6b', fontSize: '12px' }}>
                       ⚠️ No connection found (direct or via intermediates)
+                    </div>
+                  )}
+                </>
+              ) : analysis.type === 'multi_end' ? (
+                // Multiple end nodes selected - show probability mass comparison
+                <>
+                  <div style={{ marginBottom: '12px' }}>
+                    <strong>End Node Comparison</strong>
+                    <div style={{ color: '#666', fontSize: '12px', marginTop: '2px' }}>
+                      From: {analysis.startNode?.data?.label || 'Start'}
+                    </div>
+                  </div>
+                  
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{ fontSize: '12px', color: '#666', marginBottom: '6px' }}>
+                      Probability mass reaching each end node:
+                    </div>
+                    {(analysis.endNodeProbabilities || []).map((item: any, idx: number) => {
+                      const percentage = item.probability * 100;
+                      const barWidth = (analysis.totalProbability || 0) > 0 
+                        ? (item.probability / (analysis.totalProbability || 1)) * 100 
+                        : 0;
+                      
+                      // Get outcome type color
+                      const outcomeType = item.node.data?.outcome_type;
+                      let barColor = '#6b7280'; // default gray
+                      if (outcomeType === 'success') barColor = '#16a34a'; // green
+                      else if (outcomeType === 'failure') barColor = '#dc2626'; // red
+                      else if (outcomeType === 'abandoned') barColor = '#ea580c'; // orange
+                      
+                      return (
+                        <div key={item.node.id} style={{ marginBottom: '8px' }}>
+                          <div style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'space-between',
+                            fontSize: '11px',
+                            marginBottom: '2px'
+                          }}>
+                            <span style={{ fontWeight: 500 }}>
+                              {item.node.data?.label || item.node.id}
+                            </span>
+                            <span style={{ color: '#666' }}>
+                              {percentage.toFixed(2)}%
+                            </span>
+                          </div>
+                          <div style={{ 
+                            width: '100%', 
+                            height: '20px', 
+                            background: '#f3f4f6',
+                            borderRadius: '3px',
+                            overflow: 'hidden',
+                            position: 'relative'
+                          }}>
+                            <div style={{ 
+                              width: `${barWidth}%`, 
+                              height: '100%', 
+                              background: barColor,
+                              transition: 'width 0.3s ease',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: 'white',
+                              fontSize: '10px',
+                              fontWeight: 600
+                            }}>
+                              {barWidth > 15 && `${barWidth.toFixed(0)}%`}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  {(analysis.totalProbability || 0) < 0.99 && (
+                    <div style={{ fontSize: '11px', color: '#666', marginTop: '8px' }}>
+                      ℹ️ Remaining {((1 - (analysis.totalProbability || 0)) * 100).toFixed(1)}% flows to other outcomes
                     </div>
                   )}
                 </>
