@@ -172,6 +172,10 @@ export default function App() {
         const appsScriptUrl = urlParams.get('appsScriptUrl');
         if (sessionId && outputCell && sheetId && appsScriptUrl) {
             // We're being used from Apps Script - save automatically via form POST (bypasses CORS)
+            if (!graph) {
+                console.error('Cannot save: graph is null');
+                return;
+            }
             try {
                 // Reorder JSON to put metadata first with description at the top
                 const reorderedGraph = {
@@ -278,7 +282,7 @@ export default function App() {
                 }, children: [_jsx("div", { style: { padding: '16px', borderBottom: '1px solid #e9ecef' }, children: _jsx(GitOperations, { onGraphLoad: setGraph, onGraphSave: async (graphName, graphData) => {
                                 // This is a placeholder - the actual save is handled in GitOperations
                                 return true;
-                            }, currentGraph: graph, currentGraphName: graph?.metadata?.name || 'untitled' }) }), _jsx("div", { style: { padding: '16px', borderBottom: '1px solid #e9ecef' }, children: _jsx(WhatIfAnalysisControl, {}) }), _jsx("div", { style: { flex: 1, overflow: 'hidden' }, children: _jsx(PropertiesPanel, { selectedNodeId: selectedNodeId, onSelectedNodeChange: setSelectedNodeId, selectedEdgeId: selectedEdgeId, onSelectedEdgeChange: setSelectedEdgeId }) })] }), _jsxs("div", { style: {
+                            }, currentGraph: graph, currentGraphName: graph?.metadata?.description || 'untitled' }) }), _jsx("div", { style: { padding: '16px', borderBottom: '1px solid #e9ecef' }, children: _jsx(WhatIfAnalysisControl, {}) }), _jsx("div", { style: { flex: 1, overflow: 'hidden' }, children: _jsx(PropertiesPanel, { selectedNodeId: selectedNodeId, onSelectedNodeChange: setSelectedNodeId, selectedEdgeId: selectedEdgeId, onSelectedEdgeChange: setSelectedEdgeId }) })] }), _jsxs("div", { style: {
                     position: 'fixed',
                     top: '20px',
                     right: '370px',
