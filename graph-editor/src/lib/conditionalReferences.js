@@ -150,7 +150,7 @@ export function getAllConditionalReferences(graph) {
         const edgeRefs = getEdgeConditionalReferences(edge, graph);
         allReferences.push(...edgeRefs.map(ref => ({
             ...ref,
-            edgeSlug: edge.slug
+            edgeSlug: edge.slug || edge.id
         })));
     }
     return allReferences;

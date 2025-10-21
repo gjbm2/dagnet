@@ -794,28 +794,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Callback functions for node/edge updates
   const handleUpdateNode = useCallback((id: string, data: any) => {
     console.log('handleUpdateNode called:', { id, data });
-    setGraph((prevGraph) => {
-      if (!prevGraph) return prevGraph;
+    if (!graph) return;
+    
+    const prevGraph = graph;
       
-      // Check for slug uniqueness if slug is being updated
-      if (data.slug) {
-        const existingSlugs = getAllExistingSlugs(id);
-        if (existingSlugs.includes(data.slug)) {
-          alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
-          return prevGraph;
-        }
+    // Check for slug uniqueness if slug is being updated
+    if (data.slug) {
+      const existingSlugs = getAllExistingSlugs(id);
+      if (existingSlugs.includes(data.slug)) {
+        alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
+        return;
       }
-      
-      const nextGraph = structuredClone(prevGraph);
-      const nodeIndex = nextGraph.nodes.findIndex(n => n.id === id);
-      if (nodeIndex >= 0) {
-        nextGraph.nodes[nodeIndex] = { ...nextGraph.nodes[nodeIndex], ...data };
-        nextGraph.metadata.updated_at = new Date().toISOString();
-        console.log('Updated node in graph:', nextGraph.nodes[nodeIndex]);
-      }
-      return nextGraph;
-    });
-  }, [setGraph, getAllExistingSlugs]);
+    }
+    
+    const nextGraph = structuredClone(prevGraph);
+    const nodeIndex = nextGraph.nodes.findIndex(n => n.id === id);
+    if (nodeIndex >= 0) {
+      nextGraph.nodes[nodeIndex] = { ...nextGraph.nodes[nodeIndex], ...data };
+      nextGraph.metadata.updated_at = new Date().toISOString();
+      console.log('Updated node in graph:', nextGraph.nodes[nodeIndex]);
+    }
+    setGraph(nextGraph);
+  }, [graph, setGraph, getAllExistingSlugs]);
 
   const handleDeleteNode = useCallback((id: string) => {
     console.log('=== DELETING NODE ===', id);
@@ -838,7 +838,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Ensure metadata exists and update it
     if (!nextGraph.metadata) {
-      nextGraph.metadata = {};
+      nextGraph.metadata = {
+        version: "1.0.0",
+        created_at: new Date().toISOString()
+      };
     }
     nextGraph.metadata.updated_at = new Date().toISOString();
     
@@ -860,27 +863,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [graph, setGraph, onSelectedNodeChange]);
 
   const handleUpdateEdge = useCallback((id: string, data: any) => {
-    setGraph((prevGraph) => {
-      if (!prevGraph) return prevGraph;
-      
-      // Check for slug uniqueness if slug is being updated
-      if (data.slug) {
-        const existingSlugs = getAllExistingSlugs(id);
-        if (existingSlugs.includes(data.slug)) {
-          alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
-          return prevGraph;
-        }
+    if (!graph) return;
+    
+    const prevGraph = graph;
+    
+    // Check for slug uniqueness if slug is being updated
+    if (data.slug) {
+      const existingSlugs = getAllExistingSlugs(id);
+      if (existingSlugs.includes(data.slug)) {
+        alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
+        return;
       }
-      
-      const nextGraph = structuredClone(prevGraph);
-      const edgeIndex = nextGraph.edges.findIndex(e => e.id === id);
-      if (edgeIndex >= 0) {
-        nextGraph.edges[edgeIndex] = { ...nextGraph.edges[edgeIndex], ...data };
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      return nextGraph;
-    });
-  }, [setGraph, getAllExistingSlugs]);
+    }
+    
+    const nextGraph = structuredClone(prevGraph);
+    const edgeIndex = nextGraph.edges.findIndex(e => e.id === id);
+    if (edgeIndex >= 0) {
+      nextGraph.edges[edgeIndex] = { ...nextGraph.edges[edgeIndex], ...data };
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    setGraph(nextGraph);
+  }, [graph, setGraph, getAllExistingSlugs]);
 
   const handleDeleteEdge = useCallback((id: string) => {
     console.log('=== DELETING EDGE ===', id);
@@ -895,7 +898,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Ensure metadata exists and update it
     if (!nextGraph.metadata) {
-      nextGraph.metadata = {};
+      nextGraph.metadata = {
+        version: "1.0.0",
+        created_at: new Date().toISOString()
+      };
     }
     nextGraph.metadata.updated_at = new Date().toISOString();
     
@@ -1299,8 +1305,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Target handles: keep as-is ("top", "left", "right", "bottom")
       const sourceHandle = newConnection.sourceHandle ? 
         (newConnection.sourceHandle.endsWith('-out') ? newConnection.sourceHandle : `${newConnection.sourceHandle}-out`) : 
-        null;
-      const targetHandle = newConnection.targetHandle || null;
+        undefined;
+      const targetHandle = newConnection.targetHandle || undefined;
       
       nextGraph.edges[edgeIndex].fromHandle = sourceHandle;
       nextGraph.edges[edgeIndex].toHandle = targetHandle;
@@ -1465,7 +1471,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const existingVariantEdge = graph.edges.find(edge => 
       edge.from === pendingConnection.source && 
       edge.to === pendingConnection.target &&
-      edge.case_id === sourceNode.case.id &&
+      edge.case_id === sourceNode.case?.id &&
       edge.case_variant === variant.name
     );
     

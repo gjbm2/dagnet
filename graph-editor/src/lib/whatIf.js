@@ -138,7 +138,7 @@ export function computeEffectiveEdgeProbability(graph, edgeId, whatIfOverrides, 
             if (newOverride !== undefined) {
                 variantWeight = edge.case_variant === newOverride ? 1.0 : 0.0;
             }
-            else if (legacyWhatIfAnalysis?.caseNodeId === caseNode.id) {
+            else if (legacyWhatIfAnalysis && legacyWhatIfAnalysis.caseNodeId === caseNode.id) {
                 variantWeight = edge.case_variant === legacyWhatIfAnalysis.selectedVariant ? 1.0 : 0.0;
             }
             // Multiply probability by variant weight
@@ -211,7 +211,7 @@ export function getEdgeWhatIfDisplay(graph, edgeId, whatIfOverrides, legacyWhatI
                 variantWeight = edge.case_variant === newOverride ? 1.0 : 0.0;
                 isOverridden = true;
             }
-            else if (legacyWhatIfAnalysis?.caseNodeId === caseNode.id) {
+            else if (legacyWhatIfAnalysis && legacyWhatIfAnalysis.caseNodeId === caseNode.id) {
                 variantWeight = edge.case_variant === legacyWhatIfAnalysis.selectedVariant ? 1.0 : 0.0;
                 isOverridden = true;
             }
