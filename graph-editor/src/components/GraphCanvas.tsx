@@ -274,37 +274,58 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     return edge.selected ? 3 : 2;
   }, [edgeScalingMode, logMassTransform]);
 
-  // Calculate edge sort keys for Sankey stacking
-  // Group edges by neighbor position, then stack longer edges on outside
+  // Calculate edge sort keys for curved edge stacking
+  // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
   const getEdgeSortKey = useCallback((sourceNode: any, targetNode: any, face: string, isSourceFace: boolean = true) => {
-    if (!sourceNode || !targetNode) return [0, 0, 0];
+    if (!sourceNode || !targetNode) return [0, 0];
 
     const sourceX = sourceNode.position?.x || 0;
     const sourceY = sourceNode.position?.y || 0;
     const targetX = targetNode.position?.x || 0;
     const targetY = targetNode.position?.y || 0;
 
-    // Calculate span along flow axis
-    const span = (face === 'right' || face === 'left')
-      ? Math.abs(targetX - sourceX)
-      : Math.abs(targetY - sourceY);
+    // Calculate vector from source to target
+    const dx = targetX - sourceX;
+    const dy = targetY - sourceY;
 
-    // Get neighbor's perpendicular coordinate
-    // For source face: where are we going TO (target)?
-    // For target face: where are we coming FROM (source)?
-    const neighborPerp = (face === 'right' || face === 'left')
-      ? (isSourceFace ? targetY : sourceY)
-      : (isSourceFace ? targetX : sourceX);
+    // For Bézier curves, approximate the control point direction
+    // Default ReactFlow Bézier uses 25% of dx/dy as control point offset
+    const controlFactor = 0.25;
+    
+    // Calculate the initial/final direction vector accounting for curve
+    let directionAngle: number;
+    
+    if (isSourceFace) {
+      // Source face: direction as edge LEAVES the node
+      if (face === 'right') {
+        // Right face: edges curve based on vertical offset
+        // Sort by vertical component of initial direction
+        directionAngle = Math.atan2(dy, Math.abs(dx)); // Angle from horizontal
+      } else if (face === 'left') {
+        directionAngle = Math.atan2(dy, -Math.abs(dx));
+      } else if (face === 'bottom') {
+        directionAngle = Math.atan2(Math.abs(dy), dx);
+      } else { // top
+        directionAngle = Math.atan2(-Math.abs(dy), dx);
+      }
+    } else {
+      // Target face: direction as edge ENTERS the node
+      if (face === 'left') {
+        // Left face: edges arrive from the right
+        directionAngle = Math.atan2(-dy, -Math.abs(dx));
+      } else if (face === 'right') {
+        directionAngle = Math.atan2(-dy, Math.abs(dx));
+      } else if (face === 'top') {
+        directionAngle = Math.atan2(-Math.abs(dy), -dx);
+      } else { // bottom
+        directionAngle = Math.atan2(Math.abs(dy), -dx);
+      }
+    }
 
-    // Return [primary, secondary, tertiary]
-    // Primary: Group by neighbor perpendicular position
-    // Secondary: Within group, longer edges first (on outside)
-    // Tertiary: For exact ties, use neighbor's flow-axis position for stability
-    const neighborFlow = (face === 'right' || face === 'left')
-      ? (isSourceFace ? targetX : sourceX)
-      : (isSourceFace ? targetY : sourceY);
+    // Secondary sort by span for stability when angles are very close
+    const span = Math.sqrt(dx * dx + dy * dy);
 
-    return [neighborPerp, -span, neighborFlow];
+    return [directionAngle, -span];
   }, []);
 
   // Calculate edge offsets for Sankey-style visualization
@@ -367,7 +388,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return eSourceFace === sourceFace;
       });
 
-      // Sort: group by target perp position, longer edges first within each group
+      // Sort by departure angle from this face (accounts for curve trajectory)
       const sortedSourceEdges = [...sameFaceSourceEdges].sort((a, b) => {
         const aTarget = allNodes.find(n => n.id === a.target);
         const bTarget = allNodes.find(n => n.id === b.target);
@@ -376,10 +397,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const aKey = getEdgeSortKey(sourceNode, aTarget, sourceFace, true);
         const bKey = getEdgeSortKey(sourceNode, bTarget, sourceFace, true);
         
-        // Compare [primary, secondary, tertiary]
+        // Compare [angle, span]
         if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
-        return aKey[2] - bKey[2];
+        return aKey[1] - bKey[1];
       });
 
       // Calculate total visual width of all edges on this face
@@ -435,7 +455,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return eTargetFace === targetFace;
       });
 
-      // Sort: group by source perp position, longer edges first within each group
+      // Sort by arrival angle at this face (accounts for curve trajectory)
       const sortedTargetEdges = [...sameFaceTargetEdges].sort((a, b) => {
         const aSource = allNodes.find(n => n.id === a.source);
         const bSource = allNodes.find(n => n.id === b.source);
@@ -444,10 +464,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const aKey = getEdgeSortKey(aSource, targetNode, targetFace, false);
         const bKey = getEdgeSortKey(bSource, targetNode, targetFace, false);
         
-        // Compare [primary, secondary, tertiary]
+        // Compare [angle, span]
         if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
-        return aKey[2] - bKey[2];
+        return aKey[1] - bKey[1];
       });
 
       // Calculate total visual width of all edges on this target face
