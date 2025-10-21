@@ -237,11 +237,13 @@ export default function PropertiesPanel({
           e.preventDefault();
           if (confirm('Delete this edge?')) {
             const next = structuredClone(graph);
-            next.edges = next.edges.filter((e: any) => 
-              e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
-            );
-            setGraph(next);
-            onSelectedEdgeChange(null);
+            if (next) {
+              next.edges = next.edges.filter((e: any) => 
+                e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
+              );
+              setGraph(next);
+              onSelectedEdgeChange(null);
+            }
           }
         }
       }
