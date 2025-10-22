@@ -241,7 +241,7 @@ export default function PropertiesPanel({
               e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
             );
             setGraph(next);
-            saveHistoryState('Delete edge', undefined, selectedEdgeId);
+            saveHistoryState('Delete edge', undefined, selectedEdgeId || undefined);
             onSelectedEdgeChange(null);
           }
         }
@@ -276,7 +276,7 @@ export default function PropertiesPanel({
         next.metadata.updated_at = new Date().toISOString();
       }
       setGraph(next);
-      saveHistoryState(`Update node ${field}`, selectedNodeId);
+      saveHistoryState(`Update node ${field}`, selectedNodeId || undefined);
     }
   }, [selectedNodeId, graph, setGraph, saveHistoryState]);
 
@@ -310,7 +310,7 @@ export default function PropertiesPanel({
         next.metadata.updated_at = new Date().toISOString();
       }
       setGraph(next);
-      saveHistoryState(`Update edge ${field}`, undefined, selectedEdgeId);
+      saveHistoryState(`Update edge ${field}`, undefined, selectedEdgeId || undefined);
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
@@ -1179,7 +1179,7 @@ export default function PropertiesPanel({
                                       next.metadata.updated_at = new Date().toISOString();
                                     }
                                     setGraph(next);
-                                    saveHistoryState('Remove case variant', selectedNodeId);
+                                    saveHistoryState('Remove case variant', selectedNodeId || undefined);
                                   }
                                 }
                               }}
@@ -1347,7 +1347,7 @@ export default function PropertiesPanel({
                                         nextGraph.metadata.updated_at = new Date().toISOString();
                                       }
                                       setGraph(nextGraph);
-                                      saveHistoryState('Balance variant weights', selectedNodeId);
+                                      saveHistoryState('Balance variant weights', selectedNodeId || undefined);
                                     }
                                   }
                                 }}
@@ -1441,7 +1441,7 @@ export default function PropertiesPanel({
                                 next.metadata.updated_at = new Date().toISOString();
                               }
                               setGraph(next);
-                              saveHistoryState('Add case variant', selectedNodeId);
+                              saveHistoryState('Add case variant', selectedNodeId || undefined);
                             }
                           }
                         }}
@@ -1652,7 +1652,7 @@ export default function PropertiesPanel({
                             nextGraph.metadata.updated_at = new Date().toISOString();
                           }
                           setGraph(nextGraph);
-                          saveHistoryState('Balance probabilities', undefined, selectedEdgeId);
+                          saveHistoryState('Balance probabilities', undefined, selectedEdgeId || undefined);
                         }
                       }}
                       style={{
@@ -1840,7 +1840,7 @@ export default function PropertiesPanel({
                           if (!nextGraph.metadata) nextGraph.metadata = {} as any;
                           nextGraph.metadata.updated_at = new Date().toISOString();
                           setGraph(nextGraph);
-                          saveHistoryState('Update conditional probabilities', undefined, selectedEdgeId);
+                          saveHistoryState('Update conditional probabilities', undefined, selectedEdgeId || undefined);
                         }
                       }
                     }}
@@ -1857,7 +1857,7 @@ export default function PropertiesPanel({
                         if (!nextGraph.metadata) nextGraph.metadata = {} as any;
                         nextGraph.metadata.updated_at = new Date().toISOString();
                         setGraph(nextGraph);
-                        saveHistoryState('Update conditional color', undefined, selectedEdgeId);
+                        saveHistoryState('Update conditional color', undefined, selectedEdgeId || undefined);
                       }
                     }}
                   />
@@ -2313,7 +2313,7 @@ export default function PropertiesPanel({
                       e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
                     );
                     setGraph(next);
-                    saveHistoryState('Delete edge', undefined, selectedEdgeId);
+                    saveHistoryState('Delete edge', undefined, selectedEdgeId || undefined);
                     onSelectedEdgeChange(null);
                   }}
                   style={{
