@@ -70,6 +70,7 @@ export default function WhatIfAnalysisControl() {
 
   // Count active overrides (including legacy whatIfAnalysis)
   const activeCount = (whatIfAnalysis ? 1 : 0) + 
+                     (whatIfOverrides?.caseOverrides?.size || 0) +
                      (whatIfOverrides?.conditionalOverrides?.size || 0);
 
   // Get case node display name
@@ -178,6 +179,41 @@ export default function WhatIfAnalysisControl() {
               </button>
             </div>
           )}
+          {Array.from(whatIfOverrides?.caseOverrides?.entries() || []).map(([nodeId, variant]) => {
+            const node = graph?.nodes.find(n => n.id === nodeId);
+            const nodeColor = node?.layout?.color || '#8B5CF6';
+            return (
+              <div
+                key={nodeId}
+                style={{
+                  background: nodeColor,
+                  color: 'white',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  fontSize: '11px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <span>🎭 {getCaseNodeName(nodeId)}: {variant}</span>
+                <button
+                  onClick={() => setCaseOverride(nodeId, null)}
+                  style={{
+                    background: 'rgba(255,255,255,0.3)',
+                    border: 'none',
+                    color: 'white',
+                    borderRadius: '3px',
+                    cursor: 'pointer',
+                    padding: '0 4px',
+                    fontSize: '11px'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
           {Array.from(whatIfOverrides?.conditionalOverrides?.entries() || []).map(([edgeId, visitedNodes]) => {
             const edge = graph?.edges.find(e => e.id === edgeId);
             const edgeColor = edge ? (getConditionalColor(edge) || '#4ade80') : '#4ade80';
@@ -241,7 +277,7 @@ export default function WhatIfAnalysisControl() {
                 🎭 Case Nodes
               </div>
               {filteredCaseNodes.map(node => {
-                const isActive = whatIfAnalysis?.caseNodeId === node.id;
+                const isActive = whatIfOverrides?.caseOverrides?.has(node.id);
                 const variants = node.case?.variants || [];
                 const nodeColor = node.layout?.color || '#e5e7eb';
                 
@@ -275,16 +311,13 @@ export default function WhatIfAnalysisControl() {
                       {node.label || node.slug}
                     </div>
                     <select
-                      value={isActive ? whatIfAnalysis.selectedVariant : ''}
+                      value={whatIfOverrides?.caseOverrides?.get(node.id) || ''}
                       onChange={(e) => {
                         const variantName = e.target.value;
                         if (variantName) {
-                          setWhatIfAnalysis({
-                            caseNodeId: node.id,
-                            selectedVariant: variantName
-                          });
+                          setCaseOverride(node.id, variantName);
                         } else {
-                          setWhatIfAnalysis(null);
+                          setCaseOverride(node.id, null);
                         }
                       }}
                       style={{

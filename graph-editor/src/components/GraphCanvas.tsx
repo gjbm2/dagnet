@@ -42,9 +42,12 @@ interface GraphCanvasProps {
   onSelectEdge?: (id: string) => void;
   edgeScalingMode: 'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass';
   autoReroute: boolean;
+  onAddNodeRef?: React.MutableRefObject<(() => void) | null>;
+  onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
+  onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -55,12 +58,15 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onSelectEdge={onSelectEdge}
         edgeScalingMode={edgeScalingMode}
         autoReroute={autoReroute}
+        onAddNodeRef={onAddNodeRef}
+        onDeleteSelectedRef={onDeleteSelectedRef}
+        onAutoLayoutRef={onAutoLayoutRef}
       />
     </ReactFlowProvider>
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef }: GraphCanvasProps) {
   const { graph, setGraph, whatIfAnalysis } = useGraphStore();
   // Recompute edge widths when conditional what-if overrides change
   const overridesVersion = useGraphStore(state => state.whatIfOverrides._version);
@@ -78,6 +84,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const [preLayoutGraph, setPreLayoutGraph] = useState<any>(null);
   const [showLayoutModal, setShowLayoutModal] = useState(false);
   const [layoutDirection, setLayoutDirection] = useState<'LR' | 'RL' | 'TB' | 'BT'>('LR');
+  
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null);
+  const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
+  const [contextMenuLocalData, setContextMenuLocalData] = useState<{
+    probability: number;
+    conditionalProbabilities: { [key: string]: number };
+    variantWeight: number;
+  } | null>(null);
   
   // Custom onNodesChange handler to detect position changes for auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
@@ -311,9 +327,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       } else if (face === 'left') {
         directionAngle = Math.atan2(dy, -Math.abs(dx));
       } else if (face === 'bottom') {
-        directionAngle = Math.atan2(Math.abs(dy), dx);
+        directionAngle = Math.atan2(Math.abs(dy), -dx); // Reversed for correct left-to-right order
       } else { // top
-        directionAngle = Math.atan2(-Math.abs(dy), dx);
+        directionAngle = Math.atan2(-Math.abs(dy), -dx); // Reversed for correct left-to-right order
       }
     } else {
       // Target face: direction as edge ENTERS the node
@@ -1004,7 +1020,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     setNodes(nodesWithSelection);
     setEdges(edgesWithOffsetData);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, calculateEdgeWidth, calculateEdgeOffsets, fitView, nodes.length]);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, calculateEdgeWidth, calculateEdgeOffsets]);
 
   // Separate effect to handle initial fitView AFTER nodes are populated
   useEffect(() => {
@@ -1016,7 +1032,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         fitView();
       }, 250);
     }
-  }, [nodes.length, fitView]);
+  }, [fitView]); // Removed nodes.length dependency
   
   // Reset fitView flag when graph changes (new file loaded)
   useEffect(() => {
@@ -2622,6 +2638,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const existingSlugs = getAllExistingSlugs();
     const slug = generateUniqueSlug(baseSlug, existingSlugs);
     
+    // Place node at center of current viewport
+    const viewportCenter = screenToFlowPosition({ 
+      x: window.innerWidth / 2, 
+      y: window.innerHeight / 2 
+    });
+    
     // Add node directly to graph state (not ReactFlow state)
     const nextGraph = structuredClone(graph);
     nextGraph.nodes.push({
@@ -2630,8 +2652,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       label: label,
       absorbing: false,
       layout: {
-        x: Math.random() * 400 + 100,
-        y: Math.random() * 300 + 100
+        x: viewportCenter.x,
+        y: viewportCenter.y
       }
     });
     
@@ -2646,11 +2668,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setTimeout(() => {
       onSelectedNodeChange(newId);
     }, 50);
-  }, [graph, setGraph, generateSlugFromLabel, generateUniqueSlug, getAllExistingSlugs, onSelectedNodeChange]);
+  }, [graph, setGraph, generateSlugFromLabel, generateUniqueSlug, getAllExistingSlugs, onSelectedNodeChange, screenToFlowPosition]);
+
+  // Expose addNode function to parent component via ref
+  useEffect(() => {
+    if (onAddNodeRef) {
+      onAddNodeRef.current = addNode;
+    }
+  }, [addNode, onAddNodeRef]);
+
+  // Expose deleteSelected function to parent component via ref
+  useEffect(() => {
+    if (onDeleteSelectedRef) {
+      onDeleteSelectedRef.current = deleteSelected;
+    }
+  }, [deleteSelected, onDeleteSelectedRef]);
 
   // Auto-layout function using dagre
-  const performAutoLayout = useCallback(() => {
+  const performAutoLayout = useCallback((direction?: 'LR' | 'RL' | 'TB' | 'BT') => {
     if (!graph) return;
+    
+    // Use provided direction or fall back to state
+    const effectiveDirection = direction || layoutDirection;
     
     // Store current graph for potential undo
     setPreLayoutGraph(structuredClone(graph));
@@ -2668,7 +2707,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Configure layout direction and spacing
     dagreGraph.setGraph({ 
-      rankdir: layoutDirection, // User-selected direction
+      rankdir: effectiveDirection, // User-selected direction
       nodesep: 80,   // Spacing between nodes in same rank
       ranksep: 200,  // Spacing between ranks
       marginx: 50,
@@ -2731,6 +2770,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 150);
   }, [graph, setGraph, nodes, edges, layoutDirection, fitView]);
 
+  // Auto-layout function that can be called from parent
+  const triggerAutoLayout = useCallback((direction: 'LR' | 'RL' | 'TB' | 'BT') => {
+    setLayoutDirection(direction);
+    // Pass direction directly to performAutoLayout (don't wait for state to update)
+    performAutoLayout(direction);
+  }, [performAutoLayout]);
+
+  // Expose auto-layout function to parent component via ref
+  useEffect(() => {
+    if (onAutoLayoutRef) {
+      onAutoLayoutRef.current = triggerAutoLayout;
+    }
+  }, [triggerAutoLayout, onAutoLayoutRef]);
+
   // Handle layout confirmation
   const handleKeepLayout = useCallback(() => {
     setShowLayoutModal(false);
@@ -2744,6 +2797,132 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     setShowLayoutModal(false);
   }, [preLayoutGraph, setGraph]);
+
+  // Handle canvas right-click for context menu
+  const onPaneContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    
+    // Get the flow position (position in the canvas coordinate system)
+    const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      flowX: flowPosition.x,
+      flowY: flowPosition.y
+    });
+  }, [screenToFlowPosition]);
+
+  // Close context menus on any click
+  useEffect(() => {
+    if (contextMenu || nodeContextMenu || edgeContextMenu) {
+      const handleClick = () => {
+        setContextMenu(null);
+        setNodeContextMenu(null);
+        setEdgeContextMenu(null);
+        setContextMenuLocalData(null);
+      };
+      // Delay adding the listener to avoid catching the same click that opened the menu
+      const timeoutId = setTimeout(() => {
+        document.addEventListener('click', handleClick);
+      }, 0);
+      
+      return () => {
+        clearTimeout(timeoutId);
+        document.removeEventListener('click', handleClick);
+      };
+    }
+  }, [contextMenu, nodeContextMenu, edgeContextMenu]);
+
+  // Add node at specific position
+  const addNodeAtPosition = useCallback((x: number, y: number) => {
+    if (!graph) return;
+    
+    const slug = `node-${Date.now()}`;
+    const label = `Node ${graph.nodes.length + 1}`;
+    
+    const newNode = {
+      id: crypto.randomUUID(),
+      slug: slug,
+      label: label,
+      absorbing: false,
+      layout: {
+        x: x,
+        y: y
+      }
+    };
+    
+    const nextGraph = structuredClone(graph);
+    nextGraph.nodes.push(newNode);
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    setGraph(nextGraph);
+    setContextMenu(null);
+  }, [graph, setGraph]);
+
+  // Handle node right-click
+  const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
+    event.preventDefault();
+    event.stopPropagation();
+    
+    setNodeContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      nodeId: node.id
+    });
+  }, []);
+
+  // Handle edge right-click
+  const onEdgeContextMenu = useCallback((event: React.MouseEvent, edge: any) => {
+    event.preventDefault();
+    event.stopPropagation();
+    
+    const edgeData = graph?.edges?.find((e: any) => e.id === edge.id);
+    setEdgeContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      edgeId: edge.id
+    });
+    setContextMenuLocalData({
+      probability: edgeData?.p?.mean || 0,
+      conditionalProbabilities: {},
+      variantWeight: 0
+    });
+  }, []);
+
+  // Delete specific node
+  const deleteNode = useCallback((nodeId: string) => {
+    if (!graph) return;
+    
+    const nextGraph = structuredClone(graph);
+    nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== nodeId);
+    nextGraph.edges = nextGraph.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    setGraph(nextGraph);
+    setNodeContextMenu(null);
+  }, [graph, setGraph]);
+
+  // Delete specific edge
+  const deleteEdge = useCallback((edgeId: string) => {
+    if (!graph) return;
+    
+    const nextGraph = structuredClone(graph);
+    nextGraph.edges = nextGraph.edges.filter(e => e.id !== edgeId);
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    setGraph(nextGraph);
+    setEdgeContextMenu(null);
+  }, [graph, setGraph]);
 
   if (!graph) {
     return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -2761,6 +2940,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onConnect={onConnect}
         onReconnect={onEdgeUpdate}
         onSelectionChange={onSelectionChange}
+        onPaneContextMenu={onPaneContextMenu}
+        onNodeContextMenu={onNodeContextMenu}
+        onEdgeContextMenu={onEdgeContextMenu}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         connectionMode={ConnectionMode.Loose}
@@ -2801,68 +2983,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           />
         )}
         
-        <Panel position="top-left">
-          <button
-            onClick={addNode}
-            style={{
-              padding: '8px 16px',
-              background: '#007bff',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginRight: '8px',
-            }}
-          >
-            + Add Node
-          </button>
-          <button
-            onClick={deleteSelected}
-            style={{
-              padding: '8px 16px',
-              background: '#dc3545',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginRight: '8px',
-            }}
-          >
-            Delete Selected
-          </button>
-          <select
-            value={layoutDirection}
-            onChange={(e) => setLayoutDirection(e.target.value as 'LR' | 'RL' | 'TB' | 'BT')}
-            style={{
-              padding: '8px 12px',
-              border: '1px solid #ccc',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginRight: '8px',
-              fontSize: '14px',
-            }}
-            title="Layout direction"
-          >
-            <option value="LR">Left → Right</option>
-            <option value="RL">Right → Left</option>
-            <option value="TB">Top → Bottom</option>
-            <option value="BT">Bottom → Top</option>
-          </select>
-          <button
-            onClick={performAutoLayout}
-            style={{
-              padding: '8px 16px',
-              background: '#28a745',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-            }}
-            title={nodes.filter(n => n.selected).length > 0 ? "Auto-layout selected nodes" : "Auto-layout all nodes"}
-          >
-            🔧 Auto Layout
-          </button>
-        </Panel>
         
         {/* Layout Confirmation Modal */}
         {showLayoutModal && (
@@ -3202,6 +3322,746 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           </Panel>
         )}
       </ReactFlow>
+      
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+            background: 'white',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            minWidth: '160px',
+            padding: '4px',
+            zIndex: 10000
+          }}
+        >
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              addNodeAtPosition(contextMenu.flowX, contextMenu.flowY);
+            }}
+            style={{
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: '#333',
+              borderRadius: '2px'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          >
+            ➕ Add node
+          </div>
+        </div>
+      )}
+      
+      {/* Node Context Menu */}
+      {nodeContextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: nodeContextMenu.x,
+            top: nodeContextMenu.y,
+            background: 'white',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            minWidth: '160px',
+            padding: '4px',
+            zIndex: 10000
+          }}
+        >
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              if (window.confirm('Are you sure you want to delete this node? This will also delete all connected edges.')) {
+                deleteNode(nodeContextMenu.nodeId);
+              }
+            }}
+            style={{
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: '#dc3545',
+              borderRadius: '2px'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          >
+            🗑️ Delete node
+          </div>
+        </div>
+      )}
+      
+      {/* Edge Context Menu */}
+      {edgeContextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: edgeContextMenu.x,
+            top: edgeContextMenu.y,
+            background: 'white',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            minWidth: '200px',
+            padding: '8px',
+            zIndex: 10000
+          }}
+        >
+          {/* Probability editing section */}
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
+              Probability
+            </label>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                value={contextMenuLocalData?.probability || 0}
+                onChange={(e) => {
+                  const value = parseFloat(e.target.value) || 0;
+                  // Update local state immediately for responsive input
+                  setContextMenuLocalData(prev => prev ? { ...prev, probability: value } : null);
+                  
+                  // Debounce only the expensive graph update
+                  clearTimeout((window as any).contextMenuNumberTimeout);
+                  (window as any).contextMenuNumberTimeout = setTimeout(() => {
+                    if (graph) {
+                      const nextGraph = structuredClone(graph);
+                      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                      if (edgeIndex >= 0) {
+                        nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
+                        
+                        if (nextGraph.metadata) {
+                          nextGraph.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(nextGraph);
+                      }
+                    }
+                  }, 250);
+                }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        style={{
+                          width: '60px',
+                          padding: '4px',
+                          border: '1px solid #ddd',
+                          borderRadius: '3px',
+                          fontSize: '11px'
+                        }}
+                      />
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={contextMenuLocalData?.probability || 0}
+                onChange={(e) => {
+                  const value = parseFloat(e.target.value);
+                  // Update local state immediately for smooth slider movement
+                  setContextMenuLocalData(prev => prev ? { ...prev, probability: value } : null);
+                  
+                  // Debounce only the expensive graph update
+                  clearTimeout((window as any).contextMenuSliderTimeout);
+                  (window as any).contextMenuSliderTimeout = setTimeout(() => {
+                    if (graph) {
+                      const nextGraph = structuredClone(graph);
+                      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                      if (edgeIndex >= 0) {
+                        nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
+                        
+                        if (nextGraph.metadata) {
+                          nextGraph.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(nextGraph);
+                      }
+                    }
+                  }, 250);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onMouseUp={(e) => e.stopPropagation()}
+                style={{
+                  flex: 1,
+                  height: '4px',
+                  background: '#ddd',
+                  outline: 'none',
+                  borderRadius: '2px'
+                }}
+              />
+                <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
+                  {((contextMenuLocalData?.probability || 0) * 100).toFixed(0)}%
+                </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!graph) return;
+                  const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                  if (!currentEdge) return;
+                  
+                  const siblings = graph.edges.filter((e: any) => {
+                    // For case edges, only balance within the same variant
+                    if (currentEdge.case_id && currentEdge.case_variant) {
+                      return e.id !== currentEdge.id && 
+                             e.from === currentEdge.from && 
+                             e.case_id === currentEdge.case_id && 
+                             e.case_variant === currentEdge.case_variant;
+                    }
+                    // For regular edges, balance all edges from same source
+                    return e.id !== currentEdge.id && e.from === currentEdge.from;
+                  });
+                  
+                  if (siblings.length > 0) {
+                    const nextGraph = structuredClone(graph);
+                    const currentValue = currentEdge.p?.mean || 0;
+                    const remainingProbability = 1 - currentValue;
+                    
+                    // Calculate total current probability of siblings
+                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                    
+                    if (siblingsTotal > 0) {
+                      // Rebalance siblings proportionally
+                      siblings.forEach(sibling => {
+                        const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                        if (siblingIndex >= 0) {
+                          const siblingCurrentValue = sibling.p?.mean || 0;
+                          const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
+                          nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: newValue };
+                        }
+                      });
+                    } else {
+                      // If siblings have no probability, distribute equally
+                      const equalShare = remainingProbability / siblings.length;
+                      siblings.forEach(sibling => {
+                        const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                        if (siblingIndex >= 0) {
+                          nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
+                        }
+                      });
+                    }
+                    
+                    if (nextGraph.metadata) {
+                      nextGraph.metadata.updated_at = new Date().toISOString();
+                    }
+                    setGraph(nextGraph);
+                  }
+                }}
+                style={{
+                  padding: '2px 4px',
+                  fontSize: '9px',
+                  backgroundColor: (() => {
+                    if (!graph) return '#f8f9fa';
+                    const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                    if (!currentEdge) return '#f8f9fa';
+                    
+                    const siblings = graph.edges.filter((e: any) => {
+                      // For case edges, only balance within the same variant
+                      if (currentEdge.case_id && currentEdge.case_variant) {
+                        return e.id !== currentEdge.id && 
+                               e.from === currentEdge.from && 
+                               e.case_id === currentEdge.case_id && 
+                               e.case_variant === currentEdge.case_variant;
+                      }
+                      // For regular edges, balance all edges from same source
+                      return e.id !== currentEdge.id && e.from === currentEdge.from;
+                    });
+                    
+                    if (siblings.length === 0) return '#f8f9fa';
+                    
+                    // Calculate total probability mass
+                    const currentValue = currentEdge.p?.mean || 0;
+                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                    const totalMass = currentValue + siblingsTotal;
+                    
+                    // Light up if total mass is not close to 1.0
+                    return Math.abs(totalMass - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
+                  })(),
+                  border: (() => {
+                    if (!graph) return '1px solid #ddd';
+                    const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                    if (!currentEdge) return '1px solid #ddd';
+                    
+                    const siblings = graph.edges.filter((e: any) => {
+                      // For case edges, only balance within the same variant
+                      if (currentEdge.case_id && currentEdge.case_variant) {
+                        return e.id !== currentEdge.id && 
+                               e.from === currentEdge.from && 
+                               e.case_id === currentEdge.case_id && 
+                               e.case_variant === currentEdge.case_variant;
+                      }
+                      // For regular edges, balance all edges from same source
+                      return e.id !== currentEdge.id && e.from === currentEdge.from;
+                    });
+                    
+                    if (siblings.length === 0) return '1px solid #ddd';
+                    
+                    // Calculate total probability mass
+                    const currentValue = currentEdge.p?.mean || 0;
+                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                    const totalMass = currentValue + siblingsTotal;
+                    
+                    // Light up if total mass is not close to 1.0
+                    return Math.abs(totalMass - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
+                  })(),
+                  borderRadius: '2px',
+                  cursor: 'pointer',
+                  color: (() => {
+                    if (!graph) return '#666';
+                    const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                    if (!currentEdge) return '#666';
+                    
+                    const siblings = graph.edges.filter((e: any) => {
+                      // For case edges, only balance within the same variant
+                      if (currentEdge.case_id && currentEdge.case_variant) {
+                        return e.id !== currentEdge.id && 
+                               e.from === currentEdge.from && 
+                               e.case_id === currentEdge.case_id && 
+                               e.case_variant === currentEdge.case_variant;
+                      }
+                      // For regular edges, balance all edges from same source
+                      return e.id !== currentEdge.id && e.from === currentEdge.from;
+                    });
+                    
+                    if (siblings.length === 0) return '#666';
+                    
+                    // Calculate total probability mass
+                    const currentValue = currentEdge.p?.mean || 0;
+                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                    const totalMass = currentValue + siblingsTotal;
+                    
+                    // Light up if total mass is not close to 1.0
+                    return Math.abs(totalMass - 1.0) > 0.01 ? '#856404' : '#666';
+                  })()
+                }}
+                title="Rebalance sibling edges proportionally"
+              >
+                ⚖️
+              </button>
+            </div>
+          </div>
+
+          {/* Conditional Probability editing section */}
+          {(() => {
+            const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
+            return edge?.conditional_p && edge.conditional_p.length > 0;
+          })() && (
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
+                Conditional Probabilities
+              </label>
+              {(() => {
+                const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
+                return edge?.conditional_p?.map((condP: any, index: number) => (
+                  <div key={index} style={{ marginBottom: '8px', padding: '6px', border: '1px solid #eee', borderRadius: '3px' }}>
+                    <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>
+                      Condition: {condP.condition.visited.join(', ') || 'None'}
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={condP.p.mean}
+                        onChange={(e) => {
+                          const value = parseFloat(e.target.value) || 0;
+                          if (graph) {
+                            const nextGraph = structuredClone(graph);
+                            const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                            if (edgeIndex >= 0) {
+                              nextGraph.edges[edgeIndex].conditional_p[index].p.mean = value;
+                              
+                              if (nextGraph.metadata) {
+                                nextGraph.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(nextGraph);
+                            }
+                          }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        style={{
+                          width: '50px',
+                          padding: '3px',
+                          border: '1px solid #ddd',
+                          borderRadius: '2px',
+                          fontSize: '10px'
+                        }}
+                      />
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={condP.p.mean}
+                        onChange={(e) => {
+                          const value = parseFloat(e.target.value);
+                          // Debounce the expensive graph update
+                          clearTimeout((window as any).contextMenuConditionalSliderTimeout);
+                          (window as any).contextMenuConditionalSliderTimeout = setTimeout(() => {
+                            if (graph) {
+                              const nextGraph = structuredClone(graph);
+                              const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                              if (edgeIndex >= 0) {
+                                nextGraph.edges[edgeIndex].conditional_p[index].p.mean = value;
+                                
+                                if (nextGraph.metadata) {
+                                  nextGraph.metadata.updated_at = new Date().toISOString();
+                                }
+                                setGraph(nextGraph);
+                              }
+                            }
+                          }, 250);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onMouseUp={(e) => e.stopPropagation()}
+                        style={{
+                          flex: 1,
+                          height: '3px',
+                          background: '#ddd',
+                          outline: 'none',
+                          borderRadius: '2px'
+                        }}
+                      />
+                      <span style={{ fontSize: '9px', color: '#666', minWidth: '20px' }}>
+                        {(condP.p.mean * 100).toFixed(0)}%
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!graph) return;
+                          const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                          if (!currentEdge) return;
+                          
+                          const siblings = graph.edges.filter((e: any) => {
+                            // For case edges, only balance within the same variant
+                            if (currentEdge.case_id && currentEdge.case_variant) {
+                              return e.id !== currentEdge.id && 
+                                     e.from === currentEdge.from && 
+                                     e.case_id === currentEdge.case_id && 
+                                     e.case_variant === currentEdge.case_variant;
+                            }
+                            // For regular edges, balance all edges from same source
+                            return e.id !== currentEdge.id && e.from === currentEdge.from;
+                          });
+                          
+                          if (siblings.length > 0) {
+                            const nextGraph = structuredClone(graph);
+                            const currentValue = condP.p.mean;
+                            const remainingProbability = 1 - currentValue;
+                            
+                            // Calculate total current probability of siblings for this condition
+                            const conditionKey = JSON.stringify(condP.condition.visited.sort());
+                            const siblingsWithSameCondition = siblings.filter(sibling => {
+                              if (!sibling.conditional_p) return false;
+                              return sibling.conditional_p.some((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                            });
+                            
+                            if (siblingsWithSameCondition.length > 0) {
+                              // Calculate total current probability of siblings for this condition
+                              const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
+                                const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                );
+                                return sum + (matchingCondition?.p?.mean || 0);
+                              }, 0);
+                              
+                              if (siblingsTotal > 0) {
+                                // Rebalance siblings proportionally for this condition
+                                siblingsWithSameCondition.forEach(sibling => {
+                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                  if (siblingIndex >= 0) {
+                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                    );
+                                    if (matchingCondition) {
+                                      const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                        JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                      );
+                                      if (conditionIndex >= 0) {
+                                        const siblingCurrentValue = matchingCondition.p?.mean || 0;
+                                        const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
+                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
+                                      }
+                                    }
+                                  }
+                                });
+                              } else {
+                                // If siblings have no probability for this condition, distribute equally
+                                const equalShare = remainingProbability / siblingsWithSameCondition.length;
+                                siblingsWithSameCondition.forEach(sibling => {
+                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                  if (siblingIndex >= 0) {
+                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                    );
+                                    if (matchingCondition) {
+                                      const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                        JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                      );
+                                      if (conditionIndex >= 0) {
+                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
+                                      }
+                                    }
+                                  }
+                                });
+                              }
+                            }
+                            
+                            if (nextGraph.metadata) {
+                              nextGraph.metadata.updated_at = new Date().toISOString();
+                            }
+                            setGraph(nextGraph);
+                          }
+                        }}
+                        style={{
+                          padding: '1px 3px',
+                          fontSize: '8px',
+                          backgroundColor: (() => {
+                            if (!graph) return '#f8f9fa';
+                            const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                            if (!currentEdge) return '#f8f9fa';
+                            
+                            const siblings = graph.edges.filter((e: any) => {
+                              // For case edges, only balance within the same variant
+                              if (currentEdge.case_id && currentEdge.case_variant) {
+                                return e.id !== currentEdge.id && 
+                                       e.from === currentEdge.from && 
+                                       e.case_id === currentEdge.case_id && 
+                                       e.case_variant === currentEdge.case_variant;
+                              }
+                              // For regular edges, balance all edges from same source
+                              return e.id !== currentEdge.id && e.from === currentEdge.from;
+                            });
+                            
+                            if (siblings.length === 0) return '#f8f9fa';
+                            
+                            // Calculate total probability mass for this condition
+                            const conditionKey = JSON.stringify(condP.condition.visited.sort());
+                            const currentValue = condP.p.mean;
+                            const siblingsTotal = siblings.reduce((sum, sibling) => {
+                              if (!sibling.conditional_p) return sum;
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                              return sum + (matchingCondition?.p?.mean || 0);
+                            }, 0);
+                            const totalMass = currentValue + siblingsTotal;
+                            
+                            // Light up if total mass is not close to 1.0
+                            return Math.abs(totalMass - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
+                          })(),
+                          border: (() => {
+                            if (!graph) return '1px solid #ddd';
+                            const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                            if (!currentEdge) return '1px solid #ddd';
+                            
+                            const siblings = graph.edges.filter((e: any) => {
+                              // For case edges, only balance within the same variant
+                              if (currentEdge.case_id && currentEdge.case_variant) {
+                                return e.id !== currentEdge.id && 
+                                       e.from === currentEdge.from && 
+                                       e.case_id === currentEdge.case_id && 
+                                       e.case_variant === currentEdge.case_variant;
+                              }
+                              // For regular edges, balance all edges from same source
+                              return e.id !== currentEdge.id && e.from === currentEdge.from;
+                            });
+                            
+                            if (siblings.length === 0) return '1px solid #ddd';
+                            
+                            // Calculate total probability mass for this condition
+                            const conditionKey = JSON.stringify(condP.condition.visited.sort());
+                            const currentValue = condP.p.mean;
+                            const siblingsTotal = siblings.reduce((sum, sibling) => {
+                              if (!sibling.conditional_p) return sum;
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                              return sum + (matchingCondition?.p?.mean || 0);
+                            }, 0);
+                            const totalMass = currentValue + siblingsTotal;
+                            
+                            // Light up if total mass is not close to 1.0
+                            return Math.abs(totalMass - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
+                          })(),
+                          borderRadius: '2px',
+                          cursor: 'pointer',
+                          color: (() => {
+                            if (!graph) return '#666';
+                            const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                            if (!currentEdge) return '#666';
+                            
+                            const siblings = graph.edges.filter((e: any) => {
+                              // For case edges, only balance within the same variant
+                              if (currentEdge.case_id && currentEdge.case_variant) {
+                                return e.id !== currentEdge.id && 
+                                       e.from === currentEdge.from && 
+                                       e.case_id === currentEdge.case_id && 
+                                       e.case_variant === currentEdge.case_variant;
+                              }
+                              // For regular edges, balance all edges from same source
+                              return e.id !== currentEdge.id && e.from === currentEdge.from;
+                            });
+                            
+                            if (siblings.length === 0) return '#666';
+                            
+                            // Calculate total probability mass for this condition
+                            const conditionKey = JSON.stringify(condP.condition.visited.sort());
+                            const currentValue = condP.p.mean;
+                            const siblingsTotal = siblings.reduce((sum, sibling) => {
+                              if (!sibling.conditional_p) return sum;
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                              return sum + (matchingCondition?.p?.mean || 0);
+                            }, 0);
+                            const totalMass = currentValue + siblingsTotal;
+                            
+                            // Light up if total mass is not close to 1.0
+                            return Math.abs(totalMass - 1.0) > 0.01 ? '#856404' : '#666';
+                          })()
+                        }}
+                        title="Rebalance sibling conditional probabilities for this condition"
+                      >
+                        ⚖️
+                      </button>
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+          )}
+
+          {/* Variant Weight editing for case edges */}
+          {(() => {
+            const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
+            return edge?.case_id && edge?.case_variant;
+          })() && (() => {
+            const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
+            const caseNode = graph?.nodes?.find((n: any) => n.case?.id === edge?.case_id);
+            const variant = caseNode?.case?.variants?.find((v: any) => v.name === edge?.case_variant);
+            return variant && (
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
+                  Variant Weight ({edge?.case_variant})
+                </label>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={variant.weight}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value) || 0;
+                      if (graph) {
+                        const nextGraph = structuredClone(graph);
+                        const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
+                        if (nodeIndex >= 0) {
+                          const variantIndex = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
+                          if (variantIndex >= 0) {
+                            nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = value;
+                            
+                            if (nextGraph.metadata) {
+                              nextGraph.metadata.updated_at = new Date().toISOString();
+                            }
+                            setGraph(nextGraph);
+                          }
+                        }
+                      }
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style={{
+                      width: '60px',
+                      padding: '4px',
+                      border: '1px solid #ddd',
+                      borderRadius: '3px',
+                      fontSize: '11px'
+                    }}
+                  />
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={variant.weight}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value);
+                      // Debounce the expensive graph update
+                      clearTimeout((window as any).contextMenuVariantSliderTimeout);
+                      (window as any).contextMenuVariantSliderTimeout = setTimeout(() => {
+                        if (graph) {
+                          const nextGraph = structuredClone(graph);
+                          const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
+                          if (nodeIndex >= 0) {
+                            const variantIndex = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
+                            if (variantIndex >= 0) {
+                              nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = value;
+                              
+                              if (nextGraph.metadata) {
+                                nextGraph.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(nextGraph);
+                            }
+                          }
+                        }
+                      }, 250);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseUp={(e) => e.stopPropagation()}
+                    style={{
+                      flex: 1,
+                      height: '4px',
+                      background: '#ddd',
+                      outline: 'none',
+                      borderRadius: '2px'
+                    }}
+                  />
+                  <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
+                    {(variant.weight * 100).toFixed(0)}%
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+          
+          {/* Delete option */}
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              if (window.confirm('Are you sure you want to delete this edge?')) {
+                deleteEdge(edgeContextMenu.edgeId);
+              }
+            }}
+            style={{
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: '#dc3545',
+              borderRadius: '2px',
+              borderTop: '1px solid #eee',
+              marginTop: '8px'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          >
+            🗑️ Delete edge
+          </div>
+        </div>
+      )}
       
       {/* Variant Selection Modal */}
       {showVariantModal && (
