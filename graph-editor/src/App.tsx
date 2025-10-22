@@ -23,6 +23,7 @@ export default function App() {
   const [saveGraphName, setSaveGraphName] = useState('');
   const [saveCommitMessage, setSaveCommitMessage] = useState('');
   const [graphKey, setGraphKey] = useState(0); // Force remount on revert
+  const [sidebarOpen, setSidebarOpen] = useState(true); // Sidebar toggle state
   const lastLoadedGraphRef = useRef<string | null>(null);
   const addNodeRef = useRef<(() => void) | null>(null);
   const deleteSelectedRef = useRef<(() => void) | null>(null);
@@ -141,7 +142,7 @@ export default function App() {
     
     const decoded = decodeStateFromUrl();
     if (decoded) { 
-      setGraph(decoded);
+      setGraph(decoded); 
       lastLoadedGraphRef.current = JSON.stringify(decoded);
       return; 
     }
@@ -424,15 +425,30 @@ export default function App() {
     setSelectedNodeId(null);
   };
 
+  // Keyboard shortcut for sidebar toggle (Ctrl/Cmd + B)
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'b') {
+        event.preventDefault();
+        setSidebarOpen(prev => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   return (
     <div style={{ 
       display: 'grid', 
-      gridTemplateColumns: '1fr 350px', 
+      gridTemplateColumns: sidebarOpen ? '1fr 350px' : '1fr', 
       height: '100vh',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      transition: 'grid-template-columns 0.3s ease-in-out'
     }}>
       {/* Main Graph Area */}
       <div style={{ position: 'relative', marginTop: '40px' }}>
+        
         <GraphCanvas 
           key={graphKey}
           onSelectedNodeChange={setSelectedNodeId}
@@ -449,29 +465,115 @@ export default function App() {
       </div>
 
       {/* Right Sidebar */}
-      <div style={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        height: 'calc(100vh - 40px)',
-        background: '#fff',
-        borderLeft: '1px solid #e9ecef',
-        marginTop: '40px'
-      }}>
-        {/* What-If Analysis Control */}
-        <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
-          <WhatIfAnalysisControl />
-        </div>
+      {sidebarOpen && (
+        <div style={{ 
+          display: 'flex', 
+          flexDirection: 'column', 
+          height: 'calc(100vh - 40px)',
+          background: '#fff',
+          borderLeft: '1px solid #e9ecef',
+          marginTop: '40px',
+          animation: 'slideInFromRight 0.3s ease-out',
+          position: 'relative'
+        }}>
+          {/* Sidebar Toggle Button */}
+          <button
+            onClick={() => setSidebarOpen(false)}
+            style={{
+              position: 'absolute',
+              left: '-12px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              zIndex: 1000,
+              width: '24px',
+              height: '24px',
+              background: '#fff',
+              border: '1px solid #e9ecef',
+              borderRadius: '50%',
+              cursor: 'pointer',
+              fontSize: '12px',
+              color: '#666',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#f8f9fa';
+              e.currentTarget.style.borderColor = '#007bff';
+              e.currentTarget.style.color = '#007bff';
+              e.currentTarget.style.transform = 'translateY(-50%) scale(1.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = '#fff';
+              e.currentTarget.style.borderColor = '#e9ecef';
+              e.currentTarget.style.color = '#666';
+              e.currentTarget.style.transform = 'translateY(-50%) scale(1)';
+            }}
+            title="Hide Sidebar (Ctrl/Cmd + B)"
+          >
+            ◀
+          </button>
 
-        {/* Properties Panel */}
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <PropertiesPanel 
-            selectedNodeId={selectedNodeId} 
-            onSelectedNodeChange={setSelectedNodeId}
-            selectedEdgeId={selectedEdgeId}
-            onSelectedEdgeChange={setSelectedEdgeId}
-          />
+          {/* What-If Analysis Control */}
+          <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
+            <WhatIfAnalysisControl />
+          </div>
+
+          {/* Properties Panel */}
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            <PropertiesPanel 
+              selectedNodeId={selectedNodeId} 
+              onSelectedNodeChange={setSelectedNodeId}
+              selectedEdgeId={selectedEdgeId}
+              onSelectedEdgeChange={setSelectedEdgeId}
+            />
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Show Sidebar Button (when sidebar is closed) */}
+      {!sidebarOpen && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          style={{
+            position: 'fixed',
+            right: '10px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 1000,
+            width: '24px',
+            height: '24px',
+            background: '#fff',
+            border: '1px solid #e9ecef',
+            borderRadius: '50%',
+            cursor: 'pointer',
+            fontSize: '12px',
+            color: '#666',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+            transition: 'all 0.2s ease'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = '#f8f9fa';
+            e.currentTarget.style.borderColor = '#007bff';
+            e.currentTarget.style.color = '#007bff';
+            e.currentTarget.style.transform = 'translateY(-50%) scale(1.1)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = '#fff';
+            e.currentTarget.style.borderColor = '#e9ecef';
+            e.currentTarget.style.color = '#666';
+            e.currentTarget.style.transform = 'translateY(-50%) scale(1)';
+          }}
+          title="Show Sidebar (Ctrl/Cmd + B)"
+        >
+          ▶
+        </button>
+      )}
 
       {/* Menu Bar */}
       <Menubar.Root style={{
