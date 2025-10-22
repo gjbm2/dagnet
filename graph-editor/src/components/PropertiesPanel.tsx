@@ -1324,7 +1324,7 @@ export default function PropertiesPanel({
                                         // Rebalance other variants proportionally
                                         otherVariants.forEach((otherVariant, otherIndex) => {
                                           const originalIndex = currentNode.case?.variants?.findIndex(v => v.name === otherVariant.name);
-                                          if (originalIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                                          if (originalIndex !== undefined && originalIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
                                             const newWeight = (otherVariant.weight / othersTotal) * remainingWeight;
                                             nextGraph.nodes[nodeIndex].case.variants[originalIndex].weight = newWeight;
                                           }
@@ -1334,7 +1334,7 @@ export default function PropertiesPanel({
                                         const equalShare = remainingWeight / otherVariants.length;
                                         otherVariants.forEach((otherVariant, otherIndex) => {
                                           const originalIndex = currentNode.case?.variants?.findIndex(v => v.name === otherVariant.name);
-                                          if (originalIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                                          if (originalIndex !== undefined && originalIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
                                             nextGraph.nodes[nodeIndex].case.variants[originalIndex].weight = equalShare;
                                           }
                                         });
