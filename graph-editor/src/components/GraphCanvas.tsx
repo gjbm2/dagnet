@@ -101,7 +101,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     onNodesChangeBase(changes);
     
     // Save history for node changes (position, selection, etc.)
+    // Only save when dragging finishes (dragging === false)
     const hasPositionChanges = changes.some(change => change.type === 'position' && change.dragging === false);
+    
     if (hasPositionChanges) {
       saveHistoryState('Move node');
     }
@@ -1123,11 +1125,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   useEffect(() => {
     if (!graph) return;
     if (isSyncingRef.current) {
-      console.log('Skipping ReactFlow->graph sync (isSyncingRef=true)');
       return;
     }
     if (nodes.length === 0 && graph.nodes.length > 0) {
-      console.log('Skipping ReactFlow->graph sync (still initializing)');
       return;
     }
     
@@ -1137,9 +1137,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (updatedJson === lastSyncedReactFlowRef.current) {
         return;
       }
+      
       isSyncingRef.current = true;
       lastSyncedReactFlowRef.current = updatedJson;
       setGraph(updatedGraph);
+      
+      // Note: History saving is handled in onNodesChange when dragging finishes
       
       // Reset sync flag
       setTimeout(() => {
@@ -2949,7 +2952,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         selectionOnDrag={false}
         selectNodesOnDrag={false}
         selectionKeyCode={['Meta', 'Ctrl']}
-        nodesDraggable
+        nodesDraggable={true}
         nodesConnectable
         elementsSelectable
         reconnectRadius={50}
