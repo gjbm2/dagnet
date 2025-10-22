@@ -25,6 +25,7 @@ import { useGraphStore } from '@/lib/useGraphStore';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
+import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -45,9 +46,10 @@ interface GraphCanvasProps {
   onAddNodeRef?: React.MutableRefObject<(() => void) | null>;
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
   onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
+  onForceRerouteRef?: React.MutableRefObject<(() => void) | null>;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -61,12 +63,13 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onAddNodeRef={onAddNodeRef}
         onDeleteSelectedRef={onDeleteSelectedRef}
         onAutoLayoutRef={onAutoLayoutRef}
+        onForceRerouteRef={onForceRerouteRef}
       />
     </ReactFlowProvider>
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef }: GraphCanvasProps) {
   const store = useGraphStore();
   const { graph, setGraph, whatIfAnalysis } = store;
   const saveHistoryState = store.saveHistoryState;
@@ -76,7 +79,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
+  
+  // Custom onEdgesChange handler to prevent automatic deletion
+  const onEdgesChange = useCallback((changes: any[]) => {
+    console.log('onEdgesChange called with changes:', changes);
+    
+    // Filter out remove changes to prevent automatic deletion
+    const filteredChanges = changes.filter(change => change.type !== 'remove');
+    
+    if (filteredChanges.length !== changes.length) {
+      console.log('Filtered out remove changes to prevent automatic deletion');
+    }
+    
+    // Call the base handler with filtered changes
+    onEdgesChangeBase(filteredChanges);
+  }, [onEdgesChangeBase]);
   
   // Trigger flag for re-routing
   const [shouldReroute, setShouldReroute] = useState(0);
@@ -295,7 +313,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Calculate edge sort keys for curved edge stacking
   // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
-  const getEdgeSortKey = useCallback((sourceNode: any, targetNode: any, face: string, isSourceFace: boolean = true) => {
+  const getEdgeSortKey = useCallback((sourceNode: any, targetNode: any, face: string, isSourceFace: boolean = true, edgeId?: string) => {
     if (!sourceNode || !targetNode) return [0, 0];
 
     const sourceX = sourceNode.position?.x || 0;
@@ -307,44 +325,40 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const dx = targetX - sourceX;
     const dy = targetY - sourceY;
 
-    // For Bézier curves, approximate the control point direction
-    // Default ReactFlow Bézier uses 25% of dx/dy as control point offset
-    const controlFactor = 0.25;
-    
-    // Calculate the initial/final direction vector accounting for curve
+    // Angle-based sorting (preferred). Use abs(dy) to mirror top/bottom behavior
+    // so tiny vertical shifts don't flip ordering on left/right faces.
     let directionAngle: number;
-    
     if (isSourceFace) {
-      // Source face: direction as edge LEAVES the node
+      // Edge leaves the source
       if (face === 'right') {
-        // Right face: edges curve based on vertical offset
-        // Sort by vertical component of initial direction
-        directionAngle = Math.atan2(dy, Math.abs(dx)); // Angle from horizontal
+        directionAngle = Math.atan2(Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
       } else if (face === 'left') {
-        directionAngle = Math.atan2(dy, -Math.abs(dx));
+        directionAngle = -Math.atan2(Math.abs(dx), dy); // rotate top/bottom by 90°: swap x↔y
       } else if (face === 'bottom') {
-        directionAngle = Math.atan2(Math.abs(dy), -dx); // Reversed for correct left-to-right order
+        directionAngle = Math.atan2(Math.abs(dy), -dx);
       } else { // top
-        directionAngle = Math.atan2(-Math.abs(dy), -dx); // Reversed for correct left-to-right order
+        directionAngle = -Math.atan2(Math.abs(dy), dx);
       }
     } else {
-      // Target face: direction as edge ENTERS the node
+      // Edge enters the target
       if (face === 'left') {
-        // Left face: edges arrive from the right
-        directionAngle = Math.atan2(-dy, -Math.abs(dx));
+        directionAngle = Math.atan2(-Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
       } else if (face === 'right') {
-        directionAngle = Math.atan2(-dy, Math.abs(dx));
+        directionAngle = -Math.atan2(Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
       } else if (face === 'top') {
         directionAngle = Math.atan2(-Math.abs(dy), -dx);
       } else { // bottom
-        directionAngle = Math.atan2(Math.abs(dy), -dx);
+        directionAngle = -Math.atan2(Math.abs(dy), -dx);
       }
     }
 
     // Secondary sort by span for stability when angles are very close
     const span = Math.sqrt(dx * dx + dy * dy);
 
-    return [directionAngle, -span];
+    // Final tie-breaker to keep order stable under tiny movements
+    const edgeIdHash = edgeId ? edgeId.split('').reduce((a, b) => a + b.charCodeAt(0), 0) : 0;
+
+    return [directionAngle, -span, edgeIdHash];
   }, []);
 
   // Calculate edge offsets for Sankey-style visualization
@@ -413,12 +427,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const bTarget = allNodes.find(n => n.id === b.target);
         if (!aTarget || !bTarget) return 0;
         
-        const aKey = getEdgeSortKey(sourceNode, aTarget, sourceFace, true);
-        const bKey = getEdgeSortKey(sourceNode, bTarget, sourceFace, true);
+        const aKey = getEdgeSortKey(sourceNode, aTarget, sourceFace, true, a.id);
+        const bKey = getEdgeSortKey(sourceNode, bTarget, sourceFace, true, b.id);
         
-        // Compare [angle, span]
+        // Compare [angle, span, edgeIdHash]
         if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        return aKey[1] - bKey[1];
+        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
+        return aKey[2] - bKey[2];
       });
 
       // Calculate total visual width of all edges on this face
@@ -480,12 +495,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const bSource = allNodes.find(n => n.id === b.source);
         if (!aSource || !bSource) return 0;
         
-        const aKey = getEdgeSortKey(aSource, targetNode, targetFace, false);
-        const bKey = getEdgeSortKey(bSource, targetNode, targetFace, false);
+        const aKey = getEdgeSortKey(aSource, targetNode, targetFace, false, a.id);
+        const bKey = getEdgeSortKey(bSource, targetNode, targetFace, false, b.id);
         
-        // Compare [angle, span]
+        // Compare [angle, span, edgeIdHash]
         if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        return aKey[1] - bKey[1];
+        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
+        return aKey[2] - bKey[2];
       });
 
       // Calculate total visual width of all edges on this target face
@@ -567,41 +583,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Calculate optimal handles between two nodes
   const calculateOptimalHandles = useCallback((sourceNode: any, targetNode: any) => {
-    const sourceX = sourceNode.position.x;
-    const sourceY = sourceNode.position.y;
-    const targetX = targetNode.position.x;
-    const targetY = targetNode.position.y;
+    // Calculate direction from source to target
+    const deltaX = targetNode.position.x - sourceNode.position.x;
+    const deltaY = targetNode.position.y - sourceNode.position.y;
     
-    // Node dimensions (from layout.ts: width: 120, height: 120)
-    const nodeWidth = 120;
-    const nodeHeight = 120;
+    // For source node: this is an output connection, direction TO target
+    const sourceFace = getOptimalFace(sourceNode.id, true, deltaX, deltaY, edges);
     
-    // Calculate relative positions
-    const deltaX = targetX - sourceX;
-    const deltaY = targetY - sourceY;
+    // For target node: this is an input connection, direction FROM source (inverse)
+    const targetFace = getOptimalFace(targetNode.id, false, -deltaX, -deltaY, edges);
     
-    // Determine optimal source handle based on direction
-    let sourceHandle: string;
-    if (Math.abs(deltaX) > Math.abs(deltaY)) {
-      // Horizontal movement dominates
-      sourceHandle = deltaX > 0 ? 'right-out' : 'left-out';
-    } else {
-      // Vertical movement dominates
-      sourceHandle = deltaY > 0 ? 'bottom-out' : 'top-out';
-    }
-    
-    // Determine optimal target handle based on direction
-    let targetHandle: string;
-    if (Math.abs(deltaX) > Math.abs(deltaY)) {
-      // Horizontal movement dominates
-      targetHandle = deltaX > 0 ? 'left' : 'right';
-    } else {
-      // Vertical movement dominates
-      targetHandle = deltaY > 0 ? 'top' : 'bottom';
-    }
+    // Convert face to handle format
+    const sourceHandle = sourceFace + '-out';
+    const targetHandle = targetFace;
     
     return { sourceHandle, targetHandle };
-  }, []);
+  }, [edges]);
   
   // Perform immediate re-route of ALL edges (used when toggling on)
   const performImmediateReroute = useCallback(() => {
@@ -712,28 +709,59 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Update graph with new handle positions
     const nextGraph = structuredClone(graph);
     
-    edgesToReroute.forEach(edge => {
-      const sourceNode = nodes.find(n => n.id === edge.source);
-      const targetNode = nodes.find(n => n.id === edge.target);
+    // Build quick position map
+    const pos: Record<string, { x: number; y: number }> = {};
+    nodes.forEach(n => { pos[n.id] = { x: n.position.x, y: n.position.y }; });
+
+    // Track which edges changed to identify nodes that need re-evaluation
+    const changedEdges = new Set<string>();
+    const processedNodes = new Set<string>();
+    const nodesToProcess = [...movedNodes];
+    
+    // Process nodes in waves, using original edge state for decisions
+    while (nodesToProcess.length > 0) {
+      const nodeId = nodesToProcess.shift()!;
+      if (processedNodes.has(nodeId)) continue;
       
-      if (sourceNode && targetNode) {
-        const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
+      processedNodes.add(nodeId);
+      
+      // Use original edges for face assignment decisions
+      const assignments = assignFacesForNode(nodeId, pos, edges as any);
+      
+      // Apply assignments and track changes
+      Object.entries(assignments).forEach(([edgeId, face]) => {
+        const originalEdge = edges.find(e => e.id === edgeId);
+        const graphEdge = nextGraph.edges.find(e => e.id === edgeId);
+        if (!originalEdge || !graphEdge) return;
         
-        console.log(`Re-routing edge ${edge.id}:`, { 
-          oldFromHandle: edge.sourceHandle, 
-          newFromHandle: sourceHandle,
-          oldToHandle: edge.targetHandle,
-          newToHandle: targetHandle
-        });
+        const newFromHandle = graphEdge.from === nodeId ? face + '-out' : graphEdge.fromHandle;
+        const newToHandle = graphEdge.to === nodeId ? face : graphEdge.toHandle;
         
-        // Find the edge in the graph and update its handles
-        const graphEdge = nextGraph.edges.find(e => e.id === edge.id);
-        if (graphEdge) {
-          graphEdge.fromHandle = sourceHandle;
-          graphEdge.toHandle = targetHandle;
+        // Check if this edge's face actually changed
+        const fromChanged = graphEdge.from === nodeId && originalEdge.sourceHandle !== newFromHandle;
+        const toChanged = graphEdge.to === nodeId && originalEdge.targetHandle !== newToHandle;
+        
+        if (fromChanged || toChanged) {
+          changedEdges.add(edgeId);
+          
+          // Add connected nodes for next wave
+          if (!processedNodes.has(originalEdge.source)) {
+            nodesToProcess.push(originalEdge.source);
+          }
+          if (!processedNodes.has(originalEdge.target)) {
+            nodesToProcess.push(originalEdge.target);
+          }
         }
-      }
-    });
+        
+        // Apply the changes
+        if (graphEdge.from === nodeId) {
+          graphEdge.fromHandle = face + '-out';
+        }
+        if (graphEdge.to === nodeId) {
+          graphEdge.toHandle = face;
+        }
+      });
+    }
     
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
@@ -926,37 +954,62 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Update the graph (this will trigger the graph->ReactFlow sync which will update lastSyncedGraphRef)
     setGraph(nextGraph);
     
-    // Save history state for edge deletion
-    saveHistoryState('Delete edge', undefined, id);
+    // Note: History saving is handled by the calling component (PropertiesPanel or deleteSelected)
     
     // Clear selection when edge is deleted
     onSelectedEdgeChange(null);
-  }, [graph, setGraph, onSelectedEdgeChange, saveHistoryState]);
+  }, [graph, setGraph, onSelectedEdgeChange]);
 
   // Delete selected elements
   const deleteSelected = useCallback(() => {
+    if (!graph) return;
+    
     const selectedNodes = nodes.filter(n => n.selected);
     const selectedEdges = edges.filter(e => e.selected);
     
     console.log('deleteSelected called with:', selectedNodes.length, 'nodes and', selectedEdges.length, 'edges');
     
-    // Save history state for bulk deletion
-    if (selectedNodes.length > 0 || selectedEdges.length > 0) {
+    if (selectedNodes.length === 0 && selectedEdges.length === 0) return;
+    
+    // Save history state BEFORE deletion
+    if (selectedNodes.length > 1 || selectedEdges.length > 1 || (selectedNodes.length > 0 && selectedEdges.length > 0)) {
       saveHistoryState('Delete selected', undefined, undefined);
+    } else if (selectedEdges.length === 1) {
+      saveHistoryState('Delete edge', undefined, selectedEdges[0].id);
+    } else if (selectedNodes.length === 1) {
+      saveHistoryState('Delete node', selectedNodes[0].id);
     }
     
-    // Delete selected nodes (which will cascade delete their edges)
-    selectedNodes.forEach(node => {
-      console.log('Deleting node:', node.id);
-      handleDeleteNode(node.id);
-    });
+    // Do all deletions in a single graph update
+    const nextGraph = structuredClone(graph);
     
-    // Delete any remaining selected edges
-    selectedEdges.forEach(edge => {
-      console.log('Deleting edge:', edge.id);
-      handleDeleteEdge(edge.id);
-    });
-  }, [nodes, edges, handleDeleteNode, handleDeleteEdge, saveHistoryState]);
+    // Delete selected nodes and their connected edges
+    const selectedNodeIds = new Set(selectedNodes.map(n => n.id));
+    nextGraph.nodes = nextGraph.nodes.filter(n => !selectedNodeIds.has(n.id));
+    nextGraph.edges = nextGraph.edges.filter(e => 
+      !selectedNodeIds.has(e.from) && !selectedNodeIds.has(e.to)
+    );
+    
+    // Delete selected edges (that weren't already deleted with nodes)
+    const selectedEdgeIds = new Set(selectedEdges.map(e => e.id));
+    nextGraph.edges = nextGraph.edges.filter(e => !selectedEdgeIds.has(e.id));
+    
+    // Update metadata
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Single graph update for all deletions
+    setGraph(nextGraph);
+    
+    // Clear selection
+    if (selectedNodes.length > 0) {
+      onSelectedNodeChange(null);
+    }
+    if (selectedEdges.length > 0) {
+      onSelectedEdgeChange(null);
+    }
+  }, [nodes, edges, graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange]);
 
   // Sync FROM graph TO ReactFlow when graph changes externally
   useEffect(() => {
@@ -1023,7 +1076,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     setNodes(nodesWithSelection);
     setEdges(edgesWithOffsetData);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, calculateEdgeWidth, calculateEdgeOffsets]);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge]);
 
   // Separate effect to handle initial fitView AFTER nodes are populated
   useEffect(() => {
@@ -1083,10 +1136,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }
       }));
       
-      console.log('Recalculated edge widths, sample edge scaledWidth:', result[0]?.data?.scaledWidth);
       return result;
     });
-  }, [edgeScalingMode, calculateEdgeWidth, calculateEdgeOffsets, nodes, setEdges]);
+  }, [edgeScalingMode, nodes, setEdges]);
   
   // Recalculate edge widths when what-if changes (separate effect to avoid loops)
   useEffect(() => {
@@ -1118,7 +1170,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }
       }));
     });
-  }, [overridesVersion, whatIfAnalysis, setEdges, calculateEdgeWidth, calculateEdgeOffsets, nodes]);
+  }, [overridesVersion, whatIfAnalysis, setEdges, nodes]);
   
   // Sync FROM ReactFlow TO graph when user makes changes in the canvas
   // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
@@ -2719,10 +2771,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Configure layout direction and spacing
     dagreGraph.setGraph({ 
       rankdir: effectiveDirection, // User-selected direction
-      nodesep: 80,   // Spacing between nodes in same rank
-      ranksep: 200,  // Spacing between ranks
-      marginx: 50,
-      marginy: 50,
+      nodesep: 60,   // Spacing between nodes in same rank (midpoint between 80 and 40)
+      ranksep: 150,  // Spacing between ranks (midpoint between 200 and 100)
+      edgesep: 20,   // Minimum separation between edges (encourages straighter edges)
+      marginx: 40,   // Midpoint margins
+      marginy: 40,
     });
     
     // Add nodes to dagre graph
@@ -2792,6 +2845,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onAutoLayoutRef.current = triggerAutoLayout;
     }
   }, [triggerAutoLayout, onAutoLayoutRef]);
+
+  // Expose force re-route function to parent component via ref
+  useEffect(() => {
+    if (onForceRerouteRef) {
+      onForceRerouteRef.current = () => {
+        console.log('Force re-route triggered via ref');
+        setForceReroute(true);
+      };
+    }
+  }, [onForceRerouteRef]);
 
 
   // Handle canvas right-click for context menu
@@ -2923,6 +2986,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     setGraph(nextGraph);
+    // Note: History saving is handled by PropertiesPanel for keyboard/button deletes
     setEdgeContextMenu(null);
   }, [graph, setGraph]);
 

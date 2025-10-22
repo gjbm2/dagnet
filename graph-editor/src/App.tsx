@@ -28,6 +28,7 @@ export default function App() {
   const addNodeRef = useRef<(() => void) | null>(null);
   const deleteSelectedRef = useRef<(() => void) | null>(null);
   const autoLayoutRef = useRef<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>(null);
+  const forceRerouteRef = useRef<(() => void) | null>(null);
 
   // Load graph from repository
   const handleLoadGraph = async (graphName: string) => {
@@ -191,6 +192,9 @@ export default function App() {
   const revertToLastLoaded = () => {
     if (lastLoadedGraphRef.current) {
       try {
+        // Save current state before reverting
+        saveHistoryState('Revert to last loaded');
+        
         const graphData = JSON.parse(lastLoadedGraphRef.current);
         // Force a complete remount by changing the key
         setGraphKey(prev => prev + 1);
@@ -480,6 +484,7 @@ export default function App() {
           onAddNodeRef={addNodeRef}
           onDeleteSelectedRef={deleteSelectedRef}
           onAutoLayoutRef={autoLayoutRef}
+          onForceRerouteRef={forceRerouteRef}
         />
       </div>
 
@@ -1067,9 +1072,10 @@ export default function App() {
               <Menubar.Item
                 onClick={() => {
                   console.log('Re-route clicked');
-                  // Trigger re-route once
-                  setAutoReroute(true);
-                  setTimeout(() => setAutoReroute(false), 100);
+                  // Trigger force re-route for all nodes
+                  if (forceRerouteRef.current) {
+                    forceRerouteRef.current();
+                  }
                 }}
                 style={{
                   padding: '8px 12px',

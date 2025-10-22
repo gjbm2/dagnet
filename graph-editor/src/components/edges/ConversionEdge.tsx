@@ -740,23 +740,67 @@ export default function ConversionEdge({
         const relX = (flowPos.x - nodeX) / nodeWidth;
         const relY = (flowPos.y - nodeY) / nodeHeight;
         
-        // Determine which handle based on which edge of the node is closest
-        const distToLeft = relX;
-        const distToRight = 1 - relX;
-        const distToTop = relY;
-        const distToBottom = 1 - relY;
+        // Calculate distances to all faces
+        const faceDistances = [
+          { face: 'left', distance: relX },
+          { face: 'right', distance: 1 - relX },
+          { face: 'top', distance: relY },
+          { face: 'bottom', distance: 1 - relY }
+        ];
         
-        const minDist = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+        // Sort by distance (closest first)
+        faceDistances.sort((a, b) => a.distance - b.distance);
         
-        let targetHandle: string;
-        if (minDist === distToLeft) {
-          targetHandle = 'left';
-        } else if (minDist === distToRight) {
-          targetHandle = 'right';
-        } else if (minDist === distToTop) {
-          targetHandle = 'top';
-        } else {
-          targetHandle = 'bottom';
+        // Get existing edges to analyze face usage
+        const allEdges = getEdges();
+        const nodeId = targetNode.id;
+        
+        // Determine if we're connecting as input or output
+        const isInputConnection = isDraggingTarget;
+        const isOutputConnection = isDraggingSource;
+        
+        // Find best face with type preference
+        let targetHandle: string = faceDistances[0].face; // fallback to closest
+        
+        for (const { face, distance } of faceDistances) {
+          // Get all edges using this face (both input and output)
+          const faceEdges = allEdges.filter(edge => {
+            const sourceHandle = edge.sourceHandle || 'right-out';
+            const targetHandle = edge.targetHandle || 'left';
+            const sourceFace = sourceHandle.split('-')[0];
+            const targetFace = targetHandle.split('-')[0];
+            
+            // Check if this face is used by any edge connected to this node
+            return (edge.source === nodeId && sourceFace === face) || 
+                   (edge.target === nodeId && targetFace === face);
+          });
+          
+          if (faceEdges.length === 0) {
+            // Empty face - use it
+            targetHandle = face;
+            break;
+          }
+          
+          // Check if face is used consistently (all input or all output)
+          const hasInputs = faceEdges.some(edge => edge.target === nodeId);
+          const hasOutputs = faceEdges.some(edge => edge.source === nodeId);
+          
+          // If face is mixed (both inputs and outputs), skip it
+          if (hasInputs && hasOutputs) {
+            continue;
+          }
+          
+          // If face has only inputs and we're adding an input, use it
+          if (hasInputs && !hasOutputs && isInputConnection) {
+            targetHandle = face;
+            break;
+          }
+          
+          // If face has only outputs and we're adding an output, use it
+          if (hasOutputs && !hasInputs && isOutputConnection) {
+            targetHandle = face;
+            break;
+          }
         }
         
         // Drop position analysis complete

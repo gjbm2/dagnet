@@ -131,8 +131,8 @@
       "label": "Gives BD",
       "absorbing": false,
       "layout": {
-        "x": 1376,
-        "y": -247
+        "x": 622,
+        "y": 139
       }
     },
     {
@@ -215,8 +215,8 @@
       "label": "Proceed after chasing",
       "absorbing": false,
       "layout": {
-        "x": 1631,
-        "y": 2
+        "x": 2147,
+        "y": -24
       }
     },
     {
@@ -504,8 +504,8 @@
       "slug": "is-bd-registrable-to-gives-bd",
       "from": "735df3d3-bad4-456d-9aac-a376ce567ee1",
       "to": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
-      "fromHandle": "right-out",
-      "toHandle": "left",
+      "fromHandle": "bottom-out",
+      "toHandle": "top",
       "p": {
         "mean": 0.28
       },
@@ -594,8 +594,8 @@
       "slug": "proceed-after-chasing-to-switch-registration",
       "from": "0b29a099-9a13-4a32-98e9-0ad4bb496492",
       "to": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
-      "fromHandle": "top-out",
-      "toHandle": "bottom",
+      "fromHandle": "left-out",
+      "toHandle": "right",
       "p": {
         "mean": 1
       },
@@ -682,8 +682,8 @@
       "slug": "coffee-promotion-to-gives-bd",
       "from": "0da63279-aacc-44eb-89ad-ab1e93a55191",
       "to": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
-      "fromHandle": "right-out",
-      "toHandle": "left",
+      "fromHandle": "left-out",
+      "toHandle": "right",
       "p": {
         "mean": 0.55
       },
@@ -713,7 +713,7 @@
       "from": "550e8400-e29b-41d4-a716-446655440001",
       "to": "8245f8ed-a207-45bc-9b15-9f8e5d67e05c",
       "fromHandle": "right-out",
-      "toHandle": "left-out",
+      "toHandle": "left",
       "case_id": "case_traffic",
       "case_variant": "influencer",
       "p": {
@@ -782,7 +782,7 @@
     "created_at": "2025-10-16T22:14:49.473Z",
     "author": "Graph Editor",
     "description": "Default empty graph",
-    "updated_at": "2025-10-22T13:30:11.635Z",
+    "updated_at": "2025-10-22T22:57:21.288Z",
     "name": "case-conversion-base3.json",
     "source": "git",
     "branch": "main"
