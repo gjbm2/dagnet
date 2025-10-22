@@ -11,7 +11,7 @@ import { getValidator } from './lib/schema';
 import './custom-reactflow.css';
 
 export default function App() {
-  const { graph, setGraph } = useGraphStore();
+  const { graph, setGraph, canUndo, canRedo, undo, redo, saveHistoryState } = useGraphStore();
   const [ajvValidate, setAjvValidate] = useState<any>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -52,6 +52,7 @@ export default function App() {
         // Force a complete remount to trigger fitView
         setGraphKey(prev => prev + 1);
         setGraph(graphData);
+        saveHistoryState('Load graph from repository');
         setShowLoadModal(false);
       } else {
         console.error('Failed to load graph:', result.error);
@@ -262,6 +263,8 @@ export default function App() {
     };
     setGraph(defaultGraph);
     lastLoadedGraphRef.current = JSON.stringify(defaultGraph);
+    console.log('Loading default graph, saving initial state');
+    saveHistoryState('Initial empty graph');
   };
 
   // Helper function to load graph from repository
@@ -432,11 +435,27 @@ export default function App() {
         event.preventDefault();
         setSidebarOpen(prev => !prev);
       }
+      
+      // Undo/Redo shortcuts
+      if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        if (canUndo) {
+          undo();
+        }
+      }
+      
+      if (((event.ctrlKey || event.metaKey) && event.key === 'y') || 
+          ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'Z')) {
+        event.preventDefault();
+        if (canRedo) {
+          redo();
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [canUndo, canRedo, undo, redo]);
 
   return (
     <div style={{ 
@@ -466,11 +485,11 @@ export default function App() {
 
       {/* Right Sidebar */}
       {sidebarOpen && (
-        <div style={{ 
-          display: 'flex', 
-          flexDirection: 'column', 
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
           height: 'calc(100vh - 40px)',
-          background: '#fff',
+        background: '#fff',
           borderLeft: '1px solid #e9ecef',
           marginTop: '40px',
           animation: 'slideInFromRight 0.3s ease-out',
@@ -516,21 +535,21 @@ export default function App() {
             ◀
           </button>
 
-          {/* What-If Analysis Control */}
-          <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
-            <WhatIfAnalysisControl />
-          </div>
-
-          {/* Properties Panel */}
-          <div style={{ flex: 1, overflow: 'hidden' }}>
-            <PropertiesPanel 
-              selectedNodeId={selectedNodeId} 
-              onSelectedNodeChange={setSelectedNodeId}
-              selectedEdgeId={selectedEdgeId}
-              onSelectedEdgeChange={setSelectedEdgeId}
-            />
-          </div>
+        {/* What-If Analysis Control */}
+        <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
+          <WhatIfAnalysisControl />
         </div>
+
+        {/* Properties Panel */}
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <PropertiesPanel 
+            selectedNodeId={selectedNodeId} 
+            onSelectedNodeChange={setSelectedNodeId}
+            selectedEdgeId={selectedEdgeId}
+            onSelectedEdgeChange={setSelectedEdgeId}
+          />
+        </div>
+      </div>
       )}
 
       {/* Show Sidebar Button (when sidebar is closed) */}
@@ -538,11 +557,11 @@ export default function App() {
         <button
           onClick={() => setSidebarOpen(true)}
           style={{
-            position: 'fixed',
+        position: 'fixed',
             right: '10px',
             top: '50%',
             transform: 'translateY(-50%)',
-            zIndex: 1000,
+        zIndex: 1000,
             width: '24px',
             height: '24px',
             background: '#fff',
@@ -551,8 +570,8 @@ export default function App() {
             cursor: 'pointer',
             fontSize: '12px',
             color: '#666',
-            display: 'flex',
-            alignItems: 'center',
+        display: 'flex',
+        alignItems: 'center',
             justifyContent: 'center',
             boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
             transition: 'all 0.2s ease'
@@ -653,6 +672,7 @@ export default function App() {
                 background: '#e9ecef',
                 margin: '4px 0'
               }} />
+              
               
               <Menubar.Item
                 onClick={() => {
@@ -791,6 +811,106 @@ export default function App() {
                 onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
               >
                 🔗 Save as shareable URL
+              </Menubar.Item>
+            </Menubar.Content>
+          </Menubar.Portal>
+        </Menubar.Menu>
+        
+        {/* Edit Menu */}
+        <Menubar.Menu>
+          <Menubar.Trigger
+            style={{
+                padding: '0 16px',
+                background: 'transparent',
+                color: '#333',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: '500',
+            transition: 'background-color 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                height: '100%',
+                borderRight: '1px solid #dee2e6'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#e9ecef';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              Edit
+          </Menubar.Trigger>
+          
+          <Menubar.Portal>
+            <Menubar.Content
+          style={{
+              background: 'white',
+              border: '1px solid #dee2e6',
+              borderRadius: '6px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              minWidth: '160px',
+              padding: '4px'
+            }}
+                    sideOffset={4}
+            >
+              <Menubar.Item
+                onClick={() => {
+                  if (canUndo) {
+                    undo();
+                  }
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: canUndo ? 'pointer' : 'not-allowed',
+                  fontSize: '13px',
+                  color: canUndo ? '#333' : '#999',
+                  borderRadius: '2px',
+                  outline: 'none',
+                  opacity: canUndo ? 1 : 0.5
+                }}
+                onMouseEnter={(e) => {
+                  if (canUndo) {
+                    e.currentTarget.style.background = '#f8f9fa';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (canUndo) {
+                    e.currentTarget.style.background = 'white';
+                  }
+                }}
+              >
+                ↶ Undo {canUndo ? '(Ctrl+Z)' : ''}
+              </Menubar.Item>
+              
+              <Menubar.Item
+                onClick={() => {
+                  if (canRedo) {
+                    redo();
+                  }
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: canRedo ? 'pointer' : 'not-allowed',
+                  fontSize: '13px',
+                  color: canRedo ? '#333' : '#999',
+                  borderRadius: '2px',
+                  outline: 'none',
+                  opacity: canRedo ? 1 : 0.5
+                }}
+                onMouseEnter={(e) => {
+                  if (canRedo) {
+                    e.currentTarget.style.background = '#f8f9fa';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (canRedo) {
+                    e.currentTarget.style.background = 'white';
+                  }
+                }}
+              >
+                ↷ Redo {canRedo ? '(Ctrl+Y)' : ''}
               </Menubar.Item>
             </Menubar.Content>
           </Menubar.Portal>
@@ -1153,8 +1273,11 @@ export default function App() {
               <Menubar.Item
                 onClick={() => {
                   console.log('Add node clicked');
+                  console.log('addNodeRef.current:', addNodeRef.current);
                   if (addNodeRef.current) {
                     addNodeRef.current();
+                  } else {
+                    console.log('addNodeRef.current is null');
                   }
                 }}
                 style={{

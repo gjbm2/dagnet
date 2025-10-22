@@ -67,7 +67,11 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
 }
 
 function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef }: GraphCanvasProps) {
-  const { graph, setGraph, whatIfAnalysis } = useGraphStore();
+  const store = useGraphStore();
+  const { graph, setGraph, whatIfAnalysis } = store;
+  const saveHistoryState = store.saveHistoryState;
+  console.log('GraphCanvas: store:', store);
+  console.log('GraphCanvas: saveHistoryState:', saveHistoryState);
   // Recompute edge widths when conditional what-if overrides change
   const overridesVersion = useGraphStore(state => state.whatIfOverrides._version);
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
@@ -106,6 +110,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Call the base handler first
     onNodesChangeBase(changes);
     
+    // Save history for node changes (position, selection, etc.)
+    const hasPositionChanges = changes.some(change => change.type === 'position' && change.dragging === false);
+    if (hasPositionChanges) {
+      saveHistoryState('Move node');
+    }
+    
     // Check if any position changes occurred (when user finishes dragging)
     if (autoReroute) {
       const positionChanges = changes.filter(change => change.type === 'position' && change.dragging === false);
@@ -120,7 +130,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         });
       }
     }
-  }, [onNodesChangeBase, autoReroute]);
+  }, [onNodesChangeBase, autoReroute, saveHistoryState]);
 
   // Log transformation function for Global Log Mass scaling
   const logMassTransform = useCallback((probability: number, maxWidth: number): number => {
@@ -1464,12 +1474,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Update graph state - this will trigger graph->ReactFlow sync
     setGraph(nextGraph);
+    saveHistoryState('Add edge', undefined, edgeId);
     
     // Select the new edge after a brief delay to allow sync to complete
     setTimeout(() => {
       onSelectedEdgeChange(edgeId);
     }, 50);
-  }, [graph, setGraph, generateEdgeSlug, wouldCreateCycle, onSelectedEdgeChange]);
+  }, [graph, setGraph, generateEdgeSlug, wouldCreateCycle, onSelectedEdgeChange, saveHistoryState]);
 
   // Variant selection modal state
   const [showVariantModal, setShowVariantModal] = useState(false);
@@ -1524,12 +1535,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     setGraph(nextGraph);
+    saveHistoryState('Add edge', undefined, nextGraph.edges[nextGraph.edges.length - 1].id);
     
     // Close modal and clear state
     setShowVariantModal(false);
     setPendingConnection(null);
     setCaseNodeVariants([]);
-  }, [pendingConnection, graph, setGraph, generateEdgeSlug]);
+  }, [pendingConnection, graph, setGraph, generateEdgeSlug, saveHistoryState]);
   
   // Handle Shift+Drag lasso selection
   const [isLassoSelecting, setIsLassoSelecting] = useState(false);
@@ -2626,6 +2638,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Add new node
   const addNode = useCallback(() => {
+    console.log('addNode function called');
     if (!graph) return;
     
     const newId = crypto.randomUUID();
@@ -2663,17 +2676,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Update graph state - this will trigger graph->ReactFlow sync
     setGraph(nextGraph);
+    console.log('saveHistoryState function:', typeof saveHistoryState);
+    if (typeof saveHistoryState === 'function') {
+      saveHistoryState('Add node', newId);
+    } else {
+      console.error('saveHistoryState is not a function:', saveHistoryState);
+    }
     
     // Select the new node after a brief delay to allow sync to complete
     setTimeout(() => {
       onSelectedNodeChange(newId);
     }, 50);
-  }, [graph, setGraph, generateSlugFromLabel, generateUniqueSlug, getAllExistingSlugs, onSelectedNodeChange, screenToFlowPosition]);
+  }, [graph, setGraph, generateSlugFromLabel, generateUniqueSlug, getAllExistingSlugs, onSelectedNodeChange, screenToFlowPosition, saveHistoryState]);
 
   // Expose addNode function to parent component via ref
   useEffect(() => {
     if (onAddNodeRef) {
+      console.log('Setting addNodeRef.current to addNode function');
       onAddNodeRef.current = addNode;
+    } else {
+      console.log('onAddNodeRef is null');
     }
   }, [addNode, onAddNodeRef]);
 
@@ -2860,8 +2882,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     setGraph(nextGraph);
+    console.log('saveHistoryState in addNodeAtPosition:', typeof saveHistoryState, saveHistoryState);
+    if (typeof saveHistoryState === 'function') {
+      saveHistoryState('Add node', newNode.id);
+    } else {
+      console.error('saveHistoryState is not a function in addNodeAtPosition:', saveHistoryState);
+    }
     setContextMenu(null);
-  }, [graph, setGraph]);
+  }, [graph, setGraph, saveHistoryState]);
 
   // Handle node right-click
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
