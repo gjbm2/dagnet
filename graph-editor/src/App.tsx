@@ -17,7 +17,7 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass'>('global-log-mass');
-  const [autoReroute, setAutoReroute] = useState(false);
+  const [autoReroute, setAutoReroute] = useState(true);
   const [showLoadModal, setShowLoadModal] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveGraphName, setSaveGraphName] = useState('');
