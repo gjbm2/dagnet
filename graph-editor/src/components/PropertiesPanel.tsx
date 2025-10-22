@@ -232,20 +232,7 @@ export default function PropertiesPanel({
         return;
       }
       
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedEdgeId && activeTab === 'edge') {
-          e.preventDefault();
-          const next = structuredClone(graph);
-          if (next) {
-            next.edges = next.edges.filter((e: any) => 
-              e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
-            );
-            setGraph(next);
-            saveHistoryState('Delete edge', undefined, selectedEdgeId || undefined);
-            onSelectedEdgeChange(null);
-          }
-        }
-      }
+      // Note: Delete key handling is done by GraphCanvas, not here
     };
 
     document.addEventListener('keydown', handleKeyDown);
