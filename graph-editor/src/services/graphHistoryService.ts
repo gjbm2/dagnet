@@ -58,7 +58,12 @@ export class GraphHistoryService {
     this.currentIndex--;
     const previousState = this.history[this.currentIndex];
     
-    console.log(`Undoing: ${previousState.action}`);
+    // Defensive check to ensure previousState exists
+    if (!previousState) {
+      console.error('Undo failed: previousState is undefined');
+      this.isUndoRedo = false;
+      return null;
+    }
     
     // Reset flag after a brief delay to allow state to settle
     setTimeout(() => {
@@ -78,7 +83,12 @@ export class GraphHistoryService {
     this.currentIndex++;
     const nextState = this.history[this.currentIndex];
     
-    console.log(`Redoing: ${nextState.action}`);
+    // Defensive check to ensure nextState exists
+    if (!nextState) {
+      console.error('Redo failed: nextState is undefined');
+      this.isUndoRedo = false;
+      return null;
+    }
     
     // Reset flag after a brief delay to allow state to settle
     setTimeout(() => {
@@ -92,7 +102,7 @@ export class GraphHistoryService {
    * Check if undo is possible
    */
   canUndo(): boolean {
-    return this.history.length > 1;
+    return this.currentIndex > 0;
   }
 
   /**
@@ -126,7 +136,6 @@ export class GraphHistoryService {
   clear(): void {
     this.history = [];
     this.currentIndex = -1;
-    console.log('History cleared');
   }
 
   /**
@@ -138,7 +147,9 @@ export class GraphHistoryService {
       currentIndex: this.currentIndex,
       canUndo: this.canUndo(),
       canRedo: this.canRedo(),
-      maxSize: this.maxSize
+      maxSize: this.maxSize,
+      currentState: this.history[this.currentIndex] ? this.history[this.currentIndex].action : 'none',
+      previousState: this.history[this.currentIndex - 1] ? this.history[this.currentIndex - 1].action : 'none'
     };
   }
 
