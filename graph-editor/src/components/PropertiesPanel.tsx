@@ -1426,36 +1426,200 @@ export default function PropertiesPanel({
                       ? 'Sub-Route Probability (within variant)' 
                       : 'Probability'}
                   </label>
-                  <input
-                    data-field="probability"
-                    type="text"
-                    value={localEdgeData.probability || 0}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setLocalEdgeData({...localEdgeData, probability: value});
-                    }}
-                    onBlur={() => {
-                      const numValue = parseFloat(localEdgeData.probability) || 0;
-                      setLocalEdgeData({...localEdgeData, probability: numValue});
-                      updateEdge('probability', numValue);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const numValue = parseFloat(localEdgeData.probability) || 0;
-                        setLocalEdgeData({...localEdgeData, probability: numValue});
-                        updateEdge('probability', numValue);
-                        e.currentTarget.blur();
-                      }
-                    }}
-                    placeholder={selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) ? "1.0 (for single path)" : "0.0"}
-                    style={{ 
-                      width: '100%', 
-                      padding: '8px', 
-                      border: '1px solid #ddd', 
-                      borderRadius: '4px',
-                      boxSizing: 'border-box'
-                    }}
-                  />
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input
+                      data-field="probability"
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={localEdgeData.probability || 0}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value) || 0;
+                        setLocalEdgeData({...localEdgeData, probability: value});
+                        updateEdge('probability', value);
+                      }}
+                      placeholder={selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) ? "1.0" : "0.0"}
+                      style={{ 
+                        width: '80px', 
+                        padding: '8px', 
+                        border: '1px solid #ddd', 
+                        borderRadius: '4px',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={localEdgeData.probability || 0}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        // Update local state immediately for smooth slider movement
+                        setLocalEdgeData({...localEdgeData, probability: value});
+                        // Debounce only the expensive graph update
+                        clearTimeout((window as any).probabilitySliderTimeout);
+                        (window as any).probabilitySliderTimeout = setTimeout(() => {
+                          updateEdge('probability', value);
+                        }, 250);
+                      }}
+                      style={{ 
+                        flex: 1,
+                        height: '6px',
+                        background: '#ddd',
+                        outline: 'none',
+                        borderRadius: '3px'
+                      }}
+                    />
+                    <span style={{ fontSize: '12px', color: '#666', minWidth: '30px' }}>
+                      {((localEdgeData.probability || 0) * 100).toFixed(0)}%
+                    </span>
+                    <button
+                      onClick={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const currentEdge = graph.edges.find((e: any) => e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
+                        if (!currentEdge) return;
+                        
+                        const siblings = graph.edges.filter((e: any) => {
+                          // For case edges, only balance within the same variant
+                          if (currentEdge.case_id && currentEdge.case_variant) {
+                            return e.id !== currentEdge.id && 
+                                   e.from === currentEdge.from && 
+                                   e.case_id === currentEdge.case_id && 
+                                   e.case_variant === currentEdge.case_variant;
+                          }
+                          // For regular edges, balance all edges from same source
+                          return e.id !== currentEdge.id && e.from === currentEdge.from;
+                        });
+                        
+                        if (siblings.length > 0) {
+                          const nextGraph = structuredClone(graph);
+                          const currentValue = currentEdge.p?.mean || 0;
+                          const remainingProbability = 1 - currentValue;
+                          
+                          // Calculate total current probability of siblings
+                          const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                          
+                          if (siblingsTotal > 0) {
+                            // Rebalance siblings proportionally
+                            siblings.forEach(sibling => {
+                              const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                              if (siblingIndex >= 0) {
+                                const siblingCurrentValue = sibling.p?.mean || 0;
+                                const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
+                                nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: newValue };
+                              }
+                            });
+                          } else {
+                            // If siblings have no probability, distribute equally
+                            const equalShare = remainingProbability / siblings.length;
+                            siblings.forEach(sibling => {
+                              const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                              if (siblingIndex >= 0) {
+                                nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
+                              }
+                            });
+                          }
+                          
+                          if (nextGraph.metadata) {
+                            nextGraph.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(nextGraph);
+                        }
+                      }}
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        backgroundColor: (() => {
+                          if (!graph || !selectedEdgeId) return '#f8f9fa';
+                          const currentEdge = graph.edges.find((e: any) => e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
+                          if (!currentEdge) return '#f8f9fa';
+                          
+                          const siblings = graph.edges.filter((e: any) => {
+                            // For case edges, only balance within the same variant
+                            if (currentEdge.case_id && currentEdge.case_variant) {
+                              return e.id !== currentEdge.id && 
+                                     e.from === currentEdge.from && 
+                                     e.case_id === currentEdge.case_id && 
+                                     e.case_variant === currentEdge.case_variant;
+                            }
+                            // For regular edges, balance all edges from same source
+                            return e.id !== currentEdge.id && e.from === currentEdge.from;
+                          });
+                          
+                          if (siblings.length === 0) return '#f8f9fa';
+                          
+                          // Calculate total probability mass
+                          const currentValue = currentEdge.p?.mean || 0;
+                          const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                          const totalMass = currentValue + siblingsTotal;
+                          
+                          // Light up if total mass is not close to 1.0
+                          return Math.abs(totalMass - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
+                        })(),
+                        border: (() => {
+                          if (!graph || !selectedEdgeId) return '1px solid #ddd';
+                          const currentEdge = graph.edges.find((e: any) => e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
+                          if (!currentEdge) return '1px solid #ddd';
+                          
+                          const siblings = graph.edges.filter((e: any) => {
+                            // For case edges, only balance within the same variant
+                            if (currentEdge.case_id && currentEdge.case_variant) {
+                              return e.id !== currentEdge.id && 
+                                     e.from === currentEdge.from && 
+                                     e.case_id === currentEdge.case_id && 
+                                     e.case_variant === currentEdge.case_variant;
+                            }
+                            // For regular edges, balance all edges from same source
+                            return e.id !== currentEdge.id && e.from === currentEdge.from;
+                          });
+                          
+                          if (siblings.length === 0) return '1px solid #ddd';
+                          
+                          // Calculate total probability mass
+                          const currentValue = currentEdge.p?.mean || 0;
+                          const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                          const totalMass = currentValue + siblingsTotal;
+                          
+                          // Light up if total mass is not close to 1.0
+                          return Math.abs(totalMass - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
+                        })(),
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        color: (() => {
+                          if (!graph || !selectedEdgeId) return '#666';
+                          const currentEdge = graph.edges.find((e: any) => e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
+                          if (!currentEdge) return '#666';
+                          
+                          const siblings = graph.edges.filter((e: any) => {
+                            // For case edges, only balance within the same variant
+                            if (currentEdge.case_id && currentEdge.case_variant) {
+                              return e.id !== currentEdge.id && 
+                                     e.from === currentEdge.from && 
+                                     e.case_id === currentEdge.case_id && 
+                                     e.case_variant === currentEdge.case_variant;
+                            }
+                            // For regular edges, balance all edges from same source
+                            return e.id !== currentEdge.id && e.from === currentEdge.from;
+                          });
+                          
+                          if (siblings.length === 0) return '#666';
+                          
+                          // Calculate total probability mass
+                          const currentValue = currentEdge.p?.mean || 0;
+                          const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                          const totalMass = currentValue + siblingsTotal;
+                          
+                          // Light up if total mass is not close to 1.0
+                          return Math.abs(totalMass - 1.0) > 0.01 ? '#856404' : '#666';
+                        })()
+                      }}
+                      title="Rebalance sibling edges proportionally"
+                    >
+                      ⚖️
+                    </button>
+                  </div>
                   {selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) && (
                     <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
                       For single-path variants, leave at 1.0. For multi-path variants, probabilities must sum to 1.0.
@@ -1544,6 +1708,7 @@ export default function PropertiesPanel({
                         );
                         if (edgeIndex >= 0) {
                           nextGraph.edges[edgeIndex].conditional_p = conditionalP.length > 0 ? conditionalP : undefined;
+                          
                           if (!nextGraph.metadata) nextGraph.metadata = {} as any;
                           nextGraph.metadata.updated_at = new Date().toISOString();
                           setGraph(nextGraph);

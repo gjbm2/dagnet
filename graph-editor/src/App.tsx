@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import GraphCanvas from './components/GraphCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
-import GitOperations from './components/GitOperations';
 import WhatIfAnalysisControl from './components/WhatIfAnalysisControl';
+import LoadGraphModal from './components/LoadGraphModal';
+import * as Menubar from '@radix-ui/react-menubar';
 import { loadFromSheet, saveToSheet } from './lib/sheetsClient';
 import { decodeStateFromUrl, encodeStateToUrl } from './lib/shareUrl';
 import { useGraphStore } from './lib/useGraphStore';
@@ -17,7 +18,85 @@ export default function App() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass'>('global-log-mass');
   const [autoReroute, setAutoReroute] = useState(false);
+  const [showLoadModal, setShowLoadModal] = useState(false);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveGraphName, setSaveGraphName] = useState('');
+  const [saveCommitMessage, setSaveCommitMessage] = useState('');
+  const [graphKey, setGraphKey] = useState(0); // Force remount on revert
+  const lastLoadedGraphRef = useRef<string | null>(null);
+  const addNodeRef = useRef<(() => void) | null>(null);
+  const deleteSelectedRef = useRef<(() => void) | null>(null);
+  const autoLayoutRef = useRef<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>(null);
 
+  // Load graph from repository
+  const handleLoadGraph = async (graphName: string) => {
+    try {
+      // Import the graphGitService here to avoid circular imports
+      const { graphGitService } = await import('./services/graphGitService');
+      const result = await graphGitService.getGraph(graphName, 'main');
+      
+      if (result.success && result.data) {
+        // Store the ORIGINAL loaded data as string for revert
+        lastLoadedGraphRef.current = JSON.stringify(result.data.content);
+        
+        const graphData = {
+          ...result.data.content,
+          metadata: {
+            ...result.data.content.metadata,
+            name: graphName,
+            source: 'git',
+            branch: 'main'
+          }
+        };
+        // Force a complete remount to trigger fitView
+        setGraphKey(prev => prev + 1);
+        setGraph(graphData);
+        setShowLoadModal(false);
+      } else {
+        console.error('Failed to load graph:', result.error);
+      }
+    } catch (error) {
+      console.error('Error loading graph:', error);
+    }
+  };
+
+  // Save graph to repository
+  const handleSaveToRepository = async () => {
+    if (!graph) {
+      console.error('No graph to save');
+      return;
+    }
+
+    if (!saveGraphName.trim()) {
+      console.error('Please enter a graph name');
+      return;
+    }
+
+    if (!saveCommitMessage.trim()) {
+      console.error('Please enter a commit message');
+      return;
+    }
+
+    try {
+      const { graphGitService } = await import('./services/graphGitService');
+      const result = await graphGitService.saveGraph(
+        saveGraphName,
+        graph,
+        saveCommitMessage,
+        'main'
+      );
+      
+      if (result.success) {
+        console.log(`✅ Successfully saved graph "${saveGraphName}" to repository`);
+        setShowSaveDialog(false);
+        // Keep the values for next save
+      } else {
+        console.error('Failed to save graph:', result.error);
+      }
+    } catch (error) {
+      console.error('Error saving graph:', error);
+    }
+  };
 
   // Load schema validator once
   useEffect(() => {
@@ -50,6 +129,7 @@ export default function App() {
       loadGraphFromRepository(graphParam).then(g => {
         if (g) {
           setGraph(g);
+          lastLoadedGraphRef.current = JSON.stringify(g);
         } else {
           console.error('Failed to load graph from repository:', graphParam);
           // Fall back to default graph
@@ -61,13 +141,15 @@ export default function App() {
     
     const decoded = decodeStateFromUrl();
     if (decoded) { 
-      setGraph(decoded); 
+      setGraph(decoded);
+      lastLoadedGraphRef.current = JSON.stringify(decoded);
       return; 
     }
     
     loadFromSheet().then(g => {
       if (g) {
         setGraph(g);
+        lastLoadedGraphRef.current = JSON.stringify(g);
       } else {
         // Create a default empty graph if no data is available
         const defaultGraph = {
@@ -95,12 +177,61 @@ export default function App() {
         }
       };
       setGraph(defaultGraph);
+      lastLoadedGraphRef.current = JSON.stringify(defaultGraph);
       }
     }).catch(e => {
       console.warn('Failed to load from sheet, using default graph:', e);
       loadDefaultGraph();
     });
   }, [setGraph]);
+
+  // Helper function to revert to last loaded graph
+  const revertToLastLoaded = () => {
+    if (lastLoadedGraphRef.current) {
+      try {
+        const graphData = JSON.parse(lastLoadedGraphRef.current);
+        // Force a complete remount by changing the key
+        setGraphKey(prev => prev + 1);
+        setGraph(graphData);
+        console.log('Reverted to last loaded graph');
+      } catch (error) {
+        console.error('Failed to parse last loaded graph:', error);
+      }
+    } else {
+      console.log('No last loaded graph to revert to');
+    }
+  };
+
+  // Helper function to load graph from file
+  const loadGraphFromFile = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = (event) => {
+      const file = (event.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const content = e.target?.result as string;
+            const graphData = JSON.parse(content);
+            
+            // Store the original loaded data for revert
+            lastLoadedGraphRef.current = content;
+            
+            // Set the graph
+            setGraph(graphData);
+            console.log('Graph loaded from file:', file.name);
+          } catch (error) {
+            console.error('Failed to parse graph file:', error);
+            alert('Failed to load graph file. Please ensure it\'s a valid JSON file.');
+          }
+        };
+        reader.readAsText(file);
+      }
+    };
+    input.click();
+  };
 
   // Helper function to load default graph
   const loadDefaultGraph = () => {
@@ -129,6 +260,7 @@ export default function App() {
       }
     };
     setGraph(defaultGraph);
+    lastLoadedGraphRef.current = JSON.stringify(defaultGraph);
   };
 
   // Helper function to load graph from repository
@@ -300,8 +432,9 @@ export default function App() {
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
       {/* Main Graph Area */}
-      <div style={{ position: 'relative' }}>
+      <div style={{ position: 'relative', marginTop: '40px' }}>
         <GraphCanvas 
+          key={graphKey}
           onSelectedNodeChange={setSelectedNodeId}
           onSelectedEdgeChange={setSelectedEdgeId}
           onDoubleClickNode={handleDoubleClickNode}
@@ -309,6 +442,9 @@ export default function App() {
           onSelectEdge={handleSelectEdge}
           edgeScalingMode={edgeScalingMode}
           autoReroute={autoReroute}
+          onAddNodeRef={addNodeRef}
+          onDeleteSelectedRef={deleteSelectedRef}
+          onAutoLayoutRef={autoLayoutRef}
         />
       </div>
 
@@ -316,23 +452,11 @@ export default function App() {
       <div style={{ 
         display: 'flex', 
         flexDirection: 'column', 
-        height: '100vh',
+        height: 'calc(100vh - 40px)',
         background: '#fff',
-        borderLeft: '1px solid #e9ecef'
+        borderLeft: '1px solid #e9ecef',
+        marginTop: '40px'
       }}>
-        {/* Git Operations */}
-        <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
-          <GitOperations 
-            onGraphLoad={setGraph}
-            onGraphSave={async (graphName, graphData) => {
-              // This is a placeholder - the actual save is handled in GitOperations
-              return true;
-            }}
-            currentGraph={graph}
-            currentGraphName={graph?.metadata?.description || 'untitled'}
-          />
-        </div>
-
         {/* What-If Analysis Control */}
         <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
           <WhatIfAnalysisControl />
@@ -349,116 +473,626 @@ export default function App() {
         </div>
       </div>
 
-      {/* Floating Action Bar */}
-      <div style={{
+      {/* Menu Bar */}
+      <Menubar.Root style={{
         position: 'fixed',
-        top: '20px',
-        right: '370px',
+        top: 0,
+        left: 0,
+        right: 0,
         zIndex: 1000,
         display: 'flex',
-        gap: '8px',
-        background: 'rgba(255, 255, 255, 0.95)',
-        padding: '8px 12px',
-        borderRadius: '8px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-        backdropFilter: 'blur(10px)',
-        alignItems: 'center',
+        background: '#f8f9fa',
+        borderBottom: '1px solid #dee2e6',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        alignItems: 'stretch',
+        height: '40px',
       }}>
-        {/* Edge Scaling Dropdown */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <label style={{ fontSize: '12px', fontWeight: '500', color: '#495057' }}>
-            Edge Scaling:
-          </label>
-          <select
-            value={edgeScalingMode}
-            onChange={(e) => setEdgeScalingMode(e.target.value as 'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass')}
-            style={{
-              padding: '4px 8px',
-              border: '1px solid #ced4da',
-              borderRadius: '4px',
-              fontSize: '12px',
-              background: 'white',
-              cursor: 'pointer',
-            }}
-          >
-            <option value="uniform">Uniform</option>
-            <option value="local-mass">Local Mass</option>
-            <option value="global-mass">Global Mass</option>
-            <option value="global-log-mass">Global Log Mass</option>
-          </select>
-        </div>
         
-        {/* Auto Re-route Toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <label style={{ fontSize: '12px', fontWeight: '500', color: '#495057' }}>
-            Auto Re-route:
-          </label>
-          <input
-            type="checkbox"
-            checked={autoReroute}
-            onChange={(e) => setAutoReroute(e.target.checked)}
+        {/* Graph Menu */}
+        <Menubar.Menu>
+          <Menubar.Trigger
             style={{
-              width: '16px',
-              height: '16px',
+                padding: '0 16px',
+                background: 'transparent',
+                color: '#333',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: '500',
+                transition: 'background-color 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                height: '100%',
+                borderRight: '1px solid #dee2e6'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#e9ecef';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              Graph
+          </Menubar.Trigger>
+          
+          <Menubar.Portal>
+            <Menubar.Content
+            style={{
+              background: 'white',
+                border: '1px solid #ddd',
+              borderRadius: '4px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                minWidth: '160px',
+                padding: '4px'
+              }}
+                    sideOffset={4}
+            >
+              <Menubar.Item
+                onClick={() => {
+                  console.log('New graph clicked');
+                  loadDefaultGraph();
+                }}
+                style={{
+                  padding: '8px 12px',
               cursor: 'pointer',
-            }}
-          />
-        </div>
-        <button
-          onClick={onSave}
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                🆕 New
+              </Menubar.Item>
+              
+              <Menubar.Separator style={{
+                height: '1px',
+                background: '#e9ecef',
+                margin: '4px 0'
+              }} />
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Open from repository clicked');
+                  setShowLoadModal(true);
+                }}
+            style={{
+                  padding: '8px 12px',
+              cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                📁 Open from repository...
+              </Menubar.Item>
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Open from file clicked');
+                  loadGraphFromFile();
+                }}
           style={{
-            padding: '8px 16px',
-            background: '#007bff',
-            color: 'white',
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                📄 Open from file...
+              </Menubar.Item>
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Revert clicked');
+                  revertToLastLoaded();
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                🔄 Revert
+              </Menubar.Item>
+              
+              <Menubar.Separator style={{
+                height: '1px',
+                background: '#e9ecef',
+                margin: '4px 0'
+              }} />
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Save to calling app clicked');
+                  onSave();
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                📤 Save to calling app
+              </Menubar.Item>
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Save to repository clicked');
+                  setShowSaveDialog(true);
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                🗂️ Save to repository...
+              </Menubar.Item>
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Save to file clicked');
+                  onDownload();
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                💾 Save to file...
+              </Menubar.Item>
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Save as shareable URL clicked');
+                  onShare();
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                🔗 Save as shareable URL
+              </Menubar.Item>
+            </Menubar.Content>
+          </Menubar.Portal>
+        </Menubar.Menu>
+        
+        {/* View Menu */}
+        <Menubar.Menu>
+          <Menubar.Trigger
+          style={{
+                padding: '0 16px',
+                background: 'transparent',
+                color: '#333',
             border: 'none',
-            borderRadius: '4px',
             cursor: 'pointer',
             fontSize: '14px',
             fontWeight: '500',
             transition: 'background-color 0.2s',
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = '#0056b3'}
-          onMouseLeave={(e) => e.currentTarget.style.background = '#007bff'}
-        >
-          Save
-        </button>
-        <button
-          onClick={onDownload}
+                display: 'flex',
+                alignItems: 'center',
+                height: '100%',
+                borderRight: '1px solid #dee2e6'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#e9ecef';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              View
+          </Menubar.Trigger>
+          
+          <Menubar.Portal>
+            <Menubar.Content
           style={{
-            padding: '8px 16px',
-            background: '#28a745',
-            color: 'white',
-            border: 'none',
+                background: 'white',
+                border: '1px solid #ddd',
             borderRadius: '4px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                minWidth: '200px',
+                padding: '4px'
+              }}
+                    sideOffset={4}
+            >
+              <Menubar.Sub>
+                <Menubar.SubTrigger
+                  style={{
+                    padding: '8px 12px',
+            cursor: 'pointer',
+                    fontSize: '13px',
+                    color: '#333',
+                    borderRadius: '2px',
+                    outline: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                >
+                  📏 Edge Scaling
+                  <span style={{ fontSize: '10px' }}>▶</span>
+                </Menubar.SubTrigger>
+                
+                <Menubar.Portal>
+                  <Menubar.SubContent
+          style={{
+                      background: 'white',
+                      border: '1px solid #ddd',
+            borderRadius: '4px',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                      minWidth: '160px',
+                      padding: '4px'
+                    }}
+                    sideOffset={4}
+                  >
+                    <Menubar.Item
+                      onClick={() => setEdgeScalingMode('uniform')}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: edgeScalingMode === 'uniform' ? '#007bff' : '#333',
+                        borderRadius: '2px',
+                        outline: 'none',
+                        background: edgeScalingMode === 'uniform' ? '#e3f2fd' : 'transparent'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = edgeScalingMode === 'uniform' ? '#e3f2fd' : 'white'}
+                    >
+                      {edgeScalingMode === 'uniform' ? '✓' : ''} Uniform
+                    </Menubar.Item>
+                    
+                    <Menubar.Item
+                      onClick={() => setEdgeScalingMode('local-mass')}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: edgeScalingMode === 'local-mass' ? '#007bff' : '#333',
+                        borderRadius: '2px',
+                        outline: 'none',
+                        background: edgeScalingMode === 'local-mass' ? '#e3f2fd' : 'transparent'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = edgeScalingMode === 'local-mass' ? '#e3f2fd' : 'white'}
+                    >
+                      {edgeScalingMode === 'local-mass' ? '✓' : ''} Local Mass
+                    </Menubar.Item>
+                    
+                    <Menubar.Item
+                      onClick={() => setEdgeScalingMode('global-mass')}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: edgeScalingMode === 'global-mass' ? '#007bff' : '#333',
+                        borderRadius: '2px',
+                        outline: 'none',
+                        background: edgeScalingMode === 'global-mass' ? '#e3f2fd' : 'transparent'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = edgeScalingMode === 'global-mass' ? '#e3f2fd' : 'white'}
+                    >
+                      {edgeScalingMode === 'global-mass' ? '✓' : ''} Global Mass
+                    </Menubar.Item>
+                    
+                    <Menubar.Item
+                      onClick={() => setEdgeScalingMode('global-log-mass')}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: edgeScalingMode === 'global-log-mass' ? '#007bff' : '#333',
+                        borderRadius: '2px',
+                        outline: 'none',
+                        background: edgeScalingMode === 'global-log-mass' ? '#e3f2fd' : 'transparent'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = edgeScalingMode === 'global-log-mass' ? '#e3f2fd' : 'white'}
+                    >
+                      {edgeScalingMode === 'global-log-mass' ? '✓' : ''} Global Log Mass
+                    </Menubar.Item>
+                  </Menubar.SubContent>
+                </Menubar.Portal>
+              </Menubar.Sub>
+              
+              <Menubar.Separator style={{
+                height: '1px',
+                background: '#e9ecef',
+                margin: '4px 0'
+              }} />
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Re-route clicked');
+                  // Trigger re-route once
+                  setAutoReroute(true);
+                  setTimeout(() => setAutoReroute(false), 100);
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                🔄 Re-route
+              </Menubar.Item>
+              
+              <Menubar.Item
+                onClick={() => setAutoReroute(!autoReroute)}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none',
+                  background: autoReroute ? '#e3f2fd' : 'transparent'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = autoReroute ? '#e3f2fd' : 'white'}
+              >
+                {autoReroute ? '✓' : ''} Auto Re-route
+              </Menubar.Item>
+              
+              <Menubar.Separator style={{
+                height: '1px',
+                background: '#e9ecef',
+                margin: '4px 0'
+              }} />
+              
+              <Menubar.Sub>
+                <Menubar.SubTrigger
+                  style={{
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    color: '#333',
+                    borderRadius: '2px',
+                    outline: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                >
+                  📐 Auto Layout
+                  <span style={{ fontSize: '10px' }}>▶</span>
+                </Menubar.SubTrigger>
+                
+                <Menubar.Portal>
+                  <Menubar.SubContent
+                    style={{
+                      background: 'white',
+                      border: '1px solid #ddd',
+                      borderRadius: '4px',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                      minWidth: '160px',
+                      padding: '4px'
+                    }}
+                    sideOffset={4}
+                  >
+                    <Menubar.Item
+                      onClick={() => {
+                        console.log('Left-to-right layout clicked');
+                        if (autoLayoutRef.current) {
+                          autoLayoutRef.current('LR');
+                        }
+                      }}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: '#333',
+                        borderRadius: '2px',
+                        outline: 'none'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      ➡️ Left-to-right
+                    </Menubar.Item>
+                    
+                    <Menubar.Item
+                      onClick={() => {
+                        console.log('Right-to-left layout clicked');
+                        if (autoLayoutRef.current) {
+                          autoLayoutRef.current('RL');
+                        }
+                      }}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: '#333',
+                        borderRadius: '2px',
+                        outline: 'none'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      ⬅️ Right-to-left
+                    </Menubar.Item>
+                    
+                    <Menubar.Item
+                      onClick={() => {
+                        console.log('Top-to-bottom layout clicked');
+                        if (autoLayoutRef.current) {
+                          autoLayoutRef.current('TB');
+                        }
+                      }}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: '#333',
+                        borderRadius: '2px',
+                        outline: 'none'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      ⬇️ Top-to-bottom
+                    </Menubar.Item>
+                    
+                    <Menubar.Item
+                      onClick={() => {
+                        console.log('Bottom-to-top layout clicked');
+                        if (autoLayoutRef.current) {
+                          autoLayoutRef.current('BT');
+                        }
+                      }}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: '#333',
+                        borderRadius: '2px',
+                        outline: 'none'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      ⬆️ Bottom-to-top
+                    </Menubar.Item>
+                  </Menubar.SubContent>
+                </Menubar.Portal>
+              </Menubar.Sub>
+              
+            </Menubar.Content>
+          </Menubar.Portal>
+        </Menubar.Menu>
+        
+        {/* Objects Menu */}
+        <Menubar.Menu>
+          <Menubar.Trigger
+          style={{
+                padding: '0 16px',
+                background: 'transparent',
+                color: '#333',
+            border: 'none',
             cursor: 'pointer',
             fontSize: '14px',
             fontWeight: '500',
             transition: 'background-color 0.2s',
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = '#1e7e34'}
-          onMouseLeave={(e) => e.currentTarget.style.background = '#28a745'}
-        >
-          Download
-        </button>
-        <button
-          onClick={onShare}
-          style={{
-            padding: '8px 16px',
-            background: '#6c757d',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: '500',
-            transition: 'background-color 0.2s',
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = '#545b62'}
-          onMouseLeave={(e) => e.currentTarget.style.background = '#6c757d'}
-        >
-          Share
-        </button>
-      </div>
+                display: 'flex',
+                alignItems: 'center',
+                height: '100%',
+                borderRight: '1px solid #dee2e6'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#e9ecef';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              Objects
+          </Menubar.Trigger>
+          
+          <Menubar.Portal>
+            <Menubar.Content
+              style={{
+                background: 'white',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                minWidth: '160px',
+                padding: '4px'
+              }}
+                    sideOffset={4}
+            >
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Add node clicked');
+                  if (addNodeRef.current) {
+                    addNodeRef.current();
+                  }
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                ➕ Add node
+              </Menubar.Item>
+              
+              <Menubar.Item
+                onClick={() => {
+                  console.log('Delete selected clicked');
+                  if (deleteSelectedRef.current) {
+                    deleteSelectedRef.current();
+                  }
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: '#333',
+                  borderRadius: '2px',
+                  outline: 'none'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+              >
+                🗑️ Delete selected
+              </Menubar.Item>
+            </Menubar.Content>
+          </Menubar.Portal>
+        </Menubar.Menu>
+      </Menubar.Root>
 
       {/* Schema Errors Overlay */}
       {errors.length > 0 && (
@@ -493,6 +1127,129 @@ export default function App() {
               <li key={i}>{e}</li>
             ))}
           </ul>
+        </div>
+      )}
+      
+      {/* Load Graph Modal */}
+      <LoadGraphModal
+        isOpen={showLoadModal}
+        onClose={() => setShowLoadModal(false)}
+        onLoadGraph={handleLoadGraph}
+        selectedBranch="main"
+        isLoading={false}
+      />
+
+      {/* Save Dialog */}
+      {showSaveDialog && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '8px',
+            padding: '20px',
+            width: '400px',
+            maxWidth: '90vw'
+          }}>
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px' }}>Save Graph to Repository</h3>
+            
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ 
+                display: 'block', 
+                fontSize: '12px', 
+                fontWeight: '600', 
+                marginBottom: '4px' 
+              }}>
+                Graph Name:
+              </label>
+              <input
+                type="text"
+                value={saveGraphName}
+                onChange={(e) => setSaveGraphName(e.target.value)}
+                placeholder="my-graph"
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: '1px solid #ddd',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ 
+                display: 'block', 
+                fontSize: '12px', 
+                fontWeight: '600', 
+                marginBottom: '4px' 
+              }}>
+                Commit Message:
+              </label>
+              <textarea
+                value={saveCommitMessage}
+                onChange={(e) => setSaveCommitMessage(e.target.value)}
+                placeholder="Add new conversion funnel"
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: '1px solid #ddd',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  minHeight: '60px',
+                  resize: 'vertical',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ 
+              display: 'flex', 
+              gap: '8px', 
+              justifyContent: 'flex-end' 
+            }}>
+              <button
+                onClick={() => setShowSaveDialog(false)}
+                style={{
+                  background: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveToRepository}
+                disabled={!saveGraphName.trim() || !saveCommitMessage.trim()}
+                style={{
+                  background: '#28a745',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  cursor: (!saveGraphName.trim() || !saveCommitMessage.trim()) ? 'not-allowed' : 'pointer',
+                  opacity: (!saveGraphName.trim() || !saveCommitMessage.trim()) ? 0.6 : 1
+                }}
+              >
+                💾 Save to Repository
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

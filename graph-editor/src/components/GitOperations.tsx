@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { graphGitService, GraphFile, GraphOperationResult } from '../services/graphGitService';
 import { gitConfig } from '../config/gitConfig';
+import LoadGraphModal from './LoadGraphModal';
 
 interface GitOperationsProps {
   onGraphLoad: (graphData: any) => void;
@@ -15,32 +16,34 @@ export default function GitOperations({
   currentGraph,
   currentGraphName 
 }: GitOperationsProps) {
-  const [availableGraphs, setAvailableGraphs] = useState<GraphFile[]>([]);
   const [branches, setBranches] = useState<string[]>([]);
   const [selectedBranch, setSelectedBranch] = useState<string>(gitConfig.branch);
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-  const [showGraphList, setShowGraphList] = useState(false);
+  const [showLoadModal, setShowLoadModal] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveGraphName, setSaveGraphName] = useState(currentGraphName || '');
   const [saveCommitMessage, setSaveCommitMessage] = useState('');
 
-  // Load available graphs and branches on mount
+  // Load branches on mount
   useEffect(() => {
     loadBranches();
-    loadAvailableGraphs();
   }, []);
 
   // Update saveGraphName when currentGraphName changes (e.g., when a graph is loaded)
   useEffect(() => {
     if (currentGraphName) {
       setSaveGraphName(currentGraphName);
+      // Set a default commit message when a graph is loaded
+      setSaveCommitMessage(`Update ${currentGraphName}`);
     }
   }, [currentGraphName]);
 
   const showMessage = (type: 'success' | 'error' | 'info', text: string) => {
     setMessage({ type, text });
-    setTimeout(() => setMessage(null), 5000);
+    // Show success messages longer
+    const timeout = type === 'success' ? 8000 : 5000;
+    setTimeout(() => setMessage(null), timeout);
   };
 
   const loadBranches = async () => {
@@ -59,25 +62,9 @@ export default function GitOperations({
     }
   };
 
-  const loadAvailableGraphs = async () => {
-    setIsLoading(true);
-    try {
-      const result = await graphGitService.getAvailableGraphs(selectedBranch);
-      if (result.success && result.data) {
-        setAvailableGraphs(result.data);
-      } else {
-        showMessage('error', result.error || 'Failed to load graphs');
-      }
-    } catch (error) {
-      showMessage('error', 'Failed to load graphs');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleBranchChange = (branch: string) => {
     setSelectedBranch(branch);
-    loadAvailableGraphs();
   };
 
   const handleLoadGraph = async (graphName: string) => {
@@ -134,12 +121,11 @@ export default function GitOperations({
       );
       
       if (result.success) {
-        showMessage('success', `Saved graph ${saveGraphName} to ${selectedBranch}`);
+        showMessage('success', `✅ Successfully saved graph "${saveGraphName}" to ${selectedBranch}`);
         setShowSaveDialog(false);
         // Keep the values for next save instead of clearing them
         // setSaveGraphName('');
         // setSaveCommitMessage('');
-        loadAvailableGraphs(); // Refresh the list
       } else {
         showMessage('error', result.error || 'Failed to save graph');
       }
@@ -165,7 +151,6 @@ export default function GitOperations({
       
       if (result.success) {
         showMessage('success', `Deleted graph ${graphName}`);
-        loadAvailableGraphs(); // Refresh the list
       } else {
         showMessage('error', result.error || 'Failed to delete graph');
       }
@@ -195,7 +180,7 @@ export default function GitOperations({
         </h3>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
-            onClick={() => setShowGraphList(!showGraphList)}
+            onClick={() => setShowLoadModal(true)}
             disabled={isLoading}
             style={{
               background: '#007bff',
@@ -208,7 +193,7 @@ export default function GitOperations({
               opacity: isLoading ? 0.6 : 1
             }}
           >
-            {showGraphList ? 'Hide' : 'Show'} Graphs
+            📁 Load Graph
           </button>
           <button
             onClick={() => setShowSaveDialog(true)}
@@ -224,7 +209,7 @@ export default function GitOperations({
               opacity: (!currentGraph || isLoading) ? 0.6 : 1
             }}
           >
-            Save Graph
+            💾 Save Graph
           </button>
         </div>
       </div>
@@ -273,86 +258,14 @@ export default function GitOperations({
         </div>
       )}
 
-      {/* Graph List */}
-      {showGraphList && (
-        <div style={{ 
-          background: 'white', 
-          border: '1px solid #e9ecef', 
-          borderRadius: '4px', 
-          padding: '12px',
-          maxHeight: '200px',
-          overflowY: 'auto'
-        }}>
-          <div style={{ 
-            fontSize: '12px', 
-            fontWeight: '600', 
-            marginBottom: '8px',
-            color: '#666'
-          }}>
-            Available Graphs ({availableGraphs.length}):
-          </div>
-          {availableGraphs.length === 0 ? (
-            <div style={{ fontSize: '11px', color: '#999', fontStyle: 'italic' }}>
-              No graphs found in {selectedBranch}
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              {availableGraphs.map((graph, index) => (
-                <div key={index} style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '6px 8px',
-                  background: '#f8f9fa',
-                  borderRadius: '3px',
-                  fontSize: '11px'
-                }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: '500' }}>{graph.name}</div>
-                    <div style={{ color: '#666', fontSize: '10px' }}>
-                      {graph.size} bytes • {graph.lastModified}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '4px' }}>
-                    <button
-                      onClick={() => handleLoadGraph(graph.name)}
-                      disabled={isLoading}
-                      style={{
-                        background: '#007bff',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '3px',
-                        padding: '2px 6px',
-                        fontSize: '10px',
-                        cursor: isLoading ? 'not-allowed' : 'pointer',
-                        opacity: isLoading ? 0.6 : 1
-                      }}
-                    >
-                      Load
-                    </button>
-                    <button
-                      onClick={() => handleDeleteGraph(graph.name)}
-                      disabled={isLoading}
-                      style={{
-                        background: '#dc3545',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '3px',
-                        padding: '2px 6px',
-                        fontSize: '10px',
-                        cursor: isLoading ? 'not-allowed' : 'pointer',
-                        opacity: isLoading ? 0.6 : 1
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Load Graph Modal */}
+      <LoadGraphModal
+        isOpen={showLoadModal}
+        onClose={() => setShowLoadModal(false)}
+        onLoadGraph={handleLoadGraph}
+        selectedBranch={selectedBranch}
+        isLoading={isLoading}
+      />
 
       {/* Save Dialog */}
       {showSaveDialog && (
@@ -463,7 +376,7 @@ export default function GitOperations({
                   opacity: (isLoading || !saveGraphName.trim() || !saveCommitMessage.trim()) ? 0.6 : 1
                 }}
               >
-                {isLoading ? 'Saving...' : 'Save Graph'}
+                {isLoading ? '💾 Saving...' : '💾 Save Graph'}
               </button>
             </div>
           </div>

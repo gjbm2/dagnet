@@ -201,31 +201,247 @@ export default function ConditionalProbabilitiesSection({
                 <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>
                   Probability (mean)
                 </label>
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={condition.p.mean}
-                  onChange={(e) => {
-                    const newConditions = [...conditions];
-                    newConditions[index] = {
-                      ...condition,
-                      p: { ...condition.p, mean: parseFloat(e.target.value) || 0 }
-                    };
-                    onLocalUpdate(newConditions);
-                  }}
-                  placeholder="0.5"
-                  style={{
-                    width: '100%',
-                    padding: '6px',
-                    border: '1px solid #ddd',
-                    borderRadius: '3px',
-                    boxSizing: 'border-box',
-                    fontSize: '12px'
-                  }}
-                />
-              </div>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={condition.p.mean}
+                    onChange={(e) => {
+                      const newConditions = [...conditions];
+                      newConditions[index] = {
+                        ...condition,
+                        p: { ...condition.p, mean: parseFloat(e.target.value) || 0 }
+                      };
+                      onLocalUpdate(newConditions);
+                    }}
+                    placeholder="0.5"
+                    style={{
+                      width: '60px',
+                      padding: '4px',
+                      border: '1px solid #ddd',
+                      borderRadius: '3px',
+                      boxSizing: 'border-box',
+                      fontSize: '11px'
+                    }}
+                  />
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={condition.p.mean}
+                    onChange={(e) => {
+                      const newConditions = [...conditions];
+                      newConditions[index] = {
+                        ...condition,
+                        p: { ...condition.p, mean: parseFloat(e.target.value) }
+                      };
+                      onLocalUpdate(newConditions);
+                    }}
+                    style={{
+                      flex: 1,
+                      height: '4px',
+                      background: '#ddd',
+                      outline: 'none',
+                      borderRadius: '2px'
+                    }}
+                  />
+                      <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
+                        {(condition.p.mean * 100).toFixed(0)}%
+                      </span>
+                      <button
+                        onClick={() => {
+                          if (!graph || !edge) return;
+                          const siblings = graph.edges.filter((e: any) => {
+                            // For case edges, only balance within the same variant
+                            if (edge.case_id && edge.case_variant) {
+                              return e.id !== edge.id && 
+                                     e.from === edge.from && 
+                                     e.case_id === edge.case_id && 
+                                     e.case_variant === edge.case_variant;
+                            }
+                            // For regular edges, balance all edges from same source
+                            return e.id !== edge.id && e.from === edge.from;
+                          });
+                          
+                          if (siblings.length > 0) {
+                            const nextGraph = structuredClone(graph);
+                            const currentValue = condition.p.mean;
+                            const remainingProbability = 1 - currentValue;
+                            
+                            // Calculate total current probability of siblings for this condition
+                            const conditionKey = JSON.stringify(condition.condition.visited.sort());
+                            const siblingsWithSameCondition = siblings.filter(sibling => {
+                              if (!sibling.conditional_p) return false;
+                              return sibling.conditional_p.some((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                            });
+                            
+                            if (siblingsWithSameCondition.length > 0) {
+                              // Calculate total current probability of siblings for this condition
+                              const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
+                                const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                );
+                                return sum + (matchingCondition?.p?.mean || 0);
+                              }, 0);
+                              
+                              if (siblingsTotal > 0) {
+                                // Rebalance siblings proportionally for this condition
+                                siblingsWithSameCondition.forEach(sibling => {
+                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                  if (siblingIndex >= 0) {
+                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                    );
+                                    if (matchingCondition) {
+                                      const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                        JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                      );
+                                      if (conditionIndex >= 0) {
+                                        const siblingCurrentValue = matchingCondition.p?.mean || 0;
+                                        const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
+                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
+                                      }
+                                    }
+                                  }
+                                });
+                              } else {
+                                // If siblings have no probability for this condition, distribute equally
+                                const equalShare = remainingProbability / siblingsWithSameCondition.length;
+                                siblingsWithSameCondition.forEach(sibling => {
+                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                  if (siblingIndex >= 0) {
+                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                    );
+                                    if (matchingCondition) {
+                                      const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                        JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                      );
+                                      if (conditionIndex >= 0) {
+                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
+                                      }
+                                    }
+                                  }
+                                });
+                              }
+                            }
+                            
+                            if (nextGraph.metadata) {
+                              nextGraph.metadata.updated_at = new Date().toISOString();
+                            }
+                            setGraph(nextGraph);
+                          }
+                        }}
+                        style={{
+                          padding: '2px 4px',
+                          fontSize: '9px',
+                          backgroundColor: (() => {
+                            if (!graph || !edge) return '#f8f9fa';
+                            const siblings = graph.edges.filter((e: any) => {
+                              // For case edges, only balance within the same variant
+                              if (edge.case_id && edge.case_variant) {
+                                return e.id !== edge.id && 
+                                       e.from === edge.from && 
+                                       e.case_id === edge.case_id && 
+                                       e.case_variant === edge.case_variant;
+                              }
+                              // For regular edges, balance all edges from same source
+                              return e.id !== edge.id && e.from === edge.from;
+                            });
+                            
+                            if (siblings.length === 0) return '#f8f9fa';
+                            
+                            // Calculate total probability mass for this condition
+                            const conditionKey = JSON.stringify(condition.condition.visited.sort());
+                            const currentValue = condition.p.mean;
+                            const siblingsTotal = siblings.reduce((sum, sibling) => {
+                              if (!sibling.conditional_p) return sum;
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                              return sum + (matchingCondition?.p?.mean || 0);
+                            }, 0);
+                            const totalMass = currentValue + siblingsTotal;
+                            
+                            // Light up if total mass is not close to 1.0
+                            return Math.abs(totalMass - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
+                          })(),
+                          border: (() => {
+                            if (!graph || !edge) return '1px solid #ddd';
+                            const siblings = graph.edges.filter((e: any) => {
+                              // For case edges, only balance within the same variant
+                              if (edge.case_id && edge.case_variant) {
+                                return e.id !== edge.id && 
+                                       e.from === edge.from && 
+                                       e.case_id === edge.case_id && 
+                                       e.case_variant === edge.case_variant;
+                              }
+                              // For regular edges, balance all edges from same source
+                              return e.id !== edge.id && e.from === edge.from;
+                            });
+                            
+                            if (siblings.length === 0) return '1px solid #ddd';
+                            
+                            // Calculate total probability mass for this condition
+                            const conditionKey = JSON.stringify(condition.condition.visited.sort());
+                            const currentValue = condition.p.mean;
+                            const siblingsTotal = siblings.reduce((sum, sibling) => {
+                              if (!sibling.conditional_p) return sum;
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                              return sum + (matchingCondition?.p?.mean || 0);
+                            }, 0);
+                            const totalMass = currentValue + siblingsTotal;
+                            
+                            // Light up if total mass is not close to 1.0
+                            return Math.abs(totalMass - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
+                          })(),
+                          borderRadius: '2px',
+                          cursor: 'pointer',
+                          color: (() => {
+                            if (!graph || !edge) return '#666';
+                            const siblings = graph.edges.filter((e: any) => {
+                              // For case edges, only balance within the same variant
+                              if (edge.case_id && edge.case_variant) {
+                                return e.id !== edge.id && 
+                                       e.from === edge.from && 
+                                       e.case_id === edge.case_id && 
+                                       e.case_variant === edge.case_variant;
+                              }
+                              // For regular edges, balance all edges from same source
+                              return e.id !== edge.id && e.from === edge.from;
+                            });
+                            
+                            if (siblings.length === 0) return '#666';
+                            
+                            // Calculate total probability mass for this condition
+                            const conditionKey = JSON.stringify(condition.condition.visited.sort());
+                            const currentValue = condition.p.mean;
+                            const siblingsTotal = siblings.reduce((sum, sibling) => {
+                              if (!sibling.conditional_p) return sum;
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                              return sum + (matchingCondition?.p?.mean || 0);
+                            }, 0);
+                            const totalMass = currentValue + siblingsTotal;
+                            
+                            // Light up if total mass is not close to 1.0
+                            return Math.abs(totalMass - 1.0) > 0.01 ? '#856404' : '#666';
+                          })()
+                        }}
+                        title="Rebalance sibling conditional probabilities for this condition"
+                      >
+                        ⚖️
+                      </button>
+                    </div>
+                  </div>
 
               {/* Probability stdev */}
               <div>
