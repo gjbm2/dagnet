@@ -627,9 +627,7 @@ export default function ConversionEdge({
   };
 
   const handleDelete = useCallback(() => {
-    if (confirm('Delete this edge?')) {
-      deleteElements({ edges: [{ id }] });
-    }
+    deleteElements({ edges: [{ id }] });
   }, [id, deleteElements]);
 
   const handleDoubleClick = useCallback(() => {
