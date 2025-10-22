@@ -84,7 +84,7 @@ export default function GitOperations({
         };
         onGraphLoad(graphData);
         showMessage('success', `Loaded graph ${graphName} from ${selectedBranch}`);
-        setShowGraphList(false);
+        setShowLoadModal(false);
       } else {
         showMessage('error', result.error || 'Failed to load graph');
       }
