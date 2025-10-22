@@ -17,7 +17,7 @@ export default function PropertiesPanel({
   selectedEdgeId, 
   onSelectedEdgeChange 
 }: PropertiesPanelProps) {
-  const { graph, setGraph, whatIfAnalysis, setWhatIfAnalysis } = useGraphStore();
+  const { graph, setGraph, whatIfAnalysis, setWhatIfAnalysis, saveHistoryState } = useGraphStore();
   const [activeTab, setActiveTab] = useState<'graph' | 'node' | 'edge' | 'json'>('graph');
   
   // Local state for form inputs to prevent eager updates
@@ -277,8 +277,9 @@ export default function PropertiesPanel({
         next.metadata.updated_at = new Date().toISOString();
       }
       setGraph(next);
+      saveHistoryState(`Update node ${field}`, selectedNodeId);
     }
-  }, [selectedNodeId, graph, setGraph]);
+  }, [selectedNodeId, graph, setGraph, saveHistoryState]);
 
   const updateEdge = useCallback((field: string, value: any) => {
     if (!graph || !selectedEdgeId) return;
@@ -310,8 +311,9 @@ export default function PropertiesPanel({
         next.metadata.updated_at = new Date().toISOString();
       }
       setGraph(next);
+      saveHistoryState(`Update edge ${field}`, undefined, selectedEdgeId);
     }
-  }, [selectedEdgeId, graph, setGraph]);
+  }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
   // JSON edit functions
   const openJsonEdit = useCallback(() => {
@@ -1231,37 +1233,37 @@ export default function PropertiesPanel({
                           <div style={{ marginBottom: '8px' }}>
                             <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Weight (0-1)</label>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                              <input
-                                type="number"
-                                min="0"
-                                max="1"
-                                step="0.01"
-                                value={variant.weight}
-                                onChange={(e) => {
-                                  const newVariants = [...caseData.variants];
-                                  newVariants[index].weight = parseFloat(e.target.value) || 0;
-                                  setCaseData({...caseData, variants: newVariants});
-                                }}
-                                onBlur={() => {
-                                  if (graph && selectedNodeId) {
-                                    const next = structuredClone(graph);
-                                    const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                                    if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                      next.nodes[nodeIndex].case.variants = caseData.variants;
-                                      if (next.metadata) {
-                                        next.metadata.updated_at = new Date().toISOString();
-                                      }
-                                      setGraph(next);
+                            <input
+                              type="number"
+                              min="0"
+                              max="1"
+                              step="0.01"
+                              value={variant.weight}
+                              onChange={(e) => {
+                                const newVariants = [...caseData.variants];
+                                newVariants[index].weight = parseFloat(e.target.value) || 0;
+                                setCaseData({...caseData, variants: newVariants});
+                              }}
+                              onBlur={() => {
+                                if (graph && selectedNodeId) {
+                                  const next = structuredClone(graph);
+                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                    next.nodes[nodeIndex].case.variants = caseData.variants;
+                                    if (next.metadata) {
+                                      next.metadata.updated_at = new Date().toISOString();
                                     }
+                                    setGraph(next);
                                   }
-                                }}
-                                placeholder="0.5"
-                                style={{ 
+                                }
+                              }}
+                              placeholder="0.5"
+                              style={{ 
                                   width: '60px', 
                                   padding: '4px', 
-                                  border: '1px solid #ddd', 
-                                  borderRadius: '3px',
-                                  boxSizing: 'border-box',
+                                border: '1px solid #ddd', 
+                                borderRadius: '3px',
+                                boxSizing: 'border-box',
                                   fontSize: '11px'
                                 }}
                               />
@@ -1548,27 +1550,27 @@ export default function PropertiesPanel({
                       : 'Probability'}
                   </label>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                    <input
-                      data-field="probability"
+                  <input
+                    data-field="probability"
                       type="number"
                       min="0"
                       max="1"
                       step="0.01"
-                      value={localEdgeData.probability || 0}
-                      onChange={(e) => {
+                    value={localEdgeData.probability || 0}
+                    onChange={(e) => {
                         const value = parseFloat(e.target.value) || 0;
-                        setLocalEdgeData({...localEdgeData, probability: value});
+                      setLocalEdgeData({...localEdgeData, probability: value});
                         updateEdge('probability', value);
                       }}
                       placeholder={selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) ? "1.0" : "0.0"}
-                      style={{ 
+                    style={{ 
                         width: '80px', 
-                        padding: '8px', 
-                        border: '1px solid #ddd', 
-                        borderRadius: '4px',
-                        boxSizing: 'border-box'
-                      }}
-                    />
+                      padding: '8px', 
+                      border: '1px solid #ddd', 
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
+                  />
                     <input
                       type="range"
                       min="0"

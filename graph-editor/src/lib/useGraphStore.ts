@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { Graph } from './types';
+import { graphHistoryService, HistoryState } from '../services/graphHistoryService';
 
 // Legacy single case what-if state (kept for backward compatibility)
 type LegacyWhatIfState = {
@@ -32,6 +33,15 @@ type State = {
   setCaseOverride: (nodeId: string, variant: string | null) => void;
   setConditionalOverride: (edgeId: string, visitedNodes: Set<string> | null) => void;
   clearAllOverrides: () => void;
+  
+  // History/Undo-Redo functionality
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
+  saveHistoryState: (action: string, nodeId?: string, edgeId?: string) => void;
+  getHistoryStats: () => any;
+  updateHistoryState: () => void; // Update UI state for undo/redo buttons
 };
 
 export const useGraphStore = create<State>((set) => ({
@@ -102,4 +112,56 @@ export const useGraphStore = create<State>((set) => ({
         _version: 0,
       },
     }),
+  
+  // History/Undo-Redo functionality
+  canUndo: false,
+  canRedo: false,
+  
+  undo: () => {
+    const previousGraph = graphHistoryService.undo();
+    if (previousGraph) {
+      set({ 
+        graph: previousGraph,
+        canUndo: graphHistoryService.canUndo(),
+        canRedo: graphHistoryService.canRedo()
+      });
+    }
+  },
+  
+  redo: () => {
+    const nextGraph = graphHistoryService.redo();
+    if (nextGraph) {
+      set({ 
+        graph: nextGraph,
+        canUndo: graphHistoryService.canUndo(),
+        canRedo: graphHistoryService.canRedo()
+      });
+    }
+  },
+  
+  saveHistoryState: (action, nodeId, edgeId) => {
+    console.log('saveHistoryState called with:', action, nodeId, edgeId);
+    const state = useGraphStore.getState();
+    if (state.graph) {
+      console.log('Saving history state:', action, 'canUndo before:', graphHistoryService.canUndo());
+      graphHistoryService.saveState(state.graph, action, nodeId, edgeId);
+      console.log('canUndo after:', graphHistoryService.canUndo());
+      set({
+        canUndo: graphHistoryService.canUndo(),
+        canRedo: graphHistoryService.canRedo()
+      });
+    } else {
+      console.log('No graph to save history for');
+    }
+  },
+  
+  getHistoryStats: () => graphHistoryService.getStats(),
+  
+  // Update history state (call this when graph changes)
+  updateHistoryState: () => {
+    set({
+      canUndo: graphHistoryService.canUndo(),
+      canRedo: graphHistoryService.canRedo()
+    });
+  },
 }));
