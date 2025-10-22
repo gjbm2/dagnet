@@ -70,8 +70,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const store = useGraphStore();
   const { graph, setGraph, whatIfAnalysis } = store;
   const saveHistoryState = store.saveHistoryState;
-  console.log('GraphCanvas: store:', store);
-  console.log('GraphCanvas: saveHistoryState:', saveHistoryState);
   // Recompute edge widths when conditional what-if overrides change
   const overridesVersion = useGraphStore(state => state.whatIfOverrides._version);
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
@@ -85,8 +83,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const [forceReroute, setForceReroute] = useState(false); // Force re-route once (for layout)
   
   // Auto-layout state
-  const [preLayoutGraph, setPreLayoutGraph] = useState<any>(null);
-  const [showLayoutModal, setShowLayoutModal] = useState(false);
   const [layoutDirection, setLayoutDirection] = useState<'LR' | 'RL' | 'TB' | 'BT'>('LR');
   
   // Context menu state
@@ -101,12 +97,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Custom onNodesChange handler to detect position changes for auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
-    console.log('onNodesChange called:', { 
-      changeCount: changes.length, 
-      autoReroute, 
-      changeTypes: changes.map(c => ({ type: c.type, dragging: c.dragging }))
-    });
-    
     // Call the base handler first
     onNodesChangeBase(changes);
     
@@ -119,15 +109,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Check if any position changes occurred (when user finishes dragging)
     if (autoReroute) {
       const positionChanges = changes.filter(change => change.type === 'position' && change.dragging === false);
-      console.log('Filtered position changes:', positionChanges.length);
       if (positionChanges.length > 0) {
-        console.log('Position changes detected (dragging finished):', positionChanges);
-        console.log('Setting shouldReroute flag');
         // Trigger re-routing by incrementing the flag
-        setShouldReroute(prev => {
-          console.log('shouldReroute incrementing from', prev, 'to', prev + 1);
-          return prev + 1;
-        });
+        setShouldReroute(prev => prev + 1);
       }
     }
   }, [onNodesChangeBase, autoReroute, saveHistoryState]);
@@ -884,9 +868,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Update the graph (this will trigger the graph->ReactFlow sync which will update lastSyncedGraphRef)
     setGraph(nextGraph);
     
+    // Save history state for node deletion
+    saveHistoryState('Delete node', id);
+    
     // Clear selection when node is deleted
     onSelectedNodeChange(null);
-  }, [graph, setGraph, onSelectedNodeChange]);
+  }, [graph, setGraph, onSelectedNodeChange, saveHistoryState]);
 
   const handleUpdateEdge = useCallback((id: string, data: any) => {
     if (!graph) return;
@@ -937,9 +924,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Update the graph (this will trigger the graph->ReactFlow sync which will update lastSyncedGraphRef)
     setGraph(nextGraph);
     
+    // Save history state for edge deletion
+    saveHistoryState('Delete edge', undefined, id);
+    
     // Clear selection when edge is deleted
     onSelectedEdgeChange(null);
-  }, [graph, setGraph, onSelectedEdgeChange]);
+  }, [graph, setGraph, onSelectedEdgeChange, saveHistoryState]);
 
   // Delete selected elements
   const deleteSelected = useCallback(() => {
@@ -947,6 +937,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const selectedEdges = edges.filter(e => e.selected);
     
     console.log('deleteSelected called with:', selectedNodes.length, 'nodes and', selectedEdges.length, 'edges');
+    
+    // Save history state for bulk deletion
+    if (selectedNodes.length > 0 || selectedEdges.length > 0) {
+      saveHistoryState('Delete selected', undefined, undefined);
+    }
     
     // Delete selected nodes (which will cascade delete their edges)
     selectedNodes.forEach(node => {
@@ -959,23 +954,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('Deleting edge:', edge.id);
       handleDeleteEdge(edge.id);
     });
-  }, [nodes, edges, handleDeleteNode, handleDeleteEdge]);
+  }, [nodes, edges, handleDeleteNode, handleDeleteEdge, saveHistoryState]);
 
   // Sync FROM graph TO ReactFlow when graph changes externally
   useEffect(() => {
     if (!graph) return;
     if (isSyncingRef.current) {
-      console.log('Skipping graph->ReactFlow sync (isSyncingRef=true)');
       return;
     }
     
     const graphJson = JSON.stringify(graph);
     if (graphJson === lastSyncedGraphRef.current) {
-      console.log('Skipping graph->ReactFlow sync (no changes)');
       return;
     }
-    
-    console.log('=== Syncing graph -> ReactFlow ===');
     lastSyncedGraphRef.current = graphJson;
     
     // Preserve current selection state
@@ -1144,11 +1135,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (updatedGraph) {
       const updatedJson = JSON.stringify(updatedGraph);
       if (updatedJson === lastSyncedReactFlowRef.current) {
-        console.log('Skipping ReactFlow->graph sync (no changes)');
         return;
       }
-      
-      console.log('=== Syncing ReactFlow -> graph ===');
       isSyncingRef.current = true;
       lastSyncedReactFlowRef.current = updatedJson;
       setGraph(updatedGraph);
@@ -1357,8 +1345,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('');
       
       setGraph(nextGraph);
+      
+      // Save history state for edge reconnection
+      saveHistoryState('Reconnect edge', undefined, nextGraph.edges[edgeIndex].id);
     }, 50); // 50ms debounce
-  }, [graph, setGraph, wouldCreateCycle]);
+  }, [graph, setGraph, wouldCreateCycle, saveHistoryState]);
 
   // Generate a unique slug for an edge based on node slugs
   const generateEdgeSlug = useCallback((sourceId: string, targetId: string) => {
@@ -1571,10 +1562,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         
         if (selectedNodes.length > 0 || selectedEdges.length > 0) {
           e.preventDefault();
-          if (confirm(`Delete ${selectedNodes.length} node(s) and ${selectedEdges.length} edge(s)?`)) {
-            console.log('Calling deleteSelected');
-            deleteSelected();
-          }
+          console.log('Calling deleteSelected');
+          deleteSelected();
         }
       }
     };
@@ -2713,9 +2702,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Use provided direction or fall back to state
     const effectiveDirection = direction || layoutDirection;
     
-    // Store current graph for potential undo
-    setPreLayoutGraph(structuredClone(graph));
-    
     // Determine which nodes to layout
     const selectedNodes = nodes.filter(n => n.selected);
     const nodesToLayout = selectedNodes.length > 0 ? selectedNodes : nodes;
@@ -2775,22 +2761,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Update graph - this will trigger sync
     setGraph(nextGraph);
     
+    // Save history state for auto-layout
+    saveHistoryState('Auto-layout', undefined, undefined);
+    
     // ALWAYS trigger re-route after layout (regardless of autoReroute setting)
     setTimeout(() => {
       console.log('Triggering FORCED re-route after auto-layout');
       setForceReroute(true); // Force re-route even if autoReroute is off
       
-      // Fit view and show confirmation modal after re-route completes
+      // Fit view after re-route completes
       setTimeout(() => {
         fitView({ padding: 0.1, duration: 400 });
-        
-        // Show modal after fitView animation
-        setTimeout(() => {
-          setShowLayoutModal(true);
-        }, 500);
       }, 200);
     }, 150);
-  }, [graph, setGraph, nodes, edges, layoutDirection, fitView]);
+  }, [graph, setGraph, nodes, edges, layoutDirection, fitView, saveHistoryState]);
 
   // Auto-layout function that can be called from parent
   const triggerAutoLayout = useCallback((direction: 'LR' | 'RL' | 'TB' | 'BT') => {
@@ -2806,19 +2790,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [triggerAutoLayout, onAutoLayoutRef]);
 
-  // Handle layout confirmation
-  const handleKeepLayout = useCallback(() => {
-    setShowLayoutModal(false);
-    setPreLayoutGraph(null);
-  }, []);
-
-  const handleRevertLayout = useCallback(() => {
-    if (preLayoutGraph) {
-      setGraph(preLayoutGraph);
-      setPreLayoutGraph(null);
-    }
-    setShowLayoutModal(false);
-  }, [preLayoutGraph, setGraph]);
 
   // Handle canvas right-click for context menu
   const onPaneContextMenu = useCallback((event: React.MouseEvent) => {
@@ -3009,68 +2980,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               zIndex: 1000,
             }}
           />
-        )}
-        
-        
-        {/* Layout Confirmation Modal */}
-        {showLayoutModal && (
-          <div style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 10000,
-          }}>
-            <div style={{
-              background: 'white',
-              borderRadius: '8px',
-              padding: '24px',
-              maxWidth: '400px',
-              boxShadow: '0 4px 24px rgba(0, 0, 0, 0.3)',
-            }}>
-              <h3 style={{ margin: '0 0 16px 0', fontSize: '18px' }}>
-                Keep new layout?
-              </h3>
-              <p style={{ margin: '0 0 24px 0', color: '#666', fontSize: '14px' }}>
-                The graph has been automatically laid out. Would you like to keep this new layout or revert to the previous one?
-              </p>
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                <button
-                  onClick={handleRevertLayout}
-                  style={{
-                    padding: '10px 20px',
-                    background: '#6c757d',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                  }}
-                >
-                  Revert
-                </button>
-                <button
-                  onClick={handleKeepLayout}
-                  style={{
-                    padding: '10px 20px',
-                    background: '#28a745',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                  }}
-                >
-                  Keep Layout
-                </button>
-              </div>
-            </div>
-          </div>
         )}
 
         {/* Selection Analysis Popup */}
@@ -3406,9 +3315,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           <div
             onClick={(e) => {
               e.stopPropagation();
-              if (window.confirm('Are you sure you want to delete this node? This will also delete all connected edges.')) {
-                deleteNode(nodeContextMenu.nodeId);
-              }
+              deleteNode(nodeContextMenu.nodeId);
             }}
             style={{
               padding: '8px 12px',
@@ -3579,6 +3486,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                       nextGraph.metadata.updated_at = new Date().toISOString();
                     }
                     setGraph(nextGraph);
+                    saveHistoryState('Balance probabilities', undefined, currentEdge.id);
                   }
                 }}
                 style={{
@@ -3850,6 +3758,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                               nextGraph.metadata.updated_at = new Date().toISOString();
                             }
                             setGraph(nextGraph);
+                            saveHistoryState('Balance conditional probabilities', undefined, currentEdge.id);
                           }
                         }}
                         style={{
@@ -4103,6 +4012,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                             nextGraph.metadata.updated_at = new Date().toISOString();
                           }
                           setGraph(nextGraph);
+                          saveHistoryState('Balance variant weights', nodeContextMenu?.nodeId);
                         }
                       }
                     }}
@@ -4152,9 +4062,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           <div
             onClick={(e) => {
               e.stopPropagation();
-              if (window.confirm('Are you sure you want to delete this edge?')) {
-                deleteEdge(edgeContextMenu.edgeId);
-              }
+              deleteEdge(edgeContextMenu.edgeId);
             }}
             style={{
               padding: '8px 12px',

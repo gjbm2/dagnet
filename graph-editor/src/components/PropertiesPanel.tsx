@@ -235,15 +235,14 @@ export default function PropertiesPanel({
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedEdgeId && activeTab === 'edge') {
           e.preventDefault();
-          if (confirm('Delete this edge?')) {
-            const next = structuredClone(graph);
-            if (next) {
-              next.edges = next.edges.filter((e: any) => 
-                e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
-              );
-              setGraph(next);
-              onSelectedEdgeChange(null);
-            }
+          const next = structuredClone(graph);
+          if (next) {
+            next.edges = next.edges.filter((e: any) => 
+              e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
+            );
+            setGraph(next);
+            saveHistoryState('Delete edge', undefined, selectedEdgeId);
+            onSelectedEdgeChange(null);
           }
         }
       }
@@ -363,11 +362,12 @@ export default function PropertiesPanel({
       }
       
       setGraph(parsed);
+      saveHistoryState('JSON edit');
       closeJsonEdit();
     } catch (error) {
       setJsonEditError(error instanceof Error ? error.message : 'Invalid JSON');
     }
-  }, [jsonEditContent, setGraph, closeJsonEdit]);
+  }, [jsonEditContent, setGraph, closeJsonEdit, saveHistoryState]);
 
   if (!graph) return null;
 
@@ -1179,6 +1179,7 @@ export default function PropertiesPanel({
                                       next.metadata.updated_at = new Date().toISOString();
                                     }
                                     setGraph(next);
+                                    saveHistoryState('Remove case variant', selectedNodeId);
                                   }
                                 }
                               }}
@@ -1346,6 +1347,7 @@ export default function PropertiesPanel({
                                         nextGraph.metadata.updated_at = new Date().toISOString();
                                       }
                                       setGraph(nextGraph);
+                                      saveHistoryState('Balance variant weights', selectedNodeId);
                                     }
                                   }
                                 }}
@@ -1439,6 +1441,7 @@ export default function PropertiesPanel({
                                 next.metadata.updated_at = new Date().toISOString();
                               }
                               setGraph(next);
+                              saveHistoryState('Add case variant', selectedNodeId);
                             }
                           }
                         }}
@@ -1649,6 +1652,7 @@ export default function PropertiesPanel({
                             nextGraph.metadata.updated_at = new Date().toISOString();
                           }
                           setGraph(nextGraph);
+                          saveHistoryState('Balance probabilities', undefined, selectedEdgeId);
                         }
                       }}
                       style={{
@@ -1820,6 +1824,7 @@ export default function PropertiesPanel({
                     setGraph={setGraph}
                     localConditionalP={localConditionalP}
                     setLocalConditionalP={setLocalConditionalP}
+                    saveHistoryState={saveHistoryState}
                     onLocalUpdate={(conditionalP) => {
                       // Update local state immediately (like variants)
                       setLocalConditionalP(conditionalP);
@@ -1835,6 +1840,7 @@ export default function PropertiesPanel({
                           if (!nextGraph.metadata) nextGraph.metadata = {} as any;
                           nextGraph.metadata.updated_at = new Date().toISOString();
                           setGraph(nextGraph);
+                          saveHistoryState('Update conditional probabilities', undefined, selectedEdgeId);
                         }
                       }
                     }}
@@ -1851,6 +1857,7 @@ export default function PropertiesPanel({
                         if (!nextGraph.metadata) nextGraph.metadata = {} as any;
                         nextGraph.metadata.updated_at = new Date().toISOString();
                         setGraph(nextGraph);
+                        saveHistoryState('Update conditional color', undefined, selectedEdgeId);
                       }
                     }}
                   />
@@ -2301,14 +2308,13 @@ export default function PropertiesPanel({
 
                 <button
                   onClick={() => {
-                    if (confirm('Delete this edge?')) {
-                      const next = structuredClone(graph);
-                      next.edges = next.edges.filter((e: any) => 
-                        e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
-                      );
-                      setGraph(next);
-                      onSelectedEdgeChange(null);
-                    }
+                    const next = structuredClone(graph);
+                    next.edges = next.edges.filter((e: any) => 
+                      e.id !== selectedEdgeId && `${e.from}->${e.to}` !== selectedEdgeId
+                    );
+                    setGraph(next);
+                    saveHistoryState('Delete edge', undefined, selectedEdgeId);
+                    onSelectedEdgeChange(null);
                   }}
                   style={{
                     width: '100%',

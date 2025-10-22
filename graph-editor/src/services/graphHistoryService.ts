@@ -46,13 +46,6 @@ export class GraphHistoryService {
       this.history.shift();
       this.currentIndex--;
     }
-    
-    console.log(`History after save: length=${this.history.length}, currentIndex=${this.currentIndex}, canUndo=${this.canUndo()}`);
-
-    console.log(`Saved state: ${action}`, {
-      historyLength: this.history.length,
-      currentIndex: this.currentIndex
-    });
   }
 
   /**

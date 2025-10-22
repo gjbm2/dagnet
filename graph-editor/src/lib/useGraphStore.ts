@@ -140,18 +140,13 @@ export const useGraphStore = create<State>((set) => ({
   },
   
   saveHistoryState: (action, nodeId, edgeId) => {
-    console.log('saveHistoryState called with:', action, nodeId, edgeId);
     const state = useGraphStore.getState();
     if (state.graph) {
-      console.log('Saving history state:', action, 'canUndo before:', graphHistoryService.canUndo());
       graphHistoryService.saveState(state.graph, action, nodeId, edgeId);
-      console.log('canUndo after:', graphHistoryService.canUndo());
       set({
         canUndo: graphHistoryService.canUndo(),
         canRedo: graphHistoryService.canRedo()
       });
-    } else {
-      console.log('No graph to save history for');
     }
   },
   

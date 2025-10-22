@@ -16,6 +16,7 @@ interface ConditionalProbabilitiesSectionProps {
   setGraph: (graph: any) => void;
   localConditionalP: ConditionalProbability[];
   setLocalConditionalP: (conditionalP: ConditionalProbability[]) => void;
+  saveHistoryState: (action: string, nodeId?: string, edgeId?: string) => void;
   onLocalUpdate: (conditionalP: ConditionalProbability[]) => void;
   onUpdateColor: (color: string | undefined) => void;
 }
@@ -26,6 +27,7 @@ export default function ConditionalProbabilitiesSection({
   setGraph,
   localConditionalP,
   setLocalConditionalP,
+  saveHistoryState,
   onLocalUpdate,
   onUpdateColor
 }: ConditionalProbabilitiesSectionProps) {
@@ -335,6 +337,7 @@ export default function ConditionalProbabilitiesSection({
                               nextGraph.metadata.updated_at = new Date().toISOString();
                             }
                             setGraph(nextGraph);
+                            saveHistoryState('Balance conditional probabilities', undefined, edge.id);
                           }
                         }}
                         style={{
@@ -602,6 +605,9 @@ export default function ConditionalProbabilitiesSection({
               
               // Apply to graph
               setGraph(nextGraph);
+              
+              // Save history state for adding conditional probability
+              saveHistoryState('Add conditional probability', undefined, edge.id);
               
               // Update local state for the current edge
               const newConditions = [...conditions, newCondition];

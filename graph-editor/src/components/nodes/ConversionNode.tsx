@@ -63,9 +63,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   }, [data.id, data.onDoubleClick, setNodes]);
 
   const handleDelete = useCallback(() => {
-    if (confirm('Delete this node?')) {
-      data.onDelete(data.id);
-    }
+    data.onDelete(data.id);
   }, [data]);
 
   // Calculate probability mass for outgoing edges
