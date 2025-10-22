@@ -202,27 +202,27 @@ export default function ConditionalProbabilitiesSection({
                   Probability (mean)
                 </label>
                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <input
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={condition.p.mean}
-                    onChange={(e) => {
-                      const newConditions = [...conditions];
-                      newConditions[index] = {
-                        ...condition,
-                        p: { ...condition.p, mean: parseFloat(e.target.value) || 0 }
-                      };
-                      onLocalUpdate(newConditions);
-                    }}
-                    placeholder="0.5"
-                    style={{
+                <input
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={condition.p.mean}
+                  onChange={(e) => {
+                    const newConditions = [...conditions];
+                    newConditions[index] = {
+                      ...condition,
+                      p: { ...condition.p, mean: parseFloat(e.target.value) || 0 }
+                    };
+                    onLocalUpdate(newConditions);
+                  }}
+                  placeholder="0.5"
+                  style={{
                       width: '60px',
                       padding: '4px',
-                      border: '1px solid #ddd',
-                      borderRadius: '3px',
-                      boxSizing: 'border-box',
+                    border: '1px solid #ddd',
+                    borderRadius: '3px',
+                    boxSizing: 'border-box',
                       fontSize: '11px'
                     }}
                   />
@@ -249,7 +249,7 @@ export default function ConditionalProbabilitiesSection({
                     }}
                   />
                       <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
-                        {(condition.p.mean * 100).toFixed(0)}%
+                        {((condition.p.mean || 0) * 100).toFixed(0)}%
                       </span>
                       <button
                         onClick={() => {
@@ -268,7 +268,7 @@ export default function ConditionalProbabilitiesSection({
                           
                           if (siblings.length > 0) {
                             const nextGraph = structuredClone(graph);
-                            const currentValue = condition.p.mean;
+                            const currentValue = condition.p.mean || 0;
                             const remainingProbability = 1 - currentValue;
                             
                             // Calculate total current probability of siblings for this condition
@@ -441,7 +441,7 @@ export default function ConditionalProbabilitiesSection({
                         ⚖️
                       </button>
                     </div>
-                  </div>
+              </div>
 
               {/* Probability stdev */}
               <div>

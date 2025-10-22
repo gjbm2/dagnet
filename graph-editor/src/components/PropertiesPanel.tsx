@@ -1323,8 +1323,8 @@ export default function PropertiesPanel({
                                       if (othersTotal > 0) {
                                         // Rebalance other variants proportionally
                                         otherVariants.forEach((otherVariant, otherIndex) => {
-                                          const originalIndex = currentNode.case.variants.findIndex(v => v.name === otherVariant.name);
-                                          if (originalIndex >= 0) {
+                                          const originalIndex = currentNode.case?.variants?.findIndex(v => v.name === otherVariant.name);
+                                          if (originalIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
                                             const newWeight = (otherVariant.weight / othersTotal) * remainingWeight;
                                             nextGraph.nodes[nodeIndex].case.variants[originalIndex].weight = newWeight;
                                           }
@@ -1333,8 +1333,8 @@ export default function PropertiesPanel({
                                         // If other variants have no weight, distribute equally
                                         const equalShare = remainingWeight / otherVariants.length;
                                         otherVariants.forEach((otherVariant, otherIndex) => {
-                                          const originalIndex = currentNode.case.variants.findIndex(v => v.name === otherVariant.name);
-                                          if (originalIndex >= 0) {
+                                          const originalIndex = currentNode.case?.variants?.findIndex(v => v.name === otherVariant.name);
+                                          if (originalIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
                                             nextGraph.nodes[nodeIndex].case.variants[originalIndex].weight = equalShare;
                                           }
                                         });
