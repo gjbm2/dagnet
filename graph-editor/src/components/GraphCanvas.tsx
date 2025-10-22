@@ -2899,7 +2899,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     const nextGraph = structuredClone(graph);
     nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== nodeId);
-    nextGraph.edges = nextGraph.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
+    nextGraph.edges = nextGraph.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
     
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
@@ -3675,7 +3675,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                           if (graph) {
                             const nextGraph = structuredClone(graph);
                             const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
-                            if (edgeIndex >= 0) {
+                            if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
                               nextGraph.edges[edgeIndex].conditional_p[index].p.mean = value;
                               
                               if (nextGraph.metadata) {
@@ -3709,8 +3709,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                             if (graph) {
                               const nextGraph = structuredClone(graph);
                               const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
-                              if (edgeIndex >= 0) {
-                                nextGraph.edges[edgeIndex].conditional_p[index].p.mean = value;
+                            if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
+                              nextGraph.edges[edgeIndex].conditional_p[index].p.mean = value;
                                 
                                 if (nextGraph.metadata) {
                                   nextGraph.metadata.updated_at = new Date().toISOString();
@@ -3785,10 +3785,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                                       JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                     );
                                     if (matchingCondition) {
-                                      const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                      const conditionIndex = sibling.conditional_p?.findIndex((cp: any) => 
                                         JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                       );
-                                      if (conditionIndex >= 0) {
+                                      if (conditionIndex !== undefined && conditionIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p) {
                                         const siblingCurrentValue = matchingCondition.p?.mean || 0;
                                         const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
                                         nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
@@ -3806,10 +3806,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                                       JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                     );
                                     if (matchingCondition) {
-                                      const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                      const conditionIndex = sibling.conditional_p?.findIndex((cp: any) => 
                                         JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                       );
-                                      if (conditionIndex >= 0) {
+                                      if (conditionIndex !== undefined && conditionIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p) {
                                         nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
                                       }
                                     }
@@ -3968,7 +3968,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                       if (graph) {
                         const nextGraph = structuredClone(graph);
                         const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
-                        if (nodeIndex >= 0) {
+                        if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
                           const variantIndex = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
                           if (variantIndex >= 0) {
                             nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = value;
@@ -4004,11 +4004,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                       (window as any).contextMenuVariantSliderTimeout = setTimeout(() => {
                         if (graph) {
                           const nextGraph = structuredClone(graph);
-                          const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
-                          if (nodeIndex >= 0) {
-                            const variantIndex = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
-                            if (variantIndex >= 0) {
-                              nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = value;
+                        const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
+                        if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                          const variantIndex = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
+                          if (variantIndex >= 0) {
+                            nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = value;
                               
                               if (nextGraph.metadata) {
                                 nextGraph.metadata.updated_at = new Date().toISOString();
@@ -4033,6 +4033,88 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                   <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
                     {(variant.weight * 100).toFixed(0)}%
                   </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!graph) return;
+                      const caseNode = graph.nodes.find((n: any) => n.case?.id === edge?.case_id);
+                      if (!caseNode?.case?.variants) return;
+                      
+                      const nextGraph = structuredClone(graph);
+                      const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
+                      if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                        const currentWeight = variant.weight;
+                        const remainingWeight = 1 - currentWeight;
+                        const otherVariants = caseNode.case.variants.filter((v: any) => v.name !== edge?.case_variant);
+                        
+                        if (otherVariants.length > 0) {
+                          // Calculate total current weight of other variants
+                          const othersTotal = otherVariants.reduce((sum, v) => sum + v.weight, 0);
+                          
+                          if (othersTotal > 0) {
+                            // Rebalance other variants proportionally
+                            otherVariants.forEach((otherVariant) => {
+                              const variantIndex = nextGraph.nodes[nodeIndex].case?.variants?.findIndex((v: any) => v.name === otherVariant.name);
+                              if (variantIndex !== undefined && variantIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                                const newWeight = (otherVariant.weight / othersTotal) * remainingWeight;
+                                nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = newWeight;
+                              }
+                            });
+                          } else {
+                            // If other variants have no weight, distribute equally
+                            const equalShare = remainingWeight / otherVariants.length;
+                            otherVariants.forEach((otherVariant) => {
+                              const variantIndex = nextGraph.nodes[nodeIndex].case?.variants?.findIndex((v: any) => v.name === otherVariant.name);
+                              if (variantIndex !== undefined && variantIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                                nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = equalShare;
+                              }
+                            });
+                          }
+                          
+                          if (nextGraph.metadata) {
+                            nextGraph.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(nextGraph);
+                        }
+                      }
+                    }}
+                    style={{
+                      padding: '2px 4px',
+                      fontSize: '9px',
+                      backgroundColor: (() => {
+                        if (!graph) return '#f8f9fa';
+                        const caseNode = graph.nodes.find((n: any) => n.case?.id === edge?.case_id);
+                        if (!caseNode?.case?.variants) return '#f8f9fa';
+                        
+                        const totalWeight = caseNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
+                        // Light up if total weight is not close to 1.0
+                        return Math.abs(totalWeight - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
+                      })(),
+                      border: (() => {
+                        if (!graph) return '1px solid #ddd';
+                        const caseNode = graph.nodes.find((n: any) => n.case?.id === edge?.case_id);
+                        if (!caseNode?.case?.variants) return '1px solid #ddd';
+                        
+                        const totalWeight = caseNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
+                        // Light up if total weight is not close to 1.0
+                        return Math.abs(totalWeight - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
+                      })(),
+                      borderRadius: '2px',
+                      cursor: 'pointer',
+                      color: (() => {
+                        if (!graph) return '#666';
+                        const caseNode = graph.nodes.find((n: any) => n.case?.id === edge?.case_id);
+                        if (!caseNode?.case?.variants) return '#666';
+                        
+                        const totalWeight = caseNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
+                        // Light up if total weight is not close to 1.0
+                        return Math.abs(totalWeight - 1.0) > 0.01 ? '#856404' : '#666';
+                      })()
+                    }}
+                    title="Rebalance variant weights proportionally"
+                  >
+                    ⚖️
+                  </button>
                 </div>
               </div>
             );

@@ -1230,40 +1230,161 @@ export default function PropertiesPanel({
                           
                           <div style={{ marginBottom: '8px' }}>
                             <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Weight (0-1)</label>
-                            <input
-                              type="number"
-                              min="0"
-                              max="1"
-                              step="0.01"
-                              value={variant.weight}
-                              onChange={(e) => {
-                                const newVariants = [...caseData.variants];
-                                newVariants[index].weight = parseFloat(e.target.value) || 0;
-                                setCaseData({...caseData, variants: newVariants});
-                              }}
-                              onBlur={() => {
-                                if (graph && selectedNodeId) {
-                                  const next = structuredClone(graph);
-                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                    next.nodes[nodeIndex].case.variants = caseData.variants;
-                                    if (next.metadata) {
-                                      next.metadata.updated_at = new Date().toISOString();
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              <input
+                                type="number"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                value={variant.weight}
+                                onChange={(e) => {
+                                  const newVariants = [...caseData.variants];
+                                  newVariants[index].weight = parseFloat(e.target.value) || 0;
+                                  setCaseData({...caseData, variants: newVariants});
+                                }}
+                                onBlur={() => {
+                                  if (graph && selectedNodeId) {
+                                    const next = structuredClone(graph);
+                                    const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                    if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                      next.nodes[nodeIndex].case.variants = caseData.variants;
+                                      if (next.metadata) {
+                                        next.metadata.updated_at = new Date().toISOString();
+                                      }
+                                      setGraph(next);
                                     }
-                                    setGraph(next);
                                   }
-                                }
-                              }}
-                              placeholder="0.5"
-                              style={{ 
-                                width: '100%', 
-                                padding: '6px', 
-                                border: '1px solid #ddd', 
-                                borderRadius: '3px',
-                                boxSizing: 'border-box',
-                                fontSize: '12px'
-                              }}
-                            />
+                                }}
+                                placeholder="0.5"
+                                style={{ 
+                                  width: '60px', 
+                                  padding: '4px', 
+                                  border: '1px solid #ddd', 
+                                  borderRadius: '3px',
+                                  boxSizing: 'border-box',
+                                  fontSize: '11px'
+                                }}
+                              />
+                              <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                value={variant.weight}
+                                onChange={(e) => {
+                                  const value = parseFloat(e.target.value);
+                                  const newVariants = [...caseData.variants];
+                                  newVariants[index].weight = value;
+                                  setCaseData({...caseData, variants: newVariants});
+                                  // Debounce the expensive graph update
+                                  clearTimeout((window as any).variantWeightSliderTimeout);
+                                  (window as any).variantWeightSliderTimeout = setTimeout(() => {
+                                    if (graph && selectedNodeId) {
+                                      const next = structuredClone(graph);
+                                      const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                      if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                        next.nodes[nodeIndex].case.variants = newVariants;
+                                        if (next.metadata) {
+                                          next.metadata.updated_at = new Date().toISOString();
+                                        }
+                                        setGraph(next);
+                                      }
+                                    }
+                                  }, 250);
+                                }}
+                                style={{
+                                  flex: 1,
+                                  height: '4px',
+                                  background: '#ddd',
+                                  outline: 'none',
+                                  borderRadius: '2px'
+                                }}
+                              />
+                              <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
+                                {(variant.weight * 100).toFixed(0)}%
+                              </span>
+                              <button
+                                onClick={() => {
+                                  if (!graph || !selectedNodeId) return;
+                                  const currentNode = graph.nodes.find((n: any) => n.id === selectedNodeId);
+                                  if (!currentNode?.case?.variants) return;
+                                  
+                                  const nextGraph = structuredClone(graph);
+                                  const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  if (nodeIndex >= 0) {
+                                    const currentWeight = variant.weight;
+                                    const remainingWeight = 1 - currentWeight;
+                                    const otherVariants = currentNode.case.variants.filter((_, i) => i !== index);
+                                    
+                                    if (otherVariants.length > 0) {
+                                      // Calculate total current weight of other variants
+                                      const othersTotal = otherVariants.reduce((sum, v) => sum + v.weight, 0);
+                                      
+                                      if (othersTotal > 0) {
+                                        // Rebalance other variants proportionally
+                                        otherVariants.forEach((otherVariant, otherIndex) => {
+                                          const originalIndex = currentNode.case.variants.findIndex(v => v.name === otherVariant.name);
+                                          if (originalIndex >= 0) {
+                                            const newWeight = (otherVariant.weight / othersTotal) * remainingWeight;
+                                            nextGraph.nodes[nodeIndex].case.variants[originalIndex].weight = newWeight;
+                                          }
+                                        });
+                                      } else {
+                                        // If other variants have no weight, distribute equally
+                                        const equalShare = remainingWeight / otherVariants.length;
+                                        otherVariants.forEach((otherVariant, otherIndex) => {
+                                          const originalIndex = currentNode.case.variants.findIndex(v => v.name === otherVariant.name);
+                                          if (originalIndex >= 0) {
+                                            nextGraph.nodes[nodeIndex].case.variants[originalIndex].weight = equalShare;
+                                          }
+                                        });
+                                      }
+                                      
+                                      if (nextGraph.metadata) {
+                                        nextGraph.metadata.updated_at = new Date().toISOString();
+                                      }
+                                      setGraph(nextGraph);
+                                    }
+                                  }
+                                }}
+                                style={{
+                                  padding: '2px 4px',
+                                  fontSize: '9px',
+                                  backgroundColor: (() => {
+                                    if (!graph || !selectedNodeId) return '#f8f9fa';
+                                    const currentNode = graph.nodes.find((n: any) => n.id === selectedNodeId);
+                                    if (!currentNode?.case?.variants) return '#f8f9fa';
+                                    
+                                    const totalWeight = currentNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
+                                    // Light up if total weight is not close to 1.0
+                                    return Math.abs(totalWeight - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
+                                  })(),
+                                  border: (() => {
+                                    if (!graph || !selectedNodeId) return '1px solid #ddd';
+                                    const currentNode = graph.nodes.find((n: any) => n.id === selectedNodeId);
+                                    if (!currentNode?.case?.variants) return '1px solid #ddd';
+                                    
+                                    const totalWeight = currentNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
+                                    // Light up if total weight is not close to 1.0
+                                    return Math.abs(totalWeight - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
+                                  })(),
+                                  borderRadius: '2px',
+                                  cursor: 'pointer',
+                                  color: (() => {
+                                    if (!graph || !selectedNodeId) return '#666';
+                                    const currentNode = graph.nodes.find((n: any) => n.id === selectedNodeId);
+                                    if (!currentNode?.case?.variants) return '#666';
+                                    
+                                    const totalWeight = currentNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
+                                    // Light up if total weight is not close to 1.0
+                                    return Math.abs(totalWeight - 1.0) > 0.01 ? '#856404' : '#666';
+                                  })()
+                                }}
+                                title="Rebalance variant weights proportionally"
+                              >
+                                ⚖️
+                              </button>
+                            </div>
                           </div>
                           
                           <div>
