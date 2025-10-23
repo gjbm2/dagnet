@@ -574,7 +574,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
   const lastSyncedReactFlowRef = useRef<string>('');
-  const isSyncingRef = useRef(false);
+  const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
   const hasInitialFitViewRef = useRef(false);
   const currentGraphIdRef = useRef<string>('');
   
@@ -1014,15 +1014,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Sync FROM graph TO ReactFlow when graph changes externally
   useEffect(() => {
     if (!graph) return;
-    if (isSyncingRef.current) {
-      return;
-    }
+    // Don't block external graph changes (like undo) even if we're syncing ReactFlow->Graph
+    // The isSyncingRef flag should only prevent ReactFlow->Graph sync, not Graph->ReactFlow sync
     
     const graphJson = JSON.stringify(graph);
     if (graphJson === lastSyncedGraphRef.current) {
       return;
     }
     lastSyncedGraphRef.current = graphJson;
+    
+    
     
     // Preserve current selection state
     const selectedNodeIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
@@ -1594,6 +1595,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const [lassoStart, setLassoStart] = useState<{ x: number; y: number } | null>(null);
   const [lassoEnd, setLassoEnd] = useState<{ x: number; y: number } | null>(null);
   const [isShiftHeld, setIsShiftHeld] = useState(false);
+  const lassoCompletedRef = useRef(false); // Prevent double completion
 
   // Track Shift key state and handle mouse events globally
   useEffect(() => {
@@ -1651,7 +1653,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-      if (isLassoSelecting && lassoStart && lassoEnd) {
+      if (isLassoSelecting && lassoStart && lassoEnd && !lassoCompletedRef.current) {
+        lassoCompletedRef.current = true; // Prevent double execution
         e.preventDefault();
         e.stopPropagation();
         
@@ -1684,38 +1687,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                              nodeRect.bottom < lassoRect.top || 
                              nodeRect.top > lassoRect.bottom);
           
-          console.log(`Node ${node.id}:`, {
-            nodeRect: {
-              left: nodeRect.left,
-              top: nodeRect.top,
-              right: nodeRect.right,
-              bottom: nodeRect.bottom
-            },
-            lassoRect: {
-              left: lassoRect.left,
-              top: lassoRect.top,
-              right: lassoRect.right,
-              bottom: lassoRect.bottom
-            },
-            intersects
-          });
 
           return intersects;
         });
 
-        console.log('Lasso selection:', {
-          lassoRect,
-          selectedNodes: selectedNodes.map(n => n.id),
-          allNodes: nodes.map(n => ({ id: n.id, position: n.position })),
-          screenCoords: {
-            start: { x: lassoStart.x, y: lassoStart.y },
-            end: { x: lassoEnd.x, y: lassoEnd.y }
-          },
-          flowCoords: {
-            start: { x: flowStartX, y: flowStartY },
-            end: { x: flowEndX, y: flowEndY }
-          }
-        });
 
         // Store the selected node IDs for persistence
         const selectedNodeIds = selectedNodes.map(n => n.id);
@@ -1728,26 +1703,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           }))
         );
         
-        // Force the selection to persist by re-applying it after a short delay
-        setTimeout(() => {
-          setNodes(prevNodes => 
-            prevNodes.map(n => ({ 
-              ...n, 
-              selected: selectedNodeIds.includes(n.id)
-            }))
-          );
-        }, 50);
-        
-        // Delay resetting lasso state
+        // Reset lasso state after a delay to allow selection to settle
         setTimeout(() => {
           setIsLassoSelecting(false);
           setLassoStart(null);
           setLassoEnd(null);
-        }, 200);
+          lassoCompletedRef.current = false; // Reset for next lasso
+        }, 100);
       } else {
         setIsLassoSelecting(false);
         setLassoStart(null);
         setLassoEnd(null);
+        lassoCompletedRef.current = false;
       }
     };
 
@@ -2652,17 +2619,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Handle selection changes
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: any) => {
-    console.log('Selection changed:', { 
-      nodes: selectedNodes.map((n: any) => n.id), 
-      edges: selectedEdges.map((e: any) => e.id) 
-    });
     
     // Update selected nodes for analysis
     setSelectedNodesForAnalysis(selectedNodes);
     
-    // Don't clear selection if we just finished a lasso selection
+    // Don't clear selection if we're currently lasso selecting
     if (isLassoSelecting) {
-      console.log('Ignoring selection change during lasso selection');
       return;
     }
     
@@ -3033,20 +2995,40 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         <MiniMap />
         
         {/* Lasso selection rectangle */}
-        {isLassoSelecting && lassoStart && lassoEnd && (
+        {isLassoSelecting && (
           <div
             style={{
               position: 'absolute',
-              left: Math.min(lassoStart.x, lassoEnd.x),
-              top: Math.min(lassoStart.y, lassoEnd.y),
-              width: Math.abs(lassoEnd.x - lassoStart.x),
-              height: Math.abs(lassoEnd.y - lassoStart.y),
-              border: '2px dashed #007bff',
-              background: 'rgba(0, 123, 255, 0.1)',
-              pointerEvents: 'none',
+              inset: 0,
               zIndex: 1000,
+              pointerEvents: 'auto',
             }}
-          />
+            onMouseUp={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              // Don't call handleMouseUp here - let the global handler do it once
+            }}
+            onMouseDown={(e) => {
+              // ensure pane doesn't treat this as a click
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+          >
+            {lassoStart && lassoEnd && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: Math.min(lassoStart.x, lassoEnd.x),
+                  top: Math.min(lassoStart.y, lassoEnd.y),
+                  width: Math.abs(lassoEnd.x - lassoStart.x),
+                  height: Math.abs(lassoEnd.y - lassoStart.y),
+                  border: '2px dashed #007bff',
+                  background: 'rgba(0, 123, 255, 0.1)',
+                  pointerEvents: 'none',
+                }}
+              />
+            )}
+          </div>
         )}
 
         {/* Selection Analysis Popup */}
