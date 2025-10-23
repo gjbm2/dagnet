@@ -890,6 +890,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const newFromHandle = graphEdge.from === nodeId ? face + '-out' : graphEdge.fromHandle;
         const newToHandle = graphEdge.to === nodeId ? face : graphEdge.toHandle;
         
+        
         // Check if this edge's face actually changed
         const fromChanged = graphEdge.from === nodeId && originalEdge.sourceHandle !== newFromHandle;
         const toChanged = graphEdge.to === nodeId && originalEdge.targetHandle !== newToHandle;
@@ -1205,6 +1206,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           // Update edge data while preserving component identity
           return {
             ...prevEdge,
+            sourceHandle: graphEdge.fromHandle || prevEdge.sourceHandle,
+            targetHandle: graphEdge.toHandle || prevEdge.targetHandle,
             data: {
               ...prevEdge.data,
               probability: graphEdge.p?.mean ?? 0.5,
@@ -1309,9 +1312,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setEdges(edgesWithOffsetData);
     
     // Reset syncing flag after graph->ReactFlow sync is complete
+    // Use a longer timeout to ensure all cascading updates complete
     setTimeout(() => {
       isSyncingRef.current = false;
-    }, 0);
+      console.log('Reset isSyncingRef to false');
+    }, 100);
   }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge]);
 
   // Separate effect to handle initial fitView AFTER nodes are populated
@@ -1345,6 +1350,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (edges.length === 0) return;
     
     console.log('Edge scaling mode changed to:', edgeScalingMode);
+    
+    // Ensure sync flag is reset after edge scaling updates
+    setTimeout(() => {
+      isSyncingRef.current = false;
+      console.log('Reset isSyncingRef after edge scaling');
+    }, 50);
     
     // Force re-render of edges by updating their data and recalculating offsets
     setEdges(prevEdges => {
