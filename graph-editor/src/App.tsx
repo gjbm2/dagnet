@@ -2,6 +2,10 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import GraphCanvas from './components/GraphCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import WhatIfAnalysisControl from './components/WhatIfAnalysisControl';
+import WhatIfAnalysisHeader from './components/WhatIfAnalysisHeader';
+import JsonSection from './components/JsonSection';
+import JsonSectionHeader from './components/JsonSectionHeader';
+import CollapsibleSection from './components/CollapsibleSection';
 import LoadGraphModal from './components/LoadGraphModal';
 import * as Menubar from '@radix-ui/react-menubar';
 import { loadFromSheet, saveToSheet } from './lib/sheetsClient';
@@ -24,6 +28,11 @@ export default function App() {
   const [saveCommitMessage, setSaveCommitMessage] = useState('');
   const [graphKey, setGraphKey] = useState(0); // Force remount on revert
   const [sidebarOpen, setSidebarOpen] = useState(true); // Sidebar toggle state
+  
+  // Collapsible section states - persist across sidebar open/close
+  const [whatIfOpen, setWhatIfOpen] = useState(false);
+  const [propertiesOpen, setPropertiesOpen] = useState(true);
+  const [jsonOpen, setJsonOpen] = useState(false);
   const lastLoadedGraphRef = useRef<string | null>(null);
   const addNodeRef = useRef<(() => void) | null>(null);
   const deleteSelectedRef = useRef<(() => void) | null>(null);
@@ -467,10 +476,16 @@ export default function App() {
       gridTemplateColumns: sidebarOpen ? '1fr 350px' : '1fr', 
       height: '100vh',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      transition: 'grid-template-columns 0.3s ease-in-out'
+      transition: 'grid-template-columns 0.3s ease-in-out',
+      overflow: 'hidden' // Prevent page-level scrolling
     }}>
       {/* Main Graph Area */}
-      <div style={{ position: 'relative', marginTop: '40px' }}>
+      <div style={{ 
+        position: 'relative', 
+        marginTop: '40px',
+        height: 'calc(100vh - 40px)',
+        overflow: 'hidden' // Prevent main canvas from scrolling
+      }}>
         
         <GraphCanvas 
           key={graphKey}
@@ -493,13 +508,14 @@ export default function App() {
       <div style={{ 
         display: 'flex', 
         flexDirection: 'column', 
-          height: 'calc(100vh - 40px)',
+        height: 'calc(100vh - 40px)',
         background: '#fff',
-          borderLeft: '1px solid #e9ecef',
-          marginTop: '40px',
-          animation: 'slideInFromRight 0.3s ease-out',
-          position: 'relative'
-        }}>
+        borderLeft: '1px solid #e9ecef',
+        marginTop: '40px',
+        animation: 'slideInFromRight 0.3s ease-out',
+        position: 'relative',
+        overflow: 'hidden' // Prevent sidebar from expanding beyond viewport
+      }}>
           {/* Sidebar Toggle Button */}
           <button
             onClick={() => setSidebarOpen(false)}
@@ -540,19 +556,54 @@ export default function App() {
             ◀
           </button>
 
-        {/* What-If Analysis Control */}
-        <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef' }}>
-          <WhatIfAnalysisControl />
-        </div>
+        {/* Scrollable Content Area */}
+        <div style={{ 
+          flex: 1, 
+          overflow: 'auto',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          {/* What-If Analysis Section */}
+          <CollapsibleSection 
+            title={<WhatIfAnalysisHeader />} 
+            isOpen={whatIfOpen}
+            onToggle={() => setWhatIfOpen(!whatIfOpen)}
+          >
+            <div style={{ padding: '16px' }}>
+              <WhatIfAnalysisControl />
+            </div>
+          </CollapsibleSection>
 
-        {/* Properties Panel */}
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <PropertiesPanel 
-            selectedNodeId={selectedNodeId} 
-            onSelectedNodeChange={setSelectedNodeId}
-            selectedEdgeId={selectedEdgeId}
-            onSelectedEdgeChange={setSelectedEdgeId}
-          />
+          {/* Selected Item Section */}
+          <CollapsibleSection 
+            title={
+              selectedNodeId 
+                ? (graph?.nodes?.filter((n: any) => n.selected).length > 1 
+                    ? `${graph?.nodes?.filter((n: any) => n.selected).length} nodes selected`
+                    : 'Node Properties')
+                : selectedEdgeId 
+                  ? 'Edge Properties'
+                  : 'Graph Properties'
+            } 
+            isOpen={propertiesOpen}
+            onToggle={() => setPropertiesOpen(!propertiesOpen)}
+          >
+            <PropertiesPanel 
+              selectedNodeId={selectedNodeId} 
+              onSelectedNodeChange={setSelectedNodeId}
+              selectedEdgeId={selectedEdgeId}
+              onSelectedEdgeChange={setSelectedEdgeId}
+            />
+          </CollapsibleSection>
+
+          {/* JSON Section */}
+          <CollapsibleSection 
+            title={<JsonSectionHeader />} 
+            isOpen={jsonOpen}
+            onToggle={() => setJsonOpen(!jsonOpen)}
+          >
+            <JsonSection />
+          </CollapsibleSection>
         </div>
       </div>
       )}

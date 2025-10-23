@@ -869,6 +869,7 @@ export default function ConversionEdge({
           zIndex: selected ? 1000 : 1,
           strokeDasharray: (data?.probability === undefined || data?.probability === null) ? '5,5' : 'none',
           markerEnd: data?.calculateWidth ? 'none' : `url(#arrow-${id})`,
+          transition: 'stroke-width 0.3s ease-in-out',
         }}
         className="react-flow__edge-path"
         d={edgePath}
@@ -884,6 +885,7 @@ export default function ConversionEdge({
           strokeWidth: 20,
           fill: 'none',
           zIndex: selected ? 1000 : 1,
+          transition: 'stroke-width 0.3s ease-in-out',
         }}
         className="react-flow__edge-path"
         d={edgePath}
