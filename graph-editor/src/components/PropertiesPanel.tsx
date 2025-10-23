@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useGraphStore } from '@/lib/useGraphStore';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
+import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import ConditionalProbabilitiesSection from './ConditionalProbabilitiesSection';
@@ -1394,7 +1395,7 @@ export default function PropertiesPanel({
                         if (siblings.length > 0) {
                           const nextGraph = structuredClone(graph);
                           const currentValue = value;
-                          const remainingProbability = 1 - currentValue;
+                          const remainingProbability = roundTo4DP(1 - currentValue);
                           
                           const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
                           if (currentEdgeIndex >= 0) {

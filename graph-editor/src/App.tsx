@@ -20,7 +20,8 @@ export default function App() {
   const [errors, setErrors] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [edgeScalingMode, setEdgeScalingMode] = useState<'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass'>('global-log-mass');
+  const [useUniformScaling, setUseUniformScaling] = useState(false);
+  const [massGenerosity, setMassGenerosity] = useState(0.5); // 0 = pure global (Sankey), 1 = pure local, 0.5 = balanced (default)
   const [autoReroute, setAutoReroute] = useState(true);
   const [showLoadModal, setShowLoadModal] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -513,7 +514,8 @@ export default function App() {
           onDoubleClickNode={handleDoubleClickNode}
           onDoubleClickEdge={handleDoubleClickEdge}
           onSelectEdge={handleSelectEdge}
-          edgeScalingMode={edgeScalingMode}
+          useUniformScaling={useUniformScaling}
+          massGenerosity={massGenerosity}
           autoReroute={autoReroute}
           onAddNodeRef={addNodeRef}
           onDeleteSelectedRef={deleteSelectedRef}
@@ -1065,73 +1067,71 @@ export default function App() {
                     }}
                     sideOffset={4}
                   >
-                    <Menubar.Item
-                      onClick={() => setEdgeScalingMode('uniform')}
-                      style={{
-                        padding: '8px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        color: edgeScalingMode === 'uniform' ? '#007bff' : '#333',
-                        borderRadius: '2px',
-                        outline: 'none',
-                        background: edgeScalingMode === 'uniform' ? '#e3f2fd' : 'transparent'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = edgeScalingMode === 'uniform' ? '#e3f2fd' : 'white'}
+                    {/* Uniform Scaling Checkbox */}
+                    <div style={{
+                      padding: '8px 12px',
+                      fontSize: '13px',
+                      color: '#333',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      cursor: 'pointer'
+                    }}
+                    onClick={() => setUseUniformScaling(!useUniformScaling)}
                     >
-                      {edgeScalingMode === 'uniform' ? '✓' : ''} Uniform
-                    </Menubar.Item>
+                      <input 
+                        type="checkbox" 
+                        checked={useUniformScaling} 
+                        onChange={(e) => setUseUniformScaling(e.target.checked)}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      <span>Uniform</span>
+                    </div>
                     
-                    <Menubar.Item
-                      onClick={() => setEdgeScalingMode('local-mass')}
-                      style={{
-                        padding: '8px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        color: edgeScalingMode === 'local-mass' ? '#007bff' : '#333',
-                        borderRadius: '2px',
-                        outline: 'none',
-                        background: edgeScalingMode === 'local-mass' ? '#e3f2fd' : 'transparent'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = edgeScalingMode === 'local-mass' ? '#e3f2fd' : 'white'}
-                    >
-                      {edgeScalingMode === 'local-mass' ? '✓' : ''} Local Mass
-                    </Menubar.Item>
+                    <div style={{
+                      borderTop: '1px solid #eee',
+                      margin: '4px 0'
+                    }} />
                     
-                    <Menubar.Item
-                      onClick={() => setEdgeScalingMode('global-mass')}
-                      style={{
-                        padding: '8px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        color: edgeScalingMode === 'global-mass' ? '#007bff' : '#333',
-                        borderRadius: '2px',
-                        outline: 'none',
-                        background: edgeScalingMode === 'global-mass' ? '#e3f2fd' : 'transparent'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = edgeScalingMode === 'global-mass' ? '#e3f2fd' : 'white'}
-                    >
-                      {edgeScalingMode === 'global-mass' ? '✓' : ''} Global Mass
-                    </Menubar.Item>
-                    
-                    <Menubar.Item
-                      onClick={() => setEdgeScalingMode('global-log-mass')}
-                      style={{
-                        padding: '8px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        color: edgeScalingMode === 'global-log-mass' ? '#007bff' : '#333',
-                        borderRadius: '2px',
-                        outline: 'none',
-                        background: edgeScalingMode === 'global-log-mass' ? '#e3f2fd' : 'transparent'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = edgeScalingMode === 'global-log-mass' ? '#e3f2fd' : 'white'}
-                    >
-                      {edgeScalingMode === 'global-log-mass' ? '✓' : ''} Global Log Mass
-                    </Menubar.Item>
+                    {/* Mass Generosity Slider */}
+                    <div style={{
+                      padding: '8px 12px',
+                      fontSize: '13px',
+                      color: '#333'
+                    }}>
+                      <div style={{ 
+                        marginBottom: '6px',
+                        fontSize: '12px',
+                        color: '#666',
+                        display: 'flex',
+                        justifyContent: 'space-between'
+                      }}>
+                        <span>Global</span>
+                        <span>Local</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.1"
+                        value={massGenerosity}
+                        onChange={(e) => setMassGenerosity(parseFloat(e.target.value))}
+                        disabled={useUniformScaling}
+                        style={{ 
+                          width: '100%',
+                          cursor: useUniformScaling ? 'not-allowed' : 'pointer',
+                          opacity: useUniformScaling ? 0.5 : 1
+                        }}
+                      />
+                      <div style={{
+                        fontSize: '11px',
+                        color: '#999',
+                        textAlign: 'center',
+                        marginTop: '4px'
+                      }}>
+                        {(massGenerosity * 100).toFixed(0)}%
+                      </div>
+                    </div>
                   </Menubar.SubContent>
                 </Menubar.Portal>
               </Menubar.Sub>
