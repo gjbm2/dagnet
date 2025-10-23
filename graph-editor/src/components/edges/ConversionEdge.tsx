@@ -66,6 +66,7 @@ export default function ConversionEdge({
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [adjustedLabelPosition, setAdjustedLabelPosition] = useState<{ x: number; y: number } | null>(null);
+  const pathRef = React.useRef<SVGPathElement>(null);
 
   // Generate tooltip content
   const getTooltipContent = () => {
@@ -166,6 +167,34 @@ export default function ConversionEdge({
     const currentOverrides = useGraphStore.getState().whatIfOverrides;
     return getEdgeWhatIfDisplay(graph, id, currentOverrides, whatIfAnalysis);
   }, [graph, id, whatIfAnalysis, overridesVersion]);
+  
+  // Calculate stroke width using useMemo to enable CSS transitions
+  const strokeWidth = useMemo(() => {
+    // Use scaledWidth if available (for mass-based scaling modes), otherwise fall back to calculateWidth
+    if (data?.scaledWidth !== undefined) {
+      if (id && id.includes('node-2')) {
+        console.log(`[RENDER] Edge ${id}: using scaledWidth=${data.scaledWidth}, prob=${data?.probability}`);
+      }
+      return data.scaledWidth;
+    }
+    if (data?.calculateWidth) {
+      const width = data.calculateWidth();
+      if (id && id.includes('node-2')) {
+        console.log(`[RENDER] Edge ${id}: using calculateWidth=${width}, prob=${data?.probability}`);
+      }
+      return width;
+    }
+    if (selected) return 3;
+    if (data?.probability === undefined || data?.probability === null) return 3;
+    return 2;
+  }, [data?.scaledWidth, data?.calculateWidth, data?.probability, selected, graph, overridesVersion]);
+  
+  // Update stroke-width via DOM to enable CSS transitions
+  React.useEffect(() => {
+    if (pathRef.current) {
+      pathRef.current.style.strokeWidth = `${strokeWidth}px`;
+    }
+  }, [strokeWidth]);
   
   const isCaseEdge = data?.case_id || data?.case_variant;
 
@@ -861,10 +890,10 @@ export default function ConversionEdge({
       </defs>
       
       <path
+        ref={pathRef}
         id={id}
         style={{
           stroke: getEdgeColor(),
-          strokeWidth: data?.scaledWidth || (data?.calculateWidth ? data.calculateWidth() : (selected ? 3 : (data?.probability === undefined || data?.probability === null) ? 3 : 2)),
           fill: 'none',
           zIndex: selected ? 1000 : 1,
           strokeDasharray: (data?.probability === undefined || data?.probability === null) ? '5,5' : 'none',

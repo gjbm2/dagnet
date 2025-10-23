@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import ReactFlow, {
   Background,
   Controls,
@@ -21,6 +22,8 @@ import dagre from 'dagre';
 
 import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
+import ProbabilityInput from './ProbabilityInput';
+import VariantWeightInput from './VariantWeightInput';
 import { useGraphStore } from '@/lib/useGraphStore';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
@@ -73,6 +76,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const store = useGraphStore();
   const { graph, setGraph, whatIfAnalysis } = store;
   const saveHistoryState = store.saveHistoryState;
+  const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
   // Recompute edge widths when conditional what-if overrides change
   const overridesVersion = useGraphStore(state => state.whatIfOverrides._version);
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
@@ -127,7 +131,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     // Check if any position changes occurred (when user finishes dragging)
-    if (autoReroute) {
+    // But not when syncing from graph to ReactFlow
+    if (autoReroute && !isSyncingRef.current) {
       const positionChanges = changes.filter(change => change.type === 'position' && change.dragging === false);
       if (positionChanges.length > 0) {
         // Trigger re-routing by incrementing the flag
@@ -169,9 +174,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const currentOverrides = useGraphStore.getState().whatIfOverrides;
     const currentWhatIfAnalysis = useGraphStore.getState().whatIfAnalysis;
 
-    // UNIFIED helper: get effective probability using shared logic
+    // UNIFIED helper: get effective probability
+    // Use edge data directly if available (most current), otherwise use store
     const getEffectiveProbability = (e: any): number => {
-      return computeEffectiveEdgeProbability(currentGraph, e.id, currentOverrides, currentWhatIfAnalysis);
+      // Use unified What-If engine so conditional overrides and hyperpriors are respected
+      const edgeId = e.id || `${e.source}->${e.target}`;
+      return computeEffectiveEdgeProbability(
+        currentGraph,
+        edgeId,
+        currentOverrides,
+        currentWhatIfAnalysis || null,
+        undefined
+      );
     };
     
     if (edgeScalingMode === 'uniform') {
@@ -382,6 +396,95 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       edgesByTarget[edge.target].push(edge);
     });
 
+    // Pre-calculate scale factors per face to ensure consistency
+    const faceScaleFactors: { [faceKey: string]: number } = {};
+    
+    if (edgeScalingMode === 'global-log-mass') {
+      // Calculate scale factors for each source face
+      Object.keys(edgesBySource).forEach(sourceId => {
+        const sourceEdges = edgesBySource[sourceId];
+        const sourceNode = allNodes.find(n => n.id === sourceId);
+        if (!sourceNode) return;
+        
+        // Group by face
+        const edgesByFace: { [face: string]: any[] } = {};
+        sourceEdges.forEach(edge => {
+          const sourceHandle = edge.sourceHandle || 'right-out';
+          const sourceFace = sourceHandle.split('-')[0];
+          if (!edgesByFace[sourceFace]) {
+            edgesByFace[sourceFace] = [];
+          }
+          edgesByFace[sourceFace].push(edge);
+        });
+        
+        // Calculate scale factor for each face
+        Object.keys(edgesByFace).forEach(face => {
+          const faceEdges = edgesByFace[face];
+          const totalWidth = faceEdges.reduce((sum, e) => {
+            return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
+          }, 0);
+          
+          const faceKey = `source-${sourceId}-${face}`;
+          faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
+        });
+      });
+      
+      // Calculate scale factors for each target face
+      Object.keys(edgesByTarget).forEach(targetId => {
+        const targetEdges = edgesByTarget[targetId];
+        const targetNode = allNodes.find(n => n.id === targetId);
+        if (!targetNode) return;
+        
+        // Group by face
+        const edgesByFace: { [face: string]: any[] } = {};
+        targetEdges.forEach(edge => {
+          const targetHandle = edge.targetHandle || 'left';
+          const targetFace = targetHandle.split('-')[0];
+          if (!edgesByFace[targetFace]) {
+            edgesByFace[targetFace] = [];
+          }
+          edgesByFace[targetFace].push(edge);
+        });
+        
+        // Calculate scale factor for each face
+        Object.keys(edgesByFace).forEach(face => {
+          const faceEdges = edgesByFace[face];
+          const totalWidth = faceEdges.reduce((sum, e) => {
+            return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
+          }, 0);
+          
+          const faceKey = `target-${targetId}-${face}`;
+          faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
+        });
+      });
+      
+      // Calculate scale factors for incident faces (faces with edges from multiple sources)
+      // This handles cases where multiple source nodes connect to the same target face
+      const incidentFaces: { [faceKey: string]: any[] } = {};
+      
+      // Group all edges by target node and face
+      edgesWithWidth.forEach(edge => {
+        const targetHandle = edge.targetHandle || 'left';
+        const targetFace = targetHandle.split('-')[0];
+        const faceKey = `incident-${edge.target}-${targetFace}`;
+        
+        if (!incidentFaces[faceKey]) {
+          incidentFaces[faceKey] = [];
+        }
+        incidentFaces[faceKey].push(edge);
+      });
+      
+      // Calculate scale factors for incident faces
+      Object.keys(incidentFaces).forEach(faceKey => {
+        const faceEdges = incidentFaces[faceKey];
+        const totalWidth = faceEdges.reduce((sum, e) => {
+          return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
+        }, 0);
+        
+        faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
+      });
+    }
+
     // Calculate offsets for each edge (both source and target)
     const edgesWithOffsets = edgesWithWidth.map(edge => {
       // Apply offsets for all modes including uniform (for Sankey-style visualization)
@@ -436,38 +539,56 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return aKey[2] - bKey[2];
       });
 
-      // Calculate total visual width of all edges on this face
-      const sourceTotalWidth = sortedSourceEdges.reduce((sum, e) => {
-        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-        return sum + width;
-      }, 0);
+      // Get the scale factor for this source face
+      const sourceFaceKey = `source-${edge.source}-${sourceFace}`;
+      const sourceScaleFactor = faceScaleFactors[sourceFaceKey] || 1.0;
 
+      // Calculate source offsets using the pre-calculated scale factor
       let sourceOffsetX = 0;
       let sourceOffsetY = 0;
 
-      if (sourceTotalWidth > 0) {
-        // For Global Log Mass: scale down if total width exceeds maxWidth
-        let scaleFactor = 1.0;
-        if (edgeScalingMode === 'global-log-mass' && sourceTotalWidth > maxWidth) {
-          scaleFactor = maxWidth / sourceTotalWidth;
-        }
-
+      if (sortedSourceEdges.length > 0) {
         const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id);
         if (sourceEdgeIndex !== -1) {
+          // Calculate cumulative width using per-edge scale = min(source-face, incident target-face)
           const sourceCumulativeWidth = sortedSourceEdges.slice(0, sourceEdgeIndex).reduce((sum, e) => {
             const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            return sum + width;
+            const eSourceHandle = e.sourceHandle || 'right-out';
+            const eSourceFace = eSourceHandle.split('-')[0];
+            const eTargetHandle = e.targetHandle || 'left';
+            const eTargetFace = eTargetHandle.split('-')[0];
+            const eSourceKey = `source-${e.source}-${eSourceFace}`;
+            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
+            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
+            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
+            const eScale = edgeScalingMode === 'global-log-mass' ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            return sum + (width * eScale);
           }, 0);
 
           const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
+          const incidentFaceKeyForThis = `incident-${edge.target}-${targetFace}`;
+          const incidentScaleForThis = faceScaleFactors[incidentFaceKeyForThis] || 1.0;
+          const thisEdgeScale = edgeScalingMode === 'global-log-mass' ? Math.min(sourceScaleFactor, incidentScaleForThis) : 1.0;
+          const scaledEdgeWidth = edgeWidth * thisEdgeScale;
           
-          // Apply scaling to cumulative width and edge width
-          const scaledCumulativeWidth = sourceCumulativeWidth * scaleFactor;
-          const scaledEdgeWidth = edgeWidth * scaleFactor;
-          const scaledTotalWidth = sourceTotalWidth * scaleFactor;
+          const sourceCenterInStack = sourceCumulativeWidth + (scaledEdgeWidth / 2);
           
-          const sourceCenterInStack = scaledCumulativeWidth + (scaledEdgeWidth / 2);
-          const sourceStackCenter = scaledTotalWidth / 2;
+          // Calculate total scaled width for centering using per-edge scales
+          const totalScaledWidth = sortedSourceEdges.reduce((sum, e) => {
+            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+            const eSourceHandle = e.sourceHandle || 'right-out';
+            const eSourceFace = eSourceHandle.split('-')[0];
+            const eTargetHandle = e.targetHandle || 'left';
+            const eTargetFace = eTargetHandle.split('-')[0];
+            const eSourceKey = `source-${e.source}-${eSourceFace}`;
+            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
+            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
+            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
+            const eScale = edgeScalingMode === 'global-log-mass' ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            return sum + (width * eScale);
+          }, 0);
+          
+          const sourceStackCenter = totalScaledWidth / 2;
           const sourceOffsetFromCenter = sourceCenterInStack - sourceStackCenter;
 
           // Apply offset to the correct axis based on face
@@ -504,38 +625,53 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return aKey[2] - bKey[2];
       });
 
-      // Calculate total visual width of all edges on this target face
-      const targetTotalWidth = sortedTargetEdges.reduce((sum, e) => {
-        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-        return sum + width;
-      }, 0);
+      // Get the scale factor for this target incident face (ALL incoming edges)
+      const incidentFaceKey = `incident-${edge.target}-${targetFace}`;
+      const targetScaleFactor = faceScaleFactors[incidentFaceKey] || 1.0;
 
       let targetOffsetX = 0;
       let targetOffsetY = 0;
 
-      if (targetTotalWidth > 0) {
-        // For Global Log Mass: scale down if total width exceeds maxWidth
-        let scaleFactor = 1.0;
-        if (edgeScalingMode === 'global-log-mass' && targetTotalWidth > maxWidth) {
-          scaleFactor = maxWidth / targetTotalWidth;
-        }
-
+      if (sortedTargetEdges.length > 0) {
         const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id);
         if (targetEdgeIndex !== -1) {
+          // Calculate cumulative width using per-edge scale = min(source-face, incident target-face)
           const targetCumulativeWidth = sortedTargetEdges.slice(0, targetEdgeIndex).reduce((sum, e) => {
             const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            return sum + width;
+            const eSourceHandle = e.sourceHandle || 'right-out';
+            const eSourceFace = eSourceHandle.split('-')[0];
+            const eTargetHandle = e.targetHandle || 'left';
+            const eTargetFace = eTargetHandle.split('-')[0];
+            const eSourceKey = `source-${e.source}-${eSourceFace}`;
+            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
+            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
+            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
+            const eScale = edgeScalingMode === 'global-log-mass' ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            return sum + (width * eScale);
           }, 0);
 
           const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
+          const thisEdgeScaleAtTarget = edgeScalingMode === 'global-log-mass' ? Math.min(sourceScaleFactor, targetScaleFactor) : 1.0;
+          const scaledEdgeWidth = edgeWidth * thisEdgeScaleAtTarget;
           
-          // Apply scaling to cumulative width and edge width
-          const scaledCumulativeWidth = targetCumulativeWidth * scaleFactor;
-          const scaledEdgeWidth = edgeWidth * scaleFactor;
-          const scaledTotalWidth = targetTotalWidth * scaleFactor;
+          const targetCenterInStack = targetCumulativeWidth + (scaledEdgeWidth / 2);
           
-          const targetCenterInStack = scaledCumulativeWidth + (scaledEdgeWidth / 2);
-          const targetStackCenter = scaledTotalWidth / 2;
+          // Calculate total scaled width for centering using per-edge scales
+          const totalScaledWidth = sortedTargetEdges.reduce((sum, e) => {
+            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+            const eSourceHandle = e.sourceHandle || 'right-out';
+            const eSourceFace = eSourceHandle.split('-')[0];
+            const eTargetHandle = e.targetHandle || 'left';
+            const eTargetFace = eTargetHandle.split('-')[0];
+            const eSourceKey = `source-${e.source}-${eSourceFace}`;
+            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
+            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
+            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
+            const eScale = edgeScalingMode === 'global-log-mass' ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            return sum + (width * eScale);
+          }, 0);
+          
+          const targetStackCenter = totalScaledWidth / 2;
           const targetOffsetFromCenter = targetCenterInStack - targetStackCenter;
 
           // Apply offset to the correct axis based on face
@@ -549,13 +685,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }
       }
 
-      // Apply scaling for Global Log Mass
+      // Get the final edge width using the per-edge scale factor = min(source-face, incident target-face)
       let scaledWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
       if (edgeScalingMode === 'global-log-mass') {
-        const sourceScaleFactor = sourceTotalWidth > maxWidth ? maxWidth / sourceTotalWidth : 1.0;
-        const targetScaleFactor = targetTotalWidth > maxWidth ? maxWidth / targetTotalWidth : 1.0;
-        const finalScaleFactor = Math.min(sourceScaleFactor, targetScaleFactor);
-        scaledWidth = scaledWidth * finalScaleFactor;
+        const thisIncidentScale = faceScaleFactors[`incident-${edge.target}-${targetFace}`] || 1.0;
+        const thisEdgeScale = Math.min(sourceScaleFactor, thisIncidentScale);
+        scaledWidth = scaledWidth * thisEdgeScale;
       }
 
       return { 
@@ -580,6 +715,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Re-route feature state
   const lastNodePositionsRef = useRef<{ [nodeId: string]: { x: number; y: number } }>({});
+
+  // Ref to autofocus edge probability input in context menu
+  const edgeProbabilityInputRef = useRef<HTMLInputElement | null>(null);
+  
+  // Separate state for input display to allow intermediate states like "."
+  const [edgeProbabilityDisplay, setEdgeProbabilityDisplay] = useState<string>('');
+
+  // Focus probability input when edge context menu opens
+  useEffect(() => {
+    if (edgeContextMenu && edgeProbabilityInputRef.current) {
+      // Initialize display state with current probability value
+      setEdgeProbabilityDisplay(String(contextMenuLocalData?.probability || 0));
+      requestAnimationFrame(() => {
+        edgeProbabilityInputRef.current?.focus();
+        edgeProbabilityInputRef.current?.select();
+      });
+    }
+  }, [edgeContextMenu, contextMenuLocalData?.probability]);
   
   // Calculate optimal handles between two nodes
   const calculateOptimalHandles = useCallback((sourceNode: any, targetNode: any) => {
@@ -744,11 +897,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         if (fromChanged || toChanged) {
           changedEdges.add(edgeId);
           
-          // Add connected nodes for next wave
-          if (!processedNodes.has(originalEdge.source)) {
+          // Add connected nodes for next wave (avoid duplicates)
+          if (!processedNodes.has(originalEdge.source) && !nodesToProcess.includes(originalEdge.source)) {
             nodesToProcess.push(originalEdge.source);
           }
-          if (!processedNodes.has(originalEdge.target)) {
+          if (!processedNodes.has(originalEdge.target) && !nodesToProcess.includes(originalEdge.target)) {
             nodesToProcess.push(originalEdge.target);
           }
         }
@@ -808,6 +961,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         if (forceReroute) {
           setForceReroute(false); // Reset force flag after execution
         }
+        // Reset the shouldReroute flag to prevent infinite loops
+        setShouldReroute(0);
       }, 100); // 100ms delay after user finishes dragging
       
       return () => clearTimeout(timeoutId);
@@ -1023,8 +1178,74 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     lastSyncedGraphRef.current = graphJson;
     
+    // Set syncing flag to prevent re-routing during graph->ReactFlow sync
+    isSyncingRef.current = true;
     
+    // Check if only edge probabilities changed (not topology or node positions)
+    const edgeCountChanged = edges.length !== (graph.edges?.length || 0);
+    const nodeCountChanged = nodes.length !== (graph.nodes?.length || 0);
     
+    // Check if any node positions changed
+    const nodePositionsChanged = nodes.some(node => {
+      const graphNode = graph.nodes.find((n: any) => n.id === node.id);
+      return graphNode && (
+        Math.abs((graphNode.layout?.x || 0) - node.position.x) > 0.1 ||
+        Math.abs((graphNode.layout?.y || 0) - node.position.y) > 0.1
+      );
+    });
+    
+    if (!edgeCountChanged && !nodeCountChanged && !nodePositionsChanged && edges.length > 0) {
+      // Topology unchanged - update edge data in place to preserve component identity
+      setEdges(prevEdges => {
+        // First pass: update edge data without calculateWidth functions
+        const result = prevEdges.map(prevEdge => {
+          const graphEdge = graph.edges.find((e: any) => e.id === prevEdge.id || `${e.from}->${e.to}` === prevEdge.id);
+          if (!graphEdge) return prevEdge;
+          
+          // Update edge data while preserving component identity
+          return {
+            ...prevEdge,
+            data: {
+              ...prevEdge.data,
+              probability: graphEdge.p?.mean ?? 0.5,
+              stdev: graphEdge.p?.stdev,
+              locked: graphEdge.p?.locked,
+              description: graphEdge.description,
+              costs: graphEdge.costs,
+              weight_default: graphEdge.weight_default
+            }
+          };
+        });
+        
+        // Second pass: add calculateWidth functions with updated edge data
+        const resultWithWidth = result.map(edge => ({
+          ...edge,
+          data: {
+            ...edge.data,
+            calculateWidth: () => calculateEdgeWidth(edge, result, nodes)
+          }
+        }));
+        
+        // Recalculate offsets for mass-based scaling modes
+        const edgesWithOffsets = calculateEdgeOffsets(resultWithWidth, nodes, MAX_WIDTH);
+        
+        // Attach offsets to edge data
+        return edgesWithOffsets.map(edge => ({
+          ...edge,
+          data: {
+            ...edge.data,
+            sourceOffsetX: edge.sourceOffsetX,
+            sourceOffsetY: edge.sourceOffsetY,
+            targetOffsetX: edge.targetOffsetX,
+            targetOffsetY: edge.targetOffsetY,
+            scaledWidth: edge.scaledWidth
+          }
+        }));
+      });
+      return; // Skip full toFlow rebuild
+    }
+    
+    // Topology changed - do full rebuild
     // Preserve current selection state
     const selectedNodeIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
     const selectedEdgeIds = new Set(edges.filter(e => e.selected).map(e => e.id));
@@ -1053,14 +1274,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         selected: isSelected,
         reconnectable: true, // Always true; CSS hides handles for unselected, callback rejects unselected
       data: {
-        ...edge.data,
-          calculateWidth: () => calculateEdgeWidth(edge, newEdges, nodesWithSelection)
+        ...edge.data
+        // Don't add calculateWidth here - will be added after offsets are calculated
       }
       };
     });
     
+    // Add calculateWidth functions with updated edge data
+    const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
+      ...edge,
+      data: {
+        ...edge.data,
+        calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodesWithSelection)
+      }
+    }));
+    
   // Calculate edge offsets for Sankey-style visualization
-  const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodesWithSelection, MAX_WIDTH);
+  const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodesWithSelection, MAX_WIDTH);
   
   // Attach offsets to edge data for the ConversionEdge component
   const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
@@ -1077,6 +1307,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     setNodes(nodesWithSelection);
     setEdges(edgesWithOffsetData);
+    
+    // Reset syncing flag after graph->ReactFlow sync is complete
+    setTimeout(() => {
+      isSyncingRef.current = false;
+    }, 0);
   }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge]);
 
   // Separate effect to handle initial fitView AFTER nodes are populated
@@ -1113,16 +1348,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Force re-render of edges by updating their data and recalculating offsets
     setEdges(prevEdges => {
+      // First pass: update edge data without calculateWidth functions
       const edgesWithWidth = prevEdges.map(edge => ({
         ...edge,
         data: {
+          ...edge.data
+          // Don't add calculateWidth here - will be added after offsets are calculated
+        }
+      }));
+      
+      // Second pass: add calculateWidth functions with updated edge data
+      const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
+        ...edge,
+        data: {
           ...edge.data,
-          calculateWidth: () => calculateEdgeWidth(edge, prevEdges, nodes)
+          calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
         }
       }));
       
       // Recalculate offsets for mass-based scaling modes
-      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodes, MAX_WIDTH);
+      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
       
       // Attach offsets to edge data for the ConversionEdge component
       const result = edgesWithOffsets.map(edge => ({
@@ -1147,16 +1392,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Force re-render of edges by updating their data and recalculating offsets
     setEdges(prevEdges => {
+      // First pass: update edge data without calculateWidth functions
       const edgesWithWidth = prevEdges.map(edge => ({
         ...edge,
         data: {
+          ...edge.data
+          // Don't add calculateWidth here - will be added after offsets are calculated
+        }
+      }));
+      
+      // Second pass: add calculateWidth functions with updated edge data
+      const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
+        ...edge,
+        data: {
           ...edge.data,
-          calculateWidth: () => calculateEdgeWidth(edge, prevEdges, nodes)
+          calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
         }
       }));
       
       // Recalculate offsets for mass-based scaling modes
-      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodes, MAX_WIDTH);
+      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
       
       // Attach offsets to edge data for the ConversionEdge component
       return edgesWithOffsets.map(edge => ({
@@ -1491,6 +1746,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       null;
     const targetHandle = connection.targetHandle || null;
     
+    // Calculate smart default probability based on existing outgoing edges
+    const existingOutgoingEdges = nextGraph.edges.filter((e: any) => e.from === connection.source);
+    let defaultProbability: number;
+    
+    if (existingOutgoingEdges.length === 0) {
+      // First edge from this node - default to 1.0 (100%)
+      defaultProbability = 1.0;
+    } else {
+      // Subsequent edges - default to remaining probability
+      const existingProbabilitySum = existingOutgoingEdges.reduce((sum, edge) => {
+        return sum + (edge.p?.mean || 0);
+      }, 0);
+      defaultProbability = Math.max(0, 1.0 - existingProbabilitySum);
+    }
+    
     const newEdge: any = {
       id: edgeId,
       slug: edgeSlug,
@@ -1499,7 +1769,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       fromHandle: sourceHandle,
       toHandle: targetHandle,
       p: {
-        mean: 0.5
+        mean: defaultProbability
       }
     };
     
@@ -3019,18 +3289,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             }}
           >
             {lassoStart && lassoEnd && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: Math.min(lassoStart.x, lassoEnd.x),
-                  top: Math.min(lassoStart.y, lassoEnd.y),
-                  width: Math.abs(lassoEnd.x - lassoStart.x),
-                  height: Math.abs(lassoEnd.y - lassoStart.y),
-                  border: '2px dashed #007bff',
-                  background: 'rgba(0, 123, 255, 0.1)',
-                  pointerEvents: 'none',
-                }}
-              />
+          <div
+            style={{
+              position: 'absolute',
+              left: Math.min(lassoStart.x, lassoEnd.x),
+              top: Math.min(lassoStart.y, lassoEnd.y),
+              width: Math.abs(lassoEnd.x - lassoStart.x),
+              height: Math.abs(lassoEnd.y - lassoStart.y),
+              border: '2px dashed #007bff',
+              background: 'rgba(0, 123, 255, 0.1)',
+              pointerEvents: 'none',
+            }}
+          />
             )}
           </div>
         )}
@@ -3406,235 +3676,91 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
               Probability
             </label>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <input
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                value={contextMenuLocalData?.probability || 0}
-                onChange={(e) => {
-                  const value = parseFloat(e.target.value) || 0;
-                  // Update local state immediately for responsive input
-                  setContextMenuLocalData(prev => prev ? { ...prev, probability: value } : null);
-                  
-                  // Debounce only the expensive graph update
-                  clearTimeout((window as any).contextMenuNumberTimeout);
-                  (window as any).contextMenuNumberTimeout = setTimeout(() => {
-                    if (graph) {
-                      const nextGraph = structuredClone(graph);
-                      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
-                      if (edgeIndex >= 0) {
-                        nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
-                        
-                        if (nextGraph.metadata) {
-                          nextGraph.metadata.updated_at = new Date().toISOString();
-                        }
-                        setGraph(nextGraph);
-                      }
+            <ProbabilityInput
+              value={contextMenuLocalData?.probability || 0}
+              onChange={(value) => {
+                setContextMenuLocalData(prev => prev ? { ...prev, probability: value } : null);
+              }}
+              onCommit={(value) => {
+                if (graph) {
+                  const nextGraph = structuredClone(graph);
+                  const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                  if (edgeIndex >= 0) {
+                    nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
+                    if (nextGraph.metadata) {
+                      nextGraph.metadata.updated_at = new Date().toISOString();
                     }
-                  }, 250);
-                }}
-                        onClick={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        style={{
-                          width: '60px',
-                          padding: '4px',
-                          border: '1px solid #ddd',
-                          borderRadius: '3px',
-                          fontSize: '11px'
-                        }}
-                      />
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={contextMenuLocalData?.probability || 0}
-                onChange={(e) => {
-                  const value = parseFloat(e.target.value);
-                  // Update local state immediately for smooth slider movement
-                  setContextMenuLocalData(prev => prev ? { ...prev, probability: value } : null);
-                  
-                  // Debounce only the expensive graph update
-                  clearTimeout((window as any).contextMenuSliderTimeout);
-                  (window as any).contextMenuSliderTimeout = setTimeout(() => {
-                    if (graph) {
-                      const nextGraph = structuredClone(graph);
-                      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
-                      if (edgeIndex >= 0) {
-                        nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
-                        
-                        if (nextGraph.metadata) {
-                          nextGraph.metadata.updated_at = new Date().toISOString();
-                        }
-                        setGraph(nextGraph);
-                      }
-                    }
-                  }, 250);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onMouseUp={(e) => e.stopPropagation()}
-                style={{
-                  flex: 1,
-                  height: '4px',
-                  background: '#ddd',
-                  outline: 'none',
-                  borderRadius: '2px'
-                }}
-              />
-                <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
-                  {((contextMenuLocalData?.probability || 0) * 100).toFixed(0)}%
-                </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!graph) return;
+                    setGraph(nextGraph);
+                    // History save moved to onHistorySave
+                  }
+                }
+              }}
+              onHistorySave={(value, action) => {
+                saveHistoryState(action + ' edge probability', undefined, edgeContextMenu.edgeId);
+              }}
+              onRebalance={(value) => {
+                if (graph) {
                   const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
                   if (!currentEdge) return;
                   
                   const siblings = graph.edges.filter((e: any) => {
-                    // For case edges, only balance within the same variant
                     if (currentEdge.case_id && currentEdge.case_variant) {
                       return e.id !== currentEdge.id && 
                              e.from === currentEdge.from && 
                              e.case_id === currentEdge.case_id && 
                              e.case_variant === currentEdge.case_variant;
                     }
-                    // For regular edges, balance all edges from same source
                     return e.id !== currentEdge.id && e.from === currentEdge.from;
                   });
                   
                   if (siblings.length > 0) {
                     const nextGraph = structuredClone(graph);
-                    const currentValue = currentEdge.p?.mean || 0;
-                    const remainingProbability = 1 - currentValue;
-                    
-                    // Calculate total current probability of siblings
-                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
-                    
-                    if (siblingsTotal > 0) {
-                      // Rebalance siblings proportionally
-                      siblings.forEach(sibling => {
-                        const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                        if (siblingIndex >= 0) {
-                          const siblingCurrentValue = sibling.p?.mean || 0;
-                          const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
-                          nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: newValue };
-                        }
-                      });
-                    } else {
-                      // If siblings have no probability, distribute equally
-                      const equalShare = remainingProbability / siblings.length;
-                      siblings.forEach(sibling => {
-                        const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                        if (siblingIndex >= 0) {
-                          nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
-                        }
-                      });
+                    const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                    if (edgeIndex >= 0) {
+                      nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
+                      
+                      const remainingProbability = 1 - value;
+                      const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                      
+                      if (siblingsTotal > 0) {
+                        siblings.forEach(sibling => {
+                          const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                          if (siblingIndex >= 0) {
+                            const siblingCurrentValue = sibling.p?.mean || 0;
+                            const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
+                            nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: newValue };
+                          }
+                        });
+                      } else {
+                        const equalShare = remainingProbability / siblings.length;
+                        siblings.forEach(sibling => {
+                          const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                          if (siblingIndex >= 0) {
+                            nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
+                          }
+                        });
+                      }
+                      
+                      if (nextGraph.metadata) {
+                        nextGraph.metadata.updated_at = new Date().toISOString();
+                      }
+                      setGraph(nextGraph);
+                      // History save moved to onHistorySave
                     }
-                    
-                    if (nextGraph.metadata) {
-                      nextGraph.metadata.updated_at = new Date().toISOString();
-                    }
-                    setGraph(nextGraph);
-                    saveHistoryState('Balance probabilities', undefined, currentEdge.id);
                   }
-                }}
-                style={{
-                  padding: '2px 4px',
-                  fontSize: '9px',
-                  backgroundColor: (() => {
-                    if (!graph) return '#f8f9fa';
-                    const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
-                    if (!currentEdge) return '#f8f9fa';
-                    
-                    const siblings = graph.edges.filter((e: any) => {
-                      // For case edges, only balance within the same variant
-                      if (currentEdge.case_id && currentEdge.case_variant) {
-                        return e.id !== currentEdge.id && 
-                               e.from === currentEdge.from && 
-                               e.case_id === currentEdge.case_id && 
-                               e.case_variant === currentEdge.case_variant;
-                      }
-                      // For regular edges, balance all edges from same source
-                      return e.id !== currentEdge.id && e.from === currentEdge.from;
-                    });
-                    
-                    if (siblings.length === 0) return '#f8f9fa';
-                    
-                    // Calculate total probability mass
-                    const currentValue = currentEdge.p?.mean || 0;
-                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
-                    const totalMass = currentValue + siblingsTotal;
-                    
-                    // Light up if total mass is not close to 1.0
-                    return Math.abs(totalMass - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
-                  })(),
-                  border: (() => {
-                    if (!graph) return '1px solid #ddd';
-                    const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
-                    if (!currentEdge) return '1px solid #ddd';
-                    
-                    const siblings = graph.edges.filter((e: any) => {
-                      // For case edges, only balance within the same variant
-                      if (currentEdge.case_id && currentEdge.case_variant) {
-                        return e.id !== currentEdge.id && 
-                               e.from === currentEdge.from && 
-                               e.case_id === currentEdge.case_id && 
-                               e.case_variant === currentEdge.case_variant;
-                      }
-                      // For regular edges, balance all edges from same source
-                      return e.id !== currentEdge.id && e.from === currentEdge.from;
-                    });
-                    
-                    if (siblings.length === 0) return '1px solid #ddd';
-                    
-                    // Calculate total probability mass
-                    const currentValue = currentEdge.p?.mean || 0;
-                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
-                    const totalMass = currentValue + siblingsTotal;
-                    
-                    // Light up if total mass is not close to 1.0
-                    return Math.abs(totalMass - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
-                  })(),
-                  borderRadius: '2px',
-                  cursor: 'pointer',
-                  color: (() => {
-                    if (!graph) return '#666';
-                    const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
-                    if (!currentEdge) return '#666';
-                    
-                    const siblings = graph.edges.filter((e: any) => {
-                      // For case edges, only balance within the same variant
-                      if (currentEdge.case_id && currentEdge.case_variant) {
-                        return e.id !== currentEdge.id && 
-                               e.from === currentEdge.from && 
-                               e.case_id === currentEdge.case_id && 
-                               e.case_variant === currentEdge.case_variant;
-                      }
-                      // For regular edges, balance all edges from same source
-                      return e.id !== currentEdge.id && e.from === currentEdge.from;
-                    });
-                    
-                    if (siblings.length === 0) return '#666';
-                    
-                    // Calculate total probability mass
-                    const currentValue = currentEdge.p?.mean || 0;
-                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
-                    const totalMass = currentValue + siblingsTotal;
-                    
-                    // Light up if total mass is not close to 1.0
-                    return Math.abs(totalMass - 1.0) > 0.01 ? '#856404' : '#666';
-                  })()
-                }}
-                title="Rebalance sibling edges proportionally"
-              >
-                ⚖️
-              </button>
-            </div>
+                }
+              }}
+              onClose={() => {
+                setEdgeContextMenu(null);
+                setContextMenuLocalData(null);
+              }}
+              autoFocus={true}
+              autoSelect={true}
+              showSlider={true}
+              showBalanceButton={true}
+            />
           </div>
+
 
           {/* Conditional Probability editing section */}
           {(() => {
@@ -3647,286 +3773,139 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               </label>
               {(() => {
                 const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
-                return edge?.conditional_p?.map((condP: any, index: number) => (
-                  <div key={index} style={{ marginBottom: '8px', padding: '6px', border: '1px solid #eee', borderRadius: '3px' }}>
+                return edge?.conditional_p?.map((condP: any, cpIndex: number) => (
+                  <div key={cpIndex} style={{ marginBottom: '8px', padding: '6px', border: '1px solid #eee', borderRadius: '3px' }}>
                     <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>
                       Condition: {condP.condition.visited.join(', ') || 'None'}
                     </div>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <input
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={condP.p.mean}
-                        onChange={(e) => {
-                          const value = parseFloat(e.target.value) || 0;
-                          if (graph) {
-                            const nextGraph = structuredClone(graph);
-                            const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
-                            if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
-                              nextGraph.edges[edgeIndex].conditional_p[index].p.mean = value;
-                              
-                              if (nextGraph.metadata) {
-                                nextGraph.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(nextGraph);
+                    <ProbabilityInput
+                      value={condP.p.mean}
+                      onChange={(value) => {
+                        if (graph) {
+                          const nextGraph = structuredClone(graph);
+                          const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                          if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
+                            nextGraph.edges[edgeIndex].conditional_p[cpIndex].p.mean = value;
+                            if (nextGraph.metadata) {
+                              nextGraph.metadata.updated_at = new Date().toISOString();
                             }
+                            setGraph(nextGraph);
                           }
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        style={{
-                          width: '50px',
-                          padding: '3px',
-                          border: '1px solid #ddd',
-                          borderRadius: '2px',
-                          fontSize: '10px'
-                        }}
-                      />
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={condP.p.mean}
-                        onChange={(e) => {
-                          const value = parseFloat(e.target.value);
-                          // Debounce the expensive graph update
-                          clearTimeout((window as any).contextMenuConditionalSliderTimeout);
-                          (window as any).contextMenuConditionalSliderTimeout = setTimeout(() => {
-                            if (graph) {
-                              const nextGraph = structuredClone(graph);
-                              const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
-                            if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
-                              nextGraph.edges[edgeIndex].conditional_p[index].p.mean = value;
-                                
-                                if (nextGraph.metadata) {
-                                  nextGraph.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(nextGraph);
-                              }
-                            }
-                          }, 250);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onMouseUp={(e) => e.stopPropagation()}
-                        style={{
-                          flex: 1,
-                          height: '3px',
-                          background: '#ddd',
-                          outline: 'none',
-                          borderRadius: '2px'
-                        }}
-                      />
-                      <span style={{ fontSize: '9px', color: '#666', minWidth: '20px' }}>
-                        {(condP.p.mean * 100).toFixed(0)}%
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!graph) return;
+                        }
+                      }}
+                      onCommit={(value) => {
+                        // Already committed via onChange above
+                      }}
+                      onRebalance={(value) => {
+                        if (graph) {
                           const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
-                          if (!currentEdge) return;
+                          if (!currentEdge || !currentEdge.conditional_p) return;
                           
                           const siblings = graph.edges.filter((e: any) => {
-                            // For case edges, only balance within the same variant
                             if (currentEdge.case_id && currentEdge.case_variant) {
                               return e.id !== currentEdge.id && 
-                                     e.from === currentEdge.from && 
-                                     e.case_id === currentEdge.case_id && 
-                                     e.case_variant === currentEdge.case_variant;
+                             e.from === currentEdge.from && 
+                             e.case_id === currentEdge.case_id && 
+                             e.case_variant === currentEdge.case_variant;
                             }
-                            // For regular edges, balance all edges from same source
                             return e.id !== currentEdge.id && e.from === currentEdge.from;
                           });
                           
                           if (siblings.length > 0) {
                             const nextGraph = structuredClone(graph);
-                            const currentValue = condP.p.mean;
+                            const currentValue = value;
                             const remainingProbability = 1 - currentValue;
                             
-                            // Calculate total current probability of siblings for this condition
-                            const conditionKey = JSON.stringify(condP.condition.visited.sort());
-                            const siblingsWithSameCondition = siblings.filter(sibling => {
-                              if (!sibling.conditional_p) return false;
-                              return sibling.conditional_p.some((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
-                            });
-                            
-                            if (siblingsWithSameCondition.length > 0) {
-                              // Calculate total current probability of siblings for this condition
-                              const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
-                                const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                );
-                                return sum + (matchingCondition?.p?.mean || 0);
-                              }, 0);
+                            const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                            if (currentEdgeIndex >= 0 && nextGraph.edges[currentEdgeIndex].conditional_p) {
+                              nextGraph.edges[currentEdgeIndex].conditional_p[cpIndex].p.mean = currentValue;
                               
-                              if (siblingsTotal > 0) {
-                                // Rebalance siblings proportionally for this condition
-                                siblingsWithSameCondition.forEach(sibling => {
-                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                                  if (siblingIndex >= 0) {
-                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                    );
-                                    if (matchingCondition) {
-                                      const conditionIndex = sibling.conditional_p?.findIndex((cp: any) => 
+                              
+                              // Get the current condition key to match siblings with the same condition
+                              const currentCondition = currentEdge.conditional_p[cpIndex];
+                              const conditionKey = JSON.stringify(currentCondition.condition.visited.sort());
+                              
+                              // Filter siblings to only those with the same condition
+                              const siblingsWithSameCondition = siblings.filter(sibling => {
+                                if (!sibling.conditional_p) return false;
+                                return sibling.conditional_p.some((cp: any) => 
+                          JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                );
+                              });
+                              
+                              if (siblingsWithSameCondition.length > 0) {
+                                // Calculate total current probability of siblings for this condition
+                                const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
+                          const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                    JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                  );
+                                  return sum + (matchingCondition?.p?.mean || 0);
+                                }, 0);
+                                
+                                if (siblingsTotal > 0) {
+                                  // Rebalance siblings proportionally for this condition
+                                  siblingsWithSameCondition.forEach(sibling => {
+                                    const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                    if (siblingIndex >= 0) {
+                                      const matchingCondition = sibling.conditional_p?.find((cp: any) => 
                                         JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                       );
-                                      if (conditionIndex !== undefined && conditionIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p) {
-                                        const siblingCurrentValue = matchingCondition.p?.mean || 0;
-                                        const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
-                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
+                                      if (matchingCondition && sibling.conditional_p) {
+                                        const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                          JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                        );
+                                        if (conditionIndex >= 0) {
+                                          const siblingCurrentValue = matchingCondition.p?.mean || 0;
+                                          const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
+                                          if (nextGraph.edges[siblingIndex].conditional_p) {
+                                            nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
+                                          }
+                                        }
                                       }
                                     }
-                                  }
-                                });
-                              } else {
-                                // If siblings have no probability for this condition, distribute equally
-                                const equalShare = remainingProbability / siblingsWithSameCondition.length;
-                                siblingsWithSameCondition.forEach(sibling => {
-                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                                  if (siblingIndex >= 0) {
-                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                    );
-                                    if (matchingCondition) {
-                                      const conditionIndex = sibling.conditional_p?.findIndex((cp: any) => 
+                                  });
+                                } else {
+                                  // If siblings have no probability for this condition, distribute equally
+                                  const equalShare = remainingProbability / siblingsWithSameCondition.length;
+                                  siblingsWithSameCondition.forEach(sibling => {
+                                    const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                    if (siblingIndex >= 0) {
+                                      const matchingCondition = sibling.conditional_p?.find((cp: any) => 
                                         JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                       );
-                                      if (conditionIndex !== undefined && conditionIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p) {
-                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
+                                      if (matchingCondition && sibling.conditional_p) {
+                                        const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                          JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                        );
+                                        if (conditionIndex >= 0) {
+                                          if (nextGraph.edges[siblingIndex].conditional_p) {
+                                            nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
+                                          }
+                                        }
                                       }
                                     }
-                                  }
-                                });
+                                  });
+                                }
                               }
+                              
+                              if (nextGraph.metadata) {
+                                nextGraph.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(nextGraph);
+                              saveHistoryState('Auto-rebalance conditional probabilities', undefined, edgeContextMenu.edgeId);
                             }
-                            
-                            if (nextGraph.metadata) {
-                              nextGraph.metadata.updated_at = new Date().toISOString();
-                            }
-                            setGraph(nextGraph);
-                            saveHistoryState('Balance conditional probabilities', undefined, currentEdge.id);
                           }
-                        }}
-                        style={{
-                          padding: '1px 3px',
-                          fontSize: '8px',
-                          backgroundColor: (() => {
-                            if (!graph) return '#f8f9fa';
-                            const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
-                            if (!currentEdge) return '#f8f9fa';
-                            
-                            const siblings = graph.edges.filter((e: any) => {
-                              // For case edges, only balance within the same variant
-                              if (currentEdge.case_id && currentEdge.case_variant) {
-                                return e.id !== currentEdge.id && 
-                                       e.from === currentEdge.from && 
-                                       e.case_id === currentEdge.case_id && 
-                                       e.case_variant === currentEdge.case_variant;
-                              }
-                              // For regular edges, balance all edges from same source
-                              return e.id !== currentEdge.id && e.from === currentEdge.from;
-                            });
-                            
-                            if (siblings.length === 0) return '#f8f9fa';
-                            
-                            // Calculate total probability mass for this condition
-                            const conditionKey = JSON.stringify(condP.condition.visited.sort());
-                            const currentValue = condP.p.mean;
-                            const siblingsTotal = siblings.reduce((sum, sibling) => {
-                              if (!sibling.conditional_p) return sum;
-                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
-                              return sum + (matchingCondition?.p?.mean || 0);
-                            }, 0);
-                            const totalMass = currentValue + siblingsTotal;
-                            
-                            // Light up if total mass is not close to 1.0
-                            return Math.abs(totalMass - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
-                          })(),
-                          border: (() => {
-                            if (!graph) return '1px solid #ddd';
-                            const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
-                            if (!currentEdge) return '1px solid #ddd';
-                            
-                            const siblings = graph.edges.filter((e: any) => {
-                              // For case edges, only balance within the same variant
-                              if (currentEdge.case_id && currentEdge.case_variant) {
-                                return e.id !== currentEdge.id && 
-                                       e.from === currentEdge.from && 
-                                       e.case_id === currentEdge.case_id && 
-                                       e.case_variant === currentEdge.case_variant;
-                              }
-                              // For regular edges, balance all edges from same source
-                              return e.id !== currentEdge.id && e.from === currentEdge.from;
-                            });
-                            
-                            if (siblings.length === 0) return '1px solid #ddd';
-                            
-                            // Calculate total probability mass for this condition
-                            const conditionKey = JSON.stringify(condP.condition.visited.sort());
-                            const currentValue = condP.p.mean;
-                            const siblingsTotal = siblings.reduce((sum, sibling) => {
-                              if (!sibling.conditional_p) return sum;
-                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
-                              return sum + (matchingCondition?.p?.mean || 0);
-                            }, 0);
-                            const totalMass = currentValue + siblingsTotal;
-                            
-                            // Light up if total mass is not close to 1.0
-                            return Math.abs(totalMass - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
-                          })(),
-                          borderRadius: '2px',
-                          cursor: 'pointer',
-                          color: (() => {
-                            if (!graph) return '#666';
-                            const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
-                            if (!currentEdge) return '#666';
-                            
-                            const siblings = graph.edges.filter((e: any) => {
-                              // For case edges, only balance within the same variant
-                              if (currentEdge.case_id && currentEdge.case_variant) {
-                                return e.id !== currentEdge.id && 
-                                       e.from === currentEdge.from && 
-                                       e.case_id === currentEdge.case_id && 
-                                       e.case_variant === currentEdge.case_variant;
-                              }
-                              // For regular edges, balance all edges from same source
-                              return e.id !== currentEdge.id && e.from === currentEdge.from;
-                            });
-                            
-                            if (siblings.length === 0) return '#666';
-                            
-                            // Calculate total probability mass for this condition
-                            const conditionKey = JSON.stringify(condP.condition.visited.sort());
-                            const currentValue = condP.p.mean;
-                            const siblingsTotal = siblings.reduce((sum, sibling) => {
-                              if (!sibling.conditional_p) return sum;
-                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
-                              return sum + (matchingCondition?.p?.mean || 0);
-                            }, 0);
-                            const totalMass = currentValue + siblingsTotal;
-                            
-                            // Light up if total mass is not close to 1.0
-                            return Math.abs(totalMass - 1.0) > 0.01 ? '#856404' : '#666';
-                          })()
-                        }}
-                        title="Rebalance sibling conditional probabilities for this condition"
-                      >
-                        ⚖️
-                      </button>
-                    </div>
+                        }
+                      }}
+                      onClose={() => {
+                        setEdgeContextMenu(null);
+                        setContextMenuLocalData(null);
+                      }}
+                      autoFocus={false}
+                      autoSelect={false}
+                      showSlider={true}
+                      showBalanceButton={true}
+                    />
                   </div>
                 ));
               })()}
@@ -3941,122 +3920,64 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
             const caseNode = graph?.nodes?.find((n: any) => n.case?.id === edge?.case_id);
             const variant = caseNode?.case?.variants?.find((v: any) => v.name === edge?.case_variant);
+            const variantIndex = caseNode?.case?.variants?.findIndex((v: any) => v.name === edge?.case_variant) ?? -1;
+            const allVariants = caseNode?.case?.variants || [];
+            
             return variant && (
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
                   Variant Weight ({edge?.case_variant})
                 </label>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <input
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={variant.weight}
-                    onChange={(e) => {
-                      const value = parseFloat(e.target.value) || 0;
-                      if (graph) {
-                        const nextGraph = structuredClone(graph);
-                        const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
-                        if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
-                          const variantIndex = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
-                          if (variantIndex >= 0) {
-                            nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = value;
-                            
-                            if (nextGraph.metadata) {
-                              nextGraph.metadata.updated_at = new Date().toISOString();
-                            }
-                            setGraph(nextGraph);
-                          }
-                        }
-                      }
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    style={{
-                      width: '60px',
-                      padding: '4px',
-                      border: '1px solid #ddd',
-                      borderRadius: '3px',
-                      fontSize: '11px'
-                    }}
-                  />
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={variant.weight}
-                    onChange={(e) => {
-                      const value = parseFloat(e.target.value);
-                      // Debounce the expensive graph update
-                      clearTimeout((window as any).contextMenuVariantSliderTimeout);
-                      (window as any).contextMenuVariantSliderTimeout = setTimeout(() => {
-                        if (graph) {
-                          const nextGraph = structuredClone(graph);
-                        const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
-                        if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
-                          const variantIndex = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
-                          if (variantIndex >= 0) {
-                            nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = value;
-                              
-                              if (nextGraph.metadata) {
-                                nextGraph.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(nextGraph);
-                            }
-                          }
-                        }
-                      }, 250);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onMouseUp={(e) => e.stopPropagation()}
-                    style={{
-                      flex: 1,
-                      height: '4px',
-                      background: '#ddd',
-                      outline: 'none',
-                      borderRadius: '2px'
-                    }}
-                  />
-                  <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
-                    {(variant.weight * 100).toFixed(0)}%
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!graph) return;
-                      const caseNode = graph.nodes.find((n: any) => n.case?.id === edge?.case_id);
-                      if (!caseNode?.case?.variants) return;
-                      
+                <VariantWeightInput
+                  value={variant.weight}
+                  onChange={(value) => {
+                    // Optional: update local state if needed
+                  }}
+                  onCommit={(value) => {
+                    if (graph && edge) {
                       const nextGraph = structuredClone(graph);
                       const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
                       if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
-                        const currentWeight = variant.weight;
-                        const remainingWeight = 1 - currentWeight;
-                        const otherVariants = caseNode.case.variants.filter((v: any) => v.name !== edge?.case_variant);
-                        
-                        if (otherVariants.length > 0) {
-                          // Calculate total current weight of other variants
-                          const othersTotal = otherVariants.reduce((sum, v) => sum + v.weight, 0);
+                        const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
+                        if (vIdx >= 0) {
+                          nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = value;
+                          if (nextGraph.metadata) {
+                            nextGraph.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(nextGraph);
+                          saveHistoryState('Update variant weight', caseNode?.id);
+                        }
+                      }
+                    }
+                  }}
+                  onRebalance={(value, currentIndex, variants) => {
+                    if (graph && edge) {
+                      const nextGraph = structuredClone(graph);
+                      const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
+                      if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                        const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
+                        if (vIdx >= 0) {
+                          nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = value;
                           
-                          if (othersTotal > 0) {
-                            // Rebalance other variants proportionally
-                            otherVariants.forEach((otherVariant) => {
-                              const variantIndex = nextGraph.nodes[nodeIndex].case?.variants?.findIndex((v: any) => v.name === otherVariant.name);
-                              if (variantIndex !== undefined && variantIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
-                                const newWeight = (otherVariant.weight / othersTotal) * remainingWeight;
-                                nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = newWeight;
+                          const remainingWeight = 1 - value;
+                          const otherVariants = variants.filter((v: any, i: number) => i !== vIdx);
+                          const otherVariantsTotal = otherVariants.reduce((sum, v) => sum + (v.weight || 0), 0);
+                          
+                          if (otherVariantsTotal > 0) {
+                            otherVariants.forEach(v => {
+                              const otherIdx = nextGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
+                              if (otherIdx !== undefined && otherIdx >= 0) {
+                                const currentWeight = v.weight || 0;
+                                const newWeight = (currentWeight / otherVariantsTotal) * remainingWeight;
+                                nextGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = newWeight;
                               }
                             });
                           } else {
-                            // If other variants have no weight, distribute equally
                             const equalShare = remainingWeight / otherVariants.length;
-                            otherVariants.forEach((otherVariant) => {
-                              const variantIndex = nextGraph.nodes[nodeIndex].case?.variants?.findIndex((v: any) => v.name === otherVariant.name);
-                              if (variantIndex !== undefined && variantIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
-                                nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = equalShare;
+                            otherVariants.forEach(v => {
+                              const otherIdx = nextGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
+                              if (otherIdx !== undefined && otherIdx >= 0) {
+                                nextGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = equalShare;
                               }
                             });
                           }
@@ -4065,51 +3986,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                             nextGraph.metadata.updated_at = new Date().toISOString();
                           }
                           setGraph(nextGraph);
-                          saveHistoryState('Balance variant weights', nodeContextMenu?.nodeId);
+                          saveHistoryState('Update and balance variant weights', caseNode?.id);
                         }
                       }
-                    }}
-                    style={{
-                      padding: '2px 4px',
-                      fontSize: '9px',
-                      backgroundColor: (() => {
-                        if (!graph) return '#f8f9fa';
-                        const caseNode = graph.nodes.find((n: any) => n.case?.id === edge?.case_id);
-                        if (!caseNode?.case?.variants) return '#f8f9fa';
-                        
-                        const totalWeight = caseNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
-                        // Light up if total weight is not close to 1.0
-                        return Math.abs(totalWeight - 1.0) > 0.01 ? '#fff3cd' : '#f8f9fa';
-                      })(),
-                      border: (() => {
-                        if (!graph) return '1px solid #ddd';
-                        const caseNode = graph.nodes.find((n: any) => n.case?.id === edge?.case_id);
-                        if (!caseNode?.case?.variants) return '1px solid #ddd';
-                        
-                        const totalWeight = caseNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
-                        // Light up if total weight is not close to 1.0
-                        return Math.abs(totalWeight - 1.0) > 0.01 ? '1px solid #ffc107' : '1px solid #ddd';
-                      })(),
-                      borderRadius: '2px',
-                      cursor: 'pointer',
-                      color: (() => {
-                        if (!graph) return '#666';
-                        const caseNode = graph.nodes.find((n: any) => n.case?.id === edge?.case_id);
-                        if (!caseNode?.case?.variants) return '#666';
-                        
-                        const totalWeight = caseNode.case.variants.reduce((sum, v) => sum + v.weight, 0);
-                        // Light up if total weight is not close to 1.0
-                        return Math.abs(totalWeight - 1.0) > 0.01 ? '#856404' : '#666';
-                      })()
-                    }}
-                    title="Rebalance variant weights proportionally"
-                  >
-                    ⚖️
-                  </button>
-                </div>
+                    }
+                  }}
+                  onClose={() => {
+                    setEdgeContextMenu(null);
+                    setContextMenuLocalData(null);
+                  }}
+                  currentIndex={variantIndex}
+                  allVariants={allVariants}
+                  autoFocus={false}
+                  autoSelect={false}
+                  showSlider={true}
+                  showBalanceButton={true}
+                />
               </div>
             );
           })()}
+
+
           
           {/* Delete option */}
           <div
