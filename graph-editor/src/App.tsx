@@ -63,6 +63,12 @@ export default function App() {
         setGraphKey(prev => prev + 1);
         setGraph(graphData);
         saveHistoryState('Load graph from repository');
+        
+        // Set the save name to the loaded graph name
+        console.log('Setting save name to:', graphName);
+        setSaveGraphName(graphName);
+        setSaveCommitMessage(`Update ${graphName}`);
+        
         setShowLoadModal(false);
       } else {
         console.error('Failed to load graph:', result.error);
@@ -142,6 +148,9 @@ export default function App() {
         if (g) {
           setGraph(g);
           lastLoadedGraphRef.current = JSON.stringify(g);
+          // Set the save name to the loaded graph name
+          setSaveGraphName(graphParam);
+          setSaveCommitMessage(`Update ${graphParam}`);
         } else {
           console.error('Failed to load graph from repository:', graphParam);
           // Fall back to default graph
@@ -155,6 +164,11 @@ export default function App() {
     if (decoded) { 
       setGraph(decoded); 
       lastLoadedGraphRef.current = JSON.stringify(decoded);
+      // Set save name from graph metadata if available
+      if (decoded.metadata?.name) {
+        setSaveGraphName(decoded.metadata.name);
+        setSaveCommitMessage(`Update ${decoded.metadata.name}`);
+      }
       return; 
     }
     
@@ -162,6 +176,11 @@ export default function App() {
       if (g) {
         setGraph(g);
         lastLoadedGraphRef.current = JSON.stringify(g);
+        // Set save name from graph metadata if available
+        if (g.metadata?.name) {
+          setSaveGraphName(g.metadata.name);
+          setSaveCommitMessage(`Update ${g.metadata.name}`);
+        }
       } else {
         // Create a default empty graph if no data is available
         const defaultGraph = {
