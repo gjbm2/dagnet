@@ -6,7 +6,6 @@ interface ProbabilityInputProps {
   onChange: (value: number) => void;
   onCommit?: (value: number) => void;
   onRebalance?: (value: number) => void;
-  onHistorySave?: (value: number, action: string) => void;
   onClose?: () => void;
   min?: number;
   max?: number;
@@ -28,7 +27,6 @@ export default function ProbabilityInput({
   onChange,
   onCommit,
   onRebalance,
-  onHistorySave,
   onClose,
   min = 0,
   max = 1,
@@ -101,8 +99,8 @@ export default function ProbabilityInput({
     // Only update slider and graph if input is valid
     const parsed = parseInputValue(inputValue);
     if (parsed !== null) {
-      const snappedValue = snapValue(parsed);
-      onChange(snappedValue);
+      // Don't snap typed values - only snap slider values
+      onChange(parsed);
     }
   };
 
@@ -114,48 +112,32 @@ export default function ProbabilityInput({
     // Update display value to match slider
     setDisplayValue(String(snappedValue));
     
-    // Debounce the expensive operations but DON'T commit yet (no history save)
-    clearTimeout((window as any).probabilitySliderTimeout);
-    (window as any).probabilitySliderTimeout = setTimeout(() => {
-      if (onCommit) {
-        onCommit(snappedValue);
-      }
-      
-      // Auto-rebalance if CTRL is held (but still no history save)
-      if (onRebalance) {
-        scheduleRebalance(() => onRebalance(snappedValue));
-      }
-    }, 50);
-  };
-  
-  const handleSliderCommit = () => {
-    // Called on mouseup/blur - this is when we save history
-    if (onHistorySave) {
-      onHistorySave(value, shouldAutoRebalance() ? 'Update and balance' : 'Update');
+    // NO onCommit here - only onChange for real-time updates
+    // onCommit should only be called on blur/enter
+    
+    // Auto-rebalance if CTRL is held (but no history save)
+    if (onRebalance) {
+      scheduleRebalance(() => onRebalance(snappedValue));
     }
   };
 
-  const handleCommit = (inputValue: string, shouldSaveHistory: boolean = true) => {
+  const handleCommit = (inputValue: string) => {
     const parsed = parseInputValue(inputValue);
     if (parsed !== null) {
-      const snappedValue = snapValue(parsed);
+      // Don't snap typed values - only snap slider values
+      const finalValue = parsed;
       
       // Update display value to show the committed value
-      setDisplayValue(String(snappedValue));
+      setDisplayValue(String(finalValue));
       setIsEditing(false);
       
       if (onCommit) {
-        onCommit(snappedValue);
+        onCommit(finalValue);
       }
       
       // Auto-rebalance if CTRL is held
       if (onRebalance) {
-        scheduleRebalance(() => onRebalance(snappedValue));
-      }
-      
-      // Save history ONLY when explicitly requested (blur, ENTER, CTRL+ENTER)
-      if (shouldSaveHistory && onHistorySave) {
-        onHistorySave(snappedValue, shouldAutoRebalance() ? 'Update and balance' : 'Update');
+        scheduleRebalance(() => onRebalance(finalValue));
       }
       
       return true; // Success
@@ -170,14 +152,14 @@ export default function ProbabilityInput({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const success = handleCommit(e.currentTarget.value, true); // Save history on ENTER
+      const success = handleCommit(e.currentTarget.value);
       
       // If CTRL is held, also trigger rebalance
       if (success && e.ctrlKey && onRebalance) {
         const parsed = parseInputValue(e.currentTarget.value);
         if (parsed !== null) {
-          const snappedValue = snapValue(parsed);
-          onRebalance(snappedValue);
+          // Use exact typed value for rebalance, not snapped value
+          onRebalance(parsed);
         }
       }
       
@@ -193,7 +175,7 @@ export default function ProbabilityInput({
   };
 
   const handleBlur = () => {
-    const success = handleCommit(displayValue, true); // Save history on blur
+    const success = handleCommit(displayValue);
     if (!success) {
       // Invalid input - revert gracefully
       setDisplayValue(String(value));
@@ -205,7 +187,7 @@ export default function ProbabilityInput({
     setIsEditing(true);
   };
 
-  const commonInputProps = {
+  const numberInputProps = {
     min,
     max,
     step,
@@ -214,12 +196,28 @@ export default function ProbabilityInput({
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
     style: {
       ...style,
-      ...(inputType === 'number' ? { width: '60px', padding: '4px' } : { flex: 1, minWidth: '300px', height: '4px' })
+      width: '50px',
+      padding: '4px'
+    }
+  };
+
+  const sliderProps = {
+    min,
+    max,
+    step,
+    disabled,
+    onMouseDown: handleMouseDown,
+    onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    style: {
+      ...style,
+      flex: 1,
+      minWidth: '168px',
+      height: '4px'
     }
   };
 
   return (
-    <div className={`probability-input ${className}`} style={{ display: 'flex', gap: '6px', alignItems: 'center', width: '100%' }}>
+    <div className={`probability-input ${className}`} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
       {inputType === 'number' && (
         <input
           ref={inputRef}
@@ -230,7 +228,7 @@ export default function ProbabilityInput({
           onBlur={handleBlur}
           onFocus={handleFocus}
           placeholder={placeholder}
-          {...commonInputProps}
+          {...numberInputProps}
         />
       )}
       
@@ -239,8 +237,7 @@ export default function ProbabilityInput({
           type="range"
           value={value}
           onChange={handleSliderChange}
-          onMouseUp={handleSliderCommit}
-          {...commonInputProps}
+          {...sliderProps}
         />
       )}
       

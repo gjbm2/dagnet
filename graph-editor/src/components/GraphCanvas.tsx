@@ -3677,26 +3677,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               Probability
             </label>
             <ProbabilityInput
-              value={contextMenuLocalData?.probability || 0}
+                value={contextMenuLocalData?.probability || 0}
               onChange={(value) => {
-                setContextMenuLocalData(prev => prev ? { ...prev, probability: value } : null);
+                  setContextMenuLocalData(prev => prev ? { ...prev, probability: value } : null);
               }}
               onCommit={(value) => {
-                if (graph) {
-                  const nextGraph = structuredClone(graph);
-                  const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
-                  if (edgeIndex >= 0) {
-                    nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
-                    if (nextGraph.metadata) {
-                      nextGraph.metadata.updated_at = new Date().toISOString();
-                    }
-                    setGraph(nextGraph);
-                    // History save moved to onHistorySave
+                    if (graph) {
+                      const nextGraph = structuredClone(graph);
+                      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                      if (edgeIndex >= 0) {
+                        nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
+                        if (nextGraph.metadata) {
+                          nextGraph.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(nextGraph);
+                    saveHistoryState('Update edge probability', undefined, edgeContextMenu.edgeId);
                   }
                 }
-              }}
-              onHistorySave={(value, action) => {
-                saveHistoryState(action + ' edge probability', undefined, edgeContextMenu.edgeId);
               }}
               onRebalance={(value) => {
                 if (graph) {
@@ -3718,34 +3715,34 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                     const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
                     if (edgeIndex >= 0) {
                       nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
-                      
+                    
                       const remainingProbability = 1 - value;
-                      const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
-                      
-                      if (siblingsTotal > 0) {
-                        siblings.forEach(sibling => {
-                          const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                          if (siblingIndex >= 0) {
-                            const siblingCurrentValue = sibling.p?.mean || 0;
-                            const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
-                            nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: newValue };
-                          }
-                        });
-                      } else {
-                        const equalShare = remainingProbability / siblings.length;
-                        siblings.forEach(sibling => {
-                          const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                          if (siblingIndex >= 0) {
-                            nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
-                          }
-                        });
-                      }
-                      
-                      if (nextGraph.metadata) {
-                        nextGraph.metadata.updated_at = new Date().toISOString();
-                      }
-                      setGraph(nextGraph);
-                      // History save moved to onHistorySave
+                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
+                    
+                    if (siblingsTotal > 0) {
+                      siblings.forEach(sibling => {
+                        const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                        if (siblingIndex >= 0) {
+                          const siblingCurrentValue = sibling.p?.mean || 0;
+                          const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
+                          nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: newValue };
+                        }
+                      });
+                    } else {
+                      const equalShare = remainingProbability / siblings.length;
+                      siblings.forEach(sibling => {
+                        const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                        if (siblingIndex >= 0) {
+                          nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
+                        }
+                      });
+                    }
+                    
+                    if (nextGraph.metadata) {
+                      nextGraph.metadata.updated_at = new Date().toISOString();
+                    }
+                    setGraph(nextGraph);
+                      saveHistoryState('Update and balance edge probabilities', undefined, edgeContextMenu.edgeId);
                     }
                   }
                 }
@@ -3779,34 +3776,34 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                       Condition: {condP.condition.visited.join(', ') || 'None'}
                     </div>
                     <ProbabilityInput
-                      value={condP.p.mean}
+                        value={condP.p.mean}
                       onChange={(value) => {
-                        if (graph) {
-                          const nextGraph = structuredClone(graph);
-                          const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
-                          if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
+                          if (graph) {
+                            const nextGraph = structuredClone(graph);
+                            const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                            if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
                             nextGraph.edges[edgeIndex].conditional_p[cpIndex].p.mean = value;
-                            if (nextGraph.metadata) {
-                              nextGraph.metadata.updated_at = new Date().toISOString();
+                              if (nextGraph.metadata) {
+                                nextGraph.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(nextGraph);
                             }
-                            setGraph(nextGraph);
                           }
-                        }
-                      }}
+                        }}
                       onCommit={(value) => {
                         // Already committed via onChange above
                       }}
                       onRebalance={(value) => {
-                        if (graph) {
+                            if (graph) {
                           const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
                           if (!currentEdge || !currentEdge.conditional_p) return;
                           
                           const siblings = graph.edges.filter((e: any) => {
                             if (currentEdge.case_id && currentEdge.case_variant) {
                               return e.id !== currentEdge.id && 
-                             e.from === currentEdge.from && 
-                             e.case_id === currentEdge.case_id && 
-                             e.case_variant === currentEdge.case_variant;
+                                     e.from === currentEdge.from && 
+                                     e.case_id === currentEdge.case_id && 
+                                     e.case_variant === currentEdge.case_variant;
                             }
                             return e.id !== currentEdge.id && e.from === currentEdge.from;
                           });
@@ -3826,72 +3823,72 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                               const conditionKey = JSON.stringify(currentCondition.condition.visited.sort());
                               
                               // Filter siblings to only those with the same condition
-                              const siblingsWithSameCondition = siblings.filter(sibling => {
-                                if (!sibling.conditional_p) return false;
-                                return sibling.conditional_p.some((cp: any) => 
-                          JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                            const siblingsWithSameCondition = siblings.filter(sibling => {
+                              if (!sibling.conditional_p) return false;
+                              return sibling.conditional_p.some((cp: any) => 
+                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                              );
+                            });
+                            
+                            if (siblingsWithSameCondition.length > 0) {
+                              // Calculate total current probability of siblings for this condition
+                              const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
+                                const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                 );
-                              });
+                                return sum + (matchingCondition?.p?.mean || 0);
+                              }, 0);
                               
-                              if (siblingsWithSameCondition.length > 0) {
-                                // Calculate total current probability of siblings for this condition
-                                const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
-                          const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                    JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                  );
-                                  return sum + (matchingCondition?.p?.mean || 0);
-                                }, 0);
-                                
-                                if (siblingsTotal > 0) {
-                                  // Rebalance siblings proportionally for this condition
-                                  siblingsWithSameCondition.forEach(sibling => {
-                                    const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                                    if (siblingIndex >= 0) {
-                                      const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                        JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                      );
+                              if (siblingsTotal > 0) {
+                                // Rebalance siblings proportionally for this condition
+                                siblingsWithSameCondition.forEach(sibling => {
+                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                  if (siblingIndex >= 0) {
+                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                    );
                                       if (matchingCondition && sibling.conditional_p) {
                                         const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
-                                          JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                        );
-                                        if (conditionIndex >= 0) {
-                                          const siblingCurrentValue = matchingCondition.p?.mean || 0;
-                                          const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
-                                          if (nextGraph.edges[siblingIndex].conditional_p) {
-                                            nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
-                                          }
-                                        }
-                                      }
-                                    }
-                                  });
-                                } else {
-                                  // If siblings have no probability for this condition, distribute equally
-                                  const equalShare = remainingProbability / siblingsWithSameCondition.length;
-                                  siblingsWithSameCondition.forEach(sibling => {
-                                    const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                                    if (siblingIndex >= 0) {
-                                      const matchingCondition = sibling.conditional_p?.find((cp: any) => 
                                         JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                       );
-                                      if (matchingCondition && sibling.conditional_p) {
-                                        const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
-                                          JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                        );
                                         if (conditionIndex >= 0) {
+                                        const siblingCurrentValue = matchingCondition.p?.mean || 0;
+                                        const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
                                           if (nextGraph.edges[siblingIndex].conditional_p) {
-                                            nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
+                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
                                           }
-                                        }
                                       }
                                     }
-                                  });
-                                }
+                                  }
+                                });
+                              } else {
+                                // If siblings have no probability for this condition, distribute equally
+                                const equalShare = remainingProbability / siblingsWithSameCondition.length;
+                                siblingsWithSameCondition.forEach(sibling => {
+                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                  if (siblingIndex >= 0) {
+                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                    );
+                                      if (matchingCondition && sibling.conditional_p) {
+                                        const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                        JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                      );
+                                        if (conditionIndex >= 0) {
+                                          if (nextGraph.edges[siblingIndex].conditional_p) {
+                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
+                                          }
+                                      }
+                                    }
+                                  }
+                                });
                               }
-                              
-                              if (nextGraph.metadata) {
-                                nextGraph.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(nextGraph);
+                            }
+                            
+                            if (nextGraph.metadata) {
+                              nextGraph.metadata.updated_at = new Date().toISOString();
+                            }
+                            setGraph(nextGraph);
                               saveHistoryState('Auto-rebalance conditional probabilities', undefined, edgeContextMenu.edgeId);
                             }
                           }
@@ -3929,22 +3926,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                   Variant Weight ({edge?.case_variant})
                 </label>
                 <VariantWeightInput
-                  value={variant.weight}
+                    value={variant.weight}
                   onChange={(value) => {
                     // Optional: update local state if needed
                   }}
                   onCommit={(value) => {
                     if (graph && edge) {
-                      const nextGraph = structuredClone(graph);
-                      const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
-                      if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                          const nextGraph = structuredClone(graph);
+                        const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
+                        if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
                         const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
                         if (vIdx >= 0) {
                           nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = value;
-                          if (nextGraph.metadata) {
-                            nextGraph.metadata.updated_at = new Date().toISOString();
-                          }
-                          setGraph(nextGraph);
+                              if (nextGraph.metadata) {
+                                nextGraph.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(nextGraph);
                           saveHistoryState('Update variant weight', caseNode?.id);
                         }
                       }
