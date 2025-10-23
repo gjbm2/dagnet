@@ -207,7 +207,7 @@ export default function ConditionalProbabilitiesSection({
                   Probability (mean)
                 </label>
                 <ProbabilityInput
-                  value={condition.p.mean}
+                  value={condition.p.mean || 0}
                   onChange={(value) => {
                     const newConditions = [...conditions];
                     newConditions[index] = {
@@ -241,7 +241,8 @@ export default function ConditionalProbabilitiesSection({
                           nextGraph.edges[currentEdgeIndex].conditional_p[index].p.mean = currentValue;
                         }
                         
-                        const currentCondition = edge.conditional_p[index];
+                        const currentCondition = edge.conditional_p?.[index];
+                        if (!currentCondition) return;
                         const conditionKey = JSON.stringify(currentCondition.condition.visited.sort());
                         
                         const siblingsWithSameCondition = siblings.filter(sibling => {
