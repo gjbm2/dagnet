@@ -193,7 +193,7 @@ export default function ConversionEdge({
           return totalMass;
         };
         
-        const residualAtSource = calculateResidualProbability(fullEdge?.from, graph.edges, startNode.id);
+        const residualAtSource = fullEdge?.from ? calculateResidualProbability(fullEdge.from, graph.edges, startNode.id) : 0;
         const actualMassFlowing = residualAtSource * effectiveProbability;
         
         return actualMassFlowing;
