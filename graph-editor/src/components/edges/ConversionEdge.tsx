@@ -159,8 +159,50 @@ export default function ConversionEdge({
   // UNIFIED: Compute effective probability using shared logic
   const effectiveProbability = useMemo(() => {
     const currentOverrides = useGraphStore.getState().whatIfOverrides;
-    return computeEffectiveEdgeProbability(graph, id, currentOverrides, whatIfAnalysis);
+    const result = computeEffectiveEdgeProbability(graph, id, currentOverrides, whatIfAnalysis);
+    console.log(`Edge ${id} effective probability:`, result, 'base:', data?.probability);
+    return result;
   }, [graph, id, whatIfAnalysis, overridesVersion]);
+
+  // For dashed lines, we need the actual effective weight (flow-based), not just What-If overrides
+  const effectiveWeight = useMemo(() => {
+    // Calculate the actual probability mass flowing through this edge
+    // This is the same logic used in calculateEdgeWidth for global-mass mode
+    if (graph?.nodes && graph?.edges) {
+      // Find the start node
+      const startNode = graph.nodes.find((n: any) => 
+        n.entry?.is_start === true || (n.entry?.entry_weight || 0) > 0
+      );
+      
+      if (startNode) {
+        // Calculate residual probability at the source node
+        const calculateResidualProbability = (nodeId: string, edges: any[], startNodeId: string): number => {
+          if (nodeId === startNodeId) return 1.0;
+          
+          // Find all edges leading to this node
+          const incomingEdges = edges.filter(e => e.to === nodeId);
+          if (incomingEdges.length === 0) return 0;
+          
+          // Sum up the mass from all incoming edges
+          let totalMass = 0;
+          for (const incomingEdge of incomingEdges) {
+            const sourceResidual = calculateResidualProbability(incomingEdge.from, edges, startNodeId);
+            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.id, useGraphStore.getState().whatIfOverrides, whatIfAnalysis);
+            totalMass += sourceResidual * edgeProb;
+          }
+          return totalMass;
+        };
+        
+        const residualAtSource = calculateResidualProbability(fullEdge?.from, graph.edges, startNode.id);
+        const actualMassFlowing = residualAtSource * effectiveProbability;
+        
+        return actualMassFlowing;
+      }
+    }
+    
+    // Fallback to effective probability if no flow calculation available
+    return effectiveProbability;
+  }, [graph, fullEdge?.from, effectiveProbability, whatIfAnalysis, overridesVersion, graph?.edges?.map(e => `${e.id}-${e.p?.mean}`).join(',')]);
   
   // UNIFIED: Get what-if display info using shared logic
   const whatIfDisplay = useMemo(() => {
@@ -896,7 +938,7 @@ export default function ConversionEdge({
           stroke: getEdgeColor(),
           fill: 'none',
           zIndex: selected ? 1000 : 1,
-          strokeDasharray: (data?.probability === undefined || data?.probability === null) ? '5,5' : 'none',
+          strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
           markerEnd: data?.calculateWidth ? 'none' : `url(#arrow-${id})`,
           transition: 'stroke-width 0.3s ease-in-out',
         }}

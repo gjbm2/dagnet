@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
+import { roundTo4DP } from '@/utils/rounding';
 
 interface ProbabilityInputProps {
   value: number;
@@ -46,6 +47,7 @@ export default function ProbabilityInput({
   const [displayValue, setDisplayValue] = useState<string>(String(value));
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
 
   // Update display value when external value changes (but not while editing)
   useEffect(() => {
@@ -99,15 +101,15 @@ export default function ProbabilityInput({
     // Only update slider and graph if input is valid
     const parsed = parseInputValue(inputValue);
     if (parsed !== null) {
-      // Don't snap typed values - only snap slider values
-      onChange(parsed);
+      // Don't snap typed values - only snap slider values, but round to 4dp
+      onChange(roundTo4DP(parsed));
     }
   };
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = parseFloat(e.target.value);
     const snappedValue = snapValue(rawValue);
-    onChange(snappedValue);
+    onChange(roundTo4DP(snappedValue));
     
     // Update display value to match slider
     setDisplayValue(String(snappedValue));
@@ -117,15 +119,15 @@ export default function ProbabilityInput({
     
     // Auto-rebalance if CTRL is held (but no history save)
     if (onRebalance) {
-      scheduleRebalance(() => onRebalance(snappedValue));
+      scheduleRebalance(() => onRebalance(roundTo4DP(snappedValue)));
     }
   };
 
   const handleCommit = (inputValue: string) => {
     const parsed = parseInputValue(inputValue);
     if (parsed !== null) {
-      // Don't snap typed values - only snap slider values
-      const finalValue = parsed;
+      // Don't snap typed values - only snap slider values, but round to 4dp
+      const finalValue = roundTo4DP(parsed);
       
       // Update display value to show the committed value
       setDisplayValue(String(finalValue));
@@ -137,7 +139,7 @@ export default function ProbabilityInput({
       
       // Auto-rebalance if CTRL is held
       if (onRebalance) {
-        scheduleRebalance(() => onRebalance(finalValue));
+        scheduleRebalance(() => onRebalance(roundTo4DP(finalValue)));
       }
       
       return true; // Success
@@ -158,8 +160,8 @@ export default function ProbabilityInput({
       if (success && e.ctrlKey && onRebalance) {
         const parsed = parseInputValue(e.currentTarget.value);
         if (parsed !== null) {
-          // Use exact typed value for rebalance, not snapped value
-          onRebalance(parsed);
+          // Use exact typed value for rebalance, not snapped value, but round to 4dp
+          onRebalance(roundTo4DP(parsed));
         }
       }
       

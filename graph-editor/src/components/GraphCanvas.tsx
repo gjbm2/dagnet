@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
+import { roundTo4DP } from '@/utils/rounding';
 import ReactFlow, {
   Background,
   Controls,
@@ -44,7 +45,8 @@ interface GraphCanvasProps {
   onDoubleClickNode?: (id: string, field: string) => void;
   onDoubleClickEdge?: (id: string, field: string) => void;
   onSelectEdge?: (id: string) => void;
-  edgeScalingMode: 'uniform' | 'local-mass' | 'global-mass' | 'global-log-mass';
+  useUniformScaling: boolean;
+  massGenerosity: number; // 0 = pure global (Sankey), 1 = pure local, 0.5 = balanced
   autoReroute: boolean;
   onAddNodeRef?: React.MutableRefObject<(() => void) | null>;
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
@@ -52,7 +54,7 @@ interface GraphCanvasProps {
   onForceRerouteRef?: React.MutableRefObject<(() => void) | null>;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -61,7 +63,8 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onDoubleClickNode={onDoubleClickNode}
         onDoubleClickEdge={onDoubleClickEdge}
         onSelectEdge={onSelectEdge}
-        edgeScalingMode={edgeScalingMode}
+        useUniformScaling={useUniformScaling}
+        massGenerosity={massGenerosity}
         autoReroute={autoReroute}
         onAddNodeRef={onAddNodeRef}
         onDeleteSelectedRef={onDeleteSelectedRef}
@@ -72,7 +75,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, edgeScalingMode, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef }: GraphCanvasProps) {
   const store = useGraphStore();
   const { graph, setGraph, whatIfAnalysis } = store;
   const saveHistoryState = store.saveHistoryState;
@@ -141,27 +144,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [onNodesChangeBase, autoReroute, saveHistoryState]);
 
-  // Log transformation function for Global Log Mass scaling
-  const logMassTransform = useCallback((probability: number, maxWidth: number): number => {
-    if (probability <= 0) return 0;
-    if (probability >= 1) return maxWidth;
-    
-    // Use log base 10 with scaling to preserve visual mass
-    // Formula: width = maxWidth * (1 - log10(1/probability) / log10(1/minProb))
-    // Where minProb is the minimum probability we want to show (e.g., 0.01)
-    
-    const minProb = 0.01; // Minimum probability to show
-    const logBase = 10;
-    
-    // Clamp probability to avoid log(0)
-    const clampedProb = Math.max(probability, minProb);
-    
-    // Calculate the log transformation
-    const logRatio = Math.log10(1 / clampedProb) / Math.log10(1 / minProb);
-    const width = maxWidth * (1 - logRatio);
-    
-    return Math.max(0, Math.min(maxWidth, width));
-  }, []);
 
   // Edge width calculation based on scaling mode
   const MAX_WIDTH = 104; // Node height (120px) minus 2x corner radius (8px each = 16px)
@@ -188,93 +170,29 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       );
     };
     
-    if (edgeScalingMode === 'uniform') {
+    // Uniform scaling: constant width
+    if (useUniformScaling) {
       return 10;
     }
     
-    if (edgeScalingMode === 'local-mass') {
-      // Find all edges from the same source node
+    // Find the start node for flow calculations
+    const startNode = allNodes.find(n => 
+      n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
+    );
+    
+    const edgeProbability = getEffectiveProbability(edge);
+    
+    // If no start node, fallback to pure local mass
+    if (!startNode) {
       const sourceEdges = allEdges.filter(e => e.source === edge.source);
       const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
-      
       if (totalProbability === 0) return MIN_WIDTH;
-      
-      const edgeProbability = getEffectiveProbability(edge);
       const proportion = edgeProbability / totalProbability;
-      // Use a more dramatic scaling for better visibility
       const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
-      const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
-      return finalWidth;
+      return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
     }
     
-    if (edgeScalingMode === 'global-mass') {
-      // Global mass: scale based on residual probability as graph is traversed from start
-      // Find the start node (node with entry.is_start = true or entry.entry_weight > 0)
-      const startNode = allNodes.find(n => 
-        n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
-      );
-      
-      if (!startNode) {
-        console.log(`No start node found, falling back to local mass for edge ${edge.id}`);
-        // Fallback to local mass if no clear start node
-        const sourceEdges = allEdges.filter(e => e.source === edge.source);
-        const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
-        if (totalProbability === 0) return MIN_WIDTH;
-        const edgeProbability = getEffectiveProbability(edge);
-        const proportion = edgeProbability / totalProbability;
-        const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
-        return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
-      }
-      
-      // Calculate residual probability at the source node
-      const residualAtSource = calculateResidualProbability(edge.source, allEdges, startNode.id);
-      
-      if (residualAtSource === 0) return MIN_WIDTH;
-      
-      // Sankey-style: actual mass flowing through this edge = p(source) × edge_probability
-      const edgeProbability = getEffectiveProbability(edge);
-      const actualMassFlowing = residualAtSource * edgeProbability;
-      
-      // Width scales directly with actual mass flowing through
-      const scaledWidth = MIN_WIDTH + (actualMassFlowing * (MAX_WIDTH - MIN_WIDTH));
-      const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
-      return finalWidth;
-    }
-    
-    if (edgeScalingMode === 'global-log-mass') {
-      // Global Log Mass: same as global-mass but with logarithmic transformation
-      // Find the start node (node with entry.is_start = true or entry.entry_weight > 0)
-      const startNode = allNodes.find(n => 
-        n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
-      );
-      
-      if (!startNode) {
-        // Fallback to local mass if no clear start node
-        const sourceEdges = allEdges.filter(e => e.source === edge.source);
-        const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
-        if (totalProbability === 0) return MIN_WIDTH;
-        const edgeProbability = getEffectiveProbability(edge);
-        const proportion = edgeProbability / totalProbability;
-        const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
-        return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
-      }
-      
-      // Calculate residual probability at the source node
-      const residualAtSource = calculateResidualProbability(edge.source, allEdges, startNode.id);
-      
-      if (residualAtSource === 0) return MIN_WIDTH;
-      
-      // Sankey-style: actual mass flowing through this edge = p(source) × edge_probability
-      const edgeProbability = getEffectiveProbability(edge);
-      const actualMassFlowing = residualAtSource * edgeProbability;
-      
-      // Apply logarithmic transformation to preserve visual mass for lower probabilities
-      const logTransformedWidth = logMassTransform(actualMassFlowing, MAX_WIDTH - MIN_WIDTH);
-      const finalWidth = MIN_WIDTH + logTransformedWidth;
-      return finalWidth;
-    }
-    
-    // Helper function to calculate residual probability with normalization (mass conservation)
+    // Helper function to calculate residual probability at a node
     function calculateResidualProbability(targetNode: string, allEdges: any[], startNode: string): number {
       // Build adjacency lists
       const outgoing: { [key: string]: any[] } = {};
@@ -322,8 +240,43 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return dfs(targetNode);
     }
     
-    return edge.selected ? 3 : 2;
-  }, [edgeScalingMode, logMassTransform]);
+    // Calculate actual flow through this edge
+    const residualAtSource = calculateResidualProbability(edge.source, allEdges, startNode.id);
+    
+    if (residualAtSource === 0) return MIN_WIDTH;
+    
+    const actualMassFlowing = residualAtSource * edgeProbability;
+    
+    // Apply generosity transformation
+    // generosity = 0: pure global (actualMassFlowing^1 = actualMassFlowing)
+    // generosity = 1: pure local (actualMassFlowing^0 × local_proportion)
+    // generosity = 0.5: balanced (actualMassFlowing^0.5, compresses dynamic range)
+    
+    let displayMass: number;
+    
+    if (massGenerosity === 0) {
+      // Pure global (Sankey): use actual mass directly
+      displayMass = actualMassFlowing;
+    } else if (massGenerosity === 1) {
+      // Pure local: ignore upstream, just use local proportions
+      const sourceEdges = allEdges.filter(e => e.source === edge.source);
+      const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
+      if (totalProbability === 0) return MIN_WIDTH;
+      const localProportion = edgeProbability / totalProbability;
+      displayMass = localProportion;
+    } else {
+      // Blended: use power function to compress dynamic range
+      // At g=0.5, this gives sqrt(actualMassFlowing) which compresses the range
+      // while still respecting global flow
+      const power = 1 - massGenerosity;
+      displayMass = Math.pow(actualMassFlowing, power);
+    }
+    
+    // Scale to width
+    const scaledWidth = MIN_WIDTH + (displayMass * (MAX_WIDTH - MIN_WIDTH));
+    const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
+    return finalWidth;
+  }, [useUniformScaling, massGenerosity]);
 
   // Calculate edge sort keys for curved edge stacking
   // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
@@ -399,7 +352,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Pre-calculate scale factors per face to ensure consistency
     const faceScaleFactors: { [faceKey: string]: number } = {};
     
-    if (edgeScalingMode === 'global-log-mass') {
+    if (!useUniformScaling) {
       // Calculate scale factors for each source face
       Object.keys(edgesBySource).forEach(sourceId => {
         const sourceEdges = edgesBySource[sourceId];
@@ -561,14 +514,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
             const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
             const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            const eScale = edgeScalingMode === 'global-log-mass' ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
             return sum + (width * eScale);
           }, 0);
 
           const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
           const incidentFaceKeyForThis = `incident-${edge.target}-${targetFace}`;
           const incidentScaleForThis = faceScaleFactors[incidentFaceKeyForThis] || 1.0;
-          const thisEdgeScale = edgeScalingMode === 'global-log-mass' ? Math.min(sourceScaleFactor, incidentScaleForThis) : 1.0;
+          const thisEdgeScale = !useUniformScaling ? Math.min(sourceScaleFactor, incidentScaleForThis) : 1.0;
           const scaledEdgeWidth = edgeWidth * thisEdgeScale;
           
           const sourceCenterInStack = sourceCumulativeWidth + (scaledEdgeWidth / 2);
@@ -584,7 +537,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
             const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
             const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            const eScale = edgeScalingMode === 'global-log-mass' ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
             return sum + (width * eScale);
           }, 0);
           
@@ -646,12 +599,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
             const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
             const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            const eScale = edgeScalingMode === 'global-log-mass' ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
             return sum + (width * eScale);
           }, 0);
 
           const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-          const thisEdgeScaleAtTarget = edgeScalingMode === 'global-log-mass' ? Math.min(sourceScaleFactor, targetScaleFactor) : 1.0;
+          const thisEdgeScaleAtTarget = !useUniformScaling ? Math.min(sourceScaleFactor, targetScaleFactor) : 1.0;
           const scaledEdgeWidth = edgeWidth * thisEdgeScaleAtTarget;
           
           const targetCenterInStack = targetCumulativeWidth + (scaledEdgeWidth / 2);
@@ -667,7 +620,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
             const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
             const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            const eScale = edgeScalingMode === 'global-log-mass' ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
             return sum + (width * eScale);
           }, 0);
           
@@ -687,7 +640,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
       // Get the final edge width using the per-edge scale factor = min(source-face, incident target-face)
       let scaledWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-      if (edgeScalingMode === 'global-log-mass') {
+      if (!useUniformScaling) {
         const thisIncidentScale = faceScaleFactors[`incident-${edge.target}-${targetFace}`] || 1.0;
         const thisEdgeScale = Math.min(sourceScaleFactor, thisIncidentScale);
         scaledWidth = scaledWidth * thisEdgeScale;
@@ -704,7 +657,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
 
     return edgesWithOffsets;
-  }, [edgeScalingMode, getEdgeSortKey]);
+  }, [useUniformScaling, getEdgeSortKey]);
 
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
@@ -1349,7 +1302,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   useEffect(() => {
     if (edges.length === 0) return;
     
-    console.log('Edge scaling mode changed to:', edgeScalingMode);
+    console.log('Edge scaling changed - uniform:', useUniformScaling, 'generosity:', massGenerosity);
     
     // Ensure sync flag is reset after edge scaling updates
     setTimeout(() => {
@@ -1395,7 +1348,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       return result;
     });
-  }, [edgeScalingMode, nodes, setEdges]);
+  }, [useUniformScaling, massGenerosity, nodes, setEdges]);
   
   // Recalculate edge widths when what-if changes (separate effect to avoid loops)
   useEffect(() => {
@@ -3727,7 +3680,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                     if (edgeIndex >= 0) {
                       nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
                     
-                      const remainingProbability = 1 - value;
+                      const remainingProbability = roundTo4DP(1 - value);
                     const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
                     
                     if (siblingsTotal > 0) {
@@ -3822,7 +3775,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                           if (siblings.length > 0) {
                             const nextGraph = structuredClone(graph);
                             const currentValue = value;
-                            const remainingProbability = 1 - currentValue;
+                            const remainingProbability = roundTo4DP(1 - currentValue);
                             
                             const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
                             if (currentEdgeIndex >= 0 && nextGraph.edges[currentEdgeIndex].conditional_p) {

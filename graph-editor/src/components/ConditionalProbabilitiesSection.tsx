@@ -3,6 +3,7 @@ import { ConditionalProbability, GraphNode, GraphEdge } from '@/lib/types';
 import { getUpstreamNodes, validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { useGraphStore } from '@/lib/useGraphStore';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
+import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
 import { 
   getConditionalColor, 
@@ -234,7 +235,7 @@ export default function ConditionalProbabilitiesSection({
                       if (siblings.length > 0) {
                         const nextGraph = structuredClone(graph);
                         const currentValue = value;
-                        const remainingProbability = 1 - currentValue;
+                        const remainingProbability = roundTo4DP(1 - currentValue);
                         
                         const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edge.id);
                         if (currentEdgeIndex >= 0 && nextGraph.edges[currentEdgeIndex].conditional_p) {
@@ -329,7 +330,7 @@ export default function ConditionalProbabilitiesSection({
                           if (siblings.length > 0) {
                             const nextGraph = structuredClone(graph);
                             const currentValue = condition.p.mean || 0;
-                            const remainingProbability = 1 - currentValue;
+                            const remainingProbability = roundTo4DP(1 - currentValue);
                             
                             // Calculate total current probability of siblings for this condition
                             const conditionKey = JSON.stringify(condition.condition.visited.sort());
