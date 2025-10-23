@@ -113,27 +113,77 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const isStartNode = data.entry?.is_start || false;
   const isTerminalNode = data.absorbing || false;
   
-  // Check for conditional probability conservation errors
-  const conditionalValidation = useMemo(() => {
-    if (!graph) return null;
-    const validation = validateConditionalProbabilities(graph);
-    // Find errors for this specific node
-    const nodeErrors = validation.errors.filter(err => err.nodeId === data.id);
-    const nodeWarnings = validation.warnings.filter(warn => warn.nodeId === data.id);
-    
-    // Check if there are CONDITIONAL probability sum errors (not base case)
-    // Base case has condition='base', conditional cases have actual node IDs or 'variant_X'
-    const hasConditionalProbSumError = nodeErrors.some(err => 
-      err.type === 'probability_sum' && err.condition !== 'base' && !err.condition?.startsWith('variant_')
-    );
-    
-    return {
-      hasErrors: nodeErrors.length > 0,
-      hasProbSumError: hasConditionalProbSumError,
-      errors: nodeErrors,
-      warnings: nodeWarnings
+  // Check for conditional probability conservation errors with debouncing to prevent flashing during CTRL+drag
+  const [debouncedValidation, setDebouncedValidation] = useState<any>(null);
+  const [isActiveDrag, setIsActiveDrag] = useState(false);
+  
+  // Track CTRL+drag state to prevent validation during active operations
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Control' && e.ctrlKey) {
+        setIsActiveDrag(true);
+      }
     };
-  }, [graph, data.id]);
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Control') {
+        // Delay clearing the drag state to allow for rapid CTRL+drag operations
+        setTimeout(() => setIsActiveDrag(false), 300);
+      }
+    };
+    
+    const handleMouseUp = () => {
+      // Clear drag state when mouse is released
+      setTimeout(() => setIsActiveDrag(false), 300);
+    };
+    
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keyup', handleKeyUp);
+    document.addEventListener('mouseup', handleMouseUp);
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+  
+  useEffect(() => {
+    if (!graph) {
+      setDebouncedValidation(null);
+      return;
+    }
+    
+    // Don't run validation during active CTRL+drag operations
+    if (isActiveDrag) {
+      return;
+    }
+    
+    // Clear any existing timeout
+    const timeoutId = setTimeout(() => {
+      const validation = validateConditionalProbabilities(graph);
+      // Find errors for this specific node
+      const nodeErrors = validation.errors.filter(err => err.nodeId === data.id);
+      const nodeWarnings = validation.warnings.filter(warn => warn.nodeId === data.id);
+      
+      // Check if there are CONDITIONAL probability sum errors (not base case)
+      // Base case has condition='base', conditional cases have actual node IDs or 'variant_X'
+      const hasConditionalProbSumError = nodeErrors.some(err => 
+        err.type === 'probability_sum' && err.condition !== 'base' && !err.condition?.startsWith('variant_')
+      );
+      
+      setDebouncedValidation({
+        hasErrors: nodeErrors.length > 0,
+        hasProbSumError: hasConditionalProbSumError,
+        errors: nodeErrors,
+        warnings: nodeWarnings
+      });
+    }, 200); // 200ms delay to prevent flashing during rapid changes
+    
+    return () => clearTimeout(timeoutId);
+  }, [graph, data.id, isActiveDrag]);
+  
+  const conditionalValidation = debouncedValidation;
   
   // Generate tooltip content
   const getTooltipContent = useCallback(() => {
@@ -392,7 +442,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         )}
 
         {/* Probability mass warning */}
-        {probabilityMass && !probabilityMass.isComplete && !isCaseNode && (
+        {probabilityMass && !probabilityMass.isComplete && !isCaseNode && !isActiveDrag && (
           <div style={{ 
             fontSize: '9px', 
             color: '#ff6b6b', 
@@ -408,7 +458,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         )}
         
         {/* Conditional probability conservation warning */}
-        {conditionalValidation?.hasProbSumError && (
+        {conditionalValidation?.hasProbSumError && !isActiveDrag && (
           <div style={{ 
             fontSize: '9px', 
             color: '#ff6b6b', 

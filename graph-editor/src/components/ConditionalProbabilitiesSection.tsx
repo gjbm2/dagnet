@@ -2,6 +2,8 @@ import React, { useState, useCallback, useMemo } from 'react';
 import { ConditionalProbability, GraphNode, GraphEdge } from '@/lib/types';
 import { getUpstreamNodes, validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { useGraphStore } from '@/lib/useGraphStore';
+import { useSnapToSlider } from '@/hooks/useSnapToSlider';
+import ProbabilityInput from './ProbabilityInput';
 import { 
   getConditionalColor, 
   CONDITIONAL_COLOR_PALETTE,
@@ -32,6 +34,7 @@ export default function ConditionalProbabilitiesSection({
   onUpdateColor
 }: ConditionalProbabilitiesSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
   
   // Get upstream nodes for condition selection
   const upstreamNodes = useMemo(() => {
@@ -203,57 +206,111 @@ export default function ConditionalProbabilitiesSection({
                 <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>
                   Probability (mean)
                 </label>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.01"
+                <ProbabilityInput
                   value={condition.p.mean}
-                  onChange={(e) => {
+                  onChange={(value) => {
                     const newConditions = [...conditions];
                     newConditions[index] = {
                       ...condition,
-                      p: { ...condition.p, mean: parseFloat(e.target.value) || 0 }
+                      p: { ...condition.p, mean: value }
                     };
                     onLocalUpdate(newConditions);
                   }}
-                  placeholder="0.5"
-                  style={{
-                      width: '60px',
-                      padding: '4px',
-                    border: '1px solid #ddd',
-                    borderRadius: '3px',
-                    boxSizing: 'border-box',
-                      fontSize: '11px'
-                    }}
-                  />
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={condition.p.mean}
-                    onChange={(e) => {
-                      const newConditions = [...conditions];
-                      newConditions[index] = {
-                        ...condition,
-                        p: { ...condition.p, mean: parseFloat(e.target.value) }
-                      };
-                      onLocalUpdate(newConditions);
-                    }}
-                    style={{
-                      flex: 1,
-                      height: '4px',
-                      background: '#ddd',
-                      outline: 'none',
-                      borderRadius: '2px'
-                    }}
-                  />
-                      <span style={{ fontSize: '10px', color: '#666', minWidth: '25px' }}>
-                        {((condition.p.mean || 0) * 100).toFixed(0)}%
-                      </span>
-                      <button
+                  onCommit={(value) => {
+                    // Commit is handled by onLocalUpdate above
+                  }}
+                  onRebalance={(value) => {
+                    if (graph && edge) {
+                      const siblings = graph.edges.filter((e: any) => {
+                        if (edge.case_id && edge.case_variant) {
+                          return e.id !== edge.id && 
+                                 e.from === edge.from && 
+                                 e.case_id === edge.case_id && 
+                                 e.case_variant === edge.case_variant;
+                        }
+                        return e.id !== edge.id && e.from === edge.from;
+                      });
+                      
+                      if (siblings.length > 0) {
+                        const nextGraph = structuredClone(graph);
+                        const currentValue = value;
+                        const remainingProbability = 1 - currentValue;
+                        
+                        const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edge.id);
+                        if (currentEdgeIndex >= 0 && nextGraph.edges[currentEdgeIndex].conditional_p) {
+                          nextGraph.edges[currentEdgeIndex].conditional_p[index].p.mean = currentValue;
+                        }
+                        
+                        const currentCondition = edge.conditional_p[index];
+                        const conditionKey = JSON.stringify(currentCondition.condition.visited.sort());
+                        
+                        const siblingsWithSameCondition = siblings.filter(sibling => {
+                          if (!sibling.conditional_p) return false;
+                          return sibling.conditional_p.some((cp: any) => 
+                            JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                          );
+                        });
+                        
+                        if (siblingsWithSameCondition.length > 0) {
+                          const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
+                            const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                              JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                            );
+                            return sum + (matchingCondition?.p?.mean || 0);
+                          }, 0);
+                          
+                          if (siblingsTotal > 0) {
+                            siblingsWithSameCondition.forEach(sibling => {
+                              const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                              if (siblingIndex >= 0) {
+                                const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                );
+                                if (matchingCondition) {
+                                  const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                    JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                  );
+                                  if (conditionIndex >= 0) {
+                                    const siblingCurrentValue = matchingCondition.p?.mean || 0;
+                                    const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
+                                    nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
+                                  }
+                                }
+                              }
+                            });
+                          } else {
+                            const equalShare = remainingProbability / siblingsWithSameCondition.length;
+                            siblingsWithSameCondition.forEach(sibling => {
+                              const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                              if (siblingIndex >= 0 && sibling.conditional_p) {
+                                const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
+                                );
+                                if (conditionIndex >= 0) {
+                                  nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
+                                }
+                              }
+                            });
+                          }
+                        }
+                        
+                        if (nextGraph.metadata) {
+                          nextGraph.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(nextGraph);
+                        saveHistoryState('Auto-rebalance conditional probabilities', undefined, edge.id);
+                      }
+                    }
+                  }}
+                  autoFocus={false}
+                  autoSelect={false}
+                  showSlider={true}
+                  showBalanceButton={true}
+                />
+              </div>
+
+              {/* Balance button removed - now part of ProbabilityInput */}
+              {false && <button
                         onClick={() => {
                           if (!graph || !edge) return;
                           const siblings = graph.edges.filter((e: any) => {
@@ -442,9 +499,7 @@ export default function ConditionalProbabilitiesSection({
                         title="Rebalance sibling conditional probabilities for this condition"
                       >
                         ⚖️
-                      </button>
-                    </div>
-              </div>
+                      </button>}
 
               {/* Probability stdev */}
               <div>
