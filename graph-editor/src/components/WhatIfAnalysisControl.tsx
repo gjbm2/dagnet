@@ -4,7 +4,6 @@ import { getConditionalColor, getConditionSignature } from '@/lib/conditionalCol
 
 export default function WhatIfAnalysisControl() {
   const { graph, whatIfAnalysis, setWhatIfAnalysis, whatIfOverrides, setCaseOverride, setConditionalOverride, clearAllOverrides } = useGraphStore();
-  const [isExpanded, setIsExpanded] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
   // Get all case nodes and conditional edges
@@ -86,68 +85,9 @@ export default function WhatIfAnalysisControl() {
   }, [graph]);
 
   return (
-    <div style={{
-      background: '#f8f9fa',
-      border: '1px solid #ddd',
-      borderRadius: '6px',
-      padding: '12px',
-      marginBottom: '16px'
-    }}>
-      <div 
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          cursor: 'pointer',
-          userSelect: 'none'
-        }}
-        onClick={() => setIsExpanded(!isExpanded)}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '18px' }}>🎭</span>
-          <span style={{ fontWeight: '600', fontSize: '14px' }}>What-If Analysis</span>
-          {activeCount > 0 && (
-            <span style={{
-              background: '#007bff',
-              color: 'white',
-              borderRadius: '12px',
-              padding: '2px 8px',
-              fontSize: '11px',
-              fontWeight: '600'
-            }}>
-              {activeCount} active
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {activeCount > 0 && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setWhatIfAnalysis(null);
-                clearAllOverrides();
-              }}
-              style={{
-                padding: '4px 12px',
-                fontSize: '12px',
-                background: '#dc3545',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Clear All
-            </button>
-          )}
-          <span style={{ fontSize: '14px', color: '#666' }}>
-            {isExpanded ? '▾' : '▸'}
-          </span>
-        </div>
-      </div>
-
+    <div>
       {/* Active overrides chips */}
-      {activeCount > 0 && !isExpanded && (
+      {activeCount > 0 && (
         <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
           {whatIfAnalysis && (
             <div
@@ -252,8 +192,8 @@ export default function WhatIfAnalysisControl() {
         </div>
       )}
 
-      {isExpanded && (
-        <div style={{ marginTop: '12px' }}>
+      {/* Main content */}
+      <div style={{ marginTop: activeCount > 0 ? '8px' : '0' }}>
           {/* Search */}
           <input
             type="text"
@@ -459,8 +399,7 @@ export default function WhatIfAnalysisControl() {
               {searchTerm ? 'No matching cases or conditional edges' : 'No cases or conditional edges in this graph'}
             </div>
           )}
-        </div>
-      )}
+      </div>
     </div>
   );
 }

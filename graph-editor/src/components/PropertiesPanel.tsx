@@ -18,7 +18,6 @@ export default function PropertiesPanel({
   onSelectedEdgeChange 
 }: PropertiesPanelProps) {
   const { graph, setGraph, whatIfAnalysis, setWhatIfAnalysis, saveHistoryState } = useGraphStore();
-  const [activeTab, setActiveTab] = useState<'graph' | 'node' | 'edge' | 'json'>('graph');
   
   // Local state for form inputs to prevent eager updates
   const [localNodeData, setLocalNodeData] = useState<any>({});
@@ -43,33 +42,7 @@ export default function PropertiesPanel({
   // Local state for conditional probabilities (like variants)
   const [localConditionalP, setLocalConditionalP] = useState<any[]>([]);
   const lastLoadedEdgeRef = useRef<string | null>(null);
-  
-  // JSON edit modal state
-  const [showJsonEdit, setShowJsonEdit] = useState(false);
-  const [jsonEditContent, setJsonEditContent] = useState('');
-  const [jsonEditError, setJsonEditError] = useState<string | null>(null);
 
-  // Track previous selection to detect actual selection changes
-  const prevSelectionRef = useRef({ nodeId: selectedNodeId, edgeId: selectedEdgeId });
-  
-  // Auto-switch tabs based on selection ONLY when selection actually changes
-  useEffect(() => {
-    const selectionChanged = 
-      prevSelectionRef.current.nodeId !== selectedNodeId ||
-      prevSelectionRef.current.edgeId !== selectedEdgeId;
-    
-    if (selectionChanged) {
-      if (selectedNodeId) {
-        setActiveTab('node');
-      } else if (selectedEdgeId) {
-        setActiveTab('edge');
-      } else {
-        setActiveTab('graph');
-      }
-      
-      prevSelectionRef.current = { nodeId: selectedNodeId, edgeId: selectedEdgeId };
-    }
-  }, [selectedNodeId, selectedEdgeId]);
 
   // Track the last loaded node to prevent reloading on every graph change
   const lastLoadedNodeRef = useRef<string | null>(null);
@@ -237,7 +210,7 @@ export default function PropertiesPanel({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEdgeId, activeTab, graph, setGraph, onSelectedEdgeChange]);
+  }, [selectedEdgeId, graph, setGraph, onSelectedEdgeChange]);
 
   const updateGraph = useCallback((path: string[], value: any) => {
     if (!graph) return;
@@ -301,61 +274,6 @@ export default function PropertiesPanel({
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
-  // JSON edit functions
-  const openJsonEdit = useCallback(() => {
-    setJsonEditContent(JSON.stringify(graph, null, 2));
-    setJsonEditError(null);
-    setShowJsonEdit(true);
-  }, [graph]);
-
-  const closeJsonEdit = useCallback(() => {
-    setShowJsonEdit(false);
-    setJsonEditContent('');
-    setJsonEditError(null);
-  }, []);
-
-  const applyJsonEdit = useCallback(() => {
-    try {
-      const parsed = JSON.parse(jsonEditContent);
-      
-      // Basic validation - check required fields
-      if (!parsed.nodes || !Array.isArray(parsed.nodes)) {
-        throw new Error('Missing or invalid "nodes" array');
-      }
-      if (!parsed.edges || !Array.isArray(parsed.edges)) {
-        throw new Error('Missing or invalid "edges" array');
-      }
-      if (!parsed.policies || typeof parsed.policies !== 'object') {
-        throw new Error('Missing or invalid "policies" object');
-      }
-      if (!parsed.metadata || typeof parsed.metadata !== 'object') {
-        throw new Error('Missing or invalid "metadata" object');
-      }
-      
-      // Validate nodes have required fields
-      for (let i = 0; i < parsed.nodes.length; i++) {
-        const node = parsed.nodes[i];
-        if (!node.id || !node.slug) {
-          throw new Error(`Node ${i} missing required "id" or "slug" field`);
-        }
-      }
-      
-      // Validate edges have required fields
-      for (let i = 0; i < parsed.edges.length; i++) {
-        const edge = parsed.edges[i];
-        if (!edge.id || !edge.from || !edge.to) {
-          throw new Error(`Edge ${i} missing required "id", "from", or "to" field`);
-        }
-      }
-      
-      setGraph(parsed);
-      saveHistoryState('JSON edit');
-      closeJsonEdit();
-    } catch (error) {
-      setJsonEditError(error instanceof Error ? error.message : 'Invalid JSON');
-    }
-  }, [jsonEditContent, setGraph, closeJsonEdit, saveHistoryState]);
-
   if (!graph) return null;
 
   // Add null checks to prevent crashes when nodes/edges are deleted
@@ -364,54 +282,35 @@ export default function PropertiesPanel({
     e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
   ) : null;
 
+  // Determine header text based on selection
+  const getHeaderText = () => {
+    if (selectedNodeId) {
+      const selectedNodes = graph.nodes?.filter((n: any) => n.selected) || [];
+      if (selectedNodes.length > 1) {
+        return `${selectedNodes.length} nodes selected`;
+      }
+      return 'Node Properties';
+    }
+    if (selectedEdgeId) return 'Edge Properties';
+    return 'Graph Properties';
+  };
+
   return (
     <div style={{ 
       height: '100%', 
       display: 'flex', 
       flexDirection: 'column',
       background: '#fff',
-      borderLeft: '1px solid #e9ecef',
-      width: '350px',
-      minWidth: '350px',
-      maxWidth: '350px',
+      overflow: 'auto',
       boxSizing: 'border-box'
     }}>
-      {/* Header */}
-      <div style={{ padding: '16px', borderBottom: '1px solid #e9ecef', background: '#f8f9fa' }}>
-        <h3 style={{ margin: 0, fontSize: '18px' }}>Properties</h3>
-      </div>
-
-      {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: '1px solid #e9ecef', background: '#f8f9fa' }}>
-        {['graph', 'node', 'edge', 'json'].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab as any)}
-            style={{
-              flex: 1,
-              padding: '12px',
-              border: 'none',
-              background: activeTab === tab ? '#fff' : 'transparent',
-              borderBottom: activeTab === tab ? '2px solid #007bff' : '2px solid transparent',
-              cursor: 'pointer',
-              textTransform: 'capitalize',
-              fontSize: '12px',
-            }}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
-
       {/* Content */}
       <div style={{ 
-        flex: 1, 
         padding: '12px', 
-        overflow: 'auto',
         boxSizing: 'border-box',
         width: '100%'
       }}>
-        {activeTab === 'graph' && (
+        {!selectedNodeId && !selectedEdgeId && (
           <div>
             <div style={{ marginBottom: '20px' }}>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
@@ -471,7 +370,7 @@ export default function PropertiesPanel({
           </div>
         )}
 
-        {activeTab === 'node' && (
+        {selectedNodeId && (
           <div>
             {selectedNode ? (
               <div>
@@ -1509,7 +1408,7 @@ export default function PropertiesPanel({
           </div>
         )}
 
-        {activeTab === 'edge' && (
+        {selectedEdgeId && (
           <div>
             {selectedEdge ? (
               <div>
@@ -2325,162 +2224,7 @@ export default function PropertiesPanel({
             )}
           </div>
         )}
-
-        {activeTab === 'json' && (
-          <div>
-            <div style={{ 
-              display: 'flex', 
-              justifyContent: 'space-between', 
-              alignItems: 'center',
-              marginBottom: '12px' 
-            }}>
-              <div style={{ fontSize: '12px', color: '#666' }}>
-                Current graph JSON:
-              </div>
-              <button
-                onClick={openJsonEdit}
-                style={{
-                  background: '#007bff',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  cursor: 'pointer'
-                }}
-              >
-                Edit JSON
-              </button>
-            </div>
-            <pre style={{ 
-              background: '#f8f9fa', 
-              padding: '12px', 
-              borderRadius: '4px', 
-              fontSize: '11px',
-              overflow: 'auto',
-              maxHeight: 'calc(100vh - 300px)',
-              border: '1px solid #e9ecef',
-              fontFamily: 'monospace',
-              lineHeight: '1.5',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all'
-            }}>
-              {JSON.stringify(graph, null, 2)}
-            </pre>
-          </div>
-        )}
       </div>
-
-      {/* JSON Edit Modal */}
-      {showJsonEdit && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            background: 'white',
-            borderRadius: '8px',
-            padding: '20px',
-            width: '80%',
-            maxWidth: '800px',
-            maxHeight: '80vh',
-            display: 'flex',
-            flexDirection: 'column'
-          }}>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '16px'
-            }}>
-              <h3 style={{ margin: 0, fontSize: '18px' }}>Edit Graph JSON</h3>
-              <button
-                onClick={closeJsonEdit}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: '20px',
-                  cursor: 'pointer',
-                  color: '#666'
-                }}
-              >
-                ×
-              </button>
-            </div>
-            
-            {jsonEditError && (
-              <div style={{
-                background: '#f8d7da',
-                color: '#721c24',
-                padding: '8px 12px',
-                borderRadius: '4px',
-                marginBottom: '12px',
-                fontSize: '12px'
-              }}>
-                Error: {jsonEditError}
-              </div>
-            )}
-            
-            <textarea
-              value={jsonEditContent}
-              onChange={(e) => setJsonEditContent(e.target.value)}
-              style={{
-                flex: 1,
-                fontFamily: 'monospace',
-                fontSize: '12px',
-                padding: '12px',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                resize: 'none',
-                minHeight: '400px'
-              }}
-              placeholder="Paste your JSON here..."
-            />
-            
-            <div style={{
-              display: 'flex',
-              gap: '8px',
-              marginTop: '16px',
-              justifyContent: 'flex-end'
-            }}>
-              <button
-                onClick={closeJsonEdit}
-                style={{
-                  background: '#6c757d',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  padding: '8px 16px',
-                  cursor: 'pointer'
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={applyJsonEdit}
-                style={{
-                  background: '#28a745',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  padding: '8px 16px',
-                  cursor: 'pointer'
-                }}
-              >
-                Apply Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -112,3 +112,8 @@
   }
 }
 
+/* Edge weight animation transitions - only animate stroke-width, not colors */
+.react-flow__edge-path {
+  transition: stroke-width 0.3s ease-in-out !important;
+}
+
