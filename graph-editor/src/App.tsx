@@ -578,9 +578,12 @@ export default function App() {
           <CollapsibleSection 
             title={
               selectedNodeId 
-                ? (graph?.nodes?.filter((n: any) => n.selected).length > 1 
-                    ? `${graph?.nodes?.filter((n: any) => n.selected).length} nodes selected`
-                    : 'Node Properties')
+                ? (() => {
+                    const selectedNodes = graph?.nodes?.filter((n: any) => n.selected) || [];
+                    return selectedNodes.length > 1 
+                      ? `${selectedNodes.length} nodes selected`
+                      : 'Node Properties';
+                  })()
                 : selectedEdgeId 
                   ? 'Edge Properties'
                   : 'Graph Properties'

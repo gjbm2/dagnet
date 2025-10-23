@@ -2908,6 +2908,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     event.stopPropagation();
     
     const edgeData = graph?.edges?.find((e: any) => e.id === edge.id);
+    
+    // Select the edge so properties panel shows the correct data
+    onSelectedEdgeChange(edge.id);
+    
     setEdgeContextMenu({
       x: event.clientX,
       y: event.clientY,
@@ -2918,7 +2922,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       conditionalProbabilities: {},
       variantWeight: 0
     });
-  }, []);
+  }, [graph, onSelectedEdgeChange]);
 
   // Delete specific node
   const deleteNode = useCallback((nodeId: string) => {
