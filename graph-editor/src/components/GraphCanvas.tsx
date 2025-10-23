@@ -106,6 +106,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Trigger flag for re-routing
   const [shouldReroute, setShouldReroute] = useState(0);
   const [forceReroute, setForceReroute] = useState(false); // Force re-route once (for layout)
+  const skipNextRerouteRef = useRef(false); // Skip next auto-reroute after manual reconnection
   
   // Auto-layout state
   const [layoutDirection, setLayoutDirection] = useState<'LR' | 'RL' | 'TB' | 'BT'>('LR');
@@ -176,22 +177,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     // Find the start node for flow calculations
-    const startNode = allNodes.find(n => 
-      n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
-    );
-    
-    const edgeProbability = getEffectiveProbability(edge);
+      const startNode = allNodes.find(n => 
+        n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
+      );
+      
+        const edgeProbability = getEffectiveProbability(edge);
     
     // If no start node, fallback to pure local mass
-    if (!startNode) {
-      const sourceEdges = allEdges.filter(e => e.source === edge.source);
-      const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
-      if (totalProbability === 0) return MIN_WIDTH;
-      const proportion = edgeProbability / totalProbability;
-      const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
-      return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
-    }
-    
+      if (!startNode) {
+        const sourceEdges = allEdges.filter(e => e.source === edge.source);
+        const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
+        if (totalProbability === 0) return MIN_WIDTH;
+        const proportion = edgeProbability / totalProbability;
+        const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
+        return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
+      }
+      
     // Helper function to calculate residual probability at a node
     function calculateResidualProbability(targetNode: string, allEdges: any[], startNode: string): number {
       // Build adjacency lists
@@ -755,6 +756,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Auto re-route edges when nodes move
   const performAutoReroute = useCallback(() => {
+    // Skip if we just did a manual reconnection
+    if (skipNextRerouteRef.current) {
+      console.log('Auto re-route skipped: manual reconnection just occurred');
+      skipNextRerouteRef.current = false;
+      return;
+    }
+    
     // Allow execution if autoReroute is enabled OR if forceReroute is true
     if ((!autoReroute && !forceReroute) || !graph) {
       console.log('Auto re-route skipped:', { autoReroute, forceReroute, hasGraph: !!graph });
@@ -1148,12 +1156,80 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       );
     });
     
-    if (!edgeCountChanged && !nodeCountChanged && !nodePositionsChanged && edges.length > 0) {
-      // Topology unchanged - update edge data in place to preserve component identity
+    // Check if any edge handles changed
+    const edgeHandlesChanged = edges.some(edge => {
+      let graphEdge = graph.edges.find((e: any) => e.id === edge.id);
+      if (!graphEdge) {
+        graphEdge = graph.edges.find((e: any) => `${e.from}->${e.to}` === edge.id);
+      }
+      if (!graphEdge) {
+        graphEdge = graph.edges.find((e: any) => e.from === edge.source && e.to === edge.target);
+      }
+      if (!graphEdge) return false;
+      
+      return graphEdge.fromHandle !== edge.sourceHandle || graphEdge.toHandle !== edge.targetHandle;
+    });
+    
+    // Check if only node properties changed (not structure or positions)
+    const nodePropertiesChanged = nodes.some(node => {
+      const graphNode = graph.nodes.find((n: any) => n.id === node.id);
+      if (!graphNode) return false;
+      
+      // Check if any non-position properties changed
+      const tagsChanged = JSON.stringify(node.data?.tags || []) !== JSON.stringify(graphNode.tags || []);
+      const labelChanged = node.data?.label !== graphNode.label;
+      const slugChanged = node.data?.slug !== graphNode.slug;
+      const descriptionChanged = node.data?.description !== graphNode.description;
+      const absorbingChanged = node.data?.absorbing !== graphNode.absorbing;
+      const outcomeTypeChanged = node.data?.outcome_type !== graphNode.outcome_type;
+      const entryStartChanged = node.data?.entry?.is_start !== graphNode.entry?.is_start;
+      const entryWeightChanged = node.data?.entry?.entry_weight !== graphNode.entry?.entry_weight;
+      const caseColorChanged = node.data?.layout?.color !== graphNode.layout?.color;
+      const caseTypeChanged = node.data?.type !== graphNode.type;
+      const caseDataChanged = JSON.stringify(node.data?.case || {}) !== JSON.stringify(graphNode.case || {});
+      
+      const hasChanges = labelChanged || slugChanged || descriptionChanged || absorbingChanged || 
+                        outcomeTypeChanged || tagsChanged || entryStartChanged || entryWeightChanged ||
+                        caseColorChanged || caseTypeChanged || caseDataChanged;
+      
+      if (hasChanges) {
+        console.log('Node property changes detected:', {
+          nodeId: node.id,
+          labelChanged,
+          slugChanged,
+          descriptionChanged,
+          absorbingChanged,
+          outcomeTypeChanged,
+          tagsChanged,
+          entryStartChanged,
+          entryWeightChanged,
+          caseColorChanged,
+          caseTypeChanged,
+          caseDataChanged,
+          nodeTags: node.data?.tags,
+          graphTags: graphNode.tags,
+          nodeLayout: node.data?.layout,
+          graphLayout: graphNode.layout
+        });
+      }
+      
+      return hasChanges;
+    });
+    
+    if (!edgeCountChanged && !nodeCountChanged && !nodePositionsChanged && !edgeHandlesChanged && edges.length > 0) {
+      // Topology unchanged and handles unchanged - update edge data in place to preserve component identity
       setEdges(prevEdges => {
         // First pass: update edge data without calculateWidth functions
         const result = prevEdges.map(prevEdge => {
-          const graphEdge = graph.edges.find((e: any) => e.id === prevEdge.id || `${e.from}->${e.to}` === prevEdge.id);
+          // Try multiple ways to match edges
+          let graphEdge = graph.edges.find((e: any) => e.id === prevEdge.id);
+          if (!graphEdge) {
+            graphEdge = graph.edges.find((e: any) => `${e.from}->${e.to}` === prevEdge.id);
+          }
+          if (!graphEdge) {
+            // Try matching by source and target
+            graphEdge = graph.edges.find((e: any) => e.from === prevEdge.source && e.to === prevEdge.target);
+          }
           if (!graphEdge) return prevEdge;
           
           // Update edge data while preserving component identity
@@ -1198,6 +1274,34 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           }
         }));
       });
+      
+      // Also update node properties if they changed
+      if (nodePropertiesChanged) {
+        setNodes(prevNodes => {
+          return prevNodes.map(prevNode => {
+            const graphNode = graph.nodes.find((n: any) => n.id === prevNode.id);
+            if (!graphNode) return prevNode;
+            
+            return {
+              ...prevNode,
+              data: {
+                ...prevNode.data,
+                label: graphNode.label,
+                slug: graphNode.slug,
+                description: graphNode.description,
+                absorbing: graphNode.absorbing,
+                outcome_type: graphNode.outcome_type,
+                tags: graphNode.tags,
+                entry: graphNode.entry,
+                type: graphNode.type,
+                case: graphNode.case,
+                layout: graphNode.layout
+              }
+            };
+          });
+        });
+      }
+      
       return; // Skip full toFlow rebuild
     }
     
@@ -1575,10 +1679,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Update the edge in graph state
       const nextGraph = structuredClone(graph);
-      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === oldEdge.id);
+      
+      // Try multiple ways to find the edge
+      let edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === oldEdge.id);
+      
+      if (edgeIndex === -1) {
+        // Try finding by source->target format
+        const sourceTargetId = `${oldEdge.source}->${oldEdge.target}`;
+        edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === sourceTargetId);
+      }
+      
+      if (edgeIndex === -1) {
+        // Try finding by from->to format
+        edgeIndex = nextGraph.edges.findIndex((e: any) => 
+          e.from === oldEdge.source && e.to === oldEdge.target
+        );
+      }
       
       if (edgeIndex === -1) {
         console.log('❌ ERROR: Edge not found in graph:', oldEdge.id);
+        console.log('Available edges:', nextGraph.edges.map((e: any) => e.id));
         console.log('╚════════════════════════════════════════════════════╝');
         return;
       }
@@ -1620,6 +1740,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('');
       
       setGraph(nextGraph);
+      
+      // Prevent auto-reroute from overwriting manual handle selection
+      skipNextRerouteRef.current = true;
       
       // Save history state for edge reconnection
       saveHistoryState('Reconnect edge', undefined, nextGraph.edges[edgeIndex].id);

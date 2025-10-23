@@ -109,7 +109,7 @@ export default function PropertiesPanel({
       // Clear the ref when no node is selected
       lastLoadedNodeRef.current = null;
     }
-  }, [selectedNodeId, graph]);
+  }, [selectedNodeId]);
 
   // Load edge data when selection changes (but not on every graph update)
   useEffect(() => {
@@ -418,6 +418,7 @@ export default function PropertiesPanel({
                           next.metadata.updated_at = new Date().toISOString();
                         }
                         setGraph(next);
+                        saveHistoryState('Update node label', selectedNodeId);
                       }
                     }}
                     onKeyDown={(e) => {
@@ -438,6 +439,7 @@ export default function PropertiesPanel({
                             next.metadata.updated_at = new Date().toISOString();
                           }
                           setGraph(next);
+                          saveHistoryState('Update node label', selectedNodeId);
                         }
                       }
                     }}

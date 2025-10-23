@@ -159,10 +159,8 @@ export default function ConversionEdge({
   // UNIFIED: Compute effective probability using shared logic
   const effectiveProbability = useMemo(() => {
     const currentOverrides = useGraphStore.getState().whatIfOverrides;
-    const result = computeEffectiveEdgeProbability(graph, id, currentOverrides, whatIfAnalysis);
-    console.log(`Edge ${id} effective probability:`, result, 'base:', data?.probability);
-    return result;
-  }, [graph, id, whatIfAnalysis, overridesVersion]);
+    return computeEffectiveEdgeProbability(graph, id, currentOverrides, whatIfAnalysis);
+  }, [id, whatIfAnalysis, overridesVersion, graph?.edges?.find(e => e.id === id)?.p?.mean, graph?.metadata?.updated_at]);
 
   // For dashed lines, we need the actual effective weight (flow-based), not just What-If overrides
   const effectiveWeight = useMemo(() => {
