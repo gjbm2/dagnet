@@ -315,7 +315,7 @@ export default function App() {
       
       if (result.success && result.data) {
         console.log('Successfully loaded graph:', result.data);
-        return result.data;
+        return result.data.content;
       } else {
         console.error('Failed to load graph:', result.error || result.message);
         return null;
