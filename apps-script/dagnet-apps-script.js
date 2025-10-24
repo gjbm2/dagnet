@@ -2132,10 +2132,10 @@ function applyParameterOverrides(graph, parameters) {
         conditionalProb.p[parsed.param] = value;
       } else {
         // Apply to base probability or costs
-        if (parsed.param.startsWith('p.')) {
+        if (parsed.param === 'mean' || parsed.param === 'stdev' || parsed.param === 'locked') {
           // Probability parameter
           if (!edge.p) edge.p = {};
-          edge.p[parsed.param.substring(2)] = value; // Remove 'p.' prefix
+          edge.p[parsed.param] = value;
         } else if (parsed.param.startsWith('costs.')) {
           // Cost parameter
           if (!edge.costs) edge.costs = {};
