@@ -22,13 +22,13 @@ export function decodeStateFromUrl(): any | null {
   }
   
   try {
-    // Try Apps Script compression format (base64 + gzip)
+    // Try Apps Script gzip compression format (base64 + gzip)
     const decoded = atob(data);
     const bytes = new Uint8Array(decoded.split('').map(c => c.charCodeAt(0)));
     const decompressed = pako.inflate(bytes, { to: 'string' });
     return JSON.parse(decompressed);
   } catch (e) {
-    console.log('Apps Script compression failed, trying plain JSON...');
+    console.log('Apps Script gzip decompression failed, trying plain JSON...');
   }
   
   try {

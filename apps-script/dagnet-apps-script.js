@@ -20,18 +20,29 @@
  * - Parameter naming: e.<edge-slug>.visited(<nodes>).p.mean
  */
 
-// LZ-string compression implementation
+// Proper GZIP compression for Google Apps Script
 var LZString = {
   compressToEncodedURIComponent: function(input) {
     if (!input || input === '') return "";
     
     try {
-      // Use Google Apps Script's built-in compression
-      var blob = Utilities.newBlob(input);
-      var compressed = Utilities.compress(blob.getBytes());
-      var encoded = Utilities.base64Encode(compressed);
+      // Convert string to Blob
+      var blob = Utilities.newBlob(input, 'application/json');
+      
+      // Compress using GZIP
+      var compressedBlob = Utilities.gzip(blob);
+      
+      // Convert to base64
+      var encoded = Utilities.base64Encode(compressedBlob.getBytes());
+      
+      // Debug: check compression
+      console.log('Original length:', input.length);
+      console.log('Compressed length:', encoded.length);
+      console.log('Compression ratio:', (encoded.length / input.length * 100).toFixed(1) + '%');
+      
       return encoded;
     } catch (e) {
+      console.log('Compression failed:', e.message);
       // Fallback to regular URL encoding if compression fails
       return encodeURIComponent(input);
     }
@@ -2651,19 +2662,19 @@ function calculateTime(graph, startNode, endNodes, effectiveVisited, whatIfData)
 }
 
 /**
- * LZ-string encode a string for URL use
+ * Compress and encode a string for URL use
  * Compresses large JSON data to avoid URL length limits
  * 
  * @param {string} input String to encode (typically JSON data)
- * @return {string} LZ-string compressed and URL-encoded string
+ * @return {string} Compressed and URL-encoded string
  * @customfunction
  * 
  * Examples:
- *   =ENCODEURLLZ(A1)
- *   =ENCODEURLLZ('{"large": "json data"}')
- *   =HYPERLINK("https://dagnet-nine.vercel.app/?data="&ENCODEURLLZ(C2), "Edit graph")
+ *   =ENCODEURLCOMPRESSED(A1)
+ *   =ENCODEURLCOMPRESSED('{"large": "json data"}')
+ *   =HYPERLINK("https://dagnet-nine.vercel.app/?data="&ENCODEURLCOMPRESSED(C2), "Edit graph")
  */
-function ENCODEURLLZ(input) {
+function ENCODEURLCOMPRESSED(input) {
   if (!input) {
     return '';
   }
