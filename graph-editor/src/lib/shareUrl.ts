@@ -1,4 +1,5 @@
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
+import pako from 'pako';
 
 export function encodeStateToUrl(graph: any): string {
   const base = window.location.origin + window.location.pathname;
@@ -17,7 +18,17 @@ export function decodeStateFromUrl(): any | null {
       return JSON.parse(decompressed);
     }
   } catch (e) {
-    console.log('LZ-string decompression failed, trying plain JSON...');
+    console.log('LZ-string decompression failed, trying Apps Script compression...');
+  }
+  
+  try {
+    // Try Apps Script compression format (base64 + gzip)
+    const decoded = atob(data);
+    const bytes = new Uint8Array(decoded.split('').map(c => c.charCodeAt(0)));
+    const decompressed = pako.inflate(bytes, { to: 'string' });
+    return JSON.parse(decompressed);
+  } catch (e) {
+    console.log('Apps Script compression failed, trying plain JSON...');
   }
   
   try {
