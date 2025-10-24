@@ -1825,10 +1825,13 @@ function dagParams() {
  */
 function parseConditionalReference(reference) {
   // Base pattern: e.<edge-slug>.p.<param>
-  var basePattern = /^e\.([^.]+)\.p\.(mean|stdev)$/;
+  var basePattern = /^e\.([^.]+)\.p\.(mean|stdev|locked)$/;
   
   // Conditional pattern: e.<edge-slug>.visited(<slugs>).p.<param>
-  var conditionalPattern = /^e\.([^.]+)\.visited\(([^)]+)\)\.p\.(mean|stdev)$/;
+  var conditionalPattern = /^e\.([^.]+)\.visited\(([^)]+)\)\.p\.(mean|stdev|locked)$/;
+  
+  // Cost pattern: e.<edge-slug>.costs.<cost-path>
+  var costPattern = /^e\.([^.]+)\.costs\.(.+)$/;
   
   // Try conditional first
   var match = reference.match(conditionalPattern);
@@ -1844,13 +1847,24 @@ function parseConditionalReference(reference) {
     };
   }
   
-  // Try base
+  // Try base probability
   match = reference.match(basePattern);
   if (match) {
     return {
       edgeSlug: match[1],
       nodeSlugs: [],
       param: match[2],
+      isConditional: false
+    };
+  }
+  
+  // Try cost parameters
+  match = reference.match(costPattern);
+  if (match) {
+    return {
+      edgeSlug: match[1],
+      nodeSlugs: [],
+      param: 'costs.' + match[2], // Include 'costs.' prefix
       isConditional: false
     };
   }
