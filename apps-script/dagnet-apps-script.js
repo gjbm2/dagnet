@@ -18,7 +18,27 @@
  * - Case variant what-if scenarios
  * - Hyperprior logic (case overrides imply visited nodes)
  * - Parameter naming: e.<edge-slug>.visited(<nodes>).p.mean
- * 
+ */
+
+// LZ-string compression implementation
+var LZString = {
+  compressToEncodedURIComponent: function(input) {
+    if (!input || input === '') return "";
+    
+    try {
+      // Use Google Apps Script's built-in compression
+      var blob = Utilities.newBlob(input);
+      var compressed = Utilities.compress(blob.getBytes());
+      var encoded = Utilities.base64Encode(compressed);
+      return encoded;
+    } catch (e) {
+      // Fallback to regular URL encoding if compression fails
+      return encodeURIComponent(input);
+    }
+  }
+};
+
+/**
  * Date: October 24, 2025
  * Version: 2025-10-24-CONDITIONAL-PROB
  */
@@ -2627,5 +2647,30 @@ function calculateTime(graph, startNode, endNodes, effectiveVisited, whatIfData)
     return dfs(startNode.id);
   } catch (e) {
     return "Error calculating time: " + e.message;
+  }
+}
+
+/**
+ * LZ-string encode a string for URL use
+ * Compresses large JSON data to avoid URL length limits
+ * 
+ * @param {string} input String to encode (typically JSON data)
+ * @return {string} LZ-string compressed and URL-encoded string
+ * @customfunction
+ * 
+ * Examples:
+ *   =ENCODEURLLZ(A1)
+ *   =ENCODEURLLZ('{"large": "json data"}')
+ *   =HYPERLINK("https://dagnet-nine.vercel.app/?data="&ENCODEURLLZ(C2), "Edit graph")
+ */
+function ENCODEURLLZ(input) {
+  if (!input) {
+    return '';
+  }
+  
+  try {
+    return LZString.compressToEncodedURIComponent(input);
+  } catch (error) {
+    return 'Error: ' + error.message;
   }
 }
