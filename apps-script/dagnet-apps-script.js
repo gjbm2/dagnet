@@ -2130,10 +2130,43 @@ function applyParameterOverrides(graph, parameters) {
         
         // Update parameter
         conditionalProb.p[parsed.param] = value;
-    } else {
-        // Apply to base probability
-        if (!edge.p) edge.p = {};
-        edge.p[parsed.param] = value;
+      } else {
+        // Apply to base probability or costs
+        if (parsed.param.startsWith('p.')) {
+          // Probability parameter
+          if (!edge.p) edge.p = {};
+          edge.p[parsed.param.substring(2)] = value; // Remove 'p.' prefix
+        } else if (parsed.param.startsWith('costs.')) {
+          // Cost parameter
+          if (!edge.costs) edge.costs = {};
+          var costPath = parsed.param.substring(7); // Remove 'costs.' prefix
+          
+          if (costPath.startsWith('monetary.')) {
+            if (!edge.costs.monetary) edge.costs.monetary = {};
+            var monetaryPath = costPath.substring(9); // Remove 'monetary.' prefix
+            if (monetaryPath === 'value') {
+              edge.costs.monetary.value = value;
+            } else if (monetaryPath === 'stdev') {
+              edge.costs.monetary.stdev = value;
+            } else if (monetaryPath === 'currency') {
+              edge.costs.monetary.currency = value;
+            } else if (monetaryPath === 'distribution') {
+              edge.costs.monetary.distribution = value;
+            }
+          } else if (costPath.startsWith('time.')) {
+            if (!edge.costs.time) edge.costs.time = {};
+            var timePath = costPath.substring(5); // Remove 'time.' prefix
+            if (timePath === 'value') {
+              edge.costs.time.value = value;
+            } else if (timePath === 'stdev') {
+              edge.costs.time.stdev = value;
+            } else if (timePath === 'units') {
+              edge.costs.time.units = value;
+            } else if (timePath === 'distribution') {
+              edge.costs.time.distribution = value;
+            }
+          }
+        }
       }
     }
     
