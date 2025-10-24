@@ -2,10 +2,15 @@ import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from
 import pako from 'pako';
 
 // Make libraries available globally for browser access
-if (typeof window !== 'undefined') {
-  (window as any).LZString = { compressToEncodedURIComponent, decompressFromEncodedURIComponent };
-  (window as any).pako = pako;
-}
+const initializeLibraries = () => {
+  if (typeof window !== 'undefined') {
+    (window as any).LZString = { compressToEncodedURIComponent, decompressFromEncodedURIComponent };
+    (window as any).pako = pako;
+  }
+};
+
+// Initialize libraries immediately
+initializeLibraries();
 
 export function encodeStateToUrl(graph: any): string {
   const base = window.location.origin + window.location.pathname;
