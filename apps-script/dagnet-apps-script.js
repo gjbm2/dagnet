@@ -1,13 +1,31 @@
 /**
- * Minimal Google Apps Script for Dagnet roundtrip:
- * - Menu: Dagnet → Initialize, Edit Selected Cell in Dagnet
- * - openDagnetFromCell: opens Dagnet with selected cell JSON
+ * Google Apps Script for Dagnet Graph Analytics
+ * 
+ * Core Features:
+ * - Menu: Dagnet → Initialize, Edit graph
+ * - editGraph: opens Dagnet with selected cell JSON
  * - doPost: receives graph JSON and writes back to the same cell
- * - getCurrentWebAppUrl: returns current deployment URL (no hardcoding)
+ * - getCurrentWebAppUrl: returns current deployment URL
+ * 
+ * Analytics Functions:
+ * - dagCalc: Main analytics function with what-if support
+ * - dagParams: Create parameter/case/visited overrides
+ * - dagGetGraph: Retrieve graphs from repository or URL
+ * - dagParamsFromTable: Extract parameters from table ranges
+ * 
+ * NEW: Conditional Probability & What-If Support:
+ * - visited(node1,node2) syntax for conditional probabilities
+ * - Case variant what-if scenarios
+ * - Hyperprior logic (case overrides imply visited nodes)
+ * - Parameter naming: e.<edge-slug>.visited(<nodes>).p.mean
+ * 
+ * Date: October 24, 2025
+ * Version: 2025-10-24-CONDITIONAL-PROB
  */
 
 const DAGNET_APP_URL = 'https://dagnet-nine.vercel.app/';
-const SCRIPT_VERSION = '2025-10-13-23-30-CACHE-BUST'; // Change this every time you edit!
+const DAGNET_GRAPH_API_BASE = 'https://dagnet-nine.vercel.app/api/graph';
+const SCRIPT_VERSION = '2025-10-24-CONDITIONAL-PROB'; // Change this every time you edit!
 
 // ===== NAMED CONSTANTS FOR GRAPHCALC FUNCTION =====
 // These will appear in Google Sheets autocomplete and tooltips
@@ -42,112 +60,37 @@ const ANY_FAILURE = 'anyFailure';
  */
 const DEFAULT_SCENARIO = 'Default';
 
-// ===== USAGE EXAMPLES =====
-// Smart input detection - works with multiple input types:
-// =GraphCalc(A1, ANY_SUCCESS, PROBABILITY)  // Graph cell A1 contains "graph://graph_123"
-// =GraphCalc(B2, ANY_SUCCESS, PROBABILITY)  // Cell B2 contains "graph_123" (use as graph ID)
-// =GraphCalc(C3, ANY_SUCCESS, PROBABILITY)  // Cell C3 contains JSON blob (parse directly)
-// =GraphCalc("graph://graph_123", ANY_SUCCESS, PROBABILITY)  // Direct graph:// protocol
-// =GraphCalc("graph_123", ANY_SUCCESS, PROBABILITY)  // Direct graph ID string
-// =GraphCalc('{"nodes":[...],"edges":[...]}', ANY_SUCCESS, PROBABILITY)  // Direct JSON blob
-// =GraphCalc(A1, "start", ANY_SUCCESS, PROBABILITY)  // Explicit start node
-// =GraphCalc(A1, , ANY_SUCCESS, PROBABILITY)  // Skip start node (auto-detect)
-// =GraphCalc(A1, B2, ANY_SUCCESS, PROBABILITY)  // Start node from cell B2
-// =GraphCalc(A1, "start", ANY_SUCCESS, PROBABILITY, "Scenario 2")  // With scenario
-// =GraphCalc(A1, , ANY_SUCCESS, PROBABILITY, , customParams)  // Skip start and scenario
-//
-// Smart input behavior:
-// - Graph cell (graph://...): Extract graph ID from graph:// protocol
-// - Cell with graph ID: Use cell contents as graph ID
-// - Cell with JSON: Parse JSON directly (no history lookup)
-// - Direct graph:// string: Parse graph ID from protocol
-// - Direct graph ID string: Use as graph ID
-// - Direct JSON string: Parse JSON directly (no history lookup)
-//
-// All parameters are positional and optional:
-// GraphCalc(input, startNode, endNode, operation, scenario, customParams)
 
-function testGraphCalc() {
-  // Test function to trace GraphCalc logic
-  var cellRef = "H11"; // Change this to your actual cell reference
-  console.log('Testing GraphCalc with cell:', cellRef);
-  
-  var sheet = SpreadsheetApp.getActiveSheet();
-  var cell = sheet.getRange(cellRef);
-  
-  var note = cell.getNote();
-  console.log('Cell note:', note);
-  console.log('Note includes DAGNET_GRAPH:', note && note.includes('DAGNET_GRAPH:'));
-  
-  var cellValue = cell.getValue();
-  console.log('Cell value:', cellValue);
-  
-  if (note && note.includes('DAGNET_GRAPH:')) {
-    var graphIdMatch = note.match(/DAGNET_GRAPH:([^|]+)/);
-    console.log('Graph ID match:', graphIdMatch);
-    if (graphIdMatch) {
-      console.log('Extracted graph ID:', graphIdMatch[1]);
-    }
-  }
-  
-  return "Check console logs for details";
+/**
+ * NODES constant - Extract only node parameters
+ * @returns {string} "nodes"
+ * @customfunction
+ */
+function NODES() {
+  return 'nodes';
 }
 
-function debugGraphCalc() {
-  // Simple debug function that returns visible output
-  var cellRef = "H11";
-  var sheet = SpreadsheetApp.getActiveSheet();
-  var cell = sheet.getRange(cellRef);
-  
-  var note = cell.getNote();
-  var cellValue = cell.getValue();
-  
-  var result = "DEBUG INFO:\n";
-  result += "Cell: " + cellRef + "\n";
-  result += "Note: " + note + "\n";
-  result += "Note has DAGNET_GRAPH: " + (note && note.includes('DAGNET_GRAPH:')) + "\n";
-  result += "Cell value: " + cellValue + "\n";
-  
-  if (note && note.includes('DAGNET_GRAPH:')) {
-    var graphIdMatch = note.match(/DAGNET_GRAPH:([^|]+)/);
-    result += "Graph ID match: " + (graphIdMatch ? graphIdMatch[1] : "NO MATCH") + "\n";
-  }
-  
-  return result;
+/**
+ * EDGES constant - Extract only edge parameters
+ * @returns {string} "edges"
+ * @customfunction
+ */
+function EDGES() {
+  return 'edges';
 }
 
-function GraphCalcNew(cellRefOrGraphId, startNode, endNode, operation, scenario, customParams) {
-  // New function to bypass caching issues - uses graph:// protocol
-  try {
-    var graphId;
-    
-    // Check if input is graph:// protocol
-    if (typeof cellRefOrGraphId === 'string' && cellRefOrGraphId.startsWith('graph://')) {
-      graphId = cellRefOrGraphId.replace('graph://', '').split('?')[0];
-      return "SUCCESS: graph:// protocol detected, ID: " + graphId;
-    }
-    
-    // It's a cell reference - check its value
-    if (typeof cellRefOrGraphId === 'string' && cellRefOrGraphId.match(/^[A-Z]+\d+$/)) {
-      var sheet = SpreadsheetApp.getActiveSheet();
-      var cell = sheet.getRange(cellRefOrGraphId);
-      var cellValue = cell.getValue();
-      
-      if (cellValue && cellValue.toString().startsWith('graph://')) {
-        graphId = cellValue.toString().replace('graph://', '').split('?')[0];
-        return "SUCCESS: Cell contains graph:// protocol, ID: " + graphId;
-      } else {
-        return "ERROR: Cell does not contain graph:// protocol. Cell value: '" + cellValue + "'";
-      }
-    } else {
-      return "ERROR: Input is not a cell reference or graph:// protocol: '" + cellRefOrGraphId + "'";
-    }
-    
-  } catch (e) {
-    return "Error: " + e.message;
-  }
+/**
+ * GLOBAL constant - Extract only global parameters
+ * @returns {string} "global"
+ * @customfunction
+ */
+function GLOBAL() {
+  return 'global';
 }
 
+/**
+ * Create menu when spreadsheet opens
+ */
 function onOpen() {
   try {
     SpreadsheetApp.getUi()
@@ -160,75 +103,119 @@ function onOpen() {
   }
 }
 
-
-
+/**
+ * Initialize the script - check web app URL
+ */
 function initialize() {
   var ui = SpreadsheetApp.getUi();
   
-  // Step 2: Check/Update web app URL
+  // 1. Create named ranges first (simple)
+  var namedRangesResult = createDagNamedRanges();
+  
+  // 2. Ask for URL (if none stored)
   var currentUrl = getCurrentWebAppUrl();
+  var urlToTest = currentUrl;
   
   if (!currentUrl) {
-    ui.alert('No web app URL found. You need to deploy this script as a web app first:\n\n1. Deploy → New deployment\n2. Choose "Web app"\n3. Execute as: Me\n4. Who has access: Anyone\n5. Click Deploy\n6. Copy the "Current web app URL"\n7. Run Initialize again');
-    return;
-  }
-  
-  // Always allow URL update
-  var response = ui.alert(
-    'Current web app URL: ' + currentUrl + '\n\nDo you want to update the URL?',
-    'Update URL?',
-    ui.ButtonSet.YES_NO
-  );
-  
-  var urlToTest = currentUrl;
-  if (response === ui.Button.YES) {
-    var newUrl = Browser.inputBox('Paste the new web app URL:');
-    if (newUrl && newUrl !== 'cancel') {
-      setWebAppUrl(newUrl);
-      urlToTest = newUrl;
-    } else {
-      ui.alert('URL update cancelled.');
+    var newUrl = Browser.inputBox('Please paste your web app URL:');
+    if (!newUrl || newUrl === 'cancel') {
+      ui.alert('Setup cancelled. URL is required.');
       return;
     }
+    setWebAppUrl(newUrl.trim());
+    urlToTest = newUrl.trim();
   }
   
-  // Step 3: Test the URL
+  // 3. Test URL
   var testResult = testWebAppUrl(urlToTest);
+  
+  // 4. Show success
   if (testResult.success) {
-    // Step 4: Update all existing graph cells
-    updateAllGraphCells();
-    
-    ui.alert('✅ Setup complete!\n\nWeb app URL: ' + urlToTest + '\nStatus: Working\n\nAll graph cells updated with latest options.\n\nYou can now use "Create Graph" and "Edit Selected Cell in Dagnet"');
+    ui.alert('✅ Setup complete!\n\n• Created ' + namedRangesResult + ' named ranges\n• Web app URL is working\n• Type "DG" to see constants in autocomplete\n\nYou can now use "Edit graph" from the menu.');
   } else {
-    ui.alert('❌ Web app URL not working: ' + urlToTest + '\n\nPlease check the URL and try again.');
-    var retryUrl = Browser.inputBox('Paste the correct web app URL:');
-    if (retryUrl && retryUrl !== 'cancel') {
-      setWebAppUrl(retryUrl.trim());
-      var retest = testWebAppUrl(retryUrl.trim());
-      if (retest.success) {
-        updateAllGraphCells();
-        ui.alert('✅ Fixed! Web app is now working and all graph cells updated.');
-      } else {
-        ui.alert('❌ Still not working. Check the deployment settings.');
-      }
-    }
-  }
-}
-
-function testWebAppUrl(url) {
-  try {
-    // Simple health check - just test if the URL responds, don't write anything
-    var testUrl = url + '?healthcheck=1';
-    var response = UrlFetchApp.fetch(testUrl, { muteHttpExceptions: true });
-    // Any non-404 response means the deployment exists and is accessible
-    return { success: response.getResponseCode() !== 404, status: response.getResponseCode() };
-  } catch (e) {
-    return { success: false, status: 'error' };
+    ui.alert('⚠️ Setup partially complete\n\n• Created ' + namedRangesResult + ' named ranges\n• Type "DG" to see constants in autocomplete\n\n• Web app URL is not working: ' + urlToTest + '\n• Please check deployment settings before using "Edit graph"');
   }
 }
 
 /**
- * Open Dagnet with JSON from the currently selected cell. Edit-in-place by default.
+ * Create named ranges for DAG constants
+ */
+function createDagNamedRanges() {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    console.log('Starting to create named ranges...');
+    
+    // Create or get hidden sheet for constants
+    var constsSheet;
+    try {
+      constsSheet = spreadsheet.getSheetByName('__DAG_CONSTS');
+      if (constsSheet) {
+        console.log('Found existing __DAG_CONSTS sheet, clearing it');
+        constsSheet.clear();
+      } else {
+        console.log('Creating new __DAG_CONSTS sheet');
+        constsSheet = spreadsheet.insertSheet('__DAG_CONSTS');
+        constsSheet.hideSheet();
+      }
+    } catch (e) {
+      console.log('Error with sheet creation: ' + e.message);
+      constsSheet = spreadsheet.insertSheet('__DAG_CONSTS');
+      constsSheet.hideSheet();
+    }
+    
+    // Define constants and their values
+    var constants = [
+      { name: 'DG_PROBABILITY', value: 'probability' },
+      { name: 'DG_COST', value: 'cost' },
+      { name: 'DG_TIME', value: 'time' },
+      { name: 'DG_ANY_SUCCESS', value: 'anySuccess' },
+      { name: 'DG_ANY_FAILURE', value: 'anyFailure' },
+      { name: 'DG_NODES', value: 'nodes' },
+      { name: 'DG_EDGES', value: 'edges' },
+      { name: 'DG_GLOBAL', value: 'global' }
+    ];
+    
+    var successCount = 0;
+    
+    // Write values to sheet and create named ranges
+    for (var i = 0; i < constants.length; i++) {
+      var constant = constants[i];
+      try {
+        var cell = constsSheet.getRange(i + 1, 1);
+        cell.setValue(constant.value);
+        console.log('Set value for ' + constant.name + ': ' + constant.value);
+        
+        // Create named range
+        try {
+          spreadsheet.setNamedRange(constant.name, cell);
+          console.log('Created named range: ' + constant.name);
+          successCount++;
+        } catch (e) {
+          // If named range exists, remove it first
+          try {
+            spreadsheet.removeNamedRange(constant.name);
+            spreadsheet.setNamedRange(constant.name, cell);
+            console.log('Recreated named range: ' + constant.name);
+            successCount++;
+          } catch (e2) {
+            console.log('Could not create named range: ' + constant.name + ' - ' + e2.message);
+          }
+        }
+      } catch (e) {
+        console.log('Error with constant ' + constant.name + ': ' + e.message);
+      }
+    }
+    
+    console.log('Successfully created ' + successCount + ' out of ' + constants.length + ' named ranges');
+    return successCount;
+  } catch (e) {
+    console.log('Error creating named ranges: ' + e.message);
+    return 0;
+  }
+}
+
+/**
+ * Edit graph - opens Dagnet with selected cell contents
  */
 function editGraph() {
   const sheet = SpreadsheetApp.getActiveSheet();
@@ -285,2076 +272,23 @@ function editGraph() {
     <html><body style="font-family:Arial;padding:16px;text-align:center">
       <h3>Opening Dagnet…</h3>
       <p>If it doesn't open, <a href="${appUrl}" target="_blank">click here</a>.</p>
-      <button onclick="google.script.host.close()" style="margin-top:10px;padding:8px 16px">Close</button>
+      <p style="font-size:12px;color:#666;margin-top:10px;">This dialog will close automatically when you save in Dagnet.</p>
+      <button onclick="google.script.host.close()" style="margin-top:10px;padding:8px 16px;background:#1a73e8;color:white;border:none;border-radius:4px;cursor:pointer">Close Dialog</button>
       <script>
         (function(){
           var w = window.open(${JSON.stringify(appUrl)}, '_blank');
           if (w) {
-            setTimeout(function(){ google.script.host.close(); }, 10000);
+            // Close dialog after 3 seconds to allow Dagnet to load
+            setTimeout(function(){ 
+              google.script.host.close(); 
+            }, 5000);
           }
         })();
       </script>
     </body></html>
-  `).setWidth(380).setHeight(180);
+  `).setWidth(380).setHeight(200);
 
   SpreadsheetApp.getUi().showModalDialog(html, 'Dagnet');
-}
-
-/**
- * Create a new graph with placeholder data
- */
-function createNewGraph() {
-  const sheet = SpreadsheetApp.getActiveSheet();
-  const activeRange = sheet.getActiveRange();
-  const cellA1 = activeRange.getA1Notation();
-  
-  // Check if cell is empty
-  if (activeRange.getValue() && activeRange.getValue().toString().trim() !== '') {
-    SpreadsheetApp.getUi().alert('Selected cell is not empty. Please select an empty cell to create a new graph.');
-    return;
-  }
-  
-  // Generate unique graph ID
-  const graphId = 'graph_' + Utilities.getUuid().slice(0, 8);
-  
-  // Create graph cell with image and metadata
-  createGraphCell(activeRange, graphId);
-  
-  // Create minimal history entry (just so Dagnet can find the graph ID)
-  const historySheet = getOrCreateHistorySheet();
-  const minimalGraph = null; // NULL as requested
-  
-  addHistoryEntry(historySheet, graphId, minimalGraph, 'New graph created');
-  
-  // Open Dagnet - it will find the graph ID in history but get null data
-  openDagnetFromPointer(activeRange, graphId);
-}
-
-/**
- * Create a graph cell with graph:// protocol
- */
-function createGraphCell(cell, graphId) {
-  // Use graph:// protocol as cell value
-  cell.setValue('graph://' + graphId);
-  cell.setFontSize(10);
-  cell.setHorizontalAlignment('left');
-  cell.setVerticalAlignment('middle');
-  
-  // Style the cell to look like a graph cell
-  cell.setBackground('#e8f4fd');
-  cell.setBorder(true, true, true, true, true, true);
-  cell.setFontColor('#0066cc');
-  cell.setFontWeight('bold');
-}
-
-/**
- * Show sidebar with automatic polling
- */
-
-/**
- * Simple fallback sidebar
- */
-
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <base target="_top">
-      <style>
-        body { font-family: Arial, sans-serif; padding: 16px; margin: 0; }
-        .header { font-weight: bold; color: #1a73e8; margin-bottom: 16px; }
-        .action-button { 
-          display: block; 
-          width: 100%; 
-          padding: 8px 12px; 
-          margin: 4px 0; 
-          background: #1a73e8; 
-          color: white; 
-          border: none; 
-          border-radius: 4px; 
-          cursor: pointer;
-          text-align: left;
-        }
-        .action-button:hover { background: #1557b0; }
-        .info { background: #f8f9fa; padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 12px; }
-        .section { margin: 16px 0; }
-        .section-title { font-weight: bold; color: #333; margin-bottom: 8px; }
-        .node-list { background: #f0f8ff; padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 11px; }
-        .analytics-button { background: #28a745; }
-        .analytics-button:hover { background: #218838; }
-        .no-selection { color: #666; font-style: italic; }
-      </style>
-    </head>
-    <body>
-      <div id="sidebar-content">
-        <div class="no-selection">Select a graph cell to see actions</div>
-      </div>
-      
-      <div id="debug-info" style="margin-top: 20px; padding: 10px; background: #f0f0f0; border-radius: 4px; font-size: 11px;">
-        <strong>Debug Info:</strong><br>
-        <div id="current-cell">Current Cell: Loading...</div>
-        <div id="cell-note">Cell Note: Loading...</div>
-        <div id="polling-status">Polling: Active</div>
-      </div>
-      
-      <script>
-        var currentGraphId = null;
-        var pollInterval;
-        
-        function startPolling() {
-          console.log('Starting polling...');
-          pollInterval = setInterval(function() {
-            console.log('Polling...');
-            google.script.run
-              .withSuccessHandler(function(result) {
-                console.log('Polling success:', result);
-                updateSidebar(result);
-              })
-              .withFailureHandler(function(error) {
-                console.log('Polling error:', error);
-                document.getElementById('current-cell').textContent = 'Current Cell: Error - ' + error;
-                document.getElementById('cell-note').textContent = 'Cell Note: Error - ' + error;
-                document.getElementById('polling-status').textContent = 'Polling: Error - ' + error;
-              })
-              .getCurrentSelectionInfo();
-          }, 2000);
-        }
-        
-        function updateSidebar(selectionInfo) {
-          // Update debug info
-          document.getElementById('current-cell').textContent = 'Current Cell: ' + (selectionInfo.cellRef || 'Unknown');
-          document.getElementById('cell-note').textContent = 'Cell Note: ' + (selectionInfo.cellNote || 'None');
-          document.getElementById('polling-status').textContent = 'Polling: Active (Last: ' + new Date().toLocaleTimeString() + ')';
-          
-          if (selectionInfo && selectionInfo.isGraphCell) {
-            if (currentGraphId !== selectionInfo.graphId) {
-              currentGraphId = selectionInfo.graphId;
-              showGraphActions(selectionInfo);
-            }
-          } else {
-            if (currentGraphId !== null) {
-              currentGraphId = null;
-              showNoSelection();
-            }
-          }
-        }
-        
-        function showGraphActions(selectionInfo) {
-          var html = '<div class="header">📊 Graph Actions</div>';
-          html += '<div class="info">Graph ID: ' + selectionInfo.graphId + '</div>';
-          
-          html += '<div class="section">';
-          html += '<div class="section-title">Graph Management</div>';
-          html += '<button class="action-button" onclick="editGraph()">✏️ Edit in Dagnet</button>';
-          html += '<button class="action-button" onclick="extractParams()">📋 Extract Parameters</button>';
-          html += '<button class="action-button" onclick="addScenario()">➕ Add Scenario</button>';
-          html += '<button class="action-button" onclick="viewHistory()">📚 View History</button>';
-          html += '<button class="action-button" onclick="createNew()">➕ Create New Graph</button>';
-          html += '</div>';
-          
-          if (selectionInfo.nodeNames && selectionInfo.nodeNames.length > 0) {
-            html += '<div class="section">';
-            html += '<div class="section-title">Analytics</div>';
-            html += '<div class="node-list"><strong>Available Nodes:</strong><br>' + selectionInfo.nodeNames.join(', ') + '</div>';
-            html += '<button class="action-button analytics-button" onclick="runAnalytics(\'probability\')">📈 P(Start → Success)</button>';
-            html += '<button class="action-button analytics-button" onclick="runAnalytics(\'cost\')">💰 Cost(Start → Success)</button>';
-            html += '<button class="action-button analytics-button" onclick="runAnalytics(\'time\')">⏱️ Time(Start → Success)</button>';
-            html += '<button class="action-button analytics-button" onclick="runCustomAnalytics()">🔧 Custom Analytics</button>';
-            html += '</div>';
-          }
-          
-          document.getElementById('sidebar-content').innerHTML = html;
-        }
-        
-        function showNoSelection() {
-          document.getElementById('sidebar-content').innerHTML = '<div class="no-selection">Select a graph cell to see actions</div>';
-        }
-        
-        function editGraph() {
-          google.script.run.editGraphFromSidebar(currentGraphId);
-        }
-        
-        function extractParams() {
-          google.script.run.extractParamsFromSidebar(currentGraphId);
-        }
-        
-        function addScenario() {
-          google.script.run.addScenarioFromSidebar(currentGraphId);
-        }
-        
-        function viewHistory() {
-          google.script.run.viewHistoryFromSidebar(currentGraphId);
-        }
-        
-        function createNew() {
-          google.script.run.createNewGraphFromSidebar();
-        }
-        
-        function runAnalytics(operation) {
-          google.script.run.runStandardAnalytics(currentGraphId, operation);
-        }
-        
-        function runCustomAnalytics() {
-          google.script.run.runCustomAnalytics(currentGraphId);
-        }
-        
-        // Test function to manually trigger polling
-        function testPolling() {
-          console.log('Manual polling test...');
-          google.script.run
-            .withSuccessHandler(function(result) {
-              console.log('Manual test success:', result);
-              updateSidebar(result);
-            })
-            .withFailureHandler(function(error) {
-              console.log('Manual test error:', error);
-              alert('Error: ' + error);
-            })
-            .getCurrentSelectionInfo();
-        }
-        
-        // Add test button
-        document.addEventListener('DOMContentLoaded', function() {
-          var testButton = document.createElement('button');
-          testButton.textContent = 'Test Polling';
-          testButton.onclick = testPolling;
-          testButton.style.marginTop = '10px';
-          testButton.style.padding = '5px 10px';
-          document.getElementById('debug-info').appendChild(testButton);
-        });
-        
-        // Start polling when sidebar loads
-        startPolling();
-      </script>
-    </body>
-    </html>
-  `).setTitle('Graph Actions').setWidth(350);
-  
-  SpreadsheetApp.getUi().showSidebar(html);
-}
-
-/**
- * Get current selection info for polling
- */
-function getCurrentSelectionInfo() {
-  try {
-    var sheet = SpreadsheetApp.getActiveSheet();
-    var cell = sheet.getActiveRange();
-    var cellValue = cell.getValue();
-    var note = cell.getNote();
-    
-    // Debug logging
-    console.log('Selection info - Cell:', cell.getA1Notation(), 'Value:', cellValue, 'Note:', note);
-    
-    // Check for graph:// protocol
-    if (cellValue && cellValue.toString().startsWith('graph://')) {
-      var graphId = cellValue.toString().replace('graph://', '').split('?')[0];
-      var historySheet = getOrCreateHistorySheet();
-      var graphData = getLatestGraphData(historySheet, graphId);
-      
-      // Extract node names
-      var nodeNames = [];
-      if (graphData && graphData.nodes) {
-        nodeNames = graphData.nodes.map(function(node) {
-          return node.data ? node.data.label : node.id;
-        });
-      }
-      
-      return {
-        isGraphCell: true,
-        graphId: graphId,
-        nodeNames: nodeNames,
-        cellRef: cell.getA1Notation(),
-        cellNote: 'graph://' + graphId
-      };
-    } else {
-      // Check if within a graph's parameter range
-      var graphInfo = findGraphFromNamedRange(cell);
-      if (graphInfo) {
-        // Extract graph ID from cell value (graph:// protocol)
-        var graphCellValue = graphInfo.cell.getValue();
-        var graphId = graphCellValue.toString().replace('graph://', '').split('?')[0];
-        var historySheet = getOrCreateHistorySheet();
-        var graphData = getLatestGraphData(historySheet, graphId);
-        
-        var nodeNames = [];
-        if (graphData && graphData.nodes) {
-          nodeNames = graphData.nodes.map(function(node) {
-            return node.data ? node.data.label : node.id;
-          });
-        }
-        
-        return {
-          isGraphCell: true,
-          graphId: graphId,
-          nodeNames: nodeNames,
-          cellRef: cell.getA1Notation(),
-          cellNote: graphInfo.note
-        };
-      }
-    }
-    
-    return { 
-      isGraphCell: false,
-      cellRef: cell.getA1Notation(),
-      cellNote: note || 'None'
-    };
-  } catch (e) {
-    console.log('Error getting selection info:', e);
-    return { 
-      isGraphCell: false,
-      cellRef: 'Error',
-      cellNote: 'Error: ' + e.message
-    };
-  }
-}
-
-/**
- * Setup edit trigger for contextual actions
- */
-function setupEditTrigger() {
-  // Delete existing onEdit triggers first
-  var triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach(function(trigger) {
-    if (trigger.getHandlerFunction() === 'onEdit') {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-  
-  // Create new onEdit trigger
-  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  ScriptApp.newTrigger('onEdit')
-    .forSpreadsheet(spreadsheet)
-    .onEdit()
-    .create();
-}
-
-/**
- * Handle edit events for contextual actions
- */
-function onEdit(e) {
-  try {
-    var cell = e.range;
-    var value = cell.getValue();
-    var note = cell.getNote();
-    
-    // Check if this is a graph cell with action selected
-    if (note && note.includes('DAGNET_GRAPH:')) {
-      var graphId = note.split(':')[1];
-      
-      switch (value) {
-        case '✏️ Edit in Dagnet':
-          openDagnetFromPointer(cell, graphId);
-          break;
-        case '📋 Extract Parameters':
-          extractParametersToNamedRange(cell, graphId);
-          break;
-        case '➕ Add Scenario':
-          addScenarioToGraph(cell, graphId);
-          break;
-        case '📚 View History':
-          showHistoryForGraph(graphId);
-          break;
-        case '📊 Graph Actions':
-          // Show sidebar for more options
-          showGraphSidebar(cell, note);
-          break;
-      }
-    }
-  } catch (err) {
-    console.log('Error in onEdit:', err);
-  }
-}
-
-/**
- * Manual function to show sidebar for selected cell
- * (Google Apps Script doesn't support automatic onSelectionChange triggers)
- */
-
-/**
- * Show sidebar with graph actions
- */
-function showGraphSidebar(cell, note) {
-  var graphId = note.split(':')[1];
-  var historySheet = getOrCreateHistorySheet();
-  var graphData = getLatestGraphData(historySheet, graphId);
-  
-  // Extract node names from graph data
-  var nodeNames = [];
-  if (graphData && graphData.nodes) {
-    nodeNames = graphData.nodes.map(function(node) {
-      return node.data ? node.data.label : node.id;
-    });
-  }
-  
-  var html = HtmlService.createHtmlOutput(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <style>
-        body { font-family: Arial, sans-serif; padding: 16px; margin: 0; }
-        .header { font-weight: bold; color: #1a73e8; margin-bottom: 16px; }
-        .action-button { 
-          display: block; 
-          width: 100%; 
-          padding: 8px 12px; 
-          margin: 4px 0; 
-          background: #1a73e8; 
-          color: white; 
-          border: none; 
-          border-radius: 4px; 
-          cursor: pointer;
-          text-align: left;
-        }
-        .action-button:hover { background: #1557b0; }
-        .info { background: #f8f9fa; padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 12px; }
-        .section { margin: 16px 0; }
-        .section-title { font-weight: bold; color: #333; margin-bottom: 8px; }
-        .node-list { background: #f0f8ff; padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 11px; }
-        .analytics-button { background: #28a745; }
-        .analytics-button:hover { background: #218838; }
-      </style>
-    </head>
-    <body>
-      <div class="header">📊 Graph Actions</div>
-      <div class="info">Graph ID: ${graphId}</div>
-      
-      <div class="section">
-        <div class="section-title">Graph Management</div>
-        <button class="action-button" onclick="editGraph()">✏️ Edit in Dagnet</button>
-        <button class="action-button" onclick="extractParams()">📋 Extract Parameters</button>
-        <button class="action-button" onclick="addScenario()">➕ Add Scenario</button>
-        <button class="action-button" onclick="viewHistory()">📚 View History</button>
-        <button class="action-button" onclick="createNew()">➕ Create New Graph</button>
-      </div>
-      
-      <div class="section">
-        <div class="section-title">Analytics</div>
-        <div class="node-list">
-          <strong>Available Nodes:</strong><br>
-          ${nodeNames.join(', ')}
-        </div>
-        <button class="action-button analytics-button" onclick="runAnalytics('probability')">📈 P(Start → Success)</button>
-        <button class="action-button analytics-button" onclick="runAnalytics('cost')">💰 Cost(Start → Success)</button>
-        <button class="action-button analytics-button" onclick="runAnalytics('time')">⏱️ Time(Start → Success)</button>
-        <button class="action-button analytics-button" onclick="runCustomAnalytics()">🔧 Custom Analytics</button>
-      </div>
-      
-      <script>
-        function editGraph() {
-          google.script.run.editGraphFromSidebar('${graphId}');
-        }
-        
-        function extractParams() {
-          google.script.run.extractParamsFromSidebar('${graphId}');
-        }
-        
-        function viewHistory() {
-          google.script.run.viewHistoryFromSidebar('${graphId}');
-        }
-        
-        function addScenario() {
-          google.script.run.addScenarioFromSidebar('${graphId}');
-        }
-        
-        function createNew() {
-          google.script.run.createNewGraphFromSidebar();
-        }
-        
-        function runAnalytics(operation) {
-          google.script.run.runStandardAnalytics('${graphId}', operation);
-        }
-        
-        function runCustomAnalytics() {
-          google.script.run.runCustomAnalytics('${graphId}');
-        }
-      </script>
-    </body>
-    </html>
-  `).setTitle('Graph Actions').setWidth(350);
-  
-  SpreadsheetApp.getUi().showSidebar(html);
-}
-
-/**
- * Hide sidebar
- */
-
-/**
- * Sidebar action handlers
- */
-
-
-
-
-function runStandardAnalytics(graphId, operation) {
-  var sheet = SpreadsheetApp.getActiveSheet();
-  var range = sheet.getActiveRange();
-  runAnalyticsOnGraph(range, graphId, operation);
-}
-
-function runCustomAnalytics(graphId) {
-  var sheet = SpreadsheetApp.getActiveSheet();
-  var range = sheet.getActiveRange();
-  runCustomAnalyticsOnGraph(range, graphId);
-}
-
-
-
-/**
- * Update all graph cells with latest validation options
- */
-function updateAllGraphCells() {
-  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  var sheets = spreadsheet.getSheets();
-  var updatedCount = 0;
-  
-  sheets.forEach(function(sheet) {
-    var range = sheet.getDataRange();
-    var values = range.getValues();
-    var comments = range.getComments();
-    
-    for (var i = 0; i < values.length; i++) {
-      for (var j = 0; j < values[i].length; j++) {
-        var cell = sheet.getRange(i + 1, j + 1);
-        var comment = comments[i][j];
-        
-        if (comment && comment.includes('DAGNET_POINTER:')) {
-          // This is a graph cell - update its validation
-          updateGraphCellValidation(cell);
-          updatedCount++;
-        }
-      }
-    }
-  });
-  
-  SpreadsheetApp.getUi().alert('✅ Updated ' + updatedCount + ' graph cells with latest validation options.');
-}
-
-/**
- * Update validation for a single graph cell
- */
-function updateGraphCellValidation(cell) {
-  // Get current graph ID from comment
-  var comment = cell.getComment();
-  if (!comment || !comment.includes('DAGNET_POINTER:')) {
-    return;
-  }
-  
-  var graphId = comment.split(':')[1];
-  
-  // Update validation with latest options
-  var validation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['Edit in Dagnet', 'Extract Params', 'View History', 'Create New'])
-    .setAllowInvalid(false)
-    .setHelpText('Select action for this graph')
-    .build();
-  
-  cell.setDataValidation(validation);
-  
-  // Note: setLocked() doesn't exist in Apps Script
-  // Validation dropdown itself prevents editing the options
-  
-  // Reset to default value if it's not a valid option
-  var currentValue = cell.getValue();
-  var validOptions = ['Edit in Dagnet', 'Extract Params', 'View History', 'Create New'];
-  if (!validOptions.includes(currentValue)) {
-    cell.setValue('Select Action...');
-  }
-}
-
-/**
- * Get or create the history sheet
- */
-function getOrCreateHistorySheet() {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  let historySheet = spreadsheet.getSheetByName('History');
-  
-  if (!historySheet) {
-    historySheet = spreadsheet.insertSheet('History');
-    
-    // Add headers
-    historySheet.getRange('A1').setValue('Timestamp');
-    historySheet.getRange('B1').setValue('User');
-    historySheet.getRange('C1').setValue('Narrative');
-    historySheet.getRange('D1').setValue('JSON Data');
-    historySheet.getRange('E1').setValue('Graph ID');
-    historySheet.getRange('F1').setValue('Label');
-    
-    // Style headers
-    const headerRange = historySheet.getRange('A1:F1');
-    headerRange.setFontWeight('bold');
-    headerRange.setBackground('#f0f0f0');
-  }
-  
-  return historySheet;
-}
-
-/**
- * Add a new entry to the history sheet
- */
-function addHistoryEntry(historySheet, graphId, graphData, narrative) {
-  const lastRow = historySheet.getLastRow();
-  const newRow = lastRow + 1;
-  
-  // If no graphId provided, generate one
-  if (!graphId) {
-    graphId = 'graph_' + Utilities.getUuid().slice(0, 8);
-  }
-  
-  historySheet.getRange(newRow, 1).setValue(new Date());
-  historySheet.getRange(newRow, 2).setValue(Session.getActiveUser().getEmail());
-  historySheet.getRange(newRow, 3).setValue(narrative);
-  historySheet.getRange(newRow, 4).setValue(JSON.stringify(graphData, null, 2));
-  historySheet.getRange(newRow, 5).setValue(graphId);
-  historySheet.getRange(newRow, 6).setValue('Graph ' + graphId);
-  
-  return graphId; // Return the graph ID, not the row number!
-}
-
-/**
- * Handle dropdown selection changes
- */
-function onEdit(e) {
-  try {
-    var cell = e.range;
-    var value = e.value;
-    
-    if (!value || !cell.getComment() || !cell.getComment().includes('DAGNET_POINTER:')) {
-      return;
-    }
-    
-    var graphId = cell.getComment().split(':')[1];
-    
-    switch(value) {
-      case 'Edit in Dagnet':
-        openDagnetFromPointer(cell, graphId);
-        break;
-      case 'Extract Params':
-        extractParametersFromPointer(cell, graphId);
-        break;
-      case 'View History':
-        showHistoryForGraph(graphId);
-        break;
-      case 'Create New':
-        createNewGraph();
-        break;
-    }
-    
-    // Clear the dropdown selection after action
-    cell.setValue('');
-    
-  } catch (err) {
-    console.log('Error in onEdit:', err);
-  }
-}
-
-/**
- * Open Dagnet with graph data from pointer
- */
-function openDagnetFromPointer(cell, graphId) {
-  // CACHE BUSTER: Show version to verify we're running latest code
-  SpreadsheetApp.getUi().alert('SCRIPT VERSION: ' + SCRIPT_VERSION + '\n\nOpening graph: ' + graphId);
-  
-  const historySheet = getOrCreateHistorySheet();
-  const graphData = getLatestGraphData(historySheet, graphId);
-  
-  const sessionId = Utilities.getUuid();
-  const sheetId = cell.getSheet().getParent().getId();
-  const cellA1 = cell.getA1Notation();
-  const appsScriptUrl = getCurrentWebAppUrl();
-  
-  const appUrl = DAGNET_APP_URL
-    + '?data=' + encodeURIComponent(JSON.stringify(graphData))
-    + '&session=' + encodeURIComponent(sessionId)
-    + '&outputCell=' + encodeURIComponent(cellA1)
-    + '&sheetId=' + encodeURIComponent(sheetId)
-    + '&appsScriptUrl=' + encodeURIComponent(appsScriptUrl)
-    + '&graphId=' + encodeURIComponent(graphId);
-  
-  const html = HtmlService.createHtmlOutput(`
-    <!doctype html>
-    <html><body style="font-family:Arial;padding:16px;text-align:center">
-      <h3>Opening Dagnet…</h3>
-      <p>If it doesn't open, <a href="${appUrl}" target="_blank">click here</a>.</p>
-      <button onclick="google.script.host.close()" style="margin-top:10px;padding:8px 16px">Close</button>
-      <script>
-        (function(){
-          var w = window.open(${JSON.stringify(appUrl)}, '_blank');
-          if (w) {
-            setTimeout(function(){ google.script.host.close(); }, 10000);
-          }
-        })();
-      </script>
-    </body></html>
-  `).setWidth(380).setHeight(180);
-  
-  SpreadsheetApp.getUi().showModalDialog(html, 'Dagnet');
-}
-
-/**
- * Get the latest graph data for a given graph ID
- */
-function getLatestGraphData(historySheet, graphId) {
-  const data = historySheet.getDataRange().getValues();
-  
-  for (let i = data.length - 1; i >= 1; i--) {
-    if (data[i][4] === graphId) { // Column E (Graph ID)
-      const jsonString = data[i][3]; // Column D (JSON Data)
-      if (!jsonString || jsonString === 'null') return null;
-      return JSON.parse(jsonString);
-    }
-  }
-  return null;
-}
-
-/**
- * Extract parameters to a named range
- */
-function extractParametersToNamedRange(cell, graphId) {
-  const historySheet = getOrCreateHistorySheet();
-  const graphData = getLatestGraphData(historySheet, graphId);
-  const params = extractNamedParameters(graphData);
-  const namedRangeName = 'GraphParams_' + graphId;
-  
-  createOrUpdateNamedRange(cell, namedRangeName, params);
-  
-  // Note: Named range is associated with graph cell via the naming convention
-  // GraphParams_{graphId} where graphId matches the cell's graph://graph_id value
-}
-
-/**
- * Create or update a named range with parameters
- */
-function createOrUpdateNamedRange(cell, namedRangeName, params) {
-  const sheet = cell.getSheet();
-  const spreadsheet = sheet.getParent();
-  
-  // Calculate position for parameter table (below the graph cell)
-  const graphRow = cell.getRow();
-  const graphCol = cell.getColumn();
-  const startRow = graphRow + 1;
-  const startCol = graphCol;
-  
-  // Calculate range size needed
-  const numParams = params.length;
-  const numRows = Math.max(numParams + 1, 2); // +1 for header, minimum 2 rows
-  const numCols = 2; // Parameter name and value columns
-  
-  // Create the range
-  const paramRange = sheet.getRange(startRow, startCol, numRows, numCols);
-  
-  // Clear existing content
-  paramRange.clearContent();
-  
-  if (params.length === 0) {
-    // No parameters found
-    sheet.getRange(startRow, startCol).setValue('No parameters found');
-    sheet.getRange(startRow, startCol).setBackground('#f0f0f0');
-  } else {
-    // Add headers for multi-scenario format
-    sheet.getRange(startRow, startCol).setValue('Parameter Name');
-    sheet.getRange(startRow, startCol + 1).setValue('Default');
-    
-    // Style headers
-    const headerRange = sheet.getRange(startRow, startCol, 1, 2);
-    headerRange.setFontWeight('bold');
-    headerRange.setBackground('#e8f4fd');
-    headerRange.setBorder(true, true, true, true, true, true);
-    
-    // Add parameter data
-    params.forEach(function(param, index) {
-      const dataRow = startRow + index + 1; // +1 for header row
-      sheet.getRange(dataRow, startCol).setValue(param.name);
-      sheet.getRange(dataRow, startCol + 1).setValue(param.value);
-    });
-    
-    // Style parameter rows
-    const dataRange = sheet.getRange(startRow + 1, startCol, numParams, 2);
-    dataRange.setBorder(true, true, true, true, true, true);
-  }
-  
-  // Create or update named range
-  try {
-    // Try to get existing named range
-    const existingRange = spreadsheet.getRangeByName(namedRangeName);
-    if (existingRange) {
-      // Update existing named range - keep original position, update size
-      const originalRange = existingRange.getRange();
-      const newRange = sheet.getRange(originalRange.getRow(), originalRange.getColumn(), numRows, numCols);
-      
-      // Remove old named range and create new one
-      var namedRanges = spreadsheet.getNamedRanges();
-      for (var i = 0; i < namedRanges.length; i++) {
-        if (namedRanges[i].getName() === namedRangeName) {
-          namedRanges[i].remove();
-          break;
-        }
-      }
-      spreadsheet.setNamedRange(namedRangeName, newRange);
-      
-      // Named range doesn't need to store graph ID - graph cell stores named range ID
-      
-      // Clear and repopulate the existing range
-      newRange.clearContent();
-      if (params.length === 0) {
-        newRange.getRange(1, 1).setValue('No parameters found');
-        newRange.getRange(1, 1).setBackground('#f0f0f0');
-      } else {
-        // Add headers
-        newRange.getRange(1, 1).setValue('Parameter Name');
-        newRange.getRange(1, 2).setValue('Parameter Value');
-        
-        // Style headers
-        const headerRange = newRange.getRange(1, 1, 1, 2);
-        headerRange.setFontWeight('bold');
-        headerRange.setBackground('#e8f4fd');
-        headerRange.setBorder(true, true, true, true, true, true);
-        
-        // Add parameter data
-        params.forEach(function(param, index) {
-          const dataRow = index + 2; // +2 because headers are in row 1
-          newRange.getRange(dataRow, 1).setValue(param.name);
-          newRange.getRange(dataRow, 2).setValue(param.value);
-        });
-        
-        // Style parameter rows
-        const dataRange = newRange.getRange(2, 1, numParams, 2);
-        dataRange.setBorder(true, true, true, true, true, true);
-      }
-    } else {
-      // Create new named range
-      spreadsheet.setNamedRange(namedRangeName, paramRange);
-      
-      // Named range doesn't need to store graph ID - graph cell stores named range ID
-    }
-  } catch (e) {
-    // If there's an error, try to create a new one
-    try {
-      spreadsheet.setNamedRange(namedRangeName, paramRange);
-      // Named range doesn't need to store graph ID - graph cell stores named range ID
-    } catch (e2) {
-      console.log('Error creating named range:', e2);
-      SpreadsheetApp.getUi().alert('Warning: Could not create named range. Parameters displayed but not linked.');
-    }
-  }
-  
-  return paramRange;
-}
-
-/**
- * Add a new scenario column to an existing parameter table
- */
-function addScenarioToGraph(cell, graphId) {
-  try {
-    // DEBUG: Show version and function entry
-    SpreadsheetApp.getUi().alert('DEBUG: addScenarioToGraph called\n\nScript Version: ' + SCRIPT_VERSION + '\nGraph ID: ' + graphId + '\nCell: ' + cell.getA1Notation());
-    
-    var namedRangeName = getNamedRangeFromGraphCell(cell);
-    if (!namedRangeName) {
-      SpreadsheetApp.getUi().alert('No parameter table found for this graph. Extract parameters first.');
-      return;
-    }
-    
-    var sheet = cell.getSheet();
-    var spreadsheet = sheet.getParent();
-    var namedRange = spreadsheet.getRangeByName(namedRangeName);
-    
-    if (!namedRange) {
-      SpreadsheetApp.getUi().alert('Parameter table not found. Extract parameters first.');
-      return;
-    }
-    
-    // Get current range dimensions
-    var currentRange = namedRange; // namedRange is already a Range object
-    var currentRows = currentRange.getNumRows();
-    var currentCols = currentRange.getNumColumns();
-    var startRow = currentRange.getRow();
-    var startCol = currentRange.getColumn();
-    
-    // Calculate new scenario number
-    var newScenarioNum = currentCols; // Next scenario number (2, 3, 4, etc.)
-    var newScenarioName = 'Scenario ' + newScenarioNum;
-    
-    // Create new range with one additional column
-    var newRange = sheet.getRange(startRow, startCol, currentRows, currentCols + 1);
-    
-    // Update the named range to point to the expanded range
-    // Delete the old named range and create a new one
-    var namedRangeObj = spreadsheet.getRangeByName(namedRangeName);
-    if (namedRangeObj) {
-      // Get the NamedRange object (not the Range) to remove it
-      var namedRanges = spreadsheet.getNamedRanges();
-      for (var i = 0; i < namedRanges.length; i++) {
-        if (namedRanges[i].getName() === namedRangeName) {
-          namedRanges[i].remove();
-          break;
-        }
-      }
-    }
-    
-    // Create new named range with expanded range
-    spreadsheet.setNamedRange(namedRangeName, newRange);
-    
-    // Add new scenario header
-    var newColNum = startCol + currentCols; // Absolute column number
-    sheet.getRange(startRow, newColNum, 1, 1).setValue(newScenarioName);
-    
-    // Copy parameter values from Default column to new scenario
-    for (var i = 2; i <= currentRows; i++) {
-      var defaultValue = currentRange.getCell(i, 2).getValue(); // Get from Default column
-      sheet.getRange(startRow + i - 1, newColNum, 1, 1).setValue(defaultValue);
-    }
-    
-    // Style the new column
-    var newColRange = sheet.getRange(startRow, newColNum, currentRows, 1);
-    newColRange.setBorder(true, true, true, true, true, true);
-    
-    // Style the new header
-    var newHeaderRange = sheet.getRange(startRow, newColNum, 1, 1);
-    newHeaderRange.setFontWeight('bold');
-    newHeaderRange.setBackground('#e8f4fd');
-    newHeaderRange.setBorder(true, true, true, true, true, true);
-    
-    SpreadsheetApp.getUi().alert('✅ New scenario added: ' + newScenarioName + '\n\nYou can now edit the parameter values in the new column to create alternative scenarios.');
-    
-  } catch (e) {
-    console.log('Error adding scenario:', e);
-    SpreadsheetApp.getUi().alert('Error adding scenario: ' + e.message);
-  }
-}
-
-/**
- * Update an existing named range with new parameters
- */
-function updateExistingNamedRange(existingRange, params) {
-  const sheet = existingRange.getSheet();
-  const spreadsheet = sheet.getParent();
-  
-  // Get original position
-  const originalRow = existingRange.getRow();
-  const originalCol = existingRange.getColumn();
-  
-  // Calculate new size needed
-  const numParams = params.length;
-  const numRows = Math.max(numParams + 1, 2); // +1 for header, minimum 2 rows
-  const numCols = 2; // Parameter name and value columns
-  
-  // Create new range with same position but updated size
-  const newRange = sheet.getRange(originalRow, originalCol, numRows, numCols);
-  
-  // Update the named range to point to the new range
-  var namedRanges = spreadsheet.getNamedRanges();
-  for (var i = 0; i < namedRanges.length; i++) {
-    if (namedRanges[i].getName() === namedRangeName) {
-      namedRanges[i].remove();
-      break;
-    }
-  }
-  spreadsheet.setNamedRange(namedRangeName, newRange);
-  
-  // Named range doesn't need to store graph ID - graph cell stores named range ID
-  
-  // Clear and repopulate the range
-  newRange.clearContent();
-  
-  if (params.length === 0) {
-    // No parameters found
-    newRange.getRange(1, 1).setValue('No parameters found');
-    newRange.getRange(1, 1).setBackground('#f0f0f0');
-  } else {
-    // Add headers
-    newRange.getRange(1, 1).setValue('Parameter Name');
-    newRange.getRange(1, 2).setValue('Parameter Value');
-    
-    // Style headers
-    const headerRange = newRange.getRange(1, 1, 1, 2);
-    headerRange.setFontWeight('bold');
-    headerRange.setBackground('#e8f4fd');
-    headerRange.setBorder(true, true, true, true, true, true);
-    
-    // Add parameter data
-    params.forEach(function(param, index) {
-      const dataRow = index + 2; // +2 because headers are in row 1
-      newRange.getRange(dataRow, 1).setValue(param.name);
-      newRange.getRange(dataRow, 2).setValue(param.value);
-    });
-    
-    // Style parameter rows
-    const dataRange = newRange.getRange(2, 1, numParams, 2);
-    dataRange.setBorder(true, true, true, true, true, true);
-  }
-}
-
-/**
- * Run standard analytics on a graph
- */
-function runAnalyticsOnGraph(cell, graphId, operation) {
-  try {
-    var historySheet = getOrCreateHistorySheet();
-    var graphData = getLatestGraphData(historySheet, graphId);
-    var scenarioData = getCurrentScenarioData(cell, graphId);
-    
-    // Run the analytics
-    var result = runGraphAnalytics(graphData, scenarioData, operation);
-    
-    // Output the result
-    outputAnalyticsResult(cell, operation, result);
-    
-  } catch (e) {
-    console.log('Error running analytics:', e);
-    SpreadsheetApp.getUi().alert('Error running analytics: ' + e.message);
-  }
-}
-
-/**
- * Run custom analytics on a graph
- */
-function runCustomAnalyticsOnGraph(cell, graphId) {
-  try {
-    var historySheet = getOrCreateHistorySheet();
-    var graphData = getLatestGraphData(historySheet, graphId);
-    var scenarioData = getCurrentScenarioData(cell, graphId);
-    
-    // Show custom analytics dialog
-    showCustomAnalyticsDialog(graphData, scenarioData);
-    
-  } catch (e) {
-    console.log('Error running custom analytics:', e);
-    SpreadsheetApp.getUi().alert('Error running custom analytics: ' + e.message);
-  }
-}
-
-/**
- * Get current scenario data from parameter table
- */
-function getCurrentScenarioData(cell, graphId) {
-  try {
-    var namedRangeName = getNamedRangeFromGraphCell(cell);
-    if (!namedRangeName) {
-      return {};
-    }
-    
-    var sheet = cell.getSheet();
-    var spreadsheet = sheet.getParent();
-    var namedRange = spreadsheet.getRangeByName(namedRangeName);
-    
-    if (!namedRange) {
-      return {};
-    }
-    
-    var range = namedRange.getRange();
-    var params = {};
-    
-    // Get parameter values from Default column (column 2)
-    for (var i = 2; i <= range.getNumRows(); i++) {
-      var paramName = range.getRange(i, 1).getValue();
-      var paramValue = range.getRange(i, 2).getValue();
-      if (paramName && paramValue !== '') {
-        params[paramName] = paramValue;
-      }
-    }
-    
-    return params;
-  } catch (e) {
-    console.log('Error getting scenario data:', e);
-    return {};
-  }
-}
-
-/**
- * Run graph analytics with given parameters
- */
-function runGraphAnalytics(graphData, scenarioData, operation) {
-  // This is a placeholder for the actual analytics engine
-  // In a real implementation, this would:
-  // 1. Parse the graph structure
-  // 2. Apply parameter values
-  // 3. Run the specified operation
-  // 4. Return the result
-  
-  var result = {
-    operation: operation,
-    value: '0.85', // Placeholder result
-    formula: '=ANALYTICS("' + operation + '", ' + JSON.stringify(scenarioData) + ')',
-    timestamp: new Date().toISOString()
-  };
-  
-  return result;
-}
-
-/**
- * Output analytics result to user
- */
-function outputAnalyticsResult(cell, operation, result) {
-  try {
-    var sheet = cell.getSheet();
-    var activeRange = sheet.getActiveRange();
-    
-    // Create results table below the current selection
-    var startRow = activeRange.getRow() + 1;
-    var startCol = activeRange.getColumn();
-    
-    var resultsRange = sheet.getRange(startRow, startCol, 4, 2);
-    resultsRange.clearContent();
-    
-    // Add results
-    resultsRange.getRange(1, 1).setValue('Analytics Result');
-    resultsRange.getRange(1, 2).setValue(result.value);
-    
-    resultsRange.getRange(2, 1).setValue('Operation');
-    resultsRange.getRange(2, 2).setValue(operation);
-    
-    resultsRange.getRange(3, 1).setValue('Formula');
-    resultsRange.getRange(3, 2).setValue(result.formula);
-    
-    resultsRange.getRange(4, 1).setValue('Timestamp');
-    resultsRange.getRange(4, 2).setValue(result.timestamp);
-    
-    // Style the results
-    var headerRange = resultsRange.getRange(1, 1, 1, 2);
-    headerRange.setFontWeight('bold');
-    headerRange.setBackground('#e8f4fd');
-    headerRange.setBorder(true, true, true, true, true, true);
-    
-    var dataRange = resultsRange.getRange(2, 1, 3, 2);
-    dataRange.setBorder(true, true, true, true, true, true);
-    
-    // Copy formula to clipboard
-    copyToClipboard(result.formula);
-    
-    SpreadsheetApp.getUi().alert('✅ Analytics completed!\n\nResult: ' + result.value + '\n\nFormula copied to clipboard: ' + result.formula);
-    
-  } catch (e) {
-    console.log('Error outputting analytics result:', e);
-    SpreadsheetApp.getUi().alert('Error outputting results: ' + e.message);
-  }
-}
-
-/**
- * Show custom analytics dialog
- */
-function showCustomAnalyticsDialog(graphData, scenarioData) {
-  var ui = SpreadsheetApp.getUi();
-  var response = ui.prompt('Custom Analytics', 'Enter custom operation (e.g., "probability", "cost", "time"):', ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() === ui.Button.OK) {
-    var operation = response.getResponseText();
-    if (operation) {
-      var result = runGraphAnalytics(graphData, scenarioData, operation);
-      outputAnalyticsResult(SpreadsheetApp.getActiveSheet().getActiveRange(), operation, result);
-    }
-  }
-}
-
-/**
- * Copy text to clipboard (placeholder - Apps Script doesn't have direct clipboard access)
- */
-function copyToClipboard(text) {
-  // Note: Apps Script doesn't have direct clipboard access
-  // This would need to be implemented via a web app or browser extension
-  console.log('Formula to copy: ' + text);
-}
-
-// ===== ANALYTICS FUNCTIONS =====
-// Functions for running analytics on graphs as inline formulas
-
-/**
- * Main analytics function - called like Excel formula
- * =GraphCalc(A1, ANY_SUCCESS, PROBABILITY)  // Auto start node
- * =GraphCalc(A1, "start", ANY_SUCCESS, PROBABILITY)  // Explicit start node
- * =GraphCalc(A1, , ANY_SUCCESS, PROBABILITY)  // Skip start node (auto-detect)
- * =GraphCalc(A1, B2, ANY_SUCCESS, PROBABILITY)  // Start node from cell B2
- * 
- * @param {string} cellRefOrGraphId - Cell reference (e.g., "A1") or graph ID (e.g., "graph_123")
- * @param {string} startNode - Starting node (optional, empty string or null for auto-detect)
- * @param {string} endNode - Ending node
- * @param {string} operation - Analysis operation (PROBABILITY, COST, TIME)
- * @param {string} scenario - Optional scenario name (DEFAULT_SCENARIO, "Scenario 2", etc.)
- * @param {object} customParams - Optional custom parameters object
- * @return {number} The calculated result
- * @customfunction
- */
-function GraphCalc(cellRefOrGraphId, startNode, endNode, operation, scenario, customParams) {
-  try {
-    // Handle Excel-style missing parameters (empty strings, null, undefined)
-    if (!startNode || startNode === '' || startNode === null || startNode === undefined) {
-      startNode = null; // Will auto-detect first/entry node
-    }
-    
-    if (!scenario || scenario === '' || scenario === null || scenario === undefined) {
-      scenario = null; // Will use default scenario
-    }
-    
-    if (!customParams || customParams === '' || customParams === null || customParams === undefined) {
-      customParams = null; // Will use scenario parameters
-    }
-    
-    // DEBUG: Log function call
-    console.log('GraphCalc called with:', {
-      cellRefOrGraphId: cellRefOrGraphId,
-      startNode: startNode,
-      endNode: endNode,
-      operation: operation,
-      scenario: scenario,
-      customParams: customParams,
-      argumentCount: arguments.length
-    });
-    
-    var graphId;
-    var graphData;
-    
-    // Smart detection: graph:// protocol, cell ref, graph ID, or JSON blob
-    
-    // Check if input is graph:// protocol
-    if (typeof cellRefOrGraphId === 'string' && cellRefOrGraphId.startsWith('graph://')) {
-      graphId = cellRefOrGraphId.replace('graph://', '').split('?')[0];
-      console.log('Direct graph:// protocol, ID:', graphId);
-    }
-    // Check if input is a cell reference
-    else if (typeof cellRefOrGraphId === 'string' && cellRefOrGraphId.match(/^[A-Z]+\d+$/)) {
-      // It's a cell reference like "A1", "B5", etc.
-      var sheet = SpreadsheetApp.getActiveSheet();
-      var cell = sheet.getRange(cellRefOrGraphId);
-      var cellValue = cell.getValue();
-      
-      console.log('Cell value:', cellValue);
-      
-      // Check if cell contains graph:// protocol
-      if (cellValue && cellValue.toString().startsWith('graph://')) {
-        graphId = cellValue.toString().replace('graph://', '').split('?')[0];
-        console.log('Cell contains graph:// protocol, ID:', graphId);
-      } 
-      else if (!cellValue || cellValue === '') {
-        return "Error: Cell is empty";
-      }
-      else {
-        // Regular cell - check if it's a graph ID or JSON
-        console.log('Regular cell value:', cellValue);
-        
-        // Check if cell content is a valid graph ID
-        var historySheet = getOrCreateHistorySheet();
-        var testGraphData = getLatestGraphData(historySheet, cellValue);
-        if (testGraphData) {
-          // It's a valid graph ID
-          graphId = cellValue;
-          console.log('Cell contains valid graph ID:', graphId);
-        } else {
-          // Treat as JSON blob
-          try {
-            graphData = JSON.parse(cellValue);
-            console.log('Cell contains JSON blob, parsing directly');
-          } catch (e) {
-            console.log('JSON parse error:', e);
-            return "Error: Cell content is neither a graph ID nor valid JSON";
-          }
-        }
-      }
-    }
-    // Direct string input (not a cell reference)
-    else {
-      // It's a string - check if it's a graph ID or JSON
-      var historySheet = getOrCreateHistorySheet();
-      var testGraphData = getLatestGraphData(historySheet, cellRefOrGraphId);
-      if (testGraphData) {
-        // It's a valid graph ID
-        graphId = cellRefOrGraphId;
-        console.log('String is valid graph ID:', graphId);
-      } else {
-        // Try to parse as JSON
-        try {
-          graphData = JSON.parse(cellRefOrGraphId);
-          console.log('String is JSON blob, parsing directly');
-        } catch (e) {
-          return "Error: Input is neither a valid graph ID nor valid JSON";
-        }
-      }
-    }
-    
-    // Get graph data - either from History sheet or from JSON parsing
-    if (!graphData) {
-      console.log('Looking up graph data for ID:', graphId);
-      var historySheet = getOrCreateHistorySheet();
-      graphData = getLatestGraphData(historySheet, graphId);
-      
-      if (!graphData) {
-        console.log('Graph not found for ID:', graphId);
-        return "DEBUG: Graph not found for ID: " + graphId;
-      }
-      console.log('Graph data found in history:', graphData);
-    } else {
-      console.log('Using provided graph data:', graphData);
-    }
-    
-    console.log('Graph data found:', {
-      nodes: graphData.nodes ? graphData.nodes.length : 0,
-      edges: graphData.edges ? graphData.edges.length : 0
-    });
-    
-    // If no start node provided, find the first node (entry node or first in list)
-    if (!startNode) {
-      if (graphData.nodes && graphData.nodes.length > 0) {
-        // Look for entry node first
-        var entryNode = graphData.nodes.find(function(node) {
-          return node.entry && node.entry.is_start;
-        });
-        
-        if (entryNode) {
-          startNode = entryNode.slug || entryNode.id;
-        } else {
-          // Fall back to first node
-          startNode = graphData.nodes[0].slug || graphData.nodes[0].id;
-        }
-        
-        console.log('Auto-selected start node:', startNode);
-      } else {
-        return "Error: No nodes found in graph";
-      }
-    }
-    
-    // Get parameter values based on scenario or custom params
-    var scenarioData;
-    if (customParams && typeof customParams === 'object') {
-      // Use custom parameters provided directly
-      scenarioData = customParams;
-      console.log('Using custom parameters:', scenarioData);
-    } else {
-      // Use scenario from parameter table (defaults to "Default" if not specified)
-      scenarioData = getScenarioData(graphId, scenario || "Default");
-      console.log('Using scenario data:', scenarioData);
-    }
-    
-    var result = runGraphAnalytics(graphData, scenarioData, operation, startNode, endNode);
-    console.log('Analytics result:', result);
-    return result;
-    
-  } catch (e) {
-    console.log('GraphCalc error:', e);
-    return "Error: " + e.message;
-  }
-}
-
-/**
- * Get current scenario data for a graph
- */
-function getCurrentScenarioData(graphId) {
-  try {
-    var sheet = SpreadsheetApp.getActiveSheet();
-    var graphCell = findGraphCellByGraphId(sheet, graphId);
-    
-    if (!graphCell) {
-      return {};
-    }
-    
-    var namedRangeName = getNamedRangeFromGraphCell(graphCell);
-    if (!namedRangeName) {
-      return {};
-    }
-    
-    var spreadsheet = sheet.getParent();
-    var namedRange = spreadsheet.getRangeByName(namedRangeName);
-    
-    if (!namedRange) {
-      return {};
-    }
-    
-    var range = namedRange.getRange();
-    var params = {};
-    
-    // Get parameter values from Default column (column 2)
-    for (var i = 2; i <= range.getNumRows(); i++) {
-      var paramName = range.getRange(i, 1).getValue();
-      var paramValue = range.getRange(i, 2).getValue();
-      if (paramName && paramValue !== '') {
-        params[paramName] = paramValue;
-      }
-    }
-    
-    return params;
-  } catch (e) {
-    console.log('Error getting scenario data:', e);
-    return {};
-  }
-}
-
-/**
- * Get scenario data for a specific graph and scenario
- */
-function getScenarioData(graphId, scenarioName) {
-  try {
-    var sheet = SpreadsheetApp.getActiveSheet();
-    var graphCell = findGraphCellByGraphId(sheet, graphId);
-    
-    if (!graphCell) {
-      return {};
-    }
-    
-    var namedRangeName = getNamedRangeFromGraphCell(graphCell);
-    if (!namedRangeName) {
-      return {};
-    }
-    
-    var spreadsheet = sheet.getParent();
-    var namedRange = spreadsheet.getRangeByName(namedRangeName);
-    
-    if (!namedRange) {
-      return {};
-    }
-    
-    var range = namedRange.getRange();
-    var paramData = range.getValues();
-    
-    if (paramData.length < 2) {
-      return {}; // No parameters
-    }
-    
-    // Find the scenario column
-    var headerRow = paramData[0];
-    var scenarioColIndex = -1;
-    
-    for (var i = 0; i < headerRow.length; i++) {
-      if (headerRow[i] === scenarioName) {
-        scenarioColIndex = i;
-        break;
-      }
-    }
-    
-    if (scenarioColIndex === -1) {
-      // Scenario not found, try "Default"
-      for (var i = 0; i < headerRow.length; i++) {
-        if (headerRow[i] === "Default") {
-          scenarioColIndex = i;
-          break;
-        }
-      }
-    }
-    
-    if (scenarioColIndex === -1) {
-      return {}; // No valid scenario found
-    }
-    
-    // Extract parameter values for this scenario
-    var scenarioData = {};
-    for (var i = 1; i < paramData.length; i++) {
-      var paramName = paramData[i][0]; // Parameter name in first column
-      var paramValue = paramData[i][scenarioColIndex]; // Value in scenario column
-      
-      if (paramName && paramValue !== "") {
-        scenarioData[paramName] = paramValue;
-      }
-    }
-    
-    return scenarioData;
-  } catch (e) {
-    console.log('Error getting scenario data:', e);
-    return {};
-  }
-}
-
-/**
- * Find graph cell by graph ID
- */
-function findGraphCellByGraphId(sheet, graphId) {
-  try {
-    var dataRange = sheet.getDataRange();
-    var notes = dataRange.getNotes();
-    
-    for (var i = 0; i < notes.length; i++) {
-      for (var j = 0; j < notes[i].length; j++) {
-        var note = notes[i][j];
-        if (note && note.includes('DAGNET_GRAPH:' + graphId)) {
-          return sheet.getRange(i + 1, j + 1);
-        }
-      }
-    }
-    return null;
-  } catch (e) {
-    console.log('Error finding graph cell:', e);
-    return null;
-  }
-}
-
-/**
- * Run the actual analytics calculation
- */
-function runGraphAnalytics(graphData, scenarioData, operation, startNode, endNode) {
-  try {
-    // Apply parameter values to graph
-    var graphWithParams = applyParametersToGraph(graphData, scenarioData);
-    
-    // Run the specified operation
-    switch (operation.toLowerCase()) {
-      case 'probability':
-        return calculateProbability(graphWithParams, startNode, endNode);
-      case 'cost':
-        return calculateCost(graphWithParams, startNode, endNode);
-      case 'time':
-        return calculateTime(graphWithParams, startNode, endNode);
-      default:
-        return "Unknown operation: " + operation;
-    }
-  } catch (e) {
-    return "Error in analytics: " + e.message;
-  }
-}
-
-/**
- * Apply parameter values to graph
- */
-function applyParametersToGraph(graphData, scenarioData) {
-  try {
-    // Create a copy of the graph data
-    var graphWithParams = JSON.parse(JSON.stringify(graphData));
-    
-    // Apply parameters to nodes
-    if (graphWithParams.nodes) {
-      graphWithParams.nodes.forEach(function(node, nodeIndex) {
-        // Apply entry_weight parameter
-        var entryWeightParam = node.slug + '.entry_weight';
-        if (scenarioData[entryWeightParam] !== undefined && node.entry) {
-          node.entry.entry_weight = scenarioData[entryWeightParam];
-        }
-        
-        // Apply node costs
-        if (node.costs) {
-          for (var costType in node.costs) {
-            var costParam = node.slug + '.costs.' + costType;
-            if (scenarioData[costParam] !== undefined) {
-              node.costs[costType] = scenarioData[costParam];
-            }
-          }
-        }
-      });
-    }
-    
-    // Apply parameters to edges
-    if (graphWithParams.edges) {
-      graphWithParams.edges.forEach(function(edge, edgeIndex) {
-        // Apply probability parameters
-        var probParam = 'edge_' + edgeIndex + '.p.mean';
-        if (scenarioData[probParam] !== undefined) {
-          if (!edge.p) edge.p = {};
-          edge.p.mean = scenarioData[probParam];
-        }
-        
-        // Apply cost parameters
-        if (edge.costs) {
-          for (var costType in edge.costs) {
-            var costParam = 'edge_' + edgeIndex + '.costs.' + costType;
-            if (scenarioData[costParam] !== undefined) {
-              edge.costs[costType] = scenarioData[costParam];
-            }
-          }
-        }
-      });
-    }
-    
-    return graphWithParams;
-  } catch (e) {
-    console.log('Error applying parameters:', e);
-    return graphData;
-  }
-}
-
-/**
- * Calculate probability from start to end
- */
-function calculateProbability(graphData, startNode, endNode) {
-  try {
-    // DEBUG: Log the graph data and parameters
-    console.log('calculateProbability called with:', {
-      startNode: startNode,
-      endNode: endNode,
-      nodes: graphData.nodes ? graphData.nodes.length : 0,
-      edges: graphData.edges ? graphData.edges.length : 0
-    });
-    
-    // Find all paths from startNode to endNode and calculate total probability
-    var totalProbability = 0;
-    var visited = {};
-    
-    function findPaths(currentNode, currentProbability, path) {
-      if (visited[currentNode]) return; // Avoid cycles
-      visited[currentNode] = true;
-      
-      // If we reached the end node, add to total probability
-      if (currentNode === endNode) {
-        totalProbability += currentProbability;
-        return;
-      }
-      
-      // Find all outgoing edges from current node
-      var outgoingEdges = graphData.edges.filter(function(edge) {
-        return edge.from === currentNode;
-      });
-      
-      // If no outgoing edges and not at end node, this path leads nowhere
-      if (outgoingEdges.length === 0) {
-        return;
-      }
-      
-      // Follow each outgoing edge
-      outgoingEdges.forEach(function(edge) {
-        var edgeProbability = edge.p ? edge.p.mean : 0;
-        var newProbability = currentProbability * edgeProbability;
-        var newPath = path.concat([edge.to]);
-        
-        // Recursively explore from the target node
-        findPaths(edge.to, newProbability, newPath);
-      });
-      
-      visited[currentNode] = false; // Reset for other paths
-    }
-    
-    // Handle special cases for endNode
-    if (endNode === 'anySuccess') {
-      // Find all success nodes and calculate probability to each
-      var successNodes = graphData.nodes.filter(function(node) {
-        return node.outcome_type === 'success';
-      });
-      
-      successNodes.forEach(function(successNode) {
-        findPaths(startNode, 1, [startNode]);
-      });
-    } else if (endNode === 'anyFailure') {
-      // Find all failure nodes and calculate probability to each
-      var failureNodes = graphData.nodes.filter(function(node) {
-        return node.outcome_type === 'failure';
-      });
-      
-      failureNodes.forEach(function(failureNode) {
-        findPaths(startNode, 1, [startNode]);
-      });
-    } else {
-      // Specific end node
-      findPaths(startNode, 1, [startNode]);
-    }
-    
-    return totalProbability;
-  } catch (e) {
-    return "Error calculating probability: " + e.message;
-  }
-}
-
-/**
- * Calculate cost from start to end
- */
-function calculateCost(graphData, startNode, endNode) {
-  try {
-    var totalCost = 0;
-    var totalProbability = 0;
-    var visited = {};
-    
-    function findPathsWithCost(currentNode, currentProbability, currentCost, path) {
-      if (visited[currentNode]) return; // Avoid cycles
-      visited[currentNode] = true;
-      
-      // If we reached the end node, add weighted cost
-      if (currentNode === endNode) {
-        totalCost += currentCost * currentProbability;
-        totalProbability += currentProbability;
-        return;
-      }
-      
-      // Find all outgoing edges from current node
-      var outgoingEdges = graphData.edges.filter(function(edge) {
-        return edge.from === currentNode;
-      });
-      
-      // If no outgoing edges and not at end node, this path leads nowhere
-      if (outgoingEdges.length === 0) {
-        return;
-      }
-      
-      // Follow each outgoing edge
-      outgoingEdges.forEach(function(edge) {
-        var edgeProbability = edge.p ? edge.p.mean : 0;
-        var edgeCost = edge.costs ? (edge.costs.monetary || 0) : 0;
-        var newProbability = currentProbability * edgeProbability;
-        var newCost = currentCost + edgeCost;
-        var newPath = path.concat([edge.to]);
-        
-        // Recursively explore from the target node
-        findPathsWithCost(edge.to, newProbability, newCost, newPath);
-      });
-      
-      visited[currentNode] = false; // Reset for other paths
-    }
-    
-    // Handle special cases for endNode
-    if (endNode === 'anySuccess') {
-      var successNodes = graphData.nodes.filter(function(node) {
-        return node.outcome_type === 'success';
-      });
-      
-      successNodes.forEach(function(successNode) {
-        findPathsWithCost(startNode, 1, 0, [startNode]);
-      });
-    } else if (endNode === 'anyFailure') {
-      var failureNodes = graphData.nodes.filter(function(node) {
-        return node.outcome_type === 'failure';
-      });
-      
-      failureNodes.forEach(function(failureNode) {
-        findPathsWithCost(startNode, 1, 0, [startNode]);
-      });
-    } else {
-      findPathsWithCost(startNode, 1, 0, [startNode]);
-    }
-    
-    // Return weighted average cost
-    return totalProbability > 0 ? totalCost / totalProbability : 0;
-  } catch (e) {
-    return "Error calculating cost: " + e.message;
-  }
-}
-
-/**
- * Calculate time from start to end
- */
-function calculateTime(graphData, startNode, endNode) {
-  try {
-    // This is a placeholder implementation
-    // In a real implementation, this would:
-    // 1. Parse the graph structure
-    // 2. Find all paths from startNode to endNode
-    // 3. Calculate time for each path
-    // 4. Return minimum time or expected time
-    
-    // For now, return a placeholder value
-    return 45.0;
-  } catch (e) {
-    return "Error calculating time: " + e.message;
-  }
-}
-
-/**
- * Update parameter table with intelligent scenario management
- */
-function updateParameterTableWithScenarios(namedRange, newParams) {
-  try {
-    var sheet = namedRange.getSheet();
-    var currentRange = namedRange.getRange();
-    var currentRows = currentRange.getNumRows();
-    var currentCols = currentRange.getNumColumns();
-    var startRow = currentRange.getRow();
-    var startCol = currentRange.getColumn();
-    
-    // Get current parameter names and values
-    var currentParams = {};
-    for (var i = 2; i <= currentRows; i++) {
-      var paramName = currentRange.getRange(i, 1).getValue();
-      if (paramName) {
-        currentParams[paramName] = {
-          row: i,
-          values: {}
-        };
-        // Get values from all scenarios
-        for (var j = 2; j <= currentCols; j++) {
-          var scenarioName = currentRange.getRange(1, j).getValue();
-          var value = currentRange.getRange(i, j).getValue();
-          currentParams[paramName].values[scenarioName] = value;
-        }
-      }
-    }
-    
-    // Calculate new dimensions
-    var newParamCount = newParams.length;
-    var newRows = Math.max(newParamCount + 1, 2); // +1 for header, minimum 2 rows
-    var newCols = Math.max(currentCols, 2); // Keep existing scenarios, minimum 2 columns
-    
-    // Create new range
-    var newRange = sheet.getRange(startRow, startCol, newRows, newCols);
-    
-    // Remove old named range and create new one
-    var namedRanges = spreadsheet.getNamedRanges();
-    for (var i = 0; i < namedRanges.length; i++) {
-      if (namedRanges[i].getName() === namedRangeName) {
-        namedRanges[i].remove();
-        break;
-      }
-    }
-    spreadsheet.setNamedRange(namedRangeName, newRange);
-    
-    // Clear and rebuild the table
-    newRange.clearContent();
-    
-    if (newParamCount === 0) {
-      // No parameters found
-      newRange.getRange(1, 1).setValue('No parameters found');
-      newRange.getRange(1, 1).setBackground('#f0f0f0');
-    } else {
-      // Add headers
-      newRange.getRange(1, 1).setValue('Parameter Name');
-      newRange.getRange(1, 2).setValue('Default');
-      
-      // Add scenario headers for existing scenarios
-      for (var j = 3; j <= newCols; j++) {
-        var scenarioName = 'Scenario ' + (j - 1);
-        newRange.getRange(1, j).setValue(scenarioName);
-      }
-      
-      // Style headers
-      var headerRange = newRange.getRange(1, 1, 1, newCols);
-      headerRange.setFontWeight('bold');
-      headerRange.setBackground('#e8f4fd');
-      headerRange.setBorder(true, true, true, true, true, true);
-      
-      // Add parameter data
-      newParams.forEach(function(param, index) {
-        var dataRow = index + 2; // +2 because headers are in row 1
-        newRange.getRange(dataRow, 1).setValue(param.name);
-        
-        // Set Default column value (new or updated)
-        newRange.getRange(dataRow, 2).setValue(param.value);
-        
-        // Handle existing scenarios
-        if (currentParams[param.name]) {
-          // Parameter exists - preserve scenario values
-          for (var j = 3; j <= newCols; j++) {
-            var scenarioName = 'Scenario ' + (j - 1);
-            var existingValue = currentParams[param.name].values[scenarioName];
-            if (existingValue !== undefined) {
-              newRange.getRange(dataRow, j).setValue(existingValue);
-            } else {
-              // New scenario - copy from Default
-              newRange.getRange(dataRow, j).setValue(param.value);
-            }
-          }
-        } else {
-          // New parameter - copy Default value to all scenarios
-          for (var j = 3; j <= newCols; j++) {
-            newRange.getRange(dataRow, j).setValue(param.value);
-          }
-        }
-      });
-      
-      // Add rows for removed parameters (marked as deleted)
-      var removedParams = [];
-      for (var paramName in currentParams) {
-        var stillExists = newParams.some(function(p) { return p.name === paramName; });
-        if (!stillExists) {
-          removedParams.push(paramName);
-        }
-      }
-      
-      if (removedParams.length > 0) {
-        var startRow = newParamCount + 2;
-        removedParams.forEach(function(paramName, index) {
-          var dataRow = startRow + index;
-          newRange.getRange(dataRow, 1).setValue(paramName + ' (REMOVED)');
-          newRange.getRange(dataRow, 1).setFontStyle('italic');
-          newRange.getRange(dataRow, 1).setBackground('#ffebee');
-          
-          // Show values from all scenarios
-          for (var j = 2; j <= newCols; j++) {
-            var value = currentParams[paramName].values[newRange.getRange(1, j).getValue()];
-            if (value !== undefined) {
-              newRange.getRange(dataRow, j).setValue(value);
-              newRange.getRange(dataRow, j).setFontStyle('italic');
-              newRange.getRange(dataRow, j).setBackground('#ffebee');
-            }
-          }
-        });
-      }
-      
-      // Style all data rows
-      var totalRows = newParamCount + removedParams.length;
-      var dataRange = newRange.getRange(2, 1, totalRows, newCols);
-      dataRange.setBorder(true, true, true, true, true, true);
-    }
-    
-  } catch (e) {
-    console.log('Error updating parameter table with scenarios:', e);
-    SpreadsheetApp.getUi().alert('Error updating parameter table: ' + e.message);
-  }
-}
-
-/**
- * Get named range name from graph cell notes
- */
-function getNamedRangeFromGraphCell(cell) {
-  try {
-    var note = cell.getNote();
-    if (note && note.includes('|NAMED_RANGE:')) {
-      var parts = note.split('|NAMED_RANGE:');
-      if (parts.length > 1) {
-        return parts[1];
-      }
-    }
-    return null;
-  } catch (e) {
-    console.log('Error getting named range from graph cell:', e);
-    return null;
-  }
-}
-
-/**
- * Find graph info from a cell that might be within a named range
- */
-function findGraphFromNamedRange(cell) {
-  try {
-    var sheet = cell.getSheet();
-    var spreadsheet = sheet.getParent();
-    var cellA1 = cell.getA1Notation();
-    
-    // Get all named ranges
-    var namedRanges = spreadsheet.getNamedRanges();
-    
-    for (var i = 0; i < namedRanges.length; i++) {
-      var namedRange = namedRanges[i];
-      var range = namedRange.getRange();
-      
-      // Check if the selected cell is within this named range
-      if (range.getSheet().getName() === sheet.getName()) {
-        var rangeA1 = range.getA1Notation();
-        var rangeStart = range.getRow();
-        var rangeEnd = rangeStart + range.getNumRows() - 1;
-        var rangeColStart = range.getColumn();
-        var rangeColEnd = rangeColStart + range.getNumColumns() - 1;
-        
-        var cellRow = cell.getRow();
-        var cellCol = cell.getColumn();
-        
-        if (cellRow >= rangeStart && cellRow <= rangeEnd && 
-            cellCol >= rangeColStart && cellCol <= rangeColEnd) {
-          
-          // This cell is within the named range
-          // Now find the graph cell that references this named range
-          var graphCell = findGraphCellByNamedRange(sheet, namedRange.getName());
-          if (graphCell) {
-            return {
-              cell: graphCell,
-              note: graphCell.getNote(),
-              namedRange: namedRange.getName()
-            };
-          }
-        }
-      }
-    }
-    
-    return null;
-  } catch (e) {
-    console.log('Error finding graph from named range:', e);
-    return null;
-  }
-}
-
-/**
- * Find graph cell that references a specific named range
- */
-function findGraphCellByNamedRange(sheet, namedRangeName) {
-  try {
-    var range = sheet.getDataRange();
-    var values = range.getValues();
-    
-    // Extract graph ID from named range name (format: GraphParams_graph_xxxxx)
-    var graphIdMatch = namedRangeName.match(/GraphParams_(graph_\w+)/);
-    if (!graphIdMatch) {
-      return null;
-    }
-    var targetGraphId = graphIdMatch[1];
-    
-    // Search for cell with matching graph:// protocol
-    for (var i = 0; i < values.length; i++) {
-      for (var j = 0; j < values[i].length; j++) {
-        var cellValue = values[i][j];
-        if (cellValue && cellValue.toString().startsWith('graph://')) {
-          var graphId = cellValue.toString().replace('graph://', '').split('?')[0];
-          if (graphId === targetGraphId) {
-            return sheet.getRange(i + 1, j + 1);
-          }
-        }
-      }
-    }
-    
-    return null;
-  } catch (e) {
-    console.log('Error finding graph cell by named range:', e);
-    return null;
-  }
-}
-
-/**
- * Show history for a specific graph
- */
-function showHistoryForGraph(graphId) {
-  const historySheet = getOrCreateHistorySheet();
-  const data = historySheet.getDataRange().getValues();
-  const graphHistory = [];
-  
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][4] === graphId) { // Column E (Graph ID)
-      graphHistory.push({
-        timestamp: data[i][0],
-        user: data[i][1], 
-        narrative: data[i][2]
-      });
-    }
-  }
-  
-  if (graphHistory.length === 0) {
-    SpreadsheetApp.getUi().alert('No history found for graph: ' + graphId);
-    return;
-  }
-  
-  let historyText = 'History for ' + graphId + ':\n\n';
-  graphHistory.forEach(function(entry, index) {
-    historyText += (index + 1) + '. ' + entry.timestamp + ' - ' + entry.user + '\n';
-    historyText += '   ' + entry.narrative + '\n\n';
-  });
-  
-  SpreadsheetApp.getUi().alert(historyText);
-}
-
-/**
- * Web app GET endpoint for simple roundtrip tests.
- * Expects: sessionId, sheetId, outputCell, graphData
- */
-function doGet(e) {
-  try {
-    var p = (e && e.parameter) || {};
-    
-    // Health check - just return success without touching any data
-    if (p.healthcheck) {
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Health check OK' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    var sheetId = p.sheetId;
-    var outputCell = p.outputCell;
-    var graphData = p.graphData;
-    if (!sheetId || !outputCell || !graphData) {
-			return ContentService.createTextOutput(JSON.stringify({ success:false, error:'Missing parameters', received:p }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    var sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
-    var cell = sheet.getRange(outputCell);
-    var jsonString = typeof graphData === 'string' ? graphData : JSON.stringify(graphData);
-    try { jsonString = JSON.stringify(JSON.parse(jsonString), null, 2); } catch (ignore) {}
-    
-    // Store in history and create pointer (same as doPost)
-    var historySheet = getOrCreateHistorySheet();
-    var narrative = 'Graph updated via Dagnet (GET)';
-    
-    // Extract narrative from graph metadata if available
-    try {
-      var graph = JSON.parse(jsonString);
-      if (graph.metadata && graph.metadata.narrative) {
-        narrative = graph.metadata.narrative;
-      }
-    } catch (e) {}
-    
-    // Add to history
-    var newGraphId = addHistoryEntry(historySheet, null, JSON.parse(jsonString), narrative);
-    
-    // Update cell to use graph:// protocol
-    cell.setValue('graph://' + newGraphId);
-		return ContentService.createTextOutput(JSON.stringify({ success:true, message:'Cell updated via GET', received:p }))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ success:false, error:String(err && err.message || err) }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
 }
 
 /**
@@ -2372,7 +306,7 @@ function doPost(e) {
     var graphData = body.graphData;
 
     if (!sheetId || !outputCell || !graphData) {
-			return ContentService.createTextOutput(JSON.stringify({ success:false, error:'Missing fields', received:body }))
+      return ContentService.createTextOutput(JSON.stringify({ success:false, error:'Missing fields', received:body }))
         .setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -2384,7 +318,7 @@ function doPost(e) {
     // Simply update the cell with the returned JSON
     cell.setValue(jsonString);
 
-		return ContentService.createTextOutput(JSON.stringify({ success:true, received:body }))
+    return ContentService.createTextOutput(JSON.stringify({ success:true, received:body }))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return ContentService.createTextOutput(JSON.stringify({ success:false, error: String(err && err.message || err) }))
@@ -2393,38 +327,972 @@ function doPost(e) {
 }
 
 /**
- * Extract named parameters from graph data
+ * Get current web app URL from script properties
  */
-function extractNamedParameters(graph) {
-  var params = [];
-  if (!graph) return params;
-  
-  // Extract from nodes
-  if (graph.nodes) {
-    graph.nodes.forEach(function(node, idx) {
-      // Extract entry_weight
-      if (node.entry && node.entry.entry_weight !== undefined) {
-        params.push({ name: node.slug + '.entry_weight', value: node.entry.entry_weight });
+function getCurrentWebAppUrl() {
+  return PropertiesService.getScriptProperties().getProperty('DAGNET_WEB_APP_URL');
+}
+
+/**
+ * Set web app URL in script properties
+ */
+function setWebAppUrl(url) {
+  PropertiesService.getScriptProperties().setProperty('DAGNET_WEB_APP_URL', url);
+  SpreadsheetApp.getUi().alert('Stored web app URL: ' + url + '\n\nRun Initialize to verify.');
+}
+
+/**
+ * Test if web app URL is working
+ */
+function testWebAppUrl(url) {
+  try {
+    var response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      muteHttpExceptions: true
+    });
+    return { success: response.getResponseCode() === 200, status: response.getResponseCode() };
+  } catch (e) {
+    return { success: false, status: 'error' };
+  }
+}
+
+/**
+ * Normalize web app URL format
+ */
+function normalizeWebAppUrl(url) {
+  // Convert from Google Apps Script format to standard format
+  var m = url.match(/^https:\/\/script\.google\.com\/a\/[^/]+\/macros\/s\/([^/]+)\/exec$/);
+  return m ? ('https://script.google.com/macros/s/' + m[1] + '/exec') : url;
+}
+
+/**
+ * ParamsTable function - builds JSON dictionary from parameter table
+ * Usage: =ParamsTable(A1:C3, 'Scenario 2')
+ * Table format: param names in first column, scenario names in first row
+ * Returns JSON string with parameter values for the specified scenario
+ */
+/**
+ * dagParamsFromTable function - builds JSON dictionary from a parameter table
+ * @param {string} tableRange - Range containing parameter table (e.g., "A1:C3")
+ * @param {string} scenarioName - Name of scenario column to extract
+ * @returns {string} JSON string with parameter dictionary
+ * @customfunction
+ */
+function dagParamsFromTable(tableRange, scenarioName) {
+  try {
+    // tableRange is already a 2D array of values from the range
+    var values = tableRange;
+      
+    // Find scenario column
+    var scenarioColumn = -1;
+    for (var col = 0; col < values[0].length; col++) {
+      if (values[0][col] == scenarioName) {
+        scenarioColumn = col;
+        break;
       }
+    }
+    
+    if (scenarioColumn === -1) {
+      return "Error: Scenario not found";
+    }
+    
+    // Build parameter dictionary
+    var params = {};
+    for (var row = 1; row < values.length; row++) {
+      var paramName = values[row][0];
+      var paramValue = values[row][scenarioColumn];
+      
+      if (paramName && paramName.toString().trim() !== '') {
+        params[paramName.toString().trim()] = paramValue;
+      }
+    }
+    
+    return JSON.stringify(params);
+  } catch (e) {
+    return "Error: " + e.message;
+  }
+}
+
+/**
+ * GetParamTable function - extracts parameters from a graph and returns multi-row/column result
+ * Usage: 
+ *   =GetParamTable(M1) - extracts all interesting parameters from graph in M1 (smart filtering)
+ *   =GetParamTable(M1, NODES) - extracts only node parameters
+ *   =GetParamTable(M1, EDGES) - extracts only edge parameters  
+ *   =GetParamTable(M1, GLOBAL) - extracts only global parameters
+ *   =GetParamTable(M1, "probability") - extracts only parameters containing "probability"
+ *   =GetParamTable(M1, null, true) - extracts ALL parameters (overrides smart filtering)
+ *   =GetParamTable(M1, NODES, true) - extracts ALL node parameters (including defaults)
+ * Returns: Multi-row/column array with param names in first column, values in second column
+ * Use as array formula: =GetParamTable(M1) in F1, then it fills F2:Fn with param names, G2:Gn with values
+ */
+/**
+ * dagGetParamTable function - extracts parameters from a graph into a table
+ * @param {string} input - Cell reference or JSON string containing graph
+ * @param {string} [filter] - Filter type: "nodes", "edges", "global", or search string
+ * @param {boolean} [includeAll] - If true, includes all parameters (overrides smart filtering)
+ * @returns {Array<Array>} Multi-row array with parameter names and values
+ * @customfunction
+ */
+function dagGetParamTable(input, filter, includeAll) {
+  try {
+    var graph;
+    
+    // Parse input - the input is the actual cell value, not a cell reference
+    if (input && typeof input === 'string') {
+      try {
+        // Try parsing as JSON first
+        graph = JSON.parse(input);
+      } catch (parseError) {
+        // If that fails, it might be double-encoded, try parsing again
+        try {
+          var decoded = JSON.parse(input);
+          graph = JSON.parse(decoded);
+        } catch (secondParseError) {
+          return [["JSON Parse Error: " + parseError.message + "\nInput: " + input.substring(0, 100) + "..."]];
+        }
+      }
+    } else if (input && typeof input === 'object') {
+      // Already parsed JSON object
+      graph = input;
+    } else {
+      return [["Error: Input must be a cell reference or JSON string"]];
+    }
+    
+    if (!graph || !graph.nodes || !graph.edges) {
+      return [["Error: Invalid graph format"]];
+    }
+    
+    // Extract parameters from graph
+    var params = [];
+    
+    // Helper function to check if parameter should be included
+    function shouldIncludeParam(paramName, paramType) {
+      if (!filter) return true; // No filter = include all
+      
+      // Normalize filter value
+      var filterValue = filter;
+      if (typeof filter === 'function') {
+        filterValue = filter();
+      }
+      
+      // Check for filter constants (both string and constant values)
+      if (filterValue === 'nodes' || filterValue === 'NODES') return paramType === 'node';
+      if (filterValue === 'edges' || filterValue === 'EDGES') return paramType === 'edge';
+      if (filterValue === 'global' || filterValue === 'GLOBAL') return paramType === 'global';
+      
+      // If filter is a string, check if param name contains it
+      if (typeof filterValue === 'string') {
+        return paramName.toLowerCase().includes(filterValue.toLowerCase());
+      }
+      
+      return true;
+    }
+    
+    // Extract parameters in logical order: Global first, then systematic graph traversal
+    var allParams = includeAll ? extractAllParametersInLogicalOrder(graph) : extractParametersInLogicalOrder(graph);
+    
+    // Debug: Log the number of parameters found
+    var filterValue = filter;
+    if (typeof filter === 'function') {
+      filterValue = filter();
+    }
+    console.log('GetParamTable: Found ' + allParams.length + ' parameters, filter=' + filterValue + ', includeAll=' + includeAll);
+    
+    for (var i = 0; i < allParams.length; i++) {
+      var param = allParams[i];
+      if (shouldIncludeParam(param.name, param.type)) {
+        params.push([param.name, param.value]);
+      }
+    }
+    
+    // If no parameters found, return debug info
+    if (params.length === 0) {
+      return [["No parameters found. Debug: " + allParams.length + " total params, filter=" + filterValue + ", includeAll=" + includeAll]];
+    }
+    
+    return params;
+  } catch (e) {
+    return [["Error: " + e.message]];
+  }
+}
+
+/**
+ * GetParam function - extracts a single parameter from a graph or returns graph description
+ * Usage: 
+ *   =GetParam(M1) - returns graph description/metadata
+ *   =GetParam(M1, "start_probability") - returns specific parameter value
+ *   =GetParam(M1, "global_discount") - returns global parameter value
+ * Returns: Single cell value (string, number, or description)
+ */
+/**
+ * dagGetParam function - extracts a single parameter from a graph
+ * @param {string} input - Cell reference or JSON string containing graph
+ * @param {string} [paramName] - Name of parameter to extract (e.g., "n.start.costs.monetary" or "e.edge-slug.p.mean")
+ * @returns {string|number} Parameter value or graph description if no paramName
+ * @customfunction
+ */
+function dagGetParam(input, paramName) {
+  try {
+    var graph;
+    
+    // Parse input - the input is the actual cell value, not a cell reference
+    if (input && typeof input === 'string') {
+      try {
+        // Try parsing as JSON first
+        graph = JSON.parse(input);
+      } catch (parseError) {
+        // If that fails, it might be double-encoded, try parsing again
+        try {
+          var decoded = JSON.parse(input);
+          graph = JSON.parse(decoded);
+        } catch (secondParseError) {
+          return "JSON Parse Error: " + parseError.message + "\nInput: " + input.substring(0, 100) + "...";
+        }
+      }
+    } else if (input && typeof input === 'object') {
+      // Already parsed JSON object
+      graph = input;
+    } else {
+      return "Error: Input must be a cell reference or JSON string";
+    }
+    
+    if (!graph || !graph.nodes || !graph.edges) {
+      return "Error: Invalid graph format";
+    }
+    
+    // If no parameter specified, return graph description
+    if (!paramName) {
+      var description = "Graph with " + graph.nodes.length + " nodes and " + graph.edges.length + " edges";
+      if (graph.metadata && graph.metadata.title) {
+        description = graph.metadata.title + " - " + description;
+      }
+      if (graph.metadata && graph.metadata.description) {
+        description += "\n" + graph.metadata.description;
+      }
+      return description;
+    }
+    
+    // Search for the specific parameter
+    return getSpecificParameter(graph, paramName);
+  } catch (e) {
+    return "Error: " + e.message;
+  }
+}
+
+
+// Get a specific parameter value
+function getSpecificParameter(graph, paramName) {
+  // Search in global parameters first
+  if (graph.metadata && graph.metadata.parameters) {
+    for (var key in graph.metadata.parameters) {
+      var fullParamName = 'G:' + key;
+      if (fullParamName === paramName) {
+        return graph.metadata.parameters[key];
+      }
+    }
+  }
+  
+  // Search in nodes
+  if (graph.nodes) {
+    for (var i = 0; i < graph.nodes.length; i++) {
+      var node = graph.nodes[i];
+      var nodeParams = flattenNodeParameters(node);
+      for (var j = 0; j < nodeParams.length; j++) {
+        if (nodeParams[j].name === paramName) {
+          return nodeParams[j].value;
+        }
+      }
+    }
+  }
+  
+  // Search in edges
+  if (graph.edges) {
+    for (var i = 0; i < graph.edges.length; i++) {
+      var edge = graph.edges[i];
+      var edgeParams = flattenEdgeParameters(edge, graph);
+      for (var j = 0; j < edgeParams.length; j++) {
+        if (edgeParams[j].name === paramName) {
+          return edgeParams[j].value;
+        }
+      }
+    }
+  }
+  
+  return "Parameter '" + paramName + "' not found";
+}
+
+
+// Flatten node parameters
+function flattenNodeParameters(node) {
+  var params = [];
+  var nodeIdentifier = node.slug || node.id;
+  
+  // Handle entry parameters
+  if (node.entry) {
+    for (var key in node.entry) {
+      if (key === 'entry_weight' && node.entry[key] !== 1) { // Only include non-default
+        params.push({
+          name: 'n.' + nodeIdentifier + '.' + key,
+          value: node.entry[key]
+        });
+      }
+    }
+  }
+  
+  // Handle costs parameters
+  if (node.costs) {
+    for (var key in node.costs) {
+      if (node.costs[key] > 0) { // Only include non-zero costs
+        params.push({
+          name: 'n.' + nodeIdentifier + '.costs.' + key,
+          value: node.costs[key]
+        });
+      }
+    }
+  }
+  
+  // Handle case node information (NEW)
+  if (node.type === 'case' && node.case) {
+    if (node.case.id) {
+      params.push({
+        name: 'n.' + nodeIdentifier + '.case.id',
+        value: node.case.id
+      });
+    }
+    if (node.case.variants && node.case.variants.length > 0) {
+      params.push({
+        name: 'n.' + nodeIdentifier + '.case.variants',
+        value: node.case.variants.join(',')
+      });
+    }
+  }
+  
+  return params;
+}
+
+// Flatten edge parameters
+function flattenEdgeParameters(edge, graph) {
+  var params = [];
+  var edgeIdentifier = edge.slug || edge.id;
+  
+  // Handle probability parameters
+  if (edge.p) {
+    if (edge.p.mean !== undefined) { // Always include p_mean (including 0.5)
+      params.push({
+        name: 'e.' + edgeIdentifier + '.p.mean',
+        value: edge.p.mean
+      });
+    }
+    if (edge.p.stdev !== undefined && edge.p.stdev > 0) { // Only include if present and > 0
+      params.push({
+        name: 'e.' + edgeIdentifier + '.p.stdev',
+        value: edge.p.stdev
+      });
+    }
+    if (edge.p.locked !== undefined && edge.p.locked !== false) { // Only include if locked
+      params.push({
+        name: 'e.' + edgeIdentifier + '.p.locked',
+        value: edge.p.locked
+      });
+    }
+  }
+  
+  // Handle costs parameters (new structure)
+  if (edge.costs) {
+    // Handle monetary costs
+    if (edge.costs.monetary) {
+      if (typeof edge.costs.monetary === 'object' && edge.costs.monetary.value > 0) {
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.monetary.value',
+          value: edge.costs.monetary.value
+        });
+        if (edge.costs.monetary.stdev && edge.costs.monetary.stdev > 0) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.stdev',
+            value: edge.costs.monetary.stdev
+          });
+        }
+        if (edge.costs.monetary.currency && edge.costs.monetary.currency !== 'GBP') {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.currency',
+            value: edge.costs.monetary.currency
+          });
+        }
+        if (edge.costs.monetary.distribution && edge.costs.monetary.distribution !== 'normal') {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.distribution',
+            value: edge.costs.monetary.distribution
+          });
+        }
+      } else if (typeof edge.costs.monetary === 'number' && edge.costs.monetary > 0) {
+        // Backward compatibility with old structure
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.monetary',
+          value: edge.costs.monetary
+        });
+      }
+    }
+    
+    // Handle time costs
+    if (edge.costs.time) {
+      if (typeof edge.costs.time === 'object' && edge.costs.time.value > 0) {
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.time.value',
+          value: edge.costs.time.value
+        });
+        if (edge.costs.time.stdev && edge.costs.time.stdev > 0) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.stdev',
+            value: edge.costs.time.stdev
+          });
+        }
+        if (edge.costs.time.units && edge.costs.time.units !== 'days') {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.units',
+            value: edge.costs.time.units
+          });
+        }
+        if (edge.costs.time.distribution && edge.costs.time.distribution !== 'lognormal') {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.distribution',
+            value: edge.costs.time.distribution
+          });
+        }
+      } else if (typeof edge.costs.time === 'number' && edge.costs.time > 0) {
+        // Backward compatibility with old structure
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.time',
+          value: edge.costs.time
+        });
+      }
+    }
+  }
+  
+  // Handle conditional probabilities (NEW)
+  if (edge.conditional_p && edge.conditional_p.length > 0) {
+    for (var i = 0; i < edge.conditional_p.length; i++) {
+      var conditionalProb = edge.conditional_p[i];
+      if (conditionalProb.condition && conditionalProb.condition.visited && conditionalProb.condition.visited.length > 0) {
+        // Get node slugs for the visited condition - resolve node IDs to slugs
+        var nodeSlugs = [];
+        for (var j = 0; j < conditionalProb.condition.visited.length; j++) {
+          var nodeId = conditionalProb.condition.visited[j];
+          var nodeSlug = nodeId; // Default to ID
+          
+          // Try to find the node and get its slug
+          if (graph && graph.nodes) {
+            for (var k = 0; k < graph.nodes.length; k++) {
+              if (graph.nodes[k].id === nodeId) {
+                nodeSlug = graph.nodes[k].slug || nodeId;
+                break;
+              }
+            }
+          }
+          nodeSlugs.push(nodeSlug);
+        }
+        
+        // Sort and join node slugs for canonical naming
+        var nodeSlugStr = nodeSlugs.sort().join(',');
+        
+        // Add conditional probability parameters with canonical naming
+        if (conditionalProb.p && conditionalProb.p.mean !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.visited(' + nodeSlugStr + ').p.mean',
+            value: conditionalProb.p.mean
+          });
+        }
+        if (conditionalProb.p && conditionalProb.p.stdev !== undefined && conditionalProb.p.stdev > 0) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.visited(' + nodeSlugStr + ').p.stdev',
+            value: conditionalProb.p.stdev
+          });
+        }
+      }
+    }
+  }
+  
+  // Handle case variant information
+  if (edge.case_id && edge.case_variant) {
+    params.push({
+      name: 'e.' + edgeIdentifier + '.case_id',
+      value: edge.case_id
+    });
+    params.push({
+      name: 'e.' + edgeIdentifier + '.case_variant',
+      value: edge.case_variant
     });
   }
   
-  // Extract from edges
-  if (graph.edges) {
-    graph.edges.forEach(function(edge, idx) {
-      var edgeLabel = 'edge_' + idx;
-      
-      // Extract p.mean (probability)
-      if (edge.p && edge.p.mean !== undefined) {
-        params.push({ name: edgeLabel + '.p.mean', value: edge.p.mean });
+  // Handle weight_default
+  if (edge.weight_default !== undefined && edge.weight_default > 0) {
+    params.push({
+      name: 'e.' + edgeIdentifier + '.weight_default',
+      value: edge.weight_default
+    });
+  }
+  
+  return params;
+}
+
+// Extract parameters in logical order: Global first, then systematic graph traversal
+function extractParametersInLogicalOrder(graph) {
+  var params = [];
+  
+  // 1. Global parameters first
+  if (graph.metadata && graph.metadata.parameters) {
+    for (var key in graph.metadata.parameters) {
+      params.push({
+        name: 'G:' + key,
+        value: graph.metadata.parameters[key],
+        type: 'global'
+      });
+    }
+  }
+  
+  // 2. Find entry nodes (nodes with entry.is_start = true)
+  var entryNodes = [];
+  if (graph.nodes) {
+    for (var i = 0; i < graph.nodes.length; i++) {
+      var node = graph.nodes[i];
+      if (node.entry && node.entry.is_start) {
+        entryNodes.push(node);
       }
-      
-      // Extract costs
-      if (edge.costs) {
-        Object.keys(edge.costs).forEach(function(costType) {
-          params.push({ name: edgeLabel + '.costs.' + costType, value: edge.costs[costType] });
+    }
+  }
+  
+  // 3. If no entry nodes found, use first node
+  if (entryNodes.length === 0 && graph.nodes && graph.nodes.length > 0) {
+    entryNodes.push(graph.nodes[0]);
+  }
+  
+  // 4. Traverse graph systematically from entry nodes
+  var visitedNodes = new Set();
+  var visitedEdges = new Set();
+  
+  function traverseFromNode(node) {
+    if (visitedNodes.has(node.id)) return;
+    visitedNodes.add(node.id);
+    
+    // Extract node parameters
+    var nodeParams = flattenNodeParameters(node);
+    for (var i = 0; i < nodeParams.length; i++) {
+      params.push({
+        name: nodeParams[i].name,
+        value: nodeParams[i].value,
+        type: 'node'
+      });
+    }
+    
+    // Find outgoing edges from this node
+    if (graph.edges) {
+      for (var i = 0; i < graph.edges.length; i++) {
+        var edge = graph.edges[i];
+        if (edge.from === node.id || edge.from === node.slug) {
+          if (!visitedEdges.has(edge.id)) {
+            visitedEdges.add(edge.id);
+            
+            // Extract edge parameters
+            var edgeParams = flattenEdgeParameters(edge, graph);
+            for (var j = 0; j < edgeParams.length; j++) {
+              params.push({
+                name: edgeParams[j].name,
+                value: edgeParams[j].value,
+                type: 'edge'
+              });
+            }
+            
+            // Find target node and continue traversal
+            var targetNode = null;
+            for (var k = 0; k < graph.nodes.length; k++) {
+              if (graph.nodes[k].id === edge.to || graph.nodes[k].slug === edge.to) {
+                targetNode = graph.nodes[k];
+                break;
+              }
+            }
+            
+            if (targetNode) {
+              traverseFromNode(targetNode);
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // 5. Start traversal from entry nodes
+  for (var i = 0; i < entryNodes.length; i++) {
+    traverseFromNode(entryNodes[i]);
+  }
+  
+  // 6. Handle any remaining nodes not reached by traversal
+  if (graph.nodes) {
+    for (var i = 0; i < graph.nodes.length; i++) {
+      var node = graph.nodes[i];
+      if (!visitedNodes.has(node.id)) {
+        var nodeParams = flattenNodeParameters(node);
+        for (var j = 0; j < nodeParams.length; j++) {
+          params.push({
+            name: nodeParams[j].name,
+            value: nodeParams[j].value,
+            type: 'node'
+          });
+        }
+      }
+    }
+  }
+  
+  // 7. Handle any remaining edges not reached by traversal
+  if (graph.edges) {
+    for (var i = 0; i < graph.edges.length; i++) {
+      var edge = graph.edges[i];
+      if (!visitedEdges.has(edge.id)) {
+        var edgeParams = flattenEdgeParameters(edge, graph);
+        for (var j = 0; j < edgeParams.length; j++) {
+          params.push({
+            name: edgeParams[j].name,
+            value: edgeParams[j].value,
+            type: 'edge'
+          });
+        }
+      }
+    }
+  }
+  
+  return params;
+}
+
+// Extract ALL parameters in logical order (overriding smart filtering)
+function extractAllParametersInLogicalOrder(graph) {
+  var params = [];
+  
+  // 1. Global parameters first
+  if (graph.metadata && graph.metadata.parameters) {
+    for (var key in graph.metadata.parameters) {
+      params.push({
+        name: 'G:' + key,
+        value: graph.metadata.parameters[key],
+        type: 'global'
+      });
+    }
+  }
+  
+  // 2. Find entry nodes (nodes with entry.is_start = true)
+  var entryNodes = [];
+  if (graph.nodes) {
+    for (var i = 0; i < graph.nodes.length; i++) {
+      var node = graph.nodes[i];
+      if (node.entry && node.entry.is_start) {
+        entryNodes.push(node);
+      }
+    }
+  }
+  
+  // 3. If no entry nodes found, use first node
+  if (entryNodes.length === 0 && graph.nodes && graph.nodes.length > 0) {
+    entryNodes.push(graph.nodes[0]);
+  }
+  
+  // 4. Traverse graph systematically from entry nodes
+  var visitedNodes = new Set();
+  var visitedEdges = new Set();
+  
+  function traverseFromNode(node) {
+    if (visitedNodes.has(node.id)) return;
+    visitedNodes.add(node.id);
+    
+    // Extract ALL node parameters (no smart filtering)
+    var nodeParams = flattenAllNodeParameters(node);
+    for (var i = 0; i < nodeParams.length; i++) {
+      params.push({
+        name: nodeParams[i].name,
+        value: nodeParams[i].value,
+        type: 'node'
+      });
+    }
+    
+    // Find outgoing edges from this node
+    if (graph.edges) {
+      for (var i = 0; i < graph.edges.length; i++) {
+        var edge = graph.edges[i];
+        if (edge.from === node.id || edge.from === node.slug) {
+          if (!visitedEdges.has(edge.id)) {
+            visitedEdges.add(edge.id);
+            
+            // Extract ALL edge parameters (no smart filtering)
+            var edgeParams = flattenAllEdgeParameters(edge, graph);
+            for (var j = 0; j < edgeParams.length; j++) {
+              params.push({
+                name: edgeParams[j].name,
+                value: edgeParams[j].value,
+                type: 'edge'
+              });
+            }
+            
+            // Find target node and continue traversal
+            var targetNode = null;
+            for (var k = 0; k < graph.nodes.length; k++) {
+              if (graph.nodes[k].id === edge.to || graph.nodes[k].slug === edge.to) {
+                targetNode = graph.nodes[k];
+                break;
+              }
+            }
+            
+            if (targetNode) {
+              traverseFromNode(targetNode);
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // 5. Start traversal from entry nodes
+  for (var i = 0; i < entryNodes.length; i++) {
+    traverseFromNode(entryNodes[i]);
+  }
+  
+  // 6. Handle any remaining nodes not reached by traversal
+  if (graph.nodes) {
+    for (var i = 0; i < graph.nodes.length; i++) {
+      var node = graph.nodes[i];
+      if (!visitedNodes.has(node.id)) {
+        var nodeParams = flattenAllNodeParameters(node);
+        for (var j = 0; j < nodeParams.length; j++) {
+          params.push({
+            name: nodeParams[j].name,
+            value: nodeParams[j].value,
+            type: 'node'
+          });
+        }
+      }
+    }
+  }
+  
+  // 7. Handle any remaining edges not reached by traversal
+  if (graph.edges) {
+    for (var i = 0; i < graph.edges.length; i++) {
+      var edge = graph.edges[i];
+      if (!visitedEdges.has(edge.id)) {
+        var edgeParams = flattenAllEdgeParameters(edge, graph);
+        for (var j = 0; j < edgeParams.length; j++) {
+          params.push({
+            name: edgeParams[j].name,
+            value: edgeParams[j].value,
+            type: 'edge'
+          });
+        }
+      }
+    }
+  }
+  
+  return params;
+}
+
+// Flatten ALL node parameters (no smart filtering)
+function flattenAllNodeParameters(node) {
+  var params = [];
+  var nodeIdentifier = node.slug || node.id;
+  
+  // Handle entry parameters (include all, even defaults)
+  if (node.entry) {
+    for (var key in node.entry) {
+      params.push({
+        name: 'n.' + nodeIdentifier + '.' + key,
+        value: node.entry[key]
+      });
+    }
+  }
+  
+  // Handle costs parameters (include all, even zeros)
+  if (node.costs) {
+    for (var key in node.costs) {
+      params.push({
+        name: 'n.' + nodeIdentifier + '.costs.' + key,
+        value: node.costs[key]
+      });
+    }
+  }
+  
+  // Handle case node information (NEW - include all)
+  if (node.type === 'case' && node.case) {
+    if (node.case.id) {
+      params.push({
+        name: 'n.' + nodeIdentifier + '.case.id',
+        value: node.case.id
+      });
+    }
+    if (node.case.variants && node.case.variants.length > 0) {
+      params.push({
+        name: 'n.' + nodeIdentifier + '.case.variants',
+        value: node.case.variants.join(',')
+      });
+    }
+  }
+  
+  return params;
+}
+
+// Flatten ALL edge parameters (no smart filtering)
+function flattenAllEdgeParameters(edge, graph) {
+  var params = [];
+  var edgeIdentifier = edge.slug || edge.id;
+  
+  // Handle probability parameters (include all, even defaults)
+  if (edge.p) {
+    if (edge.p.mean !== undefined) {
+      params.push({
+        name: 'e.' + edgeIdentifier + '.p.mean',
+        value: edge.p.mean
+      });
+    }
+    if (edge.p.stdev !== undefined) {
+      params.push({
+        name: 'e.' + edgeIdentifier + '.p.stdev',
+        value: edge.p.stdev
+      });
+    }
+    if (edge.p.locked !== undefined) {
+      params.push({
+        name: 'e.' + edgeIdentifier + '.p.locked',
+        value: edge.p.locked
+      });
+    }
+  }
+  
+  // Handle costs parameters (include all, even zeros) - new structure
+  if (edge.costs) {
+    // Handle monetary costs
+    if (edge.costs.monetary) {
+      if (typeof edge.costs.monetary === 'object') {
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.monetary.value',
+          value: edge.costs.monetary.value || 0
+        });
+        if (edge.costs.monetary.stdev !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.stdev',
+            value: edge.costs.monetary.stdev
+          });
+        }
+        if (edge.costs.monetary.currency !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.currency',
+            value: edge.costs.monetary.currency
+          });
+        }
+        if (edge.costs.monetary.distribution !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.monetary.distribution',
+            value: edge.costs.monetary.distribution
+          });
+        }
+      } else {
+        // Backward compatibility with old structure
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.monetary',
+          value: edge.costs.monetary
         });
       }
+    }
+    
+    // Handle time costs
+    if (edge.costs.time) {
+      if (typeof edge.costs.time === 'object') {
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.time.value',
+          value: edge.costs.time.value || 0
+        });
+        if (edge.costs.time.stdev !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.stdev',
+            value: edge.costs.time.stdev
+          });
+        }
+        if (edge.costs.time.units !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.units',
+            value: edge.costs.time.units
+          });
+        }
+        if (edge.costs.time.distribution !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.costs.time.distribution',
+            value: edge.costs.time.distribution
+          });
+        }
+      } else {
+        // Backward compatibility with old structure
+        params.push({
+          name: 'e.' + edgeIdentifier + '.costs.time',
+          value: edge.costs.time
+        });
+      }
+    }
+  }
+  
+  // Handle conditional probabilities (NEW - include ALL)
+  if (edge.conditional_p && edge.conditional_p.length > 0) {
+    for (var i = 0; i < edge.conditional_p.length; i++) {
+      var conditionalProb = edge.conditional_p[i];
+      if (conditionalProb.condition && conditionalProb.condition.visited && conditionalProb.condition.visited.length > 0) {
+        // Get node slugs for the visited condition - resolve node IDs to slugs
+        var nodeSlugs = [];
+        for (var j = 0; j < conditionalProb.condition.visited.length; j++) {
+          var nodeId = conditionalProb.condition.visited[j];
+          var nodeSlug = nodeId; // Default to ID
+          
+          // Try to find the node and get its slug
+          if (graph && graph.nodes) {
+            for (var k = 0; k < graph.nodes.length; k++) {
+              if (graph.nodes[k].id === nodeId) {
+                nodeSlug = graph.nodes[k].slug || nodeId;
+                break;
+              }
+            }
+          }
+          nodeSlugs.push(nodeSlug);
+        }
+        
+        // Sort and join node slugs for canonical naming
+        var nodeSlugStr = nodeSlugs.sort().join(',');
+        
+        // Add conditional probability parameters with canonical naming (include ALL)
+        if (conditionalProb.p && conditionalProb.p.mean !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.visited(' + nodeSlugStr + ').p.mean',
+            value: conditionalProb.p.mean
+          });
+        }
+        if (conditionalProb.p && conditionalProb.p.stdev !== undefined) {
+          params.push({
+            name: 'e.' + edgeIdentifier + '.visited(' + nodeSlugStr + ').p.stdev',
+            value: conditionalProb.p.stdev
+          });
+        }
+      }
+    }
+  }
+  
+  // Handle case variant information (include ALL)
+  if (edge.case_id) {
+    params.push({
+      name: 'e.' + edgeIdentifier + '.case_id',
+      value: edge.case_id
+    });
+  }
+  if (edge.case_variant) {
+    params.push({
+      name: 'e.' + edgeIdentifier + '.case_variant',
+      value: edge.case_variant
+    });
+  }
+  
+  // Handle weight_default (include all, even zeros)
+  if (edge.weight_default !== undefined) {
+    params.push({
+      name: 'e.' + edgeIdentifier + '.weight_default',
+      value: edge.weight_default
     });
   }
   
@@ -2432,199 +1300,1188 @@ function extractNamedParameters(graph) {
 }
 
 /**
- * Display parameters in cells below the source cell
+ * Params function - builds JSON dictionary from cell ranges
+ * Usage: 
+ *   =Params(A1:B1, A3:B3) - multiple 2-cell ranges (name, value pairs)
+ *   =Params(A1:B3) - single range with names in column A, values in column B
+ *   =Params(A1:C2) - 2x3 array with names in first row, values in second row
+ * Returns: JSON string with parameter dictionary
  */
-function displayParameters(sheet, sourceCell, params) {
+/**
+ * dagTestParamTable function - test function to debug dagGetParamTable
+ * @param {string} input - Cell reference containing graph
+ * @returns {string} Debug information about the graph
+ * @customfunction
+ */
+function dagTestParamTable(input) {
   try {
-    // Get the row and column of the source cell
-    var sourceRange = sheet.getRange(sourceCell);
-    var sourceRow = sourceRange.getRow();
-    var sourceCol = sourceRange.getColumn();
+    var graph;
     
-    // Clear existing parameter data (2 columns, 20 rows max)
-    var clearRange = sheet.getRange(sourceRow + 1, sourceCol, 20, 2);
-    clearRange.clearContent();
+    // Debug: Log what we're getting
+    console.log('TestGetParamTable: input type = ' + typeof input);
+    console.log('TestGetParamTable: input = ' + input);
     
-    if (params.length === 0) {
-      // No parameters found
-      sheet.getRange(sourceRow + 1, sourceCol).setValue('No named parameters found');
-      return;
+    // The input is the actual cell value, not a cell reference string
+    if (input && typeof input === 'string') {
+      try {
+        // Try parsing as JSON first
+        graph = JSON.parse(input);
+      } catch (parseError) {
+        // If that fails, it might be double-encoded, try parsing again
+        try {
+          var decoded = JSON.parse(input);
+          graph = JSON.parse(decoded);
+        } catch (secondParseError) {
+          return "JSON Parse Error: " + parseError.message + "\nInput: " + input.substring(0, 100) + "...";
+        }
+      }
+    } else if (input && typeof input === 'object') {
+      // Already parsed JSON object
+      graph = input;
+    } else {
+      return "Error: Input is empty or invalid. Type: " + typeof input + ", Value: " + input;
     }
     
-    // Write parameter names in first column, values in second column
-    params.forEach(function(param, index) {
-      var nameCell = sheet.getRange(sourceRow + 1 + index, sourceCol);
-      var valueCell = sheet.getRange(sourceRow + 1 + index, sourceCol + 1);
+    if (!graph) {
+      return "Error: Could not parse graph from " + input;
+    }
+    
+    var result = "Graph has " + (graph.nodes ? graph.nodes.length : 0) + " nodes, " + 
+                 (graph.edges ? graph.edges.length : 0) + " edges";
+    
+    if (graph.nodes && graph.nodes.length > 0) {
+      result += "\nFirst node: " + (graph.nodes[0].slug || graph.nodes[0].id);
+    }
+    
+    if (graph.edges && graph.edges.length > 0) {
+      result += "\nFirst edge: " + (graph.edges[0].slug || graph.edges[0].id);
+    }
+    
+    return result;
+  } catch (e) {
+    return "Error: " + e.message;
+  }
+}
+
+/**
+ * Retrieves all nodes from a graph with their details
+ * 
+ * @param {string} input Cell reference or JSON string containing graph
+ * @param {string} match Optional pattern to filter nodes (e.g., "start", "node_*")
+ * @return {Array<Array>} Table with columns: Node, Label, Type, Outgoing, Incoming, Case ID, Case Variants
+ * @customfunction
+ * 
+ * Examples:
+ *   =dagGetNodes(A1)
+ *   =dagGetNodes(A1, "start*")
+ */
+function dagGetNodes(input, match) {
+  try {
+    var graph;
+    
+    // Parse input - the input is the actual cell value, not a cell reference
+    if (input && typeof input === 'string') {
+      try {
+        // Try parsing as JSON first
+        graph = JSON.parse(input);
+      } catch (parseError) {
+        // If that fails, it might be double-encoded, try parsing again
+        try {
+          var decoded = JSON.parse(input);
+          graph = JSON.parse(decoded);
+        } catch (secondParseError) {
+          return [["JSON Parse Error: " + parseError.message + "\nInput: " + input.substring(0, 100) + "..."]];
+        }
+      }
+    } else if (input && typeof input === 'object') {
+      // Already parsed JSON object
+      graph = input;
+    } else {
+      return [["Error: Invalid input"]];
+    }
+    
+    if (!graph || !graph.nodes) {
+      return [["Error: Invalid graph format"]];
+    }
+    
+    var results = [];
+    results.push(["Node", "Label", "Type", "Outgoing Edges", "Incoming Edges", "Case ID", "Case Variants"]);
+    
+    for (var i = 0; i < graph.nodes.length; i++) {
+      var node = graph.nodes[i];
+      var nodeIdentifier = node.slug || node.id;
+      var label = node.label || '';
+      var type = node.absorbing ? (node.outcome_type || 'terminal') : 
+                 (node.type === 'case' ? 'case' : 'intermediate');
       
-      nameCell.setValue(param.name);
-      valueCell.setValue(param.value);
+      // Check if node matches the pattern
+      if (match && !matchesPattern(nodeIdentifier, match)) {
+        continue;
+      }
+      
+      // Count outgoing edges
+      var outgoingCount = 0;
+      var incomingCount = 0;
+      if (graph.edges) {
+        for (var j = 0; j < graph.edges.length; j++) {
+          var edge = graph.edges[j];
+          if (edge.from === node.id || edge.from === node.slug) {
+            outgoingCount++;
+          }
+          if (edge.to === node.id || edge.to === node.slug) {
+            incomingCount++;
+          }
+        }
+      }
+      
+      // Get case information
+      var caseId = '';
+      var caseVariants = '';
+      if (node.type === 'case' && node.case) {
+        caseId = node.case.id || '';
+        if (node.case.variants && node.case.variants.length > 0) {
+          caseVariants = node.case.variants.join(', ');
+        }
+      }
+      
+      results.push([nodeIdentifier, label, type, outgoingCount, incomingCount, caseId, caseVariants]);
+    }
+    
+    return results;
+  } catch (e) {
+    return [["Error: " + e.message]];
+  }
+}
+
+/**
+ * Retrieves all edges from a graph with their details
+ * 
+ * @param {string} input Cell reference or JSON string containing graph
+ * @param {string} match Optional pattern to filter edges (e.g., "start-to-*", "edge_*")
+ * @return {Array<Array>} Table with columns: Edge, From, To, Probability, Costs, Description, Case ID, Case Variant, Conditional P Conditions
+ * @customfunction
+ * 
+ * Examples:
+ *   =dagGetEdges(A1)
+ *   =dagGetEdges(A1, "checkout*")
+ */
+function dagGetEdges(input, match) {
+  try {
+    var graph;
+    
+    // Parse input - the input is the actual cell value, not a cell reference
+    if (input && typeof input === 'string') {
+      try {
+        // Try parsing as JSON first
+        graph = JSON.parse(input);
+      } catch (parseError) {
+        // If that fails, it might be double-encoded, try parsing again
+        try {
+          var decoded = JSON.parse(input);
+          graph = JSON.parse(decoded);
+        } catch (secondParseError) {
+          return [["JSON Parse Error: " + parseError.message + "\nInput: " + input.substring(0, 100) + "..."]];
+        }
+      }
+    } else if (input && typeof input === 'object') {
+      // Already parsed JSON object
+      graph = input;
+    } else {
+      return [["Error: Invalid input"]];
+    }
+    
+    if (!graph || !graph.edges) {
+      return [["Error: Invalid graph format"]];
+    }
+    
+    var results = [];
+    results.push(["Edge", "From", "To", "Probability", "Costs", "Description", "Case ID", "Case Variant", "Conditional P Conditions"]);
+    
+    for (var i = 0; i < graph.edges.length; i++) {
+      var edge = graph.edges[i];
+      var edgeIdentifier = edge.slug || edge.id;
+      
+      // Convert from/to to human-readable names
+      var fromNode = findNodeByIdOrSlug(graph, edge.from);
+      var toNode = findNodeByIdOrSlug(graph, edge.to);
+      var fromName = fromNode ? (fromNode.slug || fromNode.id) : edge.from;
+      var toName = toNode ? (toNode.slug || toNode.id) : edge.to;
+      
+      var probability = edge.p ? edge.p.mean : 'N/A';
+      var costs = edge.costs ? JSON.stringify(edge.costs) : 'None';
+      var description = edge.description || '';
+      
+      // Get case information
+      var caseId = edge.case_id || '';
+      var caseVariant = edge.case_variant || '';
+      
+      // Get conditional probability conditions (show what they are, not just count)
+      var conditionalPConditions = '';
+      if (edge.conditional_p && edge.conditional_p.length > 0) {
+        var conditions = [];
+        for (var j = 0; j < edge.conditional_p.length; j++) {
+          var cp = edge.conditional_p[j];
+          if (cp.condition && cp.condition.visited && cp.condition.visited.length > 0) {
+            // Resolve node IDs to slugs for readability
+            var nodeNames = [];
+            for (var k = 0; k < cp.condition.visited.length; k++) {
+              var nodeId = cp.condition.visited[k];
+              var node = findNodeByIdOrSlug(graph, nodeId);
+              nodeNames.push(node ? (node.slug || node.id) : nodeId);
+            }
+            var prob = cp.p && cp.p.mean !== undefined ? cp.p.mean : '?';
+            conditions.push('visited(' + nodeNames.sort().join(',') + ')→' + prob);
+          }
+        }
+        conditionalPConditions = conditions.join('; ');
+      }
+      
+      // Check if edge matches the pattern
+      if (match && !matchesPattern(edgeIdentifier, match)) {
+        continue;
+      }
+      
+      results.push([edgeIdentifier, fromName, toName, probability, costs, description, caseId, caseVariant, conditionalPConditions]);
+    }
+    
+    return results;
+  } catch (e) {
+    return [["Error: " + e.message]];
+  }
+}
+
+// Helper function to check if a string matches a pattern
+function matchesPattern(str, pattern) {
+  if (!pattern) return true;
+  var regex = pattern.replace(/\*/g, '.*');
+  return new RegExp('^' + regex + '$').test(str);
+}
+
+// Helper function to find a node by ID or slug
+function findNodeByIdOrSlug(graph, identifier) {
+  if (!graph.nodes) return null;
+  
+  for (var i = 0; i < graph.nodes.length; i++) {
+    var node = graph.nodes[i];
+    if (node.id === identifier || node.slug === identifier) {
+      return node;
+    }
+  }
+  return null;
+}
+
+/**
+ * Retrieves a graph JSON from the repository or a URL
+ * 
+ * @param {string} urlOrName Graph name (e.g., "bsse-conversion-4") or full URL
+ * @param {string} branch Git branch name (default: "main")
+ * @return {string} Graph JSON string
+ * @customfunction
+ * 
+ * Examples:
+ *   =dagGetGraph("bsse-conversion-4")
+ *   =dagGetGraph("bsse-conversion-4", "main")
+ *   =dagGetGraph("https://example.com/graph.json")
+ */
+function dagGetGraph(urlOrName, branch) {
+  try {
+    if (!urlOrName) {
+      return 'Error: Graph name or URL required';
+    }
+    
+    var url;
+    
+    // Check if it's already a URL
+    if (urlOrName.startsWith('http://') || urlOrName.startsWith('https://')) {
+      url = urlOrName;
+    } else {
+      // Construct URL using default base
+      var branchParam = branch || 'main';
+      url = DAGNET_GRAPH_API_BASE + 
+            '?name=' + encodeURIComponent(urlOrName) +
+            '&branch=' + encodeURIComponent(branchParam) +
+            '&raw=true&format=pretty';
+    }
+    
+    // Fetch the graph
+    var response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      muteHttpExceptions: true
     });
     
-    // Add headers
-    sheet.getRange(sourceRow + 1, sourceCol).setValue('Parameter Name');
-    sheet.getRange(sourceRow + 1, sourceCol + 1).setValue('Parameter Value');
+    var statusCode = response.getResponseCode();
+    var content = response.getContentText();
     
-    // Style the headers
-    var headerRange = sheet.getRange(sourceRow + 1, sourceCol, 1, 2);
-    headerRange.setFontWeight('bold');
-    headerRange.setBackground('#f0f0f0');
+    if (statusCode !== 200) {
+      try {
+        var errorData = JSON.parse(content);
+        return 'Error: ' + (errorData.error || 'Failed to fetch graph');
+      } catch (e) {
+        return 'Error: HTTP ' + statusCode;
+      }
+    }
     
-  } catch (err) {
-    console.log('Error displaying parameters:', err);
+    return content;
+  } catch (error) {
+    return 'Error: ' + error.message;
   }
 }
 
 /**
- * Current deployment URL for this script. Requires one manual deployment ever.
+ * dagParams function - builds JSON dictionary from any combination of ranges and individual values
+ * EXTENDED: Now supports conditional probabilities, case overrides, and visited conditions
+ * @param {...string} args - Any combination of:
+ *   - Individual cell references or values (E17, 0.5, A1, 0.3, ...)
+ *   - Range references (A1:B2, C1:D3, ...)
+ *   - Parameter refs: "e.checkout.p.mean", 0.7
+ *   - Case overrides: "checkout-experiment", "treatment"
+ *   - Visited conditions: "visited(promo)", true
+ * All values are flattened and processed as alternating param/value pairs
+ * @returns {string} JSON string with parameter dictionary
+ * @customfunction
  */
-function getCurrentWebAppUrl() {
-  // Check stored URL first (workaround for broken getService().getUrl() on Workspace domains)
+function dagParams() {
   try {
-    var stored = PropertiesService.getScriptProperties().getProperty('DAGNET_WEB_APP_URL');
-    if (stored) return stored;
-  } catch (e) {}
+    var result = {
+      parameters: {},
+      cases: {},
+      assumeVisited: [],
+      excludeVisited: []
+    };
+    
+    var args = Array.prototype.slice.call(arguments);
+    var allValues = [];
+    
+    // Flatten all inputs into a single array
+    for (var i = 0; i < args.length; i++) {
+      var arg = args[i];
+      
+      // Check if it's a 2D array (range values)
+      if (Array.isArray(arg) && arg.length > 0 && Array.isArray(arg[0])) {
+        // It's a 2D array from a range - flatten it
+        for (var row = 0; row < arg.length; row++) {
+          for (var col = 0; col < arg[row].length; col++) {
+            allValues.push(arg[row][col]);
+          }
+        }
+      }
+      // Check if it's a range reference (contains colon)
+      else if (typeof arg === 'string' && arg.includes(':')) {
+        // It's a range reference - get all values from the range
+        var range = SpreadsheetApp.getActiveSheet().getRange(arg);
+        var values = range.getValues();
+        
+        // Flatten the 2D array into 1D
+        for (var row = 0; row < values.length; row++) {
+          for (var col = 0; col < values[row].length; col++) {
+            allValues.push(values[row][col]);
+          }
+        }
+      } else {
+        // It's an individual cell reference or value
+        allValues.push(arg);
+      }
+    }
+    
+    // Now process all values as alternating param/value pairs
+    if (allValues.length % 2 !== 0) {
+      return "Error: Must have an even number of values (param, value, param, value, ...)";
+    }
+    
+    for (var j = 0; j < allValues.length; j += 2) {
+      var key = allValues[j];
+      var value = allValues[j + 1];
+      
+      // Skip empty/null keys
+      if (!key || key === '') continue;
+      
+      // Convert key to string
+      key = key.toString().trim();
+      
+      // Normalize boolean values
+      var normalizedValue = 
+        (value === "true" || value === true) ? true :
+        (value === "false" || value === false) ? false : 
+        value;
+      
+      // Check if key is a visited condition: visited(...)
+      var keyVisitedMatch = key.match(/^visited\(([^)]+)\)$/);
+      var valueVisitedMatch = (typeof value === 'string') ? 
+        value.match(/^visited\(([^)]+)\)$/) : null;
+      
+      if (keyVisitedMatch) {
+        // Key is visited(...)
+        var nodes = keyVisitedMatch[1].split(',').map(function(n) { 
+          return n.trim(); 
+        }).sort();
+        
+        if (normalizedValue === true) {
+          // Add to assumeVisited
+          result.assumeVisited.push(nodes);
+        } else if (normalizedValue === false) {
+          // Add to excludeVisited (override hyperprior)
+          result.excludeVisited.push(nodes);
+        }
+        
+        // If value is ALSO visited(...), add it to assumeVisited too
+        if (valueVisitedMatch) {
+          var valueNodes = valueVisitedMatch[1].split(',').map(function(n) { 
+            return n.trim(); 
+          }).sort();
+          result.assumeVisited.push(valueNodes);
+        }
+      } else if (key.startsWith('e.')) {
+        // Parameter override (edge parameter reference)
+        result.parameters[key] = normalizedValue;
+      } else {
+        // Case override (case-id -> variant-name)
+        result.cases[key] = normalizedValue;
+      }
+    }
+    
+    return JSON.stringify(result);
+  } catch (e) {
+    return "Error: " + e.message;
+  }
+}
+
+// ===== HELPER FUNCTIONS FOR CONDITIONAL PROBABILITIES =====
+
+/**
+ * Parse a conditional probability reference
+ * @param {string} reference - Reference like "e.edge1.p.mean" or "e.edge1.visited(node1,node2).p.mean"
+ * @returns {Object|null} Parsed components or null if invalid
+ */
+function parseConditionalReference(reference) {
+  // Base pattern: e.<edge-slug>.p.<param>
+  var basePattern = /^e\.([^.]+)\.p\.(mean|stdev)$/;
   
-  // Fallback to getService (unreliable on Workspace)
-  try {
-    var url = ScriptApp.getService().getUrl();
-    return normalizeWebAppUrl(url);
-  } catch (e) {
-    return null;
+  // Conditional pattern: e.<edge-slug>.visited(<slugs>).p.<param>
+  var conditionalPattern = /^e\.([^.]+)\.visited\(([^)]+)\)\.p\.(mean|stdev)$/;
+  
+  // Try conditional first
+  var match = reference.match(conditionalPattern);
+  if (match) {
+    var nodeSlugs = match[2].split(',').map(function(s) { 
+      return s.trim(); 
+    }).sort();
+    return {
+      edgeSlug: match[1],
+      nodeSlugs: nodeSlugs,
+      param: match[3],
+      isConditional: true
+    };
   }
-}
-
-/**
- * Set the web app URL manually (run once after deployment)
- * Usage: setWebAppUrl('https://script.google.com/macros/s/AKfycbx00UMe.../exec')
- */
-function setWebAppUrl(url) {
-  PropertiesService.getScriptProperties().setProperty('DAGNET_WEB_APP_URL', url);
-  SpreadsheetApp.getUi().alert('Stored web app URL: ' + url + '\n\nRun Initialize to verify.');
-}
-
-function normalizeWebAppUrl(url) {
-  if (!url) return null;
-  var m = url.match(/^https:\/\/script\.google\.com\/a\/[^/]+\/macros\/s\/([^/]+)\/exec$/);
-  return m ? ('https://script.google.com/macros/s/' + m[1] + '/exec') : url;
-}
-
-/**
- * Test function to manually show sidebar
- */
-
-/**
- * Force refresh the menu - run this if new menu items don't appear
- */
-function forceMenuRefresh() {
-  try {
-    // Clear existing menu
-    SpreadsheetApp.getUi().createMenu('Dagnet').addToUi();
-    
-    // Wait a moment
-    Utilities.sleep(1000);
-    
-    // Recreate the full menu
-    onOpen();
-    
-    SpreadsheetApp.getUi().alert('Menu refreshed! Check the Dagnet menu now.');
-  } catch (e) {
-    SpreadsheetApp.getUi().alert('Error refreshing menu: ' + e.message);
+  
+  // Try base
+  match = reference.match(basePattern);
+  if (match) {
+    return {
+      edgeSlug: match[1],
+      nodeSlugs: [],
+      param: match[2],
+      isConditional: false
+    };
   }
+  
+  return null;
 }
 
 /**
- * NUCLEAR OPTION: Force complete cache clear
+ * Resolve node ID to slug
+ * @param {Object} graph - Graph object
+ * @param {string} nodeId - Node ID
+ * @returns {string} Node slug or ID if not found
  */
-function nuclearCacheClear() {
-  try {
-    // Show version to prove we're running latest
-    SpreadsheetApp.getUi().alert('NUCLEAR CACHE CLEAR\n\nScript Version: ' + SCRIPT_VERSION + '\n\nThis should show the latest code!');
-    
-    // Clear all properties
-    PropertiesService.getScriptProperties().deleteAll();
-    PropertiesService.getUserProperties().deleteAll();
-    
-    // Force menu recreation
-    forceMenuRefresh();
-    
-    SpreadsheetApp.getUi().alert('Cache cleared! Version: ' + SCRIPT_VERSION);
-  } catch (e) {
-    SpreadsheetApp.getUi().alert('Nuclear clear failed: ' + e.message);
+function resolveNodeSlug(graph, nodeId) {
+  for (var i = 0; i < graph.nodes.length; i++) {
+    var node = graph.nodes[i];
+    if (node.id === nodeId) {
+      return node.slug || nodeId;
+    }
   }
+  return nodeId;
 }
 
 /**
- * Menu wrapper functions - these run the local script version instead of cached deployment
+ * Resolve node slug to ID
+ * @param {Object} graph - Graph object
+ * @param {string} slug - Node slug
+ * @returns {string} Node ID or slug if not found
  */
+function resolveNodeId(graph, slug) {
+  for (var i = 0; i < graph.nodes.length; i++) {
+    var node = graph.nodes[i];
+    if (node.slug === slug || node.id === slug) {
+      return node.id;
+    }
+  }
+  return slug;
+}
 
-function menuEditInDagnet() {
-  try {
-    var cell = SpreadsheetApp.getActiveRange();
-    var cellValue = cell.getValue();
-    
-    if (!cellValue || !cellValue.toString().startsWith('graph://')) {
-      SpreadsheetApp.getUi().alert('Please select a graph cell (starting with graph://)');
-      return;
+/**
+ * Check if two arrays are equal
+ * @param {Array} arr1 - First array
+ * @param {Array} arr2 - Second array
+ * @returns {boolean} True if arrays are equal
+ */
+function arraysEqual(arr1, arr2) {
+  if (arr1.length !== arr2.length) return false;
+  for (var i = 0; i < arr1.length; i++) {
+    if (arr1[i] !== arr2[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Compute effective visited set based on what-if data
+ * @param {Object} graph - Graph object
+ * @param {Object} whatIfData - What-if data with cases, assumeVisited, excludeVisited
+ * @returns {Object} Object (used as Set) of node IDs that are effectively visited
+ */
+function computeEffectiveVisited(graph, whatIfData) {
+  var visited = {};
+  
+  if (!whatIfData) return visited;
+  
+  // 1. Add hyperprior (from case overrides)
+  if (whatIfData.cases) {
+    for (var caseNodeId in whatIfData.cases) {
+      var selectedVariant = whatIfData.cases[caseNodeId];
+      
+      // Find case node
+      var caseNode = null;
+      for (var i = 0; i < graph.nodes.length; i++) {
+        if (graph.nodes[i].id === caseNodeId) {
+          caseNode = graph.nodes[i];
+          break;
+        }
+      }
+      if (!caseNode || !caseNode.case) continue;
+      
+      // Find edges with this case and variant
+      for (var j = 0; j < graph.edges.length; j++) {
+        var edge = graph.edges[j];
+        if (edge.case_id === caseNode.case.id && 
+            edge.case_variant === selectedVariant) {
+          visited[edge.to] = true;
+        }
+      }
+    }
+  }
+  
+  // 2. Add assumeVisited
+  if (whatIfData.assumeVisited) {
+    for (var i = 0; i < whatIfData.assumeVisited.length; i++) {
+      var nodeList = whatIfData.assumeVisited[i];
+      for (var j = 0; j < nodeList.length; j++) {
+        var nodeSlug = nodeList[j];
+        var node = null;
+        for (var k = 0; k < graph.nodes.length; k++) {
+          if (graph.nodes[k].slug === nodeSlug || graph.nodes[k].id === nodeSlug) {
+            node = graph.nodes[k];
+            break;
+          }
+        }
+        if (node) visited[node.id] = true;
+      }
+    }
+  }
+  
+  // 3. Remove excludeVisited
+  if (whatIfData.excludeVisited) {
+    for (var i = 0; i < whatIfData.excludeVisited.length; i++) {
+      var nodeList = whatIfData.excludeVisited[i];
+      for (var j = 0; j < nodeList.length; j++) {
+        var nodeSlug = nodeList[j];
+        var node = null;
+        for (var k = 0; k < graph.nodes.length; k++) {
+          if (graph.nodes[k].slug === nodeSlug || graph.nodes[k].id === nodeSlug) {
+            node = graph.nodes[k];
+            break;
+          }
+        }
+        if (node) delete visited[node.id];
+      }
+    }
+  }
+  
+  return visited;
+}
+
+/**
+ * Get effective edge probability considering what-if overrides
+ * @param {Object} edge - Edge object
+ * @param {Object} graph - Graph object
+ * @param {Object} effectiveVisited - Object (used as Set) of visited node IDs
+ * @param {Object} whatIfData - What-if data with case overrides
+ * @returns {number} Effective probability
+ */
+function getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData) {
+  var probability = edge.p && edge.p.mean !== undefined ? edge.p.mean : 0;
+  
+  // 1. Check conditional probabilities
+  if (edge.conditional_p && edge.conditional_p.length > 0) {
+    // Try to find matching condition
+    for (var i = 0; i < edge.conditional_p.length; i++) {
+      var conditionalProb = edge.conditional_p[i];
+      if (!conditionalProb.condition || !conditionalProb.condition.visited) continue;
+      
+      var conditionNodes = conditionalProb.condition.visited;
+      
+      // Check if ALL required nodes are in effectiveVisited
+      var allVisited = true;
+      for (var j = 0; j < conditionNodes.length; j++) {
+        if (!effectiveVisited[conditionNodes[j]]) {
+          allVisited = false;
+          break;
+        }
+      }
+      
+      if (allVisited) {
+        // Use conditional probability
+        probability = conditionalProb.p && conditionalProb.p.mean !== undefined ? 
+          conditionalProb.p.mean : probability;
+        break; // First match wins
+      }
+    }
+  }
+  
+  // 2. Apply case variant weight if applicable
+  if (edge.case_id && edge.case_variant && whatIfData && whatIfData.cases) {
+    // Find the case node
+    var caseNode = null;
+    for (var i = 0; i < graph.nodes.length; i++) {
+      var node = graph.nodes[i];
+      if (node.type === 'case' && node.case && node.case.id === edge.case_id) {
+        caseNode = node;
+        break;
+      }
     }
     
-    var graphId = cellValue.toString().replace('graph://', '').split('?')[0];
+    if (caseNode && whatIfData.cases[caseNode.id]) {
+      var selectedVariant = whatIfData.cases[caseNode.id];
+      var variantWeight = (edge.case_variant === selectedVariant) ? 1.0 : 0.0;
+      probability *= variantWeight;
+    }
+  }
+  
+  return probability;
+}
+
+/**
+ * Apply parameter overrides to graph (for e.* references)
+ * @param {Object} graph - Graph object
+ * @param {Object} parameters - Parameter overrides (e.g., {"e.checkout.p.mean": 0.7})
+ * @returns {Object} Modified graph
+ */
+function applyParameterOverrides(graph, parameters) {
+  try {
+    var modifiedGraph = JSON.parse(JSON.stringify(graph)); // Deep clone
     
-    openDagnetFromPointer(cell, graphId);
+    for (var reference in parameters) {
+      var value = parameters[reference];
+      var parsed = parseConditionalReference(reference);
+      if (!parsed) continue;
+      
+      // Find the edge
+      var edgeIndex = -1;
+      for (var i = 0; i < modifiedGraph.edges.length; i++) {
+        var edge = modifiedGraph.edges[i];
+        if (edge.slug === parsed.edgeSlug || edge.id === parsed.edgeSlug) {
+          edgeIndex = i;
+          break;
+        }
+      }
+      if (edgeIndex < 0) continue;
+      
+      var edge = modifiedGraph.edges[edgeIndex];
+      
+      if (parsed.isConditional) {
+        // Apply to conditional_p
+        if (!edge.conditional_p) edge.conditional_p = [];
+        
+        // Find or create matching conditional
+        var conditionalProb = null;
+        for (var j = 0; j < edge.conditional_p.length; j++) {
+          var cp = edge.conditional_p[j];
+          var conditionNodes = cp.condition.visited.map(function(id) {
+            return resolveNodeSlug(modifiedGraph, id);
+          }).sort();
+          
+          if (arraysEqual(conditionNodes, parsed.nodeSlugs)) {
+            conditionalProb = cp;
+            break;
+          }
+        }
+        
+        if (!conditionalProb) {
+          // Create new conditional
+          var nodeIds = parsed.nodeSlugs.map(function(slug) {
+            return resolveNodeId(modifiedGraph, slug);
+          });
+          conditionalProb = {
+            condition: { visited: nodeIds },
+            p: {}
+          };
+          edge.conditional_p.push(conditionalProb);
+        }
+        
+        // Update parameter
+        conditionalProb.p[parsed.param] = value;
+      } else {
+        // Apply to base probability
+        if (!edge.p) edge.p = {};
+        edge.p[parsed.param] = value;
+      }
+    }
+    
+    return modifiedGraph;
   } catch (e) {
-    SpreadsheetApp.getUi().alert('Error in menuEditInDagnet: ' + e.message);
+    console.log('Error applying parameter overrides: ' + e.message);
+    return graph;
   }
 }
 
-function menuExtractParameters() {
+/**
+ * Apply custom parameters to graph using dot notation
+ * @param {Object} graph - The graph object
+ * @param {Object} customParams - Parameters with dot notation keys
+ * @returns {Object} Modified graph
+ */
+function applyCustomParameters(graph, customParams) {
   try {
-    var cell = SpreadsheetApp.getActiveRange();
-    var cellValue = cell.getValue();
+    var modifiedGraph = JSON.parse(JSON.stringify(graph)); // Deep clone
     
-    if (!cellValue || !cellValue.toString().startsWith('graph://')) {
-      SpreadsheetApp.getUi().alert('Please select a graph cell (starting with graph://)');
-      return;
+    for (var paramKey in customParams) {
+      var paramValue = customParams[paramKey];
+      var parts = paramKey.split('.');
+      
+      if (parts.length >= 2) {
+        var elementIdentifier = parts[0];
+        var propertyPath = parts.slice(1);
+        
+        // Handle optional prefixes (n., e., g.)
+        if (elementIdentifier === 'n' || elementIdentifier === 'e' || elementIdentifier === 'g') {
+          if (parts.length >= 3) {
+            elementIdentifier = parts[1];
+            propertyPath = parts.slice(2);
+          } else {
+            continue; // Skip invalid format
+          }
+        }
+        
+        // Try to find the element (node or edge) by slug or ID
+        var element = null;
+        var elementType = null;
+        
+        // Check nodes first
+        for (var i = 0; i < modifiedGraph.nodes.length; i++) {
+          var node = modifiedGraph.nodes[i];
+          if (node.slug === elementIdentifier || node.id === elementIdentifier || 
+              (node.label && node.label === elementIdentifier)) {
+            element = node;
+            elementType = 'node';
+            break;
+          }
+        }
+        
+        // Check edges if not found in nodes
+        if (!element) {
+          for (var j = 0; j < modifiedGraph.edges.length; j++) {
+            var edge = modifiedGraph.edges[j];
+            if (edge.slug === elementIdentifier || edge.id === elementIdentifier) {
+              element = edge;
+              elementType = 'edge';
+              break;
+            }
+          }
+        }
+        
+        if (element) {
+          // Apply the parameter using dot notation
+          setNestedProperty(element, propertyPath, paramValue);
+        }
+      }
     }
     
-    var graphId = cellValue.toString().replace('graph://', '').split('?')[0];
-    
-    extractParametersToNamedRange(cell, graphId);
+    return modifiedGraph;
   } catch (e) {
-    SpreadsheetApp.getUi().alert('Error in menuExtractParameters: ' + e.message);
+    console.log('Error applying custom parameters: ' + e.message);
+    return graph; // Return original graph if there's an error
   }
 }
 
-function menuAddScenario() {
+/**
+ * Set a nested property using an array of keys
+ * @param {Object} obj - The object to modify
+ * @param {Array} keys - Array of property keys
+ * @param {*} value - The value to set
+ */
+function setNestedProperty(obj, keys, value) {
+  var current = obj;
+  for (var i = 0; i < keys.length - 1; i++) {
+    var key = keys[i];
+    if (!(key in current) || typeof current[key] !== 'object') {
+      current[key] = {};
+    }
+    current = current[key];
+  }
+  current[keys[keys.length - 1]] = value;
+}
+
+/**
+ * dagCalc function - calculates graph analytics (probability, cost, time)
+ * EXTENDED: Now supports conditional probabilities and what-if scenarios
+ * @param {string} input - Cell reference or JSON string containing graph
+ * @param {string} [operation] - Operation: DG_PROBABILITY, DG_COST, DG_TIME (default: DG_PROBABILITY)
+ * @param {string} [startNode] - Start node slug/ID (default: first node)
+ * @param {string} [endNode] - End node: DG_ANY_SUCCESS, DG_ANY_FAILURE, or node slug (default: DG_ANY_SUCCESS)
+ * @param {string} [customParams] - JSON string with custom parameters (optional)
+ * @param {string} [whatIf] - JSON from dagParams() for what-if scenarios (optional)
+ * @returns {number} Calculated result
+ * @customfunction
+ * 
+ * Tip: Type "DG" to see available constants in autocomplete
+ * 
+ * Examples:
+ * =dagCalc(A1, DG_PROBABILITY, "start", DG_ANY_SUCCESS)
+ * =dagCalc(A1, DG_PROBABILITY, "start", DG_ANY_SUCCESS, "", dagParams("case-1", "treatment"))
+ * =dagCalc(A1, DG_PROBABILITY, "start", DG_ANY_SUCCESS, "", dagParams("visited(promo)", true))
+ */
+function dagCalc(input, operation, startNode, endNode, customParams, whatIf) {
   try {
-    var cell = SpreadsheetApp.getActiveRange();
-    var cellValue = cell.getValue();
+    var graph;
     
-    if (!cellValue || !cellValue.toString().startsWith('graph://')) {
-      SpreadsheetApp.getUi().alert('Please select a graph cell (starting with graph://)');
-      return;
+    // Parse input - could be cell reference, direct JSON string, or cell value
+    if (typeof input === 'string') {
+      // Check if it's a cell reference (like "A1")
+      if (input.match(/^[A-Z]+\d+$/)) {
+        var sheet = SpreadsheetApp.getActiveSheet();
+        var cell = sheet.getRange(input);
+        var cellValue = cell.getValue();
+        if (cellValue && typeof cellValue === 'string') {
+          graph = JSON.parse(cellValue);
+        } else {
+          return "Error: Cell " + input + " is empty or doesn't contain JSON";
+        }
+      } else {
+        // Direct JSON string
+        graph = JSON.parse(input);
+      }
+    } else {
+      return "Error: Input must be a cell reference or JSON string";
     }
     
-    var graphId = cellValue.toString().replace('graph://', '').split('?')[0];
+    if (!graph || !graph.nodes || !graph.edges) {
+      return "Error: Invalid graph format";
+    }
     
-    addScenarioToGraph(cell, graphId);
+    // Set defaults with smart fallbacks
+    if (!operation) operation = PROBABILITY;
+    if (!startNode || startNode === '') {
+      startNode = graph.nodes[0] ? (graph.nodes[0].id || graph.nodes[0].slug || graph.nodes[0].label) : 'start';
+    }
+    if (!endNode) endNode = ANY_SUCCESS;
+    
+    // Parse custom parameters if provided
+    var customParamsObj = {};
+    if (customParams) {
+      if (typeof customParams === 'string') {
+        // Check if it's a cell reference
+        if (customParams.match(/^[A-Z]+\d+$/)) {
+          var sheet = SpreadsheetApp.getActiveSheet();
+          var cell = sheet.getRange(customParams);
+          var cellValue = cell.getValue();
+          if (cellValue && typeof cellValue === 'string') {
+            try {
+              customParamsObj = JSON.parse(cellValue);
+            } catch (e) {
+              return "Error: Custom parameters in " + customParams + " must be valid JSON";
+            }
+          }
+        } else {
+          // Direct JSON string
+          try {
+            customParamsObj = JSON.parse(customParams);
+          } catch (e) {
+            return "Error: Custom parameters must be valid JSON";
+          }
+        }
+      } else if (typeof customParams === 'object') {
+        customParamsObj = customParams;
+      }
+    }
+    
+    // Apply custom parameters to graph
+    if (customParamsObj) {
+      graph = applyCustomParameters(graph, customParamsObj);
+    }
+    
+    // Parse whatIf parameter for what-if scenarios
+    var whatIfData = null;
+    if (whatIf && typeof whatIf === 'string') {
+      try {
+        whatIfData = JSON.parse(whatIf);
+        
+        // Apply parameter overrides from whatIfData if present
+        if (whatIfData.parameters) {
+          graph = applyParameterOverrides(graph, whatIfData.parameters);
+        }
+      } catch (e) {
+        return "Error: Invalid whatIf JSON: " + e.message;
+      }
+    }
+    
+    // Compute effective visited set for conditional probabilities
+    var effectiveVisited = computeEffectiveVisited(graph, whatIfData);
+    
+    // Find start and end nodes
+    var startNodeObj = graph.nodes.find(function(node) {
+      return node.id === startNode || node.slug === startNode || (node.label && node.label === startNode);
+    });
+    
+    if (!startNodeObj) {
+      return "Error: Start node '" + startNode + "' not found";
+    }
+    
+    var endNodes = [];
+    if (endNode === ANY_SUCCESS || endNode === 'anySuccess') {
+      endNodes = graph.nodes.filter(function(node) {
+        return node.absorbing && node.outcome_type === 'success';
+      });
+    } else if (endNode === ANY_FAILURE || endNode === 'anyFailure') {
+      endNodes = graph.nodes.filter(function(node) {
+        return node.absorbing && node.outcome_type === 'failure';
+      });
+    } else {
+      var endNodeObj = graph.nodes.find(function(node) {
+        return node.id === endNode || node.slug === endNode || (node.label && node.label === endNode);
+      });
+      if (endNodeObj) {
+        endNodes = [endNodeObj];
+      }
+    }
+    
+    if (endNodes.length === 0) {
+      // Debug: Show what nodes we have
+      var nodeInfo = graph.nodes.map(function(node) {
+        return node.slug + " (absorbing:" + node.absorbing + ", outcome_type:" + node.outcome_type + ")";
+      }).join(", ");
+      return "Error: End node(s) not found. Available nodes: " + nodeInfo + ". Looking for: " + endNode;
+    }
+    
+    // Calculate based on operation
+    if (operation === PROBABILITY || operation === 'probability') {
+      return calculateProbability(graph, startNodeObj, endNodes, effectiveVisited, whatIfData);
+    } else if (operation === COST || operation === 'cost') {
+      var totalExpectedCost = calculateCost(graph, startNodeObj, endNodes, effectiveVisited, whatIfData);
+      var successProbability = calculateProbability(graph, startNodeObj, endNodes, effectiveVisited, whatIfData);
+      
+      if (successProbability === 0) {
+        return "Error: No path to success - cost per success is undefined";
+      }
+      
+      // Return cost per successful conversion
+      return totalExpectedCost / successProbability;
+    } else if (operation === TIME || operation === 'time') {
+      var totalExpectedTime = calculateTime(graph, startNodeObj, endNodes, effectiveVisited, whatIfData);
+      var successProbability = calculateProbability(graph, startNodeObj, endNodes, effectiveVisited, whatIfData);
+      
+      if (successProbability === 0) {
+        return "Error: No path to success - time per success is undefined";
+      }
+      
+      // Return time per successful conversion
+      return totalExpectedTime / successProbability;
+    } else {
+      return "Error: Unknown operation '" + operation + "'";
+    }
+    
   } catch (e) {
-    SpreadsheetApp.getUi().alert('Error in menuAddScenario: ' + e.message);
+    return "Error: " + e.message;
   }
 }
 
-function menuViewHistory() {
+/**
+ * Calculate probability from start to any end node
+ * Now with conditional probability support
+ */
+function calculateProbability(graph, startNode, endNodes, effectiveVisited, whatIfData) {
   try {
-    var cell = SpreadsheetApp.getActiveRange();
-    var cellValue = cell.getValue();
+    var visited = new Set();
+    var probabilities = new Map();
     
-    if (!cellValue || !cellValue.toString().startsWith('graph://')) {
-      SpreadsheetApp.getUi().alert('Please select a graph cell (starting with graph://)');
-      return;
+    function dfs(nodeId) {
+      if (visited.has(nodeId)) return probabilities.get(nodeId) || 0;
+      if (endNodes.some(function(end) { return end.id === nodeId; })) {
+        probabilities.set(nodeId, 1);
+        return 1;
+      }
+      
+      visited.add(nodeId);
+      var totalProb = 0;
+      
+      var outgoingEdges = graph.edges.filter(function(edge) {
+        return edge.from === nodeId;
+      });
+      
+      for (var i = 0; i < outgoingEdges.length; i++) {
+        var edge = outgoingEdges[i];
+        
+        // Use getEffectiveEdgeProbability to handle conditional probabilities and case overrides
+        var edgeProb = effectiveVisited && whatIfData ? 
+          getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData) :
+          (edge.p && edge.p.mean ? edge.p.mean : 0.5);
+        
+        var targetProb = dfs(edge.to);
+        totalProb += edgeProb * targetProb;
+      }
+      
+      probabilities.set(nodeId, totalProb);
+      return totalProb;
     }
     
-    var graphId = cellValue.toString().replace('graph://', '').split('?')[0];
-    
-    viewGraphHistory(cell, graphId);
+    return dfs(startNode.id);
   } catch (e) {
-    SpreadsheetApp.getUi().alert('Error in menuViewHistory: ' + e.message);
+    return "Error calculating probability: " + e.message;
+  }
+}
+
+/**
+ * Calculate expected cost from start to any end node
+ * Now with conditional probability support
+ */
+function calculateCost(graph, startNode, endNodes, effectiveVisited, whatIfData) {
+  try {
+    var visited = [];
+    var costs = {};
+    
+    function dfs(nodeId) {
+      // Check if already visited
+      for (var i = 0; i < visited.length; i++) {
+        if (visited[i] === nodeId) {
+          return costs[nodeId] || 0;
+        }
+      }
+      
+      // Check if it's an end node
+      for (var j = 0; j < endNodes.length; j++) {
+        if (endNodes[j].id === nodeId) {
+          costs[nodeId] = 0;
+          return 0;
+        }
+      }
+      
+      visited.push(nodeId);
+      var totalCost = 0;
+      
+      var outgoingEdges = [];
+      for (var k = 0; k < graph.edges.length; k++) {
+        if (graph.edges[k].from === nodeId) {
+          outgoingEdges.push(graph.edges[k]);
+        }
+      }
+      
+      for (var i = 0; i < outgoingEdges.length; i++) {
+        var edge = outgoingEdges[i];
+        
+        // Handle new cost structure: edge.costs.monetary.value
+        var edgeCost = 0;
+        if (edge.costs && edge.costs.monetary && typeof edge.costs.monetary === 'object') {
+          edgeCost = edge.costs.monetary.value || 0;
+        } else if (edge.costs && typeof edge.costs.monetary === 'number') {
+          // Backward compatibility with old structure
+          edgeCost = edge.costs.monetary;
+        }
+        
+        // Use getEffectiveEdgeProbability to handle conditional probabilities and case overrides
+        var edgeProb = effectiveVisited && whatIfData ? 
+          getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData) :
+          (edge.p && edge.p.mean ? edge.p.mean : 0.5);
+        
+        var targetCost = dfs(edge.to);
+        totalCost += edgeProb * (edgeCost + targetCost);
+      }
+      
+      costs[nodeId] = totalCost;
+      return totalCost;
+    }
+    
+    return dfs(startNode.id);
+  } catch (e) {
+    return "Error calculating cost: " + e.message;
+  }
+}
+
+/**
+ * Calculate expected time from start to any end node
+ * Now with conditional probability support
+ */
+function calculateTime(graph, startNode, endNodes, effectiveVisited, whatIfData) {
+  try {
+    var visited = [];
+    var times = {};
+    
+    function dfs(nodeId) {
+      // Check if already visited
+      for (var i = 0; i < visited.length; i++) {
+        if (visited[i] === nodeId) {
+          return times[nodeId] || 0;
+        }
+      }
+      
+      // Check if it's an end node
+      for (var j = 0; j < endNodes.length; j++) {
+        if (endNodes[j].id === nodeId) {
+          times[nodeId] = 0;
+          return 0;
+        }
+      }
+      
+      visited.push(nodeId);
+      var totalTime = 0;
+      
+      var outgoingEdges = [];
+      for (var k = 0; k < graph.edges.length; k++) {
+        if (graph.edges[k].from === nodeId) {
+          outgoingEdges.push(graph.edges[k]);
+        }
+      }
+      
+      for (var i = 0; i < outgoingEdges.length; i++) {
+        var edge = outgoingEdges[i];
+        // Handle new cost structure: edge.costs.time.value (in days)
+        var edgeTime = 0;
+        if (edge.costs && edge.costs.time && typeof edge.costs.time === 'object') {
+          edgeTime = edge.costs.time.value || 0;
+          // Convert to days if needed
+          if (edge.costs.time.units === 'hours') {
+            edgeTime = edgeTime / 24; // Convert hours to days
+          } else if (edge.costs.time.units === 'weeks') {
+            edgeTime = edgeTime * 7; // Convert weeks to days
+          }
+          // If units is 'days' or undefined, use as-is
+        } else if (edge.costs && typeof edge.costs.time === 'number') {
+          // Backward compatibility with old structure (assume days)
+          edgeTime = edge.costs.time;
+        }
+        
+        // Use getEffectiveEdgeProbability to handle conditional probabilities and case overrides
+        var edgeProb = effectiveVisited && whatIfData ? 
+          getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData) :
+          (edge.p && edge.p.mean ? edge.p.mean : 0.5);
+        
+        var targetTime = dfs(edge.to);
+        totalTime += edgeProb * (edgeTime + targetTime);
+      }
+      
+      times[nodeId] = totalTime;
+      return totalTime;
+    }
+    
+    return dfs(startNode.id);
+  } catch (e) {
+    return "Error calculating time: " + e.message;
   }
 }
