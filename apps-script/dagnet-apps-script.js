@@ -2096,23 +2096,25 @@ function applyParameterOverrides(graph, parameters) {
     
     for (var reference in parameters) {
       var value = parameters[reference];
-      var parsed = parseConditionalReference(reference);
-      if (!parsed) continue;
       
-      // Find the edge
-      var edgeIndex = -1;
-      for (var i = 0; i < modifiedGraph.edges.length; i++) {
-        var edge = modifiedGraph.edges[i];
-        if (edge.slug === parsed.edgeSlug || edge.id === parsed.edgeSlug) {
-          edgeIndex = i;
-          break;
+      // Check if it's a conditional probability parameter
+      var conditionalMatch = reference.match(/^e\.([^.]+)\.visited\(([^)]+)\)\.p\.(mean|stdev|locked)$/);
+      if (conditionalMatch) {
+        var edgeSlug = conditionalMatch[1];
+        var nodeSlugStr = conditionalMatch[2];
+        var param = conditionalMatch[3];
+        var nodeSlugs = nodeSlugStr.split(',').map(function(s) { return s.trim(); }).sort();
+        
+        // Find the edge
+        var edge = null;
+        for (var i = 0; i < modifiedGraph.edges.length; i++) {
+          if (modifiedGraph.edges[i].slug === edgeSlug || modifiedGraph.edges[i].id === edgeSlug) {
+            edge = modifiedGraph.edges[i];
+            break;
+          }
         }
-      }
-      if (edgeIndex < 0) continue;
-      
-      var edge = modifiedGraph.edges[edgeIndex];
-      
-      if (parsed.isConditional) {
+        if (!edge) continue;
+        
         // Apply to conditional_p
         if (!edge.conditional_p) edge.conditional_p = [];
         
@@ -2124,7 +2126,7 @@ function applyParameterOverrides(graph, parameters) {
             return resolveNodeSlug(modifiedGraph, id);
           }).sort();
           
-          if (arraysEqual(conditionNodes, parsed.nodeSlugs)) {
+          if (arraysEqual(conditionNodes, nodeSlugs)) {
             conditionalProb = cp;
             break;
           }
@@ -2132,7 +2134,7 @@ function applyParameterOverrides(graph, parameters) {
         
         if (!conditionalProb) {
           // Create new conditional
-          var nodeIds = parsed.nodeSlugs.map(function(slug) {
+          var nodeIds = nodeSlugs.map(function(slug) {
             return resolveNodeId(modifiedGraph, slug);
           });
           conditionalProb = {
@@ -2143,44 +2145,16 @@ function applyParameterOverrides(graph, parameters) {
         }
         
         // Update parameter
-        conditionalProb.p[parsed.param] = value;
-      } else {
-        // Apply to base probability or costs
-        if (parsed.param === 'mean' || parsed.param === 'stdev' || parsed.param === 'locked') {
-          // Probability parameter
-          if (!edge.p) edge.p = {};
-          edge.p[parsed.param] = value;
-        } else if (parsed.param.startsWith('costs.')) {
-          // Cost parameter
-          if (!edge.costs) edge.costs = {};
-          var costPath = parsed.param.substring(7); // Remove 'costs.' prefix
-          
-          if (costPath.startsWith('monetary.')) {
-            if (!edge.costs.monetary) edge.costs.monetary = {};
-            var monetaryPath = costPath.substring(9); // Remove 'monetary.' prefix
-            if (monetaryPath === 'value') {
-              edge.costs.monetary.value = value;
-            } else if (monetaryPath === 'stdev') {
-              edge.costs.monetary.stdev = value;
-            } else if (monetaryPath === 'currency') {
-              edge.costs.monetary.currency = value;
-            } else if (monetaryPath === 'distribution') {
-              edge.costs.monetary.distribution = value;
-            }
-          } else if (costPath.startsWith('time.')) {
-            if (!edge.costs.time) edge.costs.time = {};
-            var timePath = costPath.substring(5); // Remove 'time.' prefix
-            if (timePath === 'value') {
-              edge.costs.time.value = value;
-            } else if (timePath === 'stdev') {
-              edge.costs.time.stdev = value;
-            } else if (timePath === 'units') {
-              edge.costs.time.units = value;
-            } else if (timePath === 'distribution') {
-              edge.costs.time.distribution = value;
-            }
-          }
-        }
+        conditionalProb.p[param] = value;
+        continue;
+      }
+      
+      // Otherwise, use the generic applyCustomParameters logic for all other e.* parameters
+      // This handles e.<edge>.p.<param>, e.<edge>.costs.<path>, etc.
+      if (reference.startsWith('e.')) {
+        var tempParams = {};
+        tempParams[reference] = value;
+        modifiedGraph = applyCustomParameters(modifiedGraph, tempParams);
       }
     }
     
