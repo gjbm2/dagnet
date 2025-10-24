@@ -663,7 +663,7 @@ function flattenNodeParameters(node) {
     if (node.case.variants && node.case.variants.length > 0) {
       params.push({
         name: 'n.' + nodeIdentifier + '.case.variants',
-        value: node.case.variants.join(',')
+        value: node.case.variants.map(function(variant) { return variant.name || variant; }).join(',')
       });
     }
   }
@@ -1125,7 +1125,7 @@ function flattenAllNodeParameters(node) {
     if (node.case.variants && node.case.variants.length > 0) {
       params.push({
         name: 'n.' + nodeIdentifier + '.case.variants',
-        value: node.case.variants.join(',')
+        value: node.case.variants.map(function(variant) { return variant.name || variant; }).join(',')
       });
     }
   }
@@ -1440,7 +1440,7 @@ function dagGetNodes(input, match) {
       if (node.type === 'case' && node.case) {
         caseId = node.case.id || '';
         if (node.case.variants && node.case.variants.length > 0) {
-          caseVariants = node.case.variants.join(', ');
+          caseVariants = node.case.variants.map(function(variant) { return variant.name || variant; }).join(', ');
         }
       }
       
@@ -1603,11 +1603,16 @@ function dagGetGraph(urlOrName, branch) {
             '&raw=true&format=pretty';
     }
     
+    // Debug logging
+    console.log('dagGetGraph - Fetching URL: ' + url);
+    
     // Fetch the graph
     var response = UrlFetchApp.fetch(url, {
       method: 'get',
       muteHttpExceptions: true
     });
+    
+    console.log('dagGetGraph - Response code: ' + response.getResponseCode());
     
     var statusCode = response.getResponseCode();
     var content = response.getContentText();
@@ -1615,9 +1620,9 @@ function dagGetGraph(urlOrName, branch) {
     if (statusCode !== 200) {
       try {
         var errorData = JSON.parse(content);
-        return 'Error: ' + (errorData.error || 'Failed to fetch graph');
+        return 'Error: ' + (errorData.error || 'Failed to fetch graph') + ' (URL: ' + url + ')';
       } catch (e) {
-        return 'Error: HTTP ' + statusCode;
+        return 'Error: HTTP ' + statusCode + ' (URL: ' + url + ')';
       }
     }
     
@@ -2309,17 +2314,21 @@ function dagCalc(input, operation, startNode, endNode, customParams, whatIf) {
  */
 function calculateProbability(graph, startNode, endNodes, effectiveVisited, whatIfData) {
   try {
-    var visited = new Set();
-    var probabilities = new Map();
+    var visited = {};
+    var probabilities = {};
     
-    function dfs(nodeId) {
-      if (visited.has(nodeId)) return probabilities.get(nodeId) || 0;
+    function dfs(nodeId, pathContext) {
+      // Build cache key from nodeId + sorted path context keys
+      var contextKeys = Object.keys(pathContext).sort();
+      var cacheKey = nodeId + '|' + contextKeys.join(',');
+      
+      if (visited[cacheKey]) return probabilities[cacheKey] || 0;
       if (endNodes.some(function(end) { return end.id === nodeId; })) {
-        probabilities.set(nodeId, 1);
+        probabilities[cacheKey] = 1;
         return 1;
       }
       
-      visited.add(nodeId);
+      visited[cacheKey] = true;
       var totalProb = 0;
       
       var outgoingEdges = graph.edges.filter(function(edge) {
@@ -2329,20 +2338,107 @@ function calculateProbability(graph, startNode, endNodes, effectiveVisited, what
       for (var i = 0; i < outgoingEdges.length; i++) {
         var edge = outgoingEdges[i];
         
-        // Use getEffectiveEdgeProbability to handle conditional probabilities and case overrides
-        var edgeProb = effectiveVisited && whatIfData ? 
-          getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData) :
-          (edge.p && edge.p.mean ? edge.p.mean : 0.5);
+        // Get base probability
+        var edgeProb = edge.p && edge.p.mean ? edge.p.mean : 0.5;
         
-        var targetProb = dfs(edge.to);
+        // Build edge path context (includes nodes visited so far on this path)
+        var edgePathContext = {};
+        for (var key in pathContext) {
+          edgePathContext[key] = pathContext[key];
+        }
+        if (effectiveVisited) {
+          for (var key in effectiveVisited) {
+            edgePathContext[key] = effectiveVisited[key];
+          }
+        }
+        
+        // Check for conditional probabilities based on path context
+        if (edge.conditional_p && edge.conditional_p.length > 0) {
+          for (var j = 0; j < edge.conditional_p.length; j++) {
+            var conditionalProb = edge.conditional_p[j];
+            if (conditionalProb.condition && conditionalProb.condition.visited && conditionalProb.condition.visited.length > 0) {
+              var conditionNodes = conditionalProb.condition.visited;
+              
+              // Check if ALL required nodes are in path context
+              var allVisited = true;
+              for (var k = 0; k < conditionNodes.length; k++) {
+                if (!edgePathContext[conditionNodes[k]]) {
+                  allVisited = false;
+                  break;
+                }
+              }
+              
+              if (allVisited) {
+                // Use conditional probability
+                edgeProb = conditionalProb.p && conditionalProb.p.mean !== undefined ? 
+                  conditionalProb.p.mean : edgeProb;
+                break; // First match wins
+              }
+            }
+          }
+        }
+        
+        // Apply case variant weights if present (even without whatIf scenario)
+        if (edge.case_id && edge.case_variant) {
+          // Find the case node
+          for (var j = 0; j < graph.nodes.length; j++) {
+            var node = graph.nodes[j];
+            if (node.type === 'case' && node.case && node.case.id === edge.case_id) {
+              // Find the variant weight
+              if (node.case.variants) {
+                for (var k = 0; k < node.case.variants.length; k++) {
+                  var variant = node.case.variants[k];
+                  if (variant.name === edge.case_variant) {
+                    var variantWeight = variant.weight || 0;
+                    
+                    // Apply what-if override if present
+                    if (whatIfData && whatIfData.cases && whatIfData.cases[node.id]) {
+                      variantWeight = (edge.case_variant === whatIfData.cases[node.id]) ? 1.0 : 0.0;
+                    }
+                    
+                    edgeProb *= variantWeight;
+                    break;
+                  }
+                }
+              }
+              break;
+            }
+          }
+        }
+        
+        // Update path context with target node (use slug for matching conditionals)
+        var nextPathContext = {};
+        for (var key in edgePathContext) {
+          nextPathContext[key] = edgePathContext[key];
+        }
+        // Find target node and use its slug (conditionals reference slugs, not IDs)
+        var targetSlug = edge.to;
+        for (var j = 0; j < graph.nodes.length; j++) {
+          if (graph.nodes[j].id === edge.to) {
+            targetSlug = graph.nodes[j].slug || edge.to;
+            break;
+          }
+        }
+        nextPathContext[targetSlug] = true;
+        nextPathContext[edge.to] = true; // Also add ID for backwards compatibility
+        
+        var targetProb = dfs(edge.to, nextPathContext);
         totalProb += edgeProb * targetProb;
       }
       
-      probabilities.set(nodeId, totalProb);
+      probabilities[cacheKey] = totalProb;
       return totalProb;
     }
     
-    return dfs(startNode.id);
+    // Start with empty path context (or effectiveVisited if provided)
+    var initialContext = {};
+    if (effectiveVisited) {
+      for (var key in effectiveVisited) {
+        initialContext[key] = effectiveVisited[key];
+      }
+    }
+    
+    return dfs(startNode.id, initialContext);
   } catch (e) {
     return "Error calculating probability: " + e.message;
   }
@@ -2395,10 +2491,34 @@ function calculateCost(graph, startNode, endNodes, effectiveVisited, whatIfData)
           edgeCost = edge.costs.monetary;
         }
         
-        // Use getEffectiveEdgeProbability to handle conditional probabilities and case overrides
-        var edgeProb = effectiveVisited && whatIfData ? 
-          getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData) :
-          (edge.p && edge.p.mean ? edge.p.mean : 0.5);
+        // Get base probability
+        var edgeProb = edge.p && edge.p.mean ? edge.p.mean : 0.5;
+        
+        // Apply case variant weights if present (even without whatIf scenario)
+        if (edge.case_id && edge.case_variant) {
+          // Find the case node
+          for (var j = 0; j < graph.nodes.length; j++) {
+            var node = graph.nodes[j];
+            if (node.type === 'case' && node.case && node.case.id === edge.case_id) {
+              // Find the variant weight
+              if (node.case.variants) {
+                for (var k = 0; k < node.case.variants.length; k++) {
+                  var variant = node.case.variants[k];
+                  if (variant.name === edge.case_variant) {
+                    edgeProb *= (variant.weight || 0);
+                    break;
+                  }
+                }
+              }
+              break;
+            }
+          }
+        }
+        
+        // If whatIf scenario provided, use full conditional logic
+        if (effectiveVisited && whatIfData) {
+          edgeProb = getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData);
+        }
         
         var targetCost = dfs(edge.to);
         totalCost += edgeProb * (edgeCost + targetCost);
@@ -2467,10 +2587,34 @@ function calculateTime(graph, startNode, endNodes, effectiveVisited, whatIfData)
           edgeTime = edge.costs.time;
         }
         
-        // Use getEffectiveEdgeProbability to handle conditional probabilities and case overrides
-        var edgeProb = effectiveVisited && whatIfData ? 
-          getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData) :
-          (edge.p && edge.p.mean ? edge.p.mean : 0.5);
+        // Get base probability
+        var edgeProb = edge.p && edge.p.mean ? edge.p.mean : 0.5;
+        
+        // Apply case variant weights if present (even without whatIf scenario)
+        if (edge.case_id && edge.case_variant) {
+          // Find the case node
+          for (var j = 0; j < graph.nodes.length; j++) {
+            var node = graph.nodes[j];
+            if (node.type === 'case' && node.case && node.case.id === edge.case_id) {
+              // Find the variant weight
+              if (node.case.variants) {
+                for (var k = 0; k < node.case.variants.length; k++) {
+                  var variant = node.case.variants[k];
+                  if (variant.name === edge.case_variant) {
+                    edgeProb *= (variant.weight || 0);
+                    break;
+                  }
+                }
+              }
+              break;
+            }
+          }
+        }
+        
+        // If whatIf scenario provided, use full conditional logic
+        if (effectiveVisited && whatIfData) {
+          edgeProb = getEffectiveEdgeProbability(edge, graph, effectiveVisited, whatIfData);
+        }
         
         var targetTime = dfs(edge.to);
         totalTime += edgeProb * (edgeTime + targetTime);
