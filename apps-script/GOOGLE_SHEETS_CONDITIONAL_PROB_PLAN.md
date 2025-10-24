@@ -174,7 +174,7 @@ function dagCalc(input, operation, startNode, endNode, customParams, whatIf)
 =dagCalc(A1, DG_PROBABILITY, "start", DG_ANY_SUCCESS)
 
 // With parameter override only
-=dagCalc(A1, DG_PROBABILITY, "start", DG_ANY_SUCCESS,
+=dagCalc(A1, DG_PROBABILITY, "start", DG_ANY_SUCCESS, 
   dagParams("e.checkout.p.mean", 0.7))
 
 // With case what-if
@@ -266,7 +266,7 @@ case.<case-id>.<variant-name>.weight
 When evaluating an edge, the runner must:
 
 1. **Build the effective visited set:**
-   ```javascript
+```javascript
    effectiveVisited = (hyperprior ∪ assumeVisited) \ excludeVisited
    ```
    
@@ -686,7 +686,7 @@ C2: =dagCalc(A1, DG_PROBABILITY, "start", DG_ANY_SUCCESS,
    - Test base probability references
    - Test conditional probability references
    - Test multi-node conditions
-   - Test alphabetical sorting
+- Test alphabetical sorting
 
 3. **Effective visited computation**
    - Test hyperprior from cases
