@@ -685,17 +685,25 @@ function flattenNodeParameters(node) {
   
   // Handle case node information (NEW)
   if (node.type === 'case' && node.case) {
-    if (node.case.id) {
-      params.push({
-        name: 'n.' + nodeIdentifier + '.case.id',
-        value: node.case.id
-      });
-    }
+    // Don't include case.id as a parameter - it's structural metadata
+    // if (node.case.id) {
+    //   params.push({
+    //     name: 'n.' + nodeIdentifier + '.case.id',
+    //     value: node.case.id
+    //   });
+    // }
     if (node.case.variants && node.case.variants.length > 0) {
-      params.push({
-        name: 'n.' + nodeIdentifier + '.case.variants',
-        value: node.case.variants.map(function(variant) { return variant.name || variant; }).join(',')
-      });
+      // Extract each variant weight as a separate parameter
+      // Format: n.<node>.case.variants(<variant-name>) = weight
+      for (var i = 0; i < node.case.variants.length; i++) {
+        var variant = node.case.variants[i];
+        var variantName = variant.name || variant;
+        var variantWeight = variant.weight !== undefined ? variant.weight : 1;
+        params.push({
+          name: 'n.' + nodeIdentifier + '.case.variants(' + variantName + ')',
+          value: variantWeight
+        });
+      }
     }
   }
   
@@ -843,17 +851,18 @@ function flattenEdgeParameters(edge, graph) {
     }
   }
   
-  // Handle case variant information
-  if (edge.case_id && edge.case_variant) {
-    params.push({
-      name: 'e.' + edgeIdentifier + '.case_id',
-      value: edge.case_id
-    });
-    params.push({
-      name: 'e.' + edgeIdentifier + '.case_variant',
-      value: edge.case_variant
-    });
-  }
+  // Handle case variant information - but don't include as parameters
+  // These are structural metadata, not user-configurable parameters
+  // if (edge.case_id && edge.case_variant) {
+  //   params.push({
+  //     name: 'e.' + edgeIdentifier + '.case_id',
+  //     value: edge.case_id
+  //   });
+  //   params.push({
+  //     name: 'e.' + edgeIdentifier + '.case_variant',
+  //     value: edge.case_variant
+  //   });
+  // }
   
   // Handle weight_default
   if (edge.weight_default !== undefined && edge.weight_default > 0) {
@@ -1147,17 +1156,25 @@ function flattenAllNodeParameters(node) {
   
   // Handle case node information (NEW - include all)
   if (node.type === 'case' && node.case) {
-    if (node.case.id) {
-      params.push({
-        name: 'n.' + nodeIdentifier + '.case.id',
-        value: node.case.id
-      });
-    }
+    // Don't include case.id as a parameter - it's structural metadata
+    // if (node.case.id) {
+    //   params.push({
+    //     name: 'n.' + nodeIdentifier + '.case.id',
+    //     value: node.case.id
+    //   });
+    // }
     if (node.case.variants && node.case.variants.length > 0) {
-      params.push({
-        name: 'n.' + nodeIdentifier + '.case.variants',
-        value: node.case.variants.map(function(variant) { return variant.name || variant; }).join(',')
-      });
+      // Extract each variant weight as a separate parameter
+      // Format: n.<node>.case.variants(<variant-name>) = weight
+      for (var i = 0; i < node.case.variants.length; i++) {
+        var variant = node.case.variants[i];
+        var variantName = variant.name || variant;
+        var variantWeight = variant.weight !== undefined ? variant.weight : 1;
+        params.push({
+          name: 'n.' + nodeIdentifier + '.case.variants(' + variantName + ')',
+          value: variantWeight
+        });
+      }
     }
   }
   
@@ -1305,19 +1322,20 @@ function flattenAllEdgeParameters(edge, graph) {
     }
   }
   
-  // Handle case variant information (include ALL)
-  if (edge.case_id) {
-    params.push({
-      name: 'e.' + edgeIdentifier + '.case_id',
-      value: edge.case_id
-    });
-  }
-  if (edge.case_variant) {
-    params.push({
-      name: 'e.' + edgeIdentifier + '.case_variant',
-      value: edge.case_variant
-    });
-  }
+  // Handle case variant information - but don't include as parameters
+  // These are structural metadata, not user-configurable parameters
+  // if (edge.case_id) {
+  //   params.push({
+  //     name: 'e.' + edgeIdentifier + '.case_id',
+  //     value: edge.case_id
+  //   });
+  // }
+  // if (edge.case_variant) {
+  //   params.push({
+  //     name: 'e.' + edgeIdentifier + '.case_variant',
+  //     value: edge.case_variant
+  //   });
+  // }
   
   // Handle weight_default (include all, even zeros)
   if (edge.weight_default !== undefined) {
@@ -1471,7 +1489,11 @@ function dagGetNodes(input, match) {
       if (node.type === 'case' && node.case) {
         caseId = node.case.id || '';
         if (node.case.variants && node.case.variants.length > 0) {
-          caseVariants = node.case.variants.map(function(variant) { return variant.name || variant; }).join(', ');
+          caseVariants = node.case.variants.map(function(variant) {
+            var name = variant.name || variant;
+            var weight = variant.weight !== undefined ? variant.weight : 1;
+            return name + ':' + weight;
+          }).join(', ');
         }
       }
       
@@ -2178,6 +2200,37 @@ function applyCustomParameters(graph, customParams) {
         }
         
         if (element) {
+          // Special handling for case variant weights - n.<node>.case.variants(<variant-name>) = weight
+          if (elementType === 'node' && propertyPath.length >= 2 && 
+              propertyPath[0] === 'case' && propertyPath[1].startsWith('variants(')) {
+            // Extract variant name from variants(<name>)
+            var variantMatch = propertyPath[1].match(/^variants\(([^)]+)\)$/);
+            if (variantMatch) {
+              var variantName = variantMatch[1];
+              var variantWeight = parseFloat(paramValue);
+              
+              // Ensure element.case.variants exists
+              if (!element.case) element.case = {};
+              if (!element.case.variants) element.case.variants = [];
+              
+              // Find existing variant or create new one
+              var variantFound = false;
+              for (var v = 0; v < element.case.variants.length; v++) {
+                if (element.case.variants[v].name === variantName) {
+                  element.case.variants[v].weight = variantWeight;
+                  variantFound = true;
+                  break;
+                }
+              }
+              
+              if (!variantFound) {
+                element.case.variants.push({ name: variantName, weight: variantWeight });
+              }
+              
+              continue;
+            }
+          }
+          
           // Apply the parameter using dot notation
           setNestedProperty(element, propertyPath, paramValue);
         }
