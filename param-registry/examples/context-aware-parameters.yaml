@@ -1,0 +1,241 @@
+# Example Context-Aware Parameters
+# This file demonstrates how parameters use context filters
+
+# Example 1: Base parameter (no context)
+---
+id: signup-base
+name: "Signup Conversion - Baseline"
+type: probability
+edge_reference: e.signup.p.mean
+
+# No context_filter means this applies when no other context-specific parameter matches
+value:
+  mean: 0.30
+  stdev: 0.05
+  distribution: beta
+
+metadata:
+  description: "Baseline signup conversion rate across all channels and devices"
+  units: "probability"
+  constraints:
+    min: 0.0
+    max: 1.0
+  tags: ["conversion", "signup", "baseline"]
+  created_at: "2025-10-21T00:00:00Z"
+  author: "data-team"
+  version: "1.0.0"
+  status: "active"
+
+# Example 2: Single context filter (channel only)
+---
+id: signup-google
+name: "Signup Conversion - Google Ads"
+type: probability
+edge_reference: e.signup.context(channel='google').p.mean
+
+context_filter:
+  channel: google
+
+value:
+  mean: 0.35
+  stdev: 0.04
+  distribution: beta
+
+metadata:
+  description: "Signup conversion rate for Google Ads traffic (all devices)"
+  units: "probability"
+  constraints:
+    min: 0.0
+    max: 1.0
+  data_source:
+    type: sheets
+    url: "https://docs.google.com/spreadsheets/d/abc123/edit"
+    refresh_frequency: "1d"
+  tags: ["conversion", "signup", "google"]
+  created_at: "2025-10-21T00:00:00Z"
+  author: "marketing-team"
+  version: "1.0.0"
+  status: "active"
+
+# Example 3: Multiple context filters (channel + device)
+---
+id: signup-google-mobile
+name: "Signup Conversion - Google Ads Mobile"
+type: probability
+edge_reference: e.signup.context(channel='google',device='mobile').p.mean
+
+context_filter:
+  channel: google
+  device: mobile
+
+value:
+  mean: 0.32
+  stdev: 0.06
+  distribution: beta
+
+metadata:
+  description: "Signup conversion rate for Google Ads traffic on mobile devices"
+  units: "probability"
+  constraints:
+    min: 0.0
+    max: 1.0
+  tags: ["conversion", "signup", "google", "mobile"]
+  created_at: "2025-10-21T00:00:00Z"
+  author: "mobile-team"
+  version: "1.0.0"
+  status: "active"
+  references:
+    - type: dataset
+      title: "Q4 2024 Mobile Conversion Analysis"
+      url: "https://example.com/reports/q4-2024"
+
+# Example 4: Multiple context filters (channel + device) - different combination
+---
+id: signup-facebook-desktop
+name: "Signup Conversion - Facebook Desktop"
+type: probability
+edge_reference: e.signup.context(channel='facebook',device='desktop').p.mean
+
+context_filter:
+  channel: facebook
+  device: desktop
+
+value:
+  mean: 0.28
+  stdev: 0.05
+  distribution: beta
+
+metadata:
+  description: "Signup conversion rate for Facebook Ads on desktop"
+  units: "probability"
+  constraints:
+    min: 0.0
+    max: 1.0
+  tags: ["conversion", "signup", "facebook", "desktop"]
+  created_at: "2025-10-21T00:00:00Z"
+  author: "marketing-team"
+  version: "1.0.0"
+  status: "active"
+
+# Example 5: Context + Visited combination
+---
+id: checkout-returning-google
+name: "Checkout Conversion - Returning Google Users"
+type: probability
+edge_reference: e.checkout.visited(pricing).context(channel='google').p.mean
+
+visited_filter: [pricing]
+context_filter:
+  channel: google
+
+value:
+  mean: 0.45
+  stdev: 0.04
+  distribution: beta
+
+metadata:
+  description: "Checkout conversion for Google users who viewed pricing page"
+  units: "probability"
+  constraints:
+    min: 0.0
+    max: 1.0
+  tags: ["conversion", "checkout", "google", "returning"]
+  created_at: "2025-10-21T00:00:00Z"
+  author: "data-team"
+  version: "1.0.0"
+  status: "active"
+
+# Example 6: Standard deviation parameter with context
+---
+id: signup-google-stdev
+name: "Signup Conversion StDev - Google Ads"
+type: standard_deviation
+edge_reference: e.signup.context(channel='google').p.stdev
+
+context_filter:
+  channel: google
+
+value: 0.04
+
+metadata:
+  description: "Standard deviation for Google Ads signup conversion rate"
+  units: "probability"
+  tags: ["stdev", "signup", "google"]
+  created_at: "2025-10-21T00:00:00Z"
+  author: "data-team"
+  version: "1.0.0"
+  status: "active"
+
+# Example 7: Browser-specific optimization
+---
+id: signup-safari-mobile
+name: "Signup Conversion - Safari Mobile (Optimized)"
+type: probability
+edge_reference: e.signup.context(browser='safari',device='mobile').p.mean
+
+context_filter:
+  browser: safari
+  device: mobile
+
+value:
+  mean: 0.38
+  stdev: 0.05
+  distribution: beta
+
+metadata:
+  description: "Signup conversion on Safari mobile (after UX optimizations for iOS)"
+  units: "probability"
+  constraints:
+    min: 0.0
+    max: 1.0
+  tags: ["conversion", "signup", "safari", "mobile", "optimized"]
+  created_at: "2025-10-21T00:00:00Z"
+  updated_at: "2025-10-15T00:00:00Z"
+  author: "mobile-team"
+  version: "1.1.0"
+  status: "active"
+  references:
+    - type: documentation
+      title: "iOS Safari Conversion Optimization Project"
+      url: "https://example.com/docs/safari-optimization"
+
+# Example 8: UTM source tracking
+---
+id: signup-newsletter
+name: "Signup Conversion - Newsletter Campaign"
+type: probability
+edge_reference: e.signup.context(utm_source='newsletter').p.mean
+
+context_filter:
+  utm_source: newsletter
+
+value:
+  mean: 0.42
+  stdev: 0.03
+  distribution: beta
+
+metadata:
+  description: "Signup conversion rate for newsletter campaign traffic"
+  units: "probability"
+  constraints:
+    min: 0.0
+    max: 1.0
+  data_source:
+    type: api
+    url: "https://analytics.example.com/api/newsletter-conversions"
+    refresh_frequency: "6h"
+    authentication:
+      type: token
+  analytics:
+    bayesian_prior:
+      alpha: 8.4
+      beta: 11.6
+    update_frequency: "1d"
+  tags: ["conversion", "signup", "newsletter", "utm"]
+  created_at: "2025-10-21T00:00:00Z"
+  author: "email-team"
+  version: "1.0.0"
+  status: "active"
+
+
+

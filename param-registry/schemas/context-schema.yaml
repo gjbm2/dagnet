@@ -1,0 +1,279 @@
+# Context Definitions Schema
+# This schema defines the structure for the contexts.yaml file
+# which contains canonical definitions of all available context variables.
+
+type: object
+required: [contexts, metadata]
+additionalProperties: false
+
+properties:
+  contexts:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      required: [id, name, type, values]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z_][a-z0-9_]*$'
+          minLength: 2
+          maxLength: 32
+          description: "Context identifier (snake_case) - lowercase, alphanumeric, underscores"
+          examples: ["channel", "device", "utm_source", "geo_country"]
+        
+        name:
+          type: string
+          minLength: 3
+          maxLength: 64
+          description: "Human-readable context name"
+          examples: ["Marketing Channel", "Device Type", "UTM Source"]
+        
+        description:
+          type: string
+          minLength: 10
+          maxLength: 500
+          description: "Detailed description of what this context represents"
+        
+        type:
+          type: string
+          enum: [categorical, ordinal, continuous]
+          description: |
+            Context type:
+            - categorical: Discrete unordered values (e.g., channel, browser)
+            - ordinal: Discrete ordered values (e.g., browser_version, time_of_day)
+            - continuous: Numeric range (future: not yet implemented)
+        
+        values:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required: [id, label]
+            additionalProperties: false
+            properties:
+              id:
+                type: string
+                pattern: '^[a-z0-9_-]+$'
+                minLength: 1
+                maxLength: 32
+                description: "Value identifier (kebab-case or snake_case)"
+                examples: ["google", "facebook", "mobile", "chrome-120"]
+              
+              label:
+                type: string
+                minLength: 1
+                maxLength: 64
+                description: "Human-readable label for UI display"
+                examples: ["Google Ads", "Mobile", "Chrome 120+"]
+              
+              description:
+                type: string
+                maxLength: 200
+                description: "Optional description of this value"
+              
+              order:
+                type: integer
+                minimum: 0
+                description: "Order value for ordinal contexts (required if type is ordinal)"
+              
+              aliases:
+                type: array
+                items:
+                  type: string
+                  pattern: '^[a-z0-9_-]+$'
+                uniqueItems: true
+                description: "Alternative identifiers for this value"
+          description: "Valid values for this context"
+        
+        comparison_support:
+          type: boolean
+          default: false
+          description: "Whether this context supports comparison operators (>, <, >=, <=)"
+        
+        default_value:
+          type: string
+          description: "Default value ID if none specified (optional)"
+        
+        metadata:
+          type: object
+          properties:
+            category:
+              type: string
+              enum: [marketing, technical, geographic, temporal, behavioral, business]
+              description: "Category for grouping contexts in UI"
+            
+            data_source:
+              type: string
+              description: "Where this context data comes from"
+              examples: ["utm_parameters", "user_agent", "geoip", "timestamp"]
+            
+            created_at:
+              type: string
+              format: date-time
+              description: "ISO 8601 timestamp when context was created"
+            
+            updated_at:
+              type: string
+              format: date-time
+              description: "ISO 8601 timestamp when context was last updated"
+            
+            version:
+              type: string
+              pattern: '^\\d+\\.\\d+\\.\\d+$'
+              description: "Semantic version of this context definition"
+            
+            status:
+              type: string
+              enum: [active, deprecated, draft]
+              default: "active"
+              description: "Current status of this context"
+            
+            deprecation_notice:
+              type: string
+              description: "Reason for deprecation (if status is deprecated)"
+            
+            replacement_context_id:
+              type: string
+              description: "ID of context that replaces this one (if deprecated)"
+          additionalProperties: false
+      
+      # Validation rules
+      allOf:
+        # If type is ordinal, all values must have 'order' property
+        - if:
+            properties:
+              type:
+                const: ordinal
+          then:
+            properties:
+              values:
+                items:
+                  required: [order]
+        
+        # If comparison_support is true, type must be ordinal
+        - if:
+            properties:
+              comparison_support:
+                const: true
+          then:
+            properties:
+              type:
+                enum: [ordinal]
+    
+    description: "Array of context definitions"
+  
+  metadata:
+    type: object
+    required: [version, created_at, updated_at]
+    properties:
+      version:
+        type: string
+        pattern: '^\\d+\\.\\d+\\.\\d+$'
+        description: "Semantic version of this contexts file"
+      
+      created_at:
+        type: string
+        format: date-time
+        description: "ISO 8601 timestamp when this file was created"
+      
+      updated_at:
+        type: string
+        format: date-time
+        description: "ISO 8601 timestamp when this file was last updated"
+      
+      description:
+        type: string
+        maxLength: 500
+        description: "Description of this contexts file"
+      
+      author:
+        type: string
+        description: "Author or team responsible for context definitions"
+      
+      changelog:
+        type: array
+        items:
+          type: object
+          properties:
+            version:
+              type: string
+            date:
+              type: string
+              format: date-time
+            changes:
+              type: string
+        description: "Change history for this contexts file"
+    additionalProperties: false
+
+# Example valid contexts file
+examples:
+  - contexts:
+      - id: channel
+        name: "Marketing Channel"
+        description: "Source channel for user acquisition"
+        type: categorical
+        values:
+          - id: google
+            label: "Google Ads"
+            description: "Google Ads campaigns"
+          - id: facebook
+            label: "Facebook Ads"
+            description: "Facebook advertising"
+          - id: organic
+            label: "Organic Search"
+            description: "Unpaid search traffic"
+        metadata:
+          category: marketing
+          data_source: "utm_parameters"
+          created_at: "2025-10-21T00:00:00Z"
+          version: "1.0.0"
+          status: "active"
+      
+      - id: device
+        name: "Device Type"
+        description: "User's device category"
+        type: categorical
+        values:
+          - id: mobile
+            label: "Mobile"
+          - id: desktop
+            label: "Desktop"
+          - id: tablet
+            label: "Tablet"
+        metadata:
+          category: technical
+          data_source: "user_agent"
+          created_at: "2025-10-21T00:00:00Z"
+          version: "1.0.0"
+          status: "active"
+      
+      - id: browser_version
+        name: "Browser Version"
+        description: "Major browser version number"
+        type: ordinal
+        values:
+          - id: chrome_120
+            label: "Chrome 120+"
+            order: 120
+          - id: chrome_119
+            label: "Chrome 119"
+            order: 119
+        comparison_support: true
+        metadata:
+          category: technical
+          data_source: "user_agent"
+          created_at: "2025-10-21T00:00:00Z"
+          version: "1.0.0"
+          status: "active"
+    
+    metadata:
+      version: "1.0.0"
+      created_at: "2025-10-21T00:00:00Z"
+      updated_at: "2025-10-21T00:00:00Z"
+      description: "Canonical context definitions for Dagnet parameter registry"
+      author: "data-team"
+
+
+

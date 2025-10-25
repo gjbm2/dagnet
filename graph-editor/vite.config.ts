@@ -13,10 +13,15 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
+    publicDir: 'public',
     server: {
       hmr: true,
       watch: {
         include: ['src/**/*']
+      },
+      // Allow serving files from parent directory
+      fs: {
+        allow: ['..', '../..']
       }
     },
     build: {

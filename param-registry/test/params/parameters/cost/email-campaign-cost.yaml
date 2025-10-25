@@ -1,0 +1,43 @@
+id: email-campaign-cost
+name: "Email Campaign Cost"
+type: monetary_cost
+value:
+  value: 0.05
+  stdev: 0.01
+  distribution: "lognormal"
+  currency: "GBP"
+
+metadata:
+  description: "Cost per email sent in marketing campaigns, including platform fees, design costs, and delivery charges"
+  units: "GBP"
+  constraints:
+    min: 0.0
+    max: 1.0
+  data_source:
+    type: "api"
+    url: "https://api.marketing-platform.com/v1/costs/email"
+    refresh_frequency: "1h"
+    authentication:
+      type: "token"
+      token: "${MARKETING_API_TOKEN}"
+  analytics:
+    bayesian_prior:
+      mu: -3.0
+      sigma: 0.5
+    mcmc_config:
+      samples: 5000
+      burn_in: 500
+      chains: 2
+    update_frequency: "1d"
+    dependencies: []
+  tags: ["email", "marketing", "cost"]
+  created_at: "2025-01-15T11:30:00Z"
+  updated_at: "2025-01-15T11:30:00Z"
+  author: "marketing-team"
+  version: "1.0.0"
+  status: "active"
+  aliases: ["email-cost", "campaign-cost"]
+  references:
+    - type: "documentation"
+      title: "Marketing Platform Cost Structure"
+      url: "https://docs.marketing-platform.com/costs"
