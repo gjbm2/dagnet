@@ -11,7 +11,6 @@ import {
   RegistryEntry,
   RegistrySource 
 } from '../services/paramRegistryService';
-import { gitService } from '../services/gitService';
 
 type ObjectType = 'parameters' | 'contexts' | 'cases' | 'graphs';
 
@@ -60,7 +59,7 @@ export default function ParamsPage() {
   ];
   
   // State for three panels
-  const [selectedRepo, setSelectedRepo] = useState<string>('dagnet-git');
+  const [selectedRepo, setSelectedRepo] = useState<string>('<private-repo>');
   const [selectedObjectType, setSelectedObjectType] = useState<ObjectType>('parameters');
   const [items, setItems] = useState<ListItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -371,33 +370,56 @@ export default function ParamsPage() {
         throw new Error('Unknown object type');
       }
       
+      // Determine which repo to use
+      const repoOwner = repo?.gitRepoOwner || 'gjbm2';
+      const repoName = repo?.gitRepoName || '<private-repo>';
+      const githubToken = import.meta.env.VITE_GITHUB_TOKEN;
+      
       // Check if file exists to get SHA for update
-      const existingFile = await gitService.getFile(filePath, saveBranch);
-      const sha = existingFile.success && existingFile.data ? (existingFile.data as any).sha : undefined;
-      
-      // Update gitService config to use the selected repository
-      let originalConfig: any = null;
-      if (repo?.gitRepoOwner && repo?.gitRepoName) {
-        // Temporarily update gitService config for this operation
-        originalConfig = { ...gitService.config };
-        gitService.config.repoOwner = repo.gitRepoOwner;
-        gitService.config.repoName = repo.gitRepoName;
-        gitService.config.branch = repo.gitBranch || 'main';
+      const getFileUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/contents/${filePath}?ref=${saveBranch}`;
+      const headers: HeadersInit = {
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      };
+      if (githubToken) {
+        headers['Authorization'] = `token ${githubToken}`;
       }
       
-      // Save to Git
-      const result = await gitService.createOrUpdateFile(
-        filePath,
-        content,
-        saveCommitMessage,
-        saveBranch,
-        sha
-      );
-      
-      // Restore original config
-      if (originalConfig) {
-        Object.assign(gitService.config, originalConfig);
+      let sha: string | undefined;
+      try {
+        const getResponse = await fetch(getFileUrl, { headers });
+        if (getResponse.ok) {
+          const fileData = await getResponse.json();
+          sha = fileData.sha;
+        }
+      } catch (err) {
+        // File doesn't exist, that's ok for new files
+        console.log('File does not exist yet, will create new');
       }
+      
+      // Save to Git using GitHub API
+      const putUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/contents/${filePath}`;
+      const body: any = {
+        message: saveCommitMessage,
+        content: btoa(unescape(encodeURIComponent(content))), // Base64 encode with UTF-8 support
+        branch: saveBranch,
+      };
+      if (sha) {
+        body.sha = sha;
+      }
+      
+      const putResponse = await fetch(putUrl, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(body)
+      });
+      
+      if (!putResponse.ok) {
+        const errorData = await putResponse.json();
+        throw new Error(`GitHub API Error: ${putResponse.status} - ${JSON.stringify(errorData)}`);
+      }
+      
+      const result = { success: true };
       
       if (result.success) {
         alert(`✅ Successfully saved to ${saveBranch}!`);
@@ -1259,7 +1281,7 @@ export default function ParamsPage() {
                       setFormIsDirty(JSON.stringify(e.formData) !== JSON.stringify(originalFormData));
                     }
                   }}
-                  onSubmit={(e) => e.preventDefault()}
+                  onSubmit={() => {/* Form submission handled by custom buttons */}}
                   uiSchema={{
                     'ui:submitButtonOptions': {
                       norender: true  // Hide the default submit button
