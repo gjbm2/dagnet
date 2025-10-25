@@ -1,0 +1,102 @@
+# Context Definitions
+# Defines all available context variables and their valid values
+# NOTE: This is an EXAMPLE file for development. Production contexts should live in the dagnet-registry repo.
+
+contexts:
+  - id: channel
+    name: "Marketing Channel"
+    description: "Source channel for user acquisition"
+    type: categorical
+    values:
+      - id: google
+        label: "Google Ads"
+        description: "Google Ads campaigns"
+      - id: facebook
+        label: "Facebook Ads"
+        description: "Facebook advertising"
+      - id: organic
+        label: "Organic Search"
+        description: "Unpaid search traffic"
+      - id: email
+        label: "Email Campaign"
+        description: "Email marketing"
+      - id: direct
+        label: "Direct"
+        description: "Direct URL entry"
+    metadata:
+      category: marketing
+      data_source: "utm_parameters"
+      created_at: "2025-10-21T00:00:00Z"
+      updated_at: "2025-10-21T00:00:00Z"
+      version: "1.0.0"
+      status: "active"
+  
+  - id: utm_source
+    name: "UTM Source"
+    description: "UTM source parameter from URL"
+    type: categorical
+    values:
+      - id: google
+        label: "Google"
+      - id: facebook
+        label: "Facebook"
+      - id: newsletter
+        label: "Newsletter"
+      - id: twitter
+        label: "Twitter"
+      - id: linkedin
+        label: "LinkedIn"
+    metadata:
+      category: marketing
+      data_source: "utm_parameters"
+      created_at: "2025-10-21T00:00:00Z"
+      updated_at: "2025-10-21T00:00:00Z"
+      version: "1.0.0"
+      status: "active"
+  
+  - id: device
+    name: "Device Type"
+    description: "User's device category"
+    type: categorical
+    values:
+      - id: mobile
+        label: "Mobile"
+      - id: desktop
+        label: "Desktop"
+      - id: tablet
+        label: "Tablet"
+    metadata:
+      category: technical
+      data_source: "user_agent"
+      created_at: "2025-10-21T00:00:00Z"
+      updated_at: "2025-10-21T00:00:00Z"
+      version: "1.0.0"
+      status: "active"
+  
+  - id: browser
+    name: "Browser"
+    description: "Browser family"
+    type: categorical
+    values:
+      - id: chrome
+        label: "Chrome"
+      - id: firefox
+        label: "Firefox"
+      - id: safari
+        label: "Safari"
+      - id: edge
+        label: "Edge"
+    metadata:
+      category: technical
+      data_source: "user_agent"
+      created_at: "2025-10-21T00:00:00Z"
+      updated_at: "2025-10-21T00:00:00Z"
+      version: "1.0.0"
+      status: "active"
+
+metadata:
+  version: "1.0.0"
+  created_at: "2025-10-21T00:00:00Z"
+  updated_at: "2025-10-21T00:00:00Z"
+  description: "Example context definitions for Dagnet parameter registry (development only)"
+  author: "data-team"

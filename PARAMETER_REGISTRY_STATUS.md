@@ -333,13 +333,34 @@ function resolveParameterReferences(graph: Graph): Graph {
 
 ---
 
-### Phase 4: Context System (TBD)
-**Goal:** Depends on clarifying requirements
+### Phase 4: Context System ✅ DESIGNED
+**Goal:** Enable context-aware parameters (channel, device, UTM, etc.)
 
-1. Define what "context" means
-2. Design context integration
-3. Implement context system
-4. Test with real use cases
+**Status:** Design complete - see CONTEXT_PARAMETERS_DESIGN.md
+
+**New Reference Notation:**
+```
+e.signup.context(channel='google').p.mean
+e.signup.visited(pricing).context(channel='google',device='mobile').p.mean
+```
+
+**Key Features:**
+1. Context definitions in `param-registry/contexts.yaml`
+2. Parameters with `context_filter` field
+3. Chainable reference notation (visited + context)
+4. Fallback hierarchy (exact → context → visited → base)
+5. UI context selector for what-if analysis
+6. Coverage analysis to identify missing combinations
+
+**Implementation Timeline:** 3-4 weeks (see CONTEXT_PARAMETERS_ROADMAP.md)
+
+**Related Documents:**
+- `CONTEXT_PARAMETERS_DESIGN.md` - Full specification
+- `CONTEXT_PARAMETERS_ROADMAP.md` - Implementation phases
+- `CONTEXT_PARAMETERS_EXAMPLES.md` - Usage examples
+- `CONTEXT_PARAMETERS_DECISIONS.md` - Design decisions
+- `param-registry/contexts.yaml` - Context definitions
+- `param-registry/examples/context-aware-parameters.yaml` - Example parameters
 
 ---
 
