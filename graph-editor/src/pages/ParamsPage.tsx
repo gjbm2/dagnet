@@ -11,7 +11,7 @@ import {
   RegistrySource 
 } from '../services/paramRegistryService';
 
-type ObjectType = 'parameters' | 'contexts' | 'graphs';
+type ObjectType = 'parameters' | 'contexts' | 'cases' | 'graphs';
 
 type RepositoryOption = {
   id: string;
@@ -48,7 +48,7 @@ export default function ParamsPage() {
       id: 'nous-conversion',
       label: 'nous-conversion (Git)',
       source: 'git',
-      gitBasePath: 'params',
+      gitBasePath: 'registry',
       gitBranch: 'main',
       gitRepoOwner: 'gjbm2',
       gitRepoName: 'nous-conversion'
@@ -119,6 +119,15 @@ export default function ParamsPage() {
           status: c.status
         }));
         setItems(contextItems);
+      } else if (selectedObjectType === 'cases') {
+        const casesIndex = await paramRegistryService.loadCasesIndex();
+        const caseItems: ListItem[] = casesIndex.cases.map(c => ({
+          id: c.id,
+          name: c.id.replace(/^case-/, '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          type: 'case',
+          status: c.status
+        }));
+        setItems(caseItems);
       } else if (selectedObjectType === 'graphs') {
         const graphs = await paramRegistryService.loadGraphs();
         const graphItems: ListItem[] = graphs.map((g: any) => ({
@@ -148,6 +157,9 @@ export default function ParamsPage() {
       } else if (selectedObjectType === 'contexts') {
         const context = await paramRegistryService.loadContext(selectedItemId);
         setSelectedItemData(context);
+      } else if (selectedObjectType === 'cases') {
+        const caseData = await paramRegistryService.loadCase(selectedItemId);
+        setSelectedItemData(caseData);
       } else if (selectedObjectType === 'graphs') {
         const graph = await paramRegistryService.loadGraph(selectedItemId);
         setSelectedItemData(graph);
@@ -169,6 +181,8 @@ export default function ParamsPage() {
         schemaData = await paramRegistryService.loadSchema('parameter-schema.yaml');
       } else if (selectedObjectType === 'contexts') {
         schemaData = await paramRegistryService.loadSchema('context-definition-schema.yaml');
+      } else if (selectedObjectType === 'cases') {
+        schemaData = await paramRegistryService.loadSchema('case-parameter-schema.yaml');
       } else if (selectedObjectType === 'graphs') {
         // Load graph schema from /schema directory (JSON format)
         const response = await fetch('/schema/conversion-graph-1.0.0.json');
@@ -218,6 +232,26 @@ export default function ParamsPage() {
           status: 'active'
         }
       });
+    } else if (selectedObjectType === 'cases') {
+      setSelectedItemData({
+        parameter_id: 'case-',
+        parameter_type: 'case',
+        name: '',
+        description: '',
+        case: {
+          id: '',
+          status: 'active',
+          variants: [
+            { name: 'control', weight: 0.5, description: '' },
+            { name: 'treatment', weight: 0.5, description: '' }
+          ]
+        },
+        metadata: {
+          created_at: new Date().toISOString(),
+          version: '1.0.0',
+          tags: []
+        }
+      });
     } else if (selectedObjectType === 'graphs') {
       setSelectedItemData({
         nodes: [],
@@ -245,6 +279,9 @@ export default function ParamsPage() {
       } else if (selectedObjectType === 'contexts') {
         await paramRegistryService.saveContext(formData);
         alert('Context saved! (Downloaded as YAML file)');
+      } else if (selectedObjectType === 'cases') {
+        await paramRegistryService.saveCase(formData);
+        alert('Case saved! (Downloaded as YAML file)');
       } else if (selectedObjectType === 'graphs') {
         await paramRegistryService.saveGraph(formData);
         alert('Graph saved! (Downloaded as JSON file)');
@@ -260,9 +297,9 @@ export default function ParamsPage() {
 
   const handleOpenInGraphEditor = () => {
     if (selectedObjectType === 'graphs' && selectedItemData) {
-      // Navigate to graph editor with the graph data
+      // Open graph editor in new window
       const graphName = selectedItemData.metadata?.name || selectedItemId;
-      navigate(`/?graph=${graphName}`);
+      window.open(`/?graph=${graphName}`, '_blank');
     }
   };
 
@@ -365,7 +402,7 @@ export default function ParamsPage() {
             Object Type
           </h3>
           
-          {(['parameters', 'contexts', 'graphs'] as ObjectType[]).map(type => (
+          {(['parameters', 'contexts', 'cases', 'graphs'] as ObjectType[]).map(type => (
             <button
               key={type}
               onClick={() => {
@@ -562,7 +599,12 @@ export default function ParamsPage() {
                     fontWeight: '600',
                     color: '#333'
                   }}>
-                    {isCreatingNew ? 'Create New' : 'Edit'} {selectedObjectType === 'parameters' ? 'Parameter' : selectedObjectType === 'contexts' ? 'Context' : 'Graph'}
+                    {isCreatingNew ? 'Create New' : 'Edit'} {
+                      selectedObjectType === 'parameters' ? 'Parameter' : 
+                      selectedObjectType === 'contexts' ? 'Context' : 
+                      selectedObjectType === 'cases' ? 'Case' : 
+                      'Graph'
+                    }
                   </h2>
                   {!isCreatingNew && selectedItemData.id && (
                     <div style={{ fontSize: '13px', color: '#666' }}>

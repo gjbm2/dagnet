@@ -1,0 +1,29 @@
+parameter_id: case-checkout-redesign
+parameter_type: case
+name: "Checkout Redesign Experiment"
+description: "Testing new checkout flow design"
+
+case:
+  id: checkout-redesign-2024
+  slug: checkout-redesign
+  status: active
+  
+  platform:
+    type: manual
+  
+  variants:
+    - name: control
+      weight: 0.5
+      description: "Original checkout flow"
+      
+    - name: treatment
+      weight: 0.5
+      description: "New simplified checkout"
+
+metadata:
+  created_at: "2025-10-25T00:00:00Z"
+  updated_at: "2025-10-25T00:00:00Z"
+  author: "product-team"
+  version: "1.0.0"
+  tags: ["checkout", "ux", "conversion"]
+

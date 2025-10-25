@@ -1,0 +1,62 @@
+# Cases Index Schema
+# Lists all available cases in the registry
+
+type: object
+required: [version, created_at, cases]
+additionalProperties: false
+
+properties:
+  version:
+    type: string
+    pattern: '^\\d+\\.\\d+\\.\\d+$'
+    description: "Semantic version of the cases index"
+  
+  created_at:
+    type: string
+    format: date-time
+    description: "ISO 8601 timestamp when index was created"
+  
+  updated_at:
+    type: string
+    format: date-time
+    description: "ISO 8601 timestamp when index was last updated"
+  
+  cases:
+    type: array
+    description: "List of all cases in the registry"
+    items:
+      type: object
+      required: [id, file_path, status]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^case-[a-z0-9-]+$'
+          description: "Unique case identifier"
+        
+        file_path:
+          type: string
+          pattern: '^cases/[^/]+\\.yaml$'
+          description: "Relative path to case definition file"
+          examples: ["cases/checkout-redesign.yaml"]
+        
+        status:
+          type: string
+          enum: [active, paused, completed]
+          description: "Current status of the case"
+        
+        created_at:
+          type: string
+          format: date-time
+          description: "When this case was added to the index"
+        
+        updated_at:
+          type: string
+          format: date-time
+          description: "When this case was last updated"
+        
+        version:
+          type: string
+          pattern: '^\\d+\\.\\d+\\.\\d+$'
+          description: "Version of the case definition"
+

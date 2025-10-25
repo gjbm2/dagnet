@@ -107,6 +107,37 @@ export interface Graph {
   metadata: any;
 }
 
+export interface CaseEntry {
+  id: string;
+  file_path: string;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+  version?: string;
+}
+
+export interface CasesIndex {
+  version: string;
+  created_at: string;
+  updated_at?: string;
+  cases: CaseEntry[];
+}
+
+export interface Case {
+  parameter_id: string;
+  parameter_type: string;
+  name: string;
+  description?: string;
+  case: {
+    id: string;
+    slug?: string;
+    status: string;
+    platform?: any;
+    variants: any[];
+  };
+  metadata?: any;
+}
+
 class ParamRegistryService {
   private baseUrl: string;
   private config: RegistryConfig;
@@ -129,7 +160,7 @@ class ParamRegistryService {
 
   private async loadFromGit(path: string): Promise<string> {
     const branch = this.config.gitBranch || gitConfig.branch;
-    const basePath = this.config.gitBasePath || 'params';
+    const basePath = this.config.gitBasePath || 'registry';
     const fullPath = `${basePath}/${path}`;
     
     // Use config repo or fall back to default
@@ -213,7 +244,7 @@ class ParamRegistryService {
       const repoOwner = this.config.gitRepoOwner || gitConfig.repoOwner;
       const repoName = this.config.gitRepoName || gitConfig.repoName;
       const branch = this.config.gitBranch || gitConfig.branch;
-      const basePath = this.config.gitBasePath || 'params';
+      const basePath = this.config.gitBasePath || 'registry';
       const graphsPath = `${basePath}/graphs`;
       
       const apiUrl = `${gitConfig.githubApiBase}/repos/${repoOwner}/${repoName}/contents/${graphsPath}?ref=${branch}`;
@@ -246,9 +277,31 @@ class ParamRegistryService {
     return graph;
   }
 
-  // Load registry.yaml
+  // Load cases-index.yaml
+  async loadCasesIndex(): Promise<CasesIndex> {
+    const yamlText = await this.loadFile('cases-index.yaml');
+    const data = yaml.load(yamlText) as CasesIndex;
+    return data;
+  }
+
+  // Load a specific case by ID
+  async loadCase(caseId: string): Promise<Case> {
+    const index = await this.loadCasesIndex();
+    const entry = index.cases.find(c => c.id === caseId);
+    
+    if (!entry) {
+      throw new Error(`Case ${caseId} not found in index`);
+    }
+    
+    const yamlText = await this.loadFile(entry.file_path);
+    const caseData = yaml.load(yamlText) as Case;
+    
+    return caseData;
+  }
+
+  // Load parameters-index.yaml
   async loadRegistry(): Promise<Registry> {
-    const yamlText = await this.loadFile('registry.yaml');
+    const yamlText = await this.loadFile('parameters-index.yaml');
     const data = yaml.load(yamlText) as Registry;
     return data;
   }
@@ -288,6 +341,18 @@ class ParamRegistryService {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${graph.metadata?.name || 'graph'}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Save case (for development - would need backend API for production)
+  async saveCase(caseData: Case): Promise<void> {
+    const yamlStr = yaml.dump(caseData);
+    const blob = new Blob([yamlStr], { type: 'application/x-yaml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${caseData.parameter_id}.yaml`;
     a.click();
     URL.revokeObjectURL(url);
   }

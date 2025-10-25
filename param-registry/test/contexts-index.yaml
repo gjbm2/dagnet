@@ -14,7 +14,6 @@ contexts:
     created_at: "2025-10-21T00:00:00Z"
     updated_at: "2025-10-21T00:00:00Z"
     version: "1.0.0"
-    usage_count: 5
 
   - id: device
     file_path: "contexts/device.yaml"
@@ -24,5 +23,4 @@ contexts:
     created_at: "2025-10-21T00:00:00Z"
     updated_at: "2025-10-21T00:00:00Z"
     version: "1.0.0"
-    usage_count: 3
 

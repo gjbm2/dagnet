@@ -1,0 +1,38 @@
+# Parameters Index - Test Data
+# Lists all available parameters in the test registry
+
+version: "1.0.0"
+created_at: "2025-01-15T10:00:00Z"
+updated_at: "2025-01-15T15:30:00Z"
+
+parameters:
+  - id: conversion-rate-baseline
+    file_path: "parameters/conversion-rate-baseline.yaml"
+    type: probability
+    status: active
+    tags: ["conversion", "checkout", "baseline"]
+    created_at: "2025-01-15T10:00:00Z"
+    updated_at: "2025-01-15T10:00:00Z"
+    author: "data-team"
+    version: "1.0.0"
+
+  - id: email-campaign-cost
+    file_path: "parameters/email-campaign-cost.yaml"
+    type: monetary_cost
+    status: active
+    tags: ["email", "marketing", "cost"]
+    created_at: "2025-01-15T11:00:00Z"
+    updated_at: "2025-01-15T11:00:00Z"
+    author: "marketing-team"
+    version: "1.0.0"
+
+  - id: checkout-duration
+    file_path: "parameters/checkout-duration.yaml"
+    type: time_cost
+    status: active
+    tags: ["checkout", "time", "ux"]
+    created_at: "2025-01-15T12:00:00Z"
+    updated_at: "2025-01-15T12:00:00Z"
+    author: "ux-team"
+    version: "1.0.0"
+
