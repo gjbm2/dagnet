@@ -419,19 +419,14 @@ export default function ParamsPage() {
         throw new Error(`GitHub API Error: ${putResponse.status} - ${JSON.stringify(errorData)}`);
       }
       
-      const result = { success: true };
-      
-      if (result.success) {
-        alert(`✅ Successfully saved to ${saveBranch}!`);
-        setShowSaveDialog(false);
-        setFormIsDirty(false);
-        setOriginalFormData(JSON.parse(JSON.stringify(selectedItemData)));
-        setIsInitialFormLoad(true); // Treat post-save as fresh load
-        setIsCreatingNew(false);
-        loadItems();
-      } else {
-        throw new Error(result.error || 'Failed to save to Git');
-      }
+      // Success!
+      alert(`✅ Successfully saved to ${saveBranch}!`);
+      setShowSaveDialog(false);
+      setFormIsDirty(false);
+      setOriginalFormData(JSON.parse(JSON.stringify(selectedItemData)));
+      setIsInitialFormLoad(true); // Treat post-save as fresh load
+      setIsCreatingNew(false);
+      loadItems();
     } catch (err) {
       setError(`Failed to save: ${err}`);
       console.error(err);
