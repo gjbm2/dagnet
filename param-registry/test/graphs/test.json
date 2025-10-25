@@ -1,0 +1,150 @@
+{
+  "nodes": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001",
+      "slug": "a",
+      "label": "A",
+      "absorbing": false,
+      "entry": {
+        "is_start": true,
+        "entry_weight": 1
+      },
+      "layout": {
+        "x": -436,
+        "y": 80,
+        "rank": 0
+      }
+    },
+    {
+      "id": "52207d6c-d3e3-4fda-a727-484eb1706041",
+      "slug": "b",
+      "label": "B",
+      "absorbing": false,
+      "layout": {
+        "x": -65,
+        "y": -67
+      }
+    },
+    {
+      "id": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1",
+      "slug": "c",
+      "label": "C",
+      "absorbing": false,
+      "layout": {
+        "x": -75,
+        "y": 225
+      }
+    },
+    {
+      "id": "efb60fac-b7ac-431a-8a70-6eb33b345861",
+      "slug": "e",
+      "label": "E",
+      "absorbing": true,
+      "outcome_type": "success",
+      "layout": {
+        "x": 347,
+        "y": 241
+      }
+    },
+    {
+      "id": "982e2577-27c6-41c5-8250-9a87aec2db20",
+      "slug": "d",
+      "label": "D",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": {
+        "x": 367,
+        "y": -98
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001->52207d6c-d3e3-4fda-a727-484eb1706041",
+      "slug": "start-to-node-2",
+      "from": "550e8400-e29b-41d4-a716-446655440001",
+      "to": "52207d6c-d3e3-4fda-a727-484eb1706041",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 1
+      },
+      "description": ""
+    },
+    {
+      "id": "52207d6c-d3e3-4fda-a727-484eb1706041->efb60fac-b7ac-431a-8a70-6eb33b345861",
+      "slug": "node-2-to-node-4",
+      "from": "52207d6c-d3e3-4fda-a727-484eb1706041",
+      "to": "efb60fac-b7ac-431a-8a70-6eb33b345861",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.25
+      },
+      "description": ""
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001->1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1",
+      "slug": "start-to-node-3",
+      "from": "550e8400-e29b-41d4-a716-446655440001",
+      "to": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0
+      },
+      "description": ""
+    },
+    {
+      "id": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1->efb60fac-b7ac-431a-8a70-6eb33b345861",
+      "slug": "node-3-to-node-4",
+      "from": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1",
+      "to": "efb60fac-b7ac-431a-8a70-6eb33b345861",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.75
+      },
+      "description": ""
+    },
+    {
+      "id": "52207d6c-d3e3-4fda-a727-484eb1706041->982e2577-27c6-41c5-8250-9a87aec2db20",
+      "slug": "node-2-to-node-5",
+      "from": "52207d6c-d3e3-4fda-a727-484eb1706041",
+      "to": "982e2577-27c6-41c5-8250-9a87aec2db20",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.75
+      },
+      "description": ""
+    },
+    {
+      "id": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1->982e2577-27c6-41c5-8250-9a87aec2db20",
+      "slug": "node-3-to-node-5",
+      "from": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1",
+      "to": "982e2577-27c6-41c5-8250-9a87aec2db20",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.25
+      },
+      "description": ""
+    }
+  ],
+  "policies": {
+    "default_outcome": "abandon",
+    "overflow_policy": "error",
+    "free_edge_policy": "complement"
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created_at": "2025-10-21T10:21:58.922Z",
+    "author": "Graph Editor",
+    "description": "Default empty graph",
+    "updated_at": "2025-10-23T22:25:01.687Z",
+    "name": "selection-test.json",
+    "source": "git",
+    "branch": "main"
+  }
+}
