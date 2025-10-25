@@ -1,0 +1,73 @@
+# Parameter Registry Index - Test Data
+# This file serves as the main index for test parameters in the Dagnet parameter registry.
+
+version: "1.0.0"
+created_at: "2025-01-15T10:00:00Z"
+updated_at: "2025-01-15T15:30:00Z"
+
+parameters:
+  # Probability Parameters
+  - id: conversion-rate-baseline
+    file_path: "parameters/probability/conversion-rate-baseline.yaml"
+    type: probability
+    status: active
+    aliases: ["baseline-conversion", "checkout-rate"]
+    dependencies: []
+    tags: ["conversion", "checkout", "baseline"]
+    created_at: "2025-01-15T10:00:00Z"
+    updated_at: "2025-01-15T10:00:00Z"
+    author: "data-team"
+    version: "1.0.0"
+    usage_count: 5
+    last_used: "2025-01-15T14:20:00Z"
+    validation_status: "valid"
+    validation_errors: []
+    metadata_summary:
+      has_data_source: true
+      has_analytics: true
+      is_auto_updated: true
+      confidence_level: "high"
+
+  # Cost Parameters
+  - id: email-campaign-cost
+    file_path: "parameters/cost/email-campaign-cost.yaml"
+    type: monetary_cost
+    status: active
+    aliases: ["email-cost", "campaign-cost"]
+    dependencies: []
+    tags: ["email", "marketing", "cost"]
+    created_at: "2025-01-15T11:00:00Z"
+    updated_at: "2025-01-15T11:00:00Z"
+    author: "marketing-team"
+    version: "1.0.0"
+    usage_count: 3
+    last_used: "2025-01-15T13:45:00Z"
+    validation_status: "valid"
+    validation_errors: []
+    metadata_summary:
+      has_data_source: true
+      has_analytics: false
+      is_auto_updated: false
+      confidence_level: "medium"
+
+  # Time Parameters
+  - id: checkout-duration
+    file_path: "parameters/time/checkout-duration.yaml"
+    type: time_cost
+    status: active
+    aliases: ["checkout-time", "purchase-duration"]
+    dependencies: []
+    tags: ["checkout", "time", "ux"]
+    created_at: "2025-01-15T12:00:00Z"
+    updated_at: "2025-01-15T12:00:00Z"
+    author: "ux-team"
+    version: "1.0.0"
+    usage_count: 2
+    last_used: "2025-01-15T14:00:00Z"
+    validation_status: "valid"
+    validation_errors: []
+    metadata_summary:
+      has_data_source: false
+      has_analytics: false
+      is_auto_updated: false
+      confidence_level: "low"

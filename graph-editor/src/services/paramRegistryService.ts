@@ -96,6 +96,12 @@ export interface ContextsFile {
 class ParamRegistryService {
   private baseUrl: string;
   private config: RegistryConfig;
+  
+  // Schema configuration - always from dagnet repo
+  private readonly SCHEMA_REPO_OWNER = 'gjbm2';
+  private readonly SCHEMA_REPO_NAME = 'dagnet';
+  private readonly SCHEMA_BASE_PATH = 'param-registry/schemas';
+  private readonly SCHEMA_BRANCH = 'main';
 
   constructor(baseUrl: string = REGISTRY_BASE_URL, config?: RegistryConfig) {
     this.baseUrl = baseUrl;
@@ -112,34 +118,37 @@ class ParamRegistryService {
     const basePath = this.config.gitBasePath || 'params';
     const fullPath = `${basePath}/${path}`;
     
-    // Override repo if specified in config
+    // Use config repo or fall back to default
     const repoOwner = this.config.gitRepoOwner || gitConfig.repoOwner;
     const repoName = this.config.gitRepoName || gitConfig.repoName;
     
-    // Temporarily override gitConfig if different repo specified
-    const originalOwner = gitConfig.repoOwner;
-    const originalName = gitConfig.repoName;
+    // Make direct GitHub API call to support different repos
+    const apiUrl = `${gitConfig.githubApiBase}/repos/${repoOwner}/${repoName}/contents/${fullPath}?ref=${branch}`;
     
-    try {
-      if (this.config.gitRepoOwner) {
-        (gitConfig as any).repoOwner = repoOwner;
-      }
-      if (this.config.gitRepoName) {
-        (gitConfig as any).repoName = repoName;
-      }
-      
-      const result = await gitService.getFileContent(fullPath, branch);
-      
-      if (!result.success) {
-        throw new Error(`Failed to load from git: ${result.error || result.message}`);
-      }
-      
-      return result.data.content;
-    } finally {
-      // Restore original config
-      (gitConfig as any).repoOwner = originalOwner;
-      (gitConfig as any).repoName = originalName;
+    const headers: HeadersInit = {
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+    };
+    
+    if (gitConfig.githubToken && gitConfig.githubToken.trim() !== '') {
+      headers['Authorization'] = `token ${gitConfig.githubToken}`;
     }
+    
+    console.log(`Loading from GitHub: ${repoOwner}/${repoName} - ${fullPath}`);
+    
+    const response = await fetch(apiUrl, { headers });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Git API Error: ${response.status} - ${errorText}`);
+    }
+    
+    const data = await response.json();
+    
+    // Decode base64 content
+    const content = atob(data.content.replace(/\n/g, ''));
+    
+    return content;
   }
 
   private async loadFromLocal(path: string): Promise<string> {
@@ -218,10 +227,33 @@ class ParamRegistryService {
     URL.revokeObjectURL(url);
   }
 
-  // Load a schema file
+  // Load a schema file - ALWAYS from dagnet repo
   async loadSchema(schemaName: string): Promise<any> {
-    const yamlText = await this.loadFile(`schemas/${schemaName}`);
-    const schema = yaml.load(yamlText);
+    const fullPath = `${this.SCHEMA_BASE_PATH}/${schemaName}`;
+    const apiUrl = `${gitConfig.githubApiBase}/repos/${this.SCHEMA_REPO_OWNER}/${this.SCHEMA_REPO_NAME}/contents/${fullPath}?ref=${this.SCHEMA_BRANCH}`;
+    
+    const headers: HeadersInit = {
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+    };
+    
+    if (gitConfig.githubToken && gitConfig.githubToken.trim() !== '') {
+      headers['Authorization'] = `token ${gitConfig.githubToken}`;
+    }
+    
+    console.log(`Loading schema from GitHub: ${this.SCHEMA_REPO_OWNER}/${this.SCHEMA_REPO_NAME} - ${fullPath}`);
+    
+    const response = await fetch(apiUrl, { headers });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to load schema: ${response.status} - ${errorText}`);
+    }
+    
+    const data = await response.json();
+    const content = atob(data.content.replace(/\n/g, ''));
+    const schema = yaml.load(content);
+    
     return schema;
   }
 }
