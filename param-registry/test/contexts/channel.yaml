@@ -1,0 +1,29 @@
+id: channel
+name: "Marketing Channel"
+description: "Source channel for user acquisition"
+type: categorical
+values:
+  - id: google
+    label: "Google Ads"
+    description: "Google Ads campaigns"
+  - id: facebook
+    label: "Facebook Ads"
+    description: "Facebook advertising"
+  - id: organic
+    label: "Organic Search"
+    description: "Unpaid search traffic"
+  - id: email
+    label: "Email Campaign"
+    description: "Email marketing"
+  - id: direct
+    label: "Direct"
+    description: "Direct URL entry"
+metadata:
+  category: marketing
+  data_source: "utm_parameters"
+  created_at: "2025-10-21T00:00:00Z"
+  updated_at: "2025-10-21T00:00:00Z"
+  version: "1.0.0"
+  status: "active"
+  author: "data-team"
+

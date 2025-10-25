@@ -1,0 +1,78 @@
+# Contexts Index Schema
+# This schema defines the structure for contexts-index.yaml
+# which lists all available contexts (like registry.yaml for parameters)
+
+type: object
+required: [version, created_at, contexts]
+additionalProperties: false
+
+properties:
+  version:
+    type: string
+    pattern: '^\\d+\\.\\d+\\.\\d+$'
+    description: "Semantic version of the contexts index"
+  
+  created_at:
+    type: string
+    format: date-time
+    description: "ISO 8601 timestamp when index was created"
+  
+  updated_at:
+    type: string
+    format: date-time
+    description: "ISO 8601 timestamp when index was last updated"
+  
+  contexts:
+    type: array
+    description: "List of all contexts in the registry"
+    items:
+      type: object
+      required: [id, file_path, type, status]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z_][a-z0-9_]*$'
+          description: "Unique context identifier"
+        
+        file_path:
+          type: string
+          pattern: '^contexts/[^/]+\\.yaml$'
+          description: "Relative path to context definition file"
+          examples: ["contexts/channel.yaml"]
+        
+        type:
+          type: string
+          enum: [categorical, ordinal, continuous]
+          description: "Context type classification"
+        
+        status:
+          type: string
+          enum: [active, deprecated, draft]
+          description: "Current status of the context"
+        
+        category:
+          type: string
+          enum: [marketing, technical, geographic, temporal, behavioral, business]
+          description: "Category for UI grouping"
+        
+        created_at:
+          type: string
+          format: date-time
+          description: "When this context was added to the index"
+        
+        updated_at:
+          type: string
+          format: date-time
+          description: "When this context was last updated"
+        
+        version:
+          type: string
+          pattern: '^\\d+\\.\\d+\\.\\d+$'
+          description: "Version of the context definition"
+        
+        usage_count:
+          type: integer
+          minimum: 0
+          description: "Number of graphs using this context"
+
