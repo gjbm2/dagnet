@@ -1,0 +1,160 @@
+# Individual Context Definition Schema
+# This schema defines the structure for a single context definition file
+
+type: object
+required: [id, name, type, values, metadata]
+additionalProperties: false
+
+properties:
+  id:
+    type: string
+    pattern: '^[a-z_][a-z0-9_]*$'
+    minLength: 2
+    maxLength: 32
+    description: "Context identifier (snake_case) - lowercase, alphanumeric, underscores"
+    examples: ["channel", "device", "utm_source", "geo_country"]
+  
+  name:
+    type: string
+    minLength: 3
+    maxLength: 64
+    description: "Human-readable context name"
+    examples: ["Marketing Channel", "Device Type", "UTM Source"]
+  
+  description:
+    type: string
+    minLength: 10
+    maxLength: 500
+    description: "Detailed description of what this context represents"
+  
+  type:
+    type: string
+    enum: [categorical, ordinal, continuous]
+    description: |
+      Context type:
+      - categorical: Discrete unordered values (e.g., channel, browser)
+      - ordinal: Discrete ordered values (e.g., browser_version, time_of_day)
+      - continuous: Numeric range (future: not yet implemented)
+  
+  values:
+    type: array
+    minItems: 2
+    items:
+      type: object
+      required: [id, label]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z0-9_-]+$'
+          minLength: 1
+          maxLength: 32
+          description: "Value identifier (kebab-case or snake_case)"
+          examples: ["google", "facebook", "mobile", "chrome-120"]
+        
+        label:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: "Human-readable label for UI display"
+          examples: ["Google Ads", "Mobile", "Chrome 120+"]
+        
+        description:
+          type: string
+          maxLength: 200
+          description: "Optional description of this value"
+        
+        order:
+          type: integer
+          minimum: 0
+          description: "Order value for ordinal contexts (required if type is ordinal)"
+        
+        aliases:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z0-9_-]+$'
+          uniqueItems: true
+          description: "Alternative identifiers for this value"
+    description: "Valid values for this context"
+  
+  comparison_support:
+    type: boolean
+    default: false
+    description: "Whether this context supports comparison operators (>, <, >=, <=)"
+  
+  default_value:
+    type: string
+    description: "Default value ID if none specified (optional)"
+  
+  metadata:
+    type: object
+    required: [created_at, version, status]
+    properties:
+      category:
+        type: string
+        enum: [marketing, technical, geographic, temporal, behavioral, business]
+        description: "Category for grouping contexts in UI"
+      
+      data_source:
+        type: string
+        description: "Where this context data comes from"
+        examples: ["utm_parameters", "user_agent", "geoip", "timestamp"]
+      
+      created_at:
+        type: string
+        format: date-time
+        description: "ISO 8601 timestamp when context was created"
+      
+      updated_at:
+        type: string
+        format: date-time
+        description: "ISO 8601 timestamp when context was last updated"
+      
+      version:
+        type: string
+        pattern: '^\\d+\\.\\d+\\.\\d+$'
+        description: "Semantic version of this context definition"
+      
+      status:
+        type: string
+        enum: [active, deprecated, draft]
+        default: "active"
+        description: "Current status of this context"
+      
+      author:
+        type: string
+        description: "Author or team responsible"
+      
+      deprecation_notice:
+        type: string
+        description: "Reason for deprecation (if status is deprecated)"
+      
+      replacement_context_id:
+        type: string
+        description: "ID of context that replaces this one (if deprecated)"
+    additionalProperties: false
+
+# Validation rules
+allOf:
+  # If type is ordinal, all values must have 'order' property
+  - if:
+      properties:
+        type:
+          const: ordinal
+    then:
+      properties:
+        values:
+          items:
+            required: [order]
+  
+  # If comparison_support is true, type must be ordinal
+  - if:
+      properties:
+        comparison_support:
+          const: true
+    then:
+      properties:
+        type:
+          enum: [ordinal]
+

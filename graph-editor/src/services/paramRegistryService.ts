@@ -81,16 +81,30 @@ export interface Registry {
   parameters: RegistryEntry[];
 }
 
-export interface ContextsFile {
-  contexts: Context[];
-  metadata: {
-    version: string;
-    created_at: string;
-    updated_at: string;
-    description?: string;
-    author?: string;
-    changelog?: any[];
-  };
+export interface ContextEntry {
+  id: string;
+  file_path: string;
+  type: string;
+  status: string;
+  category?: string;
+  created_at?: string;
+  updated_at?: string;
+  version?: string;
+  usage_count?: number;
+}
+
+export interface ContextsIndex {
+  version: string;
+  created_at: string;
+  updated_at?: string;
+  contexts: ContextEntry[];
+}
+
+export interface Graph {
+  nodes: any[];
+  edges: any[];
+  policies: any;
+  metadata: any;
 }
 
 class ParamRegistryService {
@@ -170,11 +184,66 @@ class ParamRegistryService {
     }
   }
 
-  // Load contexts.yaml
-  async loadContexts(): Promise<ContextsFile> {
-    const yamlText = await this.loadFile('contexts.yaml');
-    const data = yaml.load(yamlText) as ContextsFile;
+  // Load contexts-index.yaml
+  async loadContextsIndex(): Promise<ContextsIndex> {
+    const yamlText = await this.loadFile('contexts-index.yaml');
+    const data = yaml.load(yamlText) as ContextsIndex;
     return data;
+  }
+
+  // Load a specific context by ID
+  async loadContext(contextId: string): Promise<Context> {
+    const index = await this.loadContextsIndex();
+    const entry = index.contexts.find(c => c.id === contextId);
+    
+    if (!entry) {
+      throw new Error(`Context ${contextId} not found in index`);
+    }
+    
+    const yamlText = await this.loadFile(entry.file_path);
+    const context = yaml.load(yamlText) as Context;
+    
+    return context;
+  }
+
+  // Load graphs index (list of available graphs)
+  async loadGraphs(): Promise<any[]> {
+    // For now, get directory contents from GitHub
+    if (this.config.source === 'git') {
+      const repoOwner = this.config.gitRepoOwner || gitConfig.repoOwner;
+      const repoName = this.config.gitRepoName || gitConfig.repoName;
+      const branch = this.config.gitBranch || gitConfig.branch;
+      const basePath = this.config.gitBasePath || 'params';
+      const graphsPath = `${basePath}/graphs`;
+      
+      const apiUrl = `${gitConfig.githubApiBase}/repos/${repoOwner}/${repoName}/contents/${graphsPath}?ref=${branch}`;
+      
+      const headers: HeadersInit = {
+        'Accept': 'application/vnd.github.v3+json',
+      };
+      
+      if (gitConfig.githubToken) {
+        headers['Authorization'] = `token ${gitConfig.githubToken}`;
+      }
+      
+      const response = await fetch(apiUrl, { headers });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to load graphs directory: ${response.status}`);
+      }
+      
+      const files = await response.json();
+      return files.filter((f: any) => f.name.endsWith('.json'));
+    }
+    
+    return [];
+  }
+
+  // Load a specific graph by filename
+  async loadGraph(filename: string): Promise<Graph> {
+    const yamlText = await this.loadFile(`graphs/${filename}`);
+    const graph = JSON.parse(yamlText) as Graph;
+    return graph;
   }
 
   // Load registry.yaml
@@ -199,16 +268,26 @@ class ParamRegistryService {
     return param;
   }
 
-  // Save contexts (for development - would need backend API for production)
-  async saveContexts(contexts: ContextsFile): Promise<void> {
-    // In production, this would POST to an API
-    // For now, we'll just download as YAML file
-    const yamlStr = yaml.dump(contexts);
+  // Save context (for development - would need backend API for production)
+  async saveContext(context: Context): Promise<void> {
+    const yamlStr = yaml.dump(context);
     const blob = new Blob([yamlStr], { type: 'application/x-yaml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'contexts.yaml';
+    a.download = `${context.id}.yaml`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Save graph (for development - would need backend API for production)
+  async saveGraph(graph: Graph): Promise<void> {
+    const jsonStr = JSON.stringify(graph, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${graph.metadata?.name || 'graph'}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }

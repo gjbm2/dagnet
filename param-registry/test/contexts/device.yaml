@@ -1,0 +1,23 @@
+id: device
+name: "Device Type"
+description: "User's device category"
+type: categorical
+values:
+  - id: mobile
+    label: "Mobile"
+    description: "Smartphone devices"
+  - id: desktop
+    label: "Desktop"
+    description: "Desktop computers"
+  - id: tablet
+    label: "Tablet"
+    description: "Tablet devices"
+metadata:
+  category: technical
+  data_source: "user_agent"
+  created_at: "2025-10-21T00:00:00Z"
+  updated_at: "2025-10-21T00:00:00Z"
+  version: "1.0.0"
+  status: "active"
+  author: "ux-team"
+

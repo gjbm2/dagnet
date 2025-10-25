@@ -111,16 +111,22 @@ export default function ParamsPage() {
         }));
         setItems(paramItems);
       } else if (selectedObjectType === 'contexts') {
-        const contextsFile = await paramRegistryService.loadContexts();
-        const contextItems: ListItem[] = contextsFile.contexts.map(c => ({
+        const contextsIndex = await paramRegistryService.loadContextsIndex();
+        const contextItems: ListItem[] = contextsIndex.contexts.map(c => ({
           id: c.id,
-          name: c.name,
-          type: c.type
+          name: c.id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          type: c.type,
+          status: c.status
         }));
         setItems(contextItems);
       } else if (selectedObjectType === 'graphs') {
-        // TODO: Load graphs from repository
-        setItems([]);
+        const graphs = await paramRegistryService.loadGraphs();
+        const graphItems: ListItem[] = graphs.map((g: any) => ({
+          id: g.name,
+          name: g.name.replace(/\.json$/, '').replace(/-/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
+          type: 'graph'
+        }));
+        setItems(graphItems);
       }
     } catch (err) {
       setError(`Failed to load ${selectedObjectType}: ${err}`);
@@ -140,9 +146,11 @@ export default function ParamsPage() {
         const param = await paramRegistryService.loadParameter(selectedItemId);
         setSelectedItemData(param);
       } else if (selectedObjectType === 'contexts') {
-        const contextsFile = await paramRegistryService.loadContexts();
-        const context = contextsFile.contexts.find(c => c.id === selectedItemId);
+        const context = await paramRegistryService.loadContext(selectedItemId);
         setSelectedItemData(context);
+      } else if (selectedObjectType === 'graphs') {
+        const graph = await paramRegistryService.loadGraph(selectedItemId);
+        setSelectedItemData(graph);
       }
     } catch (err) {
       setError(`Failed to load item: ${err}`);
@@ -160,7 +168,14 @@ export default function ParamsPage() {
       if (selectedObjectType === 'parameters') {
         schemaData = await paramRegistryService.loadSchema('parameter-schema.yaml');
       } else if (selectedObjectType === 'contexts') {
-        schemaData = await paramRegistryService.loadSchema('context-schema.yaml');
+        schemaData = await paramRegistryService.loadSchema('context-definition-schema.yaml');
+      } else if (selectedObjectType === 'graphs') {
+        // Load graph schema from /schema directory (JSON format)
+        const response = await fetch('/schema/conversion-graph-1.0.0.json');
+        if (!response.ok) {
+          throw new Error('Failed to load graph schema');
+        }
+        schemaData = await response.json();
       }
       setSchema(schemaData as RJSFSchema);
     } catch (err) {
@@ -186,7 +201,8 @@ export default function ParamsPage() {
           description: '',
           created_at: new Date().toISOString(),
           author: '',
-          version: '1.0.0'
+          version: '1.0.0',
+          status: 'active'
         }
       });
     } else if (selectedObjectType === 'contexts') {
@@ -195,7 +211,28 @@ export default function ParamsPage() {
         name: '',
         description: '',
         type: 'categorical',
-        values: []
+        values: [],
+        metadata: {
+          created_at: new Date().toISOString(),
+          version: '1.0.0',
+          status: 'active'
+        }
+      });
+    } else if (selectedObjectType === 'graphs') {
+      setSelectedItemData({
+        nodes: [],
+        edges: [],
+        policies: {
+          default_outcome: 'abandon',
+          overflow_policy: 'error',
+          free_edge_policy: 'complement'
+        },
+        metadata: {
+          version: '1.0.0',
+          created_at: new Date().toISOString(),
+          author: '',
+          description: ''
+        }
       });
     }
   };
@@ -206,19 +243,11 @@ export default function ParamsPage() {
         await paramRegistryService.saveParameter(formData);
         alert('Parameter saved! (Downloaded as YAML file)');
       } else if (selectedObjectType === 'contexts') {
-        // For contexts, we need to update the whole contexts file
-        const contextsFile = await paramRegistryService.loadContexts();
-        const contextIndex = contextsFile.contexts.findIndex(c => c.id === formData.id);
-        
-        if (contextIndex >= 0) {
-          contextsFile.contexts[contextIndex] = formData;
-        } else {
-          contextsFile.contexts.push(formData);
-        }
-        
-        contextsFile.metadata.updated_at = new Date().toISOString();
-        await paramRegistryService.saveContexts(contextsFile);
-        alert('Context saved! (Downloaded as contexts.yaml)');
+        await paramRegistryService.saveContext(formData);
+        alert('Context saved! (Downloaded as YAML file)');
+      } else if (selectedObjectType === 'graphs') {
+        await paramRegistryService.saveGraph(formData);
+        alert('Graph saved! (Downloaded as JSON file)');
       }
       
       setIsCreatingNew(false);
@@ -226,6 +255,14 @@ export default function ParamsPage() {
     } catch (err) {
       setError(`Failed to save: ${err}`);
       console.error(err);
+    }
+  };
+
+  const handleOpenInGraphEditor = () => {
+    if (selectedObjectType === 'graphs' && selectedItemData) {
+      // Navigate to graph editor with the graph data
+      const graphName = selectedItemData.metadata?.name || selectedItemId;
+      navigate(`/?graph=${graphName}`);
     }
   };
 
@@ -513,26 +550,88 @@ export default function ParamsPage() {
               <div style={{
                 marginBottom: '20px',
                 paddingBottom: '16px',
-                borderBottom: '1px solid #dee2e6'
+                borderBottom: '1px solid #dee2e6',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start'
               }}>
-                <h2 style={{ 
-                  margin: '0 0 8px 0', 
-                  fontSize: '20px', 
-                  fontWeight: '600',
-                  color: '#333'
-                }}>
-                  {isCreatingNew ? 'Create New' : 'Edit'} {selectedObjectType === 'parameters' ? 'Parameter' : 'Context'}
-                </h2>
-                {!isCreatingNew && selectedItemData.id && (
-                  <div style={{ fontSize: '13px', color: '#666' }}>
-                    ID: <code style={{ 
-                      background: '#f8f9fa', 
-                      padding: '2px 6px', 
-                      borderRadius: '3px',
-                      fontFamily: 'monospace'
-                    }}>{selectedItemData.id}</code>
-                  </div>
-                )}
+                <div style={{ flex: 1 }}>
+                  <h2 style={{ 
+                    margin: '0 0 8px 0', 
+                    fontSize: '20px', 
+                    fontWeight: '600',
+                    color: '#333'
+                  }}>
+                    {isCreatingNew ? 'Create New' : 'Edit'} {selectedObjectType === 'parameters' ? 'Parameter' : selectedObjectType === 'contexts' ? 'Context' : 'Graph'}
+                  </h2>
+                  {!isCreatingNew && selectedItemData.id && (
+                    <div style={{ fontSize: '13px', color: '#666' }}>
+                      ID: <code style={{ 
+                        background: '#f8f9fa', 
+                        padding: '2px 6px', 
+                        borderRadius: '3px',
+                        fontFamily: 'monospace'
+                      }}>{selectedItemData.id || selectedItemId}</code>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Contextual Actions */}
+                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                  {selectedObjectType === 'graphs' && !isCreatingNew && (
+                    <button
+                      onClick={handleOpenInGraphEditor}
+                      style={{
+                        background: '#17a2b8',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '8px 16px',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#138496'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = '#17a2b8'}
+                    >
+                      🎨 Open in Graph Editor
+                    </button>
+                  )}
+                  {!isCreatingNew && (
+                    <button
+                      onClick={() => {
+                        const blob = new Blob([JSON.stringify(selectedItemData, null, 2)], { 
+                          type: selectedObjectType === 'graphs' ? 'application/json' : 'application/x-yaml' 
+                        });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${selectedItemData.id || selectedItemId}.${selectedObjectType === 'graphs' ? 'json' : 'yaml'}`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      style={{
+                        background: '#6c757d',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '8px 16px',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#5a6268'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = '#6c757d'}
+                    >
+                      📥 Download
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div style={{
