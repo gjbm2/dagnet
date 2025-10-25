@@ -36,15 +36,10 @@ export default function ParamsPage() {
   // Repository options
   const repositories: RepositoryOption[] = [
     {
-      id: 'local',
-      label: 'Local (this repo)',
-      source: 'local'
-    },
-    {
       id: 'dagnet-git',
       label: 'dagnet (Git) - Test Data',
       source: 'git',
-      gitBasePath: 'param-registry/test/params',
+      gitBasePath: 'param-registry/test',
       gitBranch: 'main',
       gitRepoOwner: 'gjbm2',
       gitRepoName: 'dagnet'
@@ -540,31 +535,190 @@ export default function ParamsPage() {
                 )}
               </div>
 
-              <Form
-                schema={schema}
-                formData={selectedItemData}
-                validator={validator}
-                onChange={(e) => setSelectedItemData(e.formData)}
-                onSubmit={(e) => handleSave(e.formData)}
-                uiSchema={{
-                  'ui:submitButtonOptions': {
-                    submitText: 'Save (Download YAML)',
-                    props: {
-                      style: {
-                        background: '#007bff',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        padding: '10px 20px',
-                        fontSize: '14px',
-                        fontWeight: '500',
-                        cursor: 'pointer',
-                        marginTop: '20px'
+              <div style={{
+                // Custom RJSF styling
+                '--rjsf-label-color': '#333',
+                '--rjsf-input-border': '#dee2e6',
+                '--rjsf-input-focus': '#007bff',
+              } as React.CSSProperties}>
+                <style>{`
+                  .rjsf fieldset {
+                    border: none;
+                    padding: 0;
+                    margin: 0 0 20px 0;
+                  }
+                  
+                  .rjsf legend {
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: #333;
+                    margin-bottom: 12px;
+                    padding: 0;
+                    border-bottom: 2px solid #007bff;
+                    padding-bottom: 8px;
+                  }
+                  
+                  .rjsf .form-group {
+                    margin-bottom: 20px;
+                  }
+                  
+                  .rjsf label {
+                    display: block;
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: #495057;
+                    margin-bottom: 6px;
+                  }
+                  
+                  .rjsf input[type="text"],
+                  .rjsf input[type="number"],
+                  .rjsf input[type="email"],
+                  .rjsf textarea,
+                  .rjsf select {
+                    width: 100%;
+                    padding: 8px 12px;
+                    border: 1px solid #dee2e6;
+                    border-radius: 4px;
+                    font-size: 14px;
+                    font-family: inherit;
+                    transition: border-color 0.2s, box-shadow 0.2s;
+                    box-sizing: border-box;
+                  }
+                  
+                  .rjsf input[type="text"]:focus,
+                  .rjsf input[type="number"]:focus,
+                  .rjsf input[type="email"]:focus,
+                  .rjsf textarea:focus,
+                  .rjsf select:focus {
+                    outline: none;
+                    border-color: #007bff;
+                    box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+                  }
+                  
+                  .rjsf textarea {
+                    min-height: 100px;
+                    resize: vertical;
+                  }
+                  
+                  .rjsf .field-description {
+                    font-size: 12px;
+                    color: #6c757d;
+                    margin-top: 4px;
+                    font-style: italic;
+                  }
+                  
+                  .rjsf .help-block {
+                    font-size: 12px;
+                    color: #6c757d;
+                    margin-top: 4px;
+                  }
+                  
+                  .rjsf .text-danger {
+                    color: #dc3545;
+                    font-size: 12px;
+                    margin-top: 4px;
+                  }
+                  
+                  .rjsf .array-item {
+                    background: #f8f9fa;
+                    border: 1px solid #dee2e6;
+                    border-radius: 6px;
+                    padding: 16px;
+                    margin-bottom: 12px;
+                  }
+                  
+                  .rjsf .array-item-toolbox {
+                    display: flex;
+                    gap: 8px;
+                    margin-top: 12px;
+                  }
+                  
+                  .rjsf button[type="button"] {
+                    background: #6c757d;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 6px 12px;
+                    font-size: 12px;
+                    cursor: pointer;
+                    transition: background 0.2s;
+                  }
+                  
+                  .rjsf button[type="button"]:hover {
+                    background: #5a6268;
+                  }
+                  
+                  .rjsf .btn-add {
+                    background: #28a745;
+                    color: white;
+                    margin-top: 8px;
+                  }
+                  
+                  .rjsf .btn-add:hover {
+                    background: #218838;
+                  }
+                  
+                  .rjsf .array-item-move-up,
+                  .rjsf .array-item-move-down {
+                    background: #17a2b8;
+                  }
+                  
+                  .rjsf .array-item-move-up:hover,
+                  .rjsf .array-item-move-down:hover {
+                    background: #138496;
+                  }
+                  
+                  .rjsf .array-item-remove {
+                    background: #dc3545;
+                  }
+                  
+                  .rjsf .array-item-remove:hover {
+                    background: #c82333;
+                  }
+                  
+                  .rjsf .checkbox label {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    cursor: pointer;
+                  }
+                  
+                  .rjsf input[type="checkbox"] {
+                    width: auto;
+                    margin: 0;
+                    cursor: pointer;
+                  }
+                `}</style>
+                
+                <Form
+                  schema={schema}
+                  formData={selectedItemData}
+                  validator={validator}
+                  onChange={(e) => setSelectedItemData(e.formData)}
+                  onSubmit={(e) => handleSave(e.formData)}
+                  uiSchema={{
+                    'ui:submitButtonOptions': {
+                      submitText: '💾 Save (Download YAML)',
+                      props: {
+                        className: 'submit-button',
+                        style: {
+                          background: '#007bff',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          padding: '12px 24px',
+                          fontSize: '14px',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          marginTop: '24px',
+                          transition: 'all 0.2s',
+                          boxShadow: '0 2px 4px rgba(0,123,255,0.2)'
+                        }
                       }
                     }
-                  }
-                }}
-              />
+                  }}
+                />
+              </div>
             </div>
           )}
         </div>
