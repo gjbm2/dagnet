@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { RJSFSchema } from '@rjsf/utils';
 import Form from '@rjsf/core';
 import validator from '@rjsf/validator-ajv8';
+import yaml from 'js-yaml';
 import { 
   paramRegistryService, 
   Context, 
@@ -10,6 +11,7 @@ import {
   RegistryEntry,
   RegistrySource 
 } from '../services/paramRegistryService';
+import { gitService } from '../services/gitService';
 
 type ObjectType = 'parameters' | 'contexts' | 'cases' | 'graphs';
 
@@ -26,6 +28,8 @@ type RepositoryOption = {
 interface ListItem {
   id: string;
   name: string;
+  label?: string;
+  description?: string;
   type?: string;
   status?: string;
 }
@@ -48,7 +52,7 @@ export default function ParamsPage() {
       id: '<private-repo>',
       label: '<private-repo> (Git)',
       source: 'git',
-      gitBasePath: 'registry',
+      gitBasePath: '',  // At root
       gitBranch: 'main',
       gitRepoOwner: 'gjbm2',
       gitRepoName: '<private-repo>'
@@ -65,6 +69,12 @@ export default function ParamsPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [filterText, setFilterText] = useState<string>('');
+  const [formIsDirty, setFormIsDirty] = useState(false);
+  const [originalFormData, setOriginalFormData] = useState<any>(null);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveBranch, setSaveBranch] = useState<string>('main');
+  const [saveCommitMessage, setSaveCommitMessage] = useState<string>('');
 
   // Update service config when repository changes
   useEffect(() => {
@@ -151,19 +161,19 @@ export default function ParamsPage() {
     setIsLoading(true);
     setError(null);
     try {
+      let data;
       if (selectedObjectType === 'parameters') {
-        const param = await paramRegistryService.loadParameter(selectedItemId);
-        setSelectedItemData(param);
+        data = await paramRegistryService.loadParameter(selectedItemId);
       } else if (selectedObjectType === 'contexts') {
-        const context = await paramRegistryService.loadContext(selectedItemId);
-        setSelectedItemData(context);
+        data = await paramRegistryService.loadContext(selectedItemId);
       } else if (selectedObjectType === 'cases') {
-        const caseData = await paramRegistryService.loadCase(selectedItemId);
-        setSelectedItemData(caseData);
+        data = await paramRegistryService.loadCase(selectedItemId);
       } else if (selectedObjectType === 'graphs') {
-        const graph = await paramRegistryService.loadGraph(selectedItemId);
-        setSelectedItemData(graph);
+        data = await paramRegistryService.loadGraph(selectedItemId);
       }
+      setSelectedItemData(data);
+      setOriginalFormData(JSON.parse(JSON.stringify(data))); // Deep clone
+      setFormIsDirty(false);
     } catch (err) {
       setError(`Failed to load item: ${err}`);
       console.error(err);
@@ -205,8 +215,9 @@ export default function ParamsPage() {
     setSelectedItemId(null);
     
     // Create empty template based on type
+    let newData;
     if (selectedObjectType === 'parameters') {
-      setSelectedItemData({
+      newData = {
         id: '',
         name: '',
         type: 'probability',
@@ -218,9 +229,9 @@ export default function ParamsPage() {
           version: '1.0.0',
           status: 'active'
         }
-      });
+      };
     } else if (selectedObjectType === 'contexts') {
-      setSelectedItemData({
+      newData = {
         id: '',
         name: '',
         description: '',
@@ -231,9 +242,9 @@ export default function ParamsPage() {
           version: '1.0.0',
           status: 'active'
         }
-      });
+      };
     } else if (selectedObjectType === 'cases') {
-      setSelectedItemData({
+      newData = {
         parameter_id: 'case-',
         parameter_type: 'case',
         name: '',
@@ -251,9 +262,9 @@ export default function ParamsPage() {
           version: '1.0.0',
           tags: []
         }
-      });
+      };
     } else if (selectedObjectType === 'graphs') {
-      setSelectedItemData({
+      newData = {
         nodes: [],
         edges: [],
         policies: {
@@ -267,31 +278,91 @@ export default function ParamsPage() {
           author: '',
           description: ''
         }
-      });
+      };
     }
+    setSelectedItemData(newData);
+    setOriginalFormData(JSON.parse(JSON.stringify(newData))); // Deep clone
+    setFormIsDirty(false);
   };
 
-  const handleSave = async (formData: any) => {
+  const handleSaveClick = () => {
+    // Set default commit message
+    const itemId = selectedItemData?.id || selectedItemData?.parameter_id || 'new-item';
+    const action = isCreatingNew ? 'Add' : 'Update';
+    const itemType = selectedObjectType === 'parameters' ? 'parameter' : 
+                     selectedObjectType === 'contexts' ? 'context' : 
+                     selectedObjectType === 'cases' ? 'case' : 'graph';
+    setSaveCommitMessage(`${action} ${itemType}: ${itemId}`);
+    setShowSaveDialog(true);
+  };
+
+  const handleSaveToGit = async () => {
+    if (!selectedItemData) return;
+    
+    if (!saveCommitMessage.trim()) {
+      alert('Please enter a commit message');
+      return;
+    }
+    
+    setIsLoading(true);
+    setError(null);
+    
     try {
+      // Determine file path and content based on object type
+      let filePath: string;
+      let content: string;
+      let itemId: string;
+      
       if (selectedObjectType === 'parameters') {
-        await paramRegistryService.saveParameter(formData);
-        alert('Parameter saved! (Downloaded as YAML file)');
+        itemId = selectedItemData.id;
+        filePath = `param-registry/test/parameters/${itemId}.yaml`;
+        content = yaml.dump(selectedItemData);
       } else if (selectedObjectType === 'contexts') {
-        await paramRegistryService.saveContext(formData);
-        alert('Context saved! (Downloaded as YAML file)');
+        itemId = selectedItemData.id;
+        filePath = `param-registry/test/contexts/${itemId}.yaml`;
+        content = yaml.dump(selectedItemData);
       } else if (selectedObjectType === 'cases') {
-        await paramRegistryService.saveCase(formData);
-        alert('Case saved! (Downloaded as YAML file)');
+        itemId = selectedItemData.parameter_id;
+        filePath = `param-registry/test/cases/${itemId}.yaml`;
+        content = yaml.dump(selectedItemData);
       } else if (selectedObjectType === 'graphs') {
-        await paramRegistryService.saveGraph(formData);
-        alert('Graph saved! (Downloaded as JSON file)');
+        itemId = selectedItemData.metadata?.name || selectedItemId || 'graph';
+        const fileName = itemId.endsWith('.json') ? itemId : `${itemId}.json`;
+        filePath = `param-registry/test/graphs/${fileName}`;
+        content = JSON.stringify(selectedItemData, null, 2);
+      } else {
+        throw new Error('Unknown object type');
       }
       
-      setIsCreatingNew(false);
-      loadItems();
+      // Check if file exists to get SHA for update
+      const existingFile = await gitService.getFile(filePath, saveBranch);
+      const sha = existingFile.success && existingFile.data ? (existingFile.data as any).sha : undefined;
+      
+      // Save to Git
+      const result = await gitService.createOrUpdateFile(
+        filePath,
+        content,
+        saveCommitMessage,
+        saveBranch,
+        sha
+      );
+      
+      if (result.success) {
+        alert(`✅ Successfully saved to ${saveBranch}!`);
+        setShowSaveDialog(false);
+        setFormIsDirty(false);
+        setOriginalFormData(JSON.parse(JSON.stringify(selectedItemData)));
+        setIsCreatingNew(false);
+        loadItems();
+      } else {
+        throw new Error(result.error || 'Failed to save to Git');
+      }
     } catch (err) {
       setError(`Failed to save: ${err}`);
       console.error(err);
+      alert(`Failed to save: ${err}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -302,6 +373,50 @@ export default function ParamsPage() {
       window.open(`/?graph=${graphName}`, '_blank');
     }
   };
+
+  const handleDelete = () => {
+    if (!selectedItemId) return;
+    
+    const itemType = selectedObjectType === 'parameters' ? 'parameter' : 
+                     selectedObjectType === 'contexts' ? 'context' : 
+                     selectedObjectType === 'cases' ? 'case' : 'graph';
+    
+    if (window.confirm(`Are you sure you want to delete this ${itemType}?\n\nID: ${selectedItemId}\n\nThis will download a deletion marker. You'll need to manually remove the file from your repository.`)) {
+      // Create a deletion marker file
+      const deletionMarker = {
+        _deleted: true,
+        id: selectedItemId,
+        deletedAt: new Date().toISOString(),
+        note: 'This is a deletion marker. Remove the original file from your repository.'
+      };
+      
+      const blob = new Blob([JSON.stringify(deletionMarker, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `DELETE_${selectedItemId}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      // Clear selection
+      setSelectedItemId(null);
+      setSelectedItemData(null);
+      
+      alert('Deletion marker downloaded. Please manually remove the file from your repository and commit the changes.');
+    }
+  };
+
+  // Filter items based on search text
+  const filteredItems = items.filter(item => {
+    if (!filterText) return true;
+    
+    const searchText = filterText.toLowerCase();
+    const idMatch = item.id?.toLowerCase().includes(searchText) ?? false;
+    const labelMatch = item.label?.toLowerCase().includes(searchText) ?? false;
+    const descMatch = item.description?.toLowerCase().includes(searchText) ?? false;
+    
+    return idMatch || labelMatch || descMatch;
+  });
 
   return (
     <div style={{
@@ -356,6 +471,7 @@ export default function ParamsPage() {
               setSelectedItemId(null);
               setSelectedItemData(null);
               setIsCreatingNew(false);
+              setFilterText('');
             }}
             style={{
               padding: '6px 12px',
@@ -410,6 +526,7 @@ export default function ParamsPage() {
                 setSelectedItemId(null);
                 setSelectedItemData(null);
                 setIsCreatingNew(false);
+                setFilterText('');
               }}
               style={{
                 width: '100%',
@@ -483,6 +600,67 @@ export default function ParamsPage() {
             </button>
           </div>
 
+          {/* Filter Input */}
+          <div style={{
+            padding: '12px 16px',
+            borderBottom: '1px solid #dee2e6',
+            background: '#f8f9fa'
+          }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{
+                position: 'absolute',
+                left: '10px',
+                fontSize: '14px',
+                color: '#6c757d',
+                pointerEvents: 'none'
+              }}>
+                🔍
+              </span>
+              <input
+                type="text"
+                placeholder={`Filter ${selectedObjectType}...`}
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px 8px 32px',
+                  border: '1px solid #dee2e6',
+                  borderRadius: '4px',
+                  fontSize: '13px',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+                onFocus={(e) => e.target.style.borderColor = '#007bff'}
+                onBlur={(e) => e.target.style.borderColor = '#dee2e6'}
+              />
+              {filterText && (
+                <button
+                  onClick={() => setFilterText('')}
+                  style={{
+                    position: 'absolute',
+                    right: '8px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#6c757d',
+                    cursor: 'pointer',
+                    fontSize: '16px',
+                    padding: '2px 6px',
+                    borderRadius: '3px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'background 0.2s'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#dee2e6'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  title="Clear filter"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* List */}
           <div style={{
             flex: 1,
@@ -501,7 +679,13 @@ export default function ParamsPage() {
               </div>
             )}
             
-            {!isLoading && items.map(item => (
+            {!isLoading && items.length > 0 && filteredItems.length === 0 && (
+              <div style={{ padding: '20px', textAlign: 'center', color: '#666', fontSize: '13px' }}>
+                No matches for "{filterText}"
+              </div>
+            )}
+            
+            {!isLoading && filteredItems.map(item => (
               <div
                 key={item.id}
                 onClick={() => {
@@ -553,24 +737,11 @@ export default function ParamsPage() {
         {/* Right Panel - Form Editor */}
         <div style={{
           flex: 1,
-          overflowY: 'auto',
-          padding: '24px',
-          background: 'white'
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'white',
+          overflow: 'hidden'
         }}>
-          {error && (
-            <div style={{
-              padding: '12px',
-              marginBottom: '16px',
-              background: '#f8d7da',
-              border: '1px solid #f5c6cb',
-              borderRadius: '4px',
-              color: '#721c24',
-              fontSize: '13px'
-            }}>
-              {error}
-            </div>
-          )}
-
           {!selectedItemData && !isCreatingNew && (
             <div style={{
               padding: '40px',
@@ -583,11 +754,13 @@ export default function ParamsPage() {
           )}
 
           {selectedItemData && schema && (
-            <div>
+            <>
+              {/* Sticky Header */}
               <div style={{
-                marginBottom: '20px',
-                paddingBottom: '16px',
-                borderBottom: '1px solid #dee2e6',
+                padding: '24px 24px 16px 24px',
+                borderBottom: '2px solid #dee2e6',
+                background: 'white',
+                flexShrink: 0,
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'flex-start'
@@ -643,6 +816,31 @@ export default function ParamsPage() {
                       🎨 Open in Graph Editor
                     </button>
                   )}
+                  <button
+                    onClick={handleSaveClick}
+                    disabled={!formIsDirty}
+                    style={{
+                      background: formIsDirty ? '#28a745' : '#6c757d',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '8px 16px',
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      cursor: formIsDirty ? 'pointer' : 'not-allowed',
+                      transition: 'background 0.2s',
+                      opacity: formIsDirty ? 1 : 0.6,
+                      boxShadow: formIsDirty ? '0 2px 4px rgba(40, 167, 69, 0.3)' : 'none'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (formIsDirty) e.currentTarget.style.background = '#218838';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (formIsDirty) e.currentTarget.style.background = '#28a745';
+                    }}
+                  >
+                    💾 Save to Git
+                  </button>
                   {!isCreatingNew && (
                     <button
                       onClick={() => {
@@ -673,8 +871,50 @@ export default function ParamsPage() {
                       📥 Download
                     </button>
                   )}
+                  {!isCreatingNew && (
+                    <button
+                      onClick={handleDelete}
+                      style={{
+                        background: '#dc3545',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '8px 16px',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#c82333'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = '#dc3545'}
+                    >
+                      🗑️ Delete
+                    </button>
+                  )}
                 </div>
               </div>
+
+              {/* Scrollable Content Area */}
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '24px'
+              }}>
+                {/* Info Banner */}
+                <div style={{
+                  background: '#e7f3ff',
+                  border: '1px solid #b3d9ff',
+                  borderRadius: '6px',
+                  padding: '12px 16px',
+                  marginBottom: '20px',
+                  fontSize: '13px',
+                  color: '#004085',
+                  lineHeight: '1.6'
+                }}>
+                  <strong>ℹ️ Note:</strong> Changes are saved directly to your Git repository. 
+                  Make your edits, then click "Save to Git" to commit them with a message. 
+                  You can also use "Download" to get a local copy, or "Delete" for removal instructions.
+                </div>
 
               <div style={{
                 // Custom RJSF styling
@@ -800,6 +1040,17 @@ export default function ParamsPage() {
                   }
                   
                   .rjsf .array-item-move-up,
+                  .rjsf .array-item-move-down,
+                  .rjsf .array-item-remove {
+                    min-width: 40px !important;
+                    min-height: 36px !important;
+                    padding: 10px 16px !important;
+                    font-size: 16px !important;
+                    font-weight: bold !important;
+                    line-height: 1 !important;
+                  }
+                  
+                  .rjsf .array-item-move-up,
                   .rjsf .array-item-move-down {
                     background: #17a2b8;
                   }
@@ -835,35 +1086,143 @@ export default function ParamsPage() {
                   schema={schema}
                   formData={selectedItemData}
                   validator={validator}
-                  onChange={(e) => setSelectedItemData(e.formData)}
-                  onSubmit={(e) => handleSave(e.formData)}
+                  onChange={(e) => {
+                    setSelectedItemData(e.formData);
+                    // Check if form is dirty
+                    setFormIsDirty(JSON.stringify(e.formData) !== JSON.stringify(originalFormData));
+                  }}
+                  onSubmit={(e) => e.preventDefault()}
                   uiSchema={{
                     'ui:submitButtonOptions': {
-                      submitText: '💾 Save (Download YAML)',
-                      props: {
-                        className: 'submit-button',
-                        style: {
-                          background: '#007bff',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          padding: '12px 24px',
-                          fontSize: '14px',
-                          fontWeight: '600',
-                          cursor: 'pointer',
-                          marginTop: '24px',
-                          transition: 'all 0.2s',
-                          boxShadow: '0 2px 4px rgba(0,123,255,0.2)'
-                        }
-                      }
+                      norender: true  // Hide the default submit button
                     }
                   }}
                 />
               </div>
-            </div>
+              </div>
+            </>
           )}
         </div>
       </div>
+
+      {/* Save Dialog */}
+      {showSaveDialog && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 2000
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '8px',
+            padding: '24px',
+            maxWidth: '500px',
+            width: '90%',
+            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)'
+          }}>
+            <h2 style={{ margin: '0 0 20px 0', fontSize: '20px', fontWeight: '600' }}>
+              Save to Git Repository
+            </h2>
+            
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ 
+                display: 'block', 
+                marginBottom: '6px', 
+                fontSize: '13px', 
+                fontWeight: '600',
+                color: '#495057'
+              }}>
+                Branch:
+              </label>
+              <select
+                value={saveBranch}
+                onChange={(e) => setSaveBranch(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid #dee2e6',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontFamily: 'inherit'
+                }}
+              >
+                <option value="main">main</option>
+                <option value="develop">develop</option>
+              </select>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ 
+                display: 'block', 
+                marginBottom: '6px', 
+                fontSize: '13px', 
+                fontWeight: '600',
+                color: '#495057'
+              }}>
+                Commit Message:
+              </label>
+              <textarea
+                value={saveCommitMessage}
+                onChange={(e) => setSaveCommitMessage(e.target.value)}
+                placeholder="Describe your changes..."
+                rows={3}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid #dee2e6',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontFamily: 'inherit',
+                  resize: 'vertical',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowSaveDialog(false)}
+                style={{
+                  padding: '8px 16px',
+                  border: '1px solid #dee2e6',
+                  borderRadius: '4px',
+                  background: 'white',
+                  color: '#666',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveToGit}
+                disabled={isLoading || !saveCommitMessage.trim()}
+                style={{
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  background: (!isLoading && saveCommitMessage.trim()) ? '#28a745' : '#6c757d',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: (!isLoading && saveCommitMessage.trim()) ? 'pointer' : 'not-allowed',
+                  opacity: (!isLoading && saveCommitMessage.trim()) ? 1 : 0.6
+                }}
+              >
+                {isLoading ? 'Saving...' : '💾 Save to Git'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
