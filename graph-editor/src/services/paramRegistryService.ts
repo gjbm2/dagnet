@@ -160,8 +160,8 @@ class ParamRegistryService {
 
   private async loadFromGit(path: string): Promise<string> {
     const branch = this.config.gitBranch || gitConfig.branch;
-    const basePath = this.config.gitBasePath || 'registry';
-    const fullPath = `${basePath}/${path}`;
+    const basePath = this.config.gitBasePath;
+    const fullPath = basePath ? `${basePath}/${path}` : path;
     
     // Use config repo or fall back to default
     const repoOwner = this.config.gitRepoOwner || gitConfig.repoOwner;
@@ -244,8 +244,8 @@ class ParamRegistryService {
       const repoOwner = this.config.gitRepoOwner || gitConfig.repoOwner;
       const repoName = this.config.gitRepoName || gitConfig.repoName;
       const branch = this.config.gitBranch || gitConfig.branch;
-      const basePath = this.config.gitBasePath || 'registry';
-      const graphsPath = `${basePath}/graphs`;
+      const basePath = this.config.gitBasePath;
+      const graphsPath = basePath ? `${basePath}/graphs` : 'graphs';
       
       const apiUrl = `${gitConfig.githubApiBase}/repos/${repoOwner}/${repoName}/contents/${graphsPath}?ref=${branch}`;
       
