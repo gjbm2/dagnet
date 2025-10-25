@@ -331,22 +331,41 @@ export default function ParamsPage() {
       let content: string;
       let itemId: string;
       
+      // Get the current repo config to determine the correct path structure
+      const repo = repositories.find(r => r.id === selectedRepo);
+      
       if (selectedObjectType === 'parameters') {
         itemId = selectedItemData.id;
-        filePath = `param-registry/test/parameters/${itemId}.yaml`;
+        if (repo?.gitBasePath) {
+          filePath = `${repo.gitBasePath}/parameters/${itemId}.yaml`;
+        } else {
+          filePath = `parameters/${itemId}.yaml`; // <private-repo> uses flat structure
+        }
         content = yaml.dump(selectedItemData);
       } else if (selectedObjectType === 'contexts') {
         itemId = selectedItemData.id;
-        filePath = `param-registry/test/contexts/${itemId}.yaml`;
+        if (repo?.gitBasePath) {
+          filePath = `${repo.gitBasePath}/contexts/${itemId}.yaml`;
+        } else {
+          filePath = `contexts/${itemId}.yaml`;
+        }
         content = yaml.dump(selectedItemData);
       } else if (selectedObjectType === 'cases') {
         itemId = selectedItemData.parameter_id;
-        filePath = `param-registry/test/cases/${itemId}.yaml`;
+        if (repo?.gitBasePath) {
+          filePath = `${repo.gitBasePath}/cases/${itemId}.yaml`;
+        } else {
+          filePath = `cases/${itemId}.yaml`;
+        }
         content = yaml.dump(selectedItemData);
       } else if (selectedObjectType === 'graphs') {
         itemId = selectedItemData.metadata?.name || selectedItemId || 'graph';
         const fileName = itemId.endsWith('.json') ? itemId : `${itemId}.json`;
-        filePath = `param-registry/test/graphs/${fileName}`;
+        if (repo?.gitBasePath) {
+          filePath = `${repo.gitBasePath}/graphs/${fileName}`;
+        } else {
+          filePath = `graphs/${fileName}`;
+        }
         content = JSON.stringify(selectedItemData, null, 2);
       } else {
         throw new Error('Unknown object type');
@@ -356,6 +375,16 @@ export default function ParamsPage() {
       const existingFile = await gitService.getFile(filePath, saveBranch);
       const sha = existingFile.success && existingFile.data ? (existingFile.data as any).sha : undefined;
       
+      // Update gitService config to use the selected repository
+      let originalConfig: any = null;
+      if (repo?.gitRepoOwner && repo?.gitRepoName) {
+        // Temporarily update gitService config for this operation
+        originalConfig = { ...gitService.config };
+        gitService.config.repoOwner = repo.gitRepoOwner;
+        gitService.config.repoName = repo.gitRepoName;
+        gitService.config.branch = repo.gitBranch || 'main';
+      }
+      
       // Save to Git
       const result = await gitService.createOrUpdateFile(
         filePath,
@@ -364,6 +393,11 @@ export default function ParamsPage() {
         saveBranch,
         sha
       );
+      
+      // Restore original config
+      if (originalConfig) {
+        Object.assign(gitService.config, originalConfig);
+      }
       
       if (result.success) {
         alert(`✅ Successfully saved to ${saveBranch}!`);
@@ -1207,6 +1241,7 @@ export default function ParamsPage() {
                 `}</style>
                 
                 <Form
+                  key={`${selectedRepo}-${selectedObjectType}-${selectedItemId || 'new'}`}
                   schema={schema}
                   formData={selectedItemData}
                   validator={validator}
