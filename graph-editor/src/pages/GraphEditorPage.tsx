@@ -857,6 +857,48 @@ export default function GraphEditorPage() {
                 margin: '4px 0'
               }} />
 
+            </Menubar.Content>
+          </Menubar.Portal>
+        </Menubar.Menu>
+        
+        {/* Registry Menu */}
+        <Menubar.Menu>
+          <Menubar.Trigger
+            style={{
+              padding: '0 16px',
+              background: 'transparent',
+              color: '#333',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '500',
+              transition: 'background-color 0.2s',
+              display: 'flex',
+              alignItems: 'center',
+              height: '100%',
+              borderRight: '1px solid #dee2e6'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#e9ecef';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+            }}
+          >
+            Registry
+          </Menubar.Trigger>
+          
+          <Menubar.Portal>
+            <Menubar.Content
+              style={{
+                background: 'white',
+                border: '1px solid #dee2e6',
+                borderRadius: '6px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                minWidth: '200px',
+                padding: '4px'
+              }}
+            >
               <Menubar.Item
                 onClick={() => navigate('/params')}
                 style={{
@@ -870,7 +912,7 @@ export default function GraphEditorPage() {
                 onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
               >
-                📝 Parameter Registry...
+                📝 Open registry...
               </Menubar.Item>
             </Menubar.Content>
           </Menubar.Portal>
