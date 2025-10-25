@@ -75,6 +75,7 @@ export default function ParamsPage() {
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveBranch, setSaveBranch] = useState<string>('main');
   const [saveCommitMessage, setSaveCommitMessage] = useState<string>('');
+  const [isInitialFormLoad, setIsInitialFormLoad] = useState(true);
 
   // Update service config when repository changes
   useEffect(() => {
@@ -174,6 +175,7 @@ export default function ParamsPage() {
       setSelectedItemData(data);
       setOriginalFormData(JSON.parse(JSON.stringify(data))); // Deep clone
       setFormIsDirty(false);
+      setIsInitialFormLoad(true); // Reset for new data load
     } catch (err) {
       setError(`Failed to load item: ${err}`);
       console.error(err);
@@ -194,8 +196,8 @@ export default function ParamsPage() {
       } else if (selectedObjectType === 'cases') {
         schemaData = await paramRegistryService.loadSchema('case-parameter-schema.yaml');
       } else if (selectedObjectType === 'graphs') {
-        // Load graph schema from /schema directory (JSON format)
-        const response = await fetch('/schema/conversion-graph-1.0.0.json');
+        // Load graph schema from GitHub
+        const response = await fetch('https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/conversion-graph-1.0.0.json');
         if (!response.ok) {
           throw new Error('Failed to load graph schema');
         }
@@ -211,6 +213,13 @@ export default function ParamsPage() {
   };
 
   const handleCreateNew = () => {
+    // Warn if unsaved changes
+    if (formIsDirty) {
+      if (!window.confirm('You have unsaved changes. Discard them and continue?')) {
+        return;
+      }
+    }
+    
     setIsCreatingNew(true);
     setSelectedItemId(null);
     
@@ -283,6 +292,15 @@ export default function ParamsPage() {
     setSelectedItemData(newData);
     setOriginalFormData(JSON.parse(JSON.stringify(newData))); // Deep clone
     setFormIsDirty(false);
+    setIsInitialFormLoad(true); // Reset for new item creation
+  };
+
+  const handleDiscard = () => {
+    if (window.confirm('Discard all unsaved changes?')) {
+      setSelectedItemData(JSON.parse(JSON.stringify(originalFormData)));
+      setFormIsDirty(false);
+      setIsInitialFormLoad(true); // Treat discard as a fresh load
+    }
   };
 
   const handleSaveClick = () => {
@@ -352,6 +370,7 @@ export default function ParamsPage() {
         setShowSaveDialog(false);
         setFormIsDirty(false);
         setOriginalFormData(JSON.parse(JSON.stringify(selectedItemData)));
+        setIsInitialFormLoad(true); // Treat post-save as fresh load
         setIsCreatingNew(false);
         loadItems();
       } else {
@@ -467,11 +486,18 @@ export default function ParamsPage() {
           <select
             value={selectedRepo}
             onChange={(e) => {
+              // Warn if unsaved changes
+              if (formIsDirty) {
+                if (!window.confirm('You have unsaved changes. Discard them and continue?')) {
+                  return;
+                }
+              }
               setSelectedRepo(e.target.value);
               setSelectedItemId(null);
               setSelectedItemData(null);
               setIsCreatingNew(false);
               setFilterText('');
+              setFormIsDirty(false);
             }}
             style={{
               padding: '6px 12px',
@@ -522,11 +548,18 @@ export default function ParamsPage() {
             <button
               key={type}
               onClick={() => {
+                // Warn if unsaved changes
+                if (formIsDirty) {
+                  if (!window.confirm('You have unsaved changes. Discard them and continue?')) {
+                    return;
+                  }
+                }
                 setSelectedObjectType(type);
                 setSelectedItemId(null);
                 setSelectedItemData(null);
                 setIsCreatingNew(false);
                 setFilterText('');
+                setFormIsDirty(false);
               }}
               style={{
                 width: '100%',
@@ -689,8 +722,15 @@ export default function ParamsPage() {
               <div
                 key={item.id}
                 onClick={() => {
+                  // Warn if unsaved changes
+                  if (formIsDirty) {
+                    if (!window.confirm('You have unsaved changes. Discard them and continue?')) {
+                      return;
+                    }
+                  }
                   setSelectedItemId(item.id);
                   setIsCreatingNew(false);
+                  setFormIsDirty(false);
                 }}
                 style={{
                   padding: '12px',
@@ -840,6 +880,38 @@ export default function ParamsPage() {
                     }}
                   >
                     💾 Save to Git
+                  </button>
+                  <button
+                    onClick={handleDiscard}
+                    disabled={!formIsDirty}
+                    style={{
+                      background: 'white',
+                      color: '#6c757d',
+                      border: '1px solid #dee2e6',
+                      borderRadius: '4px',
+                      padding: '8px 16px',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      cursor: formIsDirty ? 'pointer' : 'not-allowed',
+                      transition: 'all 0.2s',
+                      opacity: formIsDirty ? 1 : 0.6
+                    }}
+                    onMouseEnter={(e) => {
+                      if (formIsDirty) {
+                        e.currentTarget.style.background = '#dc3545';
+                        e.currentTarget.style.color = 'white';
+                        e.currentTarget.style.borderColor = '#dc3545';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (formIsDirty) {
+                        e.currentTarget.style.background = 'white';
+                        e.currentTarget.style.color = '#6c757d';
+                        e.currentTarget.style.borderColor = '#dee2e6';
+                      }
+                    }}
+                  >
+                    ↺ Discard
                   </button>
                   {!isCreatingNew && (
                     <button
@@ -1009,63 +1081,115 @@ export default function ParamsPage() {
                   }
                   
                   .rjsf .array-item-toolbox {
-                    display: flex;
-                    gap: 8px;
-                    margin-top: 12px;
+                    display: flex !important;
+                    gap: 8px !important;
+                    margin-top: 12px !important;
+                    flex-wrap: wrap !important;
                   }
                   
+                  /* Base button styling - apply to all buttons */
+                  .rjsf button,
                   .rjsf button[type="button"] {
-                    background: #6c757d;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 6px 12px;
-                    font-size: 12px;
-                    cursor: pointer;
-                    transition: background 0.2s;
+                    background: #6c757d !important;
+                    color: white !important;
+                    border: none !important;
+                    border-radius: 4px !important;
+                    padding: 10px 20px !important;
+                    font-size: 14px !important;
+                    cursor: pointer !important;
+                    transition: background 0.2s !important;
+                    min-height: 40px !important;
+                    font-weight: 600 !important;
+                    white-space: nowrap !important;
                   }
                   
+                  .rjsf button:hover,
                   .rjsf button[type="button"]:hover {
-                    background: #5a6268;
+                    background: #5a6268 !important;
                   }
                   
-                  .rjsf .btn-add {
-                    background: #28a745;
-                    color: white;
-                    margin-top: 8px;
+                  /* Add button */
+                  .rjsf .btn-add,
+                  .rjsf button.btn-add {
+                    background: #28a745 !important;
+                    color: white !important;
+                    margin-top: 8px !important;
+                    padding: 10px 20px !important;
+                    font-size: 14px !important;
+                    min-width: 120px !important;
                   }
                   
-                  .rjsf .btn-add:hover {
-                    background: #218838;
+                  .rjsf .btn-add:hover,
+                  .rjsf button.btn-add:hover {
+                    background: #218838 !important;
                   }
                   
+                  /* Add text label to add button */
+                  .rjsf .btn-add::after,
+                  .rjsf button.btn-add::after {
+                    content: ' + Add' !important;
+                    font-size: 14px !important;
+                    font-weight: 600 !important;
+                  }
+                  
+                  /* Move up/down buttons */
                   .rjsf .array-item-move-up,
                   .rjsf .array-item-move-down,
-                  .rjsf .array-item-remove {
-                    min-width: 40px !important;
-                    min-height: 36px !important;
-                    padding: 10px 16px !important;
-                    font-size: 16px !important;
-                    font-weight: bold !important;
-                    line-height: 1 !important;
-                  }
-                  
-                  .rjsf .array-item-move-up,
-                  .rjsf .array-item-move-down {
-                    background: #17a2b8;
+                  .rjsf button.array-item-move-up,
+                  .rjsf button.array-item-move-down {
+                    background: #17a2b8 !important;
+                    min-width: 120px !important;
+                    padding: 10px 20px !important;
                   }
                   
                   .rjsf .array-item-move-up:hover,
-                  .rjsf .array-item-move-down:hover {
-                    background: #138496;
+                  .rjsf .array-item-move-down:hover,
+                  .rjsf button.array-item-move-up:hover,
+                  .rjsf button.array-item-move-down:hover {
+                    background: #138496 !important;
                   }
                   
-                  .rjsf .array-item-remove {
-                    background: #dc3545;
+                  /* Add text labels to move up button */
+                  .rjsf .array-item-move-up::after,
+                  .rjsf button.array-item-move-up::after {
+                    content: ' ▲ Move Up' !important;
+                    font-size: 14px !important;
+                    font-weight: 600 !important;
                   }
                   
-                  .rjsf .array-item-remove:hover {
-                    background: #c82333;
+                  /* Add text labels to move down button */
+                  .rjsf .array-item-move-down::after,
+                  .rjsf button.array-item-move-down::after {
+                    content: ' ▼ Move Down' !important;
+                    font-size: 14px !important;
+                    font-weight: 600 !important;
+                  }
+                  
+                  /* Remove button */
+                  .rjsf .array-item-remove,
+                  .rjsf button.array-item-remove {
+                    background: #dc3545 !important;
+                    min-width: 120px !important;
+                    padding: 10px 20px !important;
+                  }
+                  
+                  .rjsf .array-item-remove:hover,
+                  .rjsf button.array-item-remove:hover {
+                    background: #c82333 !important;
+                  }
+                  
+                  /* Add text label to remove button */
+                  .rjsf .array-item-remove::after,
+                  .rjsf button.array-item-remove::after {
+                    content: ' ✕ Remove' !important;
+                    font-size: 14px !important;
+                    font-weight: 600 !important;
+                  }
+                  
+                  /* Fix icon sizing if present */
+                  .rjsf button i,
+                  .rjsf button span {
+                    font-size: 16px !important;
                   }
                   
                   .rjsf .checkbox label {
@@ -1088,8 +1212,17 @@ export default function ParamsPage() {
                   validator={validator}
                   onChange={(e) => {
                     setSelectedItemData(e.formData);
-                    // Check if form is dirty
-                    setFormIsDirty(JSON.stringify(e.formData) !== JSON.stringify(originalFormData));
+                    
+                    // On initial form load, RJSF normalizes the data (adds undefined fields, etc.)
+                    // Capture this normalized version as the original to avoid false dirty flags
+                    if (isInitialFormLoad) {
+                      setOriginalFormData(JSON.parse(JSON.stringify(e.formData)));
+                      setIsInitialFormLoad(false);
+                      setFormIsDirty(false);
+                    } else {
+                      // Check if form is dirty by comparing with original
+                      setFormIsDirty(JSON.stringify(e.formData) !== JSON.stringify(originalFormData));
+                    }
                   }}
                   onSubmit={(e) => e.preventDefault()}
                   uiSchema={{
