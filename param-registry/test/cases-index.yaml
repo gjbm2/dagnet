@@ -1,0 +1,15 @@
+# Cases Index - Test Data
+# Lists all available cases in the test registry
+
+version: "1.0.0"
+created_at: "2025-10-25T16:00:00Z"
+updated_at: "2025-10-25T16:00:00Z"
+
+cases:
+  - id: case-checkout-redesign
+    file_path: "cases/checkout-redesign.yaml"
+    status: active
+    created_at: "2025-10-25T00:00:00Z"
+    updated_at: "2025-10-25T00:00:00Z"
+    version: "1.0.0"
+
