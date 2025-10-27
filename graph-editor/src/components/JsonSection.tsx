@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useImperativeHandle, forwardRef } from 'react';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 
 export interface JsonSectionRef {
   openJsonEdit: () => void;

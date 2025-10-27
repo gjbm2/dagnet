@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 
 export default function JsonSectionHeader() {
   const { graph, setGraph, saveHistoryState } = useGraphStore();

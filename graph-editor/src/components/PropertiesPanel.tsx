@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';

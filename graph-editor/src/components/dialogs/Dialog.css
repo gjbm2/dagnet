@@ -1,0 +1,167 @@
+/* Dialog Styles */
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: fadeIn 150ms ease;
+}
+
+.dialog-content {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0px 10px 40px rgba(0, 0, 0, 0.2);
+  min-width: 400px;
+  max-width: 600px;
+  animation: slideUp 200ms ease;
+}
+
+.dialog-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.dialog-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+.dialog-body {
+  padding: 24px;
+}
+
+.dialog-body p {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: #333;
+  line-height: 1.5;
+}
+
+.dialog-body p:last-child {
+  margin-bottom: 0;
+}
+
+.dialog-subtitle {
+  font-size: 13px !important;
+  color: #666 !important;
+}
+
+.dialog-footer {
+  padding: 16px 24px;
+  border-top: 1px solid #e0e0e0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog-button {
+  all: unset;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  outline: none;
+}
+
+.dialog-button:focus {
+  outline: 2px solid #0066cc;
+  outline-offset: 2px;
+}
+
+.dialog-button-primary {
+  background-color: #0066cc;
+  color: white;
+}
+
+.dialog-button-primary:hover {
+  background-color: #0052a3;
+}
+
+.dialog-button-secondary {
+  background-color: #f0f0f0;
+  color: #333;
+}
+
+.dialog-button-secondary:hover {
+  background-color: #e0e0e0;
+}
+
+.dialog-button-danger {
+  background-color: #dc3545;
+  color: white;
+}
+
+.dialog-button-danger:hover {
+  background-color: #c82333;
+}
+
+.dialog-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .dialog-content {
+    background-color: #2d2d2d;
+  }
+
+  .dialog-header {
+    border-bottom-color: #404040;
+  }
+
+  .dialog-title {
+    color: #e0e0e0;
+  }
+
+  .dialog-body p {
+    color: #e0e0e0;
+  }
+
+  .dialog-subtitle {
+    color: #999 !important;
+  }
+
+  .dialog-footer {
+    border-top-color: #404040;
+  }
+
+  .dialog-button-secondary {
+    background-color: #3d3d3d;
+    color: #e0e0e0;
+  }
+
+  .dialog-button-secondary:hover {
+    background-color: #4d4d4d;
+  }
+}
+

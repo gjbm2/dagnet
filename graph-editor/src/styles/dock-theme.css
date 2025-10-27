@@ -1,0 +1,152 @@
+/* 
+ * rc-dock Theme Overrides for DagNet
+ * 
+ * Strategy:
+ * - Menu bar is OUTSIDE rc-dock (rendered separately)
+ * - Navigator panel: hide tab bar, fixed width
+ * - Main tabs: normal tab bar behavior
+ */
+
+/* ============================================================
+   BASE STYLES
+   ============================================================ */
+
+/* Modern font - apply globally */
+body, body * {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+.dock-layout, .dock-layout * {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+/* Layout fills container */
+.dock-layout {
+  width: 100%;
+  height: 100%;
+}
+
+/* ============================================================
+   NAVIGATOR PANEL - No tabs visible
+   ============================================================ */
+
+/* Hide tab bar in navigator - multiple selectors to ensure it works */
+[data-dockid="navigator-panel"] .dock-bar,
+.dock-panel[data-dockid="navigator-panel"] .dock-bar,
+#navigator-panel .dock-bar {
+  display: none !important;
+}
+
+/* Also hide any tabs in navigator */
+[data-dockid="navigator-panel"] .dock-tab,
+.dock-panel[data-dockid="navigator-panel"] .dock-tab {
+  display: none !important;
+}
+
+/* Set navigator width */
+.dock-panel[data-dock-id="navigator-panel"] {
+  width: 240px;
+  min-width: 180px;
+  max-width: 400px;
+  flex: 0 0 240px !important;
+}
+
+/* Navigator content fills */
+.dock-panel[data-dock-id="navigator-panel"] .dock-content {
+  padding: 0;
+  height: 100%;
+}
+
+/* ============================================================
+   MAIN TABS AREA - Normal tabs
+   ============================================================ */
+
+/* Tab bar styling */
+.dock-bar {
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+  min-height: 36px;
+  padding: 0 4px;
+}
+
+/* Space for Navigator button when navigator is unpinned */
+.app-shell.nav-unpinned .dock-bar {
+  padding-left: 115px !important; /* Space for Navigator button */
+}
+
+/* No padding when navigator is pinned */
+.app-shell.nav-pinned .dock-bar {
+  padding-left: 4px !important;
+}
+
+/* Individual tabs */
+.dock-tab {
+  font-size: 13px;
+  color: #666;
+  border-radius: 0;
+}
+
+.dock-tab:hover {
+  background-color: #e8e8e8;
+}
+
+/* Active tab */
+.dock-tab-active {
+  font-weight: 500;
+  color: #000;
+  background-color: #fff !important;
+  border-bottom: 2px solid #1976d2;
+}
+
+/* Tab close button */
+.dock-tab-close-btn {
+  opacity: 0.6;
+}
+
+.dock-tab-close-btn:hover {
+  opacity: 1;
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+/* ============================================================
+   CONTENT AREAS
+   ============================================================ */
+
+/* All content should fill */
+.dock-content {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background-color: #fff;
+  box-sizing: border-box;
+}
+
+/* Panels */
+.dock-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+   DIVIDERS
+   ============================================================ */
+
+/* Dividers (resizable) */
+.dock-divider {
+  background-color: #e0e0e0;
+}
+
+.dock-divider:hover {
+  background-color: #1976d2;
+}
+
+/* ============================================================
+   FLOATING PANELS
+   ============================================================ */
+
+.dock-panel-float {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  overflow: hidden;
+}

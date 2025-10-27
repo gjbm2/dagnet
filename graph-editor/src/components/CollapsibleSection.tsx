@@ -24,7 +24,7 @@ export default function CollapsibleSection({
   return (
     <div style={{ borderBottom: '1px solid #e9ecef' }}>
       {/* Header */}
-      <button
+      <div
         onClick={handleToggle}
         style={{
           width: '100%',
@@ -51,7 +51,7 @@ export default function CollapsibleSection({
         }}>
           ▼
         </span>
-      </button>
+      </div>
 
       {/* Content */}
       {isOpen && (

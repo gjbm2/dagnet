@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Handle, Position, NodeProps, useReactFlow, useStore } from 'reactflow';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import Tooltip from '@/components/Tooltip';
 
