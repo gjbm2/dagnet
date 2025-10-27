@@ -1,0 +1,129 @@
+/* Error Boundary Styles */
+
+.error-boundary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 40px 20px;
+  background-color: #f8f9fa;
+}
+
+.error-boundary-content {
+  max-width: 600px;
+  text-align: center;
+}
+
+.error-boundary-title {
+  margin: 0 0 16px 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: #333;
+}
+
+.error-boundary-message {
+  margin: 0 0 24px 0;
+  font-size: 16px;
+  color: #666;
+  line-height: 1.6;
+}
+
+.error-boundary-details {
+  margin: 24px 0;
+  text-align: left;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.error-boundary-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.error-boundary-stack {
+  margin: 12px 0 0 0;
+  padding: 12px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  color: #d32f2f;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.error-boundary-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.error-boundary-button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background-color: #0066cc;
+  color: white;
+}
+
+.error-boundary-button:hover {
+  background-color: #0052a3;
+}
+
+.error-boundary-button-secondary {
+  background-color: #f0f0f0;
+  color: #333;
+}
+
+.error-boundary-button-secondary:hover {
+  background-color: #e0e0e0;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .error-boundary {
+    background-color: #1e1e1e;
+  }
+
+  .error-boundary-title {
+    color: #e0e0e0;
+  }
+
+  .error-boundary-message {
+    color: #999;
+  }
+
+  .error-boundary-details {
+    background-color: #2d2d2d;
+    border-color: #404040;
+  }
+
+  .error-boundary-details summary {
+    color: #e0e0e0;
+  }
+
+  .error-boundary-stack {
+    background-color: #1e1e1e;
+    color: #ff6b6b;
+  }
+
+  .error-boundary-button-secondary {
+    background-color: #3d3d3d;
+    color: #e0e0e0;
+  }
+
+  .error-boundary-button-secondary:hover {
+    background-color: #4d4d4d;
+  }
+}
+

@@ -25,7 +25,7 @@ import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
@@ -80,6 +80,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const { graph, setGraph, whatIfAnalysis } = store;
   const saveHistoryState = store.saveHistoryState;
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
+  
+  // Get the store hook for direct .getState() access
+  const graphStoreHook = useGraphStore();
+  
   // Recompute edge widths when conditional what-if overrides change
   const overridesVersion = useGraphStore(state => state.whatIfOverrides._version);
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
@@ -153,9 +157,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const calculateEdgeWidth = useCallback((edge: any, allEdges: any[], allNodes: any[]) => {
     
     // Get current state from store (avoid stale closures)
-    const currentGraph = useGraphStore.getState().graph;
-    const currentOverrides = useGraphStore.getState().whatIfOverrides;
-    const currentWhatIfAnalysis = useGraphStore.getState().whatIfAnalysis;
+    const currentGraph = graphStoreHook.getState().graph;
+    const currentOverrides = graphStoreHook.getState().whatIfOverrides;
+    const currentWhatIfAnalysis = graphStoreHook.getState().whatIfAnalysis;
 
     // UNIFIED helper: get effective probability
     // Use edge data directly if available (most current), otherwise use store
@@ -658,7 +662,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
 
     return edgesWithOffsets;
-  }, [useUniformScaling, getEdgeSortKey]);
+  }, [useUniformScaling, getEdgeSortKey, graphStoreHook]);
 
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
@@ -2412,9 +2416,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const costs: { [nodeId: string]: { monetary: number, time: number, units: string } } = {};
       
       // Get current state from store (avoid stale closures)
-      const currentGraph = useGraphStore.getState().graph;
-      const currentOverrides = useGraphStore.getState().whatIfOverrides;
-      const currentWhatIfAnalysis = useGraphStore.getState().whatIfAnalysis;
+      const currentGraph = graphStoreHook.getState().graph;
+      const currentOverrides = graphStoreHook.getState().whatIfOverrides;
+      const currentWhatIfAnalysis = graphStoreHook.getState().whatIfAnalysis;
       
       // Use pre-computed pruning if provided, otherwise no pruning
       const excludedEdges = prunedEdges || new Set<string>();
@@ -2668,9 +2672,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Calculate direct path (if exists) - for direct paths, cost is just the edge cost
       // UNIFIED: Use shared what-if logic for probability
-      const currentOverrides = useGraphStore.getState().whatIfOverrides;
-      const currentWhatIfAnalysis2 = useGraphStore.getState().whatIfAnalysis;
-      const currentGraph2 = useGraphStore.getState().graph;
+      const currentOverrides = graphStoreHook.getState().whatIfOverrides;
+      const currentWhatIfAnalysis2 = graphStoreHook.getState().whatIfAnalysis;
+      const currentGraph2 = graphStoreHook.getState().graph;
       // Pass both nodes for graph pruning and conditional activation
       const pathContext = new Set([nodeA.id, nodeB.id]);
       let directPathProbability = directEdge ? computeEffectiveEdgeProbability(currentGraph2, directEdge.id, currentOverrides, currentWhatIfAnalysis2, pathContext) : 0;
@@ -2728,9 +2732,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const renormFactors = new Map<string, number>();
       const impliedCaseOverrides = new Map<string, string>(); // case node ID → forced variant
       
-      const currentGraph = useGraphStore.getState().graph;
-      const currentOverrides = useGraphStore.getState().whatIfOverrides;
-      const currentWhatIfAnalysis = useGraphStore.getState().whatIfAnalysis;
+      const currentGraph = graphStoreHook.getState().graph;
+      const currentOverrides = graphStoreHook.getState().whatIfOverrides;
+      const currentWhatIfAnalysis = graphStoreHook.getState().whatIfAnalysis;
       
       // Interstitial nodes: all selected except path start and end
       const interstitialNodes = new Set(allSelectedIds.filter(id => id !== pathStart && id !== pathEnd));

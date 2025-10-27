@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../../contexts/GraphStoreContext';
 import Tooltip from '@/components/Tooltip';
 import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
@@ -149,6 +149,7 @@ export default function ConversionEdge({
     return lines.join('\n');
   };
   const { deleteElements, setEdges, getNodes, screenToFlowPosition } = useReactFlow();
+  const graphStoreHook = useGraphStore();
   const { whatIfAnalysis, graph } = useGraphStore();
   // Subscribe to version directly to force re-renders
   const overridesVersion = useGraphStore(state => state.whatIfOverrides._version);
@@ -158,9 +159,9 @@ export default function ConversionEdge({
   
   // UNIFIED: Compute effective probability using shared logic
   const effectiveProbability = useMemo(() => {
-    const currentOverrides = useGraphStore.getState().whatIfOverrides;
+    const currentOverrides = graphStoreHook.getState().whatIfOverrides;
     return computeEffectiveEdgeProbability(graph, id, currentOverrides, whatIfAnalysis);
-  }, [id, whatIfAnalysis, overridesVersion, graph?.edges?.find(e => e.id === id)?.p?.mean, graph?.metadata?.updated_at]);
+  }, [id, whatIfAnalysis, overridesVersion, graph?.edges?.find(e => e.id === id)?.p?.mean, graph?.metadata?.updated_at, graphStoreHook]);
 
   // For dashed lines, we need the actual effective weight (flow-based), not just What-If overrides
   const effectiveWeight = useMemo(() => {
@@ -185,7 +186,7 @@ export default function ConversionEdge({
           let totalMass = 0;
           for (const incomingEdge of incomingEdges) {
             const sourceResidual = calculateResidualProbability(incomingEdge.from, edges, startNodeId);
-            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.id, useGraphStore.getState().whatIfOverrides, whatIfAnalysis);
+            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.id, graphStoreHook.getState().whatIfOverrides, whatIfAnalysis);
             totalMass += sourceResidual * edgeProb;
           }
           return totalMass;
@@ -200,13 +201,13 @@ export default function ConversionEdge({
     
     // Fallback to effective probability if no flow calculation available
     return effectiveProbability;
-  }, [graph, fullEdge?.from, effectiveProbability, whatIfAnalysis, overridesVersion, graph?.edges?.map(e => `${e.id}-${e.p?.mean}`).join(',')]);
+  }, [graph, fullEdge?.from, effectiveProbability, whatIfAnalysis, overridesVersion, graph?.edges?.map(e => `${e.id}-${e.p?.mean}`).join(','), graphStoreHook]);
   
   // UNIFIED: Get what-if display info using shared logic
   const whatIfDisplay = useMemo(() => {
-    const currentOverrides = useGraphStore.getState().whatIfOverrides;
+    const currentOverrides = graphStoreHook.getState().whatIfOverrides;
     return getEdgeWhatIfDisplay(graph, id, currentOverrides, whatIfAnalysis);
-  }, [graph, id, whatIfAnalysis, overridesVersion]);
+  }, [graph, id, whatIfAnalysis, overridesVersion, graphStoreHook]);
   
   // Calculate stroke width using useMemo to enable CSS transitions
   const strokeWidth = useMemo(() => {

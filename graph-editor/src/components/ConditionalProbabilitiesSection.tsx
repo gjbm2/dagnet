@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import { ConditionalProbability, GraphNode, GraphEdge } from '@/lib/types';
 import { getUpstreamNodes, validateConditionalProbabilities } from '@/lib/conditionalValidation';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';

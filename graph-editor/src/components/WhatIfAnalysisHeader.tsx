@@ -1,5 +1,5 @@
 import React from 'react';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 
 export default function WhatIfAnalysisHeader() {
   const { whatIfAnalysis, whatIfOverrides, setWhatIfAnalysis, clearAllOverrides } = useGraphStore();

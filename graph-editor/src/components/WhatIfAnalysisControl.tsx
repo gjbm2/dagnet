@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { useGraphStore } from '@/lib/useGraphStore';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 import { getConditionalColor, getConditionSignature } from '@/lib/conditionalColors';
 
 export default function WhatIfAnalysisControl() {

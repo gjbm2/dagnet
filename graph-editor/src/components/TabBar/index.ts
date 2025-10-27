@@ -1,0 +1,2 @@
+export { TabContextMenu } from './TabContextMenu';
+

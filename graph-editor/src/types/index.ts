@@ -1,0 +1,262 @@
+// Core Types for Tab System
+
+/**
+ * Object types that can be opened in tabs
+ */
+export type ObjectType = 
+  | 'graph' 
+  | 'parameter' 
+  | 'context' 
+  | 'case'
+  | 'settings'
+  | 'about';
+
+/**
+ * View modes for displaying content
+ */
+export type ViewMode = 'interactive' | 'raw-json' | 'raw-yaml';
+
+/**
+ * Source information for a file
+ */
+export interface FileSource {
+  repository: string;
+  path: string;
+  branch: string;
+  commitHash?: string;
+}
+
+/**
+ * File state - single source of truth for a file
+ * Multiple tabs can view the same file
+ */
+export interface FileState<T = any> {
+  fileId: string;              // Unique ID for this file
+  type: ObjectType;
+  
+  // Data
+  data: T;                     // Current state
+  originalData: T;             // For revert
+  isDirty: boolean;            // Shared across all views
+  
+  // Source
+  source: FileSource;
+  
+  // Which tabs are viewing this file
+  viewTabs: string[];          // Array of tab IDs
+  
+  // Metadata
+  lastModified: number;
+  lastSaved?: number;
+}
+
+/**
+ * Individual tab - view of a file
+ */
+export interface TabState {
+  id: string;                  // Unique tab ID
+  fileId: string;              // Points to FileState
+  viewMode: ViewMode;
+  title: string;               // Display name (includes view type)
+  icon?: string;               // Optional icon
+  
+  // Tab-specific state (e.g. scroll position, selection)
+  editorState?: any;
+  
+  // UI state
+  closable?: boolean;
+  group?: string;              // For rc-dock grouping
+}
+
+/**
+ * Navigator state
+ */
+export interface NavigatorState {
+  isOpen: boolean;
+  isPinned: boolean;
+  searchQuery: string;
+  selectedRepo: string;
+  selectedBranch: string;
+  expandedSections: string[];  // Which sections are expanded
+}
+
+/**
+ * Repository item (from navigator tree)
+ */
+export interface RepositoryItem {
+  id: string;
+  type: ObjectType;
+  name: string;
+  path: string;
+  description?: string;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Git commit information
+ */
+export interface GitCommit {
+  message: string;
+  branch: string;
+  author?: {
+    name: string;
+    email: string;
+  };
+  timestamp: number;
+}
+
+/**
+ * Multi-file commit data
+ */
+export interface CommitRequest {
+  files: Array<{
+    fileId: string;
+    path: string;
+    content: string;
+  }>;
+  commit: GitCommit;
+  createNewBranch?: boolean;
+  newBranchName?: string;
+}
+
+/**
+ * App state persisted to IndexedDB
+ */
+export interface AppState {
+  id: string;                  // 'app-state' (singleton)
+  
+  // Layout
+  dockLayout: any;             // rc-dock layout
+  
+  // Navigator
+  navigatorState: NavigatorState;
+  
+  // Active tab
+  activeTabId?: string;
+  
+  // Last accessed
+  lastRepository?: string;
+  lastBranch?: string;
+  
+  // Timestamp
+  updatedAt: number;
+}
+
+/**
+ * Settings data (stored locally, not in git)
+ */
+export interface SettingsData {
+  git: {
+    defaultRepo?: string;
+    authTokens?: Record<string, string>;  // repo -> token
+  };
+  ui: {
+    theme?: 'light' | 'dark';
+    navigatorDefaultOpen?: boolean;
+    tabLimit?: number;
+  };
+  editor: {
+    autoSave?: boolean;
+    showLineNumbers?: boolean;
+    wordWrap?: boolean;
+  };
+}
+
+/**
+ * Tab operations interface
+ */
+export interface TabOperations {
+  openTab: (item: RepositoryItem, viewMode?: ViewMode) => Promise<void>;
+  closeTab: (tabId: string, force?: boolean) => Promise<boolean>;
+  switchTab: (tabId: string) => void;
+  updateTabData: (fileId: string, newData: any) => void;
+  getDirtyTabs: () => TabState[];
+  saveTab: (tabId: string) => Promise<void>;
+  saveAll: () => Promise<void>;
+  revertTab: (tabId: string) => void;
+  
+  // View mode operations
+  openInNewView: (tabId: string, viewMode: ViewMode) => Promise<void>;
+  
+  // Multi-file commit
+  commitFiles: (request: CommitRequest) => Promise<void>;
+}
+
+/**
+ * Navigator operations interface
+ */
+export interface NavigatorOperations {
+  toggleNavigator: () => void;
+  togglePin: () => void;
+  setSearchQuery: (query: string) => void;
+  selectRepository: (repo: string) => void;
+  selectBranch: (branch: string) => void;
+  expandSection: (section: string) => void;
+  collapseSection: (section: string) => void;
+}
+
+/**
+ * Editor props - passed to all editor components
+ */
+export interface EditorProps<T = any> {
+  fileId: string;
+  data: T;
+  onChange: (newData: T) => void;
+  readonly?: boolean;
+  viewMode: ViewMode;
+}
+
+/**
+ * Graph data structure (existing)
+ */
+export interface GraphData {
+  nodes: Array<{
+    id: string;
+    type?: string;
+    data: any;
+    position: { x: number; y: number };
+  }>;
+  edges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    data?: any;
+  }>;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Parameter data structure (existing)
+ */
+export interface ParameterData {
+  id: string;
+  name: string;
+  type: 'probability' | 'cost' | 'time' | 'rate' | 'other';
+  value?: number | string;
+  description?: string;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Context data structure (existing)
+ */
+export interface ContextData {
+  id: string;
+  name: string;
+  description?: string;
+  variables?: Record<string, any>;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Case data structure (existing)
+ */
+export interface CaseData {
+  id: string;
+  name: string;
+  description?: string;
+  inputs?: Record<string, any>;
+  expectedOutputs?: Record<string, any>;
+  metadata?: Record<string, any>;
+}
+
