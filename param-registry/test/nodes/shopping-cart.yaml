@@ -1,0 +1,31 @@
+id: shopping-cart
+name: "Shopping Cart"
+description: |
+  The shopping cart page where users review items, update quantities, 
+  apply promo codes, and proceed to checkout.
+
+tags:
+  - cart
+  - checkout
+  - conversion
+  - intermediate
+
+resources:
+  - type: notion
+    url: "https://notion.so/team/cart-abandonment-analysis"
+    title: "Cart Abandonment Analysis"
+    description: "Data and insights on cart abandonment rates and causes"
+  
+  - type: miro
+    url: "https://miro.com/board/cart-user-journey"
+    title: "Cart User Journey Map"
+    description: "User journey mapping for cart experience"
+
+metadata:
+  created_at: "2025-01-28T11:30:00Z"
+  updated_at: "2025-01-28T11:30:00Z"
+  author: "ecommerce-team"
+  version: "1.0.0"
+  status: active
+
+

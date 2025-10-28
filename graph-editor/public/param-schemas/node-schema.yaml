@@ -1,0 +1,79 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Node Definition Schema
+description: Schema for node definitions (optional detail files for graph nodes)
+
+type: object
+required:
+  - id
+  - name
+
+properties:
+  id:
+    type: string
+    pattern: ^[a-z0-9-]+$
+    description: Unique identifier for the node (matches node IDs in graphs)
+    
+  name:
+    type: string
+    minLength: 1
+    description: Human-readable name for the node
+    
+  description:
+    type: string
+    description: Detailed description of what this node represents
+    
+  tags:
+    type: array
+    items:
+      type: string
+    description: Tags for categorization and search
+    
+  resources:
+    type: array
+    description: External resources related to this node
+    items:
+      type: object
+      required:
+        - type
+        - url
+      properties:
+        type:
+          type: string
+          enum: [notion, figma, miro, confluence, docs, jira, slack, other]
+          description: Type of resource
+        url:
+          type: string
+          format: uri
+          description: URL to the resource
+        title:
+          type: string
+          description: Optional title for the resource
+        description:
+          type: string
+          description: Optional description of the resource
+          
+  metadata:
+    type: object
+    description: Metadata about this node definition
+    properties:
+      created_at:
+        type: string
+        format: date-time
+        description: When this definition was created
+      updated_at:
+        type: string
+        format: date-time
+        description: When this definition was last updated
+      author:
+        type: string
+        description: Author of this definition
+      version:
+        type: string
+        description: Version identifier
+      status:
+        type: string
+        enum: [active, deprecated, archived]
+        default: active
+        description: Status of this node definition
+
+

@@ -608,7 +608,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         } else {
           console.warn(`TabContext: Graph load failed or no data`);
         }
-      } else if (item.type === 'parameter' || item.type === 'context' || item.type === 'case') {
+      } else if (item.type === 'parameter' || item.type === 'context' || item.type === 'case' || item.type === 'node') {
         console.log(`TabContext: Loading ${item.type} ${item.name}...`);
         const { paramRegistryService } = await import('../services/paramRegistryService');
         
@@ -650,6 +650,8 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             data = await paramRegistryService.loadContext(item.id);
           } else if (item.type === 'case') {
             data = await paramRegistryService.loadCase(item.id);
+          } else if (item.type === 'node') {
+            data = await paramRegistryService.loadNode(item.id);
           }
           console.log(`TabContext: Loaded ${item.type} data:`, data);
         } catch (loadError) {

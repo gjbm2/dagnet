@@ -27,6 +27,7 @@ export function NavigatorContent() {
   const paramItems = items.filter(item => item.type === 'parameter');
   const contextItems = items.filter(item => item.type === 'context');
   const caseItems = items.filter(item => item.type === 'case');
+  const nodeItems = items.filter(item => item.type === 'node');
 
   const handleItemClick = (item: any) => {
     const fileId = `${item.type}-${item.id}`;
@@ -184,6 +185,24 @@ export function NavigatorContent() {
                   operations.collapseSection('cases');
                 } else {
                   operations.expandSection('cases');
+                }
+              }}
+              onItemClick={handleItemClick}
+              onItemContextMenu={handleItemContextMenu}
+              onSectionContextMenu={handleSectionContextMenu}
+            />
+
+            <ObjectTypeSection
+              title="Nodes"
+              icon="🔵"
+              items={nodeItems}
+              sectionType="node"
+              isExpanded={state.expandedSections.includes('nodes')}
+              onToggle={() => {
+                if (state.expandedSections.includes('nodes')) {
+                  operations.collapseSection('nodes');
+                } else {
+                  operations.expandSection('nodes');
                 }
               }}
               onItemClick={handleItemClick}

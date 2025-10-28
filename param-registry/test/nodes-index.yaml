@@ -1,0 +1,47 @@
+# Nodes Index - Test Data
+# Lists all available nodes in the test registry
+
+version: "1.0.0"
+created_at: "2025-01-28T10:00:00Z"
+updated_at: "2025-01-28T15:30:00Z"
+
+nodes:
+  - id: homepage
+    file_path: "nodes/homepage.yaml"
+    status: active
+    type: entry
+    category: acquisition
+    tags: ["landing", "seo", "entry-point"]
+    graphs_using: ["conversion-funnel"]
+    usage_count: 1
+    created_at: "2025-01-28T10:00:00Z"
+    updated_at: "2025-01-28T10:00:00Z"
+    author: "growth-team"
+    version: "1.0.0"
+
+  - id: checkout-complete
+    file_path: "nodes/checkout-complete.yaml"
+    status: active
+    type: success
+    category: conversion
+    tags: ["checkout", "purchase", "success"]
+    graphs_using: ["conversion-funnel"]
+    usage_count: 1
+    created_at: "2025-01-28T10:00:00Z"
+    updated_at: "2025-01-28T10:00:00Z"
+    author: "ecommerce-team"
+    version: "1.0.0"
+
+  - id: abandoned-cart
+    file_path: null
+    status: planned
+    type: exit
+    category: abandonment
+    tags: ["cart", "abandonment", "exit"]
+    graphs_using: []
+    usage_count: 0
+    created_at: "2025-01-28T10:00:00Z"
+    author: "analytics-team"
+    version: "1.0.0"
+
+

@@ -136,6 +136,7 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
                 <option value="parameter">Parameter</option>
                 <option value="context">Context</option>
                 <option value="case">Case</option>
+                <option value="node">Node</option>
               </select>
             </div>
           )}

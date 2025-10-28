@@ -7,7 +7,7 @@
 
 export interface FileTypeConfig {
   /** The type identifier (matches ObjectType) */
-  type: 'graph' | 'parameter' | 'context' | 'case' | 'credentials' | 'settings' | 'markdown';
+  type: 'graph' | 'parameter' | 'context' | 'case' | 'node' | 'credentials' | 'settings' | 'markdown';
   
   /** Display name (singular) */
   displayName: string;
@@ -98,6 +98,20 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     indexFile: 'cases-index.yaml',
     extensions: ['.yaml', '.yml', '.json'],
     icon: '📦',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
+  node: {
+    type: 'node',
+    displayName: 'Node',
+    displayNamePlural: 'Nodes',
+    schemaFile: '/param-schemas/node-schema.yaml',
+    directory: 'nodes',
+    indexFile: 'nodes-index.yaml',
+    extensions: ['.yaml', '.yml', '.json'],
+    icon: '🔵',
     interactiveEditor: 'form',
     supportsInteractiveEdit: true,
     supportsRawEdit: true

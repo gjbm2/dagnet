@@ -142,6 +142,42 @@ export interface Case {
   metadata?: any;
 }
 
+export interface NodeEntry {
+  id: string;
+  file_path?: string | null;
+  status: string;
+  type?: string;
+  category?: string;
+  tags?: string[];
+  graphs_using?: string[];
+  usage_count?: number;
+  created_at?: string;
+  updated_at?: string;
+  author?: string;
+  version?: string;
+}
+
+export interface NodesIndex {
+  version: string;
+  created_at: string;
+  updated_at?: string;
+  nodes: NodeEntry[];
+}
+
+export interface Node {
+  id: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  resources?: Array<{
+    type: string;
+    url: string;
+    title?: string;
+    description?: string;
+  }>;
+  metadata?: any;
+}
+
 class ParamRegistryService {
   private baseUrl: string;
   private config: RegistryConfig;
@@ -329,6 +365,47 @@ class ParamRegistryService {
     const caseData = yaml.load(yamlText) as Case;
     
     return caseData;
+  }
+
+  // Load nodes-index.yaml
+  async loadNodesIndex(): Promise<NodesIndex> {
+    const yamlText = await this.loadFile('nodes-index.yaml');
+    const data = yaml.load(yamlText) as NodesIndex;
+    return data;
+  }
+
+  // Load a specific node by ID
+  async loadNode(nodeId: string): Promise<Node | null> {
+    try {
+      const index = await this.loadNodesIndex();
+      const entry = index.nodes.find(n => n.id === nodeId);
+      
+      if (entry && entry.file_path) {
+        const yamlText = await this.loadFile(entry.file_path);
+        const nodeData = yaml.load(yamlText) as Node;
+        return nodeData;
+      }
+      
+      // Node exists in index but has no file (planned node)
+      return null;
+    } catch (indexError) {
+      console.log(`Node index not available, trying direct file load:`, indexError);
+    }
+    
+    // Fallback: try loading directly using directory config from registry
+    const config = getFileTypeConfig('node');
+    const directory = config?.directory || 'nodes';
+    const filePath = nodeId.includes('/') ? nodeId : `${directory}/${nodeId}`;
+    console.log(`Loading node directly from: ${filePath}`);
+    
+    try {
+      const yamlText = await this.loadFile(filePath);
+      const nodeData = yaml.load(yamlText) as Node;
+      return nodeData;
+    } catch (error) {
+      console.error(`Failed to load node ${nodeId}:`, error);
+      return null;
+    }
   }
 
   // Load parameters-index.yaml

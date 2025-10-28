@@ -1,0 +1,35 @@
+id: product-page
+name: "Product Detail Page"
+description: |
+  Product detail page where users can view product information, images, 
+  reviews, and add items to their cart.
+
+tags:
+  - product
+  - browsing
+  - conversion
+  - pdp
+
+resources:
+  - type: figma
+    url: "https://figma.com/file/pdp-designs"
+    title: "PDP Design System"
+    description: "Current product page designs and variants"
+  
+  - type: notion
+    url: "https://notion.so/team/pdp-optimization"
+    title: "PDP Optimization Project"
+    description: "A/B tests and conversion optimization initiatives"
+  
+  - type: confluence
+    url: "https://confluence.company.com/pdp-specs"
+    title: "PDP Technical Specs"
+
+metadata:
+  created_at: "2025-01-28T11:00:00Z"
+  updated_at: "2025-01-28T11:00:00Z"
+  author: "product-team"
+  version: "1.0.0"
+  status: active
+
+
