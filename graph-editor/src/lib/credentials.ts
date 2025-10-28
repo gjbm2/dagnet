@@ -75,7 +75,7 @@ export class CredentialsManager {
       console.log('CredentialsManager: No credentials available, using public access');
       return {
         success: true,
-        credentials: null,
+        credentials: undefined,
         source: 'public'
       };
 
@@ -84,7 +84,7 @@ export class CredentialsManager {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
-        source: null
+        source: undefined
       };
     }
   }
