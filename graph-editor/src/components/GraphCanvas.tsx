@@ -2048,9 +2048,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Handle Delete key for selected elements (only when not editing)
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        // Don't handle if user is typing in form fields
+        // Don't handle if user is typing in form fields or Monaco editor
         const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor')) {
           return;
         }
         
@@ -3449,6 +3449,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         selectionOnDrag={false}
         selectNodesOnDrag={false}
         selectionKeyCode={['Meta', 'Ctrl']}
+        panActivationKeyCode={null}
         nodesDraggable={true}
         nodesConnectable
         elementsSelectable

@@ -687,6 +687,7 @@ export function useTabContext(): TabContextValue {
  */
 export function useFileState<T = any>(fileId: string): {
   data: T | null;
+  originalData: T | null;
   isDirty: boolean;
   updateData: (newData: T) => void;
 } {
@@ -725,6 +726,7 @@ export function useFileState<T = any>(fileId: string): {
 
   return {
     data: file?.data ?? null,
+    originalData: file?.originalData ?? null,
     isDirty: file?.isDirty ?? false,
     updateData
   };

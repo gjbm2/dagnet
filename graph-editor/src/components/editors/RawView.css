@@ -128,6 +128,49 @@
   width: 100% !important;
 }
 
+/* Fix line wrap width issues */
+.raw-view-editor-container .monaco-editor .view-lines {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.raw-view-editor-container .monaco-editor .view-overview {
+  width: 100% !important;
+}
+
+.raw-view-editor-container .monaco-editor .overflow-guard {
+  width: 100% !important;
+}
+
+/* Ensure diff editor takes full width */
+.raw-view-editor-container .monaco-diff-editor .monaco-editor {
+  width: 100% !important;
+}
+
+.raw-view-editor-container .monaco-diff-editor .monaco-editor .view-lines {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+/* Additional Monaco editor width fixes */
+.raw-view-editor-container .monaco-editor .overflow-guard {
+  width: 100% !important;
+}
+
+.raw-view-editor-container .monaco-editor .monaco-editor-background {
+  width: 100% !important;
+}
+
+.raw-view-editor-container .monaco-editor .margin {
+  width: 100% !important;
+}
+
+/* Ensure proper width calculation in line wrap mode */
+.raw-view-editor-container .monaco-editor .view-lines .view-line {
+  width: 100% !important;
+  max-width: none !important;
+}
+
 .editor-loading {
   display: flex;
   align-items: center;
