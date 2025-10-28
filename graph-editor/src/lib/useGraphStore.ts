@@ -15,6 +15,9 @@ type WhatIfOverrides = {
   
   // Conditional edge overrides: edgeId -> forced visited nodes (hyperprior activation)
   conditionalOverrides?: Record<string, Set<string>>;
+  
+  // Version counter for triggering re-renders when overrides change
+  _version?: number;
 };
 
 type State = {

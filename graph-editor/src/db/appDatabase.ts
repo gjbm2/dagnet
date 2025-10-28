@@ -129,7 +129,9 @@ export class AppDatabase extends Dexie {
     const existing = await this.settings.get('settings');
     await this.settings.put({
       id: 'settings',
-      ...existing,
+      git: existing?.git || {},
+      ui: existing?.ui || {},
+      editor: existing?.editor || {},
       ...settings
     });
   }
@@ -170,7 +172,7 @@ db.files.get = async (key: string) => {
     await handleStorageError(error, 'files.get');
     return undefined;
   }
-};
+} as any;
 
 const originalTabsToArray = db.tabs.toArray.bind(db.tabs);
 db.tabs.toArray = async () => {
@@ -180,7 +182,7 @@ db.tabs.toArray = async () => {
     await handleStorageError(error, 'tabs.toArray');
     return [];
   }
-};
+} as any;
 
 const originalGetAppState = db.getAppState.bind(db);
 db.getAppState = async () => {
@@ -188,9 +190,9 @@ db.getAppState = async () => {
     return await originalGetAppState();
   } catch (error) {
     await handleStorageError(error, 'getAppState');
-    return null;
+    return undefined;
   }
-};
+} as any;
 
 // Initialize on import
 db.initialize().catch(error => {
