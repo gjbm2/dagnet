@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { NavigatorState, NavigatorOperations, RepositoryItem, ObjectType } from '../types';
 import { db } from '../db/appDatabase';
+import { credentialsManager } from '../lib/credentials';
+import { gitConfig } from '../config/gitConfig';
 
 /**
  * Navigator Context
@@ -31,10 +33,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Load state from IndexedDB on mount
+  // Load state from IndexedDB and credentials on mount
   useEffect(() => {
     const initialize = async () => {
       await loadStateFromDB();
+      await loadCredentialsAndUpdateRepo();
       setIsInitialized(true);
     };
     initialize();
@@ -53,6 +56,33 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       saveStateToDB();
     }
   }, [state, isInitialized]);
+
+  /**
+   * Load credentials and update selected repository
+   */
+  const loadCredentialsAndUpdateRepo = async () => {
+    try {
+      const result = await credentialsManager.loadCredentials();
+      
+      if (result.success && result.credentials) {
+        const defaultRepo = result.credentials.defaultGitRepo || 'nous-conversion';
+        const gitCreds = result.credentials.git.find(repo => repo.name === defaultRepo) || result.credentials.git[0];
+        
+        if (gitCreds) {
+          console.log(`NavigatorContext: Updating repo to ${gitCreds.name} (${gitCreds.owner}/${gitCreds.repo})`);
+          setState(prev => ({
+            ...prev,
+            selectedRepo: gitCreds.name,
+            selectedBranch: gitCreds.branch || 'main'
+          }));
+        }
+      } else {
+        console.log('NavigatorContext: No credentials available, using default repo');
+      }
+    } catch (error) {
+      console.error('NavigatorContext: Failed to load credentials:', error);
+    }
+  };
 
   /**
    * Load navigator state from IndexedDB
@@ -270,7 +300,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         const { gitService } = await import('../services/gitService');
         
         // Load parameters - try both /params and /parameters directories
-        const paramDirs = ['params', 'parameters'];
+        const paramDirs = ['params', gitConfig.paramsPath];
         for (const dir of paramDirs) {
           console.log(`Navigator: Trying ${dir}/ directory...`);
           const paramsResult = await gitService.getDirectoryContents(dir, branch, 'gjbm2', repo);

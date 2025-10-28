@@ -1,4 +1,5 @@
 import { gitConfig } from '../config/gitConfig';
+import { CredentialsData, GitRepositoryCredential } from '../types/credentials';
 
 export interface GitFile {
   name: string;
@@ -45,11 +46,34 @@ export interface GitOperationResult {
 
 class GitService {
   private config = gitConfig;
+  private credentials: CredentialsData | null = null;
+  private currentRepo: GitRepositoryCredential | null = null;
 
-  // Get base URL dynamically to support repo switching
+  constructor(credentials?: CredentialsData) {
+    this.credentials = credentials || null;
+    this.setCurrentRepo();
+  }
+
+  /**
+   * Set current repository from credentials
+   */
+  private setCurrentRepo(): void {
+    if (!this.credentials?.git?.length) {
+      this.currentRepo = null;
+      return;
+    }
+
+    // Use default repo or first available
+    const defaultRepo = this.credentials.defaultGitRepo || 'nous-conversion';
+    this.currentRepo = this.credentials.git.find(repo => repo.name === defaultRepo) || this.credentials.git[0];
+  }
+
+  /**
+   * Get base URL dynamically to support repo switching
+   */
   private getBaseUrl(repoOwner?: string, repoName?: string): string {
-    const owner = repoOwner || this.config.repoOwner;
-    const name = repoName || this.config.repoName;
+    const owner = repoOwner || this.currentRepo?.owner || this.config.repoOwner;
+    const name = repoName || this.currentRepo?.repo || this.config.repoName;
     return `${this.config.githubApiBase}/repos/${owner}/${name}`;
   }
 
@@ -66,8 +90,10 @@ class GitService {
     console.log('GitService config:', this.config);
     console.log('GitService githubToken:', this.config.githubToken ? 'SET' : 'NOT SET');
 
-    if (this.config.githubToken && this.config.githubToken.trim() !== '') {
-      headers['Authorization'] = `token ${this.config.githubToken}`;
+    // Use token from credentials or fall back to config
+    const token = this.currentRepo?.token || this.config.githubToken;
+    if (token && token.trim() !== '') {
+      headers['Authorization'] = `token ${token}`;
     }
 
     if (this.config.debugGitOperations) {

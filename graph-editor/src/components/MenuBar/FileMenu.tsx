@@ -12,8 +12,6 @@ import { encodeStateToUrl } from '../../lib/shareUrl';
  * - New (graph, parameter, context, case)
  * - Open (opens navigator)
  * - Import from File
- * - Save
- * - Save All
  * - Revert
  * - Export (Download, Share URL)
  * - Close Tab
@@ -40,15 +38,6 @@ export function FileMenu() {
     navOps.toggleNavigator();
   };
 
-  const handleSave = async () => {
-    if (activeTabId) {
-      await operations.saveTab(activeTabId);
-    }
-  };
-
-  const handleSaveAll = async () => {
-    await operations.saveAll();
-  };
 
   const handleRevert = () => {
     if (activeTabId) {
@@ -62,9 +51,16 @@ export function FileMenu() {
     }
   };
 
-  const handleSettings = () => {
-    // TODO: Open settings tab
-    console.log('Settings');
+  const handleCredentials = async () => {
+    // Open existing credentials file
+    const credentialsItem = {
+      id: 'credentials',
+      type: 'credentials',
+      name: 'Credentials',
+      path: 'credentials.yaml'
+    };
+    
+    await operations.openTab(credentialsItem, 'interactive');
   };
 
   const handleImportFromFile = () => {
@@ -147,25 +143,56 @@ export function FileMenu() {
     }
   };
 
-  const handleClearAllData = async () => {
+  const handleClearData = async () => {
     const confirmed = window.confirm(
       'Clear ALL application data?\n\n' +
       'This will:\n' +
       '- Close all tabs\n' +
       '- Clear all cached files\n' +
-      '- Reset layout and settings\n\n' +
+      '- Reset layout\n' +
+      '- Keep settings intact\n\n' +
       'This action cannot be undone!'
     );
     
     if (!confirmed) return;
 
     try {
-      console.log('Clearing all application data...');
+      console.log('Clearing all application data (keeping settings)...');
       
-      // Use the built-in clearAll method
+      // Clear all data except settings
       await db.clearAll();
       
-      console.log('All application data cleared');
+      console.log('All application data cleared (settings preserved)');
+      
+      // Reload the page to reset everything
+      window.location.reload();
+    } catch (error) {
+      console.error('Failed to clear data:', error);
+      alert('Failed to clear data: ' + error);
+    }
+  };
+
+  const handleClearAllData = async () => {
+    const confirmed = window.confirm(
+      'Clear ALL application data and settings?\n\n' +
+      'This will:\n' +
+      '- Close all tabs\n' +
+      '- Clear all cached files\n' +
+      '- Reset layout and settings\n' +
+      '- Clear all user preferences\n\n' +
+      'This action cannot be undone!'
+    );
+    
+    if (!confirmed) return;
+
+    try {
+      console.log('Clearing all application data and settings...');
+      
+      // Clear all data including settings
+      await db.clearAll();
+      await db.settings.clear();
+      
+      console.log('All application data and settings cleared');
       
       // Reload the page to reset everything
       window.location.reload();
@@ -234,24 +261,6 @@ export function FileMenu() {
 
           <Menubar.Item 
             className="menubar-item" 
-            onSelect={handleSave}
-            disabled={!activeTab}
-          >
-            Save
-            <div className="menubar-right-slot">⌘S</div>
-          </Menubar.Item>
-
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleSaveAll}
-            disabled={!hasDirtyTabs}
-          >
-            Save All
-            <div className="menubar-right-slot">⌘⇧S</div>
-          </Menubar.Item>
-
-          <Menubar.Item 
-            className="menubar-item" 
             onSelect={handleRevert}
             disabled={!activeTab || !isDirty}
           >
@@ -300,9 +309,9 @@ export function FileMenu() {
 
           <Menubar.Item 
             className="menubar-item" 
-            onSelect={handleSettings}
+            onSelect={handleCredentials}
           >
-            Settings...
+            Credentials...
             <div className="menubar-right-slot">⌘,</div>
           </Menubar.Item>
 
@@ -310,9 +319,16 @@ export function FileMenu() {
 
           <Menubar.Item 
             className="menubar-item" 
+            onSelect={handleClearData}
+          >
+            Clear Data...
+          </Menubar.Item>
+
+          <Menubar.Item 
+            className="menubar-item" 
             onSelect={handleClearAllData}
           >
-            Clear All Data...
+            Clear Data and Settings...
           </Menubar.Item>
         </Menubar.Content>
       </Menubar.Portal>

@@ -864,10 +864,25 @@ function AppShellContent() {
  * App Shell with Providers
  */
 export function AppShell() {
-  // Check for ?clear parameter to force complete state reset
+  // Check for ?clear or ?clearall parameters to force state reset
   React.useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.has('clear')) {
+    
+    if (urlParams.has('clearall')) {
+      console.warn('🗑️ CLEARING ALL DATA AND SETTINGS due to ?clearall parameter');
+      db.clearAllIncludingSettings()
+        .then(() => {
+          console.log('✅ All data and settings cleared successfully');
+          // Remove the ?clearall parameter from URL
+          const newUrl = window.location.pathname;
+          window.history.replaceState({}, document.title, newUrl);
+          // Reload to start fresh
+          window.location.reload();
+        })
+        .catch(error => {
+          console.error('❌ Failed to clear all data and settings:', error);
+        });
+    } else if (urlParams.has('clear')) {
       console.warn('🗑️ CLEARING ALL LOCAL STATE due to ?clear parameter');
       db.clearAll()
         .then(() => {

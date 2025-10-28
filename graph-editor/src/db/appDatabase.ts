@@ -1,5 +1,6 @@
 import Dexie, { Table } from 'dexie';
 import { FileState, TabState, AppState, SettingsData } from '../types';
+import { CredentialsData } from '../types/credentials';
 
 /**
  * IndexedDB database for persisting app state
@@ -9,6 +10,7 @@ import { FileState, TabState, AppState, SettingsData } from '../types';
  * - tabs: TabState records (views of files)
  * - appState: Application-level state (layout, navigator, etc.)
  * - settings: User settings (local only, not synced to git)
+ * - credentials: User authentication credentials (local only, not synced to git)
  */
 export class AppDatabase extends Dexie {
   // Tables
@@ -16,6 +18,7 @@ export class AppDatabase extends Dexie {
   tabs!: Table<TabState, string>;
   appState!: Table<AppState, string>;
   settings!: Table<SettingsData, string>;
+  credentials!: Table<CredentialsData & { id: string; source: string; timestamp: number }, string>;
 
   constructor() {
     super('DagNetGraphEditor');
@@ -31,7 +34,10 @@ export class AppDatabase extends Dexie {
       appState: 'id, updatedAt',
       
       // id is primary key (singleton: 'settings')
-      settings: 'id'
+      settings: 'id',
+      
+      // id is primary key, timestamp for sorting
+      credentials: 'id, source, timestamp'
     });
   }
 
@@ -88,7 +94,18 @@ export class AppDatabase extends Dexie {
     await this.files.clear();
     await this.tabs.clear();
     await this.appState.clear();
-    // Don't clear settings - user preferences should persist
+    // Don't clear settings or credentials - user preferences should persist
+  }
+
+  /**
+   * Clear all data including settings and credentials
+   */
+  async clearAllIncludingSettings(): Promise<void> {
+    await this.files.clear();
+    await this.tabs.clear();
+    await this.appState.clear();
+    await this.settings.clear();
+    await this.credentials.clear();
   }
 
   /**

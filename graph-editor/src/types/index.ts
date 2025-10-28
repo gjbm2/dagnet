@@ -8,7 +8,7 @@ export type ObjectType =
   | 'parameter' 
   | 'context' 
   | 'case'
-  | 'settings'
+  | 'credentials'
   | 'about';
 
 /**

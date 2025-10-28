@@ -121,7 +121,17 @@ class FileRegistry {
     
     file.data = newData;
     const wasDirty = file.isDirty;
-    file.isDirty = newDataStr !== originalDataStr;
+    
+    // Special handling for settings files - they are always persisted immediately
+    // so they should never be marked as dirty
+    if (fileId === 'settings-settings') {
+      file.isDirty = false;
+      // Update originalData to match current data since settings are auto-saved
+      file.originalData = structuredClone(newData);
+    } else {
+      file.isDirty = newDataStr !== originalDataStr;
+    }
+    
     file.lastModified = Date.now();
 
     if (wasDirty !== file.isDirty) {
@@ -328,10 +338,166 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const { showConfirm } = useDialog();
 
-  // Load tabs from IndexedDB on mount
+  // Load tabs from IndexedDB on mount and initialize credentials
   useEffect(() => {
     loadTabsFromDB();
+    initializeCredentials();
+    loadFromURLData();
   }, []);
+
+  /**
+   * Initialize credentials file from schema defaults if it doesn't exist
+   */
+  const initializeCredentials = async () => {
+    const credentialsFileId = 'credentials-credentials';
+    const existingFile = fileRegistry.getFile(credentialsFileId);
+    
+    if (!existingFile) {
+      // Create credentials file with empty data - defaults come from schema
+      console.log('TabContext: Creating credentials file from schema defaults');
+      await fileRegistry.getOrCreateFile(credentialsFileId, 'credentials', { repository: 'local', path: 'credentials.yaml', branch: 'main' }, {
+        version: '1.0.0',
+        defaultGitRepo: 'nous-conversion',
+        git: []
+      });
+    }
+  };
+
+  /**
+   * Load graph data from URL parameters (?data=... or ?graph=...)
+   */
+  const loadFromURLData = async () => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      
+      // Handle ?data parameter (compressed/uncompressed JSON)
+      const dataParam = urlParams.get('data');
+      if (dataParam) {
+        const { decodeStateFromUrl } = await import('../lib/shareUrl');
+        const urlData = decodeStateFromUrl();
+        
+        if (urlData) {
+          console.log('TabContext: Loading graph data from ?data parameter');
+          
+        // Create a temporary graph item for the URL data
+        const tempItem: RepositoryItem = {
+          id: `url-data-${Date.now()}`,
+          name: 'Shared Graph',
+          type: 'graph',
+          path: 'url-data'
+        };
+          
+        // Create file in registry with URL data
+        const fileId = `graph-${tempItem.id}`;
+        await fileRegistry.getOrCreateFile(fileId, 'graph', { repository: 'url', path: 'url-data', branch: 'main' }, urlData);
+          
+          // Open tab with the URL data
+          await openTab(tempItem, 'interactive', true);
+          
+          // Clean up URL parameter
+          const url = new URL(window.location.href);
+          url.searchParams.delete('data');
+          window.history.replaceState({}, document.title, url.toString());
+          
+          console.log('TabContext: Successfully loaded graph from ?data parameter');
+        }
+        return;
+      }
+      
+      // Handle ?graph parameter (graph name from default repo)
+      const graphName = urlParams.get('graph');
+      if (graphName) {
+        console.log(`TabContext: Loading graph '${graphName}' from default repo`);
+        
+        // Create a graph item for the named graph
+        const graphItem: RepositoryItem = {
+          id: graphName,
+          name: graphName,
+          type: 'graph',
+          path: `graphs/${graphName}.yaml`
+        };
+        
+        // Open tab with the named graph
+        await openTab(graphItem, 'interactive', true);
+        
+        // Clean up URL parameter
+        const url = new URL(window.location.href);
+        url.searchParams.delete('graph');
+        window.history.replaceState({}, document.title, url.toString());
+        
+        console.log(`TabContext: Successfully opened graph '${graphName}'`);
+        return;
+      }
+      
+      // Handle ?parameter parameter (parameter name from default repo)
+      const parameterName = urlParams.get('parameter');
+      if (parameterName) {
+        console.log(`TabContext: Loading parameter '${parameterName}' from default repo`);
+        
+        const parameterItem: RepositoryItem = {
+          id: parameterName,
+          name: parameterName,
+          type: 'parameter',
+          path: `parameters/${parameterName}.yaml`
+        };
+        
+        await openTab(parameterItem, 'interactive', true);
+        
+        const url = new URL(window.location.href);
+        url.searchParams.delete('parameter');
+        window.history.replaceState({}, document.title, url.toString());
+        
+        console.log(`TabContext: Successfully opened parameter '${parameterName}'`);
+        return;
+      }
+      
+      // Handle ?context parameter (context name from default repo)
+      const contextName = urlParams.get('context');
+      if (contextName) {
+        console.log(`TabContext: Loading context '${contextName}' from default repo`);
+        
+        const contextItem: RepositoryItem = {
+          id: contextName,
+          name: contextName,
+          type: 'context',
+          path: `contexts/${contextName}.yaml`
+        };
+        
+        await openTab(contextItem, 'interactive', true);
+        
+        const url = new URL(window.location.href);
+        url.searchParams.delete('context');
+        window.history.replaceState({}, document.title, url.toString());
+        
+        console.log(`TabContext: Successfully opened context '${contextName}'`);
+        return;
+      }
+      
+      // Handle ?case parameter (case name from default repo)
+      const caseName = urlParams.get('case');
+      if (caseName) {
+        console.log(`TabContext: Loading case '${caseName}' from default repo`);
+        
+        const caseItem: RepositoryItem = {
+          id: caseName,
+          name: caseName,
+          type: 'case',
+          path: `cases/${caseName}.yaml`
+        };
+        
+        await openTab(caseItem, 'interactive', true);
+        
+        const url = new URL(window.location.href);
+        url.searchParams.delete('case');
+        window.history.replaceState({}, document.title, url.toString());
+        
+        console.log(`TabContext: Successfully opened case '${caseName}'`);
+        return;
+      }
+    } catch (error) {
+      console.error('TabContext: Failed to load data from URL:', error);
+    }
+  };
 
   /**
    * Load tabs from IndexedDB
