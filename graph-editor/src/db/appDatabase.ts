@@ -145,8 +145,56 @@ export class AppDatabase extends Dexie {
 // Create singleton instance
 export const db = new AppDatabase();
 
+// Global error handler - if ANYTHING fails, nuke the DB and reload
+const handleStorageError = async (error: any, context: string) => {
+  console.error(`❌ Storage error in ${context}:`, error);
+  console.warn('🧹 Nuking corrupted storage and reloading...');
+  
+  try {
+    await db.delete();
+    console.log('✅ Storage deleted');
+  } catch (e) {
+    console.error('Failed to delete storage (non-fatal):', e);
+  }
+  
+  // Reload page to start fresh
+  window.location.reload();
+};
+
+// Wrap all DB operations to catch errors
+const originalGet = db.files.get.bind(db.files);
+db.files.get = async (...args: any[]) => {
+  try {
+    return await originalGet(...args);
+  } catch (error) {
+    await handleStorageError(error, 'files.get');
+    return undefined as any;
+  }
+};
+
+const originalTabsToArray = db.tabs.toArray.bind(db.tabs);
+db.tabs.toArray = async (...args: any[]) => {
+  try {
+    return await originalTabsToArray(...args);
+  } catch (error) {
+    await handleStorageError(error, 'tabs.toArray');
+    return [] as any;
+  }
+};
+
+const originalGetAppState = db.getAppState.bind(db);
+db.getAppState = async (...args: any[]) => {
+  try {
+    return await originalGetAppState(...args);
+  } catch (error) {
+    await handleStorageError(error, 'getAppState');
+    return undefined as any;
+  }
+};
+
 // Initialize on import
 db.initialize().catch(error => {
   console.error('Failed to initialize database:', error);
+  handleStorageError(error, 'initialize');
 });
 

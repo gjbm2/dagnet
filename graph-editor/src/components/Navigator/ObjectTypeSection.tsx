@@ -18,6 +18,7 @@ interface ObjectTypeSectionProps {
   isExpanded: boolean;
   onToggle: () => void;
   onItemClick: (item: RepositoryItem) => void;
+  onItemContextMenu?: (item: RepositoryItem, x: number, y: number) => void;
 }
 
 export function ObjectTypeSection({
@@ -26,7 +27,8 @@ export function ObjectTypeSection({
   items,
   isExpanded,
   onToggle,
-  onItemClick
+  onItemClick,
+  onItemContextMenu
 }: ObjectTypeSectionProps) {
   const { tabs } = useTabContext();
   const fileRegistry = useFileRegistry();
@@ -92,9 +94,16 @@ export function ObjectTypeSection({
                   key={item.id}
                   className={`section-item ${status.isOpen ? 'active' : ''} ${status.isDirty ? 'dirty' : ''}`}
                   onClick={() => onItemClick(item)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (onItemContextMenu) {
+                      onItemContextMenu(item, e.clientX, e.clientY);
+                    }
+                  }}
                   title={item.description || item.name}
                 >
-                  <span className="item-name">{item.name}</span>
+                  <span className="item-name">{item.name.replace(/\.(yaml|yml|json)$/, '')}</span>
                   
                   <span className="item-status">
                     {status.isDirty && (

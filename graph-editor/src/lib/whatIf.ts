@@ -8,9 +8,8 @@
  */
 
 export type WhatIfOverrides = {
-  caseOverrides: Map<string, string>;
-  conditionalOverrides: Map<string, Set<string>>;
-  _version: number;
+  caseOverrides?: Record<string, string>;
+  conditionalOverrides?: Record<string, number>;
 };
 
 /**
@@ -44,17 +43,19 @@ function getImplicitlyVisitedNodes(
   if (!graph?.edges || !graph?.nodes) return visitedNodes;
   
   // Check new what-if system (caseOverrides)
-  whatIfOverrides?.caseOverrides?.forEach((selectedVariant, caseNodeId) => {
-    // Find all edges from this case node with the selected variant
-    graph.edges.forEach((edge: any) => {
-      if (edge.case_id && edge.from) {
-        const caseNode = graph.nodes.find((n: any) => n.id === edge.from && n.case?.id === edge.case_id);
-        if (caseNode?.id === caseNodeId && edge.case_variant === selectedVariant) {
-          visitedNodes.add(edge.to);
+  if (whatIfOverrides?.caseOverrides) {
+    Object.entries(whatIfOverrides.caseOverrides).forEach(([caseNodeId, selectedVariant]) => {
+      // Find all edges from this case node with the selected variant
+      graph.edges.forEach((edge: any) => {
+        if (edge.case_id && edge.from) {
+          const caseNode = graph.nodes.find((n: any) => n.id === edge.from && n.case?.id === edge.case_id);
+          if (caseNode?.id === caseNodeId && edge.case_variant === selectedVariant) {
+            visitedNodes.add(edge.to);
+          }
         }
-      }
+      });
     });
-  });
+  }
   
   // Check legacy what-if system (backward compatibility)
   if (legacyWhatIfAnalysis?.caseNodeId && legacyWhatIfAnalysis?.selectedVariant) {
@@ -105,28 +106,11 @@ export function computeEffectiveEdgeProbability(
   
   // 1. Apply conditional probability override (EXPLICIT what-if)
   if (edge.conditional_p && edge.conditional_p.length > 0) {
-    const override = whatIfOverrides?.conditionalOverrides?.get(edgeId);
+    const override = whatIfOverrides?.conditionalOverrides?.[edgeId];
     
-    if (override && override.size > 0) {
-      // Explicit override - find matching condition
-      for (const conditionalProb of edge.conditional_p) {
-        if (!conditionalProb?.condition?.visited) continue;
-        
-        // Resolve all condition node references to IDs
-        const conditionNodeIds = conditionalProb.condition.visited.map((ref: string) => 
-          resolveNodeRefToId(graph, ref)
-        );
-        
-        // Check if override matches this condition
-        const matches = conditionNodeIds.length === override.size &&
-                       conditionNodeIds.every((nodeId: string) => override.has(nodeId));
-        
-        if (matches) {
-          // Override the base probability with the conditional probability
-          probability = conditionalProb.p?.mean ?? probability;
-          break;
-        }
-      }
+    if (override !== undefined) {
+      // Use the explicit override probability directly
+      probability = override;
     } else {
       // IMPLICIT/CONTEXT activation: check if conditional is satisfied by:
       // 1. Case what-ifs (hyperpriors) OR
@@ -170,7 +154,7 @@ export function computeEffectiveEdgeProbability(
       let variantWeight = variant?.weight ?? 0;
       
       // Apply what-if override (new system first, then legacy)
-      const newOverride = whatIfOverrides?.caseOverrides?.get(caseNode.id);
+      const newOverride = whatIfOverrides?.caseOverrides?.[caseNode.id];
       if (newOverride !== undefined) {
         variantWeight = edge.case_variant === newOverride ? 1.0 : 0.0;
       } else if (legacyWhatIfAnalysis && legacyWhatIfAnalysis.caseNodeId === caseNode.id) {
@@ -206,29 +190,16 @@ export function getEdgeWhatIfDisplay(
   
   // Check for conditional override (explicit or implicit)
   if (edge.conditional_p && edge.conditional_p.length > 0) {
-    const override = whatIfOverrides?.conditionalOverrides?.get(edgeId);
+    const override = whatIfOverrides?.conditionalOverrides?.[edgeId];
     
-    if (override && override.size > 0) {
+    if (override !== undefined) {
       // EXPLICIT override
-      for (const conditionalProb of edge.conditional_p) {
-        if (!conditionalProb?.condition?.visited) continue;
-        
-        const conditionNodeIds = conditionalProb.condition.visited.map((ref: string) => 
-          resolveNodeRefToId(graph, ref)
-        );
-        
-        const matches = conditionNodeIds.length === override.size &&
-                       conditionNodeIds.every((nodeId: string) => override.has(nodeId));
-        
-        if (matches) {
-          return {
-            type: 'conditional',
-            probability: conditionalProb.p?.mean ?? 0,
-            isOverridden: true,
-            displayLabel: '🔬 What-If'
-          };
-        }
-      }
+      return {
+        type: 'conditional',
+        probability: override,
+        isOverridden: true,
+        displayLabel: '🔬 What-If'
+      };
     } else {
       // IMPLICIT activation via case what-if (hyperprior)
       const implicitlyVisited = getImplicitlyVisitedNodes(graph, whatIfOverrides, legacyWhatIfAnalysis);
@@ -266,7 +237,7 @@ export function getEdgeWhatIfDisplay(
       let variantWeight = variant?.weight ?? 0;
       let isOverridden = false;
       
-      const newOverride = whatIfOverrides?.caseOverrides?.get(caseNode.id);
+      const newOverride = whatIfOverrides?.caseOverrides?.[caseNode.id];
       if (newOverride !== undefined) {
         variantWeight = edge.case_variant === newOverride ? 1.0 : 0.0;
         isOverridden = true;

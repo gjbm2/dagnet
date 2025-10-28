@@ -19,21 +19,28 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
   const isYAML = viewMode === 'raw-yaml';
   const language = isYAML ? 'yaml' : 'json';
 
-  // Convert data to string format
+  // Convert data to string format - syncs when data changes from other views
   useEffect(() => {
-    if (!data) return;
+    if (!data) {
+      console.log(`RawView[${fileId}]: No data, skipping editor update`);
+      return;
+    }
 
+    console.log(`RawView[${fileId}]: Data changed, updating editor value`);
+    
     try {
-      if (isYAML) {
-        setEditorValue(yaml.dump(data, { indent: 2, lineWidth: 120 }));
-      } else {
-        setEditorValue(JSON.stringify(data, null, 2));
-      }
+      const newValue = isYAML 
+        ? yaml.dump(data, { indent: 2, lineWidth: 120 })
+        : JSON.stringify(data, null, 2);
+      
+      console.log(`RawView[${fileId}]: Setting editor value, length:`, newValue.length);
+      setEditorValue(newValue);
       setParseError(null);
     } catch (error: any) {
+      console.error(`RawView[${fileId}]: Error formatting data:`, error);
       setParseError(error.message);
     }
-  }, [data, isYAML]);
+  }, [data, isYAML, fileId]);
 
   const handleEditorChange = (value: string | undefined) => {
     if (!value || readonly) return;

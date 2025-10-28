@@ -18,13 +18,8 @@ export interface GraphStore {
   saveHistoryState: () => void;
   undo: () => void;
   redo: () => void;
+  resetHistory: () => void;
   
-  // What-if analysis
-  whatIfOverrides: Record<string, any> & { _version: number };
-  setWhatIfOverride: (edgeId: string, value: number | null) => void;
-  clearWhatIfOverrides: () => void;
-  whatIfAnalysis: any;
-  setWhatIfAnalysis: (analysis: any) => void;
 }
 
 // Type for the Zustand store with all its methods
@@ -49,7 +44,10 @@ export function createGraphStore(): GraphStoreHook {
     
     saveHistoryState: () => {
       const { graph, history, historyIndex } = get();
-      if (!graph) return;
+      if (!graph) {
+        console.log('GraphStore: saveHistoryState - no graph');
+        return;
+      }
       
       // Remove any redo states
       const newHistory = history.slice(0, historyIndex + 1);
@@ -63,24 +61,36 @@ export function createGraphStore(): GraphStoreHook {
         newHistory.shift();
       }
       
-      set({
+      const newState = {
         history: newHistory,
         historyIndex: newHistory.length - 1,
         canUndo: newHistory.length > 1,
         canRedo: false
+      };
+      
+      console.log('GraphStore: saveHistoryState', {
+        historyLength: newHistory.length,
+        historyIndex: newState.historyIndex,
+        canUndo: newState.canUndo,
+        canRedo: newState.canRedo
       });
+      
+      set(newState);
     },
     
     undo: () => {
       const { history, historyIndex } = get();
+      console.log('GraphStore: undo', { historyIndex, historyLength: history.length });
       if (historyIndex > 0) {
         const newIndex = historyIndex - 1;
-        set({
+        const newState = {
           graph: JSON.parse(JSON.stringify(history[newIndex])),
           historyIndex: newIndex,
           canUndo: newIndex > 0,
           canRedo: true
-        });
+        };
+        console.log('GraphStore: undo applied', { newIndex, canUndo: newState.canUndo, canRedo: newState.canRedo });
+        set(newState);
       }
     },
     
@@ -97,31 +107,16 @@ export function createGraphStore(): GraphStoreHook {
       }
     },
     
-    // What-if analysis
-    whatIfOverrides: { _version: 0 },
-    
-    setWhatIfOverride: (edgeId: string, value: number | null) => {
-      const { whatIfOverrides } = get();
-      const newOverrides = { ...whatIfOverrides };
-      
-      if (value === null) {
-        delete newOverrides[edgeId];
-      } else {
-        newOverrides[edgeId] = value;
-      }
-      
-      newOverrides._version = (whatIfOverrides._version || 0) + 1;
-      set({ whatIfOverrides: newOverrides });
+    resetHistory: () => {
+      console.log('GraphStore: Resetting history');
+      set({
+        history: [],
+        historyIndex: -1,
+        canUndo: false,
+        canRedo: false
+      });
     },
     
-    clearWhatIfOverrides: () => {
-      set({ whatIfOverrides: { _version: 0 } });
-    },
-    
-    whatIfAnalysis: null,
-    setWhatIfAnalysis: (analysis: any) => {
-      set({ whatIfAnalysis: analysis });
-    }
   }));
 }
 
@@ -147,12 +142,18 @@ export function cleanupGraphStore(fileId: string): void {
     console.log(`GraphStoreContext: Force cleaning up store for ${fileId}`);
     store.setState({ 
       graph: null,
-      history: [],
-      whatIfAnalysis: null,
-      whatIfOverrides: { _version: 0 }
+      history: []
     });
     storeRegistry.delete(fileId);
   }
+}
+
+/**
+ * Get the graph store for a specific file
+ * Used by menu bar and other global components to access active tab's store
+ */
+export function getGraphStore(fileId: string): GraphStoreHook | null {
+  return storeRegistry.get(fileId) || null;
 }
 
 /**

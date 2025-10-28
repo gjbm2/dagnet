@@ -1,6 +1,7 @@
 import yaml from 'js-yaml';
 import { gitService } from './gitService';
 import { gitConfig } from '../config/gitConfig';
+import { getFileTypeConfig, getAllDirectories, getIndexFile } from '../config/fileTypeRegistry';
 
 // Base URL for registry - defaults to local development
 const REGISTRY_BASE_URL = import.meta.env.VITE_PARAM_REGISTRY_URL || '/param-registry';
@@ -224,14 +225,26 @@ class ParamRegistryService {
 
   // Load a specific context by ID
   async loadContext(contextId: string): Promise<Context> {
-    const index = await this.loadContextsIndex();
-    const entry = index.contexts.find(c => c.id === contextId);
-    
-    if (!entry) {
-      throw new Error(`Context ${contextId} not found in index`);
+    try {
+      const index = await this.loadContextsIndex();
+      const entry = index.contexts.find(c => c.id === contextId);
+      
+      if (entry) {
+        const yamlText = await this.loadFile(entry.file_path);
+        const context = yaml.load(yamlText) as Context;
+        return context;
+      }
+    } catch (indexError) {
+      console.log(`Context index not available, trying direct file load:`, indexError);
     }
     
-    const yamlText = await this.loadFile(entry.file_path);
+    // Fallback: try loading directly using directory config from registry
+    const config = getFileTypeConfig('context');
+    const directory = config?.directory || 'contexts';
+    const filePath = contextId.includes('/') ? contextId : `${directory}/${contextId}`;
+    console.log(`Loading context directly from: ${filePath}`);
+    
+    const yamlText = await this.loadFile(filePath);
     const context = yaml.load(yamlText) as Context;
     
     return context;
@@ -286,14 +299,26 @@ class ParamRegistryService {
 
   // Load a specific case by ID
   async loadCase(caseId: string): Promise<Case> {
-    const index = await this.loadCasesIndex();
-    const entry = index.cases.find(c => c.id === caseId);
-    
-    if (!entry) {
-      throw new Error(`Case ${caseId} not found in index`);
+    try {
+      const index = await this.loadCasesIndex();
+      const entry = index.cases.find(c => c.id === caseId);
+      
+      if (entry) {
+        const yamlText = await this.loadFile(entry.file_path);
+        const caseData = yaml.load(yamlText) as Case;
+        return caseData;
+      }
+    } catch (indexError) {
+      console.log(`Case index not available, trying direct file load:`, indexError);
     }
     
-    const yamlText = await this.loadFile(entry.file_path);
+    // Fallback: try loading directly using directory config from registry
+    const config = getFileTypeConfig('case');
+    const directory = config?.directory || 'cases';
+    const filePath = caseId.includes('/') ? caseId : `${directory}/${caseId}`;
+    console.log(`Loading case directly from: ${filePath}`);
+    
+    const yamlText = await this.loadFile(filePath);
     const caseData = yaml.load(yamlText) as Case;
     
     return caseData;
@@ -308,14 +333,44 @@ class ParamRegistryService {
 
   // Load a specific parameter by ID
   async loadParameter(parameterId: string): Promise<Parameter> {
-    const registry = await this.loadRegistry();
-    const entry = registry.parameters.find(p => p.id === parameterId);
-    
-    if (!entry) {
-      throw new Error(`Parameter ${parameterId} not found in registry`);
+    try {
+      const registry = await this.loadRegistry();
+      const entry = registry.parameters.find(p => p.id === parameterId);
+      
+      if (entry) {
+        const yamlText = await this.loadFile(entry.file_path);
+        const param = yaml.load(yamlText) as Parameter;
+        return param;
+      }
+    } catch (registryError) {
+      console.log(`Parameter registry not available, trying direct file load:`, registryError);
     }
     
-    const yamlText = await this.loadFile(entry.file_path);
+    // Fallback: try loading directly using directory config from registry
+    let filePath = parameterId;
+    if (!parameterId.includes('/')) {
+      const directories = getAllDirectories('parameter');
+      console.log(`Trying directories for parameter: ${directories.join(', ')}`);
+      
+      // Try each configured directory
+      for (const dir of directories) {
+        try {
+          filePath = `${dir}/${parameterId}`;
+          const yamlText = await this.loadFile(filePath);
+          const param = yaml.load(yamlText) as Parameter;
+          return param;
+        } catch (e) {
+          // Continue to next directory
+          console.log(`Not found in ${dir}, trying next...`);
+        }
+      }
+      
+      // If all fail, use the primary directory for the final attempt
+      filePath = `${directories[0]}/${parameterId}`;
+    }
+    
+    console.log(`Loading parameter directly from: ${filePath}`);
+    const yamlText = await this.loadFile(filePath);
     const param = yaml.load(yamlText) as Parameter;
     
     return param;

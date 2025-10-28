@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import DockLayout, { LayoutData } from 'rc-dock';
-import { TabProvider, useTabContext } from './contexts/TabContext';
+import { TabProvider, useTabContext, fileRegistry } from './contexts/TabContext';
 import { NavigatorProvider, useNavigatorContext } from './contexts/NavigatorContext';
 import { DialogProvider } from './contexts/DialogContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { MenuBar } from './components/MenuBar';
 import { NavigatorContent } from './components/Navigator';
+import { TabContextMenu } from './components/TabContextMenu';
 import { getEditorComponent } from './components/editors';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { layoutService } from './services/layoutService';
@@ -13,6 +14,7 @@ import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
 import 'rc-dock/dist/rc-dock.css'; // Import rc-dock base styles
 import './styles/dock-theme.css'; // Safe customizations
+import './styles/active-tab-highlight.css'; // Active tab highlighting
 
 /**
  * App Shell Content
@@ -31,6 +33,9 @@ function AppShellContent() {
   const [isHovering, setIsHovering] = useState(false);
   const navButtonRef = React.useRef<HTMLDivElement>(null);
 
+  // Tab context menu state
+  const [contextMenu, setContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
+
   // Custom groups - NO panelExtra, we'll position Navigator separately
   const customGroups = useMemo(() => ({
     ...dockGroups
@@ -42,75 +47,10 @@ function AppShellContent() {
   // Track which tabs we've already added to rc-dock
   const [addedTabs, setAddedTabs] = React.useState<Set<string>>(new Set());
 
-  // Sync tabs to rc-dock when they change
-  useEffect(() => {
-    if (!dockLayoutRef) return;
+  // Track tabs we're currently removing to prevent duplicate removal attempts
+  const removingTabsRef = React.useRef<Set<string>>(new Set());
 
-    // Only add NEW tabs that haven't been added yet
-    tabs.forEach(tab => {
-      if (!addedTabs.has(tab.id)) {
-        const EditorComponent = getEditorComponent(tab.fileId.split('-')[0] as any, tab.viewMode);
-        
-        const dockTab = {
-          id: tab.id,
-          title: tab.title,
-          content: <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} />,
-          closable: true,
-          cached: true,
-          group: 'main-content' // Assign to main-content group
-        };
-
-        // Add tab to main-tabs panel
-        dockLayoutRef.dockMove(dockTab, 'main-tabs', 'middle');
-        
-        // Mark as added
-        setAddedTabs(prev => new Set([...prev, tab.id]));
-      }
-    });
-
-    // Remove tabs that are no longer in the tabs array
-    addedTabs.forEach(tabId => {
-      if (!tabs.find(t => t.id === tabId)) {
-        setAddedTabs(prev => {
-          const next = new Set(prev);
-          next.delete(tabId);
-          return next;
-        });
-      }
-    });
-  }, [tabs, dockLayoutRef, addedTabs]);
-
-  // Create default layout
-  const defaultLayout: LayoutData = useMemo(() => ({
-    dockbox: {
-      mode: 'horizontal',
-      children: [
-        {
-          id: 'main-tabs',
-          group: 'main-content',
-          tabs: [],
-          panelLock: {}
-        }
-      ]
-    },
-    floatbox: {
-      mode: 'float',
-      children: []
-    }
-  }), []);
-
-  // Always use default layout (empty tabs)
-  // Tabs will be added programmatically when TabContext loads them
-  const [layoutLoaded, setLayoutLoaded] = React.useState(false);
-  
-  React.useEffect(() => {
-    // Just use default layout - don't try to restore tab IDs
-    // because tabs load asynchronously and rc-dock will crash if loadTab returns null
-    console.log('Using default layout (tabs will be added programmatically)');
-    setLayoutLoaded(true);
-  }, []);
-
-  // Helper to extract all tab IDs from a layout
+  // Helper to extract all tab IDs from a layout - MUST BE DEFINED BEFORE USE
   const extractTabIds = React.useCallback((layout: LayoutData): string[] => {
     const tabIdSet = new Set<string>();
     
@@ -141,78 +81,558 @@ function AppShellContent() {
     return Array.from(tabIdSet);
   }, []);
 
-  // Sync tabs from TabContext to rc-dock
-  React.useEffect(() => {
+  // Add global context menu handler for tabs
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      
+      console.log('=== RIGHT CLICK DEBUG ===');
+      console.log('Target:', target.tagName, target.className);
+      
+      // rc-dock uses role="tab" for tabs
+      const roleTab = target.closest('[role="tab"]');
+      
+      if (roleTab) {
+        // Look for our custom data-tab-id attribute in the title div
+        const titleDiv = roleTab.querySelector('[data-tab-id]') as HTMLElement;
+        const tabId = titleDiv?.getAttribute('data-tab-id');
+        
+        console.log('Found tab:', {
+          foundRoleTab: true,
+          foundTitleDiv: !!titleDiv,
+          tabId,
+          existsInTabs: tabId ? !!tabs.find(t => t.id === tabId) : false
+        });
+        
+        if (tabId && tabs.find(t => t.id === tabId)) {
+          e.preventDefault();
+          e.stopPropagation();
+          
+          console.log('✅ SHOWING CONTEXT MENU for', tabId);
+          
+          setContextMenu({
+            tabId,
+            x: e.clientX,
+            y: e.clientY
+          });
+        } else {
+          console.log('❌ No matching tab found');
+        }
+      } else {
+        console.log('❌ No [role="tab"] found');
+      }
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu, true);
+    return () => document.removeEventListener('contextmenu', handleContextMenu, true);
+  }, [tabs]);
+
+  // Track which panel each tab is in for smart placement
+  const tabPanelMapRef = React.useRef<Map<string, string>>(new Map());
+
+  // Sync tabs to rc-dock when they change
+  useEffect(() => {
     if (!dockLayoutRef) return;
 
-    console.log('AppShell: Syncing tabs to rc-dock:', tabs.map(t => t.id));
-
-    // Get current layout
     const currentLayout = dockLayoutRef.getLayout();
     const currentTabIds = extractTabIds(currentLayout);
 
-    // Find tabs that need to be added
-    const tabsToAdd = tabs.filter(tab => !currentTabIds.includes(tab.id));
+    // Update panel map - track which panel each tab is in
+    const updatePanelMap = (box: any, panelId?: string) => {
+      if (!box) return;
+      if (box.tabs && Array.isArray(box.tabs)) {
+        box.tabs.forEach((tab: any) => {
+          if (tab.id && box.id) {
+            tabPanelMapRef.current.set(tab.id, box.id);
+          }
+        });
+      }
+      if (box.children) {
+        box.children.forEach((child: any) => updatePanelMap(child, child.id));
+      }
+    };
+    if (currentLayout.dockbox) updatePanelMap(currentLayout.dockbox);
 
-    // Add each new tab to the main panel
-    for (const tab of tabsToAdd) {
-      console.log(`AppShell: Adding tab ${tab.id} to rc-dock`);
-      dockLayoutRef.dockMove(tab, 'main-tabs', 'middle');
+    tabs.forEach(tab => {
+      const isInLayout = currentTabIds.includes(tab.id);
+      const hasBeenAdded = addedTabs.has(tab.id);
+      
+      if (isInLayout && !hasBeenAdded) {
+        // Tab exists in layout (placeholder from loadTab) - UPDATE with real content
+        console.log(`AppShell: Updating placeholder tab ${tab.id} with real content`);
+        const EditorComponent = getEditorComponent(tab.fileId.split('-')[0] as any, tab.viewMode);
+        
+        const realTab = {
+          id: tab.id,
+          title: (
+            <div 
+              style={{ display: 'flex', alignItems: 'center', width: '100%' }}
+              data-tab-id={tab.id}
+              data-is-focused="false"
+              data-is-dirty="false"
+              onClick={() => tabOperations.switchTab(tab.id)}
+            >
+              <span style={{ flex: 1 }}>{tab.title}</span>
+              <div
+                className="custom-tab-close-btn"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  await tabOperations.closeTab(tab.id);
+                }}
+                style={{
+                  width: '14px',
+                  height: '14px',
+                  marginLeft: '8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '2px',
+                  fontSize: '10px'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.1)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                ✕
+              </div>
+            </div>
+          ),
+          content: (
+            <div 
+              onClick={() => tabOperations.switchTab(tab.id)}
+              style={{ width: '100%', height: '100%' }}
+            >
+              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} />
+            </div>
+          ),
+          closable: false,
+          cached: true,
+          group: 'main-content'
+        };
+        
+        // Update the placeholder with real content
+        dockLayoutRef.updateTab(tab.id, realTab, false);
+        setAddedTabs(prev => new Set([...prev, tab.id]));
+        
+      } else if (!isInLayout && !hasBeenAdded) {
+        // New tab not in layout - ADD to rc-dock
+        console.log(`AppShell: Adding new tab ${tab.id} to rc-dock`);
+        const EditorComponent = getEditorComponent(tab.fileId.split('-')[0] as any, tab.viewMode);
+        
+        const dockTab = {
+          id: tab.id,
+          title: (
+            <div 
+              style={{ display: 'flex', alignItems: 'center', width: '100%' }}
+              data-tab-id={tab.id}
+              data-is-focused="false"
+              data-is-dirty="false"
+              onClick={() => tabOperations.switchTab(tab.id)}
+            >
+              <span style={{ flex: 1 }}>{tab.title}</span>
+              <div
+                className="custom-tab-close-btn"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  await tabOperations.closeTab(tab.id);
+                }}
+                style={{
+                  width: '14px',
+                  height: '14px',
+                  marginLeft: '8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '2px',
+                  fontSize: '10px'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.1)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                ✕
+              </div>
+            </div>
+          ),
+          content: (
+            <div 
+              onClick={() => tabOperations.switchTab(tab.id)}
+              style={{ width: '100%', height: '100%' }}
+            >
+              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} />
+            </div>
+          ),
+          closable: false,
+          cached: true,
+          group: 'main-content'
+        };
+
+        dockLayoutRef.dockMove(dockTab, 'main-tabs', 'middle');
+        setAddedTabs(prev => new Set([...prev, tab.id]));
+      }
+    });
+  }, [tabs, dockLayoutRef, addedTabs, tabOperations, extractTabIds]);
+
+  // Listen for "open in same panel" events
+  useEffect(() => {
+    const handleOpenInSamePanel = (e: CustomEvent) => {
+      const { newTabId, sourceTabId } = e.detail;
+      
+      if (!dockLayoutRef) return;
+      
+      console.log(`\n=== OPEN IN SAME PANEL ===`);
+      console.log('Source tab:', sourceTabId);
+      console.log('New tab:', newTabId);
+      console.log('Panel map:', Object.fromEntries(tabPanelMapRef.current));
+      
+      // Find source tab in rc-dock to get its panel
+      const sourceTabData = dockLayoutRef.find(sourceTabId);
+      console.log('Source tab data:', sourceTabData);
+      console.log('Source tab parent:', sourceTabData?.parent);
+      
+      const sourcePanel = sourceTabData?.parent?.id;
+      console.log('Source panel ID:', sourcePanel);
+      
+      if (sourcePanel) {
+        // Wait for the tab to be added, then move it
+        setTimeout(() => {
+          const tabData = dockLayoutRef.find(newTabId);
+          console.log('Found new tab:', !!tabData);
+          if (tabData) {
+            console.log(`Moving ${newTabId} to panel ${sourcePanel}`);
+            dockLayoutRef.dockMove(tabData, sourcePanel, 'middle');
+          }
+        }, 200);
+      }
+    };
+    
+    const handleOpenInFocusedPanel = (e: CustomEvent) => {
+      const { newTabFileId } = e.detail;
+      
+      if (!dockLayoutRef || !activeTabId) return;
+      
+      console.log(`\n=== OPEN IN FOCUSED PANEL ===`);
+      console.log('Focused tab:', activeTabId);
+      console.log('New file:', newTabFileId);
+      
+      // Find focused tab in rc-dock to get its panel
+      const focusedTabData = dockLayoutRef.find(activeTabId);
+      console.log('Focused tab data:', focusedTabData);
+      console.log('Focused tab parent:', focusedTabData?.parent);
+      
+      const focusedPanel = focusedTabData?.parent?.id;
+      console.log('Focused panel ID:', focusedPanel);
+      
+      if (focusedPanel) {
+        // Find the new tab (it was just added)
+        setTimeout(() => {
+          const newTab = tabs.find(t => t.fileId === newTabFileId);
+          console.log('Found new tab in tabs array:', newTab?.id);
+          if (newTab) {
+            const tabData = dockLayoutRef.find(newTab.id);
+            console.log('Found new tab in rc-dock:', !!tabData);
+            if (tabData) {
+              console.log(`Moving ${newTab.id} to panel ${focusedPanel}`);
+              dockLayoutRef.dockMove(tabData, focusedPanel, 'middle');
+            }
+          }
+        }, 200);
+      }
+    };
+
+    window.addEventListener('dagnet:openInSamePanel' as any, handleOpenInSamePanel);
+    window.addEventListener('dagnet:openInFocusedPanel' as any, handleOpenInFocusedPanel);
+    return () => {
+      window.removeEventListener('dagnet:openInSamePanel' as any, handleOpenInSamePanel);
+      window.removeEventListener('dagnet:openInFocusedPanel' as any, handleOpenInFocusedPanel);
+    };
+  }, [dockLayoutRef, activeTabId, tabs]);
+
+  // Listen for tab close events to immediately remove from rc-dock
+  useEffect(() => {
+    const handleTabClosed = (e: CustomEvent) => {
+      const tabId = e.detail.tabId;
+      
+      // Prevent duplicate removal
+      if (removingTabsRef.current.has(tabId)) {
+        console.log(`AppShell: Tab ${tabId} already being removed, skipping`);
+        return;
+      }
+      
+      console.log(`\n=== RC-DOCK REMOVAL: ${tabId} ===`);
+      removingTabsRef.current.add(tabId);
+      
+      if (dockLayoutRef) {
+        // Find the actual tab in rc-dock's layout
+        const tabData = dockLayoutRef.find(tabId);
+        console.log('AppShell: Found tab in rc-dock:', !!tabData, tabData);
+        
+        if (tabData) {
+          console.log('AppShell: Calling dockMove to REMOVE tab');
+          dockLayoutRef.dockMove(tabData, null, 'remove');
+          console.log('AppShell: ✅ Tab removed from rc-dock');
+        } else {
+          console.warn('AppShell: ⚠️ Tab not found in rc-dock layout, cannot remove');
+        }
+        
+        setAddedTabs(prev => {
+          const next = new Set(prev);
+          next.delete(tabId);
+          console.log(`AppShell: addedTabs: ${prev.size} -> ${next.size}`);
+          return next;
+        });
+      }
+      
+      // Clear from removing set
+      setTimeout(() => {
+        removingTabsRef.current.delete(tabId);
+      }, 100);
+    };
+
+    window.addEventListener('dagnet:tabClosed' as any, handleTabClosed);
+    return () => window.removeEventListener('dagnet:tabClosed' as any, handleTabClosed);
+  }, [dockLayoutRef]);
+
+  // Sync activeTabId FROM React TO rc-dock (when programmatically changed)
+  useEffect(() => {
+    if (!dockLayoutRef || !activeTabId) return;
+    
+    console.log(`AppShell: Syncing activeTabId to rc-dock: ${activeTabId}`);
+    
+    // Find the tab in rc-dock layout
+    const tabData = dockLayoutRef.find(activeTabId);
+    if (!tabData) {
+      console.log(`AppShell: Tab ${activeTabId} not found in rc-dock layout`);
+      return;
     }
-  }, [tabs, dockLayoutRef, extractTabIds]);
+    
+    // Use rc-dock's updateTab to force it to be active
+    // This is the proper way to programmatically select a tab in rc-dock
+    dockLayoutRef.updateTab(activeTabId, tabData, true);
+    console.log(`AppShell: ✅ Selected tab ${activeTabId} in rc-dock`);
+  }, [activeTabId, dockLayoutRef]);
+  
+  // Update data-is-focused and data-is-dirty attributes via DOM
+  useEffect(() => {
+    const updateTabIndicators = () => {
+      document.querySelectorAll('[data-tab-id]').forEach(elem => {
+        const tabId = elem.getAttribute('data-tab-id');
+        if (!tabId) return;
+        
+        const tab = tabs.find(t => t.id === tabId);
+        if (!tab) return;
+        
+        const file = fileRegistry.getFile(tab.fileId);
+        
+        const isFocused = tabId === activeTabId;
+        const isDirty = file?.isDirty || false;
+        
+        elem.setAttribute('data-is-focused', isFocused ? 'true' : 'false');
+        elem.setAttribute('data-is-dirty', isDirty ? 'true' : 'false');
+      });
+    };
+    
+    updateTabIndicators();
+    
+    // Listen for dirty state changes
+    const handleDirtyChanged = () => {
+      console.log('AppShell: File dirty state changed, updating indicators');
+      updateTabIndicators();
+    };
+    
+    window.addEventListener('dagnet:fileDirtyChanged' as any, handleDirtyChanged);
+    return () => window.removeEventListener('dagnet:fileDirtyChanged' as any, handleDirtyChanged);
+  }, [activeTabId, tabs]);
+
+  // Create default layout
+  const defaultLayout: LayoutData = useMemo(() => ({
+    dockbox: {
+      mode: 'horizontal',
+      children: [
+        {
+          id: 'main-tabs',
+          group: 'main-content',
+          tabs: [],
+          panelLock: {}
+        }
+      ]
+    },
+    floatbox: {
+      mode: 'float',
+      children: []
+    }
+  }), []);
+
+  // Load saved layout with graceful fallback
+  const [layout, setLayout] = React.useState<LayoutData>(defaultLayout);
+  const [layoutLoaded, setLayoutLoaded] = React.useState(false);
+  
+  React.useEffect(() => {
+    const loadSavedLayout = async () => {
+      try {
+        const savedLayout = await layoutService.loadLayout();
+        if (savedLayout && savedLayout.dockbox) {
+          console.log('Loaded saved layout from IndexedDB');
+          setLayout(savedLayout);
+        } else {
+          console.log('No saved layout, using default');
+          setLayout(defaultLayout);
+        }
+      } catch (error) {
+        console.error('Failed to load layout, using default:', error);
+        setLayout(defaultLayout);
+      } finally {
+        setLayoutLoaded(true);
+      }
+    };
+    
+    loadSavedLayout();
+  }, [defaultLayout]);
 
   // Track previous layout to detect tab closes
   const prevLayoutRef = React.useRef<LayoutData | null>(null);
 
-  // Load tab callback - rc-dock uses this to hydrate tab IDs with actual tab data
-  const loadTab = React.useCallback((tabId: string) => {
+  // Load tab callback - rc-dock uses this to hydrate saved layout tabs
+  const loadTab = React.useCallback((savedTab: any) => {
+    try {
+      // savedTab can be either a string (tab ID) or an object with { id: ... }
+      const tabId = typeof savedTab === 'string' ? savedTab : savedTab?.id;
+      
+      console.log('loadTab called with:', savedTab, 'extracted tabId:', tabId);
+      
+      if (!tabId) {
+        console.warn('loadTab: No tab ID provided, skipping');
+        return null;
+      }
+      
     const tab = tabs.find(t => t.id === tabId);
     if (!tab) {
-      console.warn(`loadTab: Tab ${tabId} not found in TabContext`);
-      return null;
+        console.warn(`loadTab: Tab ${tabId} not found in TabContext (have ${tabs.length} tabs), will be added later`);
+        // Return minimal tab data to prevent crash
+        // The actual tab will be added when TabContext loads it
+        return {
+          id: tabId,
+          title: 'Loading...',
+          content: <div>Loading tab...</div>,
+          closable: false,
+          cached: false
+        };
+      }
+      
+      const EditorComponent = getEditorComponent(tab.fileId.split('-')[0] as any, tab.viewMode);
+      
+      // Return full TabData with content
+      return {
+        id: tab.id,
+        title: (
+          <div 
+            style={{ display: 'flex', alignItems: 'center', width: '100%' }}
+            data-tab-id={tab.id}
+            data-is-focused={tab.id === activeTabId ? 'true' : 'false'}
+            onClick={() => {
+              console.log('Tab title clicked (from loadTab), setting active:', tab.id);
+              tabOperations.switchTab(tab.id);
+            }}
+          >
+            <span style={{ flex: 1 }}>{tab.title}</span>
+            <div
+              className="custom-tab-close-btn"
+              onClick={async (e) => {
+                e.stopPropagation();
+                console.log('Custom close button clicked for', tab.id);
+                const closed = await tabOperations.closeTab(tab.id);
+                if (!closed) {
+                  console.log('Tab close was cancelled, keeping tab');
+                }
+              }}
+              style={{
+                width: '14px',
+                height: '14px',
+                marginLeft: '8px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '2px',
+                fontSize: '10px'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.1)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              ✕
+            </div>
+          </div>
+        ),
+        content: (
+          <div 
+            onClick={() => {
+              console.log('Tab content clicked (from loadTab), setting active:', tab.id);
+              tabOperations.switchTab(tab.id);
+            }}
+            style={{ width: '100%', height: '100%' }}
+          >
+            <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} />
+          </div>
+        ),
+        closable: false,
+        cached: true,
+        group: 'main-content'
+      };
+    } catch (error) {
+      console.error('loadTab: Error loading tab:', error);
+      // Return placeholder to prevent crash
+      return {
+        id: 'error-tab',
+        title: 'Error',
+        content: <div>Failed to load tab</div>,
+        closable: true,
+        cached: false
+      };
     }
-    return tab;
-  }, [tabs]);
+  }, [tabs, tabOperations]);
+
+  // Track if we're in the middle of updating tabs to prevent loops
+  const isUpdatingTabsRef = React.useRef(false);
 
   // Save layout to IndexedDB when it changes
-  const handleLayoutChange = React.useCallback(async (newLayout: LayoutData) => {
-    console.log('AppShell: handleLayoutChange called');
-    console.log('AppShell: New layout structure:', JSON.stringify(newLayout, null, 2));
+  const handleLayoutChange = React.useCallback((newLayout: LayoutData, currentTabId?: string) => {
+    console.log('AppShell: handleLayoutChange called, currentTabId:', currentTabId);
     
-    if (!dockLayoutRef) {
-      console.log('AppShell: No dockLayoutRef, returning');
+    // Update active tab when rc-dock changes active tab (when user clicks tabs)
+    // BUT don't do this if we're in the middle of updating tabs (prevents infinite loop)
+    if (currentTabId && currentTabId !== activeTabId && !isUpdatingTabsRef.current) {
+      console.log('AppShell: rc-dock switched active tab to:', currentTabId);
+      tabOperations.switchTab(currentTabId);
+    } else if (isUpdatingTabsRef.current) {
+      console.log('AppShell: Ignoring layout change during tab update (preventing loop)');
+    }
+
+    if (!prevLayoutRef.current) {
+      console.log('AppShell: First layout change, setting prevLayoutRef');
+      prevLayoutRef.current = newLayout;
       return;
     }
 
-    // Detect closed tabs by comparing with previous layout
-    if (prevLayoutRef.current) {
       const prevTabIds = extractTabIds(prevLayoutRef.current);
       const newTabIds = extractTabIds(newLayout);
+    
       console.log('AppShell: Previous tab IDs:', prevTabIds);
       console.log('AppShell: New tab IDs:', newTabIds);
       
+    // Find tabs that were closed (in prev but not in new)
       const closedTabIds = prevTabIds.filter(id => !newTabIds.includes(id));
       
       if (closedTabIds.length > 0) {
-        console.log('AppShell: Detected closed tabs:', closedTabIds);
-        // Call closeTab for each closed tab (without force, so dirty check happens)
-        for (const tabId of closedTabIds) {
-          const closed = await tabOperations.closeTab(tabId, false); // force=false to allow confirmation
-          
-          // If user cancelled (dirty file), restore the previous layout
-          if (!closed && dockLayoutRef) {
-            console.log(`AppShell: User cancelled close for ${tabId}, restoring previous layout`);
-            // Restore the entire previous layout to bring the tab back
-            dockLayoutRef.loadLayout(prevLayoutRef.current);
-            // Don't update prevLayoutRef or save to DB
-            return;
-          }
-        }
-      } else {
-        console.log('AppShell: No tabs closed');
-      }
+      console.log('AppShell: Tabs removed from rc-dock:', closedTabIds);
+      // These were already removed by our custom close button
+      // Just clean up tracking
+      setAddedTabs(prev => {
+        const next = new Set(prev);
+        closedTabIds.forEach(id => next.delete(id));
+        return next;
+      });
     } else {
-      console.log('AppShell: First layout change, setting prevLayoutRef');
+      console.log('AppShell: No tabs closed');
     }
 
     prevLayoutRef.current = newLayout;
@@ -221,7 +641,7 @@ function AppShellContent() {
     setTimeout(() => {
       layoutService.saveLayout(newLayout);
     }, 1000);
-  }, [dockLayoutRef, tabOperations, extractTabIds, tabs]);
+  }, [extractTabIds, tabOperations, activeTabId]);
 
   return (
     <div className={`app-shell ${navState.isPinned ? 'nav-pinned' : 'nav-unpinned'}`} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -380,9 +800,10 @@ function AppShellContent() {
         
         {/* rc-dock - only render after layout is loaded */}
         {layoutLoaded && (
+          <>
           <DockLayout
             ref={setDockLayoutRef}
-            defaultLayout={defaultLayout}
+              defaultLayout={layout}
             loadTab={loadTab}
             onLayoutChange={handleLayoutChange}
             groups={customGroups}
@@ -391,6 +812,40 @@ function AppShellContent() {
               height: '100%',
               paddingLeft: navState.isPinned ? '0' : '0' // rc-dock starts at 0, button overlays it
             }}
+            />
+            
+            {/* Welcome screen when no tabs - positioned BEHIND dock panels */}
+            {tabs.length === 0 && (
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: navState.isPinned ? '240px' : '0',
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: '#fafafa',
+                zIndex: 0, /* Behind everything */
+                pointerEvents: 'none'
+              }}>
+                <h1 style={{ fontSize: '32px', marginBottom: '16px', color: '#333' }}>DagNet</h1>
+                <p style={{ fontSize: '14px', marginBottom: '24px', color: '#666' }}>Conversion Graph Editor</p>
+                <p style={{ fontSize: '12px', color: '#999' }}>Open a file from the Navigator to get started</p>
+                <p style={{ fontSize: '11px', color: '#aaa', marginTop: '40px' }}>Press Cmd/Ctrl+O or Cmd/Ctrl+B to open Navigator</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Tab Context Menu */}
+        {contextMenu && (
+          <TabContextMenu
+            tabId={contextMenu.tabId}
+            x={contextMenu.x}
+            y={contextMenu.y}
+            onClose={() => setContextMenu(null)}
           />
         )}
       </div>
@@ -402,6 +857,26 @@ function AppShellContent() {
  * App Shell with Providers
  */
 export function AppShell() {
+  // Check for ?clear parameter to force complete state reset
+  React.useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('clear')) {
+      console.warn('🗑️ CLEARING ALL LOCAL STATE due to ?clear parameter');
+      db.clearAll()
+        .then(() => {
+          console.log('✅ Local state cleared successfully');
+          // Remove the ?clear parameter from URL
+          const newUrl = window.location.pathname;
+          window.history.replaceState({}, document.title, newUrl);
+          // Reload to start fresh
+          window.location.reload();
+        })
+        .catch(error => {
+          console.error('❌ Failed to clear local state:', error);
+        });
+    }
+  }, []);
+
   return (
     <ErrorBoundary>
       <DialogProvider>

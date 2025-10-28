@@ -61,19 +61,15 @@ export class LayoutService {
 
   /**
    * Load layout from IndexedDB
+   * Error handling is in db wrapper
    */
   async loadLayout(): Promise<LayoutData | null> {
-    try {
-      const appState = await db.getAppState();
-      if (appState?.dockLayout) {
-        console.log('Layout loaded from IndexedDB');
-        return appState.dockLayout;
-      }
-      return null;
-    } catch (error) {
-      console.error('Failed to load layout:', error);
-      return null;
+    const appState = await db.getAppState();
+    if (appState?.dockLayout) {
+      console.log('Layout loaded from IndexedDB');
+      return appState.dockLayout;
     }
+    return null;
   }
 
   /**

@@ -105,7 +105,10 @@ export const dockGroups = {
     panelExtra: (panelData: any) => {
       // This will be replaced with actual component in AppShell
       return null;
-    }
+    },
+    // Enable built-in tab context menu
+    // This will show rc-dock's default context menu on right-click
+    // We can customize with TabComponent if needed
   },
   
   // Special tabs (settings, about, etc.)

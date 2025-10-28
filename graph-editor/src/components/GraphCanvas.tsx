@@ -52,9 +52,13 @@ interface GraphCanvasProps {
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
   onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
   onForceRerouteRef?: React.MutableRefObject<(() => void) | null>;
+  // What-if analysis state (from tab state, not GraphStore)
+  whatIfAnalysis?: any;
+  caseOverrides?: Record<string, string>;
+  conditionalOverrides?: Record<string, number>;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, whatIfAnalysis, caseOverrides, conditionalOverrides }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -70,14 +74,17 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onDeleteSelectedRef={onDeleteSelectedRef}
         onAutoLayoutRef={onAutoLayoutRef}
         onForceRerouteRef={onForceRerouteRef}
+        whatIfAnalysis={whatIfAnalysis}
+        caseOverrides={caseOverrides}
+        conditionalOverrides={conditionalOverrides}
       />
     </ReactFlowProvider>
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {} }: GraphCanvasProps) {
   const store = useGraphStore();
-  const { graph, setGraph, whatIfAnalysis } = store;
+  const { graph, setGraph } = store;
   const saveHistoryState = store.saveHistoryState;
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
   
@@ -85,7 +92,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const graphStoreHook = useGraphStore();
   
   // Recompute edge widths when conditional what-if overrides change
-  const overridesVersion = useGraphStore(state => state.whatIfOverrides._version);
+  // Create a "version" to track changes in what-if overrides (for reactivity)
+  const overridesVersion = JSON.stringify({ caseOverrides, conditionalOverrides, whatIfAnalysis });
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
@@ -158,8 +166,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Get current state from store (avoid stale closures)
     const currentGraph = graphStoreHook.getState().graph;
-    const currentOverrides = graphStoreHook.getState().whatIfOverrides;
-    const currentWhatIfAnalysis = graphStoreHook.getState().whatIfAnalysis;
+    const currentOverrides = { caseOverrides, conditionalOverrides };
+    const currentWhatIfAnalysis = whatIfAnalysis;
 
     // UNIFIED helper: get effective probability
     // Use edge data directly if available (most current), otherwise use store
@@ -281,7 +289,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const scaledWidth = MIN_WIDTH + (displayMass * (MAX_WIDTH - MIN_WIDTH));
     const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
     return finalWidth;
-  }, [useUniformScaling, massGenerosity]);
+  }, [useUniformScaling, massGenerosity, caseOverrides, conditionalOverrides, whatIfAnalysis, graphStoreHook]);
 
   // Calculate edge sort keys for curved edge stacking
   // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
@@ -1274,7 +1282,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             sourceOffsetY: edge.sourceOffsetY,
             targetOffsetX: edge.targetOffsetX,
             targetOffsetY: edge.targetOffsetY,
-            scaledWidth: edge.scaledWidth
+            scaledWidth: edge.scaledWidth,
+            // Pass what-if overrides to edges
+            caseOverrides: caseOverrides,
+            conditionalOverrides: conditionalOverrides
           }
         }));
       });
@@ -1365,7 +1376,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       sourceOffsetY: edge.sourceOffsetY,
       targetOffsetX: edge.targetOffsetX,
       targetOffsetY: edge.targetOffsetY,
-      scaledWidth: edge.scaledWidth
+      scaledWidth: edge.scaledWidth,
+      // Pass what-if overrides to edges
+      caseOverrides: caseOverrides,
+      conditionalOverrides: conditionalOverrides
     }
   }));
     
@@ -1450,7 +1464,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           sourceOffsetY: edge.sourceOffsetY,
           targetOffsetX: edge.targetOffsetX,
           targetOffsetY: edge.targetOffsetY,
-          scaledWidth: edge.scaledWidth
+          scaledWidth: edge.scaledWidth,
+          // Pass what-if overrides to edges
+          caseOverrides: caseOverrides,
+          conditionalOverrides: conditionalOverrides
         }
       }));
       
@@ -1494,7 +1511,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           sourceOffsetY: edge.sourceOffsetY,
           targetOffsetX: edge.targetOffsetX,
           targetOffsetY: edge.targetOffsetY,
-          scaledWidth: edge.scaledWidth
+          scaledWidth: edge.scaledWidth,
+          // Pass what-if overrides to edges
+          caseOverrides: caseOverrides,
+          conditionalOverrides: conditionalOverrides
         }
       }));
     });
@@ -2672,8 +2692,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Calculate direct path (if exists) - for direct paths, cost is just the edge cost
       // UNIFIED: Use shared what-if logic for probability
-      const currentOverrides = graphStoreHook.getState().whatIfOverrides;
-      const currentWhatIfAnalysis2 = graphStoreHook.getState().whatIfAnalysis;
+      const currentOverrides = { caseOverrides, conditionalOverrides };
+      const currentWhatIfAnalysis2 = whatIfAnalysis;
       const currentGraph2 = graphStoreHook.getState().graph;
       // Pass both nodes for graph pruning and conditional activation
       const pathContext = new Set([nodeA.id, nodeB.id]);

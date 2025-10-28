@@ -1,10 +1,56 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
+import { useTabContext } from '../contexts/TabContext';
 import { getConditionalColor, getConditionSignature } from '@/lib/conditionalColors';
 
-export default function WhatIfAnalysisControl() {
-  const { graph, whatIfAnalysis, setWhatIfAnalysis, whatIfOverrides, setCaseOverride, setConditionalOverride, clearAllOverrides } = useGraphStore();
+export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
+  const { graph } = useGraphStore();
+  const { tabs, operations: tabOps } = useTabContext();
+  const myTab = tabs.find(t => t.id === tabId);
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // What-if state is now per-tab, not per-file
+  const whatIfAnalysis = myTab?.editorState?.whatIfAnalysis;
+  const caseOverrides = myTab?.editorState?.caseOverrides || {};
+  const conditionalOverrides = myTab?.editorState?.conditionalOverrides || {};
+  
+  // Helper to update tab's what-if state
+  const setWhatIfAnalysis = (analysis: any) => {
+    if (tabId) {
+      tabOps.updateTabState(tabId, { whatIfAnalysis: analysis });
+    }
+  };
+  
+  const setCaseOverride = (nodeId: string, variantName: string | null) => {
+    if (!tabId) return;
+    const newOverrides = { ...caseOverrides };
+    if (variantName === null) {
+      delete newOverrides[nodeId];
+    } else {
+      newOverrides[nodeId] = variantName;
+    }
+    tabOps.updateTabState(tabId, { caseOverrides: newOverrides });
+  };
+  
+  const setConditionalOverride = (edgeId: string, value: number | null) => {
+    if (!tabId) return;
+    const newOverrides = { ...conditionalOverrides };
+    if (value === null) {
+      delete newOverrides[edgeId];
+    } else {
+      newOverrides[edgeId] = value;
+    }
+    tabOps.updateTabState(tabId, { conditionalOverrides: newOverrides });
+  };
+  
+  const clearAllOverrides = () => {
+    if (!tabId) return;
+    tabOps.updateTabState(tabId, { 
+      whatIfAnalysis: null,
+      caseOverrides: {},
+      conditionalOverrides: {}
+    });
+  };
 
   // Get all case nodes and conditional edges
   const caseNodes = useMemo(() => {
@@ -67,10 +113,10 @@ export default function WhatIfAnalysisControl() {
     );
   }, [conditionGroups, searchTerm]);
 
-  // Count active overrides (including legacy whatIfAnalysis)
+  // Count active overrides (including whatIfAnalysis)
   const activeCount = (whatIfAnalysis ? 1 : 0) + 
-                     (whatIfOverrides?.caseOverrides?.size || 0) +
-                     (whatIfOverrides?.conditionalOverrides?.size || 0);
+                     Object.keys(caseOverrides).length +
+                     Object.keys(conditionalOverrides).length;
 
   // Get case node display name
   const getCaseNodeName = useCallback((nodeId: string) => {
@@ -119,7 +165,7 @@ export default function WhatIfAnalysisControl() {
               </button>
             </div>
           )}
-          {Array.from(whatIfOverrides?.caseOverrides?.entries() || []).map(([nodeId, variant]) => {
+          {Object.entries(caseOverrides).map(([nodeId, variant]) => {
             const node = graph?.nodes.find(n => n.id === nodeId);
             const nodeColor = node?.layout?.color || '#8B5CF6';
             return (
@@ -154,7 +200,7 @@ export default function WhatIfAnalysisControl() {
               </div>
             );
           })}
-          {Array.from(whatIfOverrides?.conditionalOverrides?.entries() || []).map(([edgeId, visitedNodes]) => {
+          {Object.entries(conditionalOverrides).map(([edgeId, probability]) => {
             const edge = graph?.edges.find(e => e.id === edgeId);
             const edgeColor = edge ? (getConditionalColor(edge) || '#4ade80') : '#4ade80';
             return (
@@ -217,7 +263,7 @@ export default function WhatIfAnalysisControl() {
                 🎭 Case Nodes
               </div>
               {filteredCaseNodes.map(node => {
-                const isActive = whatIfOverrides?.caseOverrides?.has(node.id);
+                const isActive = node.id in caseOverrides;
                 const variants = node.case?.variants || [];
                 const nodeColor = node.layout?.color || '#e5e7eb';
                 
@@ -251,7 +297,7 @@ export default function WhatIfAnalysisControl() {
                       {node.label || node.slug}
                     </div>
                     <select
-                      value={whatIfOverrides?.caseOverrides?.get(node.id) || ''}
+                      value={caseOverrides[node.id] || ''}
                       onChange={(e) => {
                         const variantName = e.target.value;
                         if (variantName) {
@@ -291,7 +337,7 @@ export default function WhatIfAnalysisControl() {
               </div>
               {filteredConditionGroups.map((group, groupIdx) => {
                 // Check if any edge in this group has an active override
-                const anyActive = group.edges.some(e => whatIfOverrides?.conditionalOverrides?.has(e.id));
+                const anyActive = group.edges.some(e => e.id in conditionalOverrides);
                 const groupColor = group.color || '#4ade80';
                 
                 return (
@@ -324,9 +370,9 @@ export default function WhatIfAnalysisControl() {
                     </div>
                     <select
                       value={(() => {
-                        if (!anyActive || !whatIfOverrides?.conditionalOverrides) return '';
-                        const override = whatIfOverrides.conditionalOverrides.get(group.edges[0].id);
-                        if (!override) return '';
+                        if (!anyActive) return '';
+                        const override = conditionalOverrides[group.edges[0].id];
+                        if (override === undefined) return '';
                         // The override contains IDs, need to find matching option
                         // Match by comparing resolved IDs
                         const overrideIds = Array.from(override).sort().join(',');

@@ -1,0 +1,17 @@
+/* FOCUSED tab highlighting - the ONE tab that has global focus */
+[data-tab-id][data-is-focused="true"] span {
+  font-weight: 700 !important;
+}
+
+/* DIRTY tab highlighting - unsaved changes (orange = standard IDE convention) */
+[data-tab-id][data-is-dirty="true"] span {
+  color: #ff8c00 !important;
+}
+
+[data-tab-id][data-is-dirty="true"]::after {
+  content: ' ●';
+  color: #ff8c00;
+  font-size: 10px;
+  font-weight: bold;
+}
+

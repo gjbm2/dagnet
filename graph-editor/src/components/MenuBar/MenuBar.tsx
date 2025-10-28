@@ -3,6 +3,7 @@ import * as Menubar from '@radix-ui/react-menubar';
 import { FileMenu } from './FileMenu';
 import { EditMenu } from './EditMenu';
 import { ViewMenu } from './ViewMenu';
+import { ObjectsMenu } from './ObjectsMenu';
 import { GitMenu } from './GitMenu';
 import { HelpMenu } from './HelpMenu';
 import './MenuBar.css';
@@ -19,6 +20,7 @@ export function MenuBarComponent() {
         <FileMenu />
         <EditMenu />
         <ViewMenu />
+        <ObjectsMenu />
         <GitMenu />
         <HelpMenu />
       </Menubar.Root>

@@ -8,16 +8,13 @@ type LegacyWhatIfState = {
   selectedVariant: string;
 } | null;
 
-// New multi-selection what-if state
+// What-if state (now tab-specific, passed as props from TabContext)
 type WhatIfOverrides = {
   // Case node overrides: nodeId -> selected variant name
-  caseOverrides: Map<string, string>;
+  caseOverrides?: Record<string, string>;
   
-  // Conditional edge overrides: edgeId -> set of visited node IDs
-  conditionalOverrides: Map<string, Set<string>>;
-  
-  // Version counter to force re-renders (Zustand doesn't detect Map changes well)
-  _version: number;
+  // Conditional edge overrides: edgeId -> probability value
+  conditionalOverrides?: Record<string, number>;
 };
 
 type State = {

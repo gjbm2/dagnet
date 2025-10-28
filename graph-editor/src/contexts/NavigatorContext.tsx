@@ -56,13 +56,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * Load navigator state from IndexedDB
+   * Error handling is in db wrapper - if it fails, DB gets nuked and page reloads
    */
   const loadStateFromDB = async () => {
     const appState = await db.getAppState();
     console.log('NavigatorContext: Loading state from DB:', appState?.navigatorState);
     if (appState?.navigatorState) {
-      // Load state but clear search query on init
-      // Also ensure selectedRepo and selectedBranch have values
       const restoredState = {
         ...appState.navigatorState,
         searchQuery: '',
@@ -71,8 +70,6 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       };
       console.log('NavigatorContext: Restoring state:', restoredState);
       setState(restoredState);
-    } else {
-      console.log('NavigatorContext: No saved state found, using defaults');
     }
   };
 
@@ -178,29 +175,36 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       // Load graphs from repository
-      const { graphGitService } = await import('../services/graphGitService');
-      const graphsResult = await graphGitService.getAvailableGraphs(branch);
+      const { gitService } = await import('../services/gitService');
+      
+      console.log(`Navigator: Loading from repo ${repo}, branch ${branch}`);
+      
+      // Pass repo to gitService so it uses the correct repository
+      const graphsResult = await gitService.getDirectoryContents('graphs', branch, 'gjbm2', repo);
       
       const items: RepositoryItem[] = [];
       
       // Add graphs
-      if (graphsResult.success && graphsResult.data) {
+      if (graphsResult.success && graphsResult.data && Array.isArray(graphsResult.data)) {
+        console.log('Navigator: Found', graphsResult.data.length, 'files in graphs/');
         graphsResult.data.forEach((file: any) => {
-          items.push({
-            id: file.name,
-            type: 'graph',
-            name: file.name,
-            path: file.path,
-            description: `Graph from ${branch}`
-          });
+          if (file.type === 'file' && file.name.endsWith('.json')) {
+            items.push({
+              id: file.name,
+              type: 'graph',
+              name: file.name,
+              path: file.path,
+              description: `Graph from ${branch}`
+            });
+          }
         });
       }
       
-      // Load parameters, contexts, cases from param registry
+      // Try to load parameters from registry
       try {
         const { paramRegistryService } = await import('../services/paramRegistryService');
         
-        // Configure for <private-repo>
+        // Configure service for current repo
         paramRegistryService.setConfig({
           source: 'git',
           gitBasePath: '',
@@ -209,13 +213,13 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           gitRepoName: repo
         });
         
-        // Load registry to get available parameters
+        console.log(`Navigator: Loading parameter registry for ${repo}...`);
         const registry = await paramRegistryService.loadRegistry();
-        console.log('Loaded parameter registry:', registry);
+        console.log('Navigator: Loaded parameter registry:', registry);
         
         // Add parameters
-        if (registry.parameters) {
-          console.log('Found parameters:', registry.parameters.length);
+        if (registry.parameters && registry.parameters.length > 0) {
+          console.log('Navigator: Found', registry.parameters.length, 'parameters in registry');
           registry.parameters.forEach((param: any) => {
             items.push({
               id: param.id,
@@ -226,11 +230,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
             });
           });
         } else {
-          console.log('No parameters in registry');
+          console.log('Navigator: No parameters in registry');
         }
         
-        // Add contexts
-        if (registry.contexts) {
+        // Add contexts - from registry if available
+        if (registry.contexts && registry.contexts.length > 0) {
+          console.log('Navigator: Loading contexts from registry');
           registry.contexts.forEach((ctx: any) => {
             items.push({
               id: ctx.id,
@@ -242,8 +247,9 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           });
         }
         
-        // Add cases
-        if (registry.cases) {
+        // Add cases - from registry if available
+        if (registry.cases && registry.cases.length > 0) {
+          console.log('Navigator: Loading cases from registry');
           registry.cases.forEach((c: any) => {
             items.push({
               id: c.id,
@@ -255,8 +261,90 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           });
         }
       } catch (error) {
-        console.error('Failed to load parameters/contexts/cases:', error);
-        // If loading fails, don't add any - better than showing fake ones
+        console.warn('Failed to load from registry:', error);
+      }
+      
+      // ALWAYS try to load parameters/contexts/cases from directories (regardless of registry)
+      // This ensures we get them even if registry doesn't exist or doesn't include them
+      try {
+        const { gitService } = await import('../services/gitService');
+        
+        // Load parameters - try both /params and /parameters directories
+        const paramDirs = ['params', 'parameters'];
+        for (const dir of paramDirs) {
+          console.log(`Navigator: Trying ${dir}/ directory...`);
+          const paramsResult = await gitService.getDirectoryContents(dir, branch, 'gjbm2', repo);
+          
+          if (paramsResult.success && paramsResult.data && Array.isArray(paramsResult.data)) {
+            console.log(`Navigator: Found ${paramsResult.data.length} files in ${dir}/`);
+            paramsResult.data.forEach((file: any) => {
+              if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+                const alreadyAdded = items.some(i => i.type === 'parameter' && i.id === file.name);
+                if (!alreadyAdded) {
+                  console.log('Navigator: Adding parameter:', file.name);
+                  items.push({
+                    id: file.name,
+                    type: 'parameter',
+                    name: file.name,
+                    path: file.path,
+                    description: `Parameter from ${branch}`
+                  });
+                }
+              }
+            });
+            break; // Found parameters, don't try other directory
+          }
+        }
+        
+        // Load contexts from contexts/ directory
+        console.log('Navigator: Loading contexts from /contexts directory...');
+        const contextsResult = await gitService.getDirectoryContents('contexts', branch, 'gjbm2', repo);
+        
+        if (contextsResult.success && contextsResult.data && Array.isArray(contextsResult.data)) {
+          console.log('Navigator: Found', contextsResult.data.length, 'files in contexts/');
+          contextsResult.data.forEach((file: any) => {
+            if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              // Only add if not already in items from registry
+              const alreadyAdded = items.some(i => i.type === 'context' && i.id === file.name);
+              if (!alreadyAdded) {
+                console.log('Navigator: Adding context:', file.name);
+                items.push({
+                  id: file.name,
+                  type: 'context',
+                  name: file.name,
+                  path: file.path,
+                  description: `Context from ${branch}`
+                });
+              }
+            }
+          });
+        }
+        
+        // Load cases from cases/ directory
+        console.log('Navigator: Loading cases from /cases directory...');
+        const casesResult = await gitService.getDirectoryContents('cases', branch, 'gjbm2', repo);
+        
+        if (casesResult.success && casesResult.data && Array.isArray(casesResult.data)) {
+          console.log('Navigator: Found', casesResult.data.length, 'files in cases/');
+          casesResult.data.forEach((file: any) => {
+            if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              // Only add if not already in items from registry
+              const alreadyAdded = items.some(i => i.type === 'case' && i.id === file.name);
+              if (!alreadyAdded) {
+                console.log('Navigator: Adding case:', file.name);
+                items.push({
+                  id: file.name,
+                  type: 'case',
+                  name: file.name,
+                  path: file.path,
+                  description: `Case from ${branch}`
+                });
+              }
+            }
+          });
+        }
+      } catch (dirError) {
+        console.warn('Failed to load contexts/cases from directories:', dirError);
       }
       
       console.log('Total items loaded:', items.length, {
