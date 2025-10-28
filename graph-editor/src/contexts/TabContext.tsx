@@ -638,6 +638,29 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             _fileId: item.id
           };
         }
+      } else if (item.type === 'credentials') {
+        console.log(`TabContext: Loading credentials ${item.name}...`);
+        // Credentials are loaded from IndexedDB, no need to fetch from Git
+        data = {};
+      } else if (item.type === 'markdown') {
+        console.log(`TabContext: Loading markdown ${item.name}...`);
+        // Load markdown content from local docs
+        try {
+          const response = await fetch(`/src/docs/${item.id}.md`);
+          if (response.ok) {
+            const markdownContent = await response.text();
+            data = { content: markdownContent };
+          } else {
+            console.warn(`TabContext: Could not load markdown file: ${item.id}.md`);
+            data = { content: '# File Not Found\n\nThe requested markdown file could not be loaded.' };
+          }
+        } catch (error) {
+          console.error(`TabContext: Error loading markdown file:`, error);
+          data = { content: '# Error Loading File\n\nThere was an error loading the markdown file.' };
+        }
+      } else {
+        console.warn(`TabContext: Unknown item type: ${item.type}`);
+        data = {};
       }
     } catch (error) {
       console.error('Failed to load file:', error);

@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run generate-docs && vite",
+    "generate-docs": "node scripts/generate-docs-index.js",
+    "prebuild": "npm run generate-docs",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },
@@ -32,8 +34,10 @@
     "rc-dock": "^4.0.0-alpha.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.9.4",
     "reactflow": "^11.10.3",
+    "remark-gfm": "^4.0.1",
     "zustand": "^4.5.4"
   },
   "devDependencies": {

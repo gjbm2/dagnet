@@ -2,6 +2,7 @@ import { ObjectType } from '../../types';
 import { GraphEditor } from './GraphEditor';
 import { FormEditor } from './FormEditor';
 import { RawView } from './RawView';
+import { MarkdownViewer } from './MarkdownViewer';
 import { getFileTypeConfig } from '../../config/fileTypeRegistry';
 
 /**
@@ -15,6 +16,7 @@ const EDITOR_COMPONENTS = {
   graph: GraphEditor,
   form: FormEditor,
   raw: RawView,
+  markdown: MarkdownViewer,
 };
 
 /**
@@ -30,6 +32,11 @@ export function getEditorComponent(type: ObjectType | 'settings', viewMode: 'int
   // Special case for settings interactive view
   if (type === 'settings') {
     return FormEditor;
+  }
+  
+  // Special case for markdown - always use MarkdownViewer for read-only display
+  if (type === 'markdown') {
+    return MarkdownViewer;
   }
   
   // Interactive views - consult FILE_TYPE_REGISTRY

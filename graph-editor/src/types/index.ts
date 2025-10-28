@@ -10,7 +10,8 @@ export type ObjectType =
   | 'case'
   | 'credentials'
   | 'settings'
-  | 'about';
+  | 'about'
+  | 'markdown';
 
 /**
  * View modes for displaying content

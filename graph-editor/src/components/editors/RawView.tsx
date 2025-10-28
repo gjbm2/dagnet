@@ -29,7 +29,8 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
   const isUpdatingEditorRef = useRef(false); // Track when we're programmatically updating editor
 
   const isYAML = viewMode === 'raw-yaml';
-  const language = isYAML ? 'yaml' : 'json';
+  const isMarkdown = fileId.includes('markdown-') || fileId.includes('keyboard-shortcuts') || fileId.includes('about');
+  const language = isMarkdown ? 'markdown' : (isYAML ? 'yaml' : 'json');
 
   // Convert data to string format - syncs when data changes from other views
   useEffect(() => {
@@ -48,9 +49,11 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
     console.log(`RawView[${fileId}]: Data changed, updating editor value`);
     
     try {
-      const newValue = isYAML 
-        ? yaml.dump(data, { indent: 2, lineWidth: 120 })
-        : JSON.stringify(data, null, 2);
+      const newValue = isMarkdown 
+        ? (data.content || data.toString())
+        : (isYAML 
+          ? yaml.dump(data, { indent: 2, lineWidth: 120 })
+          : JSON.stringify(data, null, 2));
       
       console.log(`RawView[${fileId}]: Setting editor value, length:`, newValue.length);
       
@@ -79,9 +82,11 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
     }
 
     try {
-      const originalValue = isYAML 
-        ? yaml.dump(originalData, { indent: 2, lineWidth: 120 })
-        : JSON.stringify(originalData, null, 2);
+      const originalValue = isMarkdown 
+        ? (originalData.content || originalData.toString())
+        : (isYAML 
+          ? yaml.dump(originalData, { indent: 2, lineWidth: 120 })
+          : JSON.stringify(originalData, null, 2));
       
       setOriginalValue(originalValue);
     } catch (error: any) {
@@ -145,7 +150,10 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
       // Try to parse and validate
       try {
         let parsedData;
-        if (isYAML) {
+        if (isMarkdown) {
+          // For markdown, just store the content
+          parsedData = { content: value };
+        } else if (isYAML) {
           parsedData = yaml.load(value);
         } else {
           parsedData = JSON.parse(value);
@@ -182,7 +190,9 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
 
   const handleRevertToLastValid = () => {
     if (lastValidData) {
-      setEditorValue(isYAML ? yaml.dump(lastValidData, { indent: 2, lineWidth: 120 }) : JSON.stringify(lastValidData, null, 2));
+      setEditorValue(isMarkdown 
+        ? (lastValidData.content || lastValidData.toString())
+        : (isYAML ? yaml.dump(lastValidData, { indent: 2, lineWidth: 120 }) : JSON.stringify(lastValidData, null, 2)));
       setParseError(null);
       setIsValid(true);
       updateData(lastValidData);
@@ -194,7 +204,11 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
 
     try {
       let parsedData;
-      if (isYAML) {
+      if (isMarkdown) {
+        // For markdown, just update the content
+        parsedData = { content: editorValue };
+        setEditorValue(editorValue); // No formatting for markdown
+      } else if (isYAML) {
         parsedData = yaml.load(editorValue);
         setEditorValue(yaml.dump(parsedData, { indent: 2, lineWidth: 120 }));
       } else {
@@ -350,7 +364,10 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
                   // Parse and update data
                   try {
                     let parsedData;
-                    if (isYAML) {
+                    if (isMarkdown) {
+                      // For markdown, just store the content
+                      parsedData = { content: value };
+                    } else if (isYAML) {
                       parsedData = yaml.load(value);
                     } else {
                       parsedData = JSON.parse(value);
