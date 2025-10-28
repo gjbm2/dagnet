@@ -338,6 +338,8 @@ class ParamRegistryService {
     } catch (error) {
       // Registry file doesn't exist, return empty registry
       return {
+        version: '1.0.0',
+        created_at: new Date().toISOString(),
         parameters: [],
         contexts: [],
         cases: []
