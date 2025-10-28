@@ -157,6 +157,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           // Reset sync flag before undo so the store→file sync can happen
           syncingRef.current = false;
           undo();
+          // Force a full redraw to ensure edge handles are updated
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('dagnet:forceRedraw'));
+          }, 10);
         }
       }
 
@@ -168,6 +172,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           // Reset sync flag before redo so the store→file sync can happen
           syncingRef.current = false;
           redo();
+          // Force a full redraw to ensure edge handles are updated
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('dagnet:forceRedraw'));
+          }, 10);
         }
       }
     };
