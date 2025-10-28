@@ -202,7 +202,7 @@ function AppShellContent() {
               onClick={() => tabOperations.switchTab(tab.id)}
               style={{ width: '100%', height: '100%' }}
             >
-              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} data={null} onChange={() => {}} />
+              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} onChange={() => {}} />
             </div>
           ),
           closable: false,
@@ -229,6 +229,7 @@ function AppShellContent() {
               data-is-dirty="false"
               onClick={() => tabOperations.switchTab(tab.id)}
             >
+              {tab.icon && <span style={{ marginRight: '6px', fontSize: '14px' }}>{tab.icon}</span>}
               <span style={{ flex: 1 }}>{tab.title}</span>
               <div
                 className="custom-tab-close-btn"
@@ -259,7 +260,7 @@ function AppShellContent() {
               onClick={() => tabOperations.switchTab(tab.id)}
               style={{ width: '100%', height: '100%' }}
             >
-              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} data={null} onChange={() => {}} />
+              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} onChange={() => {}} />
             </div>
           ),
           closable: false,
@@ -298,7 +299,7 @@ function AppShellContent() {
         setTimeout(() => {
           const tabData = dockLayoutRef.find(newTabId);
           console.log('Found new tab:', !!tabData);
-          if (tabData) {
+          if (tabData && ('title' in tabData && 'content' in tabData)) {
             console.log(`Moving ${newTabId} to panel ${sourcePanel}`);
             dockLayoutRef.dockMove(tabData, sourcePanel, 'middle');
           }
@@ -331,7 +332,7 @@ function AppShellContent() {
           if (newTab) {
             const tabData = dockLayoutRef.find(newTab.id);
             console.log('Found new tab in rc-dock:', !!tabData);
-            if (tabData) {
+            if (tabData && ('title' in tabData && 'content' in tabData)) {
               console.log(`Moving ${newTab.id} to panel ${focusedPanel}`);
               dockLayoutRef.dockMove(tabData, focusedPanel, 'middle');
             }
@@ -367,7 +368,7 @@ function AppShellContent() {
         const tabData = dockLayoutRef.find(tabId);
         console.log('AppShell: Found tab in rc-dock:', !!tabData, tabData);
         
-        if (tabData) {
+        if (tabData && ('title' in tabData && 'content' in tabData)) {
           console.log('AppShell: Calling dockMove to REMOVE tab');
           dockLayoutRef.dockMove(tabData, null, 'remove');
           console.log('AppShell: ✅ Tab removed from rc-dock');
@@ -401,7 +402,7 @@ function AppShellContent() {
     
     // Find the tab in rc-dock layout
     const tabData = dockLayoutRef.find(activeTabId);
-    if (!tabData) {
+    if (!tabData || !('title' in tabData && 'content' in tabData)) {
       console.log(`AppShell: Tab ${activeTabId} not found in rc-dock layout`);
       return;
     }
@@ -501,8 +502,14 @@ function AppShellContent() {
       console.log('loadTab called with:', savedTab, 'extracted tabId:', tabId);
       
       if (!tabId) {
-        console.warn('loadTab: No tab ID provided, skipping');
-        return null;
+        console.warn('loadTab: No tab ID provided, returning placeholder');
+        return {
+          id: 'placeholder',
+          title: 'Invalid Tab',
+          content: <div>Invalid tab ID</div>,
+          closable: false,
+          cached: false
+        };
       }
       
     const tab = tabs.find(t => t.id === tabId);
@@ -571,7 +578,7 @@ function AppShellContent() {
             }}
             style={{ width: '100%', height: '100%' }}
           >
-            <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} data={null} onChange={() => {}} />
+            <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} onChange={() => {}} />
           </div>
         ),
         closable: false,

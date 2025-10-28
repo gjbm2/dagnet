@@ -79,7 +79,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     type: 'context',
     displayName: 'Context',
     displayNamePlural: 'Contexts',
-    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/param-registry/schemas/context-schema.yaml',
+    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/param-registry/schemas/context-definition-schema.yaml',
     directory: 'contexts',
     indexFile: 'contexts-index.yaml',
     extensions: ['.yaml', '.yml', '.json'],
