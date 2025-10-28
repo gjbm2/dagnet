@@ -32,6 +32,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   });
 
   const [items, setItems] = useState<RepositoryItem[]>([]);
+  const [localItems, setLocalItems] = useState<RepositoryItem[]>([]); // Items not yet committed
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
@@ -60,7 +61,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     if (isInitialized) {
       saveStateToDB();
     }
-  }, [state, isInitialized]);
+  }, [state, localItems, isInitialized]);
 
   /**
    * Load credentials and update selected repository
@@ -150,6 +151,13 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       console.log('📁 NavigatorContext: Restoring state:', restoredState);
       console.log('📁 NavigatorContext: Saved selectedRepo:', appState.navigatorState.selectedRepo);
       setState(restoredState);
+      
+      // Restore local items
+      if (appState.localItems) {
+        console.log('📁 NavigatorContext: Restoring local items:', appState.localItems);
+        setLocalItems(appState.localItems);
+      }
+      
       return restoredState;
     } else {
       console.log('📁 NavigatorContext: No saved state found in DB');
@@ -163,7 +171,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   const saveStateToDB = async () => {
     console.log('NavigatorContext: Saving state to DB:', state);
     await db.saveAppState({
-      navigatorState: state
+      navigatorState: state,
+      localItems: localItems
     });
   };
 
@@ -531,17 +540,58 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
+   * Add local item (uncommitted)
+   */
+  const addLocalItem = useCallback((item: RepositoryItem) => {
+    setLocalItems(prev => {
+      // Check if item already exists
+      const exists = prev.some(i => i.id === item.id && i.type === item.type);
+      if (exists) return prev;
+      
+      return [...prev, { ...item, isLocal: true }];
+    });
+  }, []);
+  
+  /**
+   * Remove local item (e.g., after commit)
+   */
+  const removeLocalItem = useCallback((fileId: string) => {
+    setLocalItems(prev => {
+      const [type, ...idParts] = fileId.split('-');
+      const id = idParts.join('-');
+      return prev.filter(item => !(item.id === id && item.type === type));
+    });
+  }, []);
+  
+  /**
+   * Refresh items from repository
+   */
+  const refreshItems = useCallback(async () => {
+    if (state.selectedRepo && state.selectedBranch) {
+      await loadItems(state.selectedRepo, state.selectedBranch);
+    }
+  }, [state.selectedRepo, state.selectedBranch]);
+
+  /**
+   * Get all items (repository + local)
+   */
+  const getAllItems = useCallback((): RepositoryItem[] => {
+    return [...items, ...localItems];
+  }, [items, localItems]);
+
+  /**
    * Filter items by search query
    */
   const getFilteredItems = useCallback((): RepositoryItem[] => {
-    if (!state.searchQuery) return items;
+    const allItems = getAllItems();
+    if (!state.searchQuery) return allItems;
 
     const query = state.searchQuery.toLowerCase();
-    return items.filter(item => 
+    return allItems.filter(item => 
       item.name.toLowerCase().includes(query) ||
       item.description?.toLowerCase().includes(query)
     );
-  }, [items, state.searchQuery]);
+  }, [getAllItems, state.searchQuery]);
 
   /**
    * Get items by type
@@ -557,8 +607,31 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     selectRepository,
     selectBranch,
     expandSection,
-    collapseSection
+    collapseSection,
+    addLocalItem,
+    removeLocalItem,
+    refreshItems
   };
+  
+  // Listen for last view closed events to clean up local items
+  useEffect(() => {
+    const handleLastViewClosed = (event: CustomEvent) => {
+      const { fileId } = event.detail;
+      
+      // Check if this file exists in localItems (uncommitted)
+      const [type, ...idParts] = fileId.split('-');
+      const id = idParts.join('-');
+      const isLocal = localItems.some(item => item.id === id && item.type === type);
+      
+      if (isLocal) {
+        console.log(`NavigatorContext: Last view of local file ${fileId} closed, removing from navigator`);
+        removeLocalItem(fileId);
+      }
+    };
+    
+    window.addEventListener('dagnet:lastViewClosed', handleLastViewClosed as EventListener);
+    return () => window.removeEventListener('dagnet:lastViewClosed', handleLastViewClosed as EventListener);
+  }, [localItems, removeLocalItem]);
 
   return (
     <NavigatorContext.Provider value={{ 

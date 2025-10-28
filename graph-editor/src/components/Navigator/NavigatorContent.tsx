@@ -4,7 +4,8 @@ import { useTabContext } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
 import { ObjectTypeSection } from './ObjectTypeSection';
 import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
-import { RepositoryItem } from '../../types';
+import { NavigatorSectionContextMenu } from '../NavigatorSectionContextMenu';
+import { RepositoryItem, ObjectType } from '../../types';
 import './Navigator.css';
 
 /**
@@ -19,6 +20,7 @@ export function NavigatorContent() {
   const { state, operations, items, isLoading } = useNavigatorContext();
   const { tabs, activeTabId, operations: tabOps } = useTabContext();
   const [contextMenu, setContextMenu] = useState<{ item: RepositoryItem; x: number; y: number } | null>(null);
+  const [sectionContextMenu, setSectionContextMenu] = useState<{ type: ObjectType; x: number; y: number } | null>(null);
 
   // Group items by type
   const graphItems = items.filter(item => item.type === 'graph');
@@ -58,6 +60,10 @@ export function NavigatorContent() {
 
   const handleItemContextMenu = (item: RepositoryItem, x: number, y: number) => {
     setContextMenu({ item, x, y });
+  };
+
+  const handleSectionContextMenu = (type: ObjectType, x: number, y: number) => {
+    setSectionContextMenu({ type, x, y });
   };
 
   return (
@@ -117,6 +123,7 @@ export function NavigatorContent() {
               title="Graphs"
               icon="📊"
               items={graphItems}
+              sectionType="graph"
               isExpanded={state.expandedSections.includes('graphs')}
               onToggle={() => {
                 if (state.expandedSections.includes('graphs')) {
@@ -127,12 +134,14 @@ export function NavigatorContent() {
               }}
               onItemClick={handleItemClick}
               onItemContextMenu={handleItemContextMenu}
+              onSectionContextMenu={handleSectionContextMenu}
             />
 
             <ObjectTypeSection
               title="Parameters"
               icon="📋"
               items={paramItems}
+              sectionType="parameter"
               isExpanded={state.expandedSections.includes('parameters')}
               onToggle={() => {
                 if (state.expandedSections.includes('parameters')) {
@@ -143,12 +152,14 @@ export function NavigatorContent() {
               }}
               onItemClick={handleItemClick}
               onItemContextMenu={handleItemContextMenu}
+              onSectionContextMenu={handleSectionContextMenu}
             />
 
             <ObjectTypeSection
               title="Contexts"
               icon="📄"
               items={contextItems}
+              sectionType="context"
               isExpanded={state.expandedSections.includes('contexts')}
               onToggle={() => {
                 if (state.expandedSections.includes('contexts')) {
@@ -159,12 +170,14 @@ export function NavigatorContent() {
               }}
               onItemClick={handleItemClick}
               onItemContextMenu={handleItemContextMenu}
+              onSectionContextMenu={handleSectionContextMenu}
             />
 
             <ObjectTypeSection
               title="Cases"
               icon="🗂"
               items={caseItems}
+              sectionType="case"
               isExpanded={state.expandedSections.includes('cases')}
               onToggle={() => {
                 if (state.expandedSections.includes('cases')) {
@@ -175,6 +188,7 @@ export function NavigatorContent() {
               }}
               onItemClick={handleItemClick}
               onItemContextMenu={handleItemContextMenu}
+              onSectionContextMenu={handleSectionContextMenu}
             />
           </>
         )}
@@ -187,6 +201,16 @@ export function NavigatorContent() {
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+      
+      {/* Navigator section context menu */}
+      {sectionContextMenu && (
+        <NavigatorSectionContextMenu
+          sectionType={sectionContextMenu.type}
+          x={sectionContextMenu.x}
+          y={sectionContextMenu.y}
+          onClose={() => setSectionContextMenu(null)}
         />
       )}
     </div>

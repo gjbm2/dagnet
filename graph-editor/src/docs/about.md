@@ -93,4 +93,6 @@ DagNet is open source and welcomes contributions! See our [Contributing Guide](h
 
 ## Credits
 
-Built with ❤️ by the DagNet team. Special thanks to the open source community for the amazing tools and libraries that make this project possible.
+You can't do stuff like this without some serious open source goodness. *I* couldn't have done it without Anthropic & OpenAI. 
+
+Support / bugs / love &c. @gregmarsh / [greg@nous.co](mailto:greg@nous.co)

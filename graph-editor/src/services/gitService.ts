@@ -60,12 +60,17 @@ class GitService {
   private setCurrentRepo(): void {
     if (!this.credentials?.git?.length) {
       this.currentRepo = null;
+      console.log('GitService.setCurrentRepo: No credentials or git repos available');
       return;
     }
 
     // Use default repo or first available
-    const defaultRepo = this.credentials.defaultGitRepo || 'nous-conversion';
-    this.currentRepo = this.credentials.git.find(repo => repo.name === defaultRepo) || this.credentials.git[0];
+    const defaultRepo = this.credentials.defaultGitRepo;
+    this.currentRepo = defaultRepo 
+      ? this.credentials.git.find(repo => repo.name === defaultRepo) || this.credentials.git[0]
+      : this.credentials.git[0];
+    
+    console.log(`GitService.setCurrentRepo: Set to ${this.currentRepo?.name} (defaultGitRepo was: ${defaultRepo}, owner: ${this.currentRepo?.owner}, repo: ${this.currentRepo?.repo}, basePath: ${this.currentRepo?.basePath})`);
   }
 
   /**
@@ -175,8 +180,11 @@ class GitService {
   // Get a specific file
   async getFile(path: string, branch: string = this.config.branch): Promise<GitOperationResult> {
     try {
+      console.log(`🔵 GitService.getFile: Fetching ${path} from branch ${branch}, repo: ${this.currentRepo?.owner}/${this.currentRepo?.repo}, basePath: ${this.currentRepo?.basePath}`);
       const response = await this.makeRequest(`/contents/${path}?ref=${branch}`);
       const file: GitFile = await response.json();
+      
+      console.log(`🔵 GitService.getFile: Got ${path}, size: ${file.size}, SHA: ${file.sha?.substring(0, 8)}`);
       
       if (this.config.debugGitOperations) {
         console.log(`File contents for ${path}:`, file);
@@ -246,8 +254,8 @@ class GitService {
     sha?: string
   ): Promise<GitOperationResult> {
     try {
-      // Encode content to base64
-      const encodedContent = btoa(content);
+      // Encode content to base64 - handle UTF-8 properly
+      const encodedContent = btoa(unescape(encodeURIComponent(content)));
       
       const body = {
         message,
@@ -257,13 +265,24 @@ class GitService {
       };
 
       if (this.config.debugGitOperations) {
-        console.log(`Creating/updating file ${path}:`, { message, branch, sha: !!sha });
+        console.log(`Creating/updating file ${path}:`, { 
+          message, 
+          branch, 
+          sha: sha || 'none (new file)',
+          contentLength: content.length 
+        });
       }
 
       const response = await this.makeRequest(`/contents/${path}`, {
         method: 'PUT',
         body: JSON.stringify(body)
       });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error(`GitHub API Error: ${response.status} -`, errorData);
+        throw new Error(errorData.message || `HTTP ${response.status}`);
+      }
 
       const result = await response.json();
       
@@ -273,10 +292,12 @@ class GitService {
         message: `Successfully ${sha ? 'updated' : 'created'} ${path}`
       };
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Failed to ${sha ? 'update' : 'create'} file ${path}:`, errorMsg);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        message: `Failed to ${sha ? 'update' : 'create'} file ${path}`
+        error: errorMsg,
+        message: `Failed to ${sha ? 'update' : 'create'} file ${path}: ${errorMsg}`
       };
     }
   }
@@ -351,6 +372,137 @@ class GitService {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
         message: `Failed to fetch commit history for ${path}`
+      };
+    }
+  }
+
+  // Commit and push multiple files
+  async commitAndPushFiles(
+    files: Array<{ path: string; content: string; sha?: string }>,
+    message: string,
+    branch: string = this.config.branch
+  ): Promise<GitOperationResult> {
+    try {
+      if (files.length === 0) {
+        return {
+          success: false,
+          error: 'No files to commit',
+          message: 'Cannot commit empty file list'
+        };
+      }
+
+      if (this.config.debugGitOperations) {
+        console.log(`Committing ${files.length} files with message: ${message}`);
+      }
+
+      // For now, we'll commit files one by one
+      // In a more sophisticated implementation, we could use GitHub's tree API
+      // to create a single commit with multiple files
+      const results: GitOperationResult[] = [];
+      
+      for (const file of files) {
+        // Always fetch the current file SHA from GitHub to ensure we have the latest
+        // This prevents 409 conflicts from stale SHAs
+        let fileSha: string | undefined = undefined;
+        
+        try {
+          // Use the raw GitHub API to get file metadata
+          const fileInfoResponse = await this.makeRequest(`/contents/${file.path}?ref=${branch}`, {
+            method: 'GET'
+          });
+          
+          if (fileInfoResponse.ok) {
+            const fileInfo = await fileInfoResponse.json();
+            fileSha = fileInfo.sha;
+            
+            if (this.config.debugGitOperations) {
+              console.log(`Fetched current SHA for ${file.path}: ${fileSha}`);
+            }
+          }
+        } catch (error) {
+          // File doesn't exist yet, which is fine for new files
+          if (this.config.debugGitOperations) {
+            console.log(`File ${file.path} doesn't exist yet, will create it`);
+          }
+        }
+        
+        console.log(`🔵 GitService.commitAndPushFiles: Committing ${file.path}, content length: ${file.content.length}, SHA: ${fileSha?.substring(0, 8) || 'new file'}`);
+        
+        const result = await this.createOrUpdateFile(
+          file.path,
+          file.content,
+          message,
+          branch,
+          fileSha
+        );
+        
+        if (!result.success) {
+          return {
+            success: false,
+            error: result.error,
+            message: `Failed to commit file ${file.path}: ${result.error}`
+          };
+        }
+        
+        console.log(`🔵 GitService.commitAndPushFiles: Successfully committed ${file.path}, new SHA: ${result.data?.content?.sha?.substring(0, 8)}`);
+        results.push(result);
+      }
+
+      return {
+        success: true,
+        data: results,
+        message: `Successfully committed ${files.length} files`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to commit files'
+      };
+    }
+  }
+
+  // Pull latest changes (refresh from remote)
+  async pullLatest(branch: string = this.config.branch): Promise<GitOperationResult> {
+    try {
+      // For a simple pull, we just need to verify the branch exists and is accessible
+      // In a full implementation, this would involve checking for new commits
+      // and potentially updating local state
+      
+      const branchResult = await this.getBranches();
+      if (!branchResult.success) {
+        return {
+          success: false,
+          error: branchResult.error,
+          message: 'Failed to verify branch exists'
+        };
+      }
+
+      const branches = branchResult.data as GitBranch[];
+      const targetBranch = branches.find(b => b.name === branch);
+      
+      if (!targetBranch) {
+        return {
+          success: false,
+          error: 'Branch not found',
+          message: `Branch ${branch} does not exist`
+        };
+      }
+
+      if (this.config.debugGitOperations) {
+        console.log(`Pull latest from branch ${branch} - latest commit: ${targetBranch.commit.sha}`);
+      }
+
+      return {
+        success: true,
+        data: { branch, latestCommit: targetBranch.commit.sha },
+        message: `Successfully pulled latest from ${branch}`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to pull latest changes'
       };
     }
   }

@@ -111,6 +111,7 @@ export interface RepositoryItem {
   path: string;
   description?: string;
   metadata?: Record<string, any>;
+  isLocal?: boolean; // True if file exists only locally (not yet committed)
 }
 
 /**
@@ -151,6 +152,7 @@ export interface AppState {
   
   // Navigator
   navigatorState: NavigatorState;
+  localItems?: RepositoryItem[]; // Uncommitted files
   
   // Active tab
   activeTabId?: string;
@@ -216,6 +218,9 @@ export interface NavigatorOperations {
   selectBranch: (branch: string) => void;
   expandSection: (section: string) => void;
   collapseSection: (section: string) => void;
+  addLocalItem: (item: RepositoryItem) => void;
+  removeLocalItem: (fileId: string) => void;
+  refreshItems: () => Promise<void>;
 }
 
 /**

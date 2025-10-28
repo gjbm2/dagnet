@@ -1,5 +1,5 @@
 import React from 'react';
-import { RepositoryItem } from '../../types';
+import { RepositoryItem, ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 
 /**
@@ -15,20 +15,24 @@ interface ObjectTypeSectionProps {
   title: string;
   icon: string;
   items: RepositoryItem[];
+  sectionType: ObjectType;
   isExpanded: boolean;
   onToggle: () => void;
   onItemClick: (item: RepositoryItem) => void;
   onItemContextMenu?: (item: RepositoryItem, x: number, y: number) => void;
+  onSectionContextMenu?: (type: ObjectType, x: number, y: number) => void;
 }
 
 export function ObjectTypeSection({
   title,
   icon,
   items,
+  sectionType,
   isExpanded,
   onToggle,
   onItemClick,
-  onItemContextMenu
+  onItemContextMenu,
+  onSectionContextMenu
 }: ObjectTypeSectionProps) {
   const { tabs } = useTabContext();
   const fileRegistry = useFileRegistry();
@@ -73,6 +77,13 @@ export function ObjectTypeSection({
       <div 
         className="section-header"
         onClick={onToggle}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (onSectionContextMenu) {
+            onSectionContextMenu(sectionType, e.clientX, e.clientY);
+          }
+        }}
       >
         <span className="section-expand-icon">
           {isExpanded ? '▼' : '▶'}
@@ -92,7 +103,7 @@ export function ObjectTypeSection({
               return (
                 <div
                   key={item.id}
-                  className={`section-item ${status.isOpen ? 'active' : ''} ${status.isDirty ? 'dirty' : ''}`}
+                  className={`section-item ${status.isOpen ? 'active' : ''} ${status.isDirty ? 'dirty' : ''} ${item.isLocal ? 'local' : ''}`}
                   onClick={() => onItemClick(item)}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -101,9 +112,11 @@ export function ObjectTypeSection({
                       onItemContextMenu(item, e.clientX, e.clientY);
                     }
                   }}
-                  title={item.description || item.name}
+                  title={item.isLocal ? `${item.description || item.name} (not committed)` : (item.description || item.name)}
                 >
-                  <span className="item-name">{item.name.replace(/\.(yaml|yml|json)$/, '')}</span>
+                  <span className="item-name" style={item.isLocal ? { fontStyle: 'italic', opacity: 0.8 } : {}}>
+                    {item.name.replace(/\.(yaml|yml|json)$/, '')}
+                  </span>
                   
                   <span className="item-status">
                     {status.isDirty && (

@@ -139,7 +139,7 @@ export class CredentialsService {
   getDefaultGitCredentials(): CredentialsData['git'][0] | null {
     if (!this.userCredentials?.git?.length) return null;
     
-    const defaultRepo = this.userCredentials.defaultGitRepo || 'nous-conversion';
+    const defaultRepo = this.userCredentials.defaultGitRepo;
     return this.userCredentials.git.find(repo => repo.name === defaultRepo) || this.userCredentials.git[0];
   }
 
