@@ -165,34 +165,34 @@ const handleStorageError = async (error: any, context: string) => {
 
 // Wrap all DB operations to catch errors
 const originalGet = db.files.get.bind(db.files);
-db.files.get = async (key: string) => {
+(db.files as any).get = async (key: string) => {
   try {
     return await originalGet(key);
   } catch (error) {
     await handleStorageError(error, 'files.get');
     return undefined;
   }
-} as any;
+};
 
 const originalTabsToArray = db.tabs.toArray.bind(db.tabs);
-db.tabs.toArray = async () => {
+(db.tabs as any).toArray = async () => {
   try {
     return await originalTabsToArray();
   } catch (error) {
     await handleStorageError(error, 'tabs.toArray');
     return [];
   }
-} as any;
+};
 
 const originalGetAppState = db.getAppState.bind(db);
-db.getAppState = async () => {
+(db as any).getAppState = async () => {
   try {
     return await originalGetAppState();
   } catch (error) {
     await handleStorageError(error, 'getAppState');
     return undefined;
   }
-} as any;
+};
 
 // Initialize on import
 db.initialize().catch(error => {
