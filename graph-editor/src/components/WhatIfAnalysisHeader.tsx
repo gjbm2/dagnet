@@ -6,10 +6,10 @@ interface WhatIfAnalysisHeaderProps {
 }
 
 export default function WhatIfAnalysisHeader({ tabId }: WhatIfAnalysisHeaderProps) {
-  const { operations, tabs } = useTabContext();
+  const { operations, tabs, activeTabId } = useTabContext();
   
   // Use the specific tabId passed as prop, or fall back to activeTabId for backward compatibility
-  const targetTabId = tabId || tabs.find(tab => tab.isActive)?.id;
+  const targetTabId = tabId || activeTabId;
   
   // Get current tab's editor state
   const targetTab = tabs.find(tab => tab.id === targetTabId);

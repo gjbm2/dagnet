@@ -35,6 +35,7 @@ export default function ConditionalProbabilitiesSection({
   onUpdateColor
 }: ConditionalProbabilitiesSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const graphStoreHook = useGraphStore();
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
   
   // Get upstream nodes for condition selection
@@ -210,6 +211,16 @@ export default function ConditionalProbabilitiesSection({
                 <ProbabilityInput
                   value={condition.p.mean || 0}
                   onChange={(value) => {
+                    // Only update local state for real-time feedback (don't save to graph yet)
+                    const newConditions = [...conditions];
+                    newConditions[index] = {
+                      ...condition,
+                      p: { ...condition.p, mean: value }
+                    };
+                    setLocalConditionalP(newConditions);
+                  }}
+                  onCommit={(value) => {
+                    // Commit to graph
                     const newConditions = [...conditions];
                     newConditions[index] = {
                       ...condition,
@@ -217,12 +228,11 @@ export default function ConditionalProbabilitiesSection({
                     };
                     onLocalUpdate(newConditions);
                   }}
-                  onCommit={(value) => {
-                    // Commit is handled by onLocalUpdate above
-                  }}
                   onRebalance={(value) => {
-                    if (graph && edge) {
-                      const siblings = graph.edges.filter((e: any) => {
+                    // Get LATEST graph state from store to avoid stale closure
+                    const currentGraph = graphStoreHook.getState().graph;
+                    if (currentGraph && edge) {
+                      const siblings = currentGraph.edges.filter((e: any) => {
                         if (edge.case_id && edge.case_variant) {
                           return e.id !== edge.id && 
                                  e.from === edge.from && 
@@ -233,7 +243,7 @@ export default function ConditionalProbabilitiesSection({
                       });
                       
                       if (siblings.length > 0) {
-                        const nextGraph = structuredClone(graph);
+                        const nextGraph = structuredClone(currentGraph);
                         const currentValue = value;
                         const remainingProbability = roundTo4DP(1 - currentValue);
                         

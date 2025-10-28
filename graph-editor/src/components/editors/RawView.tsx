@@ -26,6 +26,7 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
   const resetEditorFlagTimeoutRef = useRef<number | null>(null);
   const editorInstanceRef = useRef<any>(null);
   const diffEditorInstanceRef = useRef<any>(null);
+  const isUpdatingEditorRef = useRef(false); // Track when we're programmatically updating editor
 
   const isYAML = viewMode === 'raw-yaml';
   const language = isYAML ? 'yaml' : 'json';
@@ -52,10 +53,18 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
         : JSON.stringify(data, null, 2);
       
       console.log(`RawView[${fileId}]: Setting editor value, length:`, newValue.length);
+      
+      // Set flag to indicate we're programmatically updating the editor
+      isUpdatingEditorRef.current = true;
       setEditorValue(newValue);
       setLastValidData(data); // Store last valid data
       setParseError(null);
       setIsValid(true);
+      
+      // Reset flag after a brief delay (allow React render to complete)
+      setTimeout(() => {
+        isUpdatingEditorRef.current = false;
+      }, 50);
     } catch (error: any) {
       console.error(`RawView[${fileId}]: Error formatting data:`, error);
       setParseError(error.message);
@@ -115,6 +124,12 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
   const handleEditorChange = (value: string | undefined) => {
     console.log(`RawView[${fileId}]: Editor change detected, value:`, value?.substring(0, 100), 'length:', value?.length);
     if (value === undefined || readonly) return;
+    
+    // Skip if this change was triggered by us updating the editor from external data
+    if (isUpdatingEditorRef.current) {
+      console.log(`RawView[${fileId}]: Editor change detected but isUpdatingEditorRef is true, skipping`);
+      return;
+    }
 
     setEditorValue(value);
 
@@ -313,6 +328,12 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
               // Listen for changes in the modified editor
               modifiedEditor.onDidChangeModelContent(() => {
                 if (readonly) return;
+                
+                // Skip if this change was triggered by us updating the editor from external data
+                if (isUpdatingEditorRef.current) {
+                  console.log(`RawView[${fileId}]: Diff editor change detected but isUpdatingEditorRef is true, skipping`);
+                  return;
+                }
                 
                 const value = modifiedEditor.getValue();
                 setEditorValue(value);

@@ -167,7 +167,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     
     // Clear any existing timeout
     const timeoutId = setTimeout(() => {
-      const validation = validateConditionalProbabilities(graph);
+      const validation = validateConditionalProbabilities(graph as any);
       // Find errors for this specific node
       const nodeErrors = validation.errors.filter(err => err.nodeId === data.id);
       const nodeWarnings = validation.warnings.filter(warn => warn.nodeId === data.id);

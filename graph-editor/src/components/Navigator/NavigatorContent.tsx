@@ -17,7 +17,7 @@ import './Navigator.css';
  */
 export function NavigatorContent() {
   const { state, operations, items, isLoading } = useNavigatorContext();
-  const { tabs, operations: tabOps } = useTabContext();
+  const { tabs, activeTabId, operations: tabOps } = useTabContext();
   const [contextMenu, setContextMenu] = useState<{ item: RepositoryItem; x: number; y: number } | null>(null);
 
   // Group items by type
@@ -42,7 +42,7 @@ export function NavigatorContent() {
       tabOps.openTab(item);
       
       // Signal to open in same panel as focused tab
-      const focusedTab = tabs.find(t => t.id === tabContext.activeTabId);
+      const focusedTab = tabs.find(t => t.id === activeTabId);
       if (focusedTab) {
         window.dispatchEvent(new CustomEvent('dagnet:openInFocusedPanel', {
           detail: { newTabFileId: fileId }

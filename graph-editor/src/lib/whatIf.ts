@@ -9,7 +9,8 @@
 
 export type WhatIfOverrides = {
   caseOverrides?: Record<string, string>;
-  conditionalOverrides?: Record<string, number>;
+  // Conditional edge overrides: edgeId -> forced visited nodes (hyperprior activation)
+  conditionalOverrides?: Record<string, Set<string>>;
 };
 
 /**
@@ -109,8 +110,26 @@ export function computeEffectiveEdgeProbability(
     const override = whatIfOverrides?.conditionalOverrides?.[edgeId];
     
     if (override !== undefined) {
-      // Use the explicit override probability directly
-      probability = override;
+      // override is a Set<string> of forced visited nodes (hyperprior activation)
+      // Find the conditional_p that matches these visited nodes
+      for (const conditionalProb of edge.conditional_p) {
+        if (!conditionalProb?.condition?.visited) continue;
+        
+        // Resolve all condition node references to IDs
+        const conditionNodeIds = conditionalProb.condition.visited.map((ref: string) => 
+          resolveNodeRefToId(graph, ref)
+        );
+        
+        // Check if the override matches this condition (same set of nodes)
+        const overrideArray = Array.from(override).sort();
+        const conditionArray = conditionNodeIds.sort();
+        
+        if (JSON.stringify(overrideArray) === JSON.stringify(conditionArray)) {
+          // Force this conditional probability to be active
+          probability = conditionalProb.p?.mean ?? probability;
+          break;
+        }
+      }
     } else {
       // IMPLICIT/CONTEXT activation: check if conditional is satisfied by:
       // 1. Case what-ifs (hyperpriors) OR
@@ -193,10 +212,28 @@ export function getEdgeWhatIfDisplay(
     const override = whatIfOverrides?.conditionalOverrides?.[edgeId];
     
     if (override !== undefined) {
-      // EXPLICIT override
+      // EXPLICIT override - override is Set<string> of forced visited nodes
+      // Find the matching conditional probability
+      let matchingProb = edge.p?.mean ?? 0;
+      for (const conditionalProb of edge.conditional_p) {
+        if (!conditionalProb?.condition?.visited) continue;
+        
+        const conditionNodeIds = conditionalProb.condition.visited.map((ref: string) => 
+          resolveNodeRefToId(graph, ref)
+        );
+        
+        const overrideArray = Array.from(override).sort();
+        const conditionArray = conditionNodeIds.sort();
+        
+        if (JSON.stringify(overrideArray) === JSON.stringify(conditionArray)) {
+          matchingProb = conditionalProb.p?.mean ?? matchingProb;
+          break;
+        }
+      }
+      
       return {
         type: 'conditional',
-        probability: override,
+        probability: matchingProb,
         isOverridden: true,
         displayLabel: '🔬 What-If'
       };

@@ -25,7 +25,7 @@ export function FileMenu() {
 
   const activeTab = tabs.find(t => t.id === activeTabId);
   const hasDirtyTabs = operations.getDirtyTabs().length > 0;
-  const isGraphTab = activeTab?.type === 'graph';
+  const isGraphTab = activeTab?.fileId.startsWith('graph-');
   
   // Get isDirty state for active tab
   const activeFile = activeTab ? fileRegistry.getFile(activeTab.fileId) : null;
@@ -76,7 +76,12 @@ export function FileMenu() {
       if (!file) return;
 
       try {
-        const text = await file.readText();
+        const text = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsText(file);
+        });
         const data = JSON.parse(text); // TODO: Support YAML parsing
 
         // Determine file type

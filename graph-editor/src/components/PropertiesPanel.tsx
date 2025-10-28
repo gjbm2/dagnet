@@ -224,6 +224,8 @@ export default function PropertiesPanel({
             costs: edge.costs || {},
             weight_default: edge.weight_default || 0,
           });
+          // Also update conditional probabilities when graph changes (e.g., from auto-rebalance)
+          setLocalConditionalP(edge.conditional_p || []);
         }
       }
     } else if (!selectedEdgeId) {
@@ -1543,8 +1545,15 @@ export default function PropertiesPanel({
                         if (edgeIndex >= 0) {
                           nextGraph.edges[edgeIndex].conditional_p = conditionalP.length > 0 ? conditionalP : undefined;
                           
-                          if (!nextGraph.metadata) nextGraph.metadata = {} as any;
-                          nextGraph.metadata.updated_at = new Date().toISOString();
+                          if (!nextGraph.metadata) {
+                            nextGraph.metadata = {
+                              version: '1.0.0',
+                              created_at: new Date().toISOString(),
+                              updated_at: new Date().toISOString()
+                            };
+                          } else {
+                            nextGraph.metadata.updated_at = new Date().toISOString();
+                          }
                           setGraph(nextGraph);
                           saveHistoryState('Update conditional probabilities', undefined, selectedEdgeId || undefined);
                         }
@@ -1560,8 +1569,15 @@ export default function PropertiesPanel({
                           nextGraph.edges[edgeIndex].display = {};
                         }
                         nextGraph.edges[edgeIndex].display!.conditional_color = color;
-                        if (!nextGraph.metadata) nextGraph.metadata = {} as any;
-                        nextGraph.metadata.updated_at = new Date().toISOString();
+                        if (!nextGraph.metadata) {
+                          nextGraph.metadata = {
+                            version: '1.0.0',
+                            created_at: new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                          };
+                        } else {
+                          nextGraph.metadata.updated_at = new Date().toISOString();
+                        }
                         setGraph(nextGraph);
                         saveHistoryState('Update conditional color', undefined, selectedEdgeId || undefined);
                       }

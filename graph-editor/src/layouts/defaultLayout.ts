@@ -1,4 +1,5 @@
 import { LayoutData } from 'rc-dock';
+import React from 'react';
 
 /**
  * Default rc-dock layout configuration
@@ -34,9 +35,7 @@ export function getDefaultLayout(): LayoutData {
                 }
               ],
               panelLock: {
-                panelStyle: 'menu-bar',
-                minSize: 40,
-                maxSize: 40
+                panelStyle: 'menu-bar'
               }
             }
           ]
@@ -62,9 +61,7 @@ export function getDefaultLayout(): LayoutData {
                 }
               ],
               panelLock: {
-                panelStyle: 'navigator',
-                minSize: 0, // Can collapse to 0
-                maxSize: 400
+                panelStyle: 'navigator'
               }
             },
             
@@ -104,7 +101,7 @@ export const dockGroups = {
     // Inject Navigator button into tab bar
     panelExtra: (panelData: any) => {
       // This will be replaced with actual component in AppShell
-      return null;
+      return React.createElement('div', { style: { display: 'none' } });
     },
     // Enable built-in tab context menu
     // This will show rc-dock's default context menu on right-click

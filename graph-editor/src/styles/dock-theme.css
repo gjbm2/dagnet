@@ -150,3 +150,38 @@ body, body * {
   border-radius: 4px;
   overflow: hidden;
 }
+
+/* ============================================================
+   DROP ZONES (for tab dragging)
+   ============================================================ */
+
+/* Make drop zones larger and more visible */
+.dock-drop-indicator {
+  background-color: rgba(25, 118, 210, 0.2) !important;
+  border: 2px solid #1976d2 !important;
+  border-radius: 4px !important;
+}
+
+/* Increase drop zone size/sensitivity */
+.dock-drop-square,
+.dock-drop-edge {
+  opacity: 0.8 !important;
+  transform: scale(1.2) !important; /* Make drop zones 20% larger */
+}
+
+.dock-drop-square:hover,
+.dock-drop-edge:hover {
+  opacity: 1 !important;
+  background-color: rgba(25, 118, 210, 0.4) !important;
+}
+
+/* Edge drop zones (left, right, top, bottom) */
+.dock-drop-edge-left,
+.dock-drop-edge-right {
+  width: 80px !important; /* Wider (default ~40px) */
+}
+
+.dock-drop-edge-top,
+.dock-drop-edge-bottom {
+  height: 80px !important; /* Taller (default ~40px) */
+}
