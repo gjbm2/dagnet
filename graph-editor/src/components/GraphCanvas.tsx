@@ -139,24 +139,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Call the base handler first
     onNodesChangeBase(changes);
     
-    // Save history for node changes (position, selection, etc.)
-    // Only save when dragging finishes (dragging === false)
-    const hasPositionChanges = changes.some(change => change.type === 'position' && change.dragging === false);
-    
-    if (hasPositionChanges) {
-      saveHistoryState('Move node');
-    }
-    
-    // Check if any position changes occurred (when user finishes dragging)
+    // Trigger auto-reroute on ANY position change (during or after drag)
     // But not when syncing from graph to ReactFlow
     if (autoReroute && !isSyncingRef.current) {
-      const positionChanges = changes.filter(change => change.type === 'position' && change.dragging === false);
+      const positionChanges = changes.filter(change => change.type === 'position');
       if (positionChanges.length > 0) {
         // Trigger re-routing by incrementing the flag
+        // This will run during drag (for visual feedback) and won't save history
         setShouldReroute(prev => prev + 1);
       }
     }
-  }, [onNodesChangeBase, autoReroute, saveHistoryState]);
+  }, [onNodesChangeBase, autoReroute]);
 
 
   // Edge width calculation based on scaling mode
@@ -677,6 +670,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const lastSyncedGraphRef = useRef<string>('');
   const lastSyncedReactFlowRef = useRef<string>('');
   const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
+  const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
   const hasInitialFitViewRef = useRef(false);
   const currentGraphIdRef = useRef<string>('');
   
@@ -782,7 +776,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
     
-    console.log('performAutoReroute executing:', { autoReroute, forceReroute });
+    const isDragging = isDraggingNodeRef.current;
+    console.log('performAutoReroute executing:', { autoReroute, forceReroute, isDragging });
     
     const currentPositions: { [nodeId: string]: { x: number; y: number } } = {};
     let movedNodes: string[] = [];
@@ -897,6 +892,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     console.log('Updating graph with new handle positions');
     setGraph(nextGraph);
+    // Graph→ReactFlow sync will pick up the edge handle changes via the fast path
   }, [autoReroute, forceReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
   
   // Reset position tracking and perform immediate re-route when autoReroute is toggled ON
@@ -1141,9 +1137,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [nodes, edges, graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange]);
 
+  // Listen for force redraw events (e.g., after undo/redo)
+  useEffect(() => {
+    const handleForceRedraw = () => {
+      console.log('🔄 Force redraw requested - clearing sync cache');
+      lastSyncedGraphRef.current = '';
+      // The Graph→ReactFlow sync useEffect will fire on next render
+    };
+    
+    window.addEventListener('dagnet:forceRedraw', handleForceRedraw);
+    return () => window.removeEventListener('dagnet:forceRedraw', handleForceRedraw);
+  }, []);
+
   // Sync FROM graph TO ReactFlow when graph changes externally
   useEffect(() => {
     if (!graph) return;
+    
+    // Allow Graph→ReactFlow sync during drag - the fast path will only update edge data, not positions
+    
     // Don't block external graph changes (like undo) even if we're syncing ReactFlow->Graph
     // The isSyncingRef flag should only prevent ReactFlow->Graph sync, not Graph->ReactFlow sync
     
@@ -1248,8 +1259,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return hasChanges;
     });
     
-    if (!edgeCountChanged && !nodeCountChanged && !nodePositionsChanged && !edgeHandlesChanged && !edgeIdsChanged && edges.length > 0) {
-      console.log('  ⚡ Fast path: Topology unchanged, updating edge data in place');
+    // Fast path: If only edge data/handles changed (no topology or position changes), update in place
+    // CRITICAL: During drag, ALWAYS take fast path to prevent node position overwrites
+    // We ignore nodePositionsChanged during drag because ReactFlow has the current drag positions
+    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && edges.length > 0 && 
+                               (isDraggingNodeRef.current || !nodePositionsChanged);
+    
+    if (shouldTakeFastPath) {
+      const pathReason = isDraggingNodeRef.current ? '(DRAG - ignoring position diff)' : '(positions unchanged)';
+      console.log(`  ⚡ Fast path: Topology unchanged, updating edge data/handles in place ${pathReason}`);
       // Topology unchanged and handles unchanged - update edge data in place to preserve component identity
       setEdges(prevEdges => {
         // First pass: update edge data without calculateWidth functions
@@ -1550,6 +1568,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (isSyncingRef.current) {
       return;
     }
+    
+    // BLOCK ReactFlow→Graph sync during node dragging to prevent multiple graph updates
+    if (isDraggingNodeRef.current) {
+      console.log('⏸️ Blocking ReactFlow→Graph sync during node drag');
+      return;
+    }
+    
     if (nodes.length === 0 && graph.nodes.length > 0) {
       return;
     }
@@ -1565,7 +1590,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       lastSyncedReactFlowRef.current = updatedJson;
       setGraph(updatedGraph);
       
-      // Note: History saving is handled in onNodesChange when dragging finishes
+      // Note: History is NOT saved here during drag - it's saved once at drag start
       
       // Reset sync flag
       setTimeout(() => {
@@ -3061,6 +3086,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis]);
 
+  // Handle node drag start - save current state to history BEFORE any changes
+  const onNodeDragStart = useCallback(() => {
+    // Save the CURRENT state (before drag) to history
+    console.log('🎯 Node drag started - saving current state to history');
+    saveHistoryState('Move node');
+    
+    // Block Graph→ReactFlow sync during drag to prevent interruption
+    isDraggingNodeRef.current = true;
+  }, [saveHistoryState]);
+
+  // Handle node drag stop - clear flag to allow ReactFlow→Graph sync
+  const onNodeDragStop = useCallback(() => {
+    console.log('🎯 Node drag stopped - clearing flag to allow sync');
+    
+    // Clear the drag flag - this allows ReactFlow→Graph sync to run and update positions
+    isDraggingNodeRef.current = false;
+    
+    // The ReactFlow→Graph sync useEffect will now run and sync final positions
+    // No history save happens - we already saved at drag start
+  }, []);
+
   // Add new node
   const addNode = useCallback(() => {
     console.log('addNode function called');
@@ -3391,6 +3437,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onConnect={onConnect}
         onReconnect={onEdgeUpdate}
         onSelectionChange={onSelectionChange}
+        onNodeDragStart={onNodeDragStart}
+        onNodeDragStop={onNodeDragStop}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
         onEdgeContextMenu={onEdgeContextMenu}
