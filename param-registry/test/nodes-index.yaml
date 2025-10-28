@@ -32,6 +32,32 @@ nodes:
     author: "ecommerce-team"
     version: "1.0.0"
 
+  - id: product-page
+    file_path: "nodes/product-page.yaml"
+    status: active
+    type: conversion
+    category: browsing
+    tags: ["product", "browsing", "pdp"]
+    graphs_using: []
+    usage_count: 0
+    created_at: "2025-01-28T11:00:00Z"
+    updated_at: "2025-01-28T11:00:00Z"
+    author: "product-team"
+    version: "1.0.0"
+
+  - id: shopping-cart
+    file_path: "nodes/shopping-cart.yaml"
+    status: active
+    type: intermediate
+    category: checkout
+    tags: ["cart", "checkout", "conversion"]
+    graphs_using: []
+    usage_count: 0
+    created_at: "2025-01-28T11:30:00Z"
+    updated_at: "2025-01-28T11:30:00Z"
+    author: "ecommerce-team"
+    version: "1.0.0"
+
   - id: abandoned-cart
     file_path: null
     status: planned

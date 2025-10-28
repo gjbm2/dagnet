@@ -375,10 +375,13 @@ class ParamRegistryService {
   }
 
   // Load a specific node by ID
-  async loadNode(nodeId: string): Promise<Node | null> {
+  async loadNode(nodeId: string): Promise<Node> {
+    // Strip extension if present
+    const cleanId = nodeId.replace(/\.(yaml|yml|json)$/, '');
+    
     try {
       const index = await this.loadNodesIndex();
-      const entry = index.nodes.find(n => n.id === nodeId);
+      const entry = index.nodes.find(n => n.id === cleanId);
       
       if (entry && entry.file_path) {
         const yamlText = await this.loadFile(entry.file_path);
@@ -386,8 +389,16 @@ class ParamRegistryService {
         return nodeData;
       }
       
-      // Node exists in index but has no file (planned node)
-      return null;
+      // Node exists in index but has no file (planned node) - return minimal node
+      if (entry) {
+        console.log(`Node ${cleanId} exists in index but has no file (planned), returning minimal node`);
+        return {
+          id: cleanId,
+          name: cleanId,
+          description: 'Planned node (no detail file yet)',
+          tags: entry.tags || []
+        };
+      }
     } catch (indexError) {
       console.log(`Node index not available, trying direct file load:`, indexError);
     }
@@ -395,17 +406,31 @@ class ParamRegistryService {
     // Fallback: try loading directly using directory config from registry
     const config = getFileTypeConfig('node');
     const directory = config?.directory || 'nodes';
-    const filePath = nodeId.includes('/') ? nodeId : `${directory}/${nodeId}`;
-    console.log(`Loading node directly from: ${filePath}`);
     
-    try {
-      const yamlText = await this.loadFile(filePath);
-      const nodeData = yaml.load(yamlText) as Node;
-      return nodeData;
-    } catch (error) {
-      console.error(`Failed to load node ${nodeId}:`, error);
-      return null;
+    // Try with different extensions
+    const extensions = ['.yaml', '.yml', '.json'];
+    for (const ext of extensions) {
+      const filePath = nodeId.includes('/') ? nodeId : `${directory}/${cleanId}${ext}`;
+      console.log(`Trying to load node from: ${filePath}`);
+      
+      try {
+        const yamlText = await this.loadFile(filePath);
+        const nodeData = yaml.load(yamlText) as Node;
+        return nodeData;
+      } catch (error) {
+        // Try next extension
+        continue;
+      }
     }
+    
+    // If all else fails, return a minimal node object
+    console.warn(`Could not load node ${cleanId}, returning minimal default`);
+    return {
+      id: cleanId,
+      name: cleanId,
+      description: 'Node definition not found',
+      tags: []
+    };
   }
 
   // Load parameters-index.yaml

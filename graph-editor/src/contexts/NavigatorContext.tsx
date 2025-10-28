@@ -529,12 +529,14 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           console.log('Navigator: Found', nodesResult.data.length, 'files in nodes/');
           nodesResult.data.forEach((file: any) => {
             if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              // Strip extension from ID for consistency with registry
+              const idWithoutExt = file.name.replace(/\.(yaml|yml|json)$/, '');
               // Only add if not already in items from registry
-              const alreadyAdded = items.some(i => i.type === 'node' && i.id === file.name);
+              const alreadyAdded = items.some(i => i.type === 'node' && i.id === idWithoutExt);
               if (!alreadyAdded) {
-                console.log('Navigator: Adding node:', file.name);
+                console.log('Navigator: Adding node:', idWithoutExt);
                 items.push({
-                  id: file.name,
+                  id: idWithoutExt,
                   type: 'node',
                   name: file.name,
                   path: file.path,
