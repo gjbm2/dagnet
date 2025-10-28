@@ -48,7 +48,7 @@ export interface SystemCredentials {
 /**
  * Credential source types
  */
-export type CredentialSource = 'user' | 'system' | 'url';
+export type CredentialSource = 'user' | 'system' | 'url' | 'none' | 'public';
 
 /**
  * Credential loading result

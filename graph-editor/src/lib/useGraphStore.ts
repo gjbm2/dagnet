@@ -55,7 +55,7 @@ export const useGraphStore = create<State>((set) => ({
     // Increment version so edge widths update when legacy what-if changes
     whatIfOverrides: {
       ...prevState.whatIfOverrides,
-      _version: prevState.whatIfOverrides._version + 1
+      _version: (prevState.whatIfOverrides._version || 0) + 1
     }
   })),
   
@@ -80,7 +80,7 @@ export const useGraphStore = create<State>((set) => ({
         whatIfOverrides: {
           caseOverrides: newCaseOverrides,
           conditionalOverrides: state.whatIfOverrides.conditionalOverrides,
-          _version: state.whatIfOverrides._version + 1,
+          _version: (state.whatIfOverrides._version || 0) + 1,
         }
       };
     }),
@@ -99,7 +99,7 @@ export const useGraphStore = create<State>((set) => ({
         whatIfOverrides: {
           caseOverrides: state.whatIfOverrides.caseOverrides,
           conditionalOverrides: newConditionalOverrides,
-          _version: state.whatIfOverrides._version + 1,
+          _version: (state.whatIfOverrides._version || 0) + 1,
         }
       };
     }),
