@@ -12,8 +12,12 @@
 ## Backlog
 
 ### High Priority
-1. Bring context into graph (blocked by tab system)
-2. Connect Params to param registry (will be easier after tab system)
+1. Commit all needs building & testing
+2. Revisit schema
+3. Named nodes
+4. Bring context into graph (blocked by tab system)
+5. Connect Params to param registry (will be easier after tab system)
+6. Google sheets pull through params
 
 ### Medium Priority
 3. Nodal levels in the editor (some nodes are 'tall')

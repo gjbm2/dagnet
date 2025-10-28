@@ -24,6 +24,8 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
   const isEditorChangeRef = useRef(false);
   const parseDebounceRef = useRef<number | null>(null);
   const resetEditorFlagTimeoutRef = useRef<number | null>(null);
+  const editorInstanceRef = useRef<any>(null);
+  const diffEditorInstanceRef = useRef<any>(null);
 
   const isYAML = viewMode === 'raw-yaml';
   const language = isYAML ? 'yaml' : 'json';
@@ -78,7 +80,8 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
     }
   }, [originalData, isYAML, fileId]);
 
-  // Cleanup debounce timers on unmount
+
+  // Cleanup debounce timers and editor instances on unmount
   useEffect(() => {
     return () => {
       if (parseDebounceRef.current !== null) {
@@ -86,6 +89,25 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
       }
       if (resetEditorFlagTimeoutRef.current !== null) {
         clearTimeout(resetEditorFlagTimeoutRef.current);
+      }
+      
+      // Properly dispose of editor instances to prevent TextModel disposal errors
+      if (editorInstanceRef.current) {
+        try {
+          editorInstanceRef.current.dispose();
+        } catch (error) {
+          console.warn('Error disposing editor:', error);
+        }
+        editorInstanceRef.current = null;
+      }
+      
+      if (diffEditorInstanceRef.current) {
+        try {
+          diffEditorInstanceRef.current.dispose();
+        } catch (error) {
+          console.warn('Error disposing diff editor:', error);
+        }
+        diffEditorInstanceRef.current = null;
       }
     };
   }, []);
@@ -236,13 +258,23 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
       )}
 
       <div className="raw-view-editor-container" ref={editorContainerRef}>
-        {showDiff ? (
+        <div style={{ display: showDiff ? 'block' : 'none', height: '100%' }}>
           <DiffEditor
+            key={`diff-${fileId}`}
             height="100%"
             language={language}
             original={originalValue}
             modified={editorValue}
             onMount={(editor, monaco) => {
+              // Store editor instance for proper cleanup
+              diffEditorInstanceRef.current = editor;
+              
+              // Add proper disposal handling
+              editor.onDidDispose(() => {
+                console.log('DiffEditor disposed');
+                diffEditorInstanceRef.current = null;
+              });
+              
               // Configure Monaco to be more permissive with JSON editing
               if (language === 'json') {
                 // Disable JSON validation that might prevent editing
@@ -334,7 +366,7 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
               scrollBeyondLastLine: false,
               wordWrap: lineWrap ? 'on' : 'off',
               automaticLayout: true,
-              fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace",
               fontLigatures: false,
               renderWhitespace: 'selection',
               // Ensure all editing is allowed
@@ -352,13 +384,24 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
               originalEditable: false
             }}
           />
-        ) : (
+        </div>
+        <div style={{ display: showDiff ? 'none' : 'block', height: '100%' }}>
           <Editor
+            key={`editor-${fileId}`}
             height="100%"
             language={language}
             value={editorValue}
             onChange={handleEditorChange}
             onMount={(editor, monaco) => {
+              // Store editor instance for proper cleanup
+              editorInstanceRef.current = editor;
+              
+              // Add proper disposal handling
+              editor.onDidDispose(() => {
+                console.log('Editor disposed');
+                editorInstanceRef.current = null;
+              });
+              
               // Configure Monaco to be more permissive with JSON editing
               if (language === 'json') {
                 // Disable JSON validation that might prevent editing
@@ -398,7 +441,7 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
               wordWrap: lineWrap ? 'on' : 'off',
               tabSize: 2,
               automaticLayout: true,
-              fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace",
               fontLigatures: false,
               renderWhitespace: 'selection',
               // Ensure all editing is allowed
@@ -413,7 +456,7 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
               trimAutoWhitespace: false
             }}
           />
-        )}
+        </div>
       </div>
     </div>
   );

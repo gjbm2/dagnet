@@ -225,22 +225,73 @@ export interface EditorProps<T = any> {
 }
 
 /**
- * Graph data structure (existing)
+ * Graph data structure (matches schema/conversion-graph-1.0.0.json)
  */
 export interface GraphData {
   nodes: Array<{
     id: string;
-    type?: string;
-    data: any;
-    position: { x: number; y: number };
+    slug: string;
+    label?: string;
+    description?: string;
+    tags?: string[];
+    type?: 'normal' | 'case';
+    absorbing?: boolean;
+    outcome_type?: 'success' | 'failure' | 'error' | 'neutral' | 'other';
+    entry?: any;
+    costs?: any;
+    residual_behavior?: any;
+    layout?: {
+      x: number;
+      y: number;
+      color?: string;
+    };
+    case?: any;
   }>;
   edges: Array<{
     id: string;
-    source: string;
-    target: string;
-    data?: any;
+    slug?: string;
+    from: string;
+    to: string;
+    fromHandle?: string;
+    toHandle?: string;
+    description?: string;
+    p?: {
+      mean?: number;
+      stdev?: number;
+      locked?: boolean;
+      parameter_id?: string;
+    };
+    conditional_p?: Array<{
+      condition: {
+        visited: string[];
+      };
+      p: {
+        mean?: number;
+        stdev?: number;
+        locked?: boolean;
+        parameter_id?: string;
+      };
+    }>;
+    weight_default?: number;
+    costs?: any;
+    case_variant?: string;
+    case_id?: string;
+    display?: {
+      conditional_color?: string;
+      conditional_group?: string;
+    };
   }>;
-  metadata?: Record<string, any>;
+  policies?: {
+    default_outcome: string;
+    overflow_policy?: 'error' | 'normalize' | 'cap';
+    free_edge_policy?: 'complement' | 'uniform' | 'weighted';
+  };
+  metadata?: {
+    version: string;
+    created_at: string;
+    updated_at?: string;
+    [key: string]: any;
+  };
 }
 
 /**

@@ -1,5 +1,13 @@
 /* Raw View Editor Styles */
 
+/* Global Monaco editor font enforcement */
+.monaco-editor,
+.monaco-editor *,
+.monaco-diff-editor,
+.monaco-diff-editor * {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace !important;
+}
+
 .raw-view-editor {
   display: flex;
   flex-direction: column;
@@ -108,7 +116,7 @@
   border-bottom: 1px solid #ef9a9a;
   color: #c62828;
   font-size: 13px;
-  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Monaco', 'Menlo', 'Consolas', monospace;
   flex-shrink: 0;
 }
 

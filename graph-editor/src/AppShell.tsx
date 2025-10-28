@@ -202,7 +202,7 @@ function AppShellContent() {
               onClick={() => tabOperations.switchTab(tab.id)}
               style={{ width: '100%', height: '100%' }}
             >
-              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} />
+              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} data={null} onChange={() => {}} />
             </div>
           ),
           closable: false,
@@ -259,7 +259,7 @@ function AppShellContent() {
               onClick={() => tabOperations.switchTab(tab.id)}
               style={{ width: '100%', height: '100%' }}
             >
-              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} />
+              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} data={null} onChange={() => {}} />
             </div>
           ),
           closable: false,
@@ -571,7 +571,7 @@ function AppShellContent() {
             }}
             style={{ width: '100%', height: '100%' }}
           >
-            <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} />
+            <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} data={null} onChange={() => {}} />
           </div>
         ),
         closable: false,
