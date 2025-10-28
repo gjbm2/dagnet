@@ -75,7 +75,7 @@ export interface TabState {
     // What-if analysis state (per-tab, not per-file)
     whatIfAnalysis?: any;
     caseOverrides?: Record<string, string>; // nodeId -> variantName
-    conditionalOverrides?: Record<string, number>; // edgeId -> probability
+    conditionalOverrides?: Record<string, Set<string>>; // edgeId -> forced visited nodes (hyperprior activation)
     // Target panel for "Open in X View" placement
     targetPanel?: string;
   };

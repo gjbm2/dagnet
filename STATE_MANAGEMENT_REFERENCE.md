@@ -323,23 +323,100 @@ Edge[] = [{
 - Reconstructs `p: { mean: probability, ... }`
 - Preserves fields from original graph
 
-### What Lives Where
+### State Hierarchy: What Lives Where
 
-#### On Raw Graph (FileState, GraphStore)
-- Node structural properties (slug, label, absorbing, type, case data)
-- Node positions (`layout.x`, `layout.y`)
-- Node colors (`layout.color`)
-- Edge structural properties (from, to, handles, probability, costs)
-- Graph-level metadata (version, created_at, updated_at)
-- Graph-level policies (default_outcome, overflow_policy)
+This is the critical hierarchy for understanding data flow:
 
-#### On ReactFlow State Only
-- **Selection state** (which nodes/edges are selected)
-- **Drag state** (currently dragging)
-- **Zoom/pan state** (viewport transform)
-- **Animation state** (transitions, highlights)
-- **Interaction state** (hover, focus)
-- **Temporary visual state** (connection preview lines)
+```
+┌─────────────────────────────────────────────────────────────┐
+│ LAYER 1: Source Data (Per-File, Shared Across Tabs)       │
+│ ─────────────────────────────────────────────────────────── │
+│ FileState.data & GraphStore.graph (Raw JSON Schema)        │
+│ • Node structural properties (slug, label, type, case)      │
+│ • Node positions (layout.x, layout.y, layout.color)         │
+│ • Edge structural properties (from, to, p.mean, p.stdev)    │
+│ • Conditional probabilities (conditional_p)                 │
+│ • Graph metadata (version, created_at, updated_at)          │
+│ • Graph policies (default_outcome, overflow_policy)         │
+│                                                              │
+│ Storage: FileRegistry (memory) + db.files (IndexedDB)       │
+│ Scope: SHARED - all tabs viewing this file see same data    │
+│ Mutability: Changed by edits, undo/redo, external updates   │
+└─────────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│ LAYER 2: Display Overrides (Per-Tab, Non-Destructive)      │
+│ ─────────────────────────────────────────────────────────── │
+│ TabState.editorState (What-If Analysis)                     │
+│ • whatIfAnalysis (legacy single-case what-if)               │
+│ • caseOverrides: Record<nodeId, variantName>                │
+│ • conditionalOverrides: Record<edgeId, Set<visitedNodes>>   │
+│                                                              │
+│ Effect: Transform how data is DISPLAYED, not the data itself│
+│ Storage: db.tabs (IndexedDB)                                │
+│ Scope: TAB-SPECIFIC - each tab has independent what-ifs     │
+│ Mutability: Changed only by What-If UI controls             │
+│ Persistence: Non-destructive, doesn't affect file.isDirty   │
+└─────────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│ LAYER 3: Presentation State (Per-Tab, ReactFlow)           │
+│ ─────────────────────────────────────────────────────────── │
+│ ReactFlow useNodesState & useEdgesState                     │
+│ • Transformed via toFlow(graph) + what-if overrides         │
+│ • Node.position (from graph.layout + what-if adjustments)   │
+│ • Edge.data.probability (from graph.p + what-if overrides)  │
+│ • Edge widths (computed with what-if pruning/renorm)        │
+│ • Visual styling (colors, highlights, animations)           │
+│ • Selection state (selected nodes/edges)                    │
+│ • Drag state (currently dragging)                           │
+│ • Zoom/pan state (viewport transform)                       │
+│                                                              │
+│ Storage: ReactFlow internal state (memory, non-durable)     │
+│ Scope: TAB-SPECIFIC - each GraphCanvas instance             │
+│ Mutability: Changes on every user interaction               │
+└─────────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│ LAYER 4: Transient Path Analysis (Per-Tab, Ephemeral)      │
+│ ─────────────────────────────────────────────────────────── │
+│ Quick Selection State (not persisted)                       │
+│ • selectedNodesForAnalysis (clicked nodes A, C, E)          │
+│ • Path Analysis panel display (probability, costs)          │
+│ • Additional pruning ON TOP of what-if                      │
+│                                                              │
+│ Storage: Component state only (not in db.tabs)              │
+│ Scope: TAB-SPECIFIC, EPHEMERAL (lost on tab close)          │
+│ Effect: ONLY Path Analysis panel, NOT edge rendering        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Critical Distinctions
+
+**Per-File State (Layer 1)**:
+- The actual graph structure
+- Shared across all tabs viewing the file
+- Changes mark file as dirty
+- Saved to git on commit
+
+**Per-Tab What-If (Layer 2)**:
+- Display transformation layer
+- Independent per tab (Tab 1 can have different what-if than Tab 2)
+- Affects edge widths, tooltips, mass displays IN THAT TAB
+- Does NOT modify underlying graph data
+- Does NOT mark file as dirty
+- Does NOT create history entries
+
+**Per-Tab ReactFlow (Layer 3)**:
+- Rendered visual state
+- Built from Layer 1 + Layer 2
+- Includes selection, drag, zoom (purely visual)
+
+**Per-Tab Quick Selection (Layer 4)**:
+- Temporary calculation overlay
+- ONLY affects Path Analysis panel display
+- Does NOT affect edge rendering
+- Does NOT affect tooltips
 
 #### Critical: Position Syncing
 
@@ -1056,15 +1133,92 @@ Data Flow:
 
 ---
 
+## State Hierarchy Summary
+
+### **The Four-Layer Architecture**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ LAYER 1: SOURCE DATA (Per-File)                             │
+│ What: The actual graph/parameter/context data               │
+│ Where: FileState.data, GraphStore.graph                     │
+│ Scope: SHARED across all tabs viewing the file              │
+│ Example: edge.p.mean = 0.3, node.layout = {x: 100, y: 200}  │
+│ Changes: Mark file dirty, create history, sync to all tabs  │
+└──────────────────────────────────────────────────────────────┘
+                           ↓
+┌──────────────────────────────────────────────────────────────┐
+│ LAYER 2: DISPLAY OVERRIDES (Per-Tab)                        │
+│ What: Non-destructive what-if transformations               │
+│ Where: TabState.editorState (caseOverrides, conditional)    │
+│ Scope: TAB-SPECIFIC - each tab has independent what-ifs     │
+│ Example: "Show me this graph AS IF nodeA was visited"       │
+│ Changes: Affect rendering, DON'T mark dirty, no history     │
+└──────────────────────────────────────────────────────────────┘
+                           ↓
+┌──────────────────────────────────────────────────────────────┐
+│ LAYER 3: VISUAL PRESENTATION (Per-Tab)                      │
+│ What: Rendered graph with what-if applied                   │
+│ Where: ReactFlow nodes/edges state                          │
+│ Scope: TAB-SPECIFIC - built from Layer 1 + Layer 2          │
+│ Example: Edge width = f(base_prob * what_if * renorm)       │
+│ Changes: Purely visual, rebuilt on every render             │
+└──────────────────────────────────────────────────────────────┘
+                           ↓
+┌──────────────────────────────────────────────────────────────┐
+│ LAYER 4: TRANSIENT ANALYSIS (Per-Tab, Ephemeral)            │
+│ What: Quick node selection for path calculations            │
+│ Where: GraphCanvas component state (not persisted)          │
+│ Scope: TAB-SPECIFIC, EPHEMERAL (lost on clear/close)        │
+│ Example: User Cmd+Clicks nodes A, C, E for path analysis    │
+│ Changes: ONLY Path Analysis panel, NOT edge rendering       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### **Key Principle: Non-Destructive Layering**
+
+Each layer **adds to** the previous layer without modifying it:
+
+| Layer | Modifies Previous? | Persisted? | Shared? | Marks Dirty? |
+|-------|-------------------|------------|---------|--------------|
+| 1. File Data | N/A (source) | ✅ IndexedDB + Git | ✅ All tabs | ✅ Yes |
+| 2. What-If | ❌ No | ✅ IndexedDB only | ❌ Per-tab | ❌ No |
+| 3. ReactFlow | ❌ No | ❌ No | ❌ Per-tab | ❌ No |
+| 4. Quick Select | ❌ No | ❌ No | ❌ Per-tab | ❌ No |
+
+### **Example: Same File, Two Tabs**
+
+```
+File: graph-example.json
+  Layer 1 Data: edge.p.mean = 0.5
+
+Tab 1 (Graph View):
+  Layer 2: caseOverrides = { "caseNode": "variantA" }
+  Layer 3: Edge renders with width for p=0.8 (variant weight applied)
+  Layer 4: [no selection]
+  
+Tab 2 (Graph View, same file):
+  Layer 2: {} (no what-if)
+  Layer 3: Edge renders with width for p=0.5 (base)
+  Layer 4: selectedNodes = ["A", "C", "E"]
+  
+Tab 3 (Raw JSON View, same file):
+  Layers 2-4: Not applicable
+  Shows: { "p": { "mean": 0.5 } } (raw data)
+```
+
+**Critical**: Editing Layer 1 in any tab propagates to all tabs. Editing Layer 2 only affects that tab.
+
 ## Conclusion
 
 This state architecture provides:
-- **Single source of truth**: FileState is canonical
+- **Single source of truth**: FileState is canonical (Layer 1)
 - **Per-file stores**: GraphStore shared across tabs viewing same file
-- **Tab independence**: UI state isolated per tab
-- **Clear boundaries**: Raw graph ↔ ReactFlow transform at GraphCanvas
+- **Tab independence**: What-if and UI state isolated per tab (Layer 2)
+- **Non-destructive exploration**: What-if doesn't modify source data
+- **Clear boundaries**: Each layer has defined responsibilities
 - **Robust syncing**: Guards prevent feedback loops
-- **Undo/redo**: Per-editor history stacks
+- **Undo/redo**: Per-editor history stacks (Layer 1 only)
 
 Understanding these patterns is critical for maintaining consistency and avoiding state synchronization bugs as the application grows.
 

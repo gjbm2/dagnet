@@ -44,6 +44,9 @@ interface ConversionEdgeData {
   isHighlighted?: boolean;
   highlightDepth?: number;
   isSingleNodeHighlight?: boolean;
+  // What-if analysis overrides (passed from tab state)
+  caseOverrides?: Record<string, string>;
+  conditionalOverrides?: Record<string, Set<string>>;
 }
 
 export default function ConversionEdge({
@@ -152,8 +155,8 @@ export default function ConversionEdge({
   const { graph } = useGraphStore();
   
   // What-if overrides are now passed through edge.data (from tab state)
-  const caseOverrides = data.caseOverrides || {};
-  const conditionalOverrides = data.conditionalOverrides || {};
+  const caseOverrides = data?.caseOverrides || {};
+  const conditionalOverrides = data?.conditionalOverrides || {};
   
   // Get the full edge object from graph (needed for tooltips and colors)
   const fullEdge = graph?.edges.find((e: any) => e.id === id);

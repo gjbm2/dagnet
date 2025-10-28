@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import ProbabilityInput from './ProbabilityInput';
+import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 
 interface ConditionalProbabilityInputProps {
   value: number;
@@ -30,16 +31,26 @@ export default function ConditionalProbabilityInput({
   inputType = 'number',
   disabled = false
 }: ConditionalProbabilityInputProps) {
+  const { shouldAutoRebalance } = useSnapToSlider();
   
-  const handleRebalance = (newValue: number) => {
+  const handleRebalance = useCallback((newValue: number) => {
     onRebalance(newValue, conditionIndex, allConditions);
-  };
+  }, [onRebalance, conditionIndex, allConditions]);
+  
+  const handleCommit = useCallback((newValue: number) => {
+    // If CTRL is held, skip commit - rebalance will handle everything
+    if (shouldAutoRebalance()) {
+      console.log('ConditionalProbabilityInput: Skipping commit, rebalance will handle it');
+      return;
+    }
+    onCommit(newValue);
+  }, [onCommit, shouldAutoRebalance]);
 
   return (
     <ProbabilityInput
       value={value}
       onChange={onChange}
-      onCommit={onCommit}
+      onCommit={handleCommit}
       onRebalance={handleRebalance}
       onClose={onClose}
       min={0}

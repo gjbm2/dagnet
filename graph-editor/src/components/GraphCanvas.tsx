@@ -56,7 +56,7 @@ interface GraphCanvasProps {
   // What-if analysis state (from tab state, not GraphStore)
   whatIfAnalysis?: any;
   caseOverrides?: Record<string, string>;
-  conditionalOverrides?: Record<string, number>;
+  conditionalOverrides?: Record<string, Set<string>>;
 }
 
 export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, whatIfAnalysis, caseOverrides, conditionalOverrides }: GraphCanvasProps) {
@@ -2852,16 +2852,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }
       });
       
+      // Build set of ALL selected nodes (including start and end for proper OR logic)
+      const allSelected = new Set(allSelectedIds);
+      
       // For each sibling group, prune and renormalize
       siblingGroups.forEach((group, key) => {
         if (group.siblings.length <= 1) return;
         
-        const selectedSiblings = group.siblings.filter(id => interstitialNodes.has(id));
+        // Check against ALL selected nodes (not just interstitials)
+        // This allows paths to the end node even if it's not an interstitial (fixes OR mode)
+        const selectedSiblings = group.siblings.filter(id => allSelected.has(id));
         
-        console.log(`Group ${key}: siblings=[${group.siblings}], interstitial=${selectedSiblings.length}/${group.siblings.length}`);
+        console.log(`Group ${key}: siblings=[${group.siblings}], selected=${selectedSiblings.length}/${group.siblings.length}`);
         
         if (selectedSiblings.length > 0 && selectedSiblings.length < group.siblings.length) {
-          const unselectedSiblings = group.siblings.filter(id => !interstitialNodes.has(id));
+          const unselectedSiblings = group.siblings.filter(id => !allSelected.has(id));
           
           const groupEdges = edges.filter(e => {
             if (group.caseId) {
@@ -2956,14 +2961,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const isSequential = areNodesTopologicallySequential(sortedNodeIds, edges);
       
       // Check if there's a unique start and end based on topological sort
-      // First node in sorted order = start, last node = end if it's absorbing
+      // First node in sorted order = start, last node = end
       const firstNodeId = sortedNodeIds[0];
       const lastNodeId = sortedNodeIds[sortedNodeIds.length - 1];
       const lastNode = selectedNodesForAnalysis.find(n => n.id === lastNodeId);
       
-      const hasUniqueStartEnd = lastNode?.data?.absorbing === true;
+      // Check if last node is an end node (absorbing OR no outgoing edges)
+      const lastNodeHasOutgoing = edges.some(e => e.source === lastNodeId);
+      const lastNodeIsEnd = lastNode?.data?.absorbing === true || !lastNodeHasOutgoing;
       
-      console.log(`3+ nodes check: isSequential=${isSequential}, first=${firstNodeId}, last=${lastNodeId}, lastIsAbsorbing=${lastNode?.data?.absorbing}, hasUniqueStartEnd=${hasUniqueStartEnd}`);
+      // Check if first node is in the selection (ensures we have a defined start point)
+      const firstNodeIsSelected = selectedNodeIds.includes(firstNodeId);
+      
+      // If we have a clear start and end in the selection, treat as path analysis
+      // This handles both sequential (A→B→C) and parallel (A→{B,C}→D) patterns
+      const hasUniqueStartEnd = firstNodeIsSelected && (lastNodeIsEnd || sortedNodeIds.length >= 3);
+      
+      console.log(`3+ nodes check: isSequential=${isSequential}, first=${firstNodeId}, last=${lastNodeId}, lastIsEnd=${lastNodeIsEnd}, hasUniqueStartEnd=${hasUniqueStartEnd}`);
       
       if (isSequential || hasUniqueStartEnd) {
         // Path analysis from first to last through intermediate nodes (sequential or parallel)

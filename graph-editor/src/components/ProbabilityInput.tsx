@@ -115,11 +115,26 @@ export default function ProbabilityInput({
     setDisplayValue(String(snappedValue));
     
     // NO onCommit here - only onChange for real-time updates
-    // onCommit should only be called on blur/enter
+    // onCommit should only be called on mouseUp
     
     // Auto-rebalance if CTRL is held (but no history save)
     if (onRebalance) {
       scheduleRebalance(() => onRebalance(roundTo4DP(snappedValue)));
+    }
+  };
+  
+  const handleSliderMouseUp = () => {
+    // If CTRL was held during drag, rebalance should have been scheduled
+    // Wait for it to complete before committing
+    if (shouldAutoRebalance()) {
+      // Rebalance is scheduled, it will call setGraph and saveHistoryState
+      // Don't call onCommit here as rebalance handles the graph update
+      return;
+    }
+    
+    // No CTRL held - normal commit
+    if (onCommit) {
+      onCommit(value);
     }
   };
 
@@ -239,6 +254,8 @@ export default function ProbabilityInput({
           type="range"
           value={value}
           onChange={handleSliderChange}
+          onMouseUp={handleSliderMouseUp}
+          onTouchEnd={handleSliderMouseUp}
           {...sliderProps}
         />
       )}

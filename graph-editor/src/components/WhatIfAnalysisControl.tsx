@@ -32,7 +32,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
     tabOps.updateTabState(tabId, { caseOverrides: newOverrides });
   };
   
-  const setConditionalOverride = (edgeId: string, value: number | null) => {
+  const setConditionalOverride = (edgeId: string, value: Set<string> | null) => {
     if (!tabId) return;
     const newOverrides = { ...conditionalOverrides };
     if (value === null) {
@@ -200,41 +200,73 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
               </div>
             );
           })}
-          {Object.entries(conditionalOverrides).map(([edgeId, probability]) => {
-            const edge = graph?.edges.find(e => e.id === edgeId);
-            const edgeColor = edge ? (getConditionalColor(edge) || '#4ade80') : '#4ade80';
-            return (
-              <div
-                key={edgeId}
-                style={{
-                  background: edgeColor,
-                  color: 'white',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  fontSize: '11px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
-                }}
-              >
-                <span>🔀 {getConditionalEdgeName(edgeId)}</span>
-                <button
-                  onClick={() => setConditionalOverride(edgeId, null)}
+          {(() => {
+            // Group conditional overrides by condition signature to avoid duplicates
+            const groupedOverrides = new Map<string, { visitedNodes: Set<string>, edgeIds: string[], color: string }>();
+            
+            Object.entries(conditionalOverrides).forEach(([edgeId, visitedNodes]) => {
+              const edge = graph?.edges.find(e => e.id === edgeId);
+              const signature = Array.from(visitedNodes).sort().join(',');
+              
+              if (!groupedOverrides.has(signature)) {
+                groupedOverrides.set(signature, {
+                  visitedNodes,
+                  edgeIds: [edgeId],
+                  color: edge ? (getConditionalColor(edge) || '#4ade80') : '#4ade80'
+                });
+              } else {
+                groupedOverrides.get(signature)!.edgeIds.push(edgeId);
+              }
+            });
+            
+            return Array.from(groupedOverrides.entries()).map(([signature, group]) => {
+              // Display which nodes are forced as visited
+              const nodeNames = Array.from(group.visitedNodes).map(nodeId => {
+                const node = graph?.nodes.find(n => n.id === nodeId);
+                return node?.label || node?.slug || nodeId;
+              }).join(', ');
+              
+              return (
+                <div
+                  key={signature}
                   style={{
-                    background: 'rgba(255,255,255,0.3)',
-                    border: 'none',
+                    background: group.color,
                     color: 'white',
-                    borderRadius: '3px',
-                    cursor: 'pointer',
-                    padding: '0 4px',
-                    fontSize: '11px'
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
                   }}
                 >
-                  ×
-                </button>
-              </div>
-            );
-          })}
+                  <span>🔀 visited({nodeNames})</span>
+                  <button
+                    onClick={() => {
+                      if (!tabId) return;
+                      // Clear ALL edges with this condition
+                      const newOverrides = { ...conditionalOverrides };
+                      group.edgeIds.forEach(edgeId => {
+                        delete newOverrides[edgeId];
+                      });
+                      tabOps.updateTabState(tabId, { conditionalOverrides: newOverrides });
+                    }}
+                    style={{
+                      background: 'rgba(255,255,255,0.3)',
+                      border: 'none',
+                      color: 'white',
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                      padding: '0 4px',
+                      fontSize: '11px'
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            });
+          })()}
         </div>
       )}
 
@@ -370,13 +402,19 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                     </div>
                     <select
                       value={(() => {
-                        if (!anyActive) return '';
-                        const override = conditionalOverrides[group.edges[0].id];
-                        if (override === undefined) return '';
-                        // The override contains IDs, need to find matching option
-                        // Match by comparing resolved IDs
+                        // Find first active edge in group to determine dropdown value
+                        const activeEdge = group.edges.find(e => e.id in conditionalOverrides);
+                        if (!activeEdge) return '';
+                        
+                        const override = conditionalOverrides[activeEdge.id];
+                        if (!override) return '';
+                        
+                        // The override is a Set<string> of forced visited nodes
+                        // Convert to sorted array for comparison
                         const overrideIds = Array.from(override).sort().join(',');
-                        const matchingCond = group.edges[0]?.conditional_p?.find(cond => {
+                        
+                        // Find matching conditional_p option
+                        const matchingCond = activeEdge.conditional_p?.find(cond => {
                           const condIds = cond.condition.visited.map(ref => {
                             const nodeById = graph?.nodes.find(n => n.id === ref);
                             if (nodeById) return nodeById.id;
@@ -386,30 +424,44 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                           }).sort().join(',');
                           return condIds === overrideIds;
                         });
+                        
                         return matchingCond ? matchingCond.condition.visited.join(',') : '';
                       })()}
                       onChange={(e) => {
                         const value = e.target.value;
-                        // Apply to ALL edges in the group
-                        group.edges.forEach(edge => {
-                          if (!value) {
-                            setConditionalOverride(edge.id, null);
-                          } else {
-                            const nodeRefs = value.split(',');
-                            // Resolve all references (could be slugs or IDs) to actual IDs
-                            const resolvedIds = nodeRefs.map(ref => {
-                              // Try to find by ID first
-                              const nodeById = graph?.nodes.find(n => n.id === ref);
-                              if (nodeById) return nodeById.id;
-                              // Try by slug
-                              const nodeBySlug = graph?.nodes.find(n => n.slug === ref);
-                              if (nodeBySlug) return nodeBySlug.id;
-                              // Return as-is if not found
-                              return ref;
-                            });
-                            setConditionalOverride(edge.id, new Set(resolvedIds));
-                          }
-                        });
+                        if (!tabId) return;
+                        
+                        // Update ALL edges in the group at once (not one by one)
+                        const newOverrides = { ...conditionalOverrides };
+                        
+                        if (!value) {
+                          // Clear all edges in group
+                          group.edges.forEach(edge => {
+                            delete newOverrides[edge.id];
+                          });
+                        } else {
+                          // Set override for all edges in group
+                          const nodeRefs = value.split(',');
+                          // Resolve all references (could be slugs or IDs) to actual IDs
+                          const resolvedIds = nodeRefs.map(ref => {
+                            // Try to find by ID first
+                            const nodeById = graph?.nodes.find(n => n.id === ref);
+                            if (nodeById) return nodeById.id;
+                            // Try by slug
+                            const nodeBySlug = graph?.nodes.find(n => n.slug === ref);
+                            if (nodeBySlug) return nodeBySlug.id;
+                            // Return as-is if not found
+                            return ref;
+                          });
+                          
+                          const visitedSet = new Set(resolvedIds);
+                          group.edges.forEach(edge => {
+                            newOverrides[edge.id] = visitedSet;
+                          });
+                        }
+                        
+                        // Single update with all changes
+                        tabOps.updateTabState(tabId, { conditionalOverrides: newOverrides });
                       }}
                       style={{
                         width: '100%',

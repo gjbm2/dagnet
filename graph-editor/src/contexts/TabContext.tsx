@@ -11,6 +11,48 @@ import { db } from '../db/appDatabase';
 import { useDialog } from './DialogContext';
 
 /**
+ * Serialize editorState for IndexedDB storage
+ * Converts Set objects to arrays (IndexedDB doesn't support Set)
+ */
+function serializeEditorState(editorState: any): any {
+  if (!editorState) return editorState;
+  
+  const serialized = { ...editorState };
+  
+  // Convert conditionalOverrides from Record<string, Set<string>> to Record<string, string[]>
+  if (serialized.conditionalOverrides) {
+    const serializedConditional: Record<string, string[]> = {};
+    Object.entries(serialized.conditionalOverrides).forEach(([key, value]) => {
+      serializedConditional[key] = value instanceof Set ? Array.from(value) : value;
+    });
+    serialized.conditionalOverrides = serializedConditional;
+  }
+  
+  return serialized;
+}
+
+/**
+ * Deserialize editorState from IndexedDB
+ * Converts arrays back to Set objects
+ */
+function deserializeEditorState(editorState: any): any {
+  if (!editorState) return editorState;
+  
+  const deserialized = { ...editorState };
+  
+  // Convert conditionalOverrides from Record<string, string[]> to Record<string, Set<string>>
+  if (deserialized.conditionalOverrides) {
+    const deserializedConditional: Record<string, Set<string>> = {};
+    Object.entries(deserialized.conditionalOverrides).forEach(([key, value]) => {
+      deserializedConditional[key] = Array.isArray(value) ? new Set(value) : value;
+    });
+    deserialized.conditionalOverrides = deserializedConditional;
+  }
+  
+  return deserialized;
+}
+
+/**
  * File Registry - Single source of truth for file data
  * Manages files and synchronizes across multiple tabs viewing the same file
  */
@@ -299,15 +341,21 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     const savedTabs = await db.tabs.toArray();
     console.log(`TabContext: Loading ${savedTabs.length} tabs from IndexedDB:`, savedTabs.map(t => t.id));
     
+    // Deserialize editorState for each tab (convert arrays back to Sets)
+    const deserializedTabs = savedTabs.map(tab => ({
+      ...tab,
+      editorState: deserializeEditorState(tab.editorState)
+    }));
+    
     // Load file data for each tab
-    for (const tab of savedTabs) {
+    for (const tab of deserializedTabs) {
       const restored = await fileRegistry.restoreFile(tab.fileId);
       if (restored) {
         console.log(`TabContext: Restored file data for ${tab.fileId}`);
       }
     }
     
-    setTabs(savedTabs);
+    setTabs(deserializedTabs);
 
     const appState = await db.getAppState();
     if (appState?.activeTabId) {
@@ -434,8 +482,12 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(tabId);
 
-    // Persist to IndexedDB
-    await db.tabs.add(newTab);
+    // Persist to IndexedDB (serialize Set objects)
+    const serializedTab = {
+      ...newTab,
+      editorState: serializeEditorState(newTab.editorState)
+    };
+    await db.tabs.add(serializedTab as TabState);
     await db.saveAppState({ activeTabId: tabId });
   }, [tabs]);
 
@@ -553,11 +605,12 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         : tab
     ));
     
-    // Persist to IndexedDB
+    // Persist to IndexedDB (serialize Set objects to arrays)
     const tab = tabs.find(t => t.id === tabId);
     if (tab) {
+      const serializedState = serializeEditorState({ ...tab.editorState, ...editorState });
       await db.tabs.update(tabId, { 
-        editorState: { ...tab.editorState, ...editorState }
+        editorState: serializedState
       });
     }
   }, [tabs]);
@@ -634,7 +687,13 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     await fileRegistry.addViewTab(tab.fileId, newTabId);
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(newTabId);
-    await db.tabs.add(newTab);
+    
+    // Serialize before saving to IndexedDB
+    const serializedTab = {
+      ...newTab,
+      editorState: serializeEditorState(newTab.editorState)
+    };
+    await db.tabs.add(serializedTab as TabState);
   }, [tabs]);
 
   /**

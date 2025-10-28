@@ -13,8 +13,8 @@ type WhatIfOverrides = {
   // Case node overrides: nodeId -> selected variant name
   caseOverrides?: Record<string, string>;
   
-  // Conditional edge overrides: edgeId -> probability value
-  conditionalOverrides?: Record<string, number>;
+  // Conditional edge overrides: edgeId -> forced visited nodes (hyperprior activation)
+  conditionalOverrides?: Record<string, Set<string>>;
 };
 
 type State = {
