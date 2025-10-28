@@ -8,6 +8,7 @@ export type ObjectType =
   | 'parameter' 
   | 'context' 
   | 'case'
+  | 'node'
   | 'credentials'
   | 'settings'
   | 'about'
@@ -99,6 +100,14 @@ export interface NavigatorState {
   expandedSections: string[];  // Which sections are expanded
   availableRepos: string[];    // Available repositories from credentials
   availableBranches: string[]; // Available branches for selected repo
+  
+  // Registry indexes (lightweight metadata catalogs)
+  registryIndexes?: {
+    parameters?: any;  // ParametersIndex from paramRegistryService
+    contexts?: any;    // ContextsIndex from paramRegistryService
+    cases?: any;       // CasesIndex from paramRegistryService
+    nodes?: any;       // NodesIndex from paramRegistryService
+  };
 }
 
 /**

@@ -1,0 +1,92 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Nodes Index Schema
+description: Schema for the nodes registry index file (nodes-index.yaml)
+
+type: object
+required:
+  - version
+  - nodes
+
+properties:
+  version:
+    type: string
+    pattern: ^\d+\.\d+\.\d+$
+    description: Schema version (semver)
+    
+  created_at:
+    type: string
+    format: date-time
+    description: When this index was created
+    
+  updated_at:
+    type: string
+    format: date-time
+    description: When this index was last updated
+    
+  nodes:
+    type: array
+    description: Array of registered nodes
+    items:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          pattern: ^[a-z0-9-]+$
+          description: Unique node identifier
+          
+        file_path:
+          type: string
+          description: Path to the detailed node definition file (optional, null for planned nodes)
+          
+        status:
+          type: string
+          enum: [active, planned, deprecated, archived]
+          default: active
+          description: Status of this node
+          
+        type:
+          type: string
+          description: Optional type classification (e.g., entry, conversion, exit)
+          
+        category:
+          type: string
+          description: Optional category for grouping
+          
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags for search and categorization
+          
+        graphs_using:
+          type: array
+          items:
+            type: string
+          description: List of graph IDs that use this node
+          
+        usage_count:
+          type: number
+          minimum: 0
+          description: How many times this node is referenced
+          
+        created_at:
+          type: string
+          format: date-time
+          description: When this entry was created
+          
+        updated_at:
+          type: string
+          format: date-time
+          description: When this entry was last updated
+          
+        author:
+          type: string
+          description: Author of this entry
+          
+        version:
+          type: string
+          description: Version identifier
+
+

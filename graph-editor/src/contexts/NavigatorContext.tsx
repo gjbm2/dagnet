@@ -26,7 +26,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     searchQuery: '',
     selectedRepo: '',
     selectedBranch: '',
-    expandedSections: ['graphs', 'parameters', 'contexts', 'cases'],
+    expandedSections: ['graphs', 'parameters', 'contexts', 'cases', 'nodes'],
     availableRepos: [],
     availableBranches: []
   });
@@ -519,15 +519,41 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
             }
           });
         }
+        
+        // Load nodes from nodes/ directory
+        console.log('Navigator: Loading nodes from /nodes directory...');
+        const nodesPath = gitCreds.basePath ? `${gitCreds.basePath}/nodes` : 'nodes';
+        const nodesResult = await gitService.getDirectoryContents(nodesPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+        
+        if (nodesResult.success && nodesResult.data && Array.isArray(nodesResult.data)) {
+          console.log('Navigator: Found', nodesResult.data.length, 'files in nodes/');
+          nodesResult.data.forEach((file: any) => {
+            if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              // Only add if not already in items from registry
+              const alreadyAdded = items.some(i => i.type === 'node' && i.id === file.name);
+              if (!alreadyAdded) {
+                console.log('Navigator: Adding node:', file.name);
+                items.push({
+                  id: file.name,
+                  type: 'node',
+                  name: file.name,
+                  path: file.path,
+                  description: `Node from ${branch}`
+                });
+              }
+            }
+          });
+        }
       } catch (dirError) {
-        console.warn('Failed to load contexts/cases from directories:', dirError);
+        console.warn('Failed to load contexts/cases/nodes from directories:', dirError);
       }
       
       console.log('Total items loaded:', items.length, {
         graphs: items.filter(i => i.type === 'graph').length,
         parameters: items.filter(i => i.type === 'parameter').length,
         contexts: items.filter(i => i.type === 'context').length,
-        cases: items.filter(i => i.type === 'case').length
+        cases: items.filter(i => i.type === 'case').length,
+        nodes: items.filter(i => i.type === 'node').length
       });
       
       setItems(items);
