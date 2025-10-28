@@ -14,6 +14,7 @@ export interface RegistryConfig {
   gitBasePath?: string;  // e.g., 'params' or 'param-registry'
   gitRepoOwner?: string;
   gitRepoName?: string;
+  gitToken?: string;  // GitHub token for authentication
 }
 
 export interface Context {
@@ -178,8 +179,10 @@ class ParamRegistryService {
       'Content-Type': 'application/json',
     };
     
-    if (gitConfig.githubToken && gitConfig.githubToken.trim() !== '') {
-      headers['Authorization'] = `token ${gitConfig.githubToken}`;
+    // Use provided token first, then fall back to gitConfig
+    const token = this.config.gitToken || gitConfig.githubToken;
+    if (token && token.trim() !== '') {
+      headers['Authorization'] = `token ${token}`;
     }
     
     console.log(`Loading from GitHub: ${repoOwner}/${repoName} - ${fullPath}`);

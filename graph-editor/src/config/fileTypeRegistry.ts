@@ -7,7 +7,7 @@
 
 export interface FileTypeConfig {
   /** The type identifier (matches ObjectType) */
-  type: 'graph' | 'parameter' | 'context' | 'case';
+  type: 'graph' | 'parameter' | 'context' | 'case' | 'credentials' | 'settings';
   
   /** Display name (singular) */
   displayName: string;
@@ -51,7 +51,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     type: 'graph',
     displayName: 'Graph',
     displayNamePlural: 'Graphs',
-    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/conversion-graph-1.0.0.json',
+    schemaFile: '/schemas/conversion-graph-1.0.0.json',
     directory: 'graphs',
     extensions: ['.json'],
     icon: '📊',
@@ -64,7 +64,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     type: 'parameter',
     displayName: 'Parameter',
     displayNamePlural: 'Parameters',
-    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/param-registry/schemas/parameter-schema.yaml',
+    schemaFile: '/param-schemas/parameter-schema.yaml',
     directory: 'params',
     alternativeDirectories: ['parameters'],
     indexFile: 'parameters-index.yaml',
@@ -79,7 +79,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     type: 'context',
     displayName: 'Context',
     displayNamePlural: 'Contexts',
-    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/param-registry/schemas/context-definition-schema.yaml',
+    schemaFile: '/param-schemas/context-definition-schema.yaml',
     directory: 'contexts',
     indexFile: 'contexts-index.yaml',
     extensions: ['.yaml', '.yml', '.json'],
@@ -93,7 +93,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     type: 'case',
     displayName: 'Case',
     displayNamePlural: 'Cases',
-    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/param-registry/schemas/case-parameter-schema.yaml',
+    schemaFile: '/param-schemas/case-parameter-schema.yaml',
     directory: 'cases',
     indexFile: 'cases-index.yaml',
     extensions: ['.yaml', '.yml', '.json'],
@@ -107,7 +107,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     type: 'credentials',
     displayName: 'Credentials',
     displayNamePlural: 'Credentials',
-    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/credentials-schema.json',
+    schemaFile: '/schemas/credentials-schema.json',
     directory: 'credentials',
     extensions: ['.yaml', '.yml', '.json'],
     icon: '🔐',

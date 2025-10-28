@@ -2,7 +2,6 @@ import { ObjectType } from '../../types';
 import { GraphEditor } from './GraphEditor';
 import { FormEditor } from './FormEditor';
 import { RawView } from './RawView';
-import SettingsTab from '../SettingsTab';
 import { getFileTypeConfig } from '../../config/fileTypeRegistry';
 
 /**
@@ -16,7 +15,6 @@ const EDITOR_COMPONENTS = {
   graph: GraphEditor,
   form: FormEditor,
   raw: RawView,
-  settings: SettingsTab
 };
 
 /**
@@ -31,7 +29,7 @@ export function getEditorComponent(type: ObjectType | 'settings', viewMode: 'int
   
   // Special case for settings interactive view
   if (type === 'settings') {
-    return SettingsTab;
+    return FormEditor;
   }
   
   // Interactive views - consult FILE_TYPE_REGISTRY

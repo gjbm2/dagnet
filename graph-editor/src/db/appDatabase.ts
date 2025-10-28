@@ -53,14 +53,16 @@ export class AppDatabase extends Dexie {
       await this.appState.add({
         id: 'app-state',
         dockLayout: null, // Will be set by rc-dock
-        navigatorState: {
-          isOpen: false,
-          isPinned: false,
-          searchQuery: '',
-          selectedRepo: '',
-          selectedBranch: '',
-          expandedSections: []
-        },
+      navigatorState: {
+        isOpen: false,
+        isPinned: false,
+        searchQuery: '',
+        selectedRepo: '',
+        selectedBranch: '',
+        expandedSections: [],
+        availableRepos: [],
+        availableBranches: []
+      },
         updatedAt: Date.now()
       });
     }
@@ -91,7 +93,15 @@ export class AppDatabase extends Dexie {
    * Clear all data (useful for testing or reset)
    */
   async clearAll(): Promise<void> {
+    // Clear all files except credentials
+    const credentialsFile = await this.files.get('credentials-credentials');
     await this.files.clear();
+    
+    // Restore credentials file if it existed
+    if (credentialsFile) {
+      await this.files.add(credentialsFile);
+    }
+    
     await this.tabs.clear();
     await this.appState.clear();
     // Don't clear settings or credentials - user preferences should persist

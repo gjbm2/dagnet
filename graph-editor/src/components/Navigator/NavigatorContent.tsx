@@ -83,8 +83,9 @@ export function NavigatorContent() {
             className="navigator-select"
           >
             <option value="">Select repository...</option>
-            <option value="dagnet">dagnet</option>
-            <option value="<private-repo>"><private-repo></option>
+            {state.availableRepos?.map(repo => (
+              <option key={repo} value={repo}>{repo}</option>
+            ))}
           </select>
         </div>
 
@@ -94,9 +95,12 @@ export function NavigatorContent() {
             value={state.selectedBranch}
             onChange={(e) => operations.selectBranch(e.target.value)}
             className="navigator-select"
+            disabled={!state.selectedRepo || !state.availableBranches || state.availableBranches.length === 0}
           >
-            <option value="main">main</option>
-            <option value="develop">develop</option>
+            <option value="">Select branch...</option>
+            {state.availableBranches?.map(branch => (
+              <option key={branch} value={branch}>{branch}</option>
+            ))}
           </select>
         </div>
       </div>
