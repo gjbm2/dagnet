@@ -122,11 +122,11 @@ class FileRegistry {
     file.data = newData;
     const wasDirty = file.isDirty;
     
-    // Special handling for settings files - they are always persisted immediately
+    // Special handling for settings and credentials files - they are always persisted immediately
     // so they should never be marked as dirty
-    if (fileId === 'settings-settings') {
+    if (fileId === 'settings-settings' || fileId === 'credentials-credentials') {
       file.isDirty = false;
-      // Update originalData to match current data since settings are auto-saved
+      // Update originalData to match current data since these are auto-saved
       file.originalData = structuredClone(newData);
     } else {
       file.isDirty = newDataStr !== originalDataStr;
@@ -353,11 +353,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     const existingFile = fileRegistry.getFile(credentialsFileId);
     
     if (!existingFile) {
+      // Check if credentials are loaded from URL - if so, don't create a file
+      const { credentialsManager } = await import('../lib/credentials');
+      const credentialsResult = await credentialsManager.loadCredentials();
+      
+      if (credentialsResult.success && credentialsResult.source === 'url') {
+        console.log('TabContext: Credentials loaded from URL, skipping file creation');
+        return;
+      }
+      
       // Create credentials file with empty data - defaults come from schema
       console.log('TabContext: Creating credentials file from schema defaults');
       await fileRegistry.getOrCreateFile(credentialsFileId, 'credentials', { repository: 'local', path: 'credentials.yaml', branch: 'main' }, {
         version: '1.0.0',
-        defaultGitRepo: 'nous-conversion',
+        defaultGitRepo: '',
         git: []
       });
     }
@@ -560,6 +569,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     try {
       if (item.type === 'graph') {
         console.log(`TabContext: Loading graph ${item.name}...`);
+        
+        // Load credentials to configure gitService
+        const { credentialsManager } = await import('../lib/credentials');
+        const credentialsResult = await credentialsManager.loadCredentials();
+        
+        if (credentialsResult.success && credentialsResult.credentials) {
+          console.log(`TabContext: Configuring gitService with credentials`);
+          // Configure gitService with credentials
+          const { gitService } = await import('../services/gitService');
+          gitService.setCredentials(credentialsResult.credentials);
+        } else {
+          console.warn('TabContext: No credentials available for graph loading');
+        }
+        
         const { graphGitService } = await import('../services/graphGitService');
         const result = await graphGitService.getGraph(item.name, 'main');
         console.log(`TabContext: Graph load result:`, result);
@@ -573,14 +596,28 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         console.log(`TabContext: Loading ${item.type} ${item.name}...`);
         const { paramRegistryService } = await import('../services/paramRegistryService');
         
-        // Configure the service for nous-conversion repository
-        paramRegistryService.setConfig({
-          source: 'git',
-          gitBasePath: '',
-          gitBranch: 'main',
-          gitRepoOwner: 'gjbm2',
-          gitRepoName: 'nous-conversion'
-        });
+        // Load credentials to configure the service
+        const { credentialsManager } = await import('../lib/credentials');
+        const credentialsResult = await credentialsManager.loadCredentials();
+        
+        if (credentialsResult.success && credentialsResult.credentials) {
+          const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === 'nous-conversion') || credentialsResult.credentials.git[0];
+          if (gitCreds) {
+            console.log(`TabContext: Configuring paramRegistryService with credentials for ${gitCreds.name}`);
+            paramRegistryService.setConfig({
+              source: 'git',
+              gitBasePath: gitCreds.basePath || '',
+              gitBranch: gitCreds.branch || 'main',
+              gitRepoOwner: gitCreds.owner,
+              gitRepoName: gitCreds.repo,
+              gitToken: gitCreds.token
+            });
+          } else {
+            console.warn('TabContext: No git credentials found for paramRegistryService');
+          }
+        } else {
+          console.warn('TabContext: No credentials available for paramRegistryService');
+        }
         
         // Load based on type
         try {
@@ -611,7 +648,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       fileId,
       item.type,
       {
-        repository: 'nous-conversion',
+        repository: 'local',
         path: item.path,
         branch: 'main'
       },

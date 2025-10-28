@@ -9,6 +9,7 @@ export type ObjectType =
   | 'context' 
   | 'case'
   | 'credentials'
+  | 'settings'
   | 'about';
 
 /**
@@ -95,6 +96,8 @@ export interface NavigatorState {
   selectedRepo: string;
   selectedBranch: string;
   expandedSections: string[];  // Which sections are expanded
+  availableRepos: string[];    // Available repositories from credentials
+  availableBranches: string[]; // Available branches for selected repo
 }
 
 /**

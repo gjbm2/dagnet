@@ -55,7 +55,7 @@ export function FileMenu() {
     // Open existing credentials file
     const credentialsItem = {
       id: 'credentials',
-      type: 'credentials',
+      type: 'credentials' as const,
       name: 'Credentials',
       path: 'credentials.yaml'
     };
@@ -188,9 +188,11 @@ export function FileMenu() {
     try {
       console.log('Clearing all application data and settings...');
       
-      // Clear all data including settings
-      await db.clearAll();
-      await db.settings.clear();
+      // Clear all data including settings and credentials
+      await db.clearAllIncludingSettings();
+      
+      // Set a flag to prevent re-initialization
+      sessionStorage.setItem('dagnet_cleared_all', 'true');
       
       console.log('All application data and settings cleared');
       

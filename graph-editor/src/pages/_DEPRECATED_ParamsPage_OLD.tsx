@@ -196,7 +196,7 @@ export default function ParamsPage() {
         schemaData = await paramRegistryService.loadSchema('case-parameter-schema.yaml');
       } else if (selectedObjectType === 'graphs') {
         // Load graph schema from GitHub
-        const response = await fetch('https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/conversion-graph-1.0.0.json');
+        const response = await fetch('/schemas/conversion-graph-1.0.0.json');
         if (!response.ok) {
           throw new Error('Failed to load graph schema');
         }

@@ -11,13 +11,13 @@ export interface GitConfig {
   debugGitOperations: boolean;
 }
 
-// Default configuration - FORCE VERCEL REBUILD
+// Default configuration - no hardcoded values
 const defaultConfig: GitConfig = {
-  repoOwner: 'gjbm2',
-  repoName: 'nous-conversion', // FORCE VERCEL REBUILD
+  repoOwner: '',
+  repoName: '',
   branch: 'main',
   graphsPath: 'graphs',
-  paramsPath: 'params',
+  paramsPath: 'parameters',
   githubApiBase: 'https://api.github.com',
   githubToken: undefined,
   devMode: true,
@@ -38,20 +38,8 @@ export function loadGitConfig(): GitConfig {
     debugGitOperations: import.meta.env.VITE_DEBUG_GIT_OPERATIONS === 'true' || defaultConfig.debugGitOperations,
   };
 
-  // Always log for debugging
+  // Log configuration for debugging
   console.log('Git Configuration:', config);
-  console.log('Environment variables available:', {
-    VITE_GIT_REPO_OWNER: import.meta.env.VITE_GIT_REPO_OWNER,
-    VITE_GIT_REPO_NAME: import.meta.env.VITE_GIT_REPO_NAME,
-    VITE_GIT_REPO_BRANCH: import.meta.env.VITE_GIT_REPO_BRANCH,
-    VITE_GIT_GRAPHS_PATH: import.meta.env.VITE_GIT_GRAPHS_PATH,
-    VITE_GITHUB_TOKEN: import.meta.env.VITE_GITHUB_TOKEN ? '***SET***' : 'NOT SET',
-  });
-  console.log('Raw VITE_GITHUB_TOKEN:', import.meta.env.VITE_GITHUB_TOKEN);
-  console.log('All import.meta.env:', import.meta.env);
-  console.log('=== FORCE VERCEL REBUILD - CHECKING REPO NAME ===');
-  console.log('Final repoName:', config.repoName);
-  console.log('Final repoOwner:', config.repoOwner);
 
   return config;
 }

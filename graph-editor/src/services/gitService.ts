@@ -69,6 +69,14 @@ class GitService {
   }
 
   /**
+   * Update credentials and current repo
+   */
+  setCredentials(credentials: CredentialsData): void {
+    this.credentials = credentials;
+    this.setCurrentRepo();
+  }
+
+  /**
    * Get base URL dynamically to support repo switching
    */
   private getBaseUrl(repoOwner?: string, repoName?: string): string {
@@ -77,7 +85,7 @@ class GitService {
     return `${this.config.githubApiBase}/repos/${owner}/${name}`;
   }
 
-  private async makeRequest(endpoint: string, options: RequestInit = {}, repoOwner?: string, repoName?: string): Promise<Response> {
+  private async makeRequest(endpoint: string, options: RequestInit = {}, repoOwner?: string, repoName?: string, token?: string): Promise<Response> {
     const baseUrl = this.getBaseUrl(repoOwner, repoName);
     const url = `${baseUrl}${endpoint}`;
     
@@ -90,10 +98,13 @@ class GitService {
     console.log('GitService config:', this.config);
     console.log('GitService githubToken:', this.config.githubToken ? 'SET' : 'NOT SET');
 
-    // Use token from credentials or fall back to config
-    const token = this.currentRepo?.token || this.config.githubToken;
-    if (token && token.trim() !== '') {
-      headers['Authorization'] = `token ${token}`;
+    // Use provided token, or token from credentials, or fall back to config
+    const authToken = token || this.currentRepo?.token || this.config.githubToken;
+    if (authToken && authToken.trim() !== '') {
+      headers['Authorization'] = `token ${authToken}`;
+      console.log('GitService: Using token for authentication');
+    } else {
+      console.log('GitService: No token available for authentication');
     }
 
     if (this.config.debugGitOperations) {
@@ -114,9 +125,9 @@ class GitService {
   }
 
   // Get all branches
-  async getBranches(): Promise<GitOperationResult> {
+  async getBranches(repoOwner?: string, repoName?: string, token?: string): Promise<GitOperationResult> {
     try {
-      const response = await this.makeRequest('/branches');
+      const response = await this.makeRequest('/branches', {}, repoOwner, repoName, token);
       const branches: GitBranch[] = await response.json();
       
       if (this.config.debugGitOperations) {
@@ -138,9 +149,9 @@ class GitService {
   }
 
   // Get files in a directory
-  async getDirectoryContents(path: string, branch: string = this.config.branch, repoOwner?: string, repoName?: string): Promise<GitOperationResult> {
+  async getDirectoryContents(path: string, branch: string = this.config.branch, repoOwner?: string, repoName?: string, token?: string): Promise<GitOperationResult> {
     try {
-      const response = await this.makeRequest(`/contents/${path}?ref=${branch}`, {}, repoOwner, repoName);
+      const response = await this.makeRequest(`/contents/${path}?ref=${branch}`, {}, repoOwner, repoName, token);
       const files: GitFile[] = await response.json();
       
       if (this.config.debugGitOperations) {
