@@ -835,12 +835,16 @@ function AppShellContent() {
                 justifyContent: 'center',
                 background: '#fafafa',
                 zIndex: 0, /* Behind everything */
-                pointerEvents: 'none'
+                pointerEvents: 'auto' // Allow clicking on links
               }}>
                 <h1 style={{ fontSize: '32px', marginBottom: '16px', color: '#333' }}>DagNet</h1>
                 <p style={{ fontSize: '14px', marginBottom: '24px', color: '#666' }}>Conversion Graph Editor</p>
                 <p style={{ fontSize: '12px', color: '#999' }}>Open a file from the Navigator to get started</p>
-                <p style={{ fontSize: '11px', color: '#aaa', marginTop: '40px' }}>Press Cmd/Ctrl+O or Cmd/Ctrl+B to open Navigator</p>
+                <p style={{ fontSize: '11px', color: '#aaa', marginTop: '40px' }}>
+                  <a href="mailto:greg@nous.co" style={{ color: '#aaa', textDecoration: 'none' }}>
+                    greg@nous.co
+                  </a> for support
+                </p>
               </div>
             )}
           </>

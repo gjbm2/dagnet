@@ -1,0 +1,20 @@
+{
+  "files": [
+    "CREDENTIALS_IMPLEMENTATION_STATUS.md",
+    "CREDENTIALS_INIT_FLOW.md",
+    "CREDENTIALS_UNIFIED_IMPLEMENTATION.md",
+    "QUICK-RUNNER.md",
+    "SETTINGS_AUTH_STRATEGY.md",
+    "STATE_MANAGEMENT_REFERENCE.md",
+    "URL_PARAMS.md",
+    "api-reference.md",
+    "user-guide.md",
+    "what-ifs-with-conditionals.md"
+  ],
+  "exclude": [
+    "about.md",
+    "keyboard-shortcuts.md",
+    "index.json"
+  ],
+  "generated_at": "2025-10-28T21:11:26.205Z"
+}

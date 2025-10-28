@@ -7,7 +7,7 @@
 
 export interface FileTypeConfig {
   /** The type identifier (matches ObjectType) */
-  type: 'graph' | 'parameter' | 'context' | 'case' | 'credentials' | 'settings';
+  type: 'graph' | 'parameter' | 'context' | 'case' | 'credentials' | 'settings' | 'markdown';
   
   /** Display name (singular) */
   displayName: string;
@@ -126,6 +126,19 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     extensions: ['.yaml', '.yml', '.json'],
     icon: '⚙️',
     interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+
+  markdown: {
+    type: 'markdown',
+    displayName: 'Markdown',
+    displayNamePlural: 'Markdown',
+    schemaFile: '', // No schema needed for markdown
+    directory: 'docs',
+    extensions: ['.md', '.markdown'],
+    icon: '📝',
+    interactiveEditor: 'form', // Will use RawView for markdown
     supportsInteractiveEdit: true,
     supportsRawEdit: true
   }
