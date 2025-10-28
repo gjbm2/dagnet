@@ -65,8 +65,8 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     displayName: 'Parameter',
     displayNamePlural: 'Parameters',
     schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/param-registry/schemas/parameter-schema.yaml',
-    directory: 'parameters',
-    alternativeDirectories: ['params'],
+    directory: 'params',
+    alternativeDirectories: ['parameters'],
     indexFile: 'parameters-index.yaml',
     extensions: ['.yaml', '.yml', '.json'],
     icon: '📋',
@@ -98,6 +98,33 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     indexFile: 'cases-index.yaml',
     extensions: ['.yaml', '.yml', '.json'],
     icon: '📦',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
+  credentials: {
+    type: 'credentials',
+    displayName: 'Credentials',
+    displayNamePlural: 'Credentials',
+    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/graph-editor/src/schemas/credentials-schema.json',
+    directory: 'credentials',
+    extensions: ['.yaml', '.yml', '.json'],
+    icon: '🔐',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
+  settings: {
+    type: 'settings',
+    displayName: 'Settings',
+    displayNamePlural: 'Settings',
+    schemaFile: '/src/schemas/settings-schema.json',
+    directory: 'data',
+    indexFile: 'settings.yaml',
+    extensions: ['.yaml', '.yml', '.json'],
+    icon: '⚙️',
     interactiveEditor: 'form',
     supportsInteractiveEdit: true,
     supportsRawEdit: true

@@ -2,6 +2,7 @@ import { ObjectType } from '../../types';
 import { GraphEditor } from './GraphEditor';
 import { FormEditor } from './FormEditor';
 import { RawView } from './RawView';
+import SettingsTab from '../SettingsTab';
 import { getFileTypeConfig } from '../../config/fileTypeRegistry';
 
 /**
@@ -14,21 +15,27 @@ import { getFileTypeConfig } from '../../config/fileTypeRegistry';
 const EDITOR_COMPONENTS = {
   graph: GraphEditor,
   form: FormEditor,
-  raw: RawView
+  raw: RawView,
+  settings: SettingsTab
 };
 
 /**
  * Get editor component for a given type and view mode.
  * Queries FILE_TYPE_REGISTRY to determine which editor to use.
  */
-export function getEditorComponent(type: ObjectType, viewMode: 'interactive' | 'raw-json' | 'raw-yaml') {
-  // Raw views always use RawView component
+export function getEditorComponent(type: ObjectType | 'settings', viewMode: 'interactive' | 'raw-json' | 'raw-yaml') {
+  // Raw views always use RawView component (including settings)
   if (viewMode === 'raw-json' || viewMode === 'raw-yaml') {
     return RawView;
   }
   
+  // Special case for settings interactive view
+  if (type === 'settings') {
+    return SettingsTab;
+  }
+  
   // Interactive views - consult FILE_TYPE_REGISTRY
-  const config = getFileTypeConfig(type);
+  const config = getFileTypeConfig(type as ObjectType);
   if (config?.interactiveEditor) {
     return EDITOR_COMPONENTS[config.interactiveEditor];
   }

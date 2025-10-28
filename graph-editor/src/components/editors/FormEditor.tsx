@@ -28,7 +28,7 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   const [canRedo, setCanRedo] = useState(false);
 
   // Determine object type from fileId
-  const objectType = fileId.split('-')[0] as 'parameter' | 'context' | 'case';
+  const objectType = fileId.split('-')[0] as 'parameter' | 'context' | 'case' | 'credentials';
 
   // Load schema based on object type (using central registry)
   useEffect(() => {

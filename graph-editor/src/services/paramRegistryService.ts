@@ -260,7 +260,7 @@ class ParamRegistryService {
       const repoName = this.config.gitRepoName || gitConfig.repoName;
       const branch = this.config.gitBranch || gitConfig.branch;
       const basePath = this.config.gitBasePath;
-      const graphsPath = basePath ? `${basePath}/graphs` : 'graphs';
+      const graphsPath = basePath ? `${basePath}/${gitConfig.graphsPath}` : gitConfig.graphsPath;
       
       const apiUrl = `${gitConfig.githubApiBase}/repos/${repoOwner}/${repoName}/contents/${graphsPath}?ref=${branch}`;
       
