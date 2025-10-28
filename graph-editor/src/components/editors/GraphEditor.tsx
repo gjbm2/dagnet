@@ -6,8 +6,6 @@ import GraphCanvas from '../GraphCanvas';
 import PropertiesPanel from '../PropertiesPanel';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import WhatIfAnalysisHeader from '../WhatIfAnalysisHeader';
-import JsonSection from '../JsonSection';
-import JsonSectionHeader from '../JsonSectionHeader';
 import CollapsibleSection from '../CollapsibleSection';
 
 /**
@@ -29,7 +27,6 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const [sidebarOpen, setSidebarOpen] = useState(tabState.sidebarOpen ?? true);
   const [whatIfOpen, setWhatIfOpen] = useState(tabState.whatIfOpen ?? false);
   const [propertiesOpen, setPropertiesOpen] = useState(tabState.propertiesOpen ?? true);
-  const [jsonOpen, setJsonOpen] = useState(tabState.jsonOpen ?? false);
   const [useUniformScaling, setUseUniformScaling] = useState(tabState.useUniformScaling ?? false);
   const [massGenerosity, setMassGenerosity] = useState(tabState.massGenerosity ?? 0.5);
   const [autoReroute, setAutoReroute] = useState(tabState.autoReroute ?? true);
@@ -432,15 +429,6 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                 onSelectedEdgeChange={setSelectedEdgeId}
                 tabId={tabId}
               />
-            </CollapsibleSection>
-
-            {/* JSON Section */}
-            <CollapsibleSection 
-              title={<JsonSectionHeader />} 
-              isOpen={jsonOpen}
-              onToggle={() => setJsonOpen(!jsonOpen)}
-            >
-              <JsonSection />
             </CollapsibleSection>
           </div>
         </div>

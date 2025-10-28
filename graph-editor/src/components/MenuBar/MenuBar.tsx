@@ -4,7 +4,7 @@ import { FileMenu } from './FileMenu';
 import { EditMenu } from './EditMenu';
 import { ViewMenu } from './ViewMenu';
 import { ObjectsMenu } from './ObjectsMenu';
-import { GitMenu } from './GitMenu';
+import { RepositoryMenu } from './RepositoryMenu';
 import { HelpMenu } from './HelpMenu';
 import './MenuBar.css';
 
@@ -21,7 +21,7 @@ export function MenuBarComponent() {
         <EditMenu />
         <ViewMenu />
         <ObjectsMenu />
-        <GitMenu />
+        <RepositoryMenu />
         <HelpMenu />
       </Menubar.Root>
     </div>

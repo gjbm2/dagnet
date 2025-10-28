@@ -4,6 +4,10 @@ import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { db } from '../../db/appDatabase';
 import { encodeStateToUrl } from '../../lib/shareUrl';
+import { CommitModal } from '../CommitModal';
+import { NewFileModal } from '../NewFileModal';
+import { gitService } from '../../services/gitService';
+import { ObjectType } from '../../types';
 
 /**
  * File Menu
@@ -19,25 +23,193 @@ import { encodeStateToUrl } from '../../lib/shareUrl';
  */
 export function FileMenu() {
   const { activeTabId, tabs, operations } = useTabContext();
-  const { operations: navOps } = useNavigatorContext();
+  const { operations: navOps, state: navState } = useNavigatorContext();
 
   const activeTab = tabs.find(t => t.id === activeTabId);
-  const hasDirtyTabs = operations.getDirtyTabs().length > 0;
   const isGraphTab = activeTab?.fileId.startsWith('graph-');
   
   // Get isDirty state for active tab
   const activeFile = activeTab ? fileRegistry.getFile(activeTab.fileId) : null;
   const isDirty = activeFile?.isDirty ?? false;
 
-  const handleNew = (type: string) => {
-    // TODO: Implement new file creation
-    console.log('New', type);
+  // Commit modal state
+  const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
+  const [commitModalPreselectedFiles, setCommitModalPreselectedFiles] = useState<string[]>([]);
+  
+  // New file modal state
+  const [isNewFileModalOpen, setIsNewFileModalOpen] = useState(false);
+  const [newFileType, setNewFileType] = useState<ObjectType | undefined>(undefined);
+  
+  // Track dirty tabs - update when tabs or files change
+  const [hasDirtyTabs, setHasDirtyTabs] = useState(false);
+  
+  // Listen for file dirty state changes
+  React.useEffect(() => {
+    const updateDirtyState = () => {
+      setHasDirtyTabs(operations.getDirtyTabs().length > 0);
+    };
+    
+    // Update immediately
+    updateDirtyState();
+    
+    // Listen for dirty state changes
+    const handleDirtyChange = () => {
+      updateDirtyState();
+    };
+    
+    window.addEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
+    return () => window.removeEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
+  }, [tabs, operations]);
+
+  const handleNew = (type: ObjectType) => {
+    setNewFileType(type);
+    setIsNewFileModalOpen(true);
+  };
+  
+  const handleCreateFile = async (name: string, type: ObjectType) => {
+    // Create a new file with default content based on type
+    const fileId = `${type}-${name}`;
+    
+    let defaultData: any;
+    if (type === 'graph') {
+      defaultData = {
+        nodes: [],
+        edges: [],
+        policies: {
+          default_outcome: 'abandon',
+          overflow_policy: 'error',
+          free_edge_policy: 'complement'
+        },
+        metadata: {
+          version: '1.0.0',
+          created_at: new Date().toISOString(),
+          author: 'Graph Editor',
+          description: '',
+          name: `${name}.json`
+        }
+      };
+    } else {
+      // YAML files (parameter, context, case)
+      defaultData = {
+        id: name,
+        name: name,
+        description: '',
+        created_at: new Date().toISOString()
+      };
+    }
+    
+    // Create file in registry
+    await fileRegistry.getOrCreateFile(
+      fileId,
+      type,
+      { repository: 'local', path: `${type}s/${name}`, branch: navState.selectedBranch || 'main' },
+      defaultData
+    );
+    
+    // Add to navigator as local/uncommitted item
+    const item = {
+      id: name,
+      type: type,
+      name: name,
+      path: `${type}s/${name}.${type === 'graph' ? 'json' : 'yaml'}`,
+      description: '',
+      isLocal: true
+    };
+    
+    navOps.addLocalItem(item);
+    
+    // Open the new file in a tab
+    await operations.openTab(item, 'interactive');
   };
 
   const handleOpen = () => {
     navOps.toggleNavigator();
   };
 
+
+  const handleCommitChanges = () => {
+    // Open commit modal for dirty files
+    setCommitModalPreselectedFiles([]); // Empty means select all dirty files
+    setIsCommitModalOpen(true);
+  };
+
+  const handleCommitAllChanges = () => {
+    // Open commit modal with all dirty files
+    setCommitModalPreselectedFiles([]); // Empty means select all dirty files
+    setIsCommitModalOpen(true);
+  };
+
+  const handlePullLatest = async () => {
+    try {
+      const result = await gitService.pullLatest();
+      if (result.success) {
+        console.log('Pull successful:', result.message);
+        // TODO: Refresh navigator content - for now just log success
+      } else {
+        alert(`Pull failed: ${result.error}`);
+      }
+    } catch (error) {
+      alert(`Pull failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleViewHistory = () => {
+    // TODO: Open history view for current file
+    console.log('View history');
+  };
+
+  const handleCommitFiles = async (files: any[], message: string, branch: string) => {
+    try {
+      // Load credentials to get repo info
+      const { credentialsManager } = await import('../../lib/credentials');
+      const credentialsResult = await credentialsManager.loadCredentials();
+      
+      if (!credentialsResult.success || !credentialsResult.credentials) {
+        throw new Error('No credentials available. Please configure credentials first.');
+      }
+
+      // Get credentials for selected repo
+      const selectedRepo = navState.selectedRepo;
+      const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
+      
+      if (!gitCreds) {
+        throw new Error(`No credentials found for repository ${selectedRepo}`);
+      }
+
+      // Set credentials on gitService with selected repo as default
+      const credentialsWithRepo = {
+        ...credentialsResult.credentials,
+        defaultGitRepo: selectedRepo
+      };
+      gitService.setCredentials(credentialsWithRepo);
+
+      // Prepare files with proper paths including basePath
+      const filesToCommit = files.map(file => {
+        const basePath = gitCreds.basePath || '';
+        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
+        return {
+          path: fullPath,
+          content: file.content,
+          sha: file.sha
+        };
+      });
+
+      const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
+      if (result.success) {
+        console.log('Commit successful:', result.message);
+        // Mark files as saved
+        for (const file of files) {
+          const fileId = file.fileId;
+          await fileRegistry.markSaved(fileId);
+        }
+        // TODO: Refresh navigator - for now just log success
+      } else {
+        throw new Error(result.error || 'Failed to commit files');
+      }
+    } catch (error) {
+      throw error; // Re-throw to be handled by CommitModal
+    }
+  };
 
   const handleRevert = () => {
     if (activeTabId) {
@@ -205,136 +377,189 @@ export function FileMenu() {
   };
 
   return (
-    <Menubar.Menu>
-      <Menubar.Trigger className="menubar-trigger">File</Menubar.Trigger>
-      <Menubar.Portal>
-        <Menubar.Content className="menubar-content" align="start">
-          <Menubar.Sub>
-            <Menubar.SubTrigger className="menubar-item">
-              New
-              <div className="menubar-right-slot">›</div>
-            </Menubar.SubTrigger>
-            <Menubar.Portal>
-              <Menubar.SubContent className="menubar-content" alignOffset={-5}>
-                <Menubar.Item 
-                  className="menubar-item" 
-                  onSelect={() => handleNew('graph')}
-                >
-                  Graph
-                </Menubar.Item>
-                <Menubar.Item 
-                  className="menubar-item" 
-                  onSelect={() => handleNew('parameter')}
-                >
-                  Parameter
-                </Menubar.Item>
-                <Menubar.Item 
-                  className="menubar-item" 
-                  onSelect={() => handleNew('context')}
-                >
-                  Context
-                </Menubar.Item>
-                <Menubar.Item 
-                  className="menubar-item" 
-                  onSelect={() => handleNew('case')}
-                >
-                  Case
-                </Menubar.Item>
-              </Menubar.SubContent>
-            </Menubar.Portal>
-          </Menubar.Sub>
+    <>
+      <Menubar.Menu>
+        <Menubar.Trigger className="menubar-trigger">File</Menubar.Trigger>
+        <Menubar.Portal>
+          <Menubar.Content className="menubar-content" align="start">
+            <Menubar.Sub>
+              <Menubar.SubTrigger className="menubar-item">
+                New
+                <div className="menubar-right-slot">›</div>
+              </Menubar.SubTrigger>
+              <Menubar.Portal>
+                <Menubar.SubContent className="menubar-content" alignOffset={-5}>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={() => handleNew('graph')}
+                  >
+                    Graph
+                  </Menubar.Item>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={() => handleNew('parameter')}
+                  >
+                    Parameter
+                  </Menubar.Item>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={() => handleNew('context')}
+                  >
+                    Context
+                  </Menubar.Item>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={() => handleNew('case')}
+                  >
+                    Case
+                  </Menubar.Item>
+                </Menubar.SubContent>
+              </Menubar.Portal>
+            </Menubar.Sub>
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleOpen}
-          >
-            Open...
-            <div className="menubar-right-slot">⌘O</div>
-          </Menubar.Item>
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleOpen}
+            >
+              Open...
+              <div className="menubar-right-slot">⌘O</div>
+            </Menubar.Item>
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleImportFromFile}
-          >
-            Import from File...
-          </Menubar.Item>
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleImportFromFile}
+            >
+              Import from File...
+            </Menubar.Item>
 
-          <Menubar.Separator className="menubar-separator" />
+            <Menubar.Separator className="menubar-separator" />
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleRevert}
-            disabled={!activeTab || !isDirty}
-          >
-            Revert
-          </Menubar.Item>
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleRevert}
+              disabled={!activeTab || !isDirty}
+            >
+              Revert
+            </Menubar.Item>
 
-          <Menubar.Separator className="menubar-separator" />
+            <Menubar.Separator className="menubar-separator" />
 
-          <Menubar.Sub>
-            <Menubar.SubTrigger className="menubar-item" disabled={!activeTab}>
-              Export
-              <div className="menubar-right-slot">›</div>
-            </Menubar.SubTrigger>
-            <Menubar.Portal>
-              <Menubar.SubContent className="menubar-content" alignOffset={-5}>
-                <Menubar.Item 
-                  className="menubar-item" 
-                  onSelect={handleDownloadFile}
-                  disabled={!activeTab}
-                >
-                  Download as File...
-                </Menubar.Item>
-                <Menubar.Item 
-                  className="menubar-item" 
-                  onSelect={handleShareURL}
-                  disabled={!isGraphTab}
-                >
-                  Copy Shareable URL
-                </Menubar.Item>
-              </Menubar.SubContent>
-            </Menubar.Portal>
-          </Menubar.Sub>
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handlePullLatest}
+            >
+              Pull Latest
+              <div className="menubar-right-slot">⌘P</div>
+            </Menubar.Item>
 
-          <Menubar.Separator className="menubar-separator" />
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleCommitChanges}
+              disabled={!hasDirtyTabs}
+            >
+              Commit Changes...
+              <div className="menubar-right-slot">⌘K</div>
+            </Menubar.Item>
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleCloseTab}
-            disabled={!activeTab}
-          >
-            Close Tab
-            <div className="menubar-right-slot">⌘W</div>
-          </Menubar.Item>
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleCommitAllChanges}
+              disabled={!hasDirtyTabs}
+            >
+              Commit All Changes...
+              <div className="menubar-right-slot">⌘⇧K</div>
+            </Menubar.Item>
 
-          <Menubar.Separator className="menubar-separator" />
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleViewHistory}
+              disabled={!activeTab}
+            >
+              View History
+              <div className="menubar-right-slot">⌘H</div>
+            </Menubar.Item>
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleCredentials}
-          >
-            Credentials...
-            <div className="menubar-right-slot">⌘,</div>
-          </Menubar.Item>
+            <Menubar.Sub>
+              <Menubar.SubTrigger className="menubar-item" disabled={!activeTab}>
+                Export
+                <div className="menubar-right-slot">›</div>
+              </Menubar.SubTrigger>
+              <Menubar.Portal>
+                <Menubar.SubContent className="menubar-content" alignOffset={-5}>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={handleDownloadFile}
+                    disabled={!activeTab}
+                  >
+                    Download as File...
+                  </Menubar.Item>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={handleShareURL}
+                    disabled={!isGraphTab}
+                  >
+                    Copy Shareable URL
+                  </Menubar.Item>
+                </Menubar.SubContent>
+              </Menubar.Portal>
+            </Menubar.Sub>
 
-          <Menubar.Separator className="menubar-separator" />
+            <Menubar.Separator className="menubar-separator" />
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleClearData}
-          >
-            Clear Data...
-          </Menubar.Item>
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleCloseTab}
+              disabled={!activeTab}
+            >
+              Close Tab
+              <div className="menubar-right-slot">⌘W</div>
+            </Menubar.Item>
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleClearAllData}
-          >
-            Clear Data and Settings...
-          </Menubar.Item>
-        </Menubar.Content>
-      </Menubar.Portal>
-    </Menubar.Menu>
+            <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleCredentials}
+            >
+              Credentials...
+              <div className="menubar-right-slot">⌘,</div>
+            </Menubar.Item>
+
+            <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleClearData}
+            >
+              Clear Data...
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleClearAllData}
+            >
+              Clear Data and Settings...
+            </Menubar.Item>
+          </Menubar.Content>
+        </Menubar.Portal>
+      </Menubar.Menu>
+
+      {/* Commit Modal */}
+      <CommitModal
+        isOpen={isCommitModalOpen}
+        onClose={() => setIsCommitModalOpen(false)}
+        onCommit={handleCommitFiles}
+        preselectedFiles={commitModalPreselectedFiles}
+      />
+      
+      {/* New File Modal */}
+      <NewFileModal
+        isOpen={isNewFileModalOpen}
+        onClose={() => setIsNewFileModalOpen(false)}
+        onCreate={handleCreateFile}
+        fileType={newFileType}
+      />
+    </>
   );
 }
 

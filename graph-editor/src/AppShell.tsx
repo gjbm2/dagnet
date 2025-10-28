@@ -7,6 +7,8 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { MenuBar } from './components/MenuBar';
 import { NavigatorContent } from './components/Navigator';
 import { TabContextMenu } from './components/TabContextMenu';
+import { CommitModal } from './components/CommitModal';
+import { gitService } from './services/gitService';
 import { getEditorComponent } from './components/editors';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { layoutService } from './services/layoutService';
@@ -35,6 +37,12 @@ function AppShellContent() {
 
   // Tab context menu state
   const [contextMenu, setContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
+  
+  // Commit modal state (lifted to AppShell to persist when context menu closes)
+  const [commitModalState, setCommitModalState] = useState<{
+    isOpen: boolean;
+    preselectedFiles: string[];
+  }>({ isOpen: false, preselectedFiles: [] });
 
   // Custom groups - NO panelExtra, we'll position Navigator separately
   const customGroups = useMemo(() => ({
@@ -651,9 +659,9 @@ function AppShellContent() {
   }, [extractTabIds, tabOperations, activeTabId]);
 
   return (
-    <div className={`app-shell ${navState.isPinned ? 'nav-pinned' : 'nav-unpinned'}`} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div className={`app-shell ${navState.isPinned ? 'nav-pinned' : 'nav-unpinned'}`} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', overflow: 'hidden' }}>
       {/* Menu bar */}
-      <div style={{ height: '40px', borderBottom: '1px solid #e0e0e0', flexShrink: 0 }}>
+      <div style={{ height: '40px', borderBottom: '1px solid #e0e0e0', flexShrink: 0, boxSizing: 'border-box' }}>
         <MenuBar />
       </div>
       
@@ -664,7 +672,9 @@ function AppShellContent() {
         gridTemplateColumns: navState.isPinned ? '240px 1fr' : '1fr',
         position: 'relative', 
         overflow: 'hidden',
-        transition: 'grid-template-columns 0.2s ease'
+        transition: 'grid-template-columns 0.2s ease',
+        boxSizing: 'border-box',
+        minHeight: 0
       }}>
         {/* Navigator button - ONLY when unpinned */}
         {!navState.isPinned && (
@@ -705,7 +715,9 @@ function AppShellContent() {
             borderRight: '1px solid #e0e0e0',
             background: '#f8f9fa',
             overflow: 'hidden',
-            position: 'relative'
+            position: 'relative',
+            boxSizing: 'border-box',
+            minWidth: 0
           }}>
             {/* Navigator header - same height as tab bar */}
             <div style={{
@@ -857,6 +869,61 @@ function AppShellContent() {
             x={contextMenu.x}
             y={contextMenu.y}
             onClose={() => setContextMenu(null)}
+            onRequestCommit={(preselectedFiles) => {
+              setCommitModalState({ isOpen: true, preselectedFiles });
+              setContextMenu(null); // Close context menu
+            }}
+          />
+        )}
+
+        {/* Commit Modal - at AppShell level so it persists when context menu closes */}
+        {commitModalState.isOpen && (
+          <CommitModal
+            isOpen={commitModalState.isOpen}
+            onClose={() => setCommitModalState({ isOpen: false, preselectedFiles: [] })}
+            onCommit={async (files, message, branch) => {
+              // Load credentials and commit files
+              const { credentialsManager } = await import('./lib/credentials');
+              const credentialsResult = await credentialsManager.loadCredentials();
+              
+              if (!credentialsResult.success || !credentialsResult.credentials) {
+                throw new Error('No credentials available. Please configure credentials first.');
+              }
+
+              const selectedRepo = navState.selectedRepo;
+              const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
+              
+              if (!gitCreds) {
+                throw new Error(`No credentials found for repository ${selectedRepo}`);
+              }
+
+              const credentialsWithRepo = {
+                ...credentialsResult.credentials,
+                defaultGitRepo: selectedRepo
+              };
+              gitService.setCredentials(credentialsWithRepo);
+
+              const filesToCommit = files.map(file => {
+                const basePath = gitCreds.basePath || '';
+                const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
+                return {
+                  path: fullPath,
+                  content: file.content,
+                  sha: file.sha
+                };
+              });
+
+              const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
+              if (result.success) {
+                console.log('Commit successful:', result.message);
+                for (const file of files) {
+                  await fileRegistry.markSaved(file.fileId);
+                }
+              } else {
+                throw new Error(result.error || 'Failed to commit files');
+              }
+            }}
+            preselectedFiles={commitModalState.preselectedFiles}
           />
         )}
       </div>

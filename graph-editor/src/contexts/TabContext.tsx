@@ -170,6 +170,11 @@ class FileRegistry {
 
     await db.files.put(file);
     this.notifyListeners(fileId, file);
+    
+    // Fire custom event so tab indicators can update
+    window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
+      detail: { fileId, isDirty: false } 
+    }));
   }
 
   /**
@@ -570,21 +575,32 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       if (item.type === 'graph') {
         console.log(`TabContext: Loading graph ${item.name}...`);
         
+        // Get the currently selected repository from NavigatorContext by reading from IndexedDB
+        const appState = await db.appState.get('app-state');
+        const selectedRepo = appState?.navigatorState?.selectedRepo;
+        const selectedBranch = appState?.navigatorState?.selectedBranch || 'main';
+        
+        console.log(`TabContext: Loading from repo: ${selectedRepo}, branch: ${selectedBranch}`);
+        
         // Load credentials to configure gitService
         const { credentialsManager } = await import('../lib/credentials');
         const credentialsResult = await credentialsManager.loadCredentials();
         
-        if (credentialsResult.success && credentialsResult.credentials) {
-          console.log(`TabContext: Configuring gitService with credentials`);
-          // Configure gitService with credentials
+        if (credentialsResult.success && credentialsResult.credentials && selectedRepo) {
+          console.log(`TabContext: Configuring gitService with credentials for repo: ${selectedRepo}`);
+          // Configure gitService with credentials for the selected repository
           const { gitService } = await import('../services/gitService');
-          gitService.setCredentials(credentialsResult.credentials);
+          const credentialsWithRepo = {
+            ...credentialsResult.credentials,
+            defaultGitRepo: selectedRepo
+          };
+          gitService.setCredentials(credentialsWithRepo);
         } else {
-          console.warn('TabContext: No credentials available for graph loading');
+          console.warn('TabContext: No credentials or selected repo available for graph loading');
         }
         
         const { graphGitService } = await import('../services/graphGitService');
-        const result = await graphGitService.getGraph(item.name, 'main');
+        const result = await graphGitService.getGraph(item.name, selectedBranch);
         console.log(`TabContext: Graph load result:`, result);
         if (result.success && result.data) {
           data = result.data.content;
@@ -596,27 +612,34 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         console.log(`TabContext: Loading ${item.type} ${item.name}...`);
         const { paramRegistryService } = await import('../services/paramRegistryService');
         
+        // Get the currently selected repository from NavigatorContext by reading from IndexedDB
+        const appState = await db.appState.get('app-state');
+        const selectedRepo = appState?.navigatorState?.selectedRepo;
+        const selectedBranch = appState?.navigatorState?.selectedBranch || 'main';
+        
+        console.log(`TabContext: Loading ${item.type} from repo: ${selectedRepo}, branch: ${selectedBranch}`);
+        
         // Load credentials to configure the service
         const { credentialsManager } = await import('../lib/credentials');
         const credentialsResult = await credentialsManager.loadCredentials();
         
-        if (credentialsResult.success && credentialsResult.credentials) {
-          const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === '<private-repo>') || credentialsResult.credentials.git[0];
+        if (credentialsResult.success && credentialsResult.credentials && selectedRepo) {
+          const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
           if (gitCreds) {
             console.log(`TabContext: Configuring paramRegistryService with credentials for ${gitCreds.name}`);
             paramRegistryService.setConfig({
               source: 'git',
               gitBasePath: gitCreds.basePath || '',
-              gitBranch: gitCreds.branch || 'main',
+              gitBranch: selectedBranch,
               gitRepoOwner: gitCreds.owner,
               gitRepoName: gitCreds.repo,
               gitToken: gitCreds.token
             });
           } else {
-            console.warn('TabContext: No git credentials found for paramRegistryService');
+            console.warn(`TabContext: No git credentials found for repo: ${selectedRepo}`);
           }
         } else {
-          console.warn('TabContext: No credentials available for paramRegistryService');
+          console.warn('TabContext: No credentials or selected repo available for paramRegistryService');
         }
         
         // Load based on type
@@ -790,8 +813,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
     console.log(`closeTab: Step 4 - Remove from IndexedDB`);
     await db.tabs.delete(tabId);
+    
+    console.log(`closeTab: Step 5 - Check if local file should be removed from navigator`);
+    if (isLastView && file) {
+      // Dispatch event to let NavigatorContext check if this is a local item
+      // and remove it if needed
+      window.dispatchEvent(new CustomEvent('dagnet:lastViewClosed', { 
+        detail: { 
+          fileId: tab.fileId,
+          type: file.type
+        } 
+      }));
+    }
 
-    console.log(`closeTab: Step 5 - Signal rc-dock to destroy tab`);
+    console.log(`closeTab: Step 6 - Signal rc-dock to destroy tab`);
     window.dispatchEvent(new CustomEvent('dagnet:tabClosed', { detail: { tabId } }));
 
     console.log(`closeTab: ✅ COMPLETED closing ${tabId}\n`);

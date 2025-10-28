@@ -671,6 +671,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const lastSyncedReactFlowRef = useRef<string>('');
   const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
   const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
+  const reactFlowWrapperRef = useRef<HTMLDivElement>(null); // For lasso coordinate calculations
   const hasInitialFitViewRef = useRef(false);
   const currentGraphIdRef = useRef<string>('');
   
@@ -2084,6 +2085,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (isShiftHeld && e.target && (e.target as Element).closest('.react-flow')) {
         e.preventDefault();
         e.stopPropagation();
+        
+        // Store viewport coordinates (for screenToFlowPosition conversion)
         setIsLassoSelecting(true);
         setLassoStart({ x: e.clientX, y: e.clientY });
         setLassoEnd({ x: e.clientX, y: e.clientY });
@@ -2094,6 +2097,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (isLassoSelecting && lassoStart) {
         e.preventDefault();
         e.stopPropagation();
+        
+        // Store viewport coordinates (for screenToFlowPosition conversion)
         setLassoEnd({ x: e.clientX, y: e.clientY });
       }
     };
@@ -3446,7 +3451,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }
 
   return (
-    <div style={{ height: '100%', position: 'relative' }}>
+    <div ref={reactFlowWrapperRef} style={{ height: '100%', position: 'relative' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -3485,41 +3490,51 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         <MiniMap />
         
         {/* Lasso selection rectangle */}
-        {isLassoSelecting && (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 1000,
-              pointerEvents: 'auto',
-            }}
-            onMouseUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              // Don't call handleMouseUp here - let the global handler do it once
-            }}
-            onMouseDown={(e) => {
-              // ensure pane doesn't treat this as a click
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-          >
-            {lassoStart && lassoEnd && (
-          <div
-            style={{
-              position: 'absolute',
-              left: Math.min(lassoStart.x, lassoEnd.x),
-              top: Math.min(lassoStart.y, lassoEnd.y),
-              width: Math.abs(lassoEnd.x - lassoStart.x),
-              height: Math.abs(lassoEnd.y - lassoStart.y),
-              border: '2px dashed #007bff',
-              background: 'rgba(0, 123, 255, 0.1)',
-              pointerEvents: 'none',
-            }}
-          />
-            )}
-          </div>
-        )}
+        {isLassoSelecting && lassoStart && lassoEnd && (() => {
+          // Convert viewport coordinates to container-relative coordinates
+          const rect = reactFlowWrapperRef.current?.getBoundingClientRect();
+          const offsetX = rect?.left || 0;
+          const offsetY = rect?.top || 0;
+          
+          const startX = lassoStart.x - offsetX;
+          const startY = lassoStart.y - offsetY;
+          const endX = lassoEnd.x - offsetX;
+          const endY = lassoEnd.y - offsetY;
+          
+          return (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 1000,
+                pointerEvents: 'auto',
+              }}
+              onMouseUp={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Don't call handleMouseUp here - let the global handler do it once
+              }}
+              onMouseDown={(e) => {
+                // ensure pane doesn't treat this as a click
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            >
+              <div
+                style={{
+                  position: 'absolute',
+                  left: Math.min(startX, endX),
+                  top: Math.min(startY, endY),
+                  width: Math.abs(endX - startX),
+                  height: Math.abs(endY - startY),
+                  border: '2px dashed #007bff',
+                  background: 'rgba(0, 123, 255, 0.1)',
+                  pointerEvents: 'none',
+                }}
+              />
+            </div>
+          );
+        })()}
 
         {/* Selection Analysis Popup */}
         {analysis && (

@@ -6,6 +6,7 @@ export interface ContextMenuItem {
   disabled?: boolean;
   divider?: boolean;
   submenu?: ContextMenuItem[];
+  keepMenuOpen?: boolean; // If true, don't close menu after onClick
 }
 
 interface ContextMenuProps {
@@ -79,7 +80,9 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           if (!item.disabled) {
             e.stopPropagation();
             item.onClick();
-            onClose();
+            if (!item.keepMenuOpen) {
+              onClose();
+            }
           }
         }}
         style={{

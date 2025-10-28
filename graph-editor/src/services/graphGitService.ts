@@ -58,7 +58,11 @@ class GraphGitService {
     try {
       // Ensure .json extension
       const fileName = graphName.endsWith('.json') ? graphName : `${graphName}.json`;
-      const filePath = `${this.config.graphsPath}/${fileName}`;
+      
+      // Get basePath from gitService's current repository configuration
+      const basePath = (gitService as any).currentRepo?.basePath || '';
+      const graphsPath = basePath ? `${basePath}/${this.config.graphsPath}` : this.config.graphsPath;
+      const filePath = `${graphsPath}/${fileName}`;
       
       const result = await gitService.getFileContent(filePath, branch);
       
@@ -82,6 +86,8 @@ class GraphGitService {
           message: `Graph ${graphName} contains invalid JSON`
         };
       }
+
+      console.log(`🔵 graphGitService.getGraph: Loaded ${graphName} from GitHub with ${graphData.nodes?.length || 0} nodes, SHA: ${file.sha?.substring(0, 8)}`);
 
       return {
         success: true,
@@ -115,7 +121,11 @@ class GraphGitService {
     try {
       // Ensure .json extension
       const fileName = graphName.endsWith('.json') ? graphName : `${graphName}.json`;
-      const filePath = `${this.config.graphsPath}/${fileName}`;
+      
+      // Get basePath from gitService's current repository configuration
+      const basePath = (gitService as any).currentRepo?.basePath || '';
+      const graphsPath = basePath ? `${basePath}/${this.config.graphsPath}` : this.config.graphsPath;
+      const filePath = `${graphsPath}/${fileName}`;
       
       // Check if file exists to determine if this is an update
       const existingFile = await gitService.getFile(filePath, branch);
@@ -172,7 +182,11 @@ class GraphGitService {
   ): Promise<GraphOperationResult> {
     try {
       const fileName = graphName.endsWith('.json') ? graphName : `${graphName}.json`;
-      const filePath = `${this.config.graphsPath}/${fileName}`;
+      
+      // Get basePath from gitService's current repository configuration
+      const basePath = (gitService as any).currentRepo?.basePath || '';
+      const graphsPath = basePath ? `${basePath}/${this.config.graphsPath}` : this.config.graphsPath;
+      const filePath = `${graphsPath}/${fileName}`;
       
       const result = await gitService.deleteFile(filePath, `Delete graph: ${message}`, branch);
       
@@ -202,7 +216,11 @@ class GraphGitService {
   async getGraphHistory(graphName: string, branch: string = this.config.branch): Promise<GraphOperationResult> {
     try {
       const fileName = graphName.endsWith('.json') ? graphName : `${graphName}.json`;
-      const filePath = `${this.config.graphsPath}/${fileName}`;
+      
+      // Get basePath from gitService's current repository configuration
+      const basePath = (gitService as any).currentRepo?.basePath || '';
+      const graphsPath = basePath ? `${basePath}/${this.config.graphsPath}` : this.config.graphsPath;
+      const filePath = `${graphsPath}/${fileName}`;
       
       const result = await gitService.getFileHistory(filePath, branch);
       

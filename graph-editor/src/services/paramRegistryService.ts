@@ -187,7 +187,9 @@ class ParamRegistryService {
     
     console.log(`Loading from GitHub: ${repoOwner}/${repoName} - ${fullPath}`);
     
-    const response = await fetch(apiUrl, { headers });
+    const response = await fetch(apiUrl, { 
+      headers
+    });
     
     if (!response.ok) {
       const errorText = await response.text();

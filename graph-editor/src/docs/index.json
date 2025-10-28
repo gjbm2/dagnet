@@ -1,6 +1,5 @@
 {
   "files": [
-    "CREDENTIALS_IMPLEMENTATION_STATUS.md",
     "CREDENTIALS_INIT_FLOW.md",
     "CREDENTIALS_UNIFIED_IMPLEMENTATION.md",
     "QUICK-RUNNER.md",
@@ -16,5 +15,5 @@
     "keyboard-shortcuts.md",
     "index.json"
   ],
-  "generated_at": "2025-10-28T21:11:26.205Z"
+  "generated_at": "2025-10-28T22:26:14.283Z"
 }
