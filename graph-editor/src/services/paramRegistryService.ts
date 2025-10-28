@@ -331,9 +331,18 @@ class ParamRegistryService {
 
   // Load parameters-index.yaml
   async loadRegistry(): Promise<Registry> {
-    const yamlText = await this.loadFile('parameters-index.yaml');
-    const data = yaml.load(yamlText) as Registry;
-    return data;
+    try {
+      const yamlText = await this.loadFile('parameters-index.yaml');
+      const data = yaml.load(yamlText) as Registry;
+      return data;
+    } catch (error) {
+      // Registry file doesn't exist, return empty registry
+      return {
+        parameters: [],
+        contexts: [],
+        cases: []
+      };
+    }
   }
 
   // Load a specific parameter by ID
