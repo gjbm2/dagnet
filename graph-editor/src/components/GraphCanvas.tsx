@@ -19,6 +19,7 @@ import ReactFlow, {
   ConnectionMode,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import '../custom-reactflow.css';
 import dagre from 'dagre';
 
 import ConversionNode from './nodes/ConversionNode';
@@ -1152,12 +1153,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     lastSyncedGraphRef.current = graphJson;
     
+    console.log('🔄 Graph→ReactFlow sync triggered');
+    console.log('  Graph edges:', graph.edges?.map((e: any) => e.id));
+    console.log('  ReactFlow edges:', edges.map(e => e.id));
+    
     // Set syncing flag to prevent re-routing during graph->ReactFlow sync
     isSyncingRef.current = true;
     
     // Check if only edge probabilities changed (not topology or node positions)
     const edgeCountChanged = edges.length !== (graph.edges?.length || 0);
     const nodeCountChanged = nodes.length !== (graph.nodes?.length || 0);
+    
+    console.log('  Edge count changed:', edgeCountChanged, `(${edges.length} -> ${graph.edges?.length || 0})`);
+    console.log('  Node count changed:', nodeCountChanged);
     
     // Check if any node positions changed
     const nodePositionsChanged = nodes.some(node => {
@@ -1167,6 +1175,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         Math.abs((graphNode.layout?.y || 0) - node.position.y) > 0.1
       );
     });
+    
+    // Check if any edge IDs changed (happens when reconnecting to different nodes)
+    const graphEdgeIds = new Set(graph.edges.map((e: any) => e.id));
+    const reactFlowEdgeIds = new Set(edges.map(e => e.id));
+    const edgeIdsChanged = edges.some(e => !graphEdgeIds.has(e.id)) || 
+                           graph.edges.some((e: any) => !reactFlowEdgeIds.has(e.id));
+    
+    console.log('  Edge IDs changed:', edgeIdsChanged);
+    if (edgeIdsChanged) {
+      console.log('    Old ReactFlow edge IDs:', Array.from(reactFlowEdgeIds));
+      console.log('    New Graph edge IDs:', Array.from(graphEdgeIds));
+    }
     
     // Check if any edge handles changed
     const edgeHandlesChanged = edges.some(edge => {
@@ -1228,7 +1248,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return hasChanges;
     });
     
-    if (!edgeCountChanged && !nodeCountChanged && !nodePositionsChanged && !edgeHandlesChanged && edges.length > 0) {
+    if (!edgeCountChanged && !nodeCountChanged && !nodePositionsChanged && !edgeHandlesChanged && !edgeIdsChanged && edges.length > 0) {
+      console.log('  ⚡ Fast path: Topology unchanged, updating edge data in place');
       // Topology unchanged and handles unchanged - update edge data in place to preserve component identity
       setEdges(prevEdges => {
         // First pass: update edge data without calculateWidth functions
@@ -1319,6 +1340,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       return; // Skip full toFlow rebuild
     }
+    
+    console.log('  🔨 Slow path: Topology changed, doing full rebuild');
     
     // Topology changed - do full rebuild
     // Preserve current selection state
@@ -1729,6 +1752,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       const originalEdge = { ...nextGraph.edges[edgeIndex] };
       
+      console.log('');
+      console.log('📊 PROBABILITY CHECK:');
+      console.log('  Original edge probability:', originalEdge.p);
+      
       // Update edge source/target and handles (source and target are guaranteed non-null by earlier check)
       nextGraph.edges[edgeIndex].from = newConnection.source!;
       nextGraph.edges[edgeIndex].to = newConnection.target!;
@@ -1758,11 +1785,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('  to:', originalEdge.to, '→', nextGraph.edges[edgeIndex].to);
       console.log('  fromHandle:', originalEdge.fromHandle, '→', nextGraph.edges[edgeIndex].fromHandle);
       console.log('  toHandle:', originalEdge.toHandle, '→', nextGraph.edges[edgeIndex].toHandle);
+      console.log('  probability (p):', originalEdge.p, '→', nextGraph.edges[edgeIndex].p);
       console.log('');
       console.log('✅ SUCCESS - Edge reconnected!');
+      console.log('📊 Final edge object:', JSON.stringify(nextGraph.edges[edgeIndex], null, 2));
       console.log('╚════════════════════════════════════════════════════╝');
       console.log('');
       
+      // Prevent ReactFlow->Graph sync from overwriting this manual reconnection
+      isSyncingRef.current = true;
       setGraph(nextGraph);
       
       // Prevent auto-reroute from overwriting manual handle selection
@@ -1770,6 +1801,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Save history state for edge reconnection
       saveHistoryState('Reconnect edge', undefined, nextGraph.edges[edgeIndex].id);
+      
+      // Reset isSyncingRef after a short delay to allow Graph->ReactFlow sync to complete
+      setTimeout(() => {
+        isSyncingRef.current = false;
+      }, 100);
     }, 50); // 50ms debounce
   }, [graph, setGraph, wouldCreateCycle, saveHistoryState]);
 
@@ -2437,8 +2473,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Get current state from store (avoid stale closures)
       const currentGraph = graphStoreHook.getState().graph;
-      const currentOverrides = graphStoreHook.getState().whatIfOverrides;
-      const currentWhatIfAnalysis = graphStoreHook.getState().whatIfAnalysis;
+      // Use per-tab what-if state (passed as props), not global store
+      const currentOverrides = { caseOverrides, conditionalOverrides };
+      const currentWhatIfAnalysis = whatIfAnalysis;
       
       // Use pre-computed pruning if provided, otherwise no pruning
       const excludedEdges = prunedEdges || new Set<string>();
@@ -2753,8 +2790,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const impliedCaseOverrides = new Map<string, string>(); // case node ID → forced variant
       
       const currentGraph = graphStoreHook.getState().graph;
-      const currentOverrides = graphStoreHook.getState().whatIfOverrides;
-      const currentWhatIfAnalysis = graphStoreHook.getState().whatIfAnalysis;
+      // Use per-tab what-if state (passed as props), not global store
+      const currentOverrides = { caseOverrides, conditionalOverrides };
+      const currentWhatIfAnalysis = whatIfAnalysis;
       
       // Interstitial nodes: all selected except path start and end
       const interstitialNodes = new Set(allSelectedIds.filter(id => id !== pathStart && id !== pathEnd));
