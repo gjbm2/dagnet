@@ -977,7 +977,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const nodeIndex = nextGraph.nodes.findIndex(n => n.id === id);
     if (nodeIndex >= 0) {
       nextGraph.nodes[nodeIndex] = { ...nextGraph.nodes[nodeIndex], ...data };
-      nextGraph.metadata.updated_at = new Date().toISOString();
+      if (nextGraph.metadata) {
+        nextGraph.metadata.updated_at = new Date().toISOString();
+      }
       console.log('Updated node in graph:', nextGraph.nodes[nodeIndex]);
     }
     setGraph(nextGraph);
@@ -1049,7 +1051,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const edgeIndex = nextGraph.edges.findIndex(e => e.id === id);
     if (edgeIndex >= 0) {
       nextGraph.edges[edgeIndex] = { ...nextGraph.edges[edgeIndex], ...data };
-      nextGraph.metadata.updated_at = new Date().toISOString();
+      if (nextGraph.metadata) {
+        nextGraph.metadata.updated_at = new Date().toISOString();
+      }
     }
     setGraph(nextGraph);
   }, [graph, setGraph, getAllExistingSlugs]);
@@ -3230,7 +3234,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const graphNode = nextGraph.nodes.find((n: any) => n.id === nodeId);
       
       if (graphNode) {
-        if (!graphNode.layout) graphNode.layout = {};
+        if (!graphNode.layout) graphNode.layout = { x: 0, y: 0 };
         // Dagre gives us center coordinates, so no need to adjust
         graphNode.layout.x = dagreNode.x;
         graphNode.layout.y = dagreNode.y;

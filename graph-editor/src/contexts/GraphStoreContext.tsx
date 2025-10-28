@@ -15,7 +15,7 @@ export interface GraphStore {
   historyIndex: number;
   canUndo: boolean;
   canRedo: boolean;
-  saveHistoryState: () => void;
+  saveHistoryState: (action?: string, nodeId?: string, edgeId?: string) => void;
   undo: () => void;
   redo: () => void;
   resetHistory: () => void;
@@ -42,7 +42,7 @@ export function createGraphStore(): GraphStoreHook {
     canUndo: false,
     canRedo: false,
     
-    saveHistoryState: () => {
+    saveHistoryState: (action?: string, nodeId?: string, edgeId?: string) => {
       const { graph, history, historyIndex } = get();
       if (!graph) {
         console.log('GraphStore: saveHistoryState - no graph');
@@ -69,6 +69,9 @@ export function createGraphStore(): GraphStoreHook {
       };
       
       console.log('GraphStore: saveHistoryState', {
+        action,
+        nodeId,
+        edgeId,
         historyLength: newHistory.length,
         historyIndex: newState.historyIndex,
         canUndo: newState.canUndo,
