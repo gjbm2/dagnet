@@ -140,9 +140,9 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle if this graph editor is the active tab
-      // and user isn't typing in an input field
+      // and user isn't typing in an input field or Monaco editor
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor')) {
         return;
       }
 

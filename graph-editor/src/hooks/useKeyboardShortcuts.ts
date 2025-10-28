@@ -26,12 +26,13 @@ export function useKeyboardShortcuts() {
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modifier = isMac ? e.metaKey : e.ctrlKey;
 
-      // Ignore if user is typing in an input/textarea
+      // Ignore if user is typing in an input/textarea or Monaco editor
       const target = e.target as HTMLElement;
       if (
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
-        target.isContentEditable
+        target.isContentEditable ||
+        target.closest('.monaco-editor') // Monaco editor elements
       ) {
         // Allow Cmd+S even in inputs
         if (modifier && e.key === 's') {

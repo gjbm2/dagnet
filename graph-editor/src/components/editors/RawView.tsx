@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import * as yaml from 'js-yaml';
 import { EditorProps, ViewMode } from '../../types';
@@ -12,7 +12,7 @@ import './RawView.css';
  * Supports syntax highlighting, validation, and formatting
  */
 export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
-  const { data, isDirty, updateData } = useFileState(fileId);
+  const { data, isDirty, updateData, originalData } = useFileState(fileId);
   const [editorValue, setEditorValue] = useState('');
   const [parseError, setParseError] = useState<string | null>(null);
   const [lineWrap, setLineWrap] = useState(false);
@@ -20,6 +20,10 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
   const [originalValue, setOriginalValue] = useState('');
   const [isValid, setIsValid] = useState(true);
   const [lastValidData, setLastValidData] = useState<any>(null);
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+  const isEditorChangeRef = useRef(false);
+  const parseDebounceRef = useRef<number | null>(null);
+  const resetEditorFlagTimeoutRef = useRef<number | null>(null);
 
   const isYAML = viewMode === 'raw-yaml';
   const language = isYAML ? 'yaml' : 'json';
@@ -28,6 +32,13 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
   useEffect(() => {
     if (!data) {
       console.log(`RawView[${fileId}]: No data, skipping editor update`);
+      return;
+    }
+
+    // Skip if this data change originated from the editor itself
+    if (isEditorChangeRef.current) {
+      console.log(`RawView[${fileId}]: Skipping editor update - change originated from editor`);
+      // Don't reset the flag here - it will be reset after a delay
       return;
     }
 
@@ -40,7 +51,6 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
       
       console.log(`RawView[${fileId}]: Setting editor value, length:`, newValue.length);
       setEditorValue(newValue);
-      setOriginalValue(newValue); // Store original for diff
       setLastValidData(data); // Store last valid data
       setParseError(null);
       setIsValid(true);
@@ -50,31 +60,87 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
     }
   }, [data, isYAML, fileId]);
 
+  // Update original value for diff view when originalData changes
+  useEffect(() => {
+    if (!originalData) {
+      console.log(`RawView[${fileId}]: No original data, skipping original value update`);
+      return;
+    }
+
+    try {
+      const originalValue = isYAML 
+        ? yaml.dump(originalData, { indent: 2, lineWidth: 120 })
+        : JSON.stringify(originalData, null, 2);
+      
+      setOriginalValue(originalValue);
+    } catch (error: any) {
+      console.error(`RawView[${fileId}]: Error formatting original data:`, error);
+    }
+  }, [originalData, isYAML, fileId]);
+
+  // Cleanup debounce timers on unmount
+  useEffect(() => {
+    return () => {
+      if (parseDebounceRef.current !== null) {
+        clearTimeout(parseDebounceRef.current);
+      }
+      if (resetEditorFlagTimeoutRef.current !== null) {
+        clearTimeout(resetEditorFlagTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleEditorChange = (value: string | undefined) => {
-    if (!value || readonly) return;
+    console.log(`RawView[${fileId}]: Editor change detected, value:`, value?.substring(0, 100), 'length:', value?.length);
+    if (value === undefined || readonly) return;
 
     setEditorValue(value);
 
-    // Try to parse and validate
-    try {
-      let parsedData;
-      if (isYAML) {
-        parsedData = yaml.load(value);
-      } else {
-        parsedData = JSON.parse(value);
-      }
-
-      // Validation passed - update data and clear errors
-      setParseError(null);
-      setIsValid(true);
-      setLastValidData(parsedData);
-      updateData(parsedData);
-    } catch (error: any) {
-      // Parse failed - show error but don't update data
-      setParseError(error.message);
-      setIsValid(false);
-      console.warn(`RawView[${fileId}]: Invalid ${language} - other views may show errors:`, error.message);
+    // Clear any pending parse
+    if (parseDebounceRef.current !== null) {
+      clearTimeout(parseDebounceRef.current);
     }
+
+    // Debounce parsing and data updates to avoid race conditions during fast typing
+    parseDebounceRef.current = window.setTimeout(() => {
+      console.log(`RawView[${fileId}]: Debounce fired, parsing and updating data`);
+      
+      // Try to parse and validate
+      try {
+        let parsedData;
+        if (isYAML) {
+          parsedData = yaml.load(value);
+        } else {
+          parsedData = JSON.parse(value);
+        }
+
+        // Validation passed - update data and clear errors
+        setParseError(null);
+        setIsValid(true);
+        setLastValidData(parsedData);
+        
+        // Mark that this change originated from the editor before updating
+        isEditorChangeRef.current = true;
+        updateData(parsedData);
+        
+        // Reset the flag after enough time for the round-trip (debounce + graph processing + sync back)
+        if (resetEditorFlagTimeoutRef.current !== null) {
+          clearTimeout(resetEditorFlagTimeoutRef.current);
+        }
+        resetEditorFlagTimeoutRef.current = window.setTimeout(() => {
+          console.log(`RawView[${fileId}]: Resetting editor change flag`);
+          isEditorChangeRef.current = false;
+          resetEditorFlagTimeoutRef.current = null;
+        }, 500); // Wait 500ms for the round-trip
+      } catch (error: any) {
+        // Parse failed - show error but don't update data
+        setParseError(error.message);
+        setIsValid(false);
+        console.warn(`RawView[${fileId}]: Invalid ${language} - parsing failed:`, error.message);
+      }
+      
+      parseDebounceRef.current = null;
+    }, 300); // Wait 300ms after last keystroke
   };
 
   const handleRevertToLastValid = () => {
@@ -169,30 +235,95 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
         </div>
       )}
 
-      <div className="raw-view-editor-container">
+      <div className="raw-view-editor-container" ref={editorContainerRef}>
         {showDiff ? (
           <DiffEditor
             height="100%"
             language={language}
             original={originalValue}
             modified={editorValue}
-            onChange={(value) => {
-              if (value && !readonly) {
-                setEditorValue(value);
-                // Parse and update data
-                try {
-                  let parsedData;
-                  if (isYAML) {
-                    parsedData = yaml.load(value);
-                  } else {
-                    parsedData = JSON.parse(value);
-                  }
-                  setParseError(null);
-                  updateData(parsedData);
-                } catch (error: any) {
-                  setParseError(error.message);
-                }
+            onMount={(editor, monaco) => {
+              // Configure Monaco to be more permissive with JSON editing
+              if (language === 'json') {
+                // Disable JSON validation that might prevent editing
+                monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+                  validate: false,
+                  allowComments: true,
+                  schemas: []
+                });
+                
+                // Configure both editors in the diff view
+                const originalEditor = editor.getOriginalEditor();
+                const modifiedEditor = editor.getModifiedEditor();
+                
+                [originalEditor, modifiedEditor].forEach(ed => {
+                  ed.updateOptions({
+                    readOnly: readonly,
+                    // Disable any features that might interfere with editing
+                    quickSuggestions: false,
+                    suggestOnTriggerCharacters: false,
+                    acceptSuggestionOnEnter: 'off',
+                    tabCompletion: 'off',
+                    wordBasedSuggestions: 'off'
+                  });
+                });
               }
+              
+              // Add debugging for key events in diff editor
+              const modifiedEditor = editor.getModifiedEditor();
+              modifiedEditor.onKeyDown((e) => {
+                console.log(`RawView[${fileId}]: Diff editor key pressed:`, e.keyCode, e.code, 'ctrlKey:', e.ctrlKey, 'metaKey:', e.metaKey);
+                if (e.keyCode === 32) {
+                  console.log(`RawView[${fileId}]: DIFF EDITOR SPACE KEY DETECTED!`);
+                }
+              });
+              
+              // Listen for changes in the modified editor
+              modifiedEditor.onDidChangeModelContent(() => {
+                if (readonly) return;
+                
+                const value = modifiedEditor.getValue();
+                setEditorValue(value);
+                
+                // Clear any pending parse
+                if (parseDebounceRef.current !== null) {
+                  clearTimeout(parseDebounceRef.current);
+                }
+                
+                // Debounce parsing and data updates to avoid race conditions during fast typing
+                parseDebounceRef.current = window.setTimeout(() => {
+                  console.log(`RawView[${fileId}]: Diff editor debounce fired, parsing and updating data`);
+                  
+                  // Parse and update data
+                  try {
+                    let parsedData;
+                    if (isYAML) {
+                      parsedData = yaml.load(value);
+                    } else {
+                      parsedData = JSON.parse(value);
+                    }
+                    setParseError(null);
+                    
+                    // Mark that this change originated from the editor before updating
+                    isEditorChangeRef.current = true;
+                    updateData(parsedData);
+                    
+                    // Reset the flag after enough time for the round-trip
+                    if (resetEditorFlagTimeoutRef.current !== null) {
+                      clearTimeout(resetEditorFlagTimeoutRef.current);
+                    }
+                    resetEditorFlagTimeoutRef.current = window.setTimeout(() => {
+                      console.log(`RawView[${fileId}]: Resetting editor change flag (diff editor)`);
+                      isEditorChangeRef.current = false;
+                      resetEditorFlagTimeoutRef.current = null;
+                    }, 500); // Wait 500ms for the round-trip
+                  } catch (error: any) {
+                    setParseError(error.message);
+                  }
+                  
+                  parseDebounceRef.current = null;
+                }, 300); // Wait 300ms after last keystroke
+              });
             }}
             theme="vs-light"
             options={{
@@ -206,6 +337,13 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
               fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace",
               fontLigatures: false,
               renderWhitespace: 'selection',
+              // Ensure all editing is allowed
+              selectOnLineNumbers: true,
+              roundedSelection: false,
+              cursorStyle: 'line',
+              cursorBlinking: 'blink',
+              contextmenu: true,
+              mouseWheelZoom: false,
               // Diff-specific options
               enableSplitViewResizing: true,
               renderSideBySide: true,
@@ -220,6 +358,36 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
             language={language}
             value={editorValue}
             onChange={handleEditorChange}
+            onMount={(editor, monaco) => {
+              // Configure Monaco to be more permissive with JSON editing
+              if (language === 'json') {
+                // Disable JSON validation that might prevent editing
+                monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+                  validate: false,
+                  allowComments: true,
+                  schemas: []
+                });
+                
+                // Ensure the editor allows all editing operations
+                editor.updateOptions({
+                  readOnly: readonly,
+                  // Disable any features that might interfere with editing
+                  quickSuggestions: false,
+                  suggestOnTriggerCharacters: false,
+                  acceptSuggestionOnEnter: 'off',
+                  tabCompletion: 'off',
+                  wordBasedSuggestions: 'off'
+                });
+              }
+              
+              // Add debugging for key events
+              editor.onKeyDown((e) => {
+                console.log(`RawView[${fileId}]: Key pressed:`, e.keyCode, e.code, 'ctrlKey:', e.ctrlKey, 'metaKey:', e.metaKey);
+                if (e.keyCode === 32) {
+                  console.log(`RawView[${fileId}]: SPACE KEY DETECTED!`);
+                }
+              });
+            }}
             theme="vs-light"
             options={{
               readOnly: readonly,
@@ -232,7 +400,17 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
               automaticLayout: true,
               fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace",
               fontLigatures: false,
-              renderWhitespace: 'selection'
+              renderWhitespace: 'selection',
+              // Ensure all editing is allowed
+              selectOnLineNumbers: true,
+              roundedSelection: false,
+              cursorStyle: 'line',
+              cursorBlinking: 'blink',
+              contextmenu: true,
+              mouseWheelZoom: false,
+              insertSpaces: true,
+              detectIndentation: true,
+              trimAutoWhitespace: false
             }}
           />
         )}
