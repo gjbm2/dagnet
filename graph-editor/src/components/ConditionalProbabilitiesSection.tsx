@@ -278,11 +278,11 @@ export default function ConditionalProbabilitiesSection({
                                 const matchingCondition = sibling.conditional_p?.find((cp: any) => 
                                   JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                 );
-                                if (matchingCondition) {
+                                if (matchingCondition && sibling.conditional_p) {
                                   const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
                                     JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                   );
-                                  if (conditionIndex >= 0) {
+                                  if (conditionIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p) {
                                     const siblingCurrentValue = matchingCondition.p?.mean || 0;
                                     const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
                                     nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
@@ -294,7 +294,7 @@ export default function ConditionalProbabilitiesSection({
                             const equalShare = remainingProbability / siblingsWithSameCondition.length;
                             siblingsWithSameCondition.forEach(sibling => {
                               const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
-                              if (siblingIndex >= 0 && sibling.conditional_p) {
+                              if (siblingIndex >= 0 && sibling.conditional_p && nextGraph.edges[siblingIndex].conditional_p) {
                                 const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
                                   JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                 );
