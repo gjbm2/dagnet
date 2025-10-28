@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Handle, Position, NodeProps, useReactFlow, useStore } from 'reactflow';
+import { useTabContext } from '../../contexts/TabContext';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import Tooltip from '@/components/Tooltip';
@@ -37,7 +38,12 @@ interface ConversionNodeData {
 
 export default function ConversionNode({ data, selected }: NodeProps<ConversionNodeData>) {
   const { getEdges, getNodes, setNodes } = useReactFlow();
-  const { whatIfAnalysis, graph } = useGraphStore();
+  const { activeTabId, operations, tabs } = useTabContext();
+  const { graph } = useGraphStore();
+  
+  // Get current tab's what-if analysis state
+  const activeTab = tabs.find(tab => tab.id === activeTabId);
+  const whatIfAnalysis = activeTab?.editorState?.whatIfAnalysis;
   
   // Track hover state
   const [isHovered, setIsHovered] = useState(false);

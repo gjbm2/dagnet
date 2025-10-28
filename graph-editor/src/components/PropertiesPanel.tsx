@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
+import { useTabContext } from '../contexts/TabContext';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
@@ -13,16 +14,30 @@ interface PropertiesPanelProps {
   onSelectedNodeChange: (id: string | null) => void;
   selectedEdgeId: string | null;
   onSelectedEdgeChange: (id: string | null) => void;
+  tabId?: string;
 }
 
 export default function PropertiesPanel({ 
   selectedNodeId, 
   onSelectedNodeChange, 
   selectedEdgeId, 
-  onSelectedEdgeChange 
+  onSelectedEdgeChange,
+  tabId
 }: PropertiesPanelProps) {
-  const { graph, setGraph, whatIfAnalysis, setWhatIfAnalysis, saveHistoryState } = useGraphStore();
+  const { graph, setGraph, saveHistoryState } = useGraphStore();
+  const { tabs, operations: tabOps } = useTabContext();
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
+  
+  // Get tab-specific what-if analysis state
+  const myTab = tabs.find(t => t.id === tabId);
+  const whatIfAnalysis = myTab?.editorState?.whatIfAnalysis;
+  
+  // Helper to update tab's what-if state
+  const setWhatIfAnalysis = (analysis: any) => {
+    if (tabId) {
+      tabOps.updateTabState(tabId, { whatIfAnalysis: analysis });
+    }
+  };
   
   // Local state for form inputs to prevent eager updates
   const [localNodeData, setLocalNodeData] = useState<any>({});
@@ -528,10 +543,10 @@ export default function PropertiesPanel({
                             };
                             // Auto-assign a fresh color from the palette
                             if (!next.nodes[nodeIndex].layout) {
-                              next.nodes[nodeIndex].layout = {};
+                              next.nodes[nodeIndex].layout = { x: 0, y: 0 };
                             }
                             if (!next.nodes[nodeIndex].layout!.color) {
-                              next.nodes[nodeIndex].layout!.color = getNextAvailableColor(graph);
+                              next.nodes[nodeIndex].layout!.color = getNextAvailableColor(graph as any);
                             }
                             if (next.metadata) {
                               next.metadata.updated_at = new Date().toISOString();
@@ -991,7 +1006,7 @@ export default function PropertiesPanel({
                             const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
                             if (nodeIndex >= 0) {
                               if (!next.nodes[nodeIndex].layout) {
-                                next.nodes[nodeIndex].layout = {};
+                                next.nodes[nodeIndex].layout = { x: 0, y: 0 };
                               }
                               next.nodes[nodeIndex].layout.color = e.target.value;
                               if (next.metadata) {
@@ -1009,7 +1024,7 @@ export default function PropertiesPanel({
                             const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
                             if (nodeIndex >= 0) {
                               if (!next.nodes[nodeIndex].layout) {
-                                next.nodes[nodeIndex].layout = {};
+                                next.nodes[nodeIndex].layout = { x: 0, y: 0 };
                               }
                               next.nodes[nodeIndex].layout.color = target.value;
                               if (next.metadata) {

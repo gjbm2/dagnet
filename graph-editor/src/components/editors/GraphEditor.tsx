@@ -399,7 +399,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           }}>
             {/* What-If Analysis */}
             <CollapsibleSection 
-              title={<WhatIfAnalysisHeader />} 
+              title={<WhatIfAnalysisHeader tabId={tabId} />} 
               isOpen={whatIfOpen}
               onToggle={() => setWhatIfOpen(!whatIfOpen)}
             >
@@ -430,6 +430,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                 onSelectedNodeChange={setSelectedNodeId}
                 selectedEdgeId={selectedEdgeId}
                 onSelectedEdgeChange={setSelectedEdgeId}
+                tabId={tabId}
               />
             </CollapsibleSection>
 

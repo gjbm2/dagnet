@@ -218,7 +218,7 @@ export interface NavigatorOperations {
  */
 export interface EditorProps<T = any> {
   fileId: string;
-  data: T;
+  data?: T;
   onChange: (newData: T) => void;
   readonly?: boolean;
   viewMode: ViewMode;

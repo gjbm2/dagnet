@@ -80,6 +80,8 @@ export interface Registry {
   created_at: string;
   updated_at?: string;
   parameters: RegistryEntry[];
+  contexts?: RegistryEntry[];
+  cases?: RegistryEntry[];
 }
 
 export interface ContextEntry {

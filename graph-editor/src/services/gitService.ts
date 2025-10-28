@@ -112,9 +112,9 @@ class GitService {
   }
 
   // Get files in a directory
-  async getDirectoryContents(path: string, branch: string = this.config.branch): Promise<GitOperationResult> {
+  async getDirectoryContents(path: string, branch: string = this.config.branch, repoOwner?: string, repoName?: string): Promise<GitOperationResult> {
     try {
-      const response = await this.makeRequest(`/contents/${path}?ref=${branch}`);
+      const response = await this.makeRequest(`/contents/${path}?ref=${branch}`, {}, repoOwner, repoName);
       const files: GitFile[] = await response.json();
       
       if (this.config.debugGitOperations) {

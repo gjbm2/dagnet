@@ -1,13 +1,38 @@
 import React from 'react';
-import { useGraphStore } from '../contexts/GraphStoreContext';
+import { useTabContext } from '../contexts/TabContext';
 
-export default function WhatIfAnalysisHeader() {
-  const { whatIfAnalysis, whatIfOverrides, setWhatIfAnalysis, clearAllOverrides } = useGraphStore();
+interface WhatIfAnalysisHeaderProps {
+  tabId?: string;
+}
+
+export default function WhatIfAnalysisHeader({ tabId }: WhatIfAnalysisHeaderProps) {
+  const { operations, tabs } = useTabContext();
+  
+  // Use the specific tabId passed as prop, or fall back to activeTabId for backward compatibility
+  const targetTabId = tabId || tabs.find(tab => tab.isActive)?.id;
+  
+  // Get current tab's editor state
+  const targetTab = tabs.find(tab => tab.id === targetTabId);
+  const editorState = targetTab?.editorState;
+  
+  const whatIfAnalysis = editorState?.whatIfAnalysis;
+  const caseOverrides = editorState?.caseOverrides || {};
+  const conditionalOverrides = editorState?.conditionalOverrides || {};
 
   // Count active overrides (including legacy whatIfAnalysis)
   const activeCount = (whatIfAnalysis ? 1 : 0) + 
-                     (whatIfOverrides?.caseOverrides?.size || 0) +
-                     (whatIfOverrides?.conditionalOverrides?.size || 0);
+                     Object.keys(caseOverrides).length +
+                     Object.keys(conditionalOverrides).length;
+
+  const clearAllOverrides = () => {
+    if (targetTabId) {
+      operations.updateTabState(targetTabId, {
+        whatIfAnalysis: null,
+        caseOverrides: {},
+        conditionalOverrides: {}
+      });
+    }
+  };
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
@@ -18,7 +43,6 @@ export default function WhatIfAnalysisHeader() {
         <button
           onClick={(e) => {
             e.stopPropagation(); // Prevent section from collapsing
-            setWhatIfAnalysis(null);
             clearAllOverrides();
           }}
           style={{
