@@ -107,7 +107,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     type: 'credentials',
     displayName: 'Credentials',
     displayNamePlural: 'Credentials',
-    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/graph-editor/src/schemas/credentials-schema.json',
+    schemaFile: 'https://raw.githubusercontent.com/gjbm2/dagnet/main/schemas/credentials-schema.json',
     directory: 'credentials',
     extensions: ['.yaml', '.yml', '.json'],
     icon: '🔐',
