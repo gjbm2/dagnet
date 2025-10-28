@@ -39,9 +39,9 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const initialize = async () => {
       console.log('🚀 NavigatorContext: Starting initialization...');
-      await loadStateFromDB();
+      const savedState = await loadStateFromDB();
       console.log('📁 NavigatorContext: State loaded from DB, now loading credentials...');
-      await loadCredentialsAndUpdateRepo();
+      await loadCredentialsAndUpdateRepo(savedState);
       console.log('✅ NavigatorContext: Initialization complete');
       setIsInitialized(true);
     };
@@ -65,7 +65,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   /**
    * Load credentials and update selected repository
    */
-  const loadCredentialsAndUpdateRepo = async () => {
+  const loadCredentialsAndUpdateRepo = async (savedState: any) => {
     try {
       console.log('🔑 NavigatorContext: Loading credentials...');
       const result = await credentialsManager.loadCredentials();
@@ -74,10 +74,17 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       if (result.success && result.credentials) {
         const availableRepos = result.credentials.git.map(repo => repo.name);
         const defaultRepo = result.credentials.defaultGitRepo || availableRepos[0];
-        const gitCreds = result.credentials.git.find(repo => repo.name === defaultRepo) || result.credentials.git[0];
         
+        // Use saved repo if it exists and is valid, otherwise use default
+        const savedRepoName = savedState?.selectedRepo;
+        console.log(`🔑 NavigatorContext: Saved repo from DB: ${savedRepoName}`);
         console.log(`🔑 NavigatorContext: Available repos: ${availableRepos.join(', ')}`);
         console.log(`🔑 NavigatorContext: Default repo: ${defaultRepo}`);
+        
+        const repoToUse = savedRepoName && availableRepos.includes(savedRepoName) ? savedRepoName : defaultRepo;
+        const gitCreds = result.credentials.git.find(repo => repo.name === repoToUse) || result.credentials.git[0];
+        
+        console.log(`🔑 NavigatorContext: Using repo: ${repoToUse}`);
         console.log(`🔑 NavigatorContext: Selected git creds:`, gitCreds);
         
         if (gitCreds) {
@@ -88,11 +95,15 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           const branches = await fetchBranches(gitCreds.name);
           const selectedBranch = branches.includes('main') ? 'main' : branches[0] || gitCreds.branch || 'main';
           
+          // Use saved branch if valid, otherwise use default
+          const savedBranchName = savedState?.selectedBranch;
+          const branchToUse = savedBranchName && branches.includes(savedBranchName) ? savedBranchName : selectedBranch;
+          
           setState(prev => {
             const newState = {
               ...prev,
               selectedRepo: gitCreds.name,
-              selectedBranch,
+              selectedBranch: branchToUse,
               availableRepos,
               availableBranches: branches
             };
@@ -101,8 +112,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           });
           
           // Load items for the selected repository
-          console.log(`🔑 NavigatorContext: Loading items for ${gitCreds.name}...`);
-          await loadItems(gitCreds.name, selectedBranch);
+          console.log(`🔑 NavigatorContext: Loading items for ${gitCreds.name} on branch ${branchToUse}...`);
+          await loadItems(gitCreds.name, branchToUse);
         } else {
           console.log('🔑 NavigatorContext: No git credentials found');
           setState(prev => ({
@@ -128,16 +139,21 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    */
   const loadStateFromDB = async () => {
     const appState = await db.getAppState();
-    console.log('NavigatorContext: Loading state from DB:', appState?.navigatorState);
+    console.log('📁 NavigatorContext: Raw state from DB:', appState?.navigatorState);
     if (appState?.navigatorState) {
       const restoredState = {
         ...appState.navigatorState,
         searchQuery: '',
-        selectedRepo: appState.navigatorState.selectedRepo || 'nous-conversion',
-        selectedBranch: appState.navigatorState.selectedBranch || 'main'
+        selectedRepo: appState.navigatorState.selectedRepo || '',
+        selectedBranch: appState.navigatorState.selectedBranch || ''
       };
-      console.log('NavigatorContext: Restoring state:', restoredState);
+      console.log('📁 NavigatorContext: Restoring state:', restoredState);
+      console.log('📁 NavigatorContext: Saved selectedRepo:', appState.navigatorState.selectedRepo);
       setState(restoredState);
+      return restoredState;
+    } else {
+      console.log('📁 NavigatorContext: No saved state found in DB');
+      return null;
     }
   };
 
@@ -227,12 +243,17 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    * Select repository
    */
   const selectRepository = useCallback(async (repo: string) => {
-    setState(prev => ({
-      ...prev,
-      selectedRepo: repo,
-      selectedBranch: '', // Clear selected branch when repo changes
-      availableBranches: [] // Clear available branches
-    }));
+    console.log('🔄 NavigatorContext: selectRepository called with:', repo);
+    setState(prev => {
+      const newState = {
+        ...prev,
+        selectedRepo: repo,
+        selectedBranch: '', // Clear selected branch when repo changes
+        availableBranches: [] // Clear available branches
+      };
+      console.log('🔄 NavigatorContext: Updated state:', newState);
+      return newState;
+    });
 
     if (repo) {
       // Fetch branches for the selected repository
@@ -324,7 +345,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       
       // Pass credentials to gitService
       console.log('📦 NavigatorContext: Calling gitService.getDirectoryContents for graphs...');
-      const graphsResult = await gitService.getDirectoryContents('graphs', branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+      const graphsPath = gitCreds.basePath ? `${gitCreds.basePath}/graphs` : 'graphs';
+      const graphsResult = await gitService.getDirectoryContents(graphsPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
       console.log('📦 NavigatorContext: Graphs result:', graphsResult);
       
       const items: RepositoryItem[] = [];
@@ -415,36 +437,34 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       try {
         const { gitService } = await import('../services/gitService');
         
-        // Load parameters - try both /params and /parameters directories
-        const paramDirs = ['params', gitCreds.paramsPath || 'parameters'];
-        for (const dir of paramDirs) {
-          console.log(`Navigator: Trying ${dir}/ directory...`);
-          const paramsResult = await gitService.getDirectoryContents(dir, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+        // Load parameters from configured path
+        const paramsPath = gitCreds.basePath ? `${gitCreds.basePath}/${gitCreds.paramsPath || 'parameters'}` : (gitCreds.paramsPath || 'parameters');
+        console.log(`Navigator: Loading parameters from ${paramsPath}/ directory...`);
+        const paramsResult = await gitService.getDirectoryContents(paramsPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
           
-          if (paramsResult.success && paramsResult.data && Array.isArray(paramsResult.data)) {
-            console.log(`Navigator: Found ${paramsResult.data.length} files in ${dir}/`);
-            paramsResult.data.forEach((file: any) => {
-              if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
-                const alreadyAdded = items.some(i => i.type === 'parameter' && i.id === file.name);
-                if (!alreadyAdded) {
-                  console.log('Navigator: Adding parameter:', file.name);
-                  items.push({
-                    id: file.name,
-                    type: 'parameter',
-                    name: file.name,
-                    path: file.path,
-                    description: `Parameter from ${branch}`
-                  });
-                }
+        if (paramsResult.success && paramsResult.data && Array.isArray(paramsResult.data)) {
+          console.log(`Navigator: Found ${paramsResult.data.length} files in ${paramsPath}/`);
+          paramsResult.data.forEach((file: any) => {
+            if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              const alreadyAdded = items.some(i => i.type === 'parameter' && i.id === file.name);
+              if (!alreadyAdded) {
+                console.log('Navigator: Adding parameter:', file.name);
+                items.push({
+                  id: file.name,
+                  type: 'parameter',
+                  name: file.name,
+                  path: file.path,
+                  description: `Parameter from ${branch}`
+                });
               }
-            });
-            break; // Found parameters, don't try other directory
-          }
+            }
+          });
         }
         
         // Load contexts from contexts/ directory
         console.log('Navigator: Loading contexts from /contexts directory...');
-        const contextsResult = await gitService.getDirectoryContents(gitCreds.contextsPath || 'contexts', branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+        const contextsPath = gitCreds.basePath ? `${gitCreds.basePath}/${gitCreds.contextsPath || 'contexts'}` : (gitCreds.contextsPath || 'contexts');
+        const contextsResult = await gitService.getDirectoryContents(contextsPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
         
         if (contextsResult.success && contextsResult.data && Array.isArray(contextsResult.data)) {
           console.log('Navigator: Found', contextsResult.data.length, 'files in contexts/');
@@ -468,7 +488,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         
         // Load cases from cases/ directory
         console.log('Navigator: Loading cases from /cases directory...');
-        const casesResult = await gitService.getDirectoryContents(gitCreds.casesPath || 'cases', branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+        const casesPath = gitCreds.basePath ? `${gitCreds.basePath}/${gitCreds.casesPath || 'cases'}` : (gitCreds.casesPath || 'cases');
+        const casesResult = await gitService.getDirectoryContents(casesPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
         
         if (casesResult.success && casesResult.data && Array.isArray(casesResult.data)) {
           console.log('Navigator: Found', casesResult.data.length, 'files in cases/');

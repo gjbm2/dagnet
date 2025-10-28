@@ -317,9 +317,10 @@ export class CredentialsManager {
     
     // Validate each Git credential
     for (const gitCred of credentials.git) {
-      if (!gitCred.name || !gitCred.owner || !gitCred.repo || !gitCred.token) {
+      if (!gitCred.name || !gitCred.owner || !gitCred.repo) {
         return false;
       }
+      // Token is optional (for public repositories)
     }
     
     return true;
