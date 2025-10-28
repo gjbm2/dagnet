@@ -11,6 +11,8 @@ export type WhatIfOverrides = {
   caseOverrides?: Record<string, string>;
   // Conditional edge overrides: edgeId -> forced visited nodes (hyperprior activation)
   conditionalOverrides?: Record<string, Set<string>>;
+  // Version counter for triggering re-renders when overrides change
+  _version?: number;
 };
 
 /**
