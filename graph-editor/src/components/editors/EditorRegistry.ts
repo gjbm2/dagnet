@@ -2,48 +2,38 @@ import { ObjectType } from '../../types';
 import { GraphEditor } from './GraphEditor';
 import { FormEditor } from './FormEditor';
 import { RawView } from './RawView';
+import { getFileTypeConfig } from '../../config/fileTypeRegistry';
 
 /**
  * Editor Registry
  * 
- * Maps object types and view modes to editor components
+ * Maps editor type identifiers to actual React components.
+ * Uses FILE_TYPE_REGISTRY as the single source of truth for which editor to use.
  */
 
-export const editorRegistry = {
-  // Interactive editors
-  interactive: {
-    graph: GraphEditor,
-    parameter: FormEditor,
-    context: FormEditor,
-    case: FormEditor,
-    settings: FormEditor,
-    about: FormEditor
-  },
-  
-  // Raw editors (JSON/YAML)
-  'raw-json': {
-    graph: RawView,
-    parameter: RawView,
-    context: RawView,
-    case: RawView,
-    settings: RawView,
-    about: RawView
-  },
-  
-  'raw-yaml': {
-    graph: RawView,
-    parameter: RawView,
-    context: RawView,
-    case: RawView,
-    settings: RawView,
-    about: RawView
-  }
+const EDITOR_COMPONENTS = {
+  graph: GraphEditor,
+  form: FormEditor,
+  raw: RawView
 };
 
 /**
- * Get editor component for a given type and view mode
+ * Get editor component for a given type and view mode.
+ * Queries FILE_TYPE_REGISTRY to determine which editor to use.
  */
 export function getEditorComponent(type: ObjectType, viewMode: 'interactive' | 'raw-json' | 'raw-yaml') {
-  return editorRegistry[viewMode][type] || FormEditor;
+  // Raw views always use RawView component
+  if (viewMode === 'raw-json' || viewMode === 'raw-yaml') {
+    return RawView;
+  }
+  
+  // Interactive views - consult FILE_TYPE_REGISTRY
+  const config = getFileTypeConfig(type);
+  if (config?.interactiveEditor) {
+    return EDITOR_COMPONENTS[config.interactiveEditor];
+  }
+  
+  // Fallback to FormEditor
+  return FormEditor;
 }
 

@@ -24,6 +24,12 @@ export function HelpMenu() {
     console.log('About DagNet');
   };
 
+  const handleOpenRegistry = () => {
+    // Open parameter registry in navigator
+    // TODO: Add direct navigation to registry section
+    console.log('Open Registry');
+  };
+
   return (
     <Menubar.Menu>
       <Menubar.Trigger className="menubar-trigger">Help</Menubar.Trigger>
@@ -42,6 +48,15 @@ export function HelpMenu() {
           >
             Keyboard Shortcuts
             <div className="menubar-right-slot">⌘/</div>
+          </Menubar.Item>
+
+          <Menubar.Separator className="menubar-separator" />
+
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={handleOpenRegistry}
+          >
+            Parameter Registry
           </Menubar.Item>
 
           <Menubar.Separator className="menubar-separator" />

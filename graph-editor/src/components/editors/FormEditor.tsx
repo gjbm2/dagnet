@@ -1,53 +1,68 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { EditorProps } from '../../types';
 import { useFileState } from '../../contexts/TabContext';
-import Form from '@rjsf/core';
+import Form from '@rjsf/mui';
 import validator from '@rjsf/validator-ajv8';
 import { RJSFSchema } from '@rjsf/utils';
-import yaml from 'js-yaml';
+import { getFileTypeConfig, getSchemaFile } from '../../config/fileTypeRegistry';
 
 /**
  * Form Editor
  * 
  * Generic form editor for Parameters, Contexts, and Cases
- * Uses @rjsf/core for JSON Schema forms
+ * Uses @rjsf/mui with Material Design styling
+ * Schemas and file type metadata are centrally managed in fileTypeRegistry
  */
 export function FormEditor({ fileId, readonly = false }: EditorProps) {
   const { data, isDirty, updateData } = useFileState(fileId);
   const [schema, setSchema] = useState<RJSFSchema | null>(null);
-  const [viewMode, setViewMode] = useState<'form' | 'json' | 'yaml'>('form');
-  const [jsonText, setJsonText] = useState('');
-  const [yamlText, setYamlText] = useState('');
-  const [parseError, setParseError] = useState<string | null>(null);
-  const isInitialMount = useRef(true);
+  const [formData, setFormData] = useState<any>(null);
+  const initialDataRef = useRef<string>('');
+  const hasLoadedRef = useRef(false);
+  const firstChangeIgnoredRef = useRef(false); // Track if we've ignored the first spurious onChange
+  
+  // Undo/redo history
+  const historyRef = useRef<any[]>([]);
+  const historyIndexRef = useRef<number>(-1);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   // Determine object type from fileId
   const objectType = fileId.split('-')[0] as 'parameter' | 'context' | 'case';
 
-  // Load schema based on object type
+  // Load schema based on object type (using central registry)
   useEffect(() => {
     const loadSchema = async () => {
       try {
-        // Try to load schema from paramRegistryService
-        const { paramRegistryService } = await import('../../services/paramRegistryService');
+        const schemaUrl = getSchemaFile(objectType);
         
-        let schemaName = '';
-        if (objectType === 'parameter') {
-          schemaName = 'parameter-schema.yaml';
-        } else if (objectType === 'context') {
-          schemaName = 'context-schema.yaml';
-        } else if (objectType === 'case') {
-          schemaName = 'case-parameter-schema.yaml';
+        if (!schemaUrl) {
+          throw new Error(`No schema configured for type: ${objectType}`);
         }
         
-        if (schemaName) {
-          console.log(`FormEditor: Loading schema ${schemaName}...`);
-          const loadedSchema = await paramRegistryService.loadSchema(schemaName);
-          console.log(`FormEditor: Loaded schema:`, loadedSchema);
-          setSchema(loadedSchema as RJSFSchema);
+        console.log(`FormEditor: Loading schema from ${schemaUrl} for ${objectType}...`);
+        
+        // Fetch absolute URL directly
+        const response = await fetch(schemaUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch schema: ${response.status} ${response.statusText}`);
+        }
+        
+        const contentType = response.headers.get('content-type');
+        let loadedSchema;
+        
+        if (contentType?.includes('yaml') || schemaUrl.endsWith('.yaml') || schemaUrl.endsWith('.yml')) {
+          // Parse YAML
+          const yaml = await import('js-yaml');
+          const text = await response.text();
+          loadedSchema = yaml.load(text);
         } else {
-          throw new Error('Unknown object type');
+          // Parse JSON
+          loadedSchema = await response.json();
         }
+        
+        console.log(`FormEditor: Loaded schema:`, loadedSchema);
+        setSchema(loadedSchema as RJSFSchema);
       } catch (error) {
         console.warn(`No schema found for ${objectType}, using default:`, error);
         // Use a generic schema if specific one doesn't exist
@@ -61,65 +76,166 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
     loadSchema();
   }, [objectType]);
 
-  // Update JSON/YAML text when data changes
+  // Sync external data changes to form
   useEffect(() => {
     if (data) {
-      console.log('FormEditor: Data changed, updating text views');
-      setJsonText(JSON.stringify(data, null, 2));
-      try {
-        setYamlText(yaml.dump(data, { indent: 2, lineWidth: -1 }));
-      } catch (e) {
-        console.error('Failed to convert to YAML:', e);
+      const dataStr = JSON.stringify(data);
+      const formDataStr = JSON.stringify(formData);
+      
+      // Only update form if data actually changed (not just a re-render)
+      if (dataStr !== formDataStr) {
+        console.log('FormEditor: External data changed, updating form');
+        setFormData(data);
+        
+        // Store initial data snapshot on first load
+        if (!hasLoadedRef.current) {
+          initialDataRef.current = dataStr;
+          hasLoadedRef.current = true;
+          console.log('FormEditor: Stored initial data snapshot');
+        } else {
+          // After initial load, add external changes to history (like revert or JSON editor changes)
+          console.log('FormEditor: External data changed after load, adding to history');
+          addToHistory(data);
+        }
       }
     }
   }, [data]);
 
-  // Reset initial mount flag when fileId changes (new file loaded)
+  // Reset on file change
   useEffect(() => {
-    isInitialMount.current = true;
+    hasLoadedRef.current = false;
+    initialDataRef.current = '';
+    firstChangeIgnoredRef.current = false;
+    setFormData(null);
+    historyRef.current = [];
+    historyIndexRef.current = -1;
+    setCanUndo(false);
+    setCanRedo(false);
   }, [fileId]);
 
-  const handleFormChange = (formData: any) => {
-    // Skip first onChange call (happens on mount)
-    if (isInitialMount.current) {
-      console.log('FormEditor: Skipping initial form change (mount)');
-      isInitialMount.current = false;
+
+  // Update undo/redo state
+  const updateUndoRedoState = () => {
+    setCanUndo(historyIndexRef.current > 0);
+    setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+  };
+
+  // Add to history
+  const addToHistory = (data: any) => {
+    const dataStr = JSON.stringify(data);
+    
+    // Don't add duplicate entries
+    if (historyIndexRef.current >= 0) {
+      const currentStr = JSON.stringify(historyRef.current[historyIndexRef.current]);
+      if (currentStr === dataStr) return;
+    }
+    
+    // Truncate history after current index
+    historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
+    
+    // Add new entry
+    historyRef.current.push(JSON.parse(dataStr)); // Deep clone
+    historyIndexRef.current = historyRef.current.length - 1;
+    
+    // Limit history size
+    if (historyRef.current.length > 50) {
+      historyRef.current.shift();
+      historyIndexRef.current--;
+    }
+    
+    updateUndoRedoState();
+  };
+
+  // Undo
+  const undo = () => {
+    if (historyIndexRef.current > 0) {
+      historyIndexRef.current--;
+      const previousData = historyRef.current[historyIndexRef.current];
+      setFormData(previousData);
+      updateData(JSON.parse(JSON.stringify(previousData)));
+      updateUndoRedoState();
+      console.log('FormEditor: Undo to index', historyIndexRef.current);
+    }
+  };
+
+  // Redo
+  const redo = () => {
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+      historyIndexRef.current++;
+      const nextData = historyRef.current[historyIndexRef.current];
+      setFormData(nextData);
+      updateData(JSON.parse(JSON.stringify(nextData)));
+      updateUndoRedoState();
+      console.log('FormEditor: Redo to index', historyIndexRef.current);
+    }
+  };
+
+  // Listen for undo/redo keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        undo();
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        redo();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canUndo, canRedo]);
+
+  // Expose undo/redo capability to Edit menu
+  useEffect(() => {
+    const handleUndoRedoQuery = (e: CustomEvent) => {
+      if (e.detail?.fileId === fileId) {
+        e.detail.canUndo = canUndo;
+        e.detail.canRedo = canRedo;
+        e.detail.undo = undo;
+        e.detail.redo = redo;
+      }
+    };
+    
+    window.addEventListener('dagnet:queryUndoRedo' as any, handleUndoRedoQuery);
+    return () => window.removeEventListener('dagnet:queryUndoRedo' as any, handleUndoRedoQuery);
+  }, [fileId, canUndo, canRedo]);
+
+  const handleFormChange = (form: any) => {
+    const newFormData = form.formData;
+    
+    // Ignore the very first onChange event from RJSF (it's always fired during initialization)
+    if (!firstChangeIgnoredRef.current) {
+      console.log('FormEditor: Ignoring first onChange (RJSF initialization artifact)');
+      firstChangeIgnoredRef.current = true;
+      setFormData(newFormData);
       return;
     }
     
-    if (!readonly) {
-      console.log('FormEditor: Form changed, updating data');
-      updateData(formData.formData);
+    if (!readonly && hasLoadedRef.current) {
+      const newDataStr = JSON.stringify(newFormData);
+      const currentDataStr = JSON.stringify(data);
+      
+      console.log('FormEditor: handleFormChange - real user change check', {
+        dataChanged: newDataStr !== currentDataStr
+      });
+      
+      // Only update if data actually changed
+      if (newDataStr !== currentDataStr) {
+        console.log('FormEditor: Form changed, calling updateData (will mark dirty)');
+        // Deep clone to ensure new references
+        const clonedData = JSON.parse(newDataStr);
+        updateData(clonedData);
+        
+        // Add to history
+        addToHistory(clonedData);
+      }
     }
+    
+    // Always update local form state for responsiveness
+    setFormData(newFormData);
   };
 
-  const handleJsonChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setJsonText(e.target.value);
-    setParseError(null);
-    
-    try {
-      const parsed = JSON.parse(e.target.value);
-      if (!readonly) {
-        updateData(parsed);
-      }
-    } catch (error) {
-      setParseError((error as Error).message);
-    }
-  };
-
-  const handleYamlChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setYamlText(e.target.value);
-    setParseError(null);
-    
-    try {
-      const parsed = yaml.load(e.target.value);
-      if (!readonly) {
-        updateData(parsed);
-      }
-    } catch (error) {
-      setParseError((error as Error).message);
-    }
-  };
 
   if (!data) {
     return (
@@ -137,158 +253,45 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   }
 
   return (
-    <div className="form-editor" style={{
+    <div style={{
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
-      background: '#fff'
+      background: '#fafafa',
+      overflow: 'auto'
     }}>
-      {/* Header */}
       <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '12px 16px',
-        borderBottom: '1px solid #e0e0e0',
-        background: '#f8f9fa'
+        padding: '24px',
+        maxWidth: '100%',
+        margin: '0 auto',
+        width: '100%',
+        boxSizing: 'border-box'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '14px', fontWeight: 600, color: '#333' }}>
-            {objectType.charAt(0).toUpperCase() + objectType.slice(1)} Editor
-          </span>
-          {isDirty && (
-            <span style={{
-              fontSize: '12px',
-              color: '#ff9800',
-              background: '#fff3e0',
-              padding: '2px 8px',
-              borderRadius: '4px'
-            }}>
-              Modified
-            </span>
-          )}
-          {readonly && (
-            <span style={{
-              fontSize: '12px',
-              color: '#666',
-              background: '#e0e0e0',
-              padding: '2px 8px',
-              borderRadius: '4px'
-            }}>
-              Read-only
-            </span>
-          )}
-        </div>
-
-        {/* View mode toggle */}
-        <div style={{
-          display: 'flex',
-          gap: '4px',
-          background: '#fff',
-          padding: '4px',
-          borderRadius: '4px',
-          border: '1px solid #e0e0e0'
-        }}>
-          {['form', 'json', 'yaml'].map(mode => (
-            <button
-              key={mode}
-              onClick={() => setViewMode(mode as any)}
-              style={{
-                padding: '6px 12px',
-                border: 'none',
-                background: viewMode === mode ? '#1976d2' : 'transparent',
-                color: viewMode === mode ? '#fff' : '#666',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                fontWeight: 500,
-                transition: 'all 0.2s'
-              }}
-            >
-              {mode.toUpperCase()}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Content */}
-      <div style={{
-        flex: 1,
-        overflow: 'auto',
-        padding: '16px'
-      }}>
-        {viewMode === 'form' && schema ? (
+        {schema && formData ? (
           <Form
             schema={schema}
-            formData={data}
+            formData={formData}
             validator={validator}
             onChange={handleFormChange}
             disabled={readonly}
             liveValidate
+            showErrorList={false}
+            uiSchema={{
+              'ui:submitButtonOptions': {
+                norender: true
+              }
+            }}
           />
-        ) : viewMode === 'json' ? (
-          <div>
-            {parseError && (
-              <div style={{
-                padding: '8px 12px',
-                background: '#ffebee',
-                color: '#c62828',
-                borderRadius: '4px',
-                marginBottom: '12px',
-                fontSize: '13px'
-              }}>
-                Parse Error: {parseError}
-              </div>
-            )}
-            <textarea
-              value={jsonText}
-              onChange={handleJsonChange}
-              readOnly={readonly}
-              style={{
-                width: '100%',
-                height: 'calc(100% - 40px)',
-                minHeight: '400px',
-                fontFamily: 'Monaco, Consolas, monospace',
-                fontSize: '13px',
-                padding: '12px',
-                border: '1px solid #e0e0e0',
-                borderRadius: '4px',
-                resize: 'vertical'
-              }}
-              spellCheck={false}
-            />
-          </div>
         ) : (
-          <div>
-            {parseError && (
-              <div style={{
-                padding: '8px 12px',
-                background: '#ffebee',
-                color: '#c62828',
-                borderRadius: '4px',
-                marginBottom: '12px',
-                fontSize: '13px'
-              }}>
-                Parse Error: {parseError}
-              </div>
-            )}
-            <textarea
-              value={yamlText}
-              onChange={handleYamlChange}
-              readOnly={readonly}
-              style={{
-                width: '100%',
-                height: 'calc(100% - 40px)',
-                minHeight: '400px',
-                fontFamily: 'Monaco, Consolas, monospace',
-                fontSize: '13px',
-                padding: '12px',
-                border: '1px solid #e0e0e0',
-                borderRadius: '4px',
-                resize: 'vertical'
-              }}
-              spellCheck={false}
-            />
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '200px',
+            color: '#666',
+            fontSize: '14px'
+          }}>
+            Loading schema...
           </div>
         )}
       </div>

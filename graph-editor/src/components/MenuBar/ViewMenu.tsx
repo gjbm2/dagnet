@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
@@ -16,8 +16,20 @@ export function ViewMenu() {
   const { operations: navOps } = useNavigatorContext();
   
   const activeTab = tabs.find(t => t.id === activeTabId);
-  const isGraphTab = activeTab?.fileId.startsWith('graph-');
+  const isGraphTab = activeTab?.fileId.startsWith('graph-') ?? false;
   const isInteractiveView = activeTab?.viewMode === 'interactive';
+  
+  // Get tab-specific state directly from tab
+  const useUniformScaling = activeTab?.editorState?.useUniformScaling ?? false;
+  const massGenerosity = activeTab?.editorState?.massGenerosity ?? 0.5;
+  const autoReroute = activeTab?.editorState?.autoReroute ?? true;
+  
+  // Debug: Log when menu is checked
+  React.useEffect(() => {
+    if (activeTab) {
+      console.log(`ViewMenu: activeTab=${activeTab.id}, fileId=${activeTab.fileId}, isGraphTab=${isGraphTab}, isInteractive=${isInteractiveView}, editorState=`, activeTab.editorState);
+    }
+  }, [activeTab, isGraphTab, isInteractiveView]);
 
   const handleOpenInNewTab = async (viewMode: 'raw-json' | 'raw-yaml') => {
     if (activeTabId) {
@@ -30,29 +42,36 @@ export function ViewMenu() {
   };
 
   // Graph-specific handlers
-  const handleEdgeScaling = () => {
-    console.log('Edge Scaling');
-    // TODO: Dispatch to graph editor
+  const handleToggleUniformScaling = () => {
+    const newValue = !useUniformScaling;
+    window.dispatchEvent(new CustomEvent('dagnet:setUniformScaling', { detail: { value: newValue } }));
+  };
+
+  const handleSetMassGenerosity = (value: number) => {
+    window.dispatchEvent(new CustomEvent('dagnet:setMassGenerosity', { detail: { value } }));
   };
 
   const handleReRoute = () => {
-    console.log('Re-route');
-    // TODO: Dispatch to graph editor
+    window.dispatchEvent(new CustomEvent('dagnet:forceReroute'));
   };
 
-  const handleAutoLayout = (direction: string) => {
-    console.log('Auto Layout:', direction);
-    // TODO: Dispatch to graph editor
+  const handleToggleAutoReroute = () => {
+    const newValue = !autoReroute;
+    window.dispatchEvent(new CustomEvent('dagnet:setAutoReroute', { detail: { value: newValue } }));
+  };
+
+  const handleAutoLayout = (direction: 'LR' | 'RL' | 'TB' | 'BT') => {
+    window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction } }));
   };
 
   const handleTogglePropertiesPanel = () => {
+    // TODO: Implement sidebar panel toggles
     console.log('Toggle Properties Panel');
-    // TODO: Dispatch to graph editor
   };
 
   const handleToggleWhatIfPanel = () => {
+    // TODO: Implement sidebar panel toggles
     console.log('Toggle What-If Analysis');
-    // TODO: Dispatch to graph editor
   };
 
   return (
@@ -93,12 +112,72 @@ export function ViewMenu() {
           {/* Graph-specific options */}
           {isGraphTab && isInteractiveView && (
             <>
-              <Menubar.Item 
-                className="menubar-item" 
-                onSelect={handleEdgeScaling}
-              >
-                Edge Scaling
-              </Menubar.Item>
+              <Menubar.Sub>
+                <Menubar.SubTrigger className="menubar-item">
+                  Edge Scaling
+                  <div className="menubar-right-slot">›</div>
+                </Menubar.SubTrigger>
+                <Menubar.Portal>
+                  <Menubar.SubContent className="menubar-content" alignOffset={-5}>
+                    <div style={{ padding: '8px 12px' }}>
+                      <label style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '8px',
+                        cursor: 'pointer',
+                        fontSize: '13px'
+                      }}>
+                        <input 
+                          type="checkbox" 
+                          checked={useUniformScaling} 
+                          onChange={handleToggleUniformScaling}
+                          style={{ cursor: 'pointer' }}
+                        />
+                        <span>Uniform</span>
+                      </label>
+                    </div>
+                    
+                    <div style={{ borderTop: '1px solid #e9ecef', margin: '4px 0' }} />
+                    
+                    <div style={{ padding: '8px 12px' }}>
+                      <div style={{ 
+                        marginBottom: '6px',
+                        fontSize: '12px',
+                        color: '#666',
+                        display: 'flex',
+                        justifyContent: 'space-between'
+                      }}>
+                        <span>Global</span>
+                        <span>Local</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.1"
+                        value={massGenerosity}
+                        onChange={(e) => handleSetMassGenerosity(parseFloat(e.target.value))}
+                        disabled={useUniformScaling}
+                        style={{ 
+                          width: '100%',
+                          cursor: useUniformScaling ? 'not-allowed' : 'pointer',
+                          opacity: useUniformScaling ? 0.5 : 1
+                        }}
+                      />
+                      <div style={{
+                        fontSize: '11px',
+                        color: '#999',
+                        textAlign: 'center',
+                        marginTop: '4px'
+                      }}>
+                        {(massGenerosity * 100).toFixed(0)}%
+                      </div>
+                    </div>
+                  </Menubar.SubContent>
+                </Menubar.Portal>
+              </Menubar.Sub>
+
+              <Menubar.Separator className="menubar-separator" />
 
               <Menubar.Item 
                 className="menubar-item" 
@@ -106,6 +185,15 @@ export function ViewMenu() {
               >
                 Re-route
               </Menubar.Item>
+
+              <Menubar.Item 
+                className="menubar-item" 
+                onSelect={handleToggleAutoReroute}
+              >
+                {autoReroute ? '✓ ' : ''}Auto Re-route
+              </Menubar.Item>
+
+              <Menubar.Separator className="menubar-separator" />
 
               <Menubar.Sub>
                 <Menubar.SubTrigger className="menubar-item">

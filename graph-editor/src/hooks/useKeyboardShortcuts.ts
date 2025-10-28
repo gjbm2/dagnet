@@ -101,17 +101,15 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Cmd/Ctrl+Z: Undo (TODO: Implement undo)
+      // Cmd/Ctrl+Z: Undo - handled by individual editors
       if (modifier && e.key === 'z' && !e.shiftKey) {
-        // Let this be handled by the editor
-        console.log('Undo');
+        // Don't interfere - let the active editor handle this
         return;
       }
 
-      // Cmd/Ctrl+Shift+Z: Redo (TODO: Implement redo)
-      if (modifier && e.key === 'z' && e.shiftKey) {
-        // Let this be handled by the editor
-        console.log('Redo');
+      // Cmd/Ctrl+Shift+Z or Cmd/Ctrl+Y: Redo - handled by individual editors
+      if ((modifier && e.key === 'z' && e.shiftKey) || (modifier && e.key === 'y')) {
+        // Don't interfere - let the active editor handle this
         return;
       }
     };

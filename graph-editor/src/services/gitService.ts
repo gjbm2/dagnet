@@ -45,14 +45,17 @@ export interface GitOperationResult {
 
 class GitService {
   private config = gitConfig;
-  private baseUrl: string;
 
-  constructor() {
-    this.baseUrl = `${this.config.githubApiBase}/repos/${this.config.repoOwner}/${this.config.repoName}`;
+  // Get base URL dynamically to support repo switching
+  private getBaseUrl(repoOwner?: string, repoName?: string): string {
+    const owner = repoOwner || this.config.repoOwner;
+    const name = repoName || this.config.repoName;
+    return `${this.config.githubApiBase}/repos/${owner}/${name}`;
   }
 
-  private async makeRequest(endpoint: string, options: RequestInit = {}): Promise<Response> {
-    const url = `${this.baseUrl}${endpoint}`;
+  private async makeRequest(endpoint: string, options: RequestInit = {}, repoOwner?: string, repoName?: string): Promise<Response> {
+    const baseUrl = this.getBaseUrl(repoOwner, repoName);
+    const url = `${baseUrl}${endpoint}`;
     
     const headers: HeadersInit = {
       'Accept': 'application/vnd.github.v3+json',

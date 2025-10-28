@@ -61,7 +61,24 @@ export interface TabState {
   icon?: string;               // Optional icon
   
   // Tab-specific state (e.g. scroll position, selection)
-  editorState?: any;
+  editorState?: {
+    // Graph editor specific
+    useUniformScaling?: boolean;
+    massGenerosity?: number;
+    autoReroute?: boolean;
+    sidebarOpen?: boolean;
+    whatIfOpen?: boolean;
+    propertiesOpen?: boolean;
+    jsonOpen?: boolean;
+    selectedNodeId?: string | null;
+    selectedEdgeId?: string | null;
+    // What-if analysis state (per-tab, not per-file)
+    whatIfAnalysis?: any;
+    caseOverrides?: Record<string, string>; // nodeId -> variantName
+    conditionalOverrides?: Record<string, number>; // edgeId -> probability
+    // Target panel for "Open in X View" placement
+    targetPanel?: string;
+  };
   
   // UI state
   closable?: boolean;
@@ -166,17 +183,18 @@ export interface SettingsData {
  * Tab operations interface
  */
 export interface TabOperations {
-  openTab: (item: RepositoryItem, viewMode?: ViewMode) => Promise<void>;
+  openTab: (item: RepositoryItem, viewMode?: ViewMode, forceNew?: boolean) => Promise<void>;
   closeTab: (tabId: string, force?: boolean) => Promise<boolean>;
   switchTab: (tabId: string) => void;
   updateTabData: (fileId: string, newData: any) => void;
+  updateTabState: (tabId: string, editorState: Partial<TabState['editorState']>) => Promise<void>;
   getDirtyTabs: () => TabState[];
   saveTab: (tabId: string) => Promise<void>;
   saveAll: () => Promise<void>;
   revertTab: (tabId: string) => void;
   
   // View mode operations
-  openInNewView: (tabId: string, viewMode: ViewMode) => Promise<void>;
+  openInNewView: (tabId: string, viewMode: ViewMode, targetPanel?: string) => Promise<void>;
   
   // Multi-file commit
   commitFiles: (request: CommitRequest) => Promise<void>;

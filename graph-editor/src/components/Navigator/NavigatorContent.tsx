@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useTabContext } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
 import { ObjectTypeSection } from './ObjectTypeSection';
+import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
+import { RepositoryItem } from '../../types';
 import './Navigator.css';
 
 /**
@@ -15,7 +17,8 @@ import './Navigator.css';
  */
 export function NavigatorContent() {
   const { state, operations, items, isLoading } = useNavigatorContext();
-  const { operations: tabOps } = useTabContext();
+  const { tabs, operations: tabOps } = useTabContext();
+  const [contextMenu, setContextMenu] = useState<{ item: RepositoryItem; x: number; y: number } | null>(null);
 
   // Group items by type
   const graphItems = items.filter(item => item.type === 'graph');
@@ -24,11 +27,37 @@ export function NavigatorContent() {
   const caseItems = items.filter(item => item.type === 'case');
 
   const handleItemClick = (item: any) => {
-    tabOps.openTab(item);
+    const fileId = `${item.type}-${item.id}`;
+    
+    // Check if there's already a tab open for this file
+    const existingTab = tabs.find(t => t.fileId === fileId);
+    
+    if (existingTab) {
+      // Navigate to existing tab instead of opening new one
+      console.log(`Navigator: File ${fileId} already open in tab ${existingTab.id}, switching to it`);
+      tabOps.switchTab(existingTab.id);
+    } else {
+      // No existing tab, open new one
+      console.log(`Navigator: Opening new tab for ${fileId}`);
+      tabOps.openTab(item);
+      
+      // Signal to open in same panel as focused tab
+      const focusedTab = tabs.find(t => t.id === tabContext.activeTabId);
+      if (focusedTab) {
+        window.dispatchEvent(new CustomEvent('dagnet:openInFocusedPanel', {
+          detail: { newTabFileId: fileId }
+        }));
+      }
+    }
+    
     // Close navigator if it's unpinned (overlay mode)
     if (!state.isPinned && state.isOpen) {
       operations.toggleNavigator();
     }
+  };
+
+  const handleItemContextMenu = (item: RepositoryItem, x: number, y: number) => {
+    setContextMenu({ item, x, y });
   };
 
   return (
@@ -93,6 +122,7 @@ export function NavigatorContent() {
                 }
               }}
               onItemClick={handleItemClick}
+              onItemContextMenu={handleItemContextMenu}
             />
 
             <ObjectTypeSection
@@ -108,6 +138,7 @@ export function NavigatorContent() {
                 }
               }}
               onItemClick={handleItemClick}
+              onItemContextMenu={handleItemContextMenu}
             />
 
             <ObjectTypeSection
@@ -123,6 +154,7 @@ export function NavigatorContent() {
                 }
               }}
               onItemClick={handleItemClick}
+              onItemContextMenu={handleItemContextMenu}
             />
 
             <ObjectTypeSection
@@ -138,10 +170,21 @@ export function NavigatorContent() {
                 }
               }}
               onItemClick={handleItemClick}
+              onItemContextMenu={handleItemContextMenu}
             />
           </>
         )}
       </div>
+
+      {/* Navigator item context menu */}
+      {contextMenu && (
+        <NavigatorItemContextMenu
+          item={contextMenu.item}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }

@@ -69,7 +69,7 @@ class FileRegistry {
   async updateFile(fileId: string, newData: any): Promise<void> {
     const file = this.files.get(fileId);
     if (!file) {
-      console.warn(`FileRegistry: File ${fileId} not found for update`);
+      console.warn(`FileRegistry: File ${fileId} not found for update (may have been closed)`);
       return;
     }
 
@@ -96,6 +96,13 @@ class FileRegistry {
 
     // Notify all listeners
     this.notifyListeners(fileId, file);
+    
+    // Emit dirty state change event for UI updates
+    if (wasDirty !== file.isDirty) {
+      window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
+        detail: { fileId, isDirty: file.isDirty } 
+      }));
+    }
   }
 
   /**
@@ -120,11 +127,22 @@ class FileRegistry {
     const file = this.files.get(fileId);
     if (!file) return;
 
+    console.log(`FileRegistry: Reverting ${fileId} to original data`);
+    const wasDirty = file.isDirty;
     file.data = structuredClone(file.originalData);
     file.isDirty = false;
     file.lastModified = Date.now();
 
     await db.files.put(file);
+    
+    // Emit dirty state change event for UI updates (tab indicators)
+    if (wasDirty !== file.isDirty) {
+      window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
+        detail: { fileId, isDirty: file.isDirty } 
+      }));
+    }
+    
+    // Notify listeners - this will add the reverted state to editor history naturally
     this.notifyListeners(fileId, file);
   }
 
@@ -198,7 +216,15 @@ class FileRegistry {
   private notifyListeners(fileId: string, file: FileState): void {
     const callbacks = this.listeners.get(fileId);
     if (callbacks) {
-      callbacks.forEach(callback => callback(file));
+      console.log(`FileRegistry: Notifying ${callbacks.size} listeners for ${fileId}`);
+      // Create COMPLETELY NEW objects to ensure React detects changes
+      // Deep clone the data to create new object references at all levels
+      const fileCopy: FileState = {
+        ...file,
+        data: JSON.parse(JSON.stringify(file.data)) // Deep clone = new references everywhere
+      };
+      console.log(`FileRegistry: Calling ${callbacks.size} callbacks with NEW data object`);
+      callbacks.forEach(callback => callback(fileCopy));
     }
   }
 
@@ -232,7 +258,7 @@ class FileRegistry {
 }
 
 // Create singleton instance
-const fileRegistry = new FileRegistry();
+export const fileRegistry = new FileRegistry();
 
 /**
  * Use FileRegistry hook - direct access to registry
@@ -267,6 +293,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * Load tabs from IndexedDB
+   * Error handling is in db wrapper - if it fails, DB gets nuked and page reloads
    */
   const loadTabsFromDB = async () => {
     const savedTabs = await db.tabs.toArray();
@@ -277,8 +304,6 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       const restored = await fileRegistry.restoreFile(tab.fileId);
       if (restored) {
         console.log(`TabContext: Restored file data for ${tab.fileId}`);
-      } else {
-        console.warn(`TabContext: No file data found for ${tab.fileId}, tab may not load correctly`);
       }
     }
     
@@ -295,17 +320,24 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
    */
   const openTab = useCallback(async (
     item: RepositoryItem, 
-    viewMode: ViewMode = 'interactive'
+    viewMode: ViewMode = 'interactive',
+    forceNew: boolean = false
   ): Promise<void> => {
     const fileId = `${item.type}-${item.id}`;
-    const tabId = `tab-${fileId}-${viewMode}`;
+    
+    // Generate tab ID - add timestamp if forcing new tab to ensure uniqueness
+    const tabId = forceNew 
+      ? `tab-${fileId}-${viewMode}-${Date.now()}` 
+      : `tab-${fileId}-${viewMode}`;
 
-    // Check if tab already exists
-    const existingTab = tabs.find(t => t.id === tabId);
-    if (existingTab) {
-      setActiveTabId(tabId);
-      await db.saveAppState({ activeTabId: tabId });
-      return;
+    // Check if tab already exists (skip if forceNew)
+    if (!forceNew) {
+      const existingTab = tabs.find(t => t.id === tabId);
+      if (existingTab) {
+        setActiveTabId(tabId);
+        await db.saveAppState({ activeTabId: tabId });
+        return;
+      }
     }
 
     // Load actual data from repository
@@ -377,10 +409,22 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       id: tabId,
       fileId,
       viewMode,
-      title: getTabTitle(item.name, viewMode),
+      title: getTabTitle(item.name, viewMode, item.type),
       icon: getIconForType(item.type),
       closable: true,
-      group: 'main-content'
+      group: 'main-content',
+      // Initialize editor state for graph tabs
+      editorState: viewMode === 'interactive' && fileId.startsWith('graph-') ? {
+        useUniformScaling: false,
+        massGenerosity: 0.5,
+        autoReroute: true,
+        sidebarOpen: true,
+        whatIfOpen: false,
+        propertiesOpen: true,
+        jsonOpen: false,
+        selectedNodeId: null,
+        selectedEdgeId: null
+      } : undefined
     };
 
     // Add to registry
@@ -396,74 +440,83 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   }, [tabs]);
 
   /**
-   * Close a tab
+   * Close a tab - SINGLE SOURCE OF TRUTH FOR CLOSING TABS
+   * This is called by:
+   * - Custom close button (✕)
+   * - Context menu "Close"
+   * - Keyboard shortcut (Cmd+W)
+   * - "Close All" operations
    */
   const closeTab = useCallback(async (
     tabId: string, 
     force: boolean = false
   ): Promise<boolean> => {
+    console.log(`\n=== CLOSE TAB: ${tabId} (force=${force}) ===`);
+    
     const tab = tabs.find(t => t.id === tabId);
     if (!tab) {
-      console.log(`closeTab: Tab ${tabId} not found`);
+      console.warn(`closeTab: Tab ${tabId} not found in tabs array`);
       return false;
     }
 
     const file = fileRegistry.getFile(tab.fileId);
-    
-    // Check if this is the last tab viewing this file
     const isLastView = file && file.viewTabs.length === 1 && file.viewTabs[0] === tabId;
     
-    console.log(`closeTab: ${tabId}, isDirty: ${file?.isDirty}, isLastView: ${isLastView}, viewTabs: ${file?.viewTabs.length}, force: ${force}`);
+    console.log(`closeTab: isDirty=${file?.isDirty}, isLastView=${isLastView}, viewTabs=${file?.viewTabs.length}`);
     
     // Check if file is dirty and this is the last view (unless forced)
     if (!force && file?.isDirty && isLastView) {
-      const fileName = tab.title.replace(/ \(.*\)$/, ''); // Remove view mode suffix
+      const fileName = tab.title.replace(/ \(.*\)$/, '');
       console.log(`closeTab: Showing confirmation for dirty file ${fileName}`);
       
       const confirmed = await showConfirm({
         title: 'Unsaved Changes',
-        message: `"${fileName}" has unsaved changes.\n\nThis is the last open view of this file.\n\nDo you want to discard your changes?`,
+        message: `"${fileName}" has unsaved changes.\n\nDo you want to discard your changes?`,
         confirmLabel: 'Discard Changes',
         cancelLabel: 'Keep Editing',
         confirmVariant: 'danger'
       });
       
       if (!confirmed) {
-        console.log(`closeTab: User cancelled close`);
+        console.log(`closeTab: ❌ User cancelled close`);
         return false;
       }
       
-      // User chose to discard - revert the file
-      console.log(`closeTab: Discarding changes to ${tab.fileId}`);
+      console.log(`closeTab: User confirmed discard, reverting ${tab.fileId}`);
       await fileRegistry.revertFile(tab.fileId);
       
-      // Clean up the graph store if this is a graph file
       if (file.type === 'graph') {
         const { cleanupGraphStore } = await import('./GraphStoreContext');
         cleanupGraphStore(tab.fileId);
       }
     }
 
-    // Remove from registry
+    // ATOMIC REMOVAL - all steps with proper state management
+    console.log(`closeTab: Step 1 - Remove from file registry`);
     await fileRegistry.removeViewTab(tab.fileId, tabId);
 
-    // Remove from tabs
-    setTabs(prev => prev.filter(t => t.id !== tabId));
-
-    // Update active tab if needed
+    console.log(`closeTab: Step 2 - Calculate new active tab BEFORE state updates`);
+    let newActiveId = activeTabId;
     if (activeTabId === tabId) {
       const remainingTabs = tabs.filter(t => t.id !== tabId);
-      setActiveTabId(remainingTabs.length > 0 ? remainingTabs[remainingTabs.length - 1].id : null);
+      newActiveId = remainingTabs.length > 0 ? remainingTabs[remainingTabs.length - 1].id : null;
+      console.log(`closeTab: Will switch activeTabId: ${activeTabId} -> ${newActiveId}`);
     }
 
-    // Remove from IndexedDB
-    console.log(`TabContext: Deleting tab ${tabId} from IndexedDB`);
-    await db.tabs.delete(tabId);
-    
-    // Verify deletion
-    const stillExists = await db.tabs.get(tabId);
-    console.log(`TabContext: Tab ${tabId} still exists after delete:`, !!stillExists);
+    console.log(`closeTab: Step 3 - Update ALL state atomically`);
+    setTabs(prev => prev.filter(t => t.id !== tabId));
+    if (newActiveId !== activeTabId) {
+      setActiveTabId(newActiveId);
+      await db.saveAppState({ activeTabId: newActiveId });
+    }
 
+    console.log(`closeTab: Step 4 - Remove from IndexedDB`);
+    await db.tabs.delete(tabId);
+
+    console.log(`closeTab: Step 5 - Signal rc-dock to destroy tab`);
+    window.dispatchEvent(new CustomEvent('dagnet:tabClosed', { detail: { tabId } }));
+
+    console.log(`closeTab: ✅ COMPLETED closing ${tabId}\n`);
     return true;
   }, [tabs, activeTabId, showConfirm]);
 
@@ -486,6 +539,28 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   ): Promise<void> => {
     await fileRegistry.updateFile(fileId, newData);
   }, []);
+
+  /**
+   * Update tab-specific editor state
+   */
+  const updateTabState = useCallback(async (
+    tabId: string,
+    editorState: Partial<TabState['editorState']>
+  ): Promise<void> => {
+    setTabs(prev => prev.map(tab => 
+      tab.id === tabId 
+        ? { ...tab, editorState: { ...tab.editorState, ...editorState } }
+        : tab
+    ));
+    
+    // Persist to IndexedDB
+    const tab = tabs.find(t => t.id === tabId);
+    if (tab) {
+      await db.tabs.update(tabId, { 
+        editorState: { ...tab.editorState, ...editorState }
+      });
+    }
+  }, [tabs]);
 
   /**
    * Get dirty tabs
@@ -543,20 +618,14 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     const file = fileRegistry.getFile(tab.fileId);
     if (!file) return;
 
-    // Create new tab with different view mode
-    const newTabId = `tab-${tab.fileId}-${viewMode}`;
-    
-    // Check if already exists
-    if (tabs.find(t => t.id === newTabId)) {
-      setActiveTabId(newTabId);
-      return;
-    }
+    // Create new tab with UNIQUE ID (always force new, never reuse existing)
+    const newTabId = `tab-${tab.fileId}-${viewMode}-${Date.now()}`;
 
     const newTab: TabState = {
       id: newTabId,
       fileId: tab.fileId,
       viewMode,
-      title: getTabTitle(tab.title.split(' (')[0], viewMode),
+      title: getTabTitle(tab.title.split(' (')[0], viewMode, tab.fileId.split('-')[0]),
       icon: tab.icon,
       closable: true,
       group: 'main-content'
@@ -586,6 +655,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     closeTab,
     switchTab,
     updateTabData,
+    updateTabState,
     getDirtyTabs,
     saveTab,
     saveAll,
@@ -640,7 +710,7 @@ export function useFileState<T = any>(fileId: string): {
         console.log(`useFileState: File ${fileId} was deleted`);
         setFile(null);
       } else {
-        console.log(`useFileState: Received update for ${fileId}`, updatedFile.data);
+        console.log(`useFileState[${fileId}]: Received update notification, updating local state`);
         setFile(updatedFile as FileState<T>);
       }
     });
@@ -649,6 +719,7 @@ export function useFileState<T = any>(fileId: string): {
   }, [fileId]);
 
   const updateData = useCallback((newData: T) => {
+    console.log(`useFileState.updateData[${fileId}]: Calling FileRegistry.updateFile`);
     fileRegistry.updateFile(fileId, newData);
   }, [fileId]);
 
@@ -662,21 +733,29 @@ export function useFileState<T = any>(fileId: string): {
 /**
  * Helper: Get tab title with view mode suffix
  */
-function getTabTitle(name: string, viewMode: ViewMode): string {
-  if (viewMode === 'raw-json') return `${name} (JSON)`;
-  if (viewMode === 'raw-yaml') return `${name} (YAML)`;
-  return name;
+function getTabTitle(name: string, viewMode: ViewMode, type?: string): string {
+  // Strip file extension
+  const nameWithoutExt = name.replace(/\.(yaml|yml|json)$/, '');
+  
+  // Don't add icon to title - rc-dock renders the icon separately from the tab.icon property
+  // Adding it here would cause double icons
+  
+  // Add view mode suffix
+  if (viewMode === 'raw-json') return `${nameWithoutExt} (JSON)`;
+  if (viewMode === 'raw-yaml') return `${nameWithoutExt} (YAML)`;
+  return nameWithoutExt;
 }
 
 /**
  * Helper: Get icon for object type
  */
 function getIconForType(type: string): string {
+  // Direct icon mapping - avoid circular imports
   const icons: Record<string, string> = {
     graph: '📊',
     parameter: '📋',
-    context: '📄',
-    case: '🗂',
+    context: '🏷️',
+    case: '📦',
     settings: '⚙️',
     about: 'ℹ️'
   };
