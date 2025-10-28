@@ -23,7 +23,7 @@ function serializeEditorState(editorState: any): any {
   if (serialized.conditionalOverrides) {
     const serializedConditional: Record<string, string[]> = {};
     Object.entries(serialized.conditionalOverrides).forEach(([key, value]) => {
-      serializedConditional[key] = value instanceof Set ? Array.from(value) : value;
+      serializedConditional[key] = value instanceof Set ? Array.from(value) : value as string[];
     });
     serialized.conditionalOverrides = serializedConditional;
   }
@@ -44,7 +44,7 @@ function deserializeEditorState(editorState: any): any {
   if (deserialized.conditionalOverrides) {
     const deserializedConditional: Record<string, Set<string>> = {};
     Object.entries(deserialized.conditionalOverrides).forEach(([key, value]) => {
-      deserializedConditional[key] = Array.isArray(value) ? new Set(value) : value;
+      deserializedConditional[key] = Array.isArray(value) ? new Set(value) : value as Set<string>;
     });
     deserialized.conditionalOverrides = deserializedConditional;
   }
@@ -559,7 +559,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     setTabs(prev => prev.filter(t => t.id !== tabId));
     if (newActiveId !== activeTabId) {
       setActiveTabId(newActiveId);
-      await db.saveAppState({ activeTabId: newActiveId });
+      await db.saveAppState({ activeTabId: newActiveId || undefined });
     }
 
     console.log(`closeTab: Step 4 - Remove from IndexedDB`);

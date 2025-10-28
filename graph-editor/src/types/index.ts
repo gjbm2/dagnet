@@ -163,6 +163,7 @@ export interface AppState {
  * Settings data (stored locally, not in git)
  */
 export interface SettingsData {
+  id: string;  // Required by Dexie
   git: {
     defaultRepo?: string;
     authTokens?: Record<string, string>;  // repo -> token

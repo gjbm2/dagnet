@@ -205,8 +205,7 @@ export function GraphStoreProvider({
             if (storeToClean) {
               storeToClean.setState({ 
                 graph: null,
-                history: [],
-                whatIfAnalysis: null 
+                history: []
               });
               storeRegistry.delete(fileId);
             }

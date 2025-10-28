@@ -58,19 +58,19 @@ export const useGraphStore = create<State>((set) => ({
   
   // New what-if overrides
   whatIfOverrides: {
-    caseOverrides: new Map(),
-    conditionalOverrides: new Map(),
+    caseOverrides: {},
+    conditionalOverrides: {},
     _version: 0,
   },
   
   setCaseOverride: (nodeId, variant) => 
     set((state) => {
-      const newCaseOverrides = new Map(state.whatIfOverrides.caseOverrides);
+      const newCaseOverrides = { ...state.whatIfOverrides.caseOverrides };
       
       if (variant === null) {
-        newCaseOverrides.delete(nodeId);
+        delete newCaseOverrides[nodeId];
       } else {
-        newCaseOverrides.set(nodeId, variant);
+        newCaseOverrides[nodeId] = variant;
       }
       
       return { 
@@ -84,12 +84,12 @@ export const useGraphStore = create<State>((set) => ({
   
   setConditionalOverride: (edgeId, visitedNodes) =>
     set((state) => {
-      const newConditionalOverrides = new Map(state.whatIfOverrides.conditionalOverrides);
+      const newConditionalOverrides = { ...state.whatIfOverrides.conditionalOverrides };
       
       if (visitedNodes === null) {
-        newConditionalOverrides.delete(edgeId);
+        delete newConditionalOverrides[edgeId];
       } else {
-        newConditionalOverrides.set(edgeId, new Set(visitedNodes));
+        newConditionalOverrides[edgeId] = visitedNodes;
       }
       
       return { 
@@ -104,8 +104,8 @@ export const useGraphStore = create<State>((set) => ({
   clearAllOverrides: () =>
     set({
       whatIfOverrides: {
-        caseOverrides: new Map(),
-        conditionalOverrides: new Map(),
+        caseOverrides: {},
+        conditionalOverrides: {},
         _version: 0,
       },
     }),
