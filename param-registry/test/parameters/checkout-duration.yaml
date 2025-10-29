@@ -1,28 +1,24 @@
 id: checkout-duration
 name: "Checkout Duration"
-type: time_cost
-value:
-  value: 3.0
-  stdev: 0.5
-  distribution: "lognormal"
-  units: "days"
+type: cost_time
+values:
+  - mean: 0.125
+    stdev: 0.02
+    distribution: "lognormal"
+    data_source:
+      type: "analytics"
+      notes: "Average time in days from cart to purchase completion. Converted from minutes to fractional days."
 
 metadata:
-  description: "Average time in days for users to complete the checkout process, from cart to payment confirmation"
-  units: "days"
-  constraints:
-    min: 30
-    max: 1800
-    discrete: false
+  description: "Average time for users to complete the checkout process, from cart to payment confirmation. Measured in days (0.125 days = 3 hours average)."
   data_source:
     type: "api"
     url: "https://api.analytics.company.com/v2/metrics/checkout-duration"
     refresh_frequency: "6h"
-    authentication:
-      type: "oauth"
+    notes: "Synced from analytics platform, automatically converted to days"
   analytics:
     bayesian_prior:
-      mu: 5.0
+      mu: -2.0
       sigma: 0.3
     mcmc_config:
       samples: 15000
@@ -30,7 +26,7 @@ metadata:
       chains: 4
     update_frequency: "1d"
     dependencies: ["conversion-rate-baseline"]
-  tags: ["checkout", "purchase", "time"]
+  tags: ["checkout", "purchase", "time", "duration"]
   created_at: "2025-01-15T13:30:00Z"
   updated_at: "2025-01-15T13:30:00Z"
   author: "ecommerce-team"

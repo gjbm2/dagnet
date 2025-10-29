@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext } from '../../contexts/TabContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
+import { useValidationMode } from '../../contexts/ValidationContext';
 
 /**
  * Edit Menu
@@ -13,6 +14,7 @@ import { getGraphStore } from '../../contexts/GraphStoreContext';
  */
 export function EditMenu() {
   const { activeTabId, tabs } = useTabContext();
+  const { mode: validationMode, setMode: setValidationMode } = useValidationMode();
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isRawView = activeTab?.viewMode === 'raw-json' || activeTab?.viewMode === 'raw-yaml';
   const isGraphEditor = activeTab?.fileId.startsWith('graph-') && activeTab?.viewMode === 'interactive';
@@ -264,6 +266,50 @@ export function EditMenu() {
               </Menubar.Item>
             </>
           )}
+
+          <Menubar.Separator className="menubar-separator" />
+
+          <Menubar.Sub>
+            <Menubar.SubTrigger className="menubar-item">
+              Validation Mode
+              <div className="menubar-right-slot">▶</div>
+            </Menubar.SubTrigger>
+            <Menubar.Portal>
+              <Menubar.SubContent className="menubar-content" alignOffset={-5}>
+                <Menubar.RadioGroup value={validationMode} onValueChange={(value) => setValidationMode(value as any)}>
+                  <Menubar.RadioItem className="menubar-item" value="warning">
+                    <Menubar.ItemIndicator className="menubar-item-indicator">
+                      ●
+                    </Menubar.ItemIndicator>
+                    Warning (Default)
+                    <div className="menubar-hint" style={{ fontSize: '11px', color: '#666', marginLeft: '8px' }}>
+                      Suggest registry, allow custom
+                    </div>
+                  </Menubar.RadioItem>
+                  
+                  <Menubar.RadioItem className="menubar-item" value="strict">
+                    <Menubar.ItemIndicator className="menubar-item-indicator">
+                      ●
+                    </Menubar.ItemIndicator>
+                    Strict
+                    <div className="menubar-hint" style={{ fontSize: '11px', color: '#666', marginLeft: '8px' }}>
+                      Require registry IDs
+                    </div>
+                  </Menubar.RadioItem>
+                  
+                  <Menubar.RadioItem className="menubar-item" value="none">
+                    <Menubar.ItemIndicator className="menubar-item-indicator">
+                      ●
+                    </Menubar.ItemIndicator>
+                    None
+                    <div className="menubar-hint" style={{ fontSize: '11px', color: '#666', marginLeft: '8px' }}>
+                      Free-form, no suggestions
+                    </div>
+                  </Menubar.RadioItem>
+                </Menubar.RadioGroup>
+              </Menubar.SubContent>
+            </Menubar.Portal>
+          </Menubar.Sub>
         </Menubar.Content>
       </Menubar.Portal>
     </Menubar.Menu>

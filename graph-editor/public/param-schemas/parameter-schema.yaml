@@ -3,7 +3,7 @@
 # in the Dagnet parameter registry system.
 
 type: object
-required: [id, name, type, value, metadata]
+required: [id, name, type, values, metadata]
 additionalProperties: false
 
 properties:
@@ -24,48 +24,67 @@ properties:
   
   type:
     type: string
-    enum: [probability, monetary_cost, time_cost, standard_deviation]
-    description: "Parameter type classification"
+    enum: [probability, cost_gbp, cost_time]
+    description: |
+      Parameter type classification:
+      - probability: 0-1 value representing likelihood
+      - cost_gbp: monetary cost in GBP
+      - cost_time: time cost in days (or fractions thereof)
   
-  value:
-    oneOf:
-      - type: number
-        description: "Single numeric value"
-      - type: object
-        description: "Distribution parameters"
-        required: [value]
-        properties:
-          value:
-            type: number
-            description: "Mean/expected value"
-          stdev:
-            type: number
-            minimum: 0
-            description: "Standard deviation (optional)"
-          distribution:
-            type: string
-            enum: [normal, beta, gamma, lognormal, uniform]
-            default: "normal"
-            description: "Statistical distribution type"
-          min:
-            type: number
-            description: "Minimum possible value"
-          max:
-            type: number
-            description: "Maximum possible value"
-          # For monetary costs
-          currency:
-            type: string
-            enum: [GBP, USD, EUR]
-            default: "GBP"
-            description: "Currency for monetary costs"
-          # For time costs
-          units:
-            type: string
-            enum: [days, hours, weeks]
-            default: "days"
-            description: "Time units for time costs"
-        additionalProperties: false
+  values:
+    type: array
+    minItems: 1
+    description: "Array of parameter values, optionally windowed by time and/or context"
+    items:
+      type: object
+      required: [mean]
+      properties:
+        mean:
+          type: number
+          description: "Mean/expected value (default = 1 if not specified)"
+          default: 1
+        
+        stdev:
+          type: number
+          minimum: 0
+          description: "Standard deviation (optional)"
+        
+        distribution:
+          type: string
+          enum: [normal, beta, gamma, lognormal, uniform]
+          description: "Statistical distribution type (optional)"
+        
+        window_from:
+          type: string
+          format: date-time
+          description: |
+            Start of time window for this value (ISO 8601 timestamp).
+            If omitted, value applies from beginning of time or previous window.
+            Window extends to next window_from or present day.
+        
+        context_id:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+          description: |
+            Optional context ID from contexts registry.
+            Allows parameter values to vary by context (e.g., device type, user segment).
+        
+        data_source:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [sheets, api, file, manual, calculated, analytics]
+              description: "Source type for this specific value"
+            url:
+              type: string
+              format: uri
+              description: "URL or path to data source"
+            notes:
+              type: string
+              description: "Additional notes about data source"
+          additionalProperties: false
+      additionalProperties: false
   
   metadata:
     type: object
@@ -107,7 +126,7 @@ properties:
         properties:
           type:
             type: string
-            enum: [sheets, api, file, manual, calculated]
+            enum: [sheets, api, file, manual, calculated, analytics]
             description: "Source type for parameter updates"
           url:
             type: string
@@ -117,16 +136,9 @@ properties:
             type: string
             pattern: '^\\d+[smhd]$'
             description: "How often to refresh from source (e.g., '1h', '6h', '1d')"
-          authentication:
-            type: object
-            properties:
-              type:
-                type: string
-                enum: [none, token, oauth, basic]
-              token:
-                type: string
-                description: "Authentication token (if applicable)"
-            additionalProperties: false
+          notes:
+            type: string
+            description: "Additional notes about the data source"
         additionalProperties: false
       
       analytics:
@@ -252,38 +264,79 @@ properties:
         description: "References to sources or documentation"
     additionalProperties: false
 
-# Example valid parameter definition
+# Example valid parameter definitions
 examples:
+  # Simple probability parameter with single value
   - id: conversion-rate-baseline
     name: "Baseline Conversion Rate"
     type: probability
-    value:
-      mean: 0.15
-      stdev: 0.03
-      distribution: "beta"
+    values:
+      - mean: 0.15
+        stdev: 0.03
+        distribution: "beta"
     metadata:
       description: "Baseline conversion rate for e-commerce checkout processes"
-      units: "probability"
-      constraints:
-        min: 0.0
-        max: 1.0
-        discrete: false
       data_source:
-        type: "sheets"
-        url: "https://docs.google.com/spreadsheets/d/example"
-        refresh_frequency: "1d"
-      analytics:
-        bayesian_prior:
-          alpha: 2.0
-          beta: 8.0
-        mcmc_config:
-          samples: 10000
-          burn_in: 1000
-        update_frequency: "1w"
+        type: "analytics"
+        notes: "Derived from 6 months of checkout data"
       tags: ["conversion", "checkout", "baseline"]
       created_at: "2025-01-15T10:00:00Z"
       updated_at: "2025-01-15T10:00:00Z"
       author: "data-team"
       version: "1.0.0"
       status: "active"
-      aliases: ["baseline-conversion", "checkout-rate"]
+  
+  # Time-windowed parameter showing value evolution
+  - id: email-open-rate
+    name: "Email Campaign Open Rate"
+    type: probability
+    values:
+      - mean: 0.22
+        stdev: 0.04
+        window_from: "2024-01-01T00:00:00Z"
+        data_source:
+          type: "sheets"
+          url: "https://docs.google.com/spreadsheets/d/..."
+      - mean: 0.28
+        stdev: 0.03
+        window_from: "2024-06-01T00:00:00Z"
+        data_source:
+          type: "sheets"
+          url: "https://docs.google.com/spreadsheets/d/..."
+          notes: "After email redesign"
+      - mean: 0.32
+        stdev: 0.02
+        window_from: "2024-10-01T00:00:00Z"
+        data_source:
+          type: "analytics"
+          notes: "A/B test winner rolled out"
+    metadata:
+      description: "Email open rate showing improvement over time"
+      tags: ["email", "marketing", "engagement"]
+      created_at: "2024-01-15T10:00:00Z"
+      updated_at: "2024-10-15T14:30:00Z"
+      author: "marketing-team"
+      version: "1.3.0"
+      status: "active"
+  
+  # Context-dependent parameter
+  - id: checkout-conversion-by-device
+    name: "Checkout Conversion Rate by Device Type"
+    type: probability
+    values:
+      - mean: 0.18
+        stdev: 0.03
+        context_id: "device-desktop"
+      - mean: 0.12
+        stdev: 0.04
+        context_id: "device-mobile"
+      - mean: 0.15
+        stdev: 0.03
+        context_id: "device-tablet"
+    metadata:
+      description: "Checkout conversion varies significantly by device type"
+      tags: ["conversion", "checkout", "device", "context-dependent"]
+      created_at: "2025-01-10T10:00:00Z"
+      author: "analytics-team"
+      version: "1.0.0"
+      status: "active"

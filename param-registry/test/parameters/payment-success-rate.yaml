@@ -1,0 +1,30 @@
+id: payment-success-rate
+name: "Payment Processing Success Rate"
+type: probability
+values:
+  - mean: 0.96
+    stdev: 0.01
+    distribution: "beta"
+    data_source:
+      type: "api"
+      url: "https://api.payment-provider.com/v1/metrics"
+      notes: "Direct from payment processor API"
+
+metadata:
+  description: "Probability that a payment attempt will succeed (not declined, errored, or abandoned). Includes card declines and technical failures."
+  data_source:
+    type: "api"
+    url: "https://api.payment-provider.com/v1/metrics"
+    refresh_frequency: "1h"
+    notes: "Real-time sync from Stripe API"
+  tags: ["payment", "checkout", "success-rate", "technical"]
+  created_at: "2025-01-17T10:00:00Z"
+  author: "payments-team"
+  version: "1.0.0"
+  status: "active"
+  aliases: ["payment-success", "payment-completion"]
+  references:
+    - type: "documentation"
+      title: "Stripe Success Rate Benchmarks"
+      url: "https://stripe.com/docs/payments/success-rates"
+

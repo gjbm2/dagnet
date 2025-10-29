@@ -62,7 +62,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
     ...original,
     nodes: nodes.map((n) => ({
       id: n.id,
-      slug: n.data.slug || n.id,
+      slug: n.data.slug ?? '', // Use nullish coalescing to preserve empty strings
       label: n.data.label,
       absorbing: n.data.absorbing ?? false,
       outcome_type: n.data.outcome_type,
@@ -86,6 +86,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         ...originalEdge, // Preserve ALL original properties (including conditional_p, display)
         id: e.id,
         slug: e.data?.slug,
+        parameter_id: e.data?.parameter_id, // Add parameter ID for connected parameters
         from: e.source,
         to: e.target,
         fromHandle: e.sourceHandle,

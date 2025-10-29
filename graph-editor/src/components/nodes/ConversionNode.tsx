@@ -415,12 +415,21 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             overflowWrap: 'break-word',
             hyphens: 'auto',
             maxWidth: '100%',
-            textAlign: 'center'
+            textAlign: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '3px'
           }}
           onDoubleClick={handleDoubleClick}
           title="Double-click to edit in properties panel"
         >
-          {data.label}
+          {data.slug && (
+            <span style={{ fontSize: '10px', opacity: 0.7 }} title={`Connected to node: ${data.slug}`}>
+              ⛓️
+            </span>
+          )}
+          <span>{data.label}</span>
         </div>
         
         {data.absorbing && !isCaseNode && !data.outcome_type && (

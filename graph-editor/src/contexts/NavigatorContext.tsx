@@ -324,6 +324,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     }
 
     setIsLoading(true);
+    let parametersIndex: any = null;
+    let contextsIndex: any = null;
+    let casesIndex: any = null;
+    let nodesIndex: any = null;
+    
     try {
       // First, check if we have credentials available
       console.log('📦 NavigatorContext: Checking credentials...');
@@ -393,6 +398,16 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         console.log(`Navigator: Loading parameter registry for ${repo}...`);
         const registry = await paramRegistryService.loadRegistry();
         console.log('Navigator: Loaded parameter registry:', registry);
+        
+        // Load registry indexes for the selector components
+        console.log(`Navigator: Loading registry indexes for ${repo}...`);
+        [parametersIndex, contextsIndex, casesIndex, nodesIndex] = await Promise.all([
+          paramRegistryService.loadRegistry().catch(() => null), // Parameters index is in loadRegistry()
+          paramRegistryService.loadContextsIndex().catch(() => null),
+          paramRegistryService.loadCasesIndex().catch(() => null),
+          paramRegistryService.loadNodesIndex().catch(() => null)
+        ]);
+        console.log('Navigator: Loaded registry indexes:', { parametersIndex, contextsIndex, casesIndex, nodesIndex });
         
         // Add parameters
         if (registry.parameters && registry.parameters.length > 0) {
@@ -559,6 +574,19 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       });
       
       setItems(items);
+      
+      // Update state with registry indexes if we loaded them
+      if (parametersIndex || contextsIndex || casesIndex || nodesIndex) {
+        setState(prev => ({
+          ...prev,
+          registryIndexes: {
+            parameters: parametersIndex || undefined,
+            contexts: contextsIndex || undefined,
+            cases: casesIndex || undefined,
+            nodes: nodesIndex || undefined
+          }
+        }));
+      }
     } catch (error) {
       console.error('Failed to load items:', error);
       setItems([]);

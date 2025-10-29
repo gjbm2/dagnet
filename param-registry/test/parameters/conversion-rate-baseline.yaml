@@ -1,24 +1,21 @@
 id: conversion-rate-baseline
 name: "Baseline Conversion Rate"
 type: probability
-value:
-  mean: 0.15
-  stdev: 0.03
-  distribution: "beta"
+values:
+  - mean: 0.15
+    stdev: 0.03
+    distribution: "beta"
+    data_source:
+      type: "analytics"
+      notes: "Derived from 6 months of checkout data across all device types"
 
 metadata:
   description: "Baseline conversion rate for e-commerce checkout processes, representing the probability that a user will complete a purchase after adding items to their cart"
-  units: "probability"
-  constraints:
-    min: 0.0
-    max: 1.0
-    discrete: false
   data_source:
     type: "sheets"
     url: "https://docs.google.com/spreadsheets/d/1ABC123DEF456GHI789JKL"
     refresh_frequency: "1d"
-    authentication:
-      type: "oauth"
+    notes: "Primary data source synced from Google Analytics"
   analytics:
     bayesian_prior:
       alpha: 2.0

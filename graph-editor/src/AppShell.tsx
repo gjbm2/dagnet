@@ -3,6 +3,7 @@ import DockLayout, { LayoutData } from 'rc-dock';
 import { TabProvider, useTabContext, fileRegistry } from './contexts/TabContext';
 import { NavigatorProvider, useNavigatorContext } from './contexts/NavigatorContext';
 import { DialogProvider } from './contexts/DialogContext';
+import { ValidationProvider } from './contexts/ValidationContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { MenuBar } from './components/MenuBar';
 import { NavigatorContent } from './components/Navigator';
@@ -973,11 +974,13 @@ export function AppShell() {
   return (
     <ErrorBoundary>
       <DialogProvider>
-        <TabProvider>
-          <NavigatorProvider>
-            <AppShellContent />
-          </NavigatorProvider>
-        </TabProvider>
+        <ValidationProvider>
+          <TabProvider>
+            <NavigatorProvider>
+              <AppShellContent />
+            </NavigatorProvider>
+          </TabProvider>
+        </ValidationProvider>
       </DialogProvider>
     </ErrorBoundary>
   );
