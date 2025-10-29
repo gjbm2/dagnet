@@ -248,19 +248,17 @@ export function calculatePathProbability(
         edgeProbability *= renormFactor;
       }
       
-      const edgeCosts = edge.data?.costs;
-      
       // Update path context to include the target node we're about to visit
       const nextPathContext = new Set([...edgePathContext, edge.target]);
       
       // Get cost from target node (recursive) with updated path context
       const targetCost = calculateCost(edge.target, nextPathContext);
       
-      // Calculate probability-weighted cost
+      // Calculate probability-weighted cost (new flat schema)
       const edgeCost = {
-        monetary: edgeCosts?.monetary?.value || 0,
-        time: edgeCosts?.time?.value || 0,
-        units: edgeCosts?.time?.units || ''
+        monetary: edge.data?.cost_gbp?.mean || 0,
+        time: edge.data?.cost_time?.mean || 0,
+        units: 'days'
       };
       
       totalCost.monetary += edgeProbability * (edgeCost.monetary + targetCost.monetary);
@@ -619,11 +617,14 @@ export function calculateGeneralStats(
   };
   
   [...internalEdges, ...outgoingEdges].forEach(edge => {
-    if (edge.data?.costs) {
-      totalCosts.monetary += edge.data.costs.monetary?.value || 0;
-      totalCosts.time += edge.data.costs.time?.value || 0;
-      if (edge.data.costs.time?.units && !totalCosts.units) {
-        totalCosts.units = edge.data.costs.time.units;
+    // New flat schema: cost_gbp, cost_time
+    if (edge.data?.cost_gbp) {
+      totalCosts.monetary += edge.data.cost_gbp.mean || 0;
+    }
+    if (edge.data?.cost_time) {
+      totalCosts.time += edge.data.cost_time.mean || 0;
+      if (!totalCosts.units) {
+        totalCosts.units = 'days';
       }
     }
   });
@@ -752,9 +753,9 @@ export function analyzeSelection(
           legacyWhatIfAnalysis
         );
         directPathCosts = {
-          monetary: directEdge.data?.costs?.monetary?.value || 0,
-          time: directEdge.data?.costs?.time?.value || 0,
-          units: directEdge.data?.costs?.time?.units || ''
+          monetary: directEdge.data?.cost_gbp?.mean || 0,
+          time: directEdge.data?.cost_time?.mean || 0,
+          units: 'days'
         };
       }
       

@@ -1295,12 +1295,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             targetHandle: graphEdge.toHandle || prevEdge.targetHandle,
             data: {
               ...prevEdge.data,
+              slug: graphEdge.slug,
+              parameter_id: (graphEdge as any).parameter_id, // Probability parameter ID
+              cost_gbp_parameter_id: (graphEdge as any).cost_gbp_parameter_id, // GBP cost parameter ID
+              cost_time_parameter_id: (graphEdge as any).cost_time_parameter_id, // Time cost parameter ID
               probability: graphEdge.p?.mean ?? 0.5,
               stdev: graphEdge.p?.stdev,
               locked: graphEdge.p?.locked,
               description: graphEdge.description,
-              costs: graphEdge.costs,
-              weight_default: graphEdge.weight_default
+              cost_gbp: (graphEdge as any).cost_gbp, // New flat cost structure
+              cost_time: (graphEdge as any).cost_time, // New flat cost structure
+              costs: graphEdge.costs, // Legacy field (for backward compat)
+              weight_default: graphEdge.weight_default,
+              case_variant: graphEdge.case_variant,
+              case_id: graphEdge.case_id
             }
           };
         });
@@ -3060,11 +3068,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     };
 
     [...internalEdges, ...outgoingEdges].forEach(edge => {
-      if (edge.data?.costs) {
-        totalCosts.monetary += edge.data.costs.monetary?.value || 0;
-        totalCosts.time += edge.data.costs.time?.value || 0;
-        if (edge.data.costs.time?.units && !totalCosts.units) {
-          totalCosts.units = edge.data.costs.time.units;
+      // New flat schema: cost_gbp, cost_time
+      if (edge.data?.cost_gbp) {
+        totalCosts.monetary += edge.data.cost_gbp.mean || 0;
+      }
+      if (edge.data?.cost_time) {
+        totalCosts.time += edge.data.cost_time.mean || 0;
+        if (!totalCosts.units) {
+          totalCosts.units = 'days';
         }
       }
     });

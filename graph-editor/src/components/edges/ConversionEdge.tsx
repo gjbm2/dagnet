@@ -9,11 +9,25 @@ import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/wha
 interface ConversionEdgeData {
   id: string;
   slug?: string;
-  parameter_id?: string; // Connected parameter from registry
+  parameter_id?: string; // Connected parameter from registry (probability)
+  cost_gbp_parameter_id?: string; // Connected parameter from registry (GBP cost)
+  cost_time_parameter_id?: string; // Connected parameter from registry (time cost)
   probability: number;
   stdev?: number;
   locked?: boolean;
   description?: string;
+  // New flat cost structure
+  cost_gbp?: {
+    mean?: number;
+    stdev?: number;
+    distribution?: string;
+  };
+  cost_time?: {
+    mean?: number;
+    stdev?: number;
+    distribution?: string;
+  };
+  // Legacy nested costs structure (for backward compatibility)
   costs?: {
     monetary?: {
       value: number;
@@ -126,21 +140,19 @@ export default function ConversionEdge({
       lines.push(`\nDescription: ${data.description}`);
     }
     
-    // Costs
-    if (data.costs) {
+    // Costs (new flat schema)
+    if (data.cost_gbp || data.cost_time) {
       lines.push('\nCosts:');
-      if (data.costs.monetary) {
-        const currency = data.costs.monetary.currency || 'USD';
-        lines.push(`  Monetary: ${data.costs.monetary.value} ${currency}`);
-        if (data.costs.monetary.stdev) {
-          lines.push(`    (±${data.costs.monetary.stdev} ${currency})`);
+      if (data.cost_gbp) {
+        lines.push(`  Monetary: £${data.cost_gbp.mean?.toFixed(2) || 0}`);
+        if (data.cost_gbp.stdev) {
+          lines.push(`    (±£${data.cost_gbp.stdev.toFixed(2)})`);
         }
       }
-      if (data.costs.time) {
-        const units = data.costs.time.units || 'minutes';
-        lines.push(`  Time: ${data.costs.time.value} ${units}`);
-        if (data.costs.time.stdev) {
-          lines.push(`    (±${data.costs.time.stdev} ${units})`);
+      if (data.cost_time) {
+        lines.push(`  Time: ${data.cost_time.mean?.toFixed(1) || 0} days`);
+        if (data.cost_time.stdev) {
+          lines.push(`    (±${data.cost_time.stdev.toFixed(1)} days)`);
         }
       }
     }
@@ -1092,18 +1104,40 @@ export default function ConversionEdge({
                 </span>
               </div>
             )}
-            {data?.costs && (data.costs.monetary || data.costs.time) && (
+            {(data?.cost_gbp || data?.cost_time) && (
               <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
-                {data.costs.monetary && (
-                  <div>
-                    £{typeof data.costs.monetary === 'object' ? data.costs.monetary.value : data.costs.monetary}
-                    {typeof data.costs.monetary === 'object' && data.costs.monetary.currency && ` ${data.costs.monetary.currency}`}
+                {data.cost_gbp && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
+                    {(data as any).cost_gbp_parameter_id && (
+                      <span style={{ fontSize: '9px', opacity: 0.7 }} title={`Connected to parameter: ${(data as any).cost_gbp_parameter_id}`}>
+                        ⛓️
+                      </span>
+                    )}
+                    <span>
+                      £{data.cost_gbp.mean?.toFixed(2) || '0.00'}
+                      {data.cost_gbp.stdev && data.cost_gbp.stdev > 0 && (
+                        <span style={{ fontSize: '9px', opacity: 0.7, marginLeft: '2px' }}>
+                          ±{data.cost_gbp.stdev.toFixed(2)}
+                        </span>
+                      )}
+                    </span>
                   </div>
                 )}
-                {data.costs.time && (
-                  <div>
-                    {typeof data.costs.time === 'object' ? data.costs.time.value : data.costs.time}
-                    {typeof data.costs.time === 'object' ? (data.costs.time.units || 'days') : 'days'}
+                {data.cost_time && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
+                    {(data as any).cost_time_parameter_id && (
+                      <span style={{ fontSize: '9px', opacity: 0.7 }} title={`Connected to parameter: ${(data as any).cost_time_parameter_id}`}>
+                        ⛓️
+                      </span>
+                    )}
+                    <span>
+                      {data.cost_time.mean?.toFixed(1) || '0.0'}d
+                      {data.cost_time.stdev && data.cost_time.stdev > 0 && (
+                        <span style={{ fontSize: '9px', opacity: 0.7, marginLeft: '2px' }}>
+                          ±{data.cost_time.stdev.toFixed(1)}
+                        </span>
+                      )}
+                    </span>
                   </div>
                 )}
               </div>

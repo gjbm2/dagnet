@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
-import { useTabContext } from '../contexts/TabContext';
+import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
@@ -157,6 +157,22 @@ export default function PropertiesPanel({
           e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
         );
         if (edge) {
+          console.log('PropertiesPanel: Loading edge data:', {
+            edgeId: selectedEdgeId,
+            cost_gbp: (edge as any).cost_gbp,
+            cost_time: (edge as any).cost_time,
+            cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id,
+            cost_time_parameter_id: (edge as any).cost_time_parameter_id
+          });
+          
+          const edgeCostGbp = (edge as any).cost_gbp;
+          const edgeCostTime = (edge as any).cost_time;
+          
+          console.log('About to setLocalEdgeData with costs:', {
+            cost_gbp: edgeCostGbp,
+            cost_time: edgeCostTime
+          });
+          
           setLocalEdgeData({
             slug: edge.slug || '',
             parameter_id: (edge as any).parameter_id || '',
@@ -165,8 +181,8 @@ export default function PropertiesPanel({
             probability: edge.p?.mean || 0,
             stdev: edge.p?.stdev || undefined,
             description: edge.description || '',
-            cost_gbp: (edge as any).cost_gbp,
-            cost_time: (edge as any).cost_time,
+            cost_gbp: edgeCostGbp,
+            cost_time: edgeCostTime,
             weight_default: edge.weight_default || 0
           });
           setLocalConditionalP(edge.conditional_p || []);
@@ -224,12 +240,23 @@ export default function PropertiesPanel({
           e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
         );
         if (edge) {
+          console.log('PropertiesPanel: Loading case edge data:', {
+            edgeId: selectedEdgeId,
+            cost_gbp: (edge as any).cost_gbp,
+            cost_time: (edge as any).cost_time
+          });
+          
           setLocalEdgeData({
             slug: edge.slug || '',
+            parameter_id: (edge as any).parameter_id || '',
+            cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
+            cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
             probability: edge.p?.mean || 0,
             stdev: edge.p?.stdev || 0,
             locked: edge.p?.locked || false,
             description: edge.description || '',
+            cost_gbp: (edge as any).cost_gbp,
+            cost_time: (edge as any).cost_time,
             costs: edge.costs || {},
             weight_default: edge.weight_default || 0,
           });
@@ -241,12 +268,23 @@ export default function PropertiesPanel({
           e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
         );
         if (edge) {
+          console.log('PropertiesPanel: Reloading edge data (graph changed):', {
+            edgeId: selectedEdgeId,
+            cost_gbp: (edge as any).cost_gbp,
+            cost_time: (edge as any).cost_time
+          });
+          
           setLocalEdgeData({
             slug: edge.slug || '',
+            parameter_id: (edge as any).parameter_id || '',
+            cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
+            cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
             probability: edge.p?.mean || 0,
             stdev: edge.p?.stdev || 0,
             locked: edge.p?.locked || false,
             description: edge.description || '',
+            cost_gbp: (edge as any).cost_gbp,
+            cost_time: (edge as any).cost_time,
             costs: edge.costs || {},
             weight_default: edge.weight_default || 0,
           });
@@ -602,7 +640,7 @@ export default function PropertiesPanel({
 
                 <ParameterSelector
                   type="node"
-                  value={localNodeData.slug || ''}
+                    value={localNodeData.slug || ''}
                   autoFocus={!localNodeData.slug} // Auto-focus if no slug yet
                   onChange={async (newSlug) => {
                     console.log('PropertiesPanel: ParameterSelector onChange:', { newSlug, currentSlug: localNodeData.slug });
@@ -885,12 +923,12 @@ export default function PropertiesPanel({
                     })()}
 
                     {/* Case ID or Parameter ID */}
-                    {caseMode === 'registry' ? (
+                      {caseMode === 'registry' ? (
                       <ParameterSelector
                         type="parameter"
-                        value={caseData.parameter_id}
+                            value={caseData.parameter_id}
                         onChange={(newParameterId) => {
-                          setCaseData({...caseData, parameter_id: newParameterId});
+                              setCaseData({...caseData, parameter_id: newParameterId});
                           // TODO: Load parameter from registry and populate case data
                         }}
                         label="Parameter ID"
@@ -926,7 +964,7 @@ export default function PropertiesPanel({
                             boxSizing: 'border-box'
                           }}
                         />
-                      </div>
+                    </div>
                     )}
 
                     {/* Case Status */}
@@ -1367,8 +1405,18 @@ export default function PropertiesPanel({
                     // Load parameter data from registry and do ALL updates in one batch
                     if (newParamId && graph && selectedEdgeId) {
                       try {
-                        const { paramRegistryService } = await import('../services/paramRegistryService');
-                        const paramData = await paramRegistryService.loadParameter(newParamId);
+                        // Try loading from FileRegistry first (for local/open files)
+                        let paramData: any = null;
+                        const localFile = fileRegistry.getFile(`parameter-${newParamId}.yaml`);
+                        if (localFile) {
+                          paramData = localFile.data;
+                          console.log('Loaded parameter from FileRegistry (local):', newParamId);
+                        } else {
+                          // Fall back to registry service for committed files
+                          const { paramRegistryService } = await import('../services/paramRegistryService');
+                          paramData = await paramRegistryService.loadParameter(newParamId);
+                          console.log('Loaded parameter from registry service:', newParamId);
+                        }
                         
                         // Clone graph and update ALL fields at once
                         const next = structuredClone(graph);
@@ -1753,146 +1801,361 @@ export default function PropertiesPanel({
                   );
                 })()}
 
-                {/* Monetary Cost Parameter */}
-                <ParameterSelector
-                  type="parameter"
-                  parameterType="cost_gbp"
-                  value={(selectedEdge as any)?.cost_gbp_parameter_id || ''}
-                  onChange={async (newParamId) => {
-                    console.log('PropertiesPanel: Cost GBP ParameterSelector onChange:', { newParamId });
-                    
-                    if (newParamId && graph && selectedEdgeId) {
-                      try {
-                        const { paramRegistryService } = await import('../services/paramRegistryService');
-                        const paramData = await paramRegistryService.loadParameter(newParamId);
-                        
-                        // Clone graph and update ALL fields at once
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) => 
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        
-                        if (edgeIndex >= 0) {
-                          const edge = next.edges[edgeIndex] as any;
-                          edge.cost_gbp_parameter_id = newParamId;
-                          
-                          // Auto-populate cost_gbp from parameter (use latest value)
-                          if (paramData && paramData.values && paramData.values.length > 0) {
-                            const sortedValues = [...paramData.values].sort((a, b) => {
-                              if (!a.window_from) return -1;
-                              if (!b.window_from) return 1;
-                              return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
-                            });
-                            const latestValue = sortedValues[0];
-                            
-                            edge.cost_gbp = {
-                              mean: latestValue.mean,
-                              stdev: latestValue.stdev,
-                              distribution: latestValue.distribution
-                            };
-                            
-                            setLocalEdgeData((prev: any) => ({
-                              ...prev,
-                              cost_gbp_parameter_id: newParamId,
-                              cost_gbp: edge.cost_gbp
-                            }));
-                            
-                            console.log('Populated GBP cost from parameter:', { 
-                              parameter_id: newParamId, 
-                              mean: latestValue.mean, 
-                              stdev: latestValue.stdev 
-                            });
+                {/* Cost Sections */}
+                {selectedEdge && (
+                <>
+                {/* Monetary Cost Section */}
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: '#333' }}>
+                    Monetary Cost (GBP)
+                  </div>
+                  
+                  {/* Parameter Selector */}
+                  <ParameterSelector
+                    type="parameter"
+                    parameterType="cost_gbp"
+                    value={(selectedEdge as any)?.cost_gbp_parameter_id || ''}
+                    onChange={async (newParamId) => {
+                      console.log('PropertiesPanel: Cost GBP ParameterSelector onChange:', { newParamId });
+                      
+                      if (newParamId && graph && selectedEdgeId) {
+                        try {
+                          // Try loading from FileRegistry first (for local/open files)
+                          let paramData: any = null;
+                          const localFile = fileRegistry.getFile(`parameter-${newParamId}.yaml`);
+                          if (localFile) {
+                            paramData = localFile.data;
+                            console.log('Loaded cost_gbp parameter from FileRegistry (local):', newParamId);
+                          } else {
+                            // Fall back to registry service for committed files
+                            const { paramRegistryService } = await import('../services/paramRegistryService');
+                            paramData = await paramRegistryService.loadParameter(newParamId);
+                            console.log('Loaded cost_gbp parameter from registry service:', newParamId);
                           }
                           
-                          if (next.metadata) {
-                            next.metadata.updated_at = new Date().toISOString();
-                          }
+                          // Clone graph and update ALL fields at once
+                          const next = structuredClone(graph);
+                          const edgeIndex = next.edges.findIndex((e: any) => 
+                            e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                          );
                           
-                          setGraph(next);
-                          saveHistoryState(`Update cost GBP parameter`, undefined, selectedEdgeId || undefined);
+                          if (edgeIndex >= 0) {
+                            const edge = next.edges[edgeIndex] as any;
+                            edge.cost_gbp_parameter_id = newParamId;
+                            
+                            // Auto-populate cost_gbp from parameter (use latest value)
+                            if (paramData && paramData.values && paramData.values.length > 0) {
+                              const sortedValues = [...paramData.values].sort((a, b) => {
+                                if (!a.window_from) return -1;
+                                if (!b.window_from) return 1;
+                                return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
+                              });
+                              const latestValue = sortedValues[0];
+                              
+                              edge.cost_gbp = {
+                                mean: latestValue.mean,
+                                stdev: latestValue.stdev,
+                                distribution: latestValue.distribution
+                              };
+                              
+                              console.log('Populated GBP cost from parameter:', { 
+                                parameter_id: newParamId, 
+                                mean: latestValue.mean, 
+                                stdev: latestValue.stdev,
+                                cost_gbp_object: edge.cost_gbp
+                              });
+                              
+                              // Update local edge data immediately with the new cost values
+                              setLocalEdgeData((prev: any) => ({
+                                ...prev,
+                                cost_gbp_parameter_id: newParamId,
+                                cost_gbp: {
+                                  mean: latestValue.mean,
+                                  stdev: latestValue.stdev,
+                                  distribution: latestValue.distribution
+                                }
+                              }));
+                            }
+                            
+                            if (next.metadata) {
+                              next.metadata.updated_at = new Date().toISOString();
+                            }
+                            
+                            setGraph(next);
+                            saveHistoryState(`Update cost GBP parameter`, undefined, selectedEdgeId || undefined);
+                          }
+                        } catch (error) {
+                          console.log('Could not load cost parameter:', error);
+                          updateEdge('cost_gbp_parameter_id', newParamId);
                         }
-                      } catch (error) {
-                        console.log('Could not load cost parameter:', error);
-                        updateEdge('cost_gbp_parameter_id', newParamId);
+                      } else {
+                        updateEdge('cost_gbp_parameter_id', newParamId || undefined);
                       }
-                    } else {
-                      updateEdge('cost_gbp_parameter_id', newParamId || undefined);
-                    }
-                  }}
-                  label="Monetary Cost (GBP)"
-                  placeholder="Select cost_gbp parameter..."
-                />
+                    }}
+                    label="Link to Parameter"
+                    placeholder="Select cost_gbp parameter..."
+                  />
+                  
+                  {/* Manual Input Fields */}
+                  <div style={{ marginTop: '8px', fontSize: '11px', color: '#666', marginBottom: '4px' }}>
+                    Or enter values manually:
+                  </div>
+                  {(() => {
+                    console.log('Rendering GBP cost inputs. localEdgeData.cost_gbp:', localEdgeData.cost_gbp, 'mean:', localEdgeData.cost_gbp?.mean);
+                    return null;
+                  })()}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <div>
+                      <label style={{ fontSize: '11px', color: '#666' }}>Mean (£)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={localEdgeData.cost_gbp?.mean ?? ''}
+                        onChange={(e) => {
+                          const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                          console.log('GBP mean onChange:', { newValue, current_cost_gbp: localEdgeData.cost_gbp });
+                          setLocalEdgeData((prev: any) => ({
+                            ...prev,
+                            cost_gbp: { ...(prev.cost_gbp || {}), mean: newValue }
+                          }));
+                        }}
+                        onBlur={() => {
+                          if (graph && selectedEdgeId) {
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((e: any) => 
+                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                            );
+                            if (edgeIndex >= 0) {
+                              const edge = next.edges[edgeIndex] as any;
+                              edge.cost_gbp = { ...edge.cost_gbp, mean: localEdgeData.cost_gbp?.mean };
+                              setGraph(next);
+                              saveHistoryState(`Update cost GBP mean`, undefined, selectedEdgeId || undefined);
+                            }
+                          }
+                        }}
+                            style={{ 
+                          width: '100%',
+                              padding: '4px 6px', 
+                          fontSize: '12px',
+                              border: '1px solid #ddd', 
+                          borderRadius: '3px'
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '11px', color: '#666' }}>Std Dev</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={localEdgeData.cost_gbp?.stdev ?? ''}
+                        onChange={(e) => {
+                          const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                          setLocalEdgeData((prev: any) => ({
+                            ...prev,
+                            cost_gbp: { ...prev.cost_gbp, stdev: newValue }
+                          }));
+                        }}
+                        onBlur={() => {
+                          if (graph && selectedEdgeId) {
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((e: any) => 
+                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                            );
+                            if (edgeIndex >= 0) {
+                              const edge = next.edges[edgeIndex] as any;
+                              edge.cost_gbp = { ...edge.cost_gbp, stdev: localEdgeData.cost_gbp?.stdev };
+                              setGraph(next);
+                              saveHistoryState(`Update cost GBP stdev`, undefined, selectedEdgeId || undefined);
+                            }
+                          }
+                        }}
+                            style={{ 
+                          width: '100%',
+                              padding: '4px 6px', 
+                          fontSize: '12px',
+                              border: '1px solid #ddd', 
+                          borderRadius: '3px'
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
 
-                {/* Time Cost Parameter */}
-                <ParameterSelector
-                  type="parameter"
-                  parameterType="cost_time"
-                  value={(selectedEdge as any)?.cost_time_parameter_id || ''}
-                  onChange={async (newParamId) => {
-                    console.log('PropertiesPanel: Cost Time ParameterSelector onChange:', { newParamId });
-                    
-                    if (newParamId && graph && selectedEdgeId) {
-                      try {
-                        const { paramRegistryService } = await import('../services/paramRegistryService');
-                        const paramData = await paramRegistryService.loadParameter(newParamId);
-                        
-                        // Clone graph and update ALL fields at once
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) => 
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        
-                        if (edgeIndex >= 0) {
-                          const edge = next.edges[edgeIndex] as any;
-                          edge.cost_time_parameter_id = newParamId;
-                          
-                          // Auto-populate cost_time from parameter (use latest value)
-                          if (paramData && paramData.values && paramData.values.length > 0) {
-                            const sortedValues = [...paramData.values].sort((a, b) => {
-                              if (!a.window_from) return -1;
-                              if (!b.window_from) return 1;
-                              return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
-                            });
-                            const latestValue = sortedValues[0];
-                            
-                            edge.cost_time = {
-                              mean: latestValue.mean,
-                              stdev: latestValue.stdev,
-                              distribution: latestValue.distribution
-                            };
-                            
-                            setLocalEdgeData((prev: any) => ({
-                              ...prev,
-                              cost_time_parameter_id: newParamId,
-                              cost_time: edge.cost_time
-                            }));
-                            
-                            console.log('Populated time cost from parameter:', { 
-                              parameter_id: newParamId, 
-                              mean: latestValue.mean, 
-                              stdev: latestValue.stdev 
-                            });
+                {/* Time Cost Section */}
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: '#333' }}>
+                          Time Cost (Days)
+                  </div>
+                  
+                  {/* Parameter Selector */}
+                  <ParameterSelector
+                    type="parameter"
+                    parameterType="cost_time"
+                    value={(selectedEdge as any)?.cost_time_parameter_id || ''}
+                    onChange={async (newParamId) => {
+                      console.log('PropertiesPanel: Cost Time ParameterSelector onChange:', { newParamId });
+                      
+                      if (newParamId && graph && selectedEdgeId) {
+                        try {
+                          // Try loading from FileRegistry first (for local/open files)
+                          let paramData: any = null;
+                          const localFile = fileRegistry.getFile(`parameter-${newParamId}.yaml`);
+                          if (localFile) {
+                            paramData = localFile.data;
+                            console.log('Loaded cost_time parameter from FileRegistry (local):', newParamId);
+                          } else {
+                            // Fall back to registry service for committed files
+                            const { paramRegistryService } = await import('../services/paramRegistryService');
+                            paramData = await paramRegistryService.loadParameter(newParamId);
+                            console.log('Loaded cost_time parameter from registry service:', newParamId);
                           }
                           
-                          if (next.metadata) {
-                            next.metadata.updated_at = new Date().toISOString();
-                          }
+                          // Clone graph and update ALL fields at once
+                          const next = structuredClone(graph);
+                          const edgeIndex = next.edges.findIndex((e: any) => 
+                            e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                          );
                           
-                          setGraph(next);
-                          saveHistoryState(`Update cost time parameter`, undefined, selectedEdgeId || undefined);
+                          if (edgeIndex >= 0) {
+                            const edge = next.edges[edgeIndex] as any;
+                            edge.cost_time_parameter_id = newParamId;
+                            
+                            // Auto-populate cost_time from parameter (use latest value)
+                            if (paramData && paramData.values && paramData.values.length > 0) {
+                              const sortedValues = [...paramData.values].sort((a, b) => {
+                                if (!a.window_from) return -1;
+                                if (!b.window_from) return 1;
+                                return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
+                              });
+                              const latestValue = sortedValues[0];
+                              
+                              edge.cost_time = {
+                                mean: latestValue.mean,
+                                stdev: latestValue.stdev,
+                                distribution: latestValue.distribution
+                              };
+                              
+                              console.log('Populated time cost from parameter:', { 
+                                parameter_id: newParamId, 
+                                mean: latestValue.mean, 
+                                stdev: latestValue.stdev,
+                                cost_time_object: edge.cost_time
+                              });
+                              
+                              // Update local edge data immediately with the new cost values
+                              setLocalEdgeData((prev: any) => ({
+                                ...prev,
+                                cost_time_parameter_id: newParamId,
+                                cost_time: {
+                                  mean: latestValue.mean,
+                                  stdev: latestValue.stdev,
+                                  distribution: latestValue.distribution
+                                }
+                              }));
+                            }
+                            
+                            if (next.metadata) {
+                              next.metadata.updated_at = new Date().toISOString();
+                            }
+                            
+                            setGraph(next);
+                            saveHistoryState(`Update cost time parameter`, undefined, selectedEdgeId || undefined);
+                          }
+                        } catch (error) {
+                          console.log('Could not load cost parameter:', error);
+                          updateEdge('cost_time_parameter_id', newParamId);
                         }
-                      } catch (error) {
-                        console.log('Could not load cost parameter:', error);
-                        updateEdge('cost_time_parameter_id', newParamId);
+                      } else {
+                        updateEdge('cost_time_parameter_id', newParamId || undefined);
                       }
-                    } else {
-                      updateEdge('cost_time_parameter_id', newParamId || undefined);
-                    }
-                  }}
-                  label="Time Cost (Days)"
-                  placeholder="Select cost_time parameter..."
-                />
+                    }}
+                    label="Link to Parameter"
+                    placeholder="Select cost_time parameter..."
+                  />
+                  
+                  {/* Manual Input Fields */}
+                  <div style={{ marginTop: '8px', fontSize: '11px', color: '#666', marginBottom: '4px' }}>
+                    Or enter values manually:
+                        </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <div>
+                      <label style={{ fontSize: '11px', color: '#666' }}>Mean (days)</label>
+                          <input
+                            type="number"
+                        step="0.01"
+                        value={localEdgeData.cost_time?.mean ?? ''}
+                        onChange={(e) => {
+                          const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                          setLocalEdgeData((prev: any) => ({
+                            ...prev,
+                            cost_time: { ...prev.cost_time, mean: newValue }
+                          }));
+                        }}
+                        onBlur={() => {
+                          if (graph && selectedEdgeId) {
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((e: any) => 
+                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                            );
+                            if (edgeIndex >= 0) {
+                              const edge = next.edges[edgeIndex] as any;
+                              edge.cost_time = { ...edge.cost_time, mean: localEdgeData.cost_time?.mean };
+                              setGraph(next);
+                              saveHistoryState(`Update cost time mean`, undefined, selectedEdgeId || undefined);
+                            }
+                          }
+                        }}
+                            style={{ 
+                          width: '100%',
+                              padding: '4px 6px', 
+                          fontSize: '12px',
+                              border: '1px solid #ddd', 
+                          borderRadius: '3px'
+                        }}
+                      />
+                        </div>
+                    <div>
+                      <label style={{ fontSize: '11px', color: '#666' }}>Std Dev</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={localEdgeData.cost_time?.stdev ?? ''}
+                        onChange={(e) => {
+                          const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                          setLocalEdgeData((prev: any) => ({
+                            ...prev,
+                            cost_time: { ...prev.cost_time, stdev: newValue }
+                          }));
+                        }}
+                        onBlur={() => {
+                          if (graph && selectedEdgeId) {
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((e: any) => 
+                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                            );
+                            if (edgeIndex >= 0) {
+                              const edge = next.edges[edgeIndex] as any;
+                              edge.cost_time = { ...edge.cost_time, stdev: localEdgeData.cost_time?.stdev };
+                              setGraph(next);
+                              saveHistoryState(`Update cost time stdev`, undefined, selectedEdgeId || undefined);
+                            }
+                            }
+                          }}
+                          style={{
+                          width: '100%',
+                          padding: '4px 6px',
+                          fontSize: '12px',
+                          border: '1px solid #ddd',
+                          borderRadius: '3px'
+                        }}
+                      />
+                      </div>
+                  </div>
+                </div>
+                </>
+                )}
 
+                {selectedEdge && (
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Description</label>
                   <textarea
@@ -1910,7 +2173,9 @@ export default function PropertiesPanel({
                     }}
                   />
                 </div>
+                )}
 
+                {selectedEdge && (
                 <button
                   onClick={() => {
                     const next = structuredClone(graph);
@@ -1935,6 +2200,7 @@ export default function PropertiesPanel({
                 >
                   Delete Edge
                 </button>
+                )}
               </div>
             ) : (
               <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>
