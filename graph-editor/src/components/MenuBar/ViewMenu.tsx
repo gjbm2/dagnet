@@ -74,6 +74,18 @@ export function ViewMenu() {
     console.log('Toggle What-If Analysis');
   };
 
+  const handleHideUnselected = async () => {
+    if (!activeTabId || !isGraphTab) return;
+    
+    // Dispatch event to GraphEditor to handle hide unselected
+    window.dispatchEvent(new CustomEvent('dagnet:hideUnselected'));
+  };
+
+  const handleShowAll = async () => {
+    if (!activeTabId || !isGraphTab) return;
+    await operations.showAllNodes(activeTabId);
+  };
+
   return (
     <Menubar.Menu>
       <Menubar.Trigger className="menubar-trigger">View</Menubar.Trigger>
@@ -244,6 +256,22 @@ export function ViewMenu() {
                 onSelect={handleToggleWhatIfPanel}
               >
                 What-If Analysis
+              </Menubar.Item>
+
+              <Menubar.Separator className="menubar-separator" />
+
+              <Menubar.Item 
+                className="menubar-item" 
+                onSelect={handleHideUnselected}
+              >
+                Hide unselected
+              </Menubar.Item>
+
+              <Menubar.Item 
+                className="menubar-item" 
+                onSelect={handleShowAll}
+              >
+                Show all
               </Menubar.Item>
 
               <Menubar.Separator className="menubar-separator" />

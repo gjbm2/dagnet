@@ -81,6 +81,8 @@ export interface TabState {
     conditionalOverrides?: Record<string, Set<string>>; // edgeId -> forced visited nodes (hyperprior activation)
     // Target panel for "Open in X View" placement
     targetPanel?: string;
+    // Node visibility state (per-tab, not per-file)
+    hiddenNodes?: Set<string>; // Set of node IDs that are hidden
   };
   
   // UI state
@@ -214,6 +216,13 @@ export interface TabOperations {
   
   // Multi-file commit
   commitFiles: (request: CommitRequest) => Promise<void>;
+  
+  // Node visibility operations
+  hideNode: (tabId: string, nodeId: string) => Promise<void>;
+  unhideNode: (tabId: string, nodeId: string) => Promise<void>;
+  hideUnselectedNodes: (tabId: string, selectedNodeIds: string[]) => Promise<void>;
+  showAllNodes: (tabId: string) => Promise<void>;
+  isNodeHidden: (tabId: string, nodeId: string) => boolean;
 }
 
 /**

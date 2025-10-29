@@ -36,6 +36,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const deleteSelectedRef = React.useRef<(() => void) | null>(null);
   const autoLayoutRef = React.useRef<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>(null);
   const forceRerouteRef = React.useRef<(() => void) | null>(null);
+  const hideUnselectedRef = React.useRef<(() => void) | null>(null);
   
   const store = useGraphStore();
   const { setGraph, graph, undo, redo, canUndo, canRedo, saveHistoryState, resetHistory } = store;
@@ -269,6 +270,17 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     window.addEventListener('dagnet:forceReroute' as any, handleForceReroute);
     window.addEventListener('dagnet:autoLayout' as any, handleAutoLayout);
 
+    const handleHideUnselected = () => {
+      // Only handle if this is the active tab's editor
+      if (tabId !== activeTabId) return;
+      
+      if (hideUnselectedRef.current) {
+        hideUnselectedRef.current();
+      }
+    };
+
+    window.addEventListener('dagnet:hideUnselected' as any, handleHideUnselected);
+
     return () => {
       window.removeEventListener('dagnet:setUniformScaling' as any, handleSetUniformScaling);
       window.removeEventListener('dagnet:setMassGenerosity' as any, handleSetMassGenerosity);
@@ -277,6 +289,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       window.removeEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
       window.removeEventListener('dagnet:forceReroute' as any, handleForceReroute);
       window.removeEventListener('dagnet:autoLayout' as any, handleAutoLayout);
+      window.removeEventListener('dagnet:hideUnselected' as any, handleHideUnselected);
     };
   }, [useUniformScaling, massGenerosity, autoReroute, tabId, activeTabId]);
 
@@ -344,6 +357,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           onDeleteSelectedRef={deleteSelectedRef}
           onAutoLayoutRef={autoLayoutRef}
           onForceRerouteRef={forceRerouteRef}
+          onHideUnselectedRef={hideUnselectedRef}
           whatIfAnalysis={myTab?.editorState?.whatIfAnalysis}
           caseOverrides={myTab?.editorState?.caseOverrides}
           conditionalOverrides={myTab?.editorState?.conditionalOverrides}

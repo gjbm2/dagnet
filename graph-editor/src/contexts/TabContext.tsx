@@ -28,6 +28,11 @@ function serializeEditorState(editorState: any): any {
     serialized.conditionalOverrides = serializedConditional;
   }
   
+  // Convert hiddenNodes from Set<string> to string[]
+  if (serialized.hiddenNodes) {
+    serialized.hiddenNodes = serialized.hiddenNodes instanceof Set ? Array.from(serialized.hiddenNodes) : serialized.hiddenNodes;
+  }
+  
   return serialized;
 }
 
@@ -47,6 +52,11 @@ function deserializeEditorState(editorState: any): any {
       deserializedConditional[key] = Array.isArray(value) ? new Set(value) : value as Set<string>;
     });
     deserialized.conditionalOverrides = deserializedConditional;
+  }
+  
+  // Convert hiddenNodes from string[] to Set<string>
+  if (deserialized.hiddenNodes) {
+    deserialized.hiddenNodes = Array.isArray(deserialized.hiddenNodes) ? new Set(deserialized.hiddenNodes) : deserialized.hiddenNodes;
   }
   
   return deserialized;
@@ -972,6 +982,69 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
+  /**
+   * Hide a node
+   */
+  const hideNode = useCallback(async (tabId: string, nodeId: string): Promise<void> => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    const hiddenNodes = tab.editorState?.hiddenNodes || new Set<string>();
+    hiddenNodes.add(nodeId);
+
+    await updateTabState(tabId, { hiddenNodes });
+  }, [tabs, updateTabState]);
+
+  /**
+   * Unhide a node
+   */
+  const unhideNode = useCallback(async (tabId: string, nodeId: string): Promise<void> => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    const hiddenNodes = tab.editorState?.hiddenNodes || new Set<string>();
+    hiddenNodes.delete(nodeId);
+
+    await updateTabState(tabId, { hiddenNodes });
+  }, [tabs, updateTabState]);
+
+  /**
+   * Hide all unselected nodes
+   */
+  const hideUnselectedNodes = useCallback(async (tabId: string, selectedNodeIds: string[]): Promise<void> => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    // Get all node IDs from the graph
+    const file = fileRegistry.getFile(tab.fileId);
+    if (!file?.data?.nodes) return;
+
+    const allNodeIds = file.data.nodes.map((node: any) => node.id);
+    const selectedSet = new Set(selectedNodeIds);
+    const nodesToHide = allNodeIds.filter((id: string) => !selectedSet.has(id));
+
+    const hiddenNodes = new Set<string>(nodesToHide);
+    await updateTabState(tabId, { hiddenNodes });
+  }, [tabs, updateTabState]);
+
+  /**
+   * Show all nodes (unhide all)
+   */
+  const showAllNodes = useCallback(async (tabId: string): Promise<void> => {
+    await updateTabState(tabId, { hiddenNodes: new Set<string>() });
+  }, [updateTabState]);
+
+  /**
+   * Check if a node is hidden
+   */
+  const isNodeHidden = useCallback((tabId: string, nodeId: string): boolean => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return false;
+
+    const hiddenNodes = tab.editorState?.hiddenNodes || new Set<string>();
+    return hiddenNodes.has(nodeId);
+  }, [tabs]);
+
   const operations: TabOperations = {
     openTab,
     closeTab,
@@ -983,7 +1056,12 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     saveAll,
     revertTab,
     openInNewView,
-    commitFiles
+    commitFiles,
+    hideNode,
+    unhideNode,
+    hideUnselectedNodes,
+    showAllNodes,
+    isNodeHidden
   };
 
   return (

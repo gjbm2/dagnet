@@ -76,6 +76,7 @@
 
 .menubar-item:hover {
   background-color: #f0f0f0;
+  color: #333;
 }
 
 .menubar-item[data-highlighted] {
@@ -86,6 +87,17 @@
 .menubar-item[data-disabled] {
   color: #aaa;
   pointer-events: none;
+}
+
+/* Submenu triggers - they use the same class but need specific hover styling */
+.menubar-item[data-state="open"] {
+  background-color: #f0f0f0;
+  color: #333;
+}
+
+.menubar-item[data-state="open"]:hover {
+  background-color: #e0e0e0;
+  color: #333;
 }
 
 /* Right slot for keyboard shortcuts */
@@ -153,11 +165,23 @@
 
   .menubar-item:hover {
     background-color: #3d3d3d;
+    color: #e0e0e0;
   }
 
   .menubar-item[data-highlighted] {
     background-color: #0066cc;
     color: white;
+  }
+
+  /* Submenu triggers in dark mode */
+  .menubar-item[data-state="open"] {
+    background-color: #3d3d3d;
+    color: #e0e0e0;
+  }
+
+  .menubar-item[data-state="open"]:hover {
+    background-color: #4d4d4d;
+    color: #e0e0e0;
   }
 
   .menubar-item[data-disabled] {
