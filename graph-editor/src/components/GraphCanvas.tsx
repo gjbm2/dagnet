@@ -2559,19 +2559,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             edgeProbability *= renormFactor;
             }
             
-            const edgeCosts = edge.data?.costs;
-            
           // Update path context to include the target node we're about to visit
           const nextPathContext = new Set([...edgePathContext, edge.target]);
           
           // Get cost from target node (recursive) with updated path context
           const targetCost = dfs(edge.target, nextPathContext);
             
-            // Calculate probability-weighted cost (dagCalc logic)
+            // Calculate probability-weighted cost (using new flat schema)
             const edgeCost = {
-              monetary: edgeCosts?.monetary?.value || 0,
-              time: edgeCosts?.time?.value || 0,
-              units: edgeCosts?.time?.units || ''
+              monetary: edge.data?.cost_gbp?.mean || 0,
+              time: edge.data?.cost_time?.mean || 0,
+              units: 'days' // Units now implicit: GBP and days
             };
             
             totalCost.monetary += edgeProbability * (edgeCost.monetary + targetCost.monetary);
@@ -2778,9 +2776,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const pathContext = new Set([nodeA.id, nodeB.id]);
       let directPathProbability = directEdge ? computeEffectiveEdgeProbability(currentGraph2, directEdge.id, currentOverrides, currentWhatIfAnalysis2, pathContext) : 0;
       const directPathCosts = {
-        monetary: directEdge?.data?.costs?.monetary?.value || 0,
-        time: directEdge?.data?.costs?.time?.value || 0,
-        units: directEdge?.data?.costs?.time?.units || ''
+        monetary: directEdge?.data?.cost_gbp?.mean || 0,
+        time: directEdge?.data?.cost_time?.mean || 0,
+        units: 'days' // Units now implicit: GBP and days
       };
       
       // Calculate path through intermediates using dagCalc logic

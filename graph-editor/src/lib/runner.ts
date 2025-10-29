@@ -379,14 +379,12 @@ export function calculateProbabilities(
   const reachableFrom = buildReachableFrom(graph);
   const nodeCosts = new Map<string, { monetary: number; time: number }>();
 
-  // Precompute edge costs
+  // Precompute edge costs (using new flat schema)
   const edgeCostMap = new Map<string, { monetary: number; time: number }>();
   for (const e of graph.edges) {
-    const monetaryCost = (e as any).costs?.monetary;
-    const timeCost = (e as any).costs?.time;
     const edgeCost = {
-      monetary: typeof monetaryCost === 'object' && monetaryCost !== null ? (monetaryCost.value || 0) : (typeof monetaryCost === 'number' ? monetaryCost : 0),
-      time: typeof timeCost === 'object' && timeCost !== null ? (timeCost.value || 0) : (typeof timeCost === 'number' ? timeCost : 0)
+      monetary: (e as any).cost_gbp?.mean || 0,
+      time: (e as any).cost_time?.mean || 0
     };
     edgeCostMap.set(e.id, edgeCost);
   }
