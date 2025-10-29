@@ -62,38 +62,16 @@ Users want to filter by:
 
 ### Location in Navigator
 
-```
-┌─────────────────────────────────────────┐
-│ Navigator                          [×]  │
-├─────────────────────────────────────────┤
-│ Repository: dagnet              [↓]    │
-│ Branch: main                    [↓]    │
-├─────────────────────────────────────────┤
-│ ┌─────────────────────────────────────┐ │  ← NEW: Filter bar
-│ │ [All] [Files Only]  [🔍 Search...]  │ │
-│ │ ☐ Local ☐ Dirty ☐ Open            │ │
-│ └─────────────────────────────────────┘ │
-├─────────────────────────────────────────┤
-│ Parameters                          🔍● │
-│ ├─ conversion-rate                  ● ● │
-│ ├─ email-signup                       ● │
-│ └─ abandoned-cart           (planned)   │
-│                                         │
-│ Contexts                            🔍  │
-│ ├─ user-segment                         │
-│ └─ time-window                          │
-...
-```
+Top, under header area
 
-### Filter Bar Design (Revised for Width)
+```
+### Filter Bar Design
 
-#### Option A: Search Full Width + Filter Dropdown (Recommended)
+Search gets full width with filter/sort controls in dropdown:
 
 ```
 ┌─────────────────────────────────────────────────┐
 │ [🔍 Search parameters, contexts, cases...] [⚙️] │
-│      ↑                                       ↑   │
-│   Full width search                    Filters  │
 └─────────────────────────────────────────────────┘
 
 Clicking [⚙️] opens dropdown:
@@ -125,24 +103,7 @@ Clicking [⚙️] opens dropdown:
 └─────────────────────────────────────┘
 ```
 
-#### Option B: Search + Inline Chips
-
-```
-┌─────────────────────────────────────────────────┐
-│ [🔍 Search...]  Mode:[All▾] [Dirty ×] [Local ×]│
-└─────────────────────────────────────────────────┘
-```
-
-#### Option C: Two-Line Layout
-
-```
-┌─────────────────────────────────────────────────┐
-│ ⚫ All  ⚪ Files   ☐ Local ☐ Dirty ☐ Open      │
-│ [🔍 Search parameters, contexts, cases...]      │
-└─────────────────────────────────────────────────┘
-```
-
-**Recommendation: Option A** 
+**Benefits**: 
 - Search gets full width (most important)
 - Filters accessible but don't clutter
 - Dropdown allows explanatory text
@@ -461,19 +422,21 @@ Repository: [dagnet            ▾]  ← Looks like safe dropdown
 Branch:     [main              ▾]  ← Looks like safe toggle
 ```
 
-#### Proposed: Guarded Selectors
+#### Proposed: Repository in Menu, Branch Guarded
+
+Since repository switching is rare, move it to Repository menu. Keep branch in Navigator header with guarded button:
 
 ```
-Repository: dagnet         [Switch...]  ← Button, not dropdown
-Branch:     main          [Switch...]  ← Button, not dropdown
+Repository menu:
+├─ Switch Repository...  ← Opens modal (rarely used)
+├─ Pull Latest
+└─ ...
+
+Navigator header:
+Branch: main          [Switch...]  ← Button opens modal
 ```
 
-Or with modal pattern:
-
-```
-Repository: dagnet                [⚙️]  ← Opens modal
-Branch:     main                  [⚙️]  ← Opens modal
-```
+This frees up space in Navigator header for search/filter controls.
 
 ### Switch Repository Modal
 
@@ -497,14 +460,14 @@ Branch:     main                  [⚙️]  ← Opens modal
 │                                               │
 │ ┌───────────────────────────────────────────┐ │
 │ │ Select Repository:                        │ │
+│ │ (From configured repositories)            │ │
+│ │                                           │ │
 │ │ ⚪ dagnet (current)                        │ │
 │ │ ⚪ example-project                         │ │
 │ │ ⚪ test-repo                               │ │
-│ └───────────────────────────────────────────┘ │
-│                                               │
-│ ┌───────────────────────────────────────────┐ │
-│ │ Or enter new repository URL:              │ │
-│ │ [https://github.com/...]                  │ │
+│ │                                           │ │
+│ │ [Configure Repositories...]               │ │
+│ │   Opens File > Configuration              │ │
 │ └───────────────────────────────────────────┘ │
 │                                               │
 │        [Cancel]  [Commit & Switch]  [Switch]  │
@@ -512,6 +475,8 @@ Branch:     main                  [⚙️]  ← Opens modal
 │                  Safe option      Force switch │
 └───────────────────────────────────────────────┘
 ```
+
+**Note**: Repositories are configured in File > Configuration (credentials). The modal only allows selecting from configured repos, not adding new ones on the fly.
 
 ### Switch Branch Modal
 
@@ -668,18 +633,19 @@ if (canRestoreSnapshot(newRepo, newBranch)) {
 }
 ```
 
-## Part 4: Complete Navigator Layout (Revised with Sub-Categories)
+## Part 4: Complete Navigator Layout (Final)
+
+**Note**: See `BRANCH_WORKFLOW_DESIGN.md` for branch strategy analysis.
+
+**Decision**: No branch/repo in Navigator header (Phase 1). Both are rare operations accessible via Repository menu. This maximizes space for search/filter controls.
 
 ```
 ┌─────────────────────────────────────────────────┐
 │ Navigator                              [×]      │
 ├─────────────────────────────────────────────────┤
-│ Repository: dagnet            [Switch Repo...] │
-│ Branch:     main             [Switch Branch...] │
-├─────────────────────────────────────────────────┤
 │ [🔍 Search parameters, contexts, cases...] [⚙️]│
 │                                            ↑    │
-│                                        Filters  │
+│                                    Filters/Sort │
 ├─────────────────────────────────────────────────┤
 │ 📊 Graphs (2)                           🔍     │
 │ ├─ conversion-funnel                    ● ●    │
@@ -992,21 +958,46 @@ function getNameClass(entry: NavigatorEntry): string {
 </TabHeader>
 ```
 
-#### Selector Option (in Graph Editor)
+#### Selector Option (in Graph Editor Sidebar)
+
+**Important**: Selection dropdowns in graph editor properties panel should look like **mini-Navigators** with the same visual treatment:
+
 ```tsx
-<SelectorOption entry={entry}>
-  <Icon>{getIcon(entry.type)}</Icon>
-  <Name className={getNameClass(entry)}>
-    {entry.name}
-  </Name>
-  {!entry.hasFile && <Badge>[create]</Badge>}
-  {entry.isLocal && <Badge>(local)</Badge>}
-  {entry.isOrphan && <WarningIcon>⚠️</WarningIcon>}
-  {entry.isDirty && <Dot color="orange">●</Dot>}
-  {/* Show additional context in selector */}
-  {entry.path && <Path>({entry.path})</Path>}
-</SelectorOption>
+<SelectorDropdown>
+  <SearchInput 
+    placeholder="Search parameters..."
+    value={searchQuery}
+    onChange={setSearchQuery}
+  />
+  
+  {/* Grouped by sub-category if enabled */}
+  <SubCategory name="Probability">
+    <SelectorOption entry={entry}>
+      <Icon>{getIcon(entry.type)}</Icon>
+      <Name className={getNameClass(entry)}>
+        {entry.name}
+      </Name>
+      {!entry.hasFile && <Badge>[create]</Badge>}
+      {entry.isLocal && <Badge>(local)</Badge>}
+      {entry.isOrphan && <WarningIcon>⚠️</WarningIcon>}
+      {entry.isDirty && <Dot color="orange">●</Dot>}
+      {/* Show additional context in selector */}
+      {entry.path && <Path>({entry.path})</Path>}
+    </SelectorOption>
+  </SubCategory>
+  
+  <SubCategory name="Cost (GBP)">
+    {/* ... more options */}
+  </SubCategory>
+</SelectorDropdown>
 ```
+
+**Key Points**:
+- Same visual treatment as Navigator
+- Same sub-categorization
+- Searchable
+- Shows create/local/dirty/orphan states
+- "Mini-Navigator" experience for consistency
 
 ### CSS Classes (Shared Stylesheet)
 
@@ -1113,37 +1104,57 @@ Edit Menu
 
 ### Sync Modal Design
 
+For large graphs with many missing IDs, the modal needs to be scrollable and searchable:
+
 ```
 ┌─────────────────────────────────────────────────┐
 │ Sync Index from Graph: conversion-funnel.yaml  │
 ├─────────────────────────────────────────────────┤
 │                                                 │
-│ Found 8 IDs used in graph that are missing     │
+│ Found 47 IDs used in graph that are missing    │
 │ from their respective indexes.                  │
 │                                                 │
-│ Select which to add to indexes:                │
+│ [🔍 Search IDs...]              [Select All]    │
+│                                 [Select None]   │
 │                                                 │
 │ ┌─────────────────────────────────────────────┐ │
-│ │ Parameters (3):                             │ │
-│ │ ☑ abandoned-cart-rate      Used 2× in graph│ │
-│ │ ☑ checkout-completion      Used 1× in graph│ │
-│ │ ☐ legacy-metric           Used 0× in graph│ │
+│ │ ▼ Parameters (25):                   12/25 ☑│ │
+│ │   ☑ abandoned-cart-rate      Used 2× (prob)│ │
+│ │   ☑ checkout-completion      Used 1× (prob)│ │
+│ │   ☑ acquisition-cost        Used 3× (£)    │ │
+│ │   ☐ legacy-metric           Used 0× (prob) │ │
+│ │   ☑ processing-time         Used 2× (time) │ │
+│ │   ... (scrollable)                          │ │
 │ │                                             │ │
-│ │ Contexts (1):                               │ │
-│ │ ☑ mobile-web              Used 3× in graph│ │
+│ │ ▼ Contexts (5):                        5/5 ☑│ │
+│ │   ☑ mobile-web              Used 3× (user) │ │
+│ │   ☑ q1-2024                 Used 8× (time) │ │
+│ │   ... (scrollable)                          │ │
 │ │                                             │ │
-│ │ Cases (2):                                  │ │
-│ │ ☑ homepage-variant-test   Used 1× in graph│ │
-│ │ ☐ old-experiment          Used 0× in graph│ │
+│ │ ▼ Cases (7):                           3/7 ☑│ │
+│ │   ☑ homepage-variant-test   Used 1× (A/B)  │ │
+│ │   ☐ old-experiment          Used 0× (A/B)  │ │
+│ │   ... (scrollable)                          │ │
 │ │                                             │ │
-│ │ Nodes (2):                                  │ │
-│ │ ☑ abandoned-cart          Used 5× in graph│ │
-│ │ ☑ help-center             Used 1× in graph│ │
+│ │ ▼ Nodes (10):                          8/10☑│ │
+│ │   ☑ abandoned-cart          Used 5× (exit) │ │
+│ │   ☑ help-center             Used 1× (exit) │ │
+│ │   ... (scrollable)                          │ │
 │ └─────────────────────────────────────────────┘ │
 │                                                 │
-│ [Select All]  [Select None]  [Cancel]  [Add]   │
+│              [Cancel]  [Add Selected (28)]      │
 └─────────────────────────────────────────────────┘
 ```
+
+**Features for Large Lists**:
+- **Search box** at top - filters IDs as you type
+- **Collapsible categories** - expand/collapse each type
+- **Selection counts** - shows "12/25" selected in header
+- **Sub-type hints** - shows (prob), (£), (time), (exit) for context
+- **Usage counts** - "Used 5× in graph"
+- **Scrollable** - handles 100+ missing IDs gracefully
+- **Bulk actions** - Select All / Select None per category
+- **Button shows count** - "Add Selected (28)"
 
 ### Implementation
 
