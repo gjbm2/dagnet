@@ -46,7 +46,7 @@ export function ParameterSelector({
   autoFocus = false,
   parameterType
 }: ParameterSelectorProps) {
-  const { state, operations: navOps } = useNavigatorContext();
+  const { state, operations: navOps, items: navItems } = useNavigatorContext();
   const { operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
   const { graph } = useGraphStore(); // Get current graph to check for used IDs
@@ -81,7 +81,8 @@ export function ParameterSelector({
         name: p.name, 
         description: p.description, 
         file_path: p.file_path,
-        type: p.type // Include parameter type for filtering
+        type: p.type, // Include parameter type for filtering
+        isLocal: false
       }));
       
       // Filter by parameter type if specified
@@ -91,22 +92,36 @@ export function ParameterSelector({
       
       return params;
     } else if (type === 'context' && 'contexts' in index) {
-      return (index as any).contexts.map((c: any) => ({ id: c.id, name: c.name, description: c.description, file_path: c.file_path }));
+      return (index as any).contexts.map((c: any) => ({ id: c.id, name: c.name, description: c.description, file_path: c.file_path, isLocal: false }));
     } else if (type === 'case' && 'cases' in index) {
-      return (index as any).cases.map((c: any) => ({ id: c.id, name: c.name, description: c.description, file_path: c.file_path }));
+      return (index as any).cases.map((c: any) => ({ id: c.id, name: c.name, description: c.description, file_path: c.file_path, isLocal: false }));
     } else if (type === 'node' && 'nodes' in index) {
-      return (index as any).nodes.map((n: any) => ({ id: n.id, name: n.name, description: n.description, file_path: n.file_path }));
+      return (index as any).nodes.map((n: any) => ({ id: n.id, name: n.name, description: n.description, file_path: n.file_path, isLocal: false }));
     }
     return [];
   })() : [];
+
+  // Also include local (uncommitted) items of this type from the navigator
+  const localItems = navItems
+    .filter(item => item.type === type && item.isLocal)
+    .map(item => ({
+      id: item.id,
+      name: item.name || item.id,
+      description: item.description,
+      file_path: undefined,
+      isLocal: true
+    }));
+
+  // Combine registry and local items
+  const allItems = [...registryItems, ...localItems];
 
   // Get list of used IDs in the current graph (for nodes only)
   const usedIdsInGraph = type === 'node' && graph ? 
     new Set(graph.nodes.map((n: any) => n.slug).filter(Boolean)) : 
     new Set();
 
-  // Filter registry items by input value
-  const filteredItems = registryItems.filter((item: any) => {
+  // Filter all items (registry + local) by input value
+  const filteredItems = allItems.filter((item: any) => {
     const query = inputValue.toLowerCase();
     return item.id.toLowerCase().includes(query) || 
            (item.name && item.name.toLowerCase().includes(query)) ||
@@ -123,12 +138,12 @@ export function ParameterSelector({
     }) :
     filteredItems;
 
-  // Check if current value is in registry
-  const isInRegistry = registryItems.some((item: any) => item.id === inputValue);
-  const registryHasFile = registryItems.find((item: any) => item.id === inputValue)?.file_path;
+  // Check if current value is in registry or local items
+  const isInRegistry = allItems.some((item: any) => item.id === inputValue);
+  const registryHasFile = allItems.find((item: any) => item.id === inputValue)?.file_path;
   
   // Check if file exists locally (in FileRegistry or as a local item in navigator)
-  const fileExistsLocally = fileRegistry.getFile(`${type}-${inputValue}.${type === 'graph' ? 'json' : 'yaml'}`) !== null;
+  const fileExistsLocally = fileRegistry.getFile(`${type}-${inputValue}.yaml`) !== null;
   
   const hasFile = registryHasFile || fileExistsLocally;
 
@@ -143,14 +158,14 @@ export function ParameterSelector({
       const timer = setTimeout(() => {
         if (inputRef.current) {
           inputRef.current.focus();
-          if (validationMode !== 'none' && registryItems.length > 0) {
+          if (validationMode !== 'none' && allItems.length > 0) {
             setShowSuggestions(true);
           }
         }
       }, 100);
       return () => clearTimeout(timer);
     }
-  }, [autoFocus, value, validationMode, registryItems.length]); // Re-run when these change
+  }, [autoFocus, value, validationMode, allItems.length]); // Re-run when these change
 
   // Close suggestions when clicking outside
   useEffect(() => {
@@ -219,13 +234,18 @@ export function ParameterSelector({
         }
       : { id: name, name, description: '' };
 
-    const file = fileRegistry.getOrCreateFile(`${fileType}-${name}.${fileType === 'graph' ? 'json' : 'yaml'}`, fileType, defaultData);
+    const file = fileRegistry.getOrCreateFile(
+      `${fileType}-${name}.yaml`, 
+      fileType, 
+      { repository: 'local', path: `${fileType}s/${name}.yaml`, branch: 'main' },
+      defaultData
+    );
     
     // Add to navigator as local item
     const newItem = {
       id: name,
-      name: `${name}.${fileType === 'graph' ? 'json' : 'yaml'}`,
-      path: `${fileType}s/${name}.${fileType === 'graph' ? 'json' : 'yaml'}`,
+      name: `${name}.yaml`,
+      path: `${fileType}s/${name}.yaml`,
       type: fileType,
       size: 0,
       lastModified: new Date().toISOString(),
@@ -296,8 +316,8 @@ export function ParameterSelector({
             onClick={async () => {
               const item = {
                 id: inputValue,
-                name: `${inputValue}.${type === 'graph' ? 'json' : 'yaml'}`,
-                path: `${type}s/${inputValue}.${type === 'graph' ? 'json' : 'yaml'}`,
+                name: `${inputValue}.yaml`,
+                path: `${type}s/${inputValue}.yaml`,
                 type: type,
                 size: 0,
                 lastModified: new Date().toISOString()
@@ -403,7 +423,17 @@ export function ParameterSelector({
                         ✓
                       </span>
                     )}
-                    {!item.file_path && (
+                    {item.isLocal && (
+                      <span style={{ 
+                        marginLeft: '2px', 
+                        fontSize: '11px', 
+                        color: '#007bff',
+                        fontStyle: 'italic'
+                      }} title="Local (uncommitted)">
+                        (local)
+                      </span>
+                    )}
+                    {!item.file_path && !item.isLocal && (
                       <span style={{ 
                         marginLeft: '2px', 
                         fontSize: '11px', 
