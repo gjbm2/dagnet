@@ -688,7 +688,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         console.log(`TabContext: Loading markdown ${item.name}...`);
         // Load markdown content from local docs
         try {
-          const response = await fetch(`/src/docs/${item.id}.md`);
+          const response = await fetch(`/docs/${item.id}.md`);
           if (response.ok) {
             const markdownContent = await response.text();
             data = { content: markdownContent };

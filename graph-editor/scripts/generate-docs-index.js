@@ -7,8 +7,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DOCS_DIR = path.join(__dirname, '..', 'src', 'docs');
-const INDEX_FILE = path.join(DOCS_DIR, 'index.json');
+const SRC_DOCS_DIR = path.join(__dirname, '..', 'src', 'docs');
+const PUBLIC_DOCS_DIR = path.join(__dirname, '..', 'public', 'docs');
+const INDEX_FILE = path.join(PUBLIC_DOCS_DIR, 'index.json');
 
 console.log('Generating documentation index...');
 
@@ -16,10 +17,26 @@ console.log('Generating documentation index...');
 const excludedFiles = ['about.md', 'keyboard-shortcuts.md', 'index.json'];
 
 try {
-  const files = fs.readdirSync(DOCS_DIR)
+  // Ensure public/docs directory exists
+  if (!fs.existsSync(PUBLIC_DOCS_DIR)) {
+    fs.mkdirSync(PUBLIC_DOCS_DIR, { recursive: true });
+  }
+
+  // Get all markdown files from src/docs
+  const files = fs.readdirSync(SRC_DOCS_DIR)
     .filter(file => file.endsWith('.md'))
     .filter(file => !excludedFiles.includes(file))
     .sort();
+
+  // Copy all markdown files to public/docs (including excluded ones)
+  const allMdFiles = fs.readdirSync(SRC_DOCS_DIR)
+    .filter(file => file.endsWith('.md'));
+  
+  allMdFiles.forEach(file => {
+    const srcPath = path.join(SRC_DOCS_DIR, file);
+    const destPath = path.join(PUBLIC_DOCS_DIR, file);
+    fs.copyFileSync(srcPath, destPath);
+  });
 
   const indexData = {
     files: files,
