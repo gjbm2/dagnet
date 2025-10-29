@@ -182,7 +182,12 @@ export class CredentialsManager {
    * Public method for serverless functions to directly load with a secret
    */
   async loadFromSystemSecretWithKey(providedSecret: string): Promise<CredentialLoadResult> {
-    return this.loadFromSystemSecret(providedSecret);
+    const result = await this.loadFromSystemSecret(providedSecret);
+    if (result.success && result.credentials) {
+      this.currentCredentials = result.credentials;
+      this.currentSource = 'system';
+    }
+    return result;
   }
 
   /**
@@ -194,12 +199,24 @@ export class CredentialsManager {
       console.log('🔧 CredentialsManager: Loading from system secret...');
       // Check for credentials JSON in environment variables
       // Support both import.meta.env (browser/Vite) and process.env (serverless)
-      const credentialsJson = typeof import.meta !== 'undefined' && import.meta.env 
-        ? import.meta.env.VITE_CREDENTIALS_JSON
-        : (typeof process !== 'undefined' ? process.env.VITE_CREDENTIALS_JSON : undefined);
-      const credentialsSecret = typeof import.meta !== 'undefined' && import.meta.env
-        ? import.meta.env.VITE_CREDENTIALS_SECRET
-        : (typeof process !== 'undefined' ? process.env.VITE_CREDENTIALS_SECRET : undefined);
+      let credentialsJson: string | undefined;
+      let credentialsSecret: string | undefined;
+      
+      try {
+        // Try browser/Vite environment first
+        if (typeof import.meta !== 'undefined' && (import.meta as any).env) {
+          credentialsJson = (import.meta as any).env.VITE_CREDENTIALS_JSON;
+          credentialsSecret = (import.meta as any).env.VITE_CREDENTIALS_SECRET;
+        }
+      } catch (e) {
+        // import.meta.env doesn't exist in Node, that's fine
+      }
+      
+      // Fall back to process.env (serverless/Node)
+      if (!credentialsJson && typeof process !== 'undefined' && process.env) {
+        credentialsJson = process.env.VITE_CREDENTIALS_JSON;
+        credentialsSecret = process.env.VITE_CREDENTIALS_SECRET;
+      }
       
       console.log('🔧 CredentialsManager: VITE_CREDENTIALS_JSON exists:', !!credentialsJson);
       console.log('🔧 CredentialsManager: VITE_CREDENTIALS_SECRET exists:', !!credentialsSecret);
