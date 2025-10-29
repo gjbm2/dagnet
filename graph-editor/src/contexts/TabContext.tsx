@@ -242,8 +242,11 @@ class FileRegistry {
 
     file.viewTabs = file.viewTabs.filter(id => id !== tabId);
 
-    // If no tabs are viewing this file, remove completely
-    if (file.viewTabs.length === 0) {
+    // Special files (settings, credentials) should never be deleted
+    const isSpecialFile = fileId === 'settings-settings' || fileId === 'credentials-credentials';
+    
+    // If no tabs are viewing this file, remove completely (unless it's a special file)
+    if (file.viewTabs.length === 0 && !isSpecialFile) {
       console.log(`FileRegistry: No more views of ${fileId}, removing from registry and DB`);
       
       // Notify listeners BEFORE deleting (so Navigator can update)
@@ -257,7 +260,10 @@ class FileRegistry {
       this.listeners.delete(fileId);
       await db.files.delete(fileId);
     } else {
-      // Still has views, just update
+      // Still has views or is special file, just update
+      if (isSpecialFile) {
+        console.log(`FileRegistry: ${fileId} is a special file, keeping in registry and DB`);
+      }
       await db.files.put(file);
     }
   }
