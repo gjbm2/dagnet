@@ -152,7 +152,7 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     await fileRegistry.getOrCreateFile(
       newFileId,
       type,
-      { repository: 'local', path: `${type}s/${name}`, branch: currentFile.source.branch },
+      { repository: 'local', path: `${type}s/${name}`, branch: currentFile.source?.branch || 'main' },
       duplicatedData
     );
     
