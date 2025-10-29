@@ -544,23 +544,24 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       // Handle ?data parameter (compressed/uncompressed JSON)
       const dataParam = urlParams.get('data');
       if (dataParam) {
+        console.log('TabContext: Found ?data parameter, attempting to decode...');
         const { decodeStateFromUrl } = await import('../lib/shareUrl');
         const urlData = decodeStateFromUrl();
         
         if (urlData) {
-          console.log('TabContext: Loading graph data from ?data parameter');
+          console.log('TabContext: Successfully decoded graph data from ?data parameter');
           
-        // Create a temporary graph item for the URL data
-        const tempItem: RepositoryItem = {
-          id: `url-data-${Date.now()}`,
-          name: 'Shared Graph',
-          type: 'graph',
-          path: 'url-data'
-        };
+          // Create a temporary graph item for the URL data
+          const tempItem: RepositoryItem = {
+            id: `url-data-${Date.now()}`,
+            name: 'Shared Graph',
+            type: 'graph',
+            path: 'url-data'
+          };
           
-        // Create file in registry with URL data
-        const fileId = `graph-${tempItem.id}`;
-        await fileRegistry.getOrCreateFile(fileId, 'graph', { repository: 'url', path: 'url-data', branch: 'main' }, urlData);
+          // Create file in registry with URL data
+          const fileId = `graph-${tempItem.id}`;
+          await fileRegistry.getOrCreateFile(fileId, 'graph', { repository: 'url', path: 'url-data', branch: 'main' }, urlData);
           
           // Open tab with the URL data
           await openTab(tempItem, 'interactive', true);
@@ -571,6 +572,8 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
           window.history.replaceState({}, document.title, url.toString());
           
           console.log('TabContext: Successfully loaded graph from ?data parameter');
+        } else {
+          console.error('TabContext: Failed to decode ?data parameter');
         }
         return;
       }
