@@ -499,9 +499,12 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
   // Load tabs from IndexedDB on mount and initialize credentials
   useEffect(() => {
-    loadTabsFromDB();
-    initializeCredentials();
-    loadFromURLData();
+    const initializeApp = async () => {
+      await loadTabsFromDB();
+      await initializeCredentials();
+      await loadFromURLData();
+    };
+    initializeApp();
   }, []);
 
   /**
