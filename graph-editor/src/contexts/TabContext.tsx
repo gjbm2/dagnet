@@ -731,14 +731,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         
         // Get the currently selected repository from NavigatorContext by reading from IndexedDB
         const appState = await db.appState.get('app-state');
-        const selectedRepo = appState?.navigatorState?.selectedRepo;
+        let selectedRepo = appState?.navigatorState?.selectedRepo;
         const selectedBranch = appState?.navigatorState?.selectedBranch || 'main';
-        
-        console.log(`TabContext: Loading from repo: ${selectedRepo}, branch: ${selectedBranch}`);
         
         // Load credentials to configure gitService
         const { credentialsManager } = await import('../lib/credentials');
         const credentialsResult = await credentialsManager.loadCredentials();
+        
+        // If no selectedRepo in IndexedDB, use defaultGitRepo from credentials
+        if (!selectedRepo && credentialsResult.success && credentialsResult.credentials) {
+          selectedRepo = credentialsResult.credentials.defaultGitRepo;
+          console.log(`TabContext: No selectedRepo in IndexedDB, using defaultGitRepo: ${selectedRepo}`);
+        }
+        
+        console.log(`TabContext: Loading from repo: ${selectedRepo}, branch: ${selectedBranch}`);
         
         if (credentialsResult.success && credentialsResult.credentials && selectedRepo) {
           console.log(`TabContext: Configuring gitService with credentials for repo: ${selectedRepo}`);
