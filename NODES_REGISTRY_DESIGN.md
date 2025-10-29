@@ -1139,3 +1139,44 @@ Traditional Flow:                Registry-Aware Flow:
 **Status**: Pending Review  
 **Changelog**: Added Part 5.5 - Enhanced NewFileModal with registry-aware creation
 
+
+## Not Yet Started (implementation gaps)
+
+- Nodes registry schemas and example files
+  - Create `public/param-schemas/node-schema.yaml` and `public/param-schemas/nodes-index-schema.yaml`.
+  - Add `param-registry/test/nodes-index.yaml` and example `param-registry/test/nodes/*.yaml` files.
+
+- Registry service (nodes)
+  - Implement in `paramRegistryService` (or `registryService` if renamed):
+    - `loadNodesIndex()`, `loadNode(id)`.
+    - Generic `loadIndex(type)` and `loadItem(type, id)`.
+    - Validation helpers: `isValidId`, `searchRegistry`.
+    - Usage tracking: `updateUsageCount('node', id, graphId)`.
+    - In-memory caching layer for indexes.
+
+- Navigator integration (nodes)
+  - Surface `state.registryIndexes.nodes` in navigator UI lists.
+  - Show planned-without-file nodes and usage counts.
+  - Add right-click: "Create file from registry ID" action.
+
+- NewFileModal enhancements (registry-aware)
+  - Two-mode UI (scratch vs. select-from-registry) with search/sort, usage counts, and validation warnings.
+
+- Auto-sync registry on save/commit
+  - Detect new IDs referenced in graphs and add to nodes index as `planned`.
+  - Increment `usage_count` when saving graphs using a node ID.
+
+- Cross-graph features (nodes)
+  - Queries: which graphs use node X; usage dashboards.
+  - Analytics surfaces for node usage and status.
+
+- Types and documentation
+  - Add `NodesIndex` and `NodeDefinition` to `src/types` and reference them across the app.
+  - Document new service APIs and registry data shapes in `src/docs`.
+
+- Testing
+  - Unit tests for registry service, navigator integration, and selector behaviors for nodes.
+
+- Validation UX for node IDs
+  - Strict/warning modes via `ValidationContext` for node ID selection.
+  - Sidebar warnings for unregistered or planned-without-file node IDs.

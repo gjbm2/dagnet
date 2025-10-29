@@ -254,11 +254,11 @@ export function calculatePathProbability(
       // Get cost from target node (recursive) with updated path context
       const targetCost = calculateCost(edge.target, nextPathContext);
       
-      // Calculate probability-weighted cost (new flat schema)
+      // Calculate probability-weighted cost (using new flat schema)
       const edgeCost = {
         monetary: edge.data?.cost_gbp?.mean || 0,
         time: edge.data?.cost_time?.mean || 0,
-        units: 'days'
+        units: 'days' // Units now implicit: GBP and days
       };
       
       totalCost.monetary += edgeProbability * (edgeCost.monetary + targetCost.monetary);

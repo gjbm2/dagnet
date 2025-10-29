@@ -196,4 +196,3 @@ When we implement commit for new files, we should prompt:
 
 This gives users **control** over what goes in the registry.
 
-
