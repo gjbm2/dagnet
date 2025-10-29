@@ -93,7 +93,7 @@ class FileRegistry {
           type,
           data,
           originalData: structuredClone(data),
-          isDirty: false,
+          isDirty: source.repository === 'local', // Local files are dirty by default
           source,
           viewTabs: [],
           lastModified: Date.now()
@@ -110,6 +110,13 @@ class FileRegistry {
     if (shouldNotify) {
       console.log(`FileRegistry: Notifying listeners for ${fileId}, data:`, file.data);
       this.notifyListeners(fileId, file);
+      
+      // Emit dirty state change event for newly created local files
+      if (file.isDirty) {
+        window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
+          detail: { fileId, isDirty: file.isDirty } 
+        }));
+      }
     }
     
     return file;
