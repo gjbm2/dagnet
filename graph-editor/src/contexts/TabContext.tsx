@@ -551,20 +551,24 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         if (urlData) {
           console.log('TabContext: Successfully decoded graph data from ?data parameter');
           
-          // Create a temporary graph item for the URL data
-          const tempItem: RepositoryItem = {
-            id: `url-data-${Date.now()}`,
-            name: 'Shared Graph',
-            type: 'graph',
-            path: 'url-data'
-          };
-          
           // Create file in registry with URL data
-          const fileId = `graph-${tempItem.id}`;
+          const timestamp = Date.now();
+          const fileId = `graph-url-data-${timestamp}`;
           await fileRegistry.getOrCreateFile(fileId, 'graph', { repository: 'url', path: 'url-data', branch: 'main' }, urlData);
           
-          // Open tab with the URL data
-          await openTab(tempItem, 'interactive', true);
+          // Create new tab directly with the data (don't use openTab which tries to load from GitHub)
+          const newTab: TabState = {
+            id: `tab-${fileId}-interactive`,
+            fileId: fileId,
+            label: 'Shared Graph',
+            viewMode: 'interactive',
+            isDirty: false
+          };
+          
+          setTabs(prev => [...prev, newTab]);
+          setActiveTabId(newTab.id);
+          await db.saveTabs([...tabs, newTab]);
+          await db.saveAppState({ activeTabId: newTab.id });
           
           // Clean up URL parameter
           const url = new URL(window.location.href);
