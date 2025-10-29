@@ -20,7 +20,8 @@
 6. Google sheets pull through params
 
 ### Medium Priority
-3. Nodal levels in the editor (some nodes are 'tall')
+3. Nodal levels in the editor (some nodes are 'tall')   
+4. auto-re-route doesn't start automatically (needs kicking)
 
 ### Low Priority
 (None currently)

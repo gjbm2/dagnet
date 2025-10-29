@@ -27,6 +27,7 @@ import ConversionEdge from './edges/ConversionEdge';
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { useGraphStore } from '../contexts/GraphStoreContext';
+import { useTabContext } from '../contexts/TabContext';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
@@ -53,13 +54,14 @@ interface GraphCanvasProps {
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
   onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
   onForceRerouteRef?: React.MutableRefObject<(() => void) | null>;
+  onHideUnselectedRef?: React.MutableRefObject<(() => void) | null>;
   // What-if analysis state (from tab state, not GraphStore)
   whatIfAnalysis?: any;
   caseOverrides?: Record<string, string>;
   conditionalOverrides?: Record<string, Set<string>>;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, whatIfAnalysis, caseOverrides, conditionalOverrides }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides, conditionalOverrides }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -75,6 +77,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onDeleteSelectedRef={onDeleteSelectedRef}
         onAutoLayoutRef={onAutoLayoutRef}
         onForceRerouteRef={onForceRerouteRef}
+        onHideUnselectedRef={onHideUnselectedRef}
         whatIfAnalysis={whatIfAnalysis}
         caseOverrides={caseOverrides}
         conditionalOverrides={conditionalOverrides}
@@ -83,9 +86,10 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {} }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {} }: GraphCanvasProps) {
   const store = useGraphStore();
   const { graph, setGraph } = store;
+  const { operations: tabOperations, activeTabId, tabs } = useTabContext();
   const saveHistoryState = store.saveHistoryState;
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
   
@@ -1446,7 +1450,31 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       isSyncingRef.current = false;
       console.log('Reset isSyncingRef to false');
     }, 100);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge]);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, activeTabId, tabs]);
+
+  // Separate effect to handle hidden state changes and trigger redraw
+  useEffect(() => {
+    if (!activeTabId || !nodes.length || !edges.length) return;
+    
+    const tab = tabs.find(t => t.id === activeTabId);
+    const hiddenNodes = tab?.editorState?.hiddenNodes || new Set<string>();
+    
+    // Update node classes
+    setNodes(prevNodes => 
+      prevNodes.map(node => ({
+        ...node,
+        className: hiddenNodes.has(node.id) ? 'hidden' : ''
+      }))
+    );
+    
+    // Update edge classes
+    setEdges(prevEdges => 
+      prevEdges.map(edge => ({
+        ...edge,
+        className: (hiddenNodes.has(edge.source) || hiddenNodes.has(edge.target)) ? 'hidden' : ''
+      }))
+    );
+  }, [activeTabId, tabs, nodes.length, edges.length, setNodes, setEdges]);
 
   // Separate effect to handle initial fitView AFTER nodes are populated
   useEffect(() => {
@@ -3318,6 +3346,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [onForceRerouteRef]);
 
+  // Hide unselected nodes function
+  const hideUnselected = useCallback(async () => {
+    if (!activeTabId) return;
+    
+    const selectedNodes = nodes.filter(n => n.selected);
+    const selectedNodeIds = selectedNodes.map(n => n.id);
+    
+    await tabOperations.hideUnselectedNodes(activeTabId, selectedNodeIds);
+  }, [activeTabId, nodes, tabOperations]);
+
+  // Expose hide unselected function to parent component via ref
+  useEffect(() => {
+    if (onHideUnselectedRef) {
+      onHideUnselectedRef.current = hideUnselected;
+    }
+  }, [hideUnselected, onHideUnselectedRef]);
+
 
   // Handle canvas right-click for context menu
   const onPaneContextMenu = useCallback((event: React.MouseEvent) => {
@@ -3891,6 +3936,52 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             zIndex: 10000
           }}
         >
+          {/* Hide/Unhide option */}
+          {activeTabId && tabOperations.isNodeHidden(activeTabId, nodeContextMenu.nodeId) ? (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                if (activeTabId) {
+                  tabOperations.unhideNode(activeTabId, nodeContextMenu.nodeId);
+                }
+                setNodeContextMenu(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: '#28a745',
+                borderRadius: '2px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              👁️ Show node
+            </div>
+          ) : (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                if (activeTabId) {
+                  tabOperations.hideNode(activeTabId, nodeContextMenu.nodeId);
+                }
+                setNodeContextMenu(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: '#6c757d',
+                borderRadius: '2px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              🙈 Hide node
+            </div>
+          )}
+          
+          {/* Delete option */}
           <div
             onClick={(e) => {
               e.stopPropagation();

@@ -1,3 +1,12 @@
+/* Hidden node and edge transparency */
+.react-flow__node.hidden {
+  opacity: 0.1 !important;
+}
+
+.react-flow__edge.hidden {
+  opacity: 0.1 !important;
+}
+
 /* Override ReactFlow control point colors to black */
 .react-flow__edgebutton,
 .react-flow__edgebutton-foreignobject {
