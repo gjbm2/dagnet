@@ -178,6 +178,14 @@ export class CredentialsManager {
   }
 
   /**
+   * Load credentials from system secret with provided secret key
+   * Public method for serverless functions to directly load with a secret
+   */
+  async loadFromSystemSecretWithKey(providedSecret: string): Promise<CredentialLoadResult> {
+    return this.loadFromSystemSecret(providedSecret);
+  }
+
+  /**
    * Load credentials from system secret
    * This would be implemented in serverless functions
    */
@@ -185,8 +193,13 @@ export class CredentialsManager {
     try {
       console.log('🔧 CredentialsManager: Loading from system secret...');
       // Check for credentials JSON in environment variables
-      const credentialsJson = import.meta.env.VITE_CREDENTIALS_JSON;
-      const credentialsSecret = import.meta.env.VITE_CREDENTIALS_SECRET;
+      // Support both import.meta.env (browser/Vite) and process.env (serverless)
+      const credentialsJson = typeof import.meta !== 'undefined' && import.meta.env 
+        ? import.meta.env.VITE_CREDENTIALS_JSON
+        : (typeof process !== 'undefined' ? process.env.VITE_CREDENTIALS_JSON : undefined);
+      const credentialsSecret = typeof import.meta !== 'undefined' && import.meta.env
+        ? import.meta.env.VITE_CREDENTIALS_SECRET
+        : (typeof process !== 'undefined' ? process.env.VITE_CREDENTIALS_SECRET : undefined);
       
       console.log('🔧 CredentialsManager: VITE_CREDENTIALS_JSON exists:', !!credentialsJson);
       console.log('🔧 CredentialsManager: VITE_CREDENTIALS_SECRET exists:', !!credentialsSecret);

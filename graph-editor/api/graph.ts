@@ -1,4 +1,5 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
+import { CredentialsManager } from '../src/lib/credentials';
 
 /**
  * Vercel serverless function to fetch graphs from GitHub
@@ -8,6 +9,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
  * - branch: Git branch (default: main)
  * - raw: Return raw JSON string (default: false)
  * - format: Return formatted JSON (default: false)
+ * - secret: Webhook secret for authentication (optional, enables system credentials)
  */
 
 interface GitHubFile {
@@ -36,17 +38,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { name, branch = 'main', raw, format } = req.query;
+    const { name, branch = 'main', raw, format, secret } = req.query;
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'Graph name is required' });
     }
 
-    // Get config from environment variables
-    const repoOwner = process.env.VITE_GIT_REPO_OWNER || 'gjbm2';
-    const repoName = process.env.VITE_GIT_REPO_NAME || '<private-repo>';
-    const graphsPath = process.env.VITE_GIT_GRAPHS_PATH || 'graphs';
-    const githubToken = process.env.VITE_GITHUB_TOKEN;
+    // Load credentials using the existing CredentialsManager
+    const credentialsManager = CredentialsManager.getInstance();
+    let credentialsResult;
+    
+    if (secret && typeof secret === 'string') {
+      // Use provided secret to load system credentials
+      credentialsResult = await credentialsManager.loadFromSystemSecretWithKey(secret);
+    } else {
+      // Try loading without a secret (will use public access or fail)
+      credentialsResult = await credentialsManager.loadCredentials();
+    }
+
+    if (!credentialsResult.success || !credentialsResult.credentials) {
+      return res.status(401).json({ 
+        error: 'No valid credentials available',
+        details: credentialsResult.error 
+      });
+    }
+
+    // Get the default git repository
+    const gitRepo = credentialsManager.getDefaultGitCredentials();
+    if (!gitRepo) {
+      return res.status(500).json({ error: 'No git repositories in credentials' });
+    }
+
+    const repoOwner = gitRepo.owner;
+    const repoName = gitRepo.repo;
+    const graphsPath = gitRepo.graphsPath || 'graphs';
+    const githubToken = gitRepo.token;
 
     // Construct file path
     const fileName = name.endsWith('.json') ? name : `${name}.json`;

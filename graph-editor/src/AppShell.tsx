@@ -18,6 +18,7 @@ import { db } from './db/appDatabase';
 import 'rc-dock/dist/rc-dock.css'; // Import rc-dock base styles
 import './styles/dock-theme.css'; // Safe customizations
 import './styles/active-tab-highlight.css'; // Active tab highlighting
+import './styles/file-state-indicators.css'; // File state visual indicators
 
 /**
  * App Shell Content

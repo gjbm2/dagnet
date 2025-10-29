@@ -67,6 +67,35 @@ export function NavigatorContent() {
     setSectionContextMenu({ type, x, y });
   };
 
+  const handleIndexClick = (type: ObjectType) => {
+    // Open the index file for this type
+    const indexFileId = `${type}-index`;
+    const indexFileName = `${type}s-index.yaml`;
+    
+    // Check if already open
+    const existingTab = tabs.find(t => t.fileId === indexFileId);
+    if (existingTab) {
+      tabOps.switchTab(existingTab.id);
+    } else {
+      // Open new tab for index file
+      const indexItem: RepositoryItem = {
+        id: 'index',
+        type: type,
+        name: indexFileName,
+        path: `${type}s/${indexFileName}`,
+        description: `${type.charAt(0).toUpperCase() + type.slice(1)}s Registry Index`
+      };
+      tabOps.openTab(indexItem);
+    }
+  };
+
+  const getIndexIsDirty = (type: ObjectType): boolean => {
+    const indexFileId = `${type}-index`;
+    const tabs = tabOps.getTabs();
+    const indexTab = tabs.find(t => t.fileId === indexFileId);
+    return indexTab?.isDirty || false;
+  };
+
   return (
     <div className="navigator-content">
       {/* Search at top */}
@@ -154,6 +183,8 @@ export function NavigatorContent() {
               onItemClick={handleItemClick}
               onItemContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
+              onIndexClick={() => handleIndexClick('parameter')}
+              indexIsDirty={getIndexIsDirty('parameter')}
             />
 
             <ObjectTypeSection
@@ -172,6 +203,8 @@ export function NavigatorContent() {
               onItemClick={handleItemClick}
               onItemContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
+              onIndexClick={() => handleIndexClick('context')}
+              indexIsDirty={getIndexIsDirty('context')}
             />
 
             <ObjectTypeSection
@@ -190,6 +223,8 @@ export function NavigatorContent() {
               onItemClick={handleItemClick}
               onItemContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
+              onIndexClick={() => handleIndexClick('case')}
+              indexIsDirty={getIndexIsDirty('case')}
             />
 
             <ObjectTypeSection
@@ -208,6 +243,8 @@ export function NavigatorContent() {
               onItemClick={handleItemClick}
               onItemContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
+              onIndexClick={() => handleIndexClick('node')}
+              indexIsDirty={getIndexIsDirty('node')}
             />
           </>
         )}

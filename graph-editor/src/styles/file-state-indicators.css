@@ -1,0 +1,434 @@
+/**
+ * Shared CSS for File State Visual Indicators
+ * 
+ * Standardized visual treatments for file states across:
+ * - Navigator panel
+ * - Tab headers
+ * - Sidebar selectors (mini-Navigators)
+ * 
+ * Visual States:
+ * - Open: Blue dot (●)
+ * - Dirty: Orange dot (●)
+ * - Local-only: Italic text
+ * - In-index-only: [create] badge
+ * - Orphan: ⚠️ icon
+ */
+
+/* ===== STATUS DOTS ===== */
+
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.open {
+  background-color: #0066cc;  /* Blue for open */
+}
+
+.status-dot.dirty {
+  background-color: #ff9800;  /* Orange for dirty */
+}
+
+.status-dot.open-dirty {
+  background: linear-gradient(135deg, #0066cc 50%, #ff9800 50%);
+}
+
+/* Multiple status dots */
+.status-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 4px;
+}
+
+
+/* ===== TEXT MODIFIERS ===== */
+
+.file-local-only {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.file-in-index-only {
+  opacity: 0.75;
+}
+
+
+/* ===== BADGES ===== */
+
+.file-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: 6px;
+}
+
+.file-badge.create {
+  background-color: #e3f2fd;
+  color: #0066cc;
+  border: 1px solid #90caf9;
+}
+
+.file-badge.local {
+  background-color: #fff3e0;
+  color: #f57c00;
+  border: 1px solid #ffb74d;
+}
+
+.file-badge.orphan {
+  background-color: #ffebee;
+  color: #c62828;
+  border: 1px solid #ef5350;
+}
+
+
+/* ===== ICONS ===== */
+
+.file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  margin-left: 4px;
+}
+
+.file-icon.orphan {
+  color: #ff9800;
+}
+
+.file-icon.index {
+  color: #666;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.file-icon.index:hover {
+  color: #0066cc;
+}
+
+
+/* ===== NAVIGATOR ITEM STYLES ===== */
+
+.navigator-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 2px 8px 2px 0;
+  transition: background-color 0.15s ease;
+}
+
+.navigator-item:hover {
+  background-color: #e9ecef;
+}
+
+.navigator-item.active {
+  background-color: #e3f2fd;
+}
+
+.navigator-item-name {
+  font-size: 13px;
+  color: #333;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navigator-item-name.local-only {
+  font-style: italic;
+}
+
+.navigator-item-name.in-index-only {
+  opacity: 0.7;
+}
+
+.navigator-item-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+
+/* ===== TAB HEADER STYLES ===== */
+
+.tab-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-right: 1px solid #e0e0e0;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.tab-header:hover {
+  background-color: #f0f0f0;
+}
+
+.tab-header.active {
+  background-color: #fff;
+  border-bottom-color: #fff;
+}
+
+.tab-title {
+  font-size: 13px;
+  color: #333;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-title.local-only {
+  font-style: italic;
+}
+
+.tab-status {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.tab-close-btn {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #666;
+  transition: all 0.15s ease;
+}
+
+.tab-close-btn:hover {
+  background-color: #e0e0e0;
+  color: #333;
+}
+
+
+/* ===== SIDEBAR SELECTOR STYLES (Mini-Navigator) ===== */
+
+.sidebar-selector {
+  position: relative;
+}
+
+.sidebar-selector-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  background-color: #fff;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+}
+
+.sidebar-selector-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.sidebar-selector-item:hover {
+  background-color: #f8f9fa;
+}
+
+.sidebar-selector-item.selected {
+  background-color: #e3f2fd;
+}
+
+.sidebar-selector-item-name {
+  font-size: 13px;
+  color: #333;
+  flex: 1;
+}
+
+.sidebar-selector-item-name.local-only {
+  font-style: italic;
+}
+
+.sidebar-selector-item-name.in-index-only {
+  opacity: 0.7;
+}
+
+.sidebar-selector-item-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+
+/* ===== INDEX SECTION HEADER ===== */
+
+.section-header-with-index {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.section-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.section-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.section-index-icon {
+  font-size: 12px;
+  color: #666;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+
+.section-index-icon:hover {
+  background-color: rgba(0, 102, 204, 0.1);
+  color: #0066cc;
+}
+
+.section-index-icon.dirty {
+  color: #ff9800;
+}
+
+
+/* ===== DARK MODE ===== */
+
+@media (prefers-color-scheme: dark) {
+  .status-dot.open {
+    background-color: #4fc3f7;
+  }
+
+  .status-dot.dirty {
+    background-color: #ffb74d;
+  }
+
+  .file-badge.create {
+    background-color: #1a3a52;
+    color: #90caf9;
+    border-color: #1976d2;
+  }
+
+  .file-badge.local {
+    background-color: #3e2723;
+    color: #ffb74d;
+    border-color: #f57c00;
+  }
+
+  .file-badge.orphan {
+    background-color: #3e1f1f;
+    color: #ef5350;
+    border-color: #c62828;
+  }
+
+  .file-icon.index {
+    color: #999;
+  }
+
+  .file-icon.index:hover {
+    color: #90caf9;
+  }
+
+  .navigator-item:hover {
+    background-color: #2d2d2d;
+  }
+
+  .navigator-item.active {
+    background-color: #1a3a52;
+  }
+
+  .navigator-item-name {
+    color: #e0e0e0;
+  }
+
+  .tab-header:hover {
+    background-color: #2d2d2d;
+  }
+
+  .tab-header.active {
+    background-color: #1e1e1e;
+    border-bottom-color: #1e1e1e;
+  }
+
+  .tab-title {
+    color: #e0e0e0;
+  }
+
+  .tab-close-btn {
+    color: #999;
+  }
+
+  .tab-close-btn:hover {
+    background-color: #3d3d3d;
+    color: #e0e0e0;
+  }
+
+  .sidebar-selector-dropdown {
+    background-color: #252525;
+    border-color: #404040;
+  }
+
+  .sidebar-selector-item:hover {
+    background-color: #2d2d2d;
+  }
+
+  .sidebar-selector-item.selected {
+    background-color: #1a3a52;
+  }
+
+  .sidebar-selector-item-name {
+    color: #e0e0e0;
+  }
+
+  .section-index-icon {
+    color: #999;
+  }
+
+  .section-index-icon:hover {
+    background-color: rgba(79, 195, 247, 0.1);
+    color: #4fc3f7;
+  }
+
+  .section-index-icon.dirty {
+    color: #ffb74d;
+  }
+}
+
+
