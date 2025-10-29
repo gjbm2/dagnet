@@ -35,11 +35,15 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     data: {
       id: e.id || `${e.from}->${e.to}`,
       slug: e.slug,
+      parameter_id: e.parameter_id, // Probability parameter ID
+      cost_gbp_parameter_id: e.cost_gbp_parameter_id, // GBP cost parameter ID
+      cost_time_parameter_id: e.cost_time_parameter_id, // Time cost parameter ID
       probability: e.p?.mean ?? 0.5,
       stdev: e.p?.stdev,
       locked: e.p?.locked,
       description: e.description,
-      costs: e.costs,
+      cost_gbp: e.cost_gbp, // Flat cost structure
+      cost_time: e.cost_time, // Flat cost structure
       weight_default: e.weight_default,
       case_variant: e.case_variant, // Add case variant for case edges
       case_id: e.case_id, // Add case ID for case edges
@@ -86,7 +90,9 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         ...originalEdge, // Preserve ALL original properties (including conditional_p, display)
         id: e.id,
         slug: e.data?.slug,
-        parameter_id: e.data?.parameter_id, // Add parameter ID for connected parameters
+        parameter_id: e.data?.parameter_id, // Probability parameter ID
+        cost_gbp_parameter_id: e.data?.cost_gbp_parameter_id, // GBP cost parameter ID
+        cost_time_parameter_id: e.data?.cost_time_parameter_id, // Time cost parameter ID
         from: e.source,
         to: e.target,
         fromHandle: e.sourceHandle,
@@ -96,8 +102,9 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
           stdev: e.data?.stdev,
           locked: e.data?.locked,
         },
+        cost_gbp: e.data?.cost_gbp, // Flat cost structure
+        cost_time: e.data?.cost_time, // Flat cost structure
         description: e.data?.description ?? '',
-        costs: e.data?.costs,
         weight_default: e.data?.weight_default,
         case_variant: e.data?.case_variant, // Add case variant for case edges
         case_id: e.data?.case_id, // Add case ID for case edges
