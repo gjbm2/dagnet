@@ -19,13 +19,13 @@ export function HelpMenu() {
     const loadDocFiles = async () => {
       try {
         // Fetch the build-time generated index.json
-        const indexResponse = await fetch('/src/docs/index.json');
+        const indexResponse = await fetch('/docs/index.json');
         if (indexResponse.ok) {
           const indexData = await indexResponse.json();
           const docFilesWithTitles = await Promise.all(
             indexData.files.map(async (filename: string) => {
               try {
-                const response = await fetch(`/src/docs/${filename}`);
+                const response = await fetch(`/docs/${filename}`);
                 if (response.ok) {
                   const content = await response.text();
                   // Extract first H1 title
