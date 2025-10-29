@@ -300,13 +300,14 @@ export function FileMenu() {
     if (!activeTab?.fileId || !isGraphTab) return;
 
     try {
-      const data = await fileRegistry.getFile(activeTab.fileId);
-      if (!data) {
+      const file = await fileRegistry.getFile(activeTab.fileId);
+      if (!file || !file.data) {
         alert('No data to share');
         return;
       }
 
-      const url = encodeStateToUrl(data);
+      // Encode only the graph data (not the FileState wrapper)
+      const url = encodeStateToUrl(file.data);
       await navigator.clipboard.writeText(url);
       alert('Shareable URL copied to clipboard!');
     } catch (error) {
