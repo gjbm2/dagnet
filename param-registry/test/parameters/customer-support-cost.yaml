@@ -1,0 +1,23 @@
+id: customer-support-cost
+name: "Customer Support Cost per Interaction"
+type: cost_gbp
+values:
+  - mean: 3.50
+    stdev: 0.80
+    distribution: "lognormal"
+    data_source:
+      type: "calculated"
+      notes: "Average cost per support ticket/chat based on staff time and overhead"
+
+metadata:
+  description: "Average cost per customer support interaction (email, chat, or phone). Includes staff salaries, tools, and overhead allocated per ticket."
+  data_source:
+    type: "calculated"
+    notes: "Monthly staff costs divided by ticket volume"
+  tags: ["support", "cost", "customer-service", "operational"]
+  created_at: "2025-01-14T10:00:00Z"
+  author: "finance-team"
+  version: "1.0.0"
+  status: "active"
+  aliases: ["support-cost", "ticket-cost"]
+

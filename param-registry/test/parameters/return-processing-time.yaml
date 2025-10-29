@@ -1,0 +1,24 @@
+id: return-processing-time
+name: "Return Processing Time"
+type: cost_time
+values:
+  - mean: 2.5
+    stdev: 0.8
+    distribution: "lognormal"
+    data_source:
+      type: "analytics"
+      notes: "Time from return initiated to refund processed, in days"
+
+metadata:
+  description: "Average time to process a product return, from customer initiating return to refund being issued. Measured in days."
+  data_source:
+    type: "analytics"
+    refresh_frequency: "1d"
+    notes: "Tracked in returns management system"
+  tags: ["returns", "time", "operations", "customer-service"]
+  created_at: "2025-01-13T10:00:00Z"
+  author: "operations-team"
+  version: "1.0.0"
+  status: "active"
+  aliases: ["return-time", "refund-processing-time"]
+

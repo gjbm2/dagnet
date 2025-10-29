@@ -8,6 +8,7 @@ import VariantWeightInput from './VariantWeightInput';
 import ConditionalProbabilitiesSection from './ConditionalProbabilitiesSection';
 import { getNextAvailableColor } from '@/lib/conditionalColors';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
+import { ParameterSelector } from './ParameterSelector';
 
 interface PropertiesPanelProps {
   selectedNodeId: string | null;
@@ -66,14 +67,29 @@ export default function PropertiesPanel({
 
   // Track the last loaded node to prevent reloading on every graph change
   const lastLoadedNodeRef = useRef<string | null>(null);
+  // Track the previous selectedNodeId to detect deselect/reselect cycles
+  const prevSelectedNodeIdRef = useRef<string | null>(null);
   
   // Load local data when selection changes (but not on every graph update)
   useEffect(() => {
     if (selectedNodeId && graph) {
-      // Only reload if we're switching to a different node
-      if (lastLoadedNodeRef.current !== selectedNodeId) {
+      // Detect if we just deselected and reselected the same node (e.g., on blur)
+      const isReselectingSameNode = prevSelectedNodeIdRef.current === selectedNodeId && 
+                                      lastLoadedNodeRef.current === selectedNodeId;
+      
+      console.log('PropertiesPanel node selection effect:', {
+        selectedNodeId,
+        lastLoaded: lastLoadedNodeRef.current,
+        prevSelected: prevSelectedNodeIdRef.current,
+        isReselectingSameNode,
+        willReload: lastLoadedNodeRef.current !== selectedNodeId && !isReselectingSameNode
+      });
+      
+      // Only reload if we're switching to a different node (not reselecting the same one)
+      if (lastLoadedNodeRef.current !== selectedNodeId && !isReselectingSameNode) {
         const node = graph.nodes.find((n: any) => n.id === selectedNodeId);
         if (node) {
+          console.log('PropertiesPanel: Reloading node data from graph, slug:', node.slug);
           setLocalNodeData({
             label: node.label || '',
             slug: node.slug || '',
@@ -120,8 +136,14 @@ export default function PropertiesPanel({
           lastLoadedNodeRef.current = selectedNodeId;
         }
       }
-    } else if (!selectedNodeId) {
-      // Clear the ref when no node is selected
+    }
+    
+    // Always track the previous selectedNodeId for next render
+    prevSelectedNodeIdRef.current = selectedNodeId;
+    
+    if (!selectedNodeId) {
+      // Clear the loaded ref when no node is selected, but keep prevSelectedNodeIdRef
+      // to detect if we're reselecting the same node
       lastLoadedNodeRef.current = null;
     }
   }, [selectedNodeId]);
@@ -137,6 +159,7 @@ export default function PropertiesPanel({
         if (edge) {
           setLocalEdgeData({
             slug: edge.slug || '',
+            parameter_id: (edge as any).parameter_id || '',
             probability: edge.p?.mean || 0,
             stdev: edge.p?.stdev || undefined,
             description: edge.description || '',
@@ -574,26 +597,76 @@ export default function PropertiesPanel({
                   </div>
                 </div>
 
-                <div style={{ marginBottom: '20px' }}>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Slug</label>
-                  <input
-                    data-field="slug"
-                    value={localNodeData.slug || ''}
-                    onChange={(e) => {
-                      setLocalNodeData({...localNodeData, slug: e.target.value});
-                      setSlugManuallyEdited(true); // Mark as manually edited
-                    }}
-                    onBlur={() => updateNode('slug', localNodeData.slug)}
-                    onKeyDown={(e) => e.key === 'Enter' && updateNode('slug', localNodeData.slug)}
-                    style={{ 
-                      width: '100%', 
-                      padding: '8px', 
-                      border: '1px solid #ddd', 
-                      borderRadius: '4px',
-                      boxSizing: 'border-box'
-                    }}
-                  />
-                </div>
+                <ParameterSelector
+                  type="node"
+                  value={localNodeData.slug || ''}
+                  autoFocus={!localNodeData.slug} // Auto-focus if no slug yet
+                  onChange={async (newSlug) => {
+                    console.log('PropertiesPanel: ParameterSelector onChange:', { newSlug, currentSlug: localNodeData.slug });
+                    
+                    // Update local state immediately
+                    setLocalNodeData({...localNodeData, slug: newSlug});
+                    setSlugManuallyEdited(true);
+                    
+                    // Load node data from registry and do ALL updates in one batch
+                    if (newSlug && graph && selectedNodeId) {
+                      try {
+                        const { paramRegistryService } = await import('../services/paramRegistryService');
+                        const nodeData = await paramRegistryService.loadNode(newSlug);
+                        
+                        // Clone graph and update ALL fields at once
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        
+                        if (nodeIndex >= 0) {
+                          const node = next.nodes[nodeIndex];
+                          
+                          // UPDATE SLUG FIRST
+                          node.slug = newSlug;
+                          
+                          // Auto-populate label from registry name (always override default "Node X" labels)
+                          if (nodeData) {
+                            const isDefaultLabel = node.label && /^Node \d+$/.test(node.label);
+                            if (nodeData.name && (isDefaultLabel || !node.label)) {
+                              node.label = nodeData.name;
+                              setLocalNodeData((prev: any) => ({...prev, slug: newSlug, label: nodeData.name}));
+                            }
+                            
+                            // Only populate empty fields (don't overwrite existing data)
+                            if (!node.description && nodeData.description) {
+                              node.description = nodeData.description;
+                              setLocalNodeData((prev: any) => ({...prev, description: nodeData.description}));
+                            }
+                            
+                            if ((!node.tags || node.tags.length === 0) && nodeData.tags) {
+                              node.tags = nodeData.tags;
+                              setLocalNodeData((prev: any) => ({...prev, tags: nodeData.tags}));
+                            }
+                            
+                            console.log('Populated node fields from registry:', { slug: newSlug, label: nodeData.name, description: nodeData.description, tags: nodeData.tags });
+                          }
+                          
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          
+                          // Single setGraph call with ALL updates
+                          setGraph(next);
+                          saveHistoryState(`Update node slug`, selectedNodeId || undefined);
+                        }
+                      } catch (error) {
+                        console.log('Could not load node data from registry:', error);
+                        // Even if registry load fails, still update the slug
+                        updateNode('slug', newSlug);
+                      }
+                    } else {
+                      // No registry data to load, just update the slug
+                      updateNode('slug', newSlug);
+                    }
+                  }}
+                  label="Node ID (Slug)"
+                  placeholder="Select or enter node ID..."
+                />
 
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -809,124 +882,22 @@ export default function PropertiesPanel({
                     })()}
 
                     {/* Case ID or Parameter ID */}
-                    <div style={{ marginBottom: '20px' }}>
-                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
-                        {caseMode === 'registry' ? 'Parameter ID' : 'Case ID'}
-                      </label>
-                      {caseMode === 'registry' ? (
-                        <div>
-                          <select
-                            value={caseData.parameter_id}
-                            onChange={(e) => {
-                              const newParameterId = e.target.value;
-                              setCaseData({...caseData, parameter_id: newParameterId});
-                              // TODO: Load parameter from registry
-                              if (newParameterId) {
-                                // Simulate loading parameter data
-                                setCaseData({
-                                  ...caseData,
-                                  parameter_id: newParameterId,
-                                  id: 'case_001',
-                                  status: 'active',
-                                  variants: [
-                                    { name: 'control', weight: 0.5, description: 'Control variant' },
-                                    { name: 'treatment', weight: 0.5, description: 'Treatment variant' }
-                                  ]
-                                });
-                              }
-                            }}
-                            style={{ 
-                              width: '100%', 
-                              padding: '8px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '4px',
-                              boxSizing: 'border-box'
-                            }}
-                          >
-                            <option value="">Select parameter...</option>
-                            <option value="case-checkout-flow-001">Checkout Flow Test</option>
-                            <option value="case-pricing-test-001">Pricing Strategy Test</option>
-                            <option value="case-onboarding-test-001">Onboarding Flow Test</option>
-                          </select>
-                          
-                          {/* Registry Info Display */}
-                          {caseData.parameter_id && (
-                            <div style={{ 
-                              marginTop: '8px', 
-                              padding: '8px', 
-                              background: '#f8f9fa', 
-                              borderRadius: '4px',
-                              fontSize: '12px'
-                            }}>
-                              <div style={{ fontWeight: '600', marginBottom: '4px' }}>Registry Info</div>
-                              <div>Name: Checkout Flow A/B Test</div>
-                              <div>Status: ● Active</div>
-                              <div>Platform: Statsig</div>
-                              <div>Last Updated: 2025-01-20</div>
-                              <div style={{ marginTop: '8px' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    // TODO: Refresh from registry
-                                    console.log('Refresh from registry');
-                                  }}
-                                  style={{
-                                    background: '#007bff',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '3px',
-                                    padding: '4px 8px',
-                                    cursor: 'pointer',
-                                    fontSize: '10px',
-                                    marginRight: '8px'
-                                  }}
-                                >
-                                  ↻ Refresh
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    // TODO: Edit in registry
-                                    console.log('Edit in registry');
-                                  }}
-                                  style={{
-                                    background: '#28a745',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '3px',
-                                    padding: '4px 8px',
-                                    cursor: 'pointer',
-                                    fontSize: '10px'
-                                  }}
-                                >
-                                  📝 Edit
-                                </button>
-                              </div>
-                              <div style={{ marginTop: '8px' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setCaseMode('manual');
-                                    // Clear parameter_id when switching to manual
-                                    setCaseData({...caseData, parameter_id: ''});
-                                  }}
-                                  style={{
-                                    background: '#6c757d',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '3px',
-                                    padding: '4px 8px',
-                                    cursor: 'pointer',
-                                    fontSize: '10px'
-                                  }}
-                                >
-                                  Override Locally
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
+                    {caseMode === 'registry' ? (
+                      <ParameterSelector
+                        type="parameter"
+                        value={caseData.parameter_id}
+                        onChange={(newParameterId) => {
+                          setCaseData({...caseData, parameter_id: newParameterId});
+                          // TODO: Load parameter from registry and populate case data
+                        }}
+                        label="Parameter ID"
+                        placeholder="Select or enter parameter ID..."
+                      />
+                    ) : (
+                      <div style={{ marginBottom: '20px' }}>
+                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                          Case ID
+                        </label>
                         <input
                           value={caseData.id}
                           onChange={(e) => setCaseData({...caseData, id: e.target.value})}
@@ -952,8 +923,8 @@ export default function PropertiesPanel({
                             boxSizing: 'border-box'
                           }}
                         />
-                      )}
-                    </div>
+                      </div>
+                    )}
 
                     {/* Case Status */}
                     <div style={{ marginBottom: '20px' }}>
@@ -1380,6 +1351,79 @@ export default function PropertiesPanel({
                     }}
                   />
                 </div>
+
+                {/* Parameter ID for probability - connect to parameter registry */}
+                <ParameterSelector
+                  type="parameter"
+                  value={(selectedEdge as any)?.parameter_id || ''}
+                  autoFocus={!(selectedEdge as any)?.parameter_id && !selectedEdge?.p?.mean} // Auto-focus if no parameter and no probability set
+                  onChange={async (newParamId) => {
+                    console.log('PropertiesPanel: Edge ParameterSelector onChange:', { newParamId, currentParamId: (selectedEdge as any)?.parameter_id });
+                    
+                    // Load parameter data from registry and do ALL updates in one batch
+                    if (newParamId && graph && selectedEdgeId) {
+                      try {
+                        const { paramRegistryService } = await import('../services/paramRegistryService');
+                        const paramData = await paramRegistryService.loadParameter(newParamId);
+                        
+                        // Clone graph and update ALL fields at once
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) => 
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        
+                          if (edgeIndex >= 0) {
+                          const edge = next.edges[edgeIndex] as any;
+                          
+                          // UPDATE PARAMETER_ID
+                          edge.parameter_id = newParamId;
+                          
+                          // Auto-populate p.mean and p.stdev from parameter (if it has probability data)
+                          if (paramData && paramData.values && paramData.values.length > 0) {
+                            // For now, use the first (or most recent) value
+                            // TODO: In the future, support time windows and context selection
+                            const primaryValue = paramData.values[paramData.values.length - 1]; // Use last (most recent) value
+                            
+                            if (primaryValue.mean !== undefined && primaryValue.mean !== null) {
+                              edge.p = { ...edge.p, mean: primaryValue.mean };
+                              setLocalEdgeData((prev: any) => ({...prev, parameter_id: newParamId, probability: primaryValue.mean}));
+                            }
+                            if (primaryValue.stdev !== undefined && primaryValue.stdev !== null) {
+                              edge.p = { ...edge.p, stdev: primaryValue.stdev };
+                              setLocalEdgeData((prev: any) => ({...prev, stdev: primaryValue.stdev}));
+                            }
+                            
+                            console.log('Populated edge fields from parameter registry:', { 
+                              parameter_id: newParamId, 
+                              mean: primaryValue.mean, 
+                              stdev: primaryValue.stdev,
+                              valueCount: paramData.values.length,
+                              hasWindows: paramData.values.some(v => v.window_from),
+                              hasContexts: paramData.values.some(v => v.context_id)
+                            });
+                          }
+                          
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          
+                          // Single setGraph call with ALL updates
+                          setGraph(next);
+                          saveHistoryState(`Update edge parameter`, undefined, selectedEdgeId || undefined);
+                        }
+                      } catch (error) {
+                        console.log('Could not load parameter data from registry:', error);
+                        // Even if registry load fails, still update the parameter_id
+                        updateEdge('parameter_id', newParamId);
+                      }
+                    } else {
+                      // No parameter selected (cleared), remove parameter_id
+                      updateEdge('parameter_id', newParamId || undefined);
+                    }
+                  }}
+                  label="Probability Parameter"
+                  placeholder="Select or enter parameter ID..."
+                />
 
                 {/* Probability field - shown for all edges, but with different meaning for case edges */}
                 <div style={{ marginBottom: '20px' }}>

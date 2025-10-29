@@ -9,6 +9,7 @@ import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/wha
 interface ConversionEdgeData {
   id: string;
   slug?: string;
+  parameter_id?: string; // Connected parameter from registry
   probability: number;
   stdev?: number;
   locked?: boolean;
@@ -1075,13 +1076,20 @@ export default function ConversionEdge({
                 </div>
               </div>
             ) : (
-              <div style={{ fontWeight: 'bold' }}>
-                {Math.round((effectiveProbability || 0) * 100)}%
-                {data?.stdev && data.stdev > 0 && (
-                  <span style={{ fontSize: '10px', color: '#666', marginLeft: '4px' }}>
-                    ±{Math.round(data.stdev * 100)}%
+              <div style={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
+                {data?.parameter_id && (
+                  <span style={{ fontSize: '10px', opacity: 0.7 }} title={`Connected to parameter: ${data.parameter_id}`}>
+                    ⛓️
                   </span>
                 )}
+                <span>
+                  {Math.round((effectiveProbability || 0) * 100)}%
+                  {data?.stdev && data.stdev > 0 && (
+                    <span style={{ fontSize: '10px', color: '#666', marginLeft: '4px' }}>
+                      ±{Math.round(data.stdev * 100)}%
+                    </span>
+                  )}
+                </span>
               </div>
             )}
             {data?.costs && (data.costs.monetary || data.costs.time) && (

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ObjectType } from '../types';
+import { useNavigatorContext } from '../contexts/NavigatorContext';
 
 interface NewFileModalProps {
   isOpen: boolean;
@@ -10,26 +11,80 @@ interface NewFileModalProps {
   defaultName?: string; // For duplicate functionality
 }
 
+type CreationMode = 'new' | 'from-registry';
+
 /**
  * New File Modal
  * Prompts for file name and type (if not pre-selected)
  */
 export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName = '' }: NewFileModalProps) {
+  const { state } = useNavigatorContext();
   const [fileName, setFileName] = useState(defaultName);
   const [selectedType, setSelectedType] = useState<ObjectType>(fileType || 'graph');
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [creationMode, setCreationMode] = useState<CreationMode>('new');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedRegistryId, setSelectedRegistryId] = useState<string | null>(null);
+
+  // Get registry items for the selected type
+  const typeToUse = fileType || selectedType;
+  const registrySupported = typeToUse === 'parameter' || typeToUse === 'context' || typeToUse === 'case' || typeToUse === 'node';
+  
+  const registryItems = registrySupported && state.registryIndexes ? (() => {
+    const key = `${typeToUse}s` as keyof typeof state.registryIndexes;
+    const index = state.registryIndexes[key];
+    
+    if (!index) return [];
+    
+    // Extract IDs from the registry index
+    if (typeToUse === 'parameter' && 'parameters' in index) {
+      return (index as any).parameters.map((p: any) => ({ id: p.id, name: p.name, description: p.description }));
+    } else if (typeToUse === 'context' && 'contexts' in index) {
+      return (index as any).contexts.map((c: any) => ({ id: c.id, name: c.name, description: c.description }));
+    } else if (typeToUse === 'case' && 'cases' in index) {
+      return (index as any).cases.map((c: any) => ({ id: c.id, name: c.name, description: c.description }));
+    } else if (typeToUse === 'node' && 'nodes' in index) {
+      return (index as any).nodes.map((n: any) => ({ id: n.id, name: n.name, description: n.description }));
+    }
+    return [];
+  })() : [];
+
+  // Filter registry items by search query
+  const filteredRegistryItems = registryItems.filter((item: any) => {
+    const query = searchQuery.toLowerCase();
+    return item.id.toLowerCase().includes(query) || 
+           (item.name && item.name.toLowerCase().includes(query)) ||
+           (item.description && item.description.toLowerCase().includes(query));
+  });
+
+  // Reset mode when type changes
+  useEffect(() => {
+    if (!registrySupported) {
+      setCreationMode('new');
+    }
+  }, [registrySupported]);
+
+  // Reset search and selection when mode changes
+  useEffect(() => {
+    setSearchQuery('');
+    setSelectedRegistryId(null);
+  }, [creationMode]);
 
   const handleCreate = async () => {
-    const trimmedName = fileName.trim();
+    // In from-registry mode, use the selected registry ID
+    // In new mode, use the entered file name
+    const nameToUse = creationMode === 'from-registry' && selectedRegistryId 
+      ? selectedRegistryId 
+      : fileName.trim();
     
-    if (!trimmedName) {
-      setError('Please enter a file name');
+    if (!nameToUse) {
+      setError(creationMode === 'from-registry' ? 'Please select a registry item' : 'Please enter a file name');
       return;
     }
 
-    // Validate name (alphanumeric, hyphens, underscores)
-    if (!/^[a-zA-Z0-9_-]+$/.test(trimmedName)) {
+    // Validate name (alphanumeric, hyphens, underscores) - only for new mode
+    if (creationMode === 'new' && !/^[a-zA-Z0-9_-]+$/.test(nameToUse)) {
       setError('File name can only contain letters, numbers, hyphens, and underscores');
       return;
     }
@@ -38,8 +93,7 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
     setError(null);
 
     try {
-      const typeToUse = fileType || selectedType;
-      await onCreate(trimmedName, typeToUse);
+      await onCreate(nameToUse, typeToUse);
       
       // Success - close modal
       handleCancel();
@@ -54,13 +108,16 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
     setSelectedType(fileType || 'graph');
     setError(null);
     setIsCreating(false);
+    setCreationMode('new');
+    setSearchQuery('');
+    setSelectedRegistryId(null);
     onClose();
   };
 
   if (!isOpen) return null;
 
-  const typeToUse = fileType || selectedType;
   const fileExtension = typeToUse === 'graph' ? '.json' : '.yaml';
+  const canSubmit = creationMode === 'from-registry' ? !!selectedRegistryId : !!fileName.trim();
 
   const modalContent = (
     <div 
@@ -141,52 +198,190 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
             </div>
           )}
 
-          {/* File name input */}
-          <div style={{ marginBottom: '20px' }}>
-            <label htmlFor="file-name" style={{ fontWeight: '500', fontSize: '14px', display: 'block', marginBottom: '8px' }}>
-              File Name:
-            </label>
-            <div style={{ position: 'relative' }}>
-              <input
-                id="file-name"
-                type="text"
-                value={fileName}
-                onChange={(e) => setFileName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !isCreating) {
-                    handleCreate();
-                  } else if (e.key === 'Escape') {
-                    handleCancel();
-                  }
-                }}
-                placeholder={`my-${typeToUse}`}
-                disabled={isCreating}
-                autoFocus
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  paddingRight: '80px',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  fontSize: '14px'
-                }}
-              />
-              <span style={{
-                position: 'absolute',
-                right: '12px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                color: '#888',
-                fontSize: '14px',
-                pointerEvents: 'none'
+          {/* Mode toggle (only for registry-supported types) */}
+          {registrySupported && !defaultName && (
+            <div style={{ marginBottom: '20px' }}>
+              <div style={{ 
+                display: 'flex', 
+                gap: '8px',
+                padding: '4px',
+                backgroundColor: '#f5f5f5',
+                borderRadius: '6px'
               }}>
-                {fileExtension}
-              </span>
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('new')}
+                  disabled={isCreating}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    cursor: isCreating ? 'not-allowed' : 'pointer',
+                    backgroundColor: creationMode === 'new' ? '#fff' : 'transparent',
+                    color: creationMode === 'new' ? '#0066cc' : '#666',
+                    boxShadow: creationMode === 'new' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  New {typeToUse}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('from-registry')}
+                  disabled={isCreating || registryItems.length === 0}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    cursor: (isCreating || registryItems.length === 0) ? 'not-allowed' : 'pointer',
+                    backgroundColor: creationMode === 'from-registry' ? '#fff' : 'transparent',
+                    color: creationMode === 'from-registry' ? '#0066cc' : '#666',
+                    boxShadow: creationMode === 'from-registry' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    transition: 'all 0.2s',
+                    opacity: registryItems.length === 0 ? 0.5 : 1
+                  }}
+                >
+                  From Registry ({registryItems.length})
+                </button>
+              </div>
             </div>
-            <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
-              Letters, numbers, hyphens, and underscores only
+          )}
+
+          {/* NEW MODE: File name input */}
+          {creationMode === 'new' && (
+            <div style={{ marginBottom: '20px' }}>
+              <label htmlFor="file-name" style={{ fontWeight: '500', fontSize: '14px', display: 'block', marginBottom: '8px' }}>
+                File Name:
+              </label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  id="file-name"
+                  type="text"
+                  value={fileName}
+                  onChange={(e) => setFileName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !isCreating && canSubmit) {
+                      handleCreate();
+                    } else if (e.key === 'Escape') {
+                      handleCancel();
+                    }
+                  }}
+                  placeholder={`my-${typeToUse}`}
+                  disabled={isCreating}
+                  autoFocus
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    paddingRight: '80px',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    fontSize: '14px'
+                  }}
+                />
+                <span style={{
+                  position: 'absolute',
+                  right: '12px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: '#888',
+                  fontSize: '14px',
+                  pointerEvents: 'none'
+                }}>
+                  {fileExtension}
+                </span>
+              </div>
+              <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
+                Letters, numbers, hyphens, and underscores only
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* FROM-REGISTRY MODE: Search and selection */}
+          {creationMode === 'from-registry' && (
+            <div style={{ marginBottom: '20px' }}>
+              {/* Search input */}
+              <div style={{ marginBottom: '12px' }}>
+                <label htmlFor="registry-search" style={{ fontWeight: '500', fontSize: '14px', display: 'block', marginBottom: '8px' }}>
+                  Search Registry:
+                </label>
+                <input
+                  id="registry-search"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search by ID, name, or description..."
+                  disabled={isCreating}
+                  autoFocus
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    fontSize: '14px'
+                  }}
+                />
+              </div>
+
+              {/* Registry items list */}
+              <div style={{
+                maxHeight: '250px',
+                overflowY: 'auto',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                backgroundColor: '#fafafa'
+              }}>
+                {filteredRegistryItems.length === 0 ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#999', fontSize: '14px' }}>
+                    {searchQuery ? 'No matching items found' : 'Registry is empty'}
+                  </div>
+                ) : (
+                  filteredRegistryItems.map((item: any) => (
+                    <div
+                      key={item.id}
+                      onClick={() => setSelectedRegistryId(item.id)}
+                      style={{
+                        padding: '12px 16px',
+                        cursor: 'pointer',
+                        borderBottom: '1px solid #eee',
+                        backgroundColor: selectedRegistryId === item.id ? '#e6f2ff' : '#fff',
+                        transition: 'background-color 0.15s'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (selectedRegistryId !== item.id) {
+                          e.currentTarget.style.backgroundColor = '#f5f5f5';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (selectedRegistryId !== item.id) {
+                          e.currentTarget.style.backgroundColor = '#fff';
+                        }
+                      }}
+                    >
+                      <div style={{ fontWeight: 500, fontSize: '14px', marginBottom: '2px', color: '#333' }}>
+                        {item.id}
+                      </div>
+                      {item.name && (
+                        <div style={{ fontSize: '13px', color: '#666', marginBottom: '2px' }}>
+                          {item.name}
+                        </div>
+                      )}
+                      {item.description && (
+                        <div style={{ fontSize: '12px', color: '#999' }}>
+                          {item.description}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Error message */}
           {error && (
@@ -233,17 +428,17 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
           <button
             type="button"
             onClick={handleCreate}
-            disabled={isCreating || !fileName.trim()}
+            disabled={isCreating || !canSubmit}
             style={{
               padding: '8px 16px',
               borderRadius: '6px',
               fontSize: '14px',
               fontWeight: 500,
-              cursor: (isCreating || !fileName.trim()) ? 'not-allowed' : 'pointer',
+              cursor: (isCreating || !canSubmit) ? 'not-allowed' : 'pointer',
               border: 'none',
               backgroundColor: '#0066cc',
               color: 'white',
-              opacity: (isCreating || !fileName.trim()) ? 0.5 : 1
+              opacity: (isCreating || !canSubmit) ? 0.5 : 1
             }}
           >
             {isCreating ? 'Creating...' : 'Create'}

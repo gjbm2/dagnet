@@ -34,19 +34,24 @@ export interface Context {
   metadata?: any;
 }
 
+export interface ParameterValue {
+  mean: number;
+  stdev?: number;
+  distribution?: 'normal' | 'beta' | 'gamma' | 'lognormal' | 'uniform';
+  window_from?: string; // ISO 8601 timestamp
+  context_id?: string;
+  data_source?: {
+    type: 'sheets' | 'api' | 'file' | 'manual' | 'calculated' | 'analytics';
+    url?: string;
+    notes?: string;
+  };
+}
+
 export interface Parameter {
   id: string;
   name: string;
-  type: 'probability' | 'monetary_cost' | 'time_cost' | 'standard_deviation';
-  value: number | {
-    value: number;
-    stdev?: number;
-    distribution?: string;
-    min?: number;
-    max?: number;
-    currency?: string;
-    units?: string;
-  };
+  type: 'probability' | 'cost_gbp' | 'cost_time';
+  values: ParameterValue[];
   metadata: {
     description: string;
     units?: string;

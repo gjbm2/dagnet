@@ -3137,13 +3137,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     const newId = crypto.randomUUID();
     
-    // Generate initial label and slug
+    // Generate initial label (but no slug - user should pick from registry)
     const label = `Node ${graph.nodes.length + 1}`;
-    const baseSlug = generateSlugFromLabel(label);
-    
-    // Get all existing slugs to ensure uniqueness from the graph state
-    const existingSlugs = getAllExistingSlugs();
-    const slug = generateUniqueSlug(baseSlug, existingSlugs);
     
     // Place node at center of current viewport
     const viewportCenter = screenToFlowPosition({ 
@@ -3155,7 +3150,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const nextGraph = structuredClone(graph);
     nextGraph.nodes.push({
       id: newId,
-      slug: slug,
+      slug: '', // Empty slug - user should assign a node_id from registry
       label: label,
       absorbing: false,
       layout: {
@@ -3179,9 +3174,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Select the new node after a brief delay to allow sync to complete
     setTimeout(() => {
+      // Select in ReactFlow (visual selection)
+      setNodes((nodes) => 
+        nodes.map((node) => ({
+          ...node,
+          selected: node.id === newId
+        }))
+      );
+      // Notify parent (PropertiesPanel)
       onSelectedNodeChange(newId);
     }, 50);
-  }, [graph, setGraph, generateSlugFromLabel, generateUniqueSlug, getAllExistingSlugs, onSelectedNodeChange, screenToFlowPosition, saveHistoryState]);
+  }, [graph, setGraph, onSelectedNodeChange, screenToFlowPosition, saveHistoryState, setNodes]);
 
   // Expose addNode function to parent component via ref
   useEffect(() => {
@@ -3347,12 +3350,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const addNodeAtPosition = useCallback((x: number, y: number) => {
     if (!graph) return;
     
-    const slug = `node-${Date.now()}`;
+    const newId = crypto.randomUUID();
     const label = `Node ${graph.nodes.length + 1}`;
     
     const newNode = {
-      id: crypto.randomUUID(),
-      slug: slug,
+      id: newId,
+      slug: '', // Empty slug - user should assign a node_id from registry
       label: label,
       absorbing: false,
       layout: {
@@ -3371,12 +3374,25 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setGraph(nextGraph);
     console.log('saveHistoryState in addNodeAtPosition:', typeof saveHistoryState, saveHistoryState);
     if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Add node', newNode.id);
+      saveHistoryState('Add node', newId);
     } else {
       console.error('saveHistoryState is not a function in addNodeAtPosition:', saveHistoryState);
     }
     setContextMenu(null);
-  }, [graph, setGraph, saveHistoryState]);
+    
+    // Select the new node after a brief delay to allow sync to complete
+    setTimeout(() => {
+      // Select in ReactFlow (visual selection)
+      setNodes((nodes) => 
+        nodes.map((node) => ({
+          ...node,
+          selected: node.id === newId
+        }))
+      );
+      // Notify parent (PropertiesPanel)
+      onSelectedNodeChange(newId);
+    }, 50);
+  }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
 
   // Handle node right-click
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
