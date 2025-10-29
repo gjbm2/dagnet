@@ -1,88 +1,148 @@
-import React from 'react';
+import React, { useState } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
+import { SwitchRepositoryModal } from '../modals/SwitchRepositoryModal';
+import { SwitchBranchModal } from '../modals/SwitchBranchModal';
 
 /**
  * Repository Menu
  * 
  * Repository operations:
- * - Switch Branch
- * - Create Branch
+ * - Switch Repository (guarded)
+ * - Switch Branch (guarded)
  * - Pull Latest
- * - Repository Settings
+ * - Push Changes
+ * - Refresh Status
+ * - Show Dirty Files
+ * - Discard Local Changes
  */
 export function RepositoryMenu() {
   const { operations, activeTabId } = useTabContext();
-  const { state } = useNavigatorContext();
+  const { state, operations: navOps } = useNavigatorContext();
   
+  const [isSwitchRepoModalOpen, setIsSwitchRepoModalOpen] = useState(false);
+  const [isSwitchBranchModalOpen, setIsSwitchBranchModalOpen] = useState(false);
+
   const dirtyTabs = operations.getDirtyTabs();
   const hasDirtyTabs = dirtyTabs.length > 0;
   const hasActiveTab = !!activeTabId;
 
+  const handleSwitchRepository = () => {
+    setIsSwitchRepoModalOpen(true);
+  };
+
   const handleSwitchBranch = () => {
-    // TODO: Open branch switching dialog
-    console.log('Switch branch');
+    setIsSwitchBranchModalOpen(true);
   };
 
-  const handleCreateBranch = () => {
-    // TODO: Open create branch dialog
-    console.log('Create new branch');
+  const handlePullLatest = async () => {
+    console.log('Pulling latest from', state.selectedBranch);
+    await navOps.refreshItems();
   };
 
-  const handlePullLatest = () => {
-    // TODO: Pull latest changes from remote
-    console.log('Pull latest from', state.selectedBranch);
+  const handlePushChanges = () => {
+    // TODO: Implement push all dirty files
+    console.log('Push changes to', state.selectedBranch);
   };
 
-  const handleRepositorySettings = () => {
-    // TODO: Open repository settings
-    console.log('Repository settings');
+  const handleRefreshStatus = async () => {
+    console.log('Refreshing repository status');
+    await navOps.refreshItems();
+  };
+
+  const handleShowDirtyFiles = () => {
+    // TODO: Open modal showing all dirty files
+    console.log('Show dirty files:', dirtyTabs);
+  };
+
+  const handleDiscardLocalChanges = () => {
+    // TODO: Open confirmation modal to discard all local changes
+    console.log('Discard local changes');
   };
 
   return (
-    <Menubar.Menu>
-      <Menubar.Trigger className="menubar-trigger">
-        Repository
-      </Menubar.Trigger>
-      <Menubar.Portal>
-        <Menubar.Content className="menubar-content" align="start">
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleSwitchBranch}
-          >
-            Switch Branch
-            <div className="menubar-right-slot">⌘B</div>
-          </Menubar.Item>
+    <>
+      <Menubar.Menu>
+        <Menubar.Trigger className="menubar-trigger">
+          Repository
+        </Menubar.Trigger>
+        <Menubar.Portal>
+          <Menubar.Content className="menubar-content" align="start">
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleSwitchRepository}
+            >
+              Switch Repository...
+            </Menubar.Item>
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleCreateBranch}
-          >
-            Create Branch...
-            <div className="menubar-right-slot">⌘⇧B</div>
-          </Menubar.Item>
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleSwitchBranch}
+            >
+              Switch Branch...
+              <div className="menubar-right-slot">⌘B</div>
+            </Menubar.Item>
 
-          <Menubar.Separator className="menubar-separator" />
+            <Menubar.Separator className="menubar-separator" />
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handlePullLatest}
-          >
-            Pull Latest
-            <div className="menubar-right-slot">⌘P</div>
-          </Menubar.Item>
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handlePullLatest}
+            >
+              Pull Latest
+              <div className="menubar-right-slot">⌘P</div>
+            </Menubar.Item>
 
-          <Menubar.Separator className="menubar-separator" />
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handlePushChanges}
+              disabled={!hasDirtyTabs}
+            >
+              Push Changes
+              {hasDirtyTabs && <div className="menubar-right-slot">{dirtyTabs.length}</div>}
+            </Menubar.Item>
 
-          <Menubar.Item 
-            className="menubar-item" 
-            onSelect={handleRepositorySettings}
-          >
-            Repository Settings...
-          </Menubar.Item>
-        </Menubar.Content>
-      </Menubar.Portal>
-    </Menubar.Menu>
+            <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleRefreshStatus}
+            >
+              Refresh Status
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleShowDirtyFiles}
+              disabled={!hasDirtyTabs}
+            >
+              Show Dirty Files
+              {hasDirtyTabs && <div className="menubar-right-slot">{dirtyTabs.length}</div>}
+            </Menubar.Item>
+
+            <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleDiscardLocalChanges}
+              disabled={!hasDirtyTabs}
+            >
+              Discard Local Changes...
+            </Menubar.Item>
+          </Menubar.Content>
+        </Menubar.Portal>
+      </Menubar.Menu>
+
+      {/* Modals */}
+      <SwitchRepositoryModal
+        isOpen={isSwitchRepoModalOpen}
+        onClose={() => setIsSwitchRepoModalOpen(false)}
+      />
+      <SwitchBranchModal
+        isOpen={isSwitchBranchModalOpen}
+        onClose={() => setIsSwitchBranchModalOpen(false)}
+      />
+    </>
   );
 }

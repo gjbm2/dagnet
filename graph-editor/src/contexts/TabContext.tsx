@@ -93,7 +93,7 @@ class FileRegistry {
           type,
           data,
           originalData: structuredClone(data),
-          isDirty: source.repository === 'local', // Local files are dirty by default
+          isDirty: source?.repository === 'local', // Local files are dirty by default
           source,
           viewTabs: [],
           lastModified: Date.now()
@@ -235,36 +235,167 @@ class FileRegistry {
 
   /**
    * Remove a tab from the file's view list
+   * 
+   * NOTE: Files are NEVER deleted when tabs close. They persist in IndexedDB
+   * as part of the local workspace. This allows:
+   * - Files to remain dirty when tabs close
+   * - Index files to stay loaded even when not viewed
+   * - Credentials/settings to persist
+   * - Proper workspace model where files != tabs
    */
   async removeViewTab(fileId: string, tabId: string): Promise<void> {
     const file = this.files.get(fileId);
     if (!file) return;
 
     file.viewTabs = file.viewTabs.filter(id => id !== tabId);
-
-    // Special files (settings, credentials) should never be deleted
-    const isSpecialFile = fileId === 'settings-settings' || fileId === 'credentials-credentials';
     
-    // If no tabs are viewing this file, remove completely (unless it's a special file)
-    if (file.viewTabs.length === 0 && !isSpecialFile) {
-      console.log(`FileRegistry: No more views of ${fileId}, removing from registry and DB`);
+    // NEVER delete file - just update view tabs
+    // Files persist in workspace regardless of open tabs
+    await db.files.put(file);
+    
+    console.log(`FileRegistry: Removed tab ${tabId} from ${fileId}, file persists in workspace`);
+  }
+  
+  /**
+   * Explicitly delete a file from workspace
+   * This is a deliberate user action (File > Delete, context menu delete, etc.)
+   * NOT called automatically when tabs close
+   */
+  async deleteFile(fileId: string): Promise<void> {
+    const file = this.files.get(fileId);
+    if (!file) return;
+    
+    // Check for open tabs
+    if (file.viewTabs.length > 0) {
+      throw new Error('Cannot delete file with open tabs. Close all tabs first.');
+    }
+    
+    // Check if dirty (optional - could allow with confirmation)
+    if (file.isDirty) {
+      throw new Error('Cannot delete dirty file. Commit or revert changes first.');
+    }
+    
+    console.log(`FileRegistry: Explicitly deleting ${fileId} from workspace`);
+    
+    // Notify listeners BEFORE deleting
+    const callbacks = this.listeners.get(fileId);
+    if (callbacks) {
+      callbacks.forEach(callback => callback(null as any));
+    }
+    
+    // Remove from registry and IDB
+    this.files.delete(fileId);
+    this.listeners.delete(fileId);
+    await db.files.delete(fileId);
+    
+    // Update index file to remove entry
+    const [type] = fileId.split('-');
+    if (type === 'parameter' || type === 'context' || type === 'case' || type === 'node') {
+      await this.updateIndexOnDelete(type as any, fileId);
+    }
+  }
+
+  /**
+   * Update index file when a new item is created
+   * Called automatically when creating parameters, contexts, cases, or nodes
+   */
+  async updateIndexOnCreate(type: 'parameter' | 'context' | 'case' | 'node', itemId: string, metadata?: any): Promise<void> {
+    const indexFileId = `${type}-index`;
+    const indexFileName = `${type}s-index.yaml`;
+    
+    try {
+      // Load or create index file
+      let indexFile = this.getFile(indexFileId);
       
-      // Notify listeners BEFORE deleting (so Navigator can update)
-      // Pass null to indicate file is being deleted
-      const callbacks = this.listeners.get(fileId);
-      if (callbacks) {
-        callbacks.forEach(callback => callback(null as any));
+      if (!indexFile) {
+        // Create new index file
+        indexFile = {
+          fileId: indexFileId,
+          type: type,
+          name: indexFileName,
+          path: `${type}s/${indexFileName}`,
+          data: {
+            version: '1.0.0',
+            entries: []
+          },
+          isDirty: false,
+          isLoaded: true,
+          viewTabs: [],
+          lastOpened: Date.now(),
+          lastModified: Date.now()
+        };
+        this.files.set(indexFileId, indexFile);
       }
       
-      this.files.delete(fileId);
-      this.listeners.delete(fileId);
-      await db.files.delete(fileId);
-    } else {
-      // Still has views or is special file, just update
-      if (isSpecialFile) {
-        console.log(`FileRegistry: ${fileId} is a special file, keeping in registry and DB`);
+      // Ensure data structure exists
+      if (!indexFile.data) {
+        indexFile.data = { version: '1.0.0', entries: [] };
       }
-      await db.files.put(file);
+      
+      // Add entry to index
+      const entries = indexFile.data.entries || [];
+      const newEntry = {
+        id: itemId.replace(`${type}-`, ''),
+        file_path: `${type}s/${itemId.replace(`${type}-`, '')}.yaml`,
+        status: 'active',
+        created_at: new Date().toISOString(),
+        ...metadata
+      };
+      
+      entries.push(newEntry);
+      indexFile.data = {
+        ...indexFile.data,
+        entries
+      };
+      indexFile.isDirty = true;
+      indexFile.lastModified = Date.now();
+      
+      // Save to IDB
+      await db.files.put(indexFile);
+      
+      // Notify listeners
+      this.notifyListeners(indexFileId, indexFile);
+      
+      console.log(`FileRegistry: Added ${itemId} to ${type} index`);
+    } catch (error) {
+      console.error(`FileRegistry: Failed to update index on create:`, error);
+    }
+  }
+
+  /**
+   * Update index file when an item is deleted
+   * Called automatically when deleting parameters, contexts, cases, or nodes
+   */
+  async updateIndexOnDelete(type: 'parameter' | 'context' | 'case' | 'node', itemId: string): Promise<void> {
+    const indexFileId = `${type}-index`;
+    
+    try {
+      const indexFile = this.getFile(indexFileId);
+      if (!indexFile || !indexFile.data?.entries) {
+        console.warn(`FileRegistry: No index file found for ${type}`);
+        return;
+      }
+      
+      // Remove entry from index
+      const itemIdBase = itemId.replace(`${type}-`, '');
+      const entries = indexFile.data.entries.filter((entry: any) => entry.id !== itemIdBase);
+      
+      indexFile.data = {
+        ...indexFile.data,
+        entries
+      };
+      indexFile.isDirty = true;
+      indexFile.lastModified = Date.now();
+      
+      // Save to IDB
+      await db.files.put(indexFile);
+      
+      // Notify listeners
+      this.notifyListeners(indexFileId, indexFile);
+      
+      console.log(`FileRegistry: Removed ${itemId} from ${type} index`);
+    } catch (error) {
+      console.error(`FileRegistry: Failed to update index on delete:`, error);
     }
   }
 
@@ -451,7 +582,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
           id: graphName,
           name: graphName,
           type: 'graph',
-          path: `graphs/${graphName}.yaml`
+          path: `graphs/${graphName}.json`
         };
         
         // Open tab with the named graph

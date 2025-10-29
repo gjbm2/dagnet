@@ -128,6 +128,8 @@ function onOpen() {
       .createMenu('Dagnet')
       .addItem('Initialize', 'initialize')
       .addItem('Edit graph', 'editGraph')
+      .addSeparator()
+      .addItem('Set Secret', 'setSecret')
       .addToUi();
   } catch (e) {
     SpreadsheetApp.getUi().alert('Error in onOpen: ' + e.message);
@@ -291,12 +293,14 @@ function editGraph() {
     }
   }
 
+  const secret = getGoogleSheetsSecret();
   const appUrl = DAGNET_APP_URL
     + '?data=' + encodeURIComponent(jsonString)
     + '&session=' + encodeURIComponent(sessionId)
     + '&outputCell=' + encodeURIComponent(cellA1)
     + '&sheetId=' + encodeURIComponent(sheetId)
-    + '&appsScriptUrl=' + encodeURIComponent(appsScriptUrl);
+    + '&appsScriptUrl=' + encodeURIComponent(appsScriptUrl)
+    + (secret ? '&secret=' + encodeURIComponent(secret) : '');
 
   const html = HtmlService.createHtmlOutput(`
     <!doctype html>
@@ -384,6 +388,43 @@ function testWebAppUrl(url) {
     return { success: response.getResponseCode() === 200, status: response.getResponseCode() };
   } catch (e) {
     return { success: false, status: 'error' };
+  }
+}
+
+/**
+ * Get Google Sheets secret from script properties
+ */
+function getGoogleSheetsSecret() {
+  return PropertiesService.getScriptProperties().getProperty('DAGNET_GOOGLE_SHEETS_SECRET');
+}
+
+/**
+ * Set Google Sheets secret in script properties
+ */
+function setGoogleSheetsSecret(secret) {
+  PropertiesService.getScriptProperties().setProperty('DAGNET_GOOGLE_SHEETS_SECRET', secret);
+  SpreadsheetApp.getUi().alert('Stored Google Sheets secret. This will be used for API authentication.');
+}
+
+/**
+ * Menu function to set the Google Sheets secret
+ */
+function setSecret() {
+  var ui = SpreadsheetApp.getUi();
+  var currentSecret = getGoogleSheetsSecret();
+  var message = 'Enter the Google Sheets secret for Dagnet API authentication:';
+  if (currentSecret) {
+    message += '\n\nCurrent secret: ' + currentSecret.substring(0, 8) + '...';
+  }
+  
+  var secret = ui.prompt('Set Google Sheets Secret', message, ui.ButtonSet.OK_CANCEL);
+  if (secret.getSelectedButton() === ui.Button.OK) {
+    var secretValue = secret.getResponseText().trim();
+    if (secretValue) {
+      setGoogleSheetsSecret(secretValue);
+    } else {
+      ui.alert('Secret cannot be empty.');
+    }
   }
 }
 
@@ -1650,10 +1691,16 @@ function dagGetGraph(urlOrName, branch) {
     } else {
       // Construct URL using default base
       var branchParam = branch || 'main';
+      var secret = getGoogleSheetsSecret();
       url = DAGNET_GRAPH_API_BASE + 
             '?name=' + encodeURIComponent(urlOrName) +
             '&branch=' + encodeURIComponent(branchParam) +
             '&raw=true&format=pretty';
+      
+      // Add secret parameter if available
+      if (secret) {
+        url += '&secret=' + encodeURIComponent(secret);
+      }
     }
     
     // Debug logging

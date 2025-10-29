@@ -36,21 +36,32 @@ export interface FileSource {
 export interface FileState<T = any> {
   fileId: string;              // Unique ID for this file
   type: ObjectType;
+  name?: string;               // Display name
+  path?: string;               // File path in repository
   
   // Data
-  data: T;                     // Current state
-  originalData: T;             // For revert
-  isDirty: boolean;            // Shared across all views
+  data?: T;                    // Current state
+  originalData?: T;            // For revert
+  isDirty?: boolean;           // Shared across all views
   
   // Source
-  source: FileSource;
+  source?: FileSource;
+  
+  // Loading state
+  isLoaded?: boolean;          // Whether file content is loaded
+  isLocal?: boolean;           // Whether file is local-only (not in repo)
   
   // Which tabs are viewing this file
   viewTabs: string[];          // Array of tab IDs
   
   // Metadata
-  lastModified: number;
+  lastModified?: number;
   lastSaved?: number;
+  lastOpened?: number;
+  
+  // Git metadata
+  sha?: string;                // Git SHA for conflict detection
+  lastSynced?: number;         // Last time synced with remote
 }
 
 /**
@@ -102,6 +113,15 @@ export interface NavigatorState {
   expandedSections: string[];  // Which sections are expanded
   availableRepos: string[];    // Available repositories from credentials
   availableBranches: string[]; // Available branches for selected repo
+  
+  // View and filter options
+  viewMode?: 'all' | 'files-only';     // Show all index entries or only files
+  showLocalOnly?: boolean;              // Filter to local-only files
+  showDirtyOnly?: boolean;              // Filter to dirty files
+  showOpenOnly?: boolean;               // Filter to open files
+  sortBy?: 'name' | 'modified' | 'opened' | 'status' | 'type';  // Sort order
+  groupBySubCategories?: boolean;       // Group by sub-categories (parameter_type, node_type, etc.)
+  groupByTags?: boolean;                // Group by tags
   
   // Registry indexes (lightweight metadata catalogs)
   registryIndexes?: {
@@ -239,6 +259,15 @@ export interface NavigatorOperations {
   addLocalItem: (item: RepositoryItem) => void;
   removeLocalItem: (fileId: string) => void;
   refreshItems: () => Promise<void>;
+  
+  // Filter and sort operations
+  setViewMode: (mode: 'all' | 'files-only') => void;
+  setShowLocalOnly: (show: boolean) => void;
+  setShowDirtyOnly: (show: boolean) => void;
+  setShowOpenOnly: (show: boolean) => void;
+  setSortBy: (sort: 'name' | 'modified' | 'opened' | 'status' | 'type') => void;
+  setGroupBySubCategories: (group: boolean) => void;
+  setGroupByTags: (group: boolean) => void;
 }
 
 /**

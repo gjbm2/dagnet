@@ -28,7 +28,16 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     selectedBranch: '',
     expandedSections: ['graphs', 'parameters', 'contexts', 'cases', 'nodes'],
     availableRepos: [],
-    availableBranches: []
+    availableBranches: [],
+    
+    // Filter and sort defaults
+    viewMode: 'all',
+    showLocalOnly: false,
+    showDirtyOnly: false,
+    showOpenOnly: false,
+    sortBy: 'name',
+    groupBySubCategories: false,
+    groupByTags: false
   });
 
   const [items, setItems] = useState<RepositoryItem[]>([]);
@@ -297,20 +306,38 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    * Expand a section
    */
   const expandSection = useCallback((section: string) => {
-    setState(prev => ({
-      ...prev,
-      expandedSections: [...prev.expandedSections, section]
-    }));
+    setState(prev => {
+      const newExpandedSections = [...prev.expandedSections, section];
+      // Persist to localStorage for quick restore
+      try {
+        localStorage.setItem(`dagnet:navigator:expandedSections`, JSON.stringify(newExpandedSections));
+      } catch (e) {
+        console.warn('Failed to save expanded sections to localStorage:', e);
+      }
+      return {
+        ...prev,
+        expandedSections: newExpandedSections
+      };
+    });
   }, []);
 
   /**
    * Collapse a section
    */
   const collapseSection = useCallback((section: string) => {
-    setState(prev => ({
-      ...prev,
-      expandedSections: prev.expandedSections.filter(s => s !== section)
-    }));
+    setState(prev => {
+      const newExpandedSections = prev.expandedSections.filter(s => s !== section);
+      // Persist to localStorage for quick restore
+      try {
+        localStorage.setItem(`dagnet:navigator:expandedSections`, JSON.stringify(newExpandedSections));
+      } catch (e) {
+        console.warn('Failed to save expanded sections to localStorage:', e);
+      }
+      return {
+        ...prev,
+        expandedSections: newExpandedSections
+      };
+    });
   }, []);
 
   /**
@@ -636,18 +663,71 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   }, [items, localItems]);
 
   /**
-   * Filter items by search query
+   * Filter and sort items based on current state
    */
   const getFilteredItems = useCallback((): RepositoryItem[] => {
-    const allItems = getAllItems();
-    if (!state.searchQuery) return allItems;
+    let filteredItems = getAllItems();
 
-    const query = state.searchQuery.toLowerCase();
-    return allItems.filter(item => 
-      item.name.toLowerCase().includes(query) ||
-      item.description?.toLowerCase().includes(query)
-    );
-  }, [getAllItems, state.searchQuery]);
+    // Apply search query
+    if (state.searchQuery) {
+      const query = state.searchQuery.toLowerCase();
+      filteredItems = filteredItems.filter(item => 
+        item.name.toLowerCase().includes(query) ||
+        item.description?.toLowerCase().includes(query)
+      );
+    }
+
+    // Apply view mode filter (All vs Files Only)
+    // For now, we'll skip this since we don't have a way to distinguish
+    // between index-only items and file items yet
+    // TODO: Implement when index loading is complete
+
+    // Apply Local Only filter
+    if (state.showLocalOnly) {
+      filteredItems = filteredItems.filter(item => item.isLocal);
+    }
+
+    // Apply Dirty Only filter
+    // TODO: Need to check FileRegistry for dirty state
+    // For now, skip this filter
+
+    // Apply Open Only filter
+    // TODO: Need to check tabs for open state
+    // For now, skip this filter
+
+    // Apply sorting
+    if (state.sortBy) {
+      filteredItems = [...filteredItems].sort((a, b) => {
+        switch (state.sortBy) {
+          case 'name':
+            return a.name.localeCompare(b.name);
+          
+          case 'type':
+            if (a.type === b.type) {
+              return a.name.localeCompare(b.name);
+            }
+            return a.type.localeCompare(b.type);
+          
+          case 'status':
+            // Sort by local first, then by name
+            if (a.isLocal !== b.isLocal) {
+              return a.isLocal ? -1 : 1;
+            }
+            return a.name.localeCompare(b.name);
+          
+          case 'modified':
+          case 'opened':
+            // TODO: Implement when we have timestamp data
+            return a.name.localeCompare(b.name);
+          
+          default:
+            return 0;
+        }
+      });
+    }
+
+    return filteredItems;
+  }, [getAllItems, state.searchQuery, state.showLocalOnly, state.sortBy]);
 
   /**
    * Get items by type
@@ -655,6 +735,37 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   const getItemsByType = useCallback((type: ObjectType): RepositoryItem[] => {
     return getFilteredItems().filter(item => item.type === type);
   }, [getFilteredItems]);
+
+  /**
+   * Filter and sort operations
+   */
+  const setViewMode = useCallback((mode: 'all' | 'files-only') => {
+    setState(prev => ({ ...prev, viewMode: mode }));
+  }, []);
+
+  const setShowLocalOnly = useCallback((show: boolean) => {
+    setState(prev => ({ ...prev, showLocalOnly: show }));
+  }, []);
+
+  const setShowDirtyOnly = useCallback((show: boolean) => {
+    setState(prev => ({ ...prev, showDirtyOnly: show }));
+  }, []);
+
+  const setShowOpenOnly = useCallback((show: boolean) => {
+    setState(prev => ({ ...prev, showOpenOnly: show }));
+  }, []);
+
+  const setSortBy = useCallback((sort: 'name' | 'modified' | 'opened' | 'status' | 'type') => {
+    setState(prev => ({ ...prev, sortBy: sort }));
+  }, []);
+
+  const setGroupBySubCategories = useCallback((group: boolean) => {
+    setState(prev => ({ ...prev, groupBySubCategories: group }));
+  }, []);
+
+  const setGroupByTags = useCallback((group: boolean) => {
+    setState(prev => ({ ...prev, groupByTags: group }));
+  }, []);
 
   const operations: NavigatorOperations = {
     toggleNavigator,
@@ -666,7 +777,16 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     collapseSection,
     addLocalItem,
     removeLocalItem,
-    refreshItems
+    refreshItems,
+    
+    // Filter and sort operations
+    setViewMode,
+    setShowLocalOnly,
+    setShowDirtyOnly,
+    setShowOpenOnly,
+    setSortBy,
+    setGroupBySubCategories,
+    setGroupByTags
   };
   
   // Listen for last view closed events to clean up local items

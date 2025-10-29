@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { gitService } from '../../services/gitService';
@@ -9,12 +9,12 @@ import { CommitModal } from '../CommitModal';
  * 
  * Appears inline with tab bar when navigator is open
  * Contains:
- * - Search input
- * - Pull button
- * - Commit button (when files are dirty)
- * - Branch dropdown
+ * - Full-width search input with filter dropdown
  * - Pin button
  * - Close button
+ * 
+ * NOTE: Repository/Branch switching has been moved to Repository menu
+ * for safe, guarded operations with dirty file checks
  */
 export function NavigatorHeader() {
   const { state, operations } = useNavigatorContext();
@@ -23,9 +23,25 @@ export function NavigatorHeader() {
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [pullError, setPullError] = useState<string | null>(null);
+  const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
+  const filterDropdownRef = useRef<HTMLDivElement>(null);
 
   const dirtyTabs = tabOps.getDirtyTabs();
   const hasDirtyFiles = dirtyTabs.length > 0;
+
+  // Close filter dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(event.target as Node)) {
+        setIsFilterDropdownOpen(false);
+      }
+    };
+
+    if (isFilterDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isFilterDropdownOpen]);
 
   const handlePull = async () => {
     setIsPulling(true);
@@ -107,45 +123,131 @@ export function NavigatorHeader() {
   return (
     <>
       <div className="navigator-header">
-        <div className="navigator-search">
+        {/* Full-width search bar with filter dropdown */}
+        <div className="navigator-search-container">
           <input
             type="text"
-            placeholder="🔍 Search..."
+            placeholder="🔍 Search parameters, contexts, cases..."
             value={state.searchQuery}
             onChange={(e) => operations.setSearchQuery(e.target.value)}
             className="navigator-search-input"
           />
+          
+          {/* Filter dropdown button */}
+          <div className="navigator-filter-dropdown" ref={filterDropdownRef}>
+            <button
+              className="navigator-filter-btn"
+              onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
+              title="Filter and Sort Options"
+            >
+              ⚙️
+            </button>
+            
+            {/* Dropdown menu */}
+            {isFilterDropdownOpen && (
+              <div className="navigator-filter-menu">
+                {/* View Mode */}
+                <div className="filter-section">
+                  <label className="filter-section-label">View Mode</label>
+                  <div className="filter-radio-group">
+                    <label>
+                      <input
+                        type="radio"
+                        name="viewMode"
+                        checked={state.viewMode === 'all'}
+                        onChange={() => operations.setViewMode('all')}
+                      />
+                      <span>All (Index + Files)</span>
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="viewMode"
+                        checked={state.viewMode === 'files-only'}
+                        onChange={() => operations.setViewMode('files-only')}
+                      />
+                      <span>Files Only</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="filter-divider" />
+
+                {/* Filters */}
+                <div className="filter-section">
+                  <label className="filter-section-label">Show</label>
+                  <label className="filter-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={state.showLocalOnly}
+                      onChange={(e) => operations.setShowLocalOnly(e.target.checked)}
+                    />
+                    <span>Local Only</span>
+                  </label>
+                  <label className="filter-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={state.showDirtyOnly}
+                      onChange={(e) => operations.setShowDirtyOnly(e.target.checked)}
+                    />
+                    <span>Dirty Only</span>
+                  </label>
+                  <label className="filter-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={state.showOpenOnly}
+                      onChange={(e) => operations.setShowOpenOnly(e.target.checked)}
+                    />
+                    <span>Open Only</span>
+                  </label>
+                </div>
+
+                <div className="filter-divider" />
+
+                {/* Sort Options */}
+                <div className="filter-section">
+                  <label className="filter-section-label">Sort By</label>
+                  <select
+                    value={state.sortBy || 'name'}
+                    onChange={(e) => operations.setSortBy(e.target.value as any)}
+                    className="filter-select"
+                  >
+                    <option value="name">Name</option>
+                    <option value="modified">Recently Modified</option>
+                    <option value="opened">Recently Opened</option>
+                    <option value="status">Status</option>
+                    <option value="type">Type</option>
+                  </select>
+                </div>
+
+                <div className="filter-divider" />
+
+                {/* Grouping Options */}
+                <div className="filter-section">
+                  <label className="filter-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={state.groupBySubCategories}
+                      onChange={(e) => operations.setGroupBySubCategories(e.target.checked)}
+                    />
+                    <span>Group by Sub-categories</span>
+                  </label>
+                  <label className="filter-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={state.groupByTags}
+                      onChange={(e) => operations.setGroupByTags(e.target.checked)}
+                    />
+                    <span>Group by Tags</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
+        {/* Control buttons */}
         <div className="navigator-controls">
-          {/* Pull button - always visible */}
-          <button
-            className="navigator-control-btn"
-            onClick={handlePull}
-            disabled={isPulling}
-            title="Pull Latest Changes"
-          >
-            {isPulling ? '⏳' : '⬇️'}
-          </button>
-
-          {/* Commit button - only when files are dirty */}
-          {hasDirtyFiles && (
-            <button
-              className="navigator-control-btn"
-              onClick={handleCommit}
-              title={`Commit ${dirtyTabs.length} file${dirtyTabs.length === 1 ? '' : 's'}`}
-            >
-              💾
-            </button>
-          )}
-
-          {/* Branch dropdown - TODO: implement in Phase 1b */}
-          <div className="navigator-branch">
-            <span style={{ fontSize: '12px', color: '#666' }}>
-              {state.selectedBranch || 'main'}
-            </span>
-          </div>
-
           <button
             className={`navigator-control-btn ${state.isPinned ? 'active' : ''}`}
             onClick={operations.togglePin}
