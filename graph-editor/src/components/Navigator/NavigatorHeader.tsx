@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
-import { useTabContext } from '../../contexts/TabContext';
+import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { gitService } from '../../services/gitService';
 import { CommitModal } from '../CommitModal';
 
