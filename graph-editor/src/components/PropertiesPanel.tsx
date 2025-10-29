@@ -160,10 +160,13 @@ export default function PropertiesPanel({
           setLocalEdgeData({
             slug: edge.slug || '',
             parameter_id: (edge as any).parameter_id || '',
+            cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
+            cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
             probability: edge.p?.mean || 0,
             stdev: edge.p?.stdev || undefined,
             description: edge.description || '',
-            costs: edge.costs || {},
+            cost_gbp: (edge as any).cost_gbp,
+            cost_time: (edge as any).cost_time,
             weight_default: edge.weight_default || 0
           });
           setLocalConditionalP(edge.conditional_p || []);
@@ -1355,6 +1358,7 @@ export default function PropertiesPanel({
                 {/* Parameter ID for probability - connect to parameter registry */}
                 <ParameterSelector
                   type="parameter"
+                  parameterType="probability"
                   value={(selectedEdge as any)?.parameter_id || ''}
                   autoFocus={!(selectedEdge as any)?.parameter_id && !selectedEdge?.p?.mean} // Auto-focus if no parameter and no probability set
                   onChange={async (newParamId) => {
@@ -1506,38 +1510,26 @@ export default function PropertiesPanel({
                   )}
                 </div>
 
-                {/* Only show standard deviation for non-case edges */}
+                {/* Probability Standard Deviation - for non-case edges */}
                 {!(selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant)) && (
                   <div style={{ marginBottom: '20px' }}>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Standard Deviation</label>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Probability Std Dev</label>
                     <input
                       data-field="stdev"
-                      type="text"
+                      type="number"
+                      min="0"
+                      step="0.01"
                       value={localEdgeData.stdev !== undefined ? localEdgeData.stdev : ''}
                       onChange={(e) => {
-                        const value = e.target.value;
+                        const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
                         setLocalEdgeData({...localEdgeData, stdev: value});
                       }}
                       onBlur={() => {
-                        const numValue = parseFloat(localEdgeData.stdev);
-                        if (isNaN(numValue)) {
-                          setLocalEdgeData({...localEdgeData, stdev: undefined});
-                          updateEdge('stdev', undefined);
-                        } else {
-                          setLocalEdgeData({...localEdgeData, stdev: numValue});
-                          updateEdge('stdev', numValue);
-                        }
+                        updateEdge('stdev', localEdgeData.stdev);
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
-                          const numValue = parseFloat(localEdgeData.stdev);
-                          if (isNaN(numValue)) {
-                            setLocalEdgeData({...localEdgeData, stdev: undefined});
-                            updateEdge('stdev', undefined);
-                          } else {
-                            setLocalEdgeData({...localEdgeData, stdev: numValue});
-                            updateEdge('stdev', numValue);
-                          }
+                          updateEdge('stdev', localEdgeData.stdev);
                           e.currentTarget.blur();
                         }
                       }}
@@ -1761,298 +1753,145 @@ export default function PropertiesPanel({
                   );
                 })()}
 
-                <div style={{ marginBottom: '20px' }}>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Costs</label>
-                  
-                  <div style={{ 
-                    background: '#f8f9fa', 
-                    padding: '12px', 
-                    borderRadius: '4px', 
-                    border: '1px solid #e9ecef',
-                    marginBottom: '12px'
-                  }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      {/* Monetary Cost Section */}
-                      <div style={{ 
-                        background: '#fff', 
-                        padding: '8px', 
-                        borderRadius: '3px', 
-                        border: '1px solid #e9ecef'
-                      }}>
-                        <label style={{ display: 'block', fontSize: '12px', marginBottom: '6px', color: '#495057', fontWeight: '600' }}>
-                          Monetary Cost (GBP)
-                        </label>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={localEdgeData.costs?.monetary?.value || ''}
-                            onChange={(e) => setLocalEdgeData({
-                              ...localEdgeData, 
-                              costs: {
-                                ...localEdgeData.costs, 
-                                monetary: {
-                                  ...localEdgeData.costs?.monetary,
-                                  value: parseFloat(e.target.value) || undefined,
-                                  currency: localEdgeData.costs?.monetary?.currency || 'GBP'
-                                }
-                              }
-                            })}
-                            onBlur={() => updateEdge('costs.monetary', localEdgeData.costs?.monetary)}
-                            placeholder="0.00"
-                            style={{ 
-                              flex: 1,
-                              padding: '6px 8px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '3px', 
-                              fontSize: '12px',
-                              boxSizing: 'border-box'
-                            }}
-                          />
-                          <select
-                            value={localEdgeData.costs?.monetary?.currency || 'GBP'}
-                            onChange={(e) => setLocalEdgeData({
-                              ...localEdgeData, 
-                              costs: {
-                                ...localEdgeData.costs, 
-                                monetary: {
-                                  ...localEdgeData.costs?.monetary,
-                                  currency: e.target.value
-                                }
-                              }
-                            })}
-                            onBlur={() => updateEdge('costs.monetary', localEdgeData.costs?.monetary)}
-                            style={{ 
-                              padding: '6px 8px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '3px', 
-                              fontSize: '12px',
-                              background: 'white'
-                            }}
-                          >
-                            <option value="GBP">GBP</option>
-                            <option value="USD">USD</option>
-                            <option value="EUR">EUR</option>
-                          </select>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={localEdgeData.costs?.monetary?.stdev || ''}
-                            onChange={(e) => setLocalEdgeData({
-                              ...localEdgeData, 
-                              costs: {
-                                ...localEdgeData.costs, 
-                                monetary: {
-                                  ...localEdgeData.costs?.monetary,
-                                  stdev: parseFloat(e.target.value) || undefined
-                                }
-                              }
-                            })}
-                            onBlur={() => updateEdge('costs.monetary', localEdgeData.costs?.monetary)}
-                            placeholder="Stdev (optional)"
-                            style={{ 
-                              flex: 1,
-                              padding: '4px 6px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '3px', 
-                              fontSize: '11px',
-                              boxSizing: 'border-box'
-                            }}
-                          />
-                          <select
-                            value={localEdgeData.costs?.monetary?.distribution || 'normal'}
-                            onChange={(e) => setLocalEdgeData({
-                              ...localEdgeData, 
-                              costs: {
-                                ...localEdgeData.costs, 
-                                monetary: {
-                                  ...localEdgeData.costs?.monetary,
-                                  distribution: e.target.value
-                                }
-                              }
-                            })}
-                            onBlur={() => updateEdge('costs.monetary', localEdgeData.costs?.monetary)}
-                            style={{ 
-                              padding: '4px 6px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '3px', 
-                              fontSize: '11px',
-                              background: 'white'
-                            }}
-                          >
-                            <option value="normal">Normal</option>
-                            <option value="lognormal">Log-normal</option>
-                            <option value="gamma">Gamma</option>
-                            <option value="uniform">Uniform</option>
-                          </select>
-                        </div>
-                      </div>
-                      
-                      {/* Time Cost Section */}
-                      <div style={{ 
-                        background: '#fff', 
-                        padding: '8px', 
-                        borderRadius: '3px', 
-                        border: '1px solid #e9ecef'
-                      }}>
-                        <label style={{ display: 'block', fontSize: '12px', marginBottom: '6px', color: '#495057', fontWeight: '600' }}>
-                          Time Cost (Days)
-                        </label>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.1"
-                            value={localEdgeData.costs?.time?.value || ''}
-                            onChange={(e) => setLocalEdgeData({
-                              ...localEdgeData, 
-                              costs: {
-                                ...localEdgeData.costs, 
-                                time: {
-                                  ...localEdgeData.costs?.time,
-                                  value: parseFloat(e.target.value) || undefined,
-                                  units: localEdgeData.costs?.time?.units || 'days'
-                                }
-                              }
-                            })}
-                            onBlur={() => updateEdge('costs.time', localEdgeData.costs?.time)}
-                            placeholder="0.0"
-                            style={{ 
-                              flex: 1,
-                              padding: '6px 8px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '3px', 
-                              fontSize: '12px',
-                              boxSizing: 'border-box'
-                            }}
-                          />
-                          <select
-                            value={localEdgeData.costs?.time?.units || 'days'}
-                            onChange={(e) => setLocalEdgeData({
-                              ...localEdgeData, 
-                              costs: {
-                                ...localEdgeData.costs, 
-                                time: {
-                                  ...localEdgeData.costs?.time,
-                                  units: e.target.value
-                                }
-                              }
-                            })}
-                            onBlur={() => updateEdge('costs.time', localEdgeData.costs?.time)}
-                            style={{ 
-                              padding: '6px 8px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '3px', 
-                              fontSize: '12px',
-                              background: 'white'
-                            }}
-                          >
-                            <option value="days">Days</option>
-                            <option value="hours">Hours</option>
-                            <option value="weeks">Weeks</option>
-                          </select>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.1"
-                            value={localEdgeData.costs?.time?.stdev || ''}
-                            onChange={(e) => setLocalEdgeData({
-                              ...localEdgeData, 
-                              costs: {
-                                ...localEdgeData.costs, 
-                                time: {
-                                  ...localEdgeData.costs?.time,
-                                  stdev: parseFloat(e.target.value) || undefined
-                                }
-                              }
-                            })}
-                            onBlur={() => updateEdge('costs.time', localEdgeData.costs?.time)}
-                            placeholder="Stdev (optional)"
-                            style={{ 
-                              flex: 1,
-                              padding: '4px 6px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '3px', 
-                              fontSize: '11px',
-                              boxSizing: 'border-box'
-                            }}
-                          />
-                          <select
-                            value={localEdgeData.costs?.time?.distribution || 'lognormal'}
-                            onChange={(e) => setLocalEdgeData({
-                              ...localEdgeData, 
-                              costs: {
-                                ...localEdgeData.costs, 
-                                time: {
-                                  ...localEdgeData.costs?.time,
-                                  distribution: e.target.value
-                                }
-                              }
-                            })}
-                            onBlur={() => updateEdge('costs.time', localEdgeData.costs?.time)}
-                            style={{ 
-                              padding: '4px 6px', 
-                              border: '1px solid #ddd', 
-                              borderRadius: '3px', 
-                              fontSize: '11px',
-                              background: 'white'
-                            }}
-                          >
-                            <option value="normal">Normal</option>
-                            <option value="lognormal">Log-normal</option>
-                            <option value="gamma">Gamma</option>
-                            <option value="uniform">Uniform</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
+                {/* Monetary Cost Parameter */}
+                <ParameterSelector
+                  type="parameter"
+                  parameterType="cost_gbp"
+                  value={(selectedEdge as any)?.cost_gbp_parameter_id || ''}
+                  onChange={async (newParamId) => {
+                    console.log('PropertiesPanel: Cost GBP ParameterSelector onChange:', { newParamId });
                     
-                    {/* Clear costs button */}
-                    {(localEdgeData.costs?.monetary?.value || localEdgeData.costs?.time?.value) && (
-                      <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #e9ecef' }}>
-                        <button
-                          onClick={() => {
-                            const clearedCosts = {};
-                            setLocalEdgeData({
-                              ...localEdgeData,
-                              costs: clearedCosts
+                    if (newParamId && graph && selectedEdgeId) {
+                      try {
+                        const { paramRegistryService } = await import('../services/paramRegistryService');
+                        const paramData = await paramRegistryService.loadParameter(newParamId);
+                        
+                        // Clone graph and update ALL fields at once
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) => 
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        
+                        if (edgeIndex >= 0) {
+                          const edge = next.edges[edgeIndex] as any;
+                          edge.cost_gbp_parameter_id = newParamId;
+                          
+                          // Auto-populate cost_gbp from parameter (use latest value)
+                          if (paramData && paramData.values && paramData.values.length > 0) {
+                            const sortedValues = [...paramData.values].sort((a, b) => {
+                              if (!a.window_from) return -1;
+                              if (!b.window_from) return 1;
+                              return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
                             });
-                            // Update the graph with cleared costs
-                            if (!graph || !selectedEdgeId) return;
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((e: any) => 
-                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                            );
-                            if (edgeIndex >= 0) {
-                              next.edges[edgeIndex].costs = clearedCosts;
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                            }
-                          }}
-                          style={{
-                            background: '#dc3545',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            padding: '4px 8px',
-                            fontSize: '11px',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Clear All Costs
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                            const latestValue = sortedValues[0];
+                            
+                            edge.cost_gbp = {
+                              mean: latestValue.mean,
+                              stdev: latestValue.stdev,
+                              distribution: latestValue.distribution
+                            };
+                            
+                            setLocalEdgeData((prev: any) => ({
+                              ...prev,
+                              cost_gbp_parameter_id: newParamId,
+                              cost_gbp: edge.cost_gbp
+                            }));
+                            
+                            console.log('Populated GBP cost from parameter:', { 
+                              parameter_id: newParamId, 
+                              mean: latestValue.mean, 
+                              stdev: latestValue.stdev 
+                            });
+                          }
+                          
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          
+                          setGraph(next);
+                          saveHistoryState(`Update cost GBP parameter`, undefined, selectedEdgeId || undefined);
+                        }
+                      } catch (error) {
+                        console.log('Could not load cost parameter:', error);
+                        updateEdge('cost_gbp_parameter_id', newParamId);
+                      }
+                    } else {
+                      updateEdge('cost_gbp_parameter_id', newParamId || undefined);
+                    }
+                  }}
+                  label="Monetary Cost (GBP)"
+                  placeholder="Select cost_gbp parameter..."
+                />
+
+                {/* Time Cost Parameter */}
+                <ParameterSelector
+                  type="parameter"
+                  parameterType="cost_time"
+                  value={(selectedEdge as any)?.cost_time_parameter_id || ''}
+                  onChange={async (newParamId) => {
+                    console.log('PropertiesPanel: Cost Time ParameterSelector onChange:', { newParamId });
+                    
+                    if (newParamId && graph && selectedEdgeId) {
+                      try {
+                        const { paramRegistryService } = await import('../services/paramRegistryService');
+                        const paramData = await paramRegistryService.loadParameter(newParamId);
+                        
+                        // Clone graph and update ALL fields at once
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) => 
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        
+                        if (edgeIndex >= 0) {
+                          const edge = next.edges[edgeIndex] as any;
+                          edge.cost_time_parameter_id = newParamId;
+                          
+                          // Auto-populate cost_time from parameter (use latest value)
+                          if (paramData && paramData.values && paramData.values.length > 0) {
+                            const sortedValues = [...paramData.values].sort((a, b) => {
+                              if (!a.window_from) return -1;
+                              if (!b.window_from) return 1;
+                              return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
+                            });
+                            const latestValue = sortedValues[0];
+                            
+                            edge.cost_time = {
+                              mean: latestValue.mean,
+                              stdev: latestValue.stdev,
+                              distribution: latestValue.distribution
+                            };
+                            
+                            setLocalEdgeData((prev: any) => ({
+                              ...prev,
+                              cost_time_parameter_id: newParamId,
+                              cost_time: edge.cost_time
+                            }));
+                            
+                            console.log('Populated time cost from parameter:', { 
+                              parameter_id: newParamId, 
+                              mean: latestValue.mean, 
+                              stdev: latestValue.stdev 
+                            });
+                          }
+                          
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          
+                          setGraph(next);
+                          saveHistoryState(`Update cost time parameter`, undefined, selectedEdgeId || undefined);
+                        }
+                      } catch (error) {
+                        console.log('Could not load cost parameter:', error);
+                        updateEdge('cost_time_parameter_id', newParamId);
+                      }
+                    } else {
+                      updateEdge('cost_time_parameter_id', newParamId || undefined);
+                    }
+                  }}
+                  label="Time Cost (Days)"
+                  placeholder="Select cost_time parameter..."
+                />
 
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Description</label>

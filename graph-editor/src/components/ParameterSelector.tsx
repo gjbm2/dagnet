@@ -22,6 +22,8 @@ interface ParameterSelectorProps {
   label?: string;
   /** Auto-focus input and show dropdown on mount */
   autoFocus?: boolean;
+  /** Filter parameters by type (only applicable when type='parameter') */
+  parameterType?: 'probability' | 'cost_gbp' | 'cost_time';
 }
 
 /**
@@ -41,7 +43,8 @@ export function ParameterSelector({
   placeholder,
   disabled = false,
   label,
-  autoFocus = false
+  autoFocus = false,
+  parameterType
 }: ParameterSelectorProps) {
   const { state, operations: navOps } = useNavigatorContext();
   const { operations: tabOps } = useTabContext();
@@ -73,7 +76,20 @@ export function ParameterSelector({
     
     // Extract IDs from the registry index
     if (type === 'parameter' && 'parameters' in index) {
-      return (index as any).parameters.map((p: any) => ({ id: p.id, name: p.name, description: p.description, file_path: p.file_path }));
+      let params = (index as any).parameters.map((p: any) => ({ 
+        id: p.id, 
+        name: p.name, 
+        description: p.description, 
+        file_path: p.file_path,
+        type: p.type // Include parameter type for filtering
+      }));
+      
+      // Filter by parameter type if specified
+      if (parameterType) {
+        params = params.filter((p: any) => p.type === parameterType);
+      }
+      
+      return params;
     } else if (type === 'context' && 'contexts' in index) {
       return (index as any).contexts.map((c: any) => ({ id: c.id, name: c.name, description: c.description, file_path: c.file_path }));
     } else if (type === 'case' && 'cases' in index) {

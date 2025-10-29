@@ -109,12 +109,25 @@
           "items": { "$ref": "#/$defs/ConditionalProbability" },
           "description": "Optional array of conditional probabilities. Evaluated in order; first match wins. Falls back to p if no matches."
         },
+        "parameter_id": {
+          "type": "string",
+          "description": "Reference to parameter registry for probability (type='probability')"
+        },
+        "cost_gbp_parameter_id": {
+          "type": "string",
+          "description": "Reference to parameter registry for GBP cost (type='cost_gbp')"
+        },
+        "cost_time_parameter_id": {
+          "type": "string",
+          "description": "Reference to parameter registry for time cost (type='cost_time')"
+        },
         "weight_default": {
           "type": "number",
           "minimum": 0,
           "description": "Used to distribute residual among free edges from the same source; proportional with others."
         },
-        "costs": { "$ref": "#/$defs/Costs" },
+        "cost_gbp": { "$ref": "#/$defs/CostParam" },
+        "cost_time": { "$ref": "#/$defs/CostParam" },
         "case_variant": {
           "type": "string",
           "maxLength": 128,
@@ -138,9 +151,24 @@
       "properties": {
         "mean": { "type": "number", "minimum": 0, "maximum": 1 },
         "stdev": { "type": "number", "minimum": 0 },
-        "locked": { "type": "boolean", "default": false },
-        "parameter_id": { "type": "string", "description": "Reference to parameter registry" }
+        "locked": { "type": "boolean", "default": false }
       }
+    },
+
+    "CostParam": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Simplified cost structure matching parameter registry. All costs are either GBP (monetary) or days (time).",
+      "properties": {
+        "mean": { "type": "number", "minimum": 0 },
+        "stdev": { "type": "number", "minimum": 0 },
+        "distribution": { 
+          "type": "string", 
+          "enum": ["normal", "lognormal", "gamma", "uniform", "beta"],
+          "default": "normal"
+        }
+      },
+      "required": ["mean"]
     },
     
     "Condition": {
