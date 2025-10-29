@@ -306,6 +306,8 @@ class FileRegistry {
 
 ```
 Repository
+├─ Switch Repository...      # Change to different configured repo
+├─ ───────────────
 ├─ Clone Repository...       # Initial clone to local workspace
 ├─ Pull Latest               # Fetch updates from remote
 ├─ Push Changes              # Push all dirty files
@@ -314,6 +316,8 @@ Repository
 ├─ Show Dirty Files          # List all dirty files
 └─ Discard Local Changes...  # Revert to remote state
 ```
+
+**Note**: "Switch Repository" at top of menu - major operation that affects workspace. Repositories are configured in File > Configuration.
 
 #### Pull Operation
 
@@ -484,7 +488,10 @@ async function loadWorkspace() {
 
 ### Visual Treatment Standard (Consistent Everywhere)
 
-Apply across Navigator, Tab headers, and Sidebar selectors:
+Apply across **all** these locations:
+1. **Navigator panel** - list items
+2. **Tab headers** - tab titles
+3. **Sidebar selectors** - parameter/node/case selectors in graph editor
 
 | State | Visual Treatment |
 |-------|------------------|
@@ -494,6 +501,12 @@ Apply across Navigator, Tab headers, and Sidebar selectors:
 | Orphan (file, no index) | Warning text + ⚠️ icon |
 | Dirty | Orange dot (●) |
 | Open | Blue dot (●) |
+
+**Key Principle**: Selection dropdowns in graph editor should function as **"mini-Navigators"**:
+- Same visual treatment
+- Same sub-categorization (Probability, Cost GBP, Cost Time)
+- Searchable
+- Shows all states (create, local, dirty, orphan)
 
 ### Filter UI
 
