@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
-import { useTabContext } from '../../contexts/TabContext';
+import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
 import { ObjectTypeSection } from './ObjectTypeSection';
 import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
@@ -19,6 +19,7 @@ import './Navigator.css';
 export function NavigatorContent() {
   const { state, operations, items, isLoading } = useNavigatorContext();
   const { tabs, activeTabId, operations: tabOps } = useTabContext();
+  const fileRegistry = useFileRegistry();
   const [contextMenu, setContextMenu] = useState<{ item: RepositoryItem; x: number; y: number } | null>(null);
   const [sectionContextMenu, setSectionContextMenu] = useState<{ type: ObjectType; x: number; y: number } | null>(null);
 
@@ -91,8 +92,9 @@ export function NavigatorContent() {
 
   const getIndexIsDirty = (type: ObjectType): boolean => {
     const indexFileId = `${type}-index`;
-    const indexTab = tabs.find(t => t.fileId === indexFileId);
-    return indexTab?.isDirty || false;
+    // Check if index file exists in registry and is dirty
+    const indexFile = fileRegistry.getFile(indexFileId);
+    return indexFile?.isDirty || false;
   };
 
   return (
