@@ -318,12 +318,10 @@ export function calculateProbabilities(
         
         if (edgeProb === 0) continue; // Skip zero-probability edges
         
-        // Get edge cost (handle both old number format and new object format)
-        const monetaryCost = edge.costs?.monetary;
-        const timeCost = edge.costs?.time;
+        // Get edge cost from new flat schema (cost_gbp, cost_time)
         const edgeCost = {
-          monetary: typeof monetaryCost === 'object' && monetaryCost !== null ? (monetaryCost.value || 0) : (typeof monetaryCost === 'number' ? monetaryCost : 0),
-          time: typeof timeCost === 'object' && timeCost !== null ? (timeCost.value || 0) : (typeof timeCost === 'number' ? timeCost : 0)
+          monetary: (edge as any).cost_gbp?.mean || 0,
+          time: (edge as any).cost_time?.mean || 0
         };
         
         // Calculate next visited set
