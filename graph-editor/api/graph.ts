@@ -1,5 +1,4 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import { CredentialsManager } from '../src/lib/credentials';
 
 /**
  * Vercel serverless function to fetch graphs from GitHub
@@ -19,6 +18,18 @@ interface GitHubFile {
   size: number;
   content: string;
   encoding: string;
+}
+
+interface CredentialsData {
+  git: Array<{
+    name: string;
+    owner: string;
+    repo: string;
+    token: string;
+    graphsPath?: string;
+    branch?: string;
+  }>;
+  defaultGitRepo?: string;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -44,30 +55,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Graph name is required' });
     }
 
-    // Load credentials using the existing CredentialsManager
-    const credentialsManager = CredentialsManager.getInstance();
-    let credentialsResult;
+    // Load credentials from environment variables
+    let credentials: CredentialsData | null = null;
     
     if (secret && typeof secret === 'string') {
-      // Use provided secret to load system credentials
-      credentialsResult = await credentialsManager.loadFromSystemSecretWithKey(secret);
-    } else {
-      // Try loading without a secret (will use public access or fail)
-      credentialsResult = await credentialsManager.loadCredentials();
+      // Validate secret
+      const envSecret = process.env.VITE_CREDENTIALS_SECRET;
+      if (!envSecret) {
+        return res.status(500).json({ error: 'Server secret not configured' });
+      }
+      
+      if (secret !== envSecret) {
+        return res.status(401).json({ error: 'Invalid secret' });
+      }
+      
+      // Load credentials from environment
+      const credentialsJson = process.env.VITE_CREDENTIALS_JSON;
+      if (!credentialsJson) {
+        return res.status(500).json({ error: 'Server credentials not configured' });
+      }
+      
+      try {
+        credentials = JSON.parse(credentialsJson);
+      } catch (e) {
+        return res.status(500).json({ error: 'Invalid credentials format' });
+      }
     }
 
-    if (!credentialsResult.success || !credentialsResult.credentials) {
-      return res.status(401).json({ 
-        error: 'No valid credentials available',
-        details: credentialsResult.error 
-      });
+    if (!credentials || !credentials.git || credentials.git.length === 0) {
+      return res.status(401).json({ error: 'No valid credentials available' });
     }
 
     // Get the default git repository
-    const gitRepo = credentialsManager.getDefaultGitCredentials();
-    if (!gitRepo) {
-      return res.status(500).json({ error: 'No git repositories in credentials' });
-    }
+    const defaultRepo = credentials.defaultGitRepo || credentials.git[0].name;
+    const gitRepo = credentials.git.find(r => r.name === defaultRepo) || credentials.git[0];
 
     const repoOwner = gitRepo.owner;
     const repoName = gitRepo.repo;
