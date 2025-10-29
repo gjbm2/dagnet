@@ -560,14 +560,13 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
           const newTab: TabState = {
             id: `tab-${fileId}-interactive`,
             fileId: fileId,
-            label: 'Shared Graph',
-            viewMode: 'interactive',
-            isDirty: false
+            title: 'Shared Graph',
+            viewMode: 'interactive'
           };
           
           setTabs(prev => [...prev, newTab]);
           setActiveTabId(newTab.id);
-          await db.saveTabs([...tabs, newTab]);
+          await db.tabs.add(newTab);
           await db.saveAppState({ activeTabId: newTab.id });
           
           // Clean up URL parameter
