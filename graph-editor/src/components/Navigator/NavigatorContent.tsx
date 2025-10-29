@@ -91,7 +91,6 @@ export function NavigatorContent() {
 
   const getIndexIsDirty = (type: ObjectType): boolean => {
     const indexFileId = `${type}-index`;
-    const tabs = tabOps.getTabs();
     const indexTab = tabs.find(t => t.fileId === indexFileId);
     return indexTab?.isDirty || false;
   };

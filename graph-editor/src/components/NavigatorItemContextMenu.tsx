@@ -340,7 +340,7 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     await fileRegistry.getOrCreateFile(
       newFileId,
       type,
-      { repository: 'local', path: `${type}s/${name}`, branch: currentFile.source.branch },
+      { repository: 'local', path: `${type}s/${name}`, branch: currentFile.source?.branch || 'main' },
       duplicatedData
     );
     
