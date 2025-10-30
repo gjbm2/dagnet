@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { EditorProps } from '../../types';
-import { useFileState } from '../../contexts/TabContext';
+import { useFileState, useTabContext, fileRegistry } from '../../contexts/TabContext';
+import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import Form from '@rjsf/mui';
 import validator from '@rjsf/validator-ajv8';
 import { RJSFSchema } from '@rjsf/utils';
 import { getFileTypeConfig, getSchemaFile } from '../../config/fileTypeRegistry';
+import { GuardedOperationModal } from '../modals/GuardedOperationModal';
 
 /**
  * Form Editor
@@ -15,6 +17,8 @@ import { getFileTypeConfig, getSchemaFile } from '../../config/fileTypeRegistry'
  */
 export function FormEditor({ fileId, readonly = false }: EditorProps) {
   const { data, isDirty, updateData } = useFileState(fileId);
+  const { operations: navOperations } = useNavigatorContext();
+  const { operations: tabOperations } = useTabContext();
   const [schema, setSchema] = useState<RJSFSchema | null>(null);
   const [formData, setFormData] = useState<any>(null);
   const initialDataRef = useRef<string>('');
@@ -26,6 +30,9 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   const historyIndexRef = useRef<number>(-1);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  
+  // Guarded operation modal state (for Apply Settings)
+  const [isGuardModalOpen, setIsGuardModalOpen] = useState(false);
 
   // Determine object type from fileId
   // Handle index files specially (e.g., 'parameter-index' → 'parameter-index')
@@ -116,6 +123,78 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
     setCanUndo(false);
     setCanRedo(false);
   }, [fileId]);
+
+  const handleApplySettings = () => {
+    // Show the modal to check for other dirty files
+    // Credentials will be saved as part of the atomic "Apply and Reload" operation
+    setIsGuardModalOpen(true);
+  };
+
+  const applyCredentialChanges = async () => {
+    try {
+      // ATOMIC OPERATION: Save credentials and reload
+      // This happens AFTER user confirms in the modal (after other files are discarded)
+      console.log('FormEditor: Starting atomic Apply and Reload operation...');
+      
+      // Step 1: Save credentials to IDB
+      const credentialsFile = fileRegistry.getFile('credentials-credentials');
+      console.log('FormEditor: Credentials file state before save:', {
+        fileId: credentialsFile?.fileId,
+        isDirty: credentialsFile?.isDirty,
+        hasData: !!credentialsFile?.data
+      });
+      
+      if (credentialsFile && credentialsFile.isDirty) {
+        await fileRegistry.markSaved('credentials-credentials');
+        console.log('FormEditor: Credentials saved to IDB and dirty flag cleared');
+      }
+      
+      // Step 2: Reload with the new credentials
+      console.log('FormEditor: Reloading with new credentials...');
+      await navOperations.reloadCredentials();
+      console.log('FormEditor: Credential reload complete');
+    } catch (e) {
+      console.error('Failed to apply and reload credentials', e);
+      alert('Failed to apply credentials: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  const renderContextualTopbar = () => {
+    // Extensible: add cases for other object types in future
+    if (objectType === 'credentials') {
+      return (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          padding: '8px 16px',
+          borderBottom: '1px solid #e5e7eb',
+          background: '#fff',
+          position: 'sticky',
+          top: 0,
+          zIndex: 10
+        }}>
+          <button
+            onClick={handleApplySettings}
+            disabled={!isDirty}
+            style={{
+              background: isDirty ? '#2563eb' : '#d1d5db',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              padding: '6px 12px',
+              fontSize: 13,
+              cursor: isDirty ? 'pointer' : 'not-allowed',
+              opacity: isDirty ? 1 : 0.6
+            }}
+          >
+            Apply and Reload
+          </button>
+        </div>
+      );
+    }
+    return null;
+  };
 
 
   // Update undo/redo state
@@ -257,49 +336,64 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   }
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      background: '#fafafa',
-      overflow: 'auto'
-    }}>
+    <>
       <div style={{
-        padding: '24px',
-        maxWidth: '100%',
-        margin: '0 auto',
-        width: '100%',
-        boxSizing: 'border-box'
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        background: '#fafafa',
+        overflow: 'auto'
       }}>
-        {schema && formData ? (
-          <Form
-            schema={schema}
-            formData={formData}
-            validator={validator}
-            onChange={handleFormChange}
-            disabled={readonly}
-            liveValidate
-            showErrorList={false}
-            uiSchema={{
-              'ui:submitButtonOptions': {
-                norender: true
-              }
-            }}
-          />
-        ) : (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '200px',
-            color: '#666',
-            fontSize: '14px'
-          }}>
-            Loading schema...
-          </div>
-        )}
+        {renderContextualTopbar()}
+        <div style={{
+          padding: '24px',
+          maxWidth: '100%',
+          margin: '0 auto',
+          width: '100%',
+          boxSizing: 'border-box'
+        }}>
+          {schema && formData ? (
+            <Form
+              schema={schema}
+              formData={formData}
+              validator={validator}
+              onChange={handleFormChange}
+              disabled={readonly}
+              liveValidate
+              showErrorList={false}
+              uiSchema={{
+                'ui:submitButtonOptions': {
+                  norender: true
+                }
+              }}
+            />
+          ) : (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              height: '200px',
+              color: '#666',
+              fontSize: '14px'
+            }}>
+              Loading schema...
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+      
+      {/* Guarded operation modal for applying credential changes */}
+      <GuardedOperationModal
+        isOpen={isGuardModalOpen}
+        onClose={() => setIsGuardModalOpen(false)}
+        onProceed={applyCredentialChanges}
+        title="Apply Credential Settings"
+        description="Applying new credentials will re-clone the workspace from Git with the updated settings."
+        proceedButtonText="Apply and Reload"
+        warningMessage="Applying credentials will re-clone the workspace. Any uncommitted changes will be lost unless you commit them first."
+        excludeFromDirtyCheck={['credentials-credentials']}
+      />
+    </>
   );
 }
 

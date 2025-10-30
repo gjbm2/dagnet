@@ -349,7 +349,18 @@ function AppShellContent() {
           group: 'main-content'
         };
 
-        dockLayoutRef.dockMove(dockTab, 'main-tabs', 'middle');
+        // Determine target panel: use currently active tab's panel, or default to 'main-tabs'
+        let targetPanel = 'main-tabs';
+        if (activeTabId) {
+          const activeTabData = dockLayoutRef.find(activeTabId);
+          const activePanel = activeTabData?.parent?.id;
+          if (activePanel && activePanel !== 'menu' && activePanel !== 'navigator') {
+            targetPanel = activePanel;
+            console.log(`AppShell: Opening new tab in focused panel: ${targetPanel}`);
+          }
+        }
+
+        dockLayoutRef.dockMove(dockTab, targetPanel, 'middle');
         setAddedTabs(prev => new Set([...prev, tab.id]));
       }
     });

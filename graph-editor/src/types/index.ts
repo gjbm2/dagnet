@@ -274,6 +274,7 @@ export interface NavigatorOperations {
   addLocalItem: (item: RepositoryItem) => void;
   removeLocalItem: (fileId: string) => void;
   refreshItems: () => Promise<void>;
+  reloadCredentials: () => Promise<void>;
   
   // Filter and sort operations
   setViewMode: (mode: 'all' | 'files-only') => void;

@@ -61,19 +61,21 @@ class WorkspaceService {
 
       const fileIds: string[] = [];
 
-      // Clone each directory
+      // Clone each directory using paths from credentials (prepend basePath if it exists)
+      const basePath = gitCreds.basePath || '';
       const directories = [
-        { path: 'graphs', type: 'graph' as ObjectType, extension: 'json' },
-        { path: 'parameters', type: 'parameter' as ObjectType, extension: 'yaml' },
-        { path: 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
-        { path: 'cases', type: 'case' as ObjectType, extension: 'yaml' },
-        { path: 'nodes', type: 'node' as ObjectType, extension: 'yaml' }
+        { path: gitCreds.graphsPath || 'graphs', type: 'graph' as ObjectType, extension: 'json' },
+        { path: gitCreds.paramsPath || 'parameters', type: 'parameter' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' }
       ];
 
       for (const dir of directories) {
-        console.log(`📂 WorkspaceService: Cloning ${dir.path}/...`);
+        const fullPath = basePath ? `${basePath}/${dir.path}` : dir.path;
+        console.log(`📂 WorkspaceService: Cloning ${fullPath}/...`);
         
-        const result = await gitService.getDirectoryContents(dir.path);
+        const result = await gitService.getDirectoryContents(fullPath);
         if (!result.success || !result.data) {
           console.log(`📂 WorkspaceService: Directory ${dir.path} not found (skipping)`);
           continue;
@@ -141,7 +143,7 @@ class WorkspaceService {
         }
       }
 
-      // Load index files (if they exist)
+      // Load index files (if they exist) - prepend basePath
       const indexFiles = [
         { path: 'parameters-index.yaml', type: 'parameter' as ObjectType },
         { path: 'contexts-index.yaml', type: 'context' as ObjectType },
@@ -151,8 +153,9 @@ class WorkspaceService {
 
       for (const indexFile of indexFiles) {
         try {
-          console.log(`📋 WorkspaceService: Loading index file ${indexFile.path}...`);
-          const fileContent = await gitService.getFileContent(indexFile.path);
+          const fullPath = basePath ? `${basePath}/${indexFile.path}` : indexFile.path;
+          console.log(`📋 WorkspaceService: Loading index file ${fullPath}...`);
+          const fileContent = await gitService.getFileContent(fullPath);
           
           if (fileContent.success && fileContent.data) {
             const contentStr = fileContent.data.content; // getFileContent returns { data: { content: string } }
@@ -164,13 +167,13 @@ class WorkspaceService {
               fileId,
               type: indexFile.type,
               name: indexFile.path,
-              path: indexFile.path,
+              path: fullPath,  // Use full path including basePath
               data,
               originalData: structuredClone(data),
               isDirty: false,
               source: {
                 repository,
-                path: indexFile.path,
+                path: fullPath,  // Use full path including basePath
                 branch,
                 commitHash: fileSha
               },
@@ -312,8 +315,10 @@ class WorkspaceService {
 
     for (const file of files) {
       await db.files.delete(file.fileId);
-      // Remove from FileRegistry memory cache
-      fileRegistry.getFile(file.fileId); // Will trigger cleanup if needed
+      // Remove from FileRegistry memory cache (force delete, bypass dirty/open checks)
+      // We're deleting the entire workspace so we don't care about dirty state
+      (fileRegistry as any).files.delete(file.fileId);
+      (fileRegistry as any).listeners.delete(file.fileId);
     }
 
     // Delete workspace record

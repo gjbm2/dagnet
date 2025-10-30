@@ -86,7 +86,8 @@ class GitService {
    */
   private getBaseUrl(repoOwner?: string, repoName?: string): string {
     const owner = repoOwner || this.currentRepo?.owner || this.config.repoOwner;
-    const name = repoName || this.currentRepo?.repo || this.config.repoName;
+    // Use currentRepo.name if repo is not set (deprecated field migration)
+    const name = repoName || this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
     return `${this.config.githubApiBase}/repos/${owner}/${name}`;
   }
 
@@ -180,7 +181,7 @@ class GitService {
   // Get a specific file
   async getFile(path: string, branch: string = this.config.branch): Promise<GitOperationResult> {
     try {
-      console.log(`🔵 GitService.getFile: Fetching ${path} from branch ${branch}, repo: ${this.currentRepo?.owner}/${this.currentRepo?.repo}, basePath: ${this.currentRepo?.basePath}`);
+      console.log(`🔵 GitService.getFile: Fetching ${path} from branch ${branch}, repo: ${this.currentRepo?.owner}/${this.currentRepo?.repo || this.currentRepo?.name}, basePath: ${this.currentRepo?.basePath}`);
       const response = await this.makeRequest(`/contents/${path}?ref=${branch}`);
       const file: GitFile = await response.json();
       
