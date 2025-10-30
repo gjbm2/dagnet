@@ -106,6 +106,11 @@ export function FileMenu() {
       defaultData
     );
     
+    // Update index file if this is a parameter/context/case/node
+    if (type === 'parameter' || type === 'context' || type === 'case' || type === 'node') {
+      await fileRegistry.updateIndexOnCreate(type, fileId);
+    }
+    
     // Add to navigator as local/uncommitted item
     const item = {
       id: name,

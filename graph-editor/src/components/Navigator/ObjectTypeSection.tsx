@@ -1,79 +1,64 @@
 import React from 'react';
-import { RepositoryItem, ObjectType } from '../../types';
+import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
+import '../../styles/file-state-indicators.css';
+
+/**
+ * Navigator Entry - Internal representation
+ */
+interface NavigatorEntry {
+  id: string;
+  name: string;
+  type: ObjectType;
+  hasFile: boolean;
+  isLocal: boolean;
+  inIndex: boolean;
+  isDirty: boolean;
+  isOpen: boolean;
+  isOrphan: boolean;
+  tags?: string[];
+  path?: string;
+}
+
+interface ObjectTypeSectionProps {
+  title: string;
+  icon: string;
+  entries: NavigatorEntry[];
+  sectionType: ObjectType;
+  isExpanded: boolean;
+  onToggle: () => void;
+  onEntryClick: (entry: NavigatorEntry) => void;
+  onEntryContextMenu?: (entry: NavigatorEntry, x: number, y: number) => void;
+  onSectionContextMenu?: (type: ObjectType, x: number, y: number) => void;
+  onIndexClick?: () => void;
+  indexIsDirty?: boolean;
+}
 
 /**
  * Object Type Section
  * 
- * Accordion section for each object type (Graphs, Parameters, etc.)
- * Shows:
- * - Section header with icon and count
- * - Expand/collapse indicator
- * - List of items when expanded
+ * Renders a collapsible section for each object type with proper visual indicators.
  */
-interface ObjectTypeSectionProps {
-  title: string;
-  icon: string;
-  items: RepositoryItem[];
-  sectionType: ObjectType;
-  isExpanded: boolean;
-  onToggle: () => void;
-  onItemClick: (item: RepositoryItem) => void;
-  onItemContextMenu?: (item: RepositoryItem, x: number, y: number) => void;
-  onSectionContextMenu?: (type: ObjectType, x: number, y: number) => void;
-  onIndexClick?: () => void;  // Callback to open index file
-  indexIsDirty?: boolean;      // Whether index file is dirty
-}
-
 export function ObjectTypeSection({
   title,
   icon,
-  items,
+  entries,
   sectionType,
   isExpanded,
   onToggle,
-  onItemClick,
-  onItemContextMenu,
+  onEntryClick,
+  onEntryContextMenu,
   onSectionContextMenu,
   onIndexClick,
   indexIsDirty = false
 }: ObjectTypeSectionProps) {
   const { tabs } = useTabContext();
   const fileRegistry = useFileRegistry();
-  const [, forceUpdate] = React.useReducer(x => x + 1, 0);
 
-  // Subscribe to file changes for all items in this section
-  React.useEffect(() => {
-    const unsubscribes = items.map(item => {
-      const fileId = `${item.type}-${item.id}`;
-      return fileRegistry.subscribe(fileId, () => {
-        // File changed, force re-render
-        forceUpdate();
-      });
-    });
-
-    return () => {
-      unsubscribes.forEach(unsub => unsub());
-    };
-  }, [items, fileRegistry]);
-
-  // Re-render when tabs change (tabs open/close)
-  // This ensures the active/dirty state updates immediately
-  React.useEffect(() => {
-    // Tabs changed, component will automatically re-render
-  }, [tabs]);
-
-  // Check if an item has open tabs
-  const getItemStatus = (item: RepositoryItem): { isOpen: boolean; isDirty: boolean; tabCount: number} => {
-    const fileId = `${item.type}-${item.id}`;
-    const itemTabs = tabs.filter(tab => tab.fileId === fileId);
-    const file = fileRegistry.getFile(fileId);
-    
-    return {
-      isOpen: itemTabs.length > 0,
-      isDirty: file?.isDirty || false,
-      tabCount: itemTabs.length
-    };
+  // Get tab count for an entry
+  const getTabCount = (entry: NavigatorEntry): number => {
+    const fileId = `${entry.type}-${entry.id}`;
+    return tabs.filter(t => t.fileId === fileId).length;
   };
 
   return (
@@ -94,7 +79,7 @@ export function ObjectTypeSection({
           </span>
           <span className="section-icon">{icon}</span>
           <span className="section-title">{title}</span>
-          <span className="section-count">({items.length})</span>
+          <span className="section-count">({entries.length})</span>
         </div>
         
         {/* Index file icon - only for types that have indexes */}
@@ -108,57 +93,66 @@ export function ObjectTypeSection({
               }}
               title={`Open ${title} Index${indexIsDirty ? ' (modified)' : ''}`}
             >
-              🔍
+              📑
             </span>
+            {indexIsDirty && <span className="status-dot dirty" style={{ marginLeft: '4px' }} />}
           </div>
         )}
       </div>
 
       {isExpanded && (
         <div className="section-items">
-          {items.length === 0 ? (
+          {entries.length === 0 ? (
             <div className="section-empty">No {title.toLowerCase()} found</div>
           ) : (
-            items.map(item => {
-              const status = getItemStatus(item);
+            entries.map(entry => {
+              const tabCount = getTabCount(entry);
+              const isActive = entry.isOpen && tabs.some(t => t.fileId === `${entry.type}-${entry.id}` && t.id === tabs.find(t => t.fileId === `${entry.type}-${entry.id}`)?.id);
+              
               return (
                 <div
-                  key={item.id}
-                  className={`navigator-item ${status.isOpen ? 'active' : ''}`}
-                  onClick={() => onItemClick(item)}
+                  key={`${entry.type}-${entry.id}`}
+                  className={`navigator-item ${isActive ? 'active' : ''}`}
+                  onClick={() => onEntryClick(entry)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (onItemContextMenu) {
-                      onItemContextMenu(item, e.clientX, e.clientY);
+                    if (onEntryContextMenu) {
+                      onEntryContextMenu(entry, e.clientX, e.clientY);
                     }
                   }}
-                  title={item.isLocal ? `${item.description || item.name} (not committed)` : (item.description || item.name)}
+                  title={entry.isOrphan ? '⚠️ Orphan file (not in index)' : entry.isLocal ? `${entry.name} (local only)` : entry.name}
                 >
-                  <span className={`navigator-item-name ${item.isLocal ? 'local-only' : ''}`}>
-                    {item.name.replace(/\.(yaml|yml|json)$/, '')}
+                  <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''}`}>
+                    {entry.name}
                   </span>
                   
                   <span className="navigator-item-status">
-                    {/* Visual state indicators */}
+                    {/* Status dots */}
                     <span className="status-dots">
-                      {status.isDirty && (
+                      {entry.isDirty && (
                         <span className="status-dot dirty" title="Modified" />
                       )}
-                      {status.isOpen && (
+                      {entry.isOpen && (
                         <span className="status-dot open" title="Open" />
                       )}
                     </span>
                     
                     {/* Tab count for multiple tabs */}
-                    {status.tabCount > 1 && (
-                      <span style={{ fontSize: '11px', color: '#0066cc', fontWeight: 600 }}>
-                        {status.tabCount}
+                    {tabCount > 1 && (
+                      <span className="tab-count" title={`${tabCount} tabs open`}>
+                        {tabCount}
                       </span>
                     )}
                     
-                    {/* Local-only badge */}
-                    {item.isLocal && (
+                    {/* Badges */}
+                    {!entry.hasFile && entry.inIndex && (
+                      <span className="file-badge create" title="Create file">[create]</span>
+                    )}
+                    {entry.isOrphan && (
+                      <span className="file-badge orphan" title="Orphan file (not in index)">⚠️</span>
+                    )}
+                    {entry.isLocal && entry.hasFile && (
                       <span className="file-badge local">local</span>
                     )}
                   </span>
@@ -171,4 +165,3 @@ export function ObjectTypeSection({
     </div>
   );
 }
-

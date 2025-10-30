@@ -36,9 +36,21 @@ export function RepositoryMenu() {
     setIsSwitchBranchModalOpen(true);
   };
 
+  const handleForceClone = async () => {
+    if (!confirm(`Force re-clone ${state.selectedRepo}/${state.selectedBranch}? This will discard any local changes.`)) {
+      return;
+    }
+    console.log('Force cloning repository...');
+    const { workspaceService } = await import('../../services/workspaceService');
+    await workspaceService.deleteWorkspace(state.selectedRepo, state.selectedBranch);
+    await navOps.refreshItems(); // This will trigger loadItems which will re-clone
+  };
+
   const handlePullLatest = async () => {
     console.log('Pulling latest from', state.selectedBranch);
-    await navOps.refreshItems();
+    const { workspaceService } = await import('../../services/workspaceService');
+    await workspaceService.deleteWorkspace(state.selectedRepo, state.selectedBranch);
+    await navOps.refreshItems(); // This will trigger loadItems which will re-clone
   };
 
   const handlePushChanges = () => {
@@ -85,6 +97,13 @@ export function RepositoryMenu() {
             </Menubar.Item>
 
             <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleForceClone}
+            >
+              Force Clone Repository
+            </Menubar.Item>
 
             <Menubar.Item 
               className="menubar-item" 

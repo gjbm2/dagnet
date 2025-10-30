@@ -30,6 +30,20 @@ export interface FileSource {
 }
 
 /**
+ * Workspace state - represents a cloned repository in IndexedDB
+ */
+export interface WorkspaceState {
+  id: string;                  // `${repository}-${branch}`
+  repository: string;          // Repository name from credentials
+  branch: string;              // Branch name
+  lastSynced: number;          // Timestamp of last sync with remote
+  commitSHA?: string;          // Last synced commit SHA
+  fileIds: string[];           // Array of fileIds in this workspace
+  isCloning?: boolean;         // True while initial clone is in progress
+  cloneError?: string;         // Error message if clone failed
+}
+
+/**
  * File state - single source of truth for a file
  * Multiple tabs can view the same file
  */

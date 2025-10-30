@@ -77,6 +77,11 @@ export function NavigatorSectionContextMenu({ sectionType, x, y, onClose }: Navi
       defaultData
     );
     
+    // Update index file if this is a parameter/context/case/node
+    if (type === 'parameter' || type === 'context' || type === 'case' || type === 'node') {
+      await fileRegistry.updateIndexOnCreate(type, newFileId);
+    }
+    
     // Add to navigator items as local/uncommitted
     const newItem = {
       id: name,

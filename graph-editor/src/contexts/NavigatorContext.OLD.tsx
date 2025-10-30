@@ -4,7 +4,6 @@ import { db } from '../db/appDatabase';
 import { credentialsManager } from '../lib/credentials';
 import { gitConfig } from '../config/gitConfig';
 import { workspaceService } from '../services/workspaceService';
-import { fileRegistry } from './TabContext';
 
 /**
  * Navigator Context
@@ -59,6 +58,13 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     };
     initialize();
   }, []);
+
+  // Load items when repo or branch changes (but only after initialization)
+  useEffect(() => {
+    if (isInitialized && state.selectedRepo && state.selectedBranch) {
+      loadItems(state.selectedRepo, state.selectedBranch);
+    }
+  }, [state.selectedRepo, state.selectedBranch, isInitialized]);
 
   // Save state to IndexedDB whenever it changes (but not on initial mount)
   useEffect(() => {
@@ -116,8 +122,9 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
             return newState;
           });
           
-          // Don't call loadItems here - let useEffect handle it
-          // This prevents duplicate calls and ensures consistent flow
+          // Load items for the selected repository
+          console.log(`🔑 NavigatorContext: Loading items for ${gitCreds.name} on branch ${branchToUse}...`);
+          await loadItems(gitCreds.name, branchToUse);
         } else {
           console.log('🔑 NavigatorContext: No git credentials found');
           setState(prev => ({
@@ -309,7 +316,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         console.warn('Failed to save expanded sections to localStorage:', e);
       }
       return {
-      ...prev,
+        ...prev,
         expandedSections: newExpandedSections
       };
     });
@@ -328,7 +335,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         console.warn('Failed to save expanded sections to localStorage:', e);
       }
       return {
-      ...prev,
+        ...prev,
         expandedSections: newExpandedSections
       };
     });
@@ -352,7 +359,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    * 3. Load from IDB (not Git API)
    * 4. Build Navigator items from FileStates
    */
-  const loadItems = useCallback(async (repo: string, branch: string) => {
+  const loadItems = async (repo: string, branch: string) => {
     console.log(`📦 WorkspaceService: loadItems called for ${repo}/${branch}`);
     if (!repo) {
       console.log('📦 WorkspaceService: No repo provided, skipping');
@@ -382,95 +389,257 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Check if workspace exists
-      const workspaceExists = await workspaceService.workspaceExists(repo, branch);
+      // Load graphs from repository using credentials
+      console.log('📦 NavigatorContext: Importing gitService...');
+      const { gitService } = await import('../services/gitService');
       
-      if (!workspaceExists) {
-        console.log(`🔄 WorkspaceService: Workspace ${repo}/${branch} doesn't exist, cloning...`);
-        await workspaceService.cloneWorkspace(repo, branch, gitCreds);
-      } else {
-        console.log(`📦 WorkspaceService: Workspace ${repo}/${branch} exists, loading from IDB...`);
-        await workspaceService.loadWorkspaceFromIDB(repo, branch);
+      console.log(`📦 NavigatorContext: Loading from repo ${gitCreds.name} (${gitCreds.owner}/${gitCreds.repo}), branch ${branch}`);
+      
+      // Pass credentials to gitService
+      console.log('📦 NavigatorContext: Calling gitService.getDirectoryContents for graphs...');
+      const graphsPath = gitCreds.basePath ? `${gitCreds.basePath}/graphs` : 'graphs';
+      const graphsResult = await gitService.getDirectoryContents(graphsPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+      console.log('📦 NavigatorContext: Graphs result:', graphsResult);
+      
+      const items: RepositoryItem[] = [];
+      
+      // Add graphs
+      if (graphsResult.success && graphsResult.data && Array.isArray(graphsResult.data)) {
+        console.log('Navigator: Found', graphsResult.data.length, 'files in graphs/');
+        graphsResult.data.forEach((file: any) => {
+          if (file.type === 'file' && file.name.endsWith('.json')) {
+            items.push({
+              id: file.name,
+              type: 'graph',
+              name: file.name,
+              path: file.path,
+              description: `Graph from ${branch}`
+            });
+          }
+        });
       }
-
-      // Get all files from workspace (IDB)
-      let workspaceFiles = await workspaceService.getWorkspaceFiles(repo, branch);
-      console.log(`📦 WorkspaceService: Loaded ${workspaceFiles.length} files from workspace`);
       
-      // If workspace exists but has no files, force re-clone
-      if (workspaceFiles.length === 0 && workspaceExists) {
-        console.log(`⚠️ WorkspaceService: Workspace exists but is empty! Force re-cloning...`);
-        await workspaceService.deleteWorkspace(repo, branch);
-        await workspaceService.cloneWorkspace(repo, branch, gitCreds);
-        workspaceFiles = await workspaceService.getWorkspaceFiles(repo, branch);
-        console.log(`📦 WorkspaceService: Re-cloned, now have ${workspaceFiles.length} files`);
+      // Try to load parameters from registry
+      try {
+        const { paramRegistryService } = await import('../services/paramRegistryService');
+        
+        // Configure service for current repo using credentials
+        paramRegistryService.setConfig({
+          source: 'git',
+          gitBasePath: gitCreds.basePath || '',
+          gitBranch: branch,
+          gitRepoOwner: gitCreds.owner,
+          gitRepoName: gitCreds.repo,
+          gitToken: gitCreds.token
+        });
+        
+        console.log(`Navigator: Loading parameter registry for ${repo}...`);
+        const registry = await paramRegistryService.loadRegistry();
+        console.log('Navigator: Loaded parameter registry:', registry);
+        
+        // Load registry indexes for the selector components (optional)
+        console.log(`Navigator: Loading registry indexes for ${repo}...`);
+        try {
+          [parametersIndex, contextsIndex, casesIndex, nodesIndex] = await Promise.all([
+            paramRegistryService.loadRegistry().catch(() => null),
+            paramRegistryService.loadContextsIndex().catch(() => null),
+            paramRegistryService.loadCasesIndex().catch(() => null),
+            paramRegistryService.loadNodesIndex().catch(() => null)
+          ]);
+        } catch (error) {
+          console.log('Navigator: Some registry indexes not available (this is normal for new repos)');
+          parametersIndex = null;
+          contextsIndex = null;
+          casesIndex = null;
+          nodesIndex = null;
+        }
+        console.log('Navigator: Loaded registry indexes:', { parametersIndex, contextsIndex, casesIndex, nodesIndex });
+        
+        // Add parameters
+        if (registry.parameters && registry.parameters.length > 0) {
+          console.log('Navigator: Found', registry.parameters.length, 'parameters in registry');
+          registry.parameters.forEach((param: any) => {
+            items.push({
+              id: param.id,
+              type: 'parameter',
+              name: param.name || param.id,
+              path: param.path || `params/${param.id}`,
+              description: param.description
+            });
+          });
+        } else {
+          console.log('Navigator: No parameters in registry');
+        }
+        
+        // Add contexts - from registry if available
+        if (registry.contexts && registry.contexts.length > 0) {
+          console.log('Navigator: Loading contexts from registry');
+          registry.contexts.forEach((ctx: any) => {
+            items.push({
+              id: ctx.id,
+              type: 'context',
+              name: ctx.name || ctx.id,
+              path: ctx.path || `contexts/${ctx.id}`,
+              description: ctx.description
+            });
+          });
+        }
+        
+        // Add cases - from registry if available
+        if (registry.cases && registry.cases.length > 0) {
+          console.log('Navigator: Loading cases from registry');
+          registry.cases.forEach((c: any) => {
+            items.push({
+              id: c.id,
+              type: 'case',
+              name: c.name || c.id,
+              path: c.path || `cases/${c.id}`,
+              description: c.description
+            });
+          });
+        }
+      } catch (error) {
+        console.warn('Failed to load from registry:', error);
       }
-
-      // Build RepositoryItem list from FileStates
-      const items: RepositoryItem[] = workspaceFiles
-        .filter(file => {
-          // Exclude system files (credentials) and index files
-          if (file.type === 'credentials') return false;
-          if (file.fileId.endsWith('-index')) return false;
-          return true;
-        })
-        .map(file => ({
-          id: file.fileId.replace(`${file.type}-`, ''),
-          type: file.type,
-          name: file.name || file.fileId,
-          path: file.path || '',
-          description: file.isLocal ? 'Local only (not committed)' : undefined,
-          isLocal: file.isLocal
-        }));
       
-      // Load registry indexes from FileStates (not Git API)
-      const parametersIndexFile = fileRegistry.getFile('parameter-index') || await db.files.get('parameter-index');
-      const contextsIndexFile = fileRegistry.getFile('context-index') || await db.files.get('context-index');
-      const casesIndexFile = fileRegistry.getFile('case-index') || await db.files.get('case-index');
-      const nodesIndexFile = fileRegistry.getFile('node-index') || await db.files.get('node-index');
-
-      console.log(`📦 WorkspaceService: Loaded ${workspaceFiles.length} files total, ${items.length} non-index items`);
-      console.log(`📦 WorkspaceService: Items by type:`, items.reduce((acc, item) => {
-        acc[item.type] = (acc[item.type] || 0) + 1;
-        return acc;
-      }, {} as Record<string, number>));
-      console.log(`📋 NavigatorContext: Index files:`, {
-        parameters: parametersIndexFile?.data,
-        contexts: contextsIndexFile?.data,
-        cases: casesIndexFile?.data,
-        nodes: nodesIndexFile?.data
+      // ALWAYS try to load parameters/contexts/cases from directories (regardless of registry)
+      // This ensures we get them even if registry doesn't exist or doesn't include them
+      try {
+        const { gitService } = await import('../services/gitService');
+        
+        // Load parameters from configured path
+        const paramsPath = gitCreds.basePath ? `${gitCreds.basePath}/${gitCreds.paramsPath || 'parameters'}` : (gitCreds.paramsPath || 'parameters');
+        console.log(`Navigator: Loading parameters from ${paramsPath}/ directory...`);
+        const paramsResult = await gitService.getDirectoryContents(paramsPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+          
+        if (paramsResult.success && paramsResult.data && Array.isArray(paramsResult.data)) {
+          console.log(`Navigator: Found ${paramsResult.data.length} files in ${paramsPath}/`);
+          paramsResult.data.forEach((file: any) => {
+            if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              const alreadyAdded = items.some(i => i.type === 'parameter' && i.id === file.name);
+              if (!alreadyAdded) {
+                console.log('Navigator: Adding parameter:', file.name);
+                items.push({
+                  id: file.name,
+                  type: 'parameter',
+                  name: file.name,
+                  path: file.path,
+                  description: `Parameter from ${branch}`
+                });
+              }
+            }
+          });
+        }
+        
+        // Load contexts from contexts/ directory
+        console.log('Navigator: Loading contexts from /contexts directory...');
+        const contextsPath = gitCreds.basePath ? `${gitCreds.basePath}/${gitCreds.contextsPath || 'contexts'}` : (gitCreds.contextsPath || 'contexts');
+        const contextsResult = await gitService.getDirectoryContents(contextsPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+        
+        if (contextsResult.success && contextsResult.data && Array.isArray(contextsResult.data)) {
+          console.log('Navigator: Found', contextsResult.data.length, 'files in contexts/');
+          contextsResult.data.forEach((file: any) => {
+            if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              // Only add if not already in items from registry
+              const alreadyAdded = items.some(i => i.type === 'context' && i.id === file.name);
+              if (!alreadyAdded) {
+                console.log('Navigator: Adding context:', file.name);
+                items.push({
+                  id: file.name,
+                  type: 'context',
+                  name: file.name,
+                  path: file.path,
+                  description: `Context from ${branch}`
+                });
+              }
+            }
+          });
+        }
+        
+        // Load cases from cases/ directory
+        console.log('Navigator: Loading cases from /cases directory...');
+        const casesPath = gitCreds.basePath ? `${gitCreds.basePath}/${gitCreds.casesPath || 'cases'}` : (gitCreds.casesPath || 'cases');
+        const casesResult = await gitService.getDirectoryContents(casesPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+        
+        if (casesResult.success && casesResult.data && Array.isArray(casesResult.data)) {
+          console.log('Navigator: Found', casesResult.data.length, 'files in cases/');
+          casesResult.data.forEach((file: any) => {
+            if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              // Only add if not already in items from registry
+              const alreadyAdded = items.some(i => i.type === 'case' && i.id === file.name);
+              if (!alreadyAdded) {
+                console.log('Navigator: Adding case:', file.name);
+                items.push({
+                  id: file.name,
+                  type: 'case',
+                  name: file.name,
+                  path: file.path,
+                  description: `Case from ${branch}`
+                });
+              }
+            }
+          });
+        }
+        
+        // Load nodes from nodes/ directory
+        console.log('Navigator: Loading nodes from /nodes directory...');
+        const nodesPath = gitCreds.basePath ? `${gitCreds.basePath}/nodes` : 'nodes';
+        const nodesResult = await gitService.getDirectoryContents(nodesPath, branch, gitCreds.owner, gitCreds.repo, gitCreds.token);
+        
+        if (nodesResult.success && nodesResult.data && Array.isArray(nodesResult.data)) {
+          console.log('Navigator: Found', nodesResult.data.length, 'files in nodes/');
+          nodesResult.data.forEach((file: any) => {
+            if (file.type === 'file' && (file.name.endsWith('.yaml') || file.name.endsWith('.yml') || file.name.endsWith('.json'))) {
+              // Strip extension from ID for consistency with registry
+              const idWithoutExt = file.name.replace(/\.(yaml|yml|json)$/, '');
+              // Only add if not already in items from registry
+              const alreadyAdded = items.some(i => i.type === 'node' && i.id === idWithoutExt);
+              if (!alreadyAdded) {
+                console.log('Navigator: Adding node:', idWithoutExt);
+                items.push({
+                  id: idWithoutExt,
+                  type: 'node',
+                  name: file.name,
+                  path: file.path,
+                  description: `Node from ${branch}`
+                });
+              }
+            }
+          });
+        }
+      } catch (dirError) {
+        console.warn('Failed to load contexts/cases/nodes from directories:', dirError);
+      }
+      
+      console.log('Total items loaded:', items.length, {
+        graphs: items.filter(i => i.type === 'graph').length,
+        parameters: items.filter(i => i.type === 'parameter').length,
+        contexts: items.filter(i => i.type === 'context').length,
+        cases: items.filter(i => i.type === 'case').length,
+        nodes: items.filter(i => i.type === 'node').length
       });
       
       setItems(items);
       
-      // Update state with registry indexes
+      // Update state with registry indexes if we loaded them
+      if (parametersIndex || contextsIndex || casesIndex || nodesIndex) {
         setState(prev => ({
           ...prev,
           registryIndexes: {
-          parameters: parametersIndexFile?.data || undefined,
-          contexts: contextsIndexFile?.data || undefined,
-          cases: casesIndexFile?.data || undefined,
-          nodes: nodesIndexFile?.data || undefined
+            parameters: parametersIndex || undefined,
+            contexts: contextsIndex || undefined,
+            cases: casesIndex || undefined,
+            nodes: nodesIndex || undefined
           }
         }));
-
+      }
     } catch (error) {
       console.error('Failed to load items:', error);
       setItems([]);
     } finally {
       setIsLoading(false);
     }
-  }, []); // Empty deps - uses params, not external state
-
-  // Load items when repo or branch changes
-  useEffect(() => {
-    if (state.selectedRepo && state.selectedBranch) {
-      console.log(`🔄 NavigatorContext: useEffect triggered - loading items for ${state.selectedRepo}/${state.selectedBranch}`);
-      loadItems(state.selectedRepo, state.selectedBranch);
-    } else {
-      console.log(`🔄 NavigatorContext: useEffect triggered but no repo/branch selected`);
-    }
-  }, [state.selectedRepo, state.selectedBranch, loadItems]);
+  };
 
   /**
    * Add local item (uncommitted)
@@ -520,11 +689,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
     // Apply search query
     if (state.searchQuery) {
-    const query = state.searchQuery.toLowerCase();
+      const query = state.searchQuery.toLowerCase();
       filteredItems = filteredItems.filter(item => 
-      item.name.toLowerCase().includes(query) ||
-      item.description?.toLowerCase().includes(query)
-    );
+        item.name.toLowerCase().includes(query) ||
+        item.description?.toLowerCase().includes(query)
+      );
     }
 
     // Apply view mode filter (All vs Files Only)

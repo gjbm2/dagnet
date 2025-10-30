@@ -129,20 +129,6 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     supportsInteractiveEdit: true,
     supportsRawEdit: true
   },
-  
-  settings: {
-    type: 'settings',
-    displayName: 'Settings',
-    displayNamePlural: 'Settings',
-    schemaFile: '/src/schemas/settings-schema.json',
-    directory: 'data',
-    indexFile: 'settings.yaml',
-    extensions: ['.yaml', '.yml', '.json'],
-    icon: '⚙️',
-    interactiveEditor: 'form',
-    supportsInteractiveEdit: true,
-    supportsRawEdit: true
-  },
 
   markdown: {
     type: 'markdown',
@@ -153,6 +139,59 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     extensions: ['.md', '.markdown'],
     icon: '📝',
     interactiveEditor: 'form', // Will use RawView for markdown
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
+  // Index file types - use existing schemas from param-schemas/
+  'parameter-index': {
+    type: 'parameter' as any,
+    displayName: 'Parameters Index',
+    displayNamePlural: 'Parameters Index',
+    schemaFile: '/param-schemas/registry-schema.yaml', // Use existing registry schema
+    directory: '',
+    extensions: ['.yaml', '.yml'],
+    icon: '📋',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
+  'context-index': {
+    type: 'context' as any,
+    displayName: 'Contexts Index',
+    displayNamePlural: 'Contexts Index',
+    schemaFile: '/param-schemas/contexts-index-schema.yaml',
+    directory: '',
+    extensions: ['.yaml', '.yml'],
+    icon: '🏷️',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
+  'case-index': {
+    type: 'case' as any,
+    displayName: 'Cases Index',
+    displayNamePlural: 'Cases Index',
+    schemaFile: '/param-schemas/cases-index-schema.yaml',
+    directory: '',
+    extensions: ['.yaml', '.yml'],
+    icon: '📦',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
+  'node-index': {
+    type: 'node' as any,
+    displayName: 'Nodes Index',
+    displayNamePlural: 'Nodes Index',
+    schemaFile: '/param-schemas/nodes-index-schema.yaml',
+    directory: '',
+    extensions: ['.yaml', '.yml'],
+    icon: '🔵',
+    interactiveEditor: 'form',
     supportsInteractiveEdit: true,
     supportsRawEdit: true
   }

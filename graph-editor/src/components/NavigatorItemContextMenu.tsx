@@ -283,6 +283,11 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
       defaultData
     );
     
+    // Update index file if this is a parameter/context/case/node
+    if (type === 'parameter' || type === 'context' || type === 'case' || type === 'node') {
+      await fileRegistry.updateIndexOnCreate(type, newFileId);
+    }
+    
     // Add to navigator as local/uncommitted item
     const newItem = {
       id: name,

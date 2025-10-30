@@ -1,4 +1,4 @@
-/* Navigator Styles - Simple, no rc-dock */
+/* Navigator Styles - Clean, Sensible Design */
 
 .navigator-content {
   display: flex;
@@ -6,29 +6,6 @@
   height: 100%;
   background-color: #f8f9fa;
   overflow: hidden;
-}
-
-/* Search box at top */
-.navigator-search-box {
-  padding: 8px;
-  background-color: #fff;
-  border-bottom: 1px solid #e0e0e0;
-  flex-shrink: 0;
-}
-
-.navigator-search-input {
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid #d0d0d0;
-  border-radius: 4px;
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.15s ease;
-  box-sizing: border-box;
-}
-
-.navigator-search-input:focus {
-  border-color: #0066cc;
 }
 
 /* Navigator Header */
@@ -52,13 +29,9 @@
   position: relative;
 }
 
-.navigator-search {
-  flex: 1;
-}
-
 .navigator-search-input {
-  width: 100%;
-  padding: 6px 32px 6px 8px;  /* Extra padding on right for filter button */
+  flex: 1;
+  padding: 6px 32px 6px 8px;
   border: 1px solid #d0d0d0;
   border-radius: 4px;
   font-size: 13px;
@@ -87,10 +60,24 @@
   cursor: pointer;
   font-size: 16px;
   transition: background-color 0.15s ease;
+  position: relative;
 }
 
 .navigator-filter-btn:hover {
   background-color: #e9ecef;
+}
+
+.filter-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  background-color: #0066cc;
+  color: white;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 8px;
+  line-height: 1.2;
 }
 
 .navigator-filter-menu {
@@ -98,12 +85,15 @@
   top: calc(100% + 4px);
   right: 0;
   min-width: 240px;
+  max-width: 320px;
   background-color: #fff;
   border: 1px solid #d0d0d0;
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  padding: 8px;
+  padding: 12px;
   z-index: 1000;
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
 .filter-section {
@@ -217,55 +207,6 @@
   color: #0066cc;
 }
 
-/* Repository/Branch Selectors */
-.navigator-selectors {
-  padding: 12px;
-  background-color: #fff;
-  border-bottom: 1px solid #e0e0e0;
-  flex-shrink: 0;
-}
-
-.navigator-selector {
-  margin-bottom: 8px;
-}
-
-.navigator-selector:last-child {
-  margin-bottom: 0;
-}
-
-.navigator-selector label {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  color: #666;
-  text-transform: uppercase;
-  margin-bottom: 4px;
-  letter-spacing: 0.5px;
-}
-
-.navigator-select {
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid #d0d0d0;
-  border-radius: 4px;
-  font-size: 13px;
-  background-color: #fff;
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.15s ease;
-}
-
-.navigator-select:focus {
-  border-color: #0066cc;
-}
-
-/* Divider */
-.navigator-divider {
-  height: 1px;
-  background-color: #e0e0e0;
-  flex-shrink: 0;
-}
-
 /* Object Tree */
 .navigator-tree {
   flex: 1;
@@ -282,13 +223,13 @@
 
 /* Object Type Section */
 .object-type-section {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .section-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
   padding: 6px 12px;
   cursor: pointer;
   user-select: none;
@@ -299,11 +240,25 @@
   background-color: #e9ecef;
 }
 
+.section-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.section-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .section-expand-icon {
   font-size: 10px;
   color: #666;
   width: 12px;
   display: inline-block;
+  text-align: center;
 }
 
 .section-icon {
@@ -320,73 +275,92 @@
 .section-count {
   font-size: 12px;
   color: #666;
+  font-weight: 400;
+}
+
+.section-index-icon {
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: background-color 0.15s ease;
+}
+
+.section-index-icon:hover {
+  background-color: #e9ecef;
 }
 
 /* Section Items */
 .section-items {
-  padding-left: 28px;
+  padding-left: 8px;
 }
 
 .section-empty {
-  padding: 8px 12px;
+  padding: 8px 12px 8px 32px;
   font-size: 12px;
   color: #999;
   font-style: italic;
 }
 
-.section-item {
+.navigator-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 6px 12px 6px 32px;
   cursor: pointer;
   border-radius: 4px;
-  margin: 2px 8px 2px 0;
+  margin: 1px 8px 1px 0;
   transition: background-color 0.15s ease;
+  min-height: 24px;
 }
 
-.section-item:hover {
+.navigator-item:hover {
   background-color: #e9ecef;
 }
 
-.section-item.active {
+.navigator-item.active {
   background-color: #e3f2fd;
 }
 
-.item-name {
+.navigator-item-name {
   font-size: 13px;
   color: #333;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
-.item-status {
+.navigator-item-name.local-only {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.navigator-item-name.in-index-only {
+  opacity: 0.7;
+  color: #666;
+}
+
+.navigator-item-status {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
   margin-left: 8px;
+  flex-shrink: 0;
 }
 
-.item-dirty {
-  color: #ff9800;
-  margin-right: 4px;
+.status-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.item-open {
-  color: #0066cc;
-}
-
-.item-multi-tab {
+.tab-count {
+  font-size: 11px;
   color: #0066cc;
   font-weight: 600;
-}
-
-.section-item.dirty .item-name {
-  color: #ff9800;
-  font-weight: 500;
+  padding: 0 4px;
 }
 
 /* Scrollbar */
@@ -469,25 +443,6 @@
     background-color: #4d4d4d;
   }
 
-  .navigator-selectors {
-    background-color: #252525;
-    border-bottom-color: #333;
-  }
-
-  .navigator-selector label {
-    color: #999;
-  }
-
-  .navigator-select {
-    background-color: #2d2d2d;
-    border-color: #404040;
-    color: #e0e0e0;
-  }
-
-  .navigator-divider {
-    background-color: #333;
-  }
-
   .navigator-loading {
     color: #999;
   }
@@ -509,16 +464,24 @@
     color: #666;
   }
 
-  .section-item:hover {
+  .navigator-item:hover {
     background-color: #2d2d2d;
   }
 
-  .section-item.active {
+  .navigator-item.active {
     background-color: #1a3a52;
   }
 
-  .item-name {
+  .navigator-item-name {
     color: #e0e0e0;
+  }
+
+  .navigator-item-name.in-index-only {
+    color: #999;
+  }
+
+  .section-index-icon:hover {
+    background-color: #3d3d3d;
   }
 
   .navigator-tree::-webkit-scrollbar-track {
@@ -533,4 +496,3 @@
     background: #505050;
   }
 }
-

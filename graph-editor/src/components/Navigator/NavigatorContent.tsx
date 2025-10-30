@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
@@ -6,15 +6,33 @@ import { ObjectTypeSection } from './ObjectTypeSection';
 import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
 import { NavigatorSectionContextMenu } from '../NavigatorSectionContextMenu';
 import { RepositoryItem, ObjectType } from '../../types';
+import { registryService, RegistryItem } from '../../services/registryService';
 import './Navigator.css';
+
+/**
+ * Navigator Entry - Internal representation with all state flags
+ */
+interface NavigatorEntry {
+  id: string;
+  name: string;
+  type: ObjectType;
+  hasFile: boolean;
+  isLocal: boolean;
+  inIndex: boolean;
+  isDirty: boolean;
+  isOpen: boolean;
+  isOrphan: boolean;
+  tags?: string[];
+  path?: string;
+  lastModified?: number;
+  lastOpened?: number;
+}
 
 /**
  * Navigator Content
  * 
- * Full-height panel showing:
- * - Header with search and controls
- * - Repository/Branch selectors
- * - Object tree (Graphs, Parameters, Contexts, Cases)
+ * Rebuilt from scratch according to design docs.
+ * Properly builds entries from index + files, applies filters/sorting.
  */
 export function NavigatorContent() {
   const { state, operations, items, isLoading } = useNavigatorContext();
@@ -22,28 +40,205 @@ export function NavigatorContent() {
   const fileRegistry = useFileRegistry();
   const [contextMenu, setContextMenu] = useState<{ item: RepositoryItem; x: number; y: number } | null>(null);
   const [sectionContextMenu, setSectionContextMenu] = useState<{ type: ObjectType; x: number; y: number } | null>(null);
+  const [registryItems, setRegistryItems] = useState<{
+    parameters: RegistryItem[];
+    contexts: RegistryItem[];
+    cases: RegistryItem[];
+    nodes: RegistryItem[];
+  }>({
+    parameters: [],
+    contexts: [],
+    cases: [],
+    nodes: []
+  });
 
-  // Group items by type
-  const graphItems = items.filter(item => item.type === 'graph');
-  const paramItems = items.filter(item => item.type === 'parameter');
-  const contextItems = items.filter(item => item.type === 'context');
-  const caseItems = items.filter(item => item.type === 'case');
-  const nodeItems = items.filter(item => item.type === 'node');
-
-  const handleItemClick = (item: any) => {
-    const fileId = `${item.type}-${item.id}`;
+  // Load registry items from central service
+  useEffect(() => {
+    const loadAllItems = async () => {
+      try {
+        const [parameters, contexts, cases, nodes] = await Promise.all([
+          registryService.getParameters(),
+          registryService.getContexts(),
+          registryService.getCases(),
+          registryService.getNodes()
+        ]);
+        
+        setRegistryItems({ parameters, contexts, cases, nodes });
+      } catch (error) {
+        console.error('Failed to load registry items:', error);
+      }
+    };
     
-    // Check if there's already a tab open for this file
+    loadAllItems();
+  }, [state.selectedRepo, state.selectedBranch]); // Reload when repo/branch changes
+
+  // Build NavigatorEntry objects from registry service + graph files
+  const navigatorEntries = useMemo(() => {
+    const entriesMap = new Map<string, NavigatorEntry>();
+    
+    // 1. Convert RegistryItem to NavigatorEntry for parameters, contexts, cases, nodes
+    const addRegistryItems = (items: RegistryItem[]) => {
+      for (const item of items) {
+        entriesMap.set(item.id, {
+          id: item.id,
+          name: item.name || item.id,
+          type: item.type,
+          hasFile: item.hasFile,
+          isLocal: item.isLocal,
+          inIndex: item.inIndex,
+          isDirty: item.isDirty,
+          isOpen: item.isOpen,
+          isOrphan: item.isOrphan,
+          tags: item.tags,
+          path: item.file_path,
+          lastModified: item.lastModified,
+          lastOpened: item.lastOpened
+        });
+      }
+    };
+    
+    addRegistryItems(registryItems.parameters);
+    addRegistryItems(registryItems.contexts);
+    addRegistryItems(registryItems.cases);
+    addRegistryItems(registryItems.nodes);
+    
+    // 2. Add graph files from NavigatorContext (graphs don't have indexes)
+    for (const item of items) {
+      if (item.type === 'graph') {
+        const fileId = `graph-${item.id}`;
+        const file = fileRegistry.getFile(fileId);
+        const itemTabs = tabs.filter(t => t.fileId === fileId);
+        
+        entriesMap.set(item.id, {
+          id: item.id,
+          name: item.name.replace(/\.(yaml|yml|json)$/, ''),
+          type: 'graph',
+          hasFile: true,
+          isLocal: item.isLocal || false,
+          inIndex: false, // Graphs don't have indexes
+          isDirty: file?.isDirty || false,
+          isOpen: itemTabs.length > 0,
+          isOrphan: false,
+          path: item.path,
+          lastModified: file?.lastModified,
+          lastOpened: file?.lastOpened
+        });
+      }
+    }
+    
+    return Array.from(entriesMap.values());
+  }, [items, tabs, registryItems]);
+
+  // Apply filters and sorting
+  const filteredAndSortedEntries = useMemo(() => {
+    let filtered = navigatorEntries.filter(entry => {
+      // Mode filter
+      if (state.viewMode === 'files-only' && !entry.hasFile) {
+        return false;
+      }
+      
+      // State filters
+      if (state.showLocalOnly && !entry.isLocal) {
+        return false;
+      }
+      
+      if (state.showDirtyOnly && !entry.isDirty) {
+        return false;
+      }
+      
+      if (state.showOpenOnly && !entry.isOpen) {
+        return false;
+      }
+      
+      // Search filter
+      if (state.searchQuery) {
+        const query = state.searchQuery.toLowerCase();
+        return entry.name.toLowerCase().includes(query) ||
+               entry.id.toLowerCase().includes(query) ||
+               entry.tags?.some(t => t.toLowerCase().includes(query)) ||
+               entry.path?.toLowerCase().includes(query);
+      }
+      
+      return true;
+    });
+    
+    // Sort
+    filtered.sort((a, b) => {
+      switch (state.sortBy) {
+        case 'name':
+          return a.name.localeCompare(b.name);
+        case 'modified':
+          return (b.lastModified || 0) - (a.lastModified || 0);
+        case 'opened':
+          return (b.lastOpened || 0) - (a.lastOpened || 0);
+        case 'status':
+          if (a.isDirty !== b.isDirty) return a.isDirty ? -1 : 1;
+          if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
+          return 0;
+        case 'type':
+          return a.type.localeCompare(b.type);
+        default:
+          return 0;
+      }
+    });
+    
+    return filtered;
+  }, [navigatorEntries, state.viewMode, state.showLocalOnly, state.showDirtyOnly, state.showOpenOnly, state.searchQuery, state.sortBy]);
+
+  // Group by type
+  const groupedEntries = useMemo(() => {
+    const groups: Record<ObjectType, NavigatorEntry[]> = {
+      graph: [],
+      parameter: [],
+      context: [],
+      case: [],
+      node: [],
+      credentials: [],
+      settings: [],
+      about: [],
+      markdown: []
+    };
+    
+    for (const entry of filteredAndSortedEntries) {
+      if (groups[entry.type]) {
+        groups[entry.type].push(entry);
+      } else {
+        console.warn(`Unknown entry type: ${entry.type}`, entry);
+      }
+    }
+    
+    return groups;
+  }, [filteredAndSortedEntries]);
+
+  // Convert NavigatorEntry to RepositoryItem for compatibility
+  const convertToRepositoryItem = (entry: NavigatorEntry): RepositoryItem => {
+    return {
+      id: entry.id,
+      type: entry.type,
+      name: entry.name,
+      path: entry.path || `${entry.type}s/${entry.name}.${entry.type === 'graph' ? 'json' : 'yaml'}`,
+      isLocal: entry.isLocal,
+      description: entry.isOrphan ? '⚠️ Orphan file (not in index)' : undefined
+    };
+  };
+
+  const handleItemClick = (entry: NavigatorEntry) => {
+    const item = convertToRepositoryItem(entry);
+    const fileId = `${entry.type}-${entry.id}`;
+    
+    // Check if there's already a tab open
     const existingTab = tabs.find(t => t.fileId === fileId);
     
     if (existingTab) {
-      // Navigate to existing tab instead of opening new one
-      console.log(`Navigator: File ${fileId} already open in tab ${existingTab.id}, switching to it`);
       tabOps.switchTab(existingTab.id);
     } else {
-      // No existing tab, open new one
-      console.log(`Navigator: Opening new tab for ${fileId}`);
+      // If no file exists, create it
+      if (!entry.hasFile) {
+        // Open new file modal or create immediately
+        tabOps.openTab(item);
+      } else {
       tabOps.openTab(item);
+      }
       
       // Signal to open in same panel as focused tab
       const focusedTab = tabs.find(t => t.id === activeTabId);
@@ -54,14 +249,14 @@ export function NavigatorContent() {
       }
     }
     
-    // Close navigator if it's unpinned (overlay mode)
+    // Close navigator if unpinned
     if (!state.isPinned && state.isOpen) {
       operations.toggleNavigator();
     }
   };
 
-  const handleItemContextMenu = (item: RepositoryItem, x: number, y: number) => {
-    setContextMenu({ item, x, y });
+  const handleItemContextMenu = (entry: NavigatorEntry, x: number, y: number) => {
+    setContextMenu({ item: convertToRepositoryItem(entry), x, y });
   };
 
   const handleSectionContextMenu = (type: ObjectType, x: number, y: number) => {
@@ -69,80 +264,45 @@ export function NavigatorContent() {
   };
 
   const handleIndexClick = (type: ObjectType) => {
-    // Open the index file for this type
     const indexFileId = `${type}-index`;
-    const indexFileName = `${type}s-index.yaml`;
     
     // Check if already open
     const existingTab = tabs.find(t => t.fileId === indexFileId);
     if (existingTab) {
       tabOps.switchTab(existingTab.id);
-    } else {
-      // Open new tab for index file
-      const indexItem: RepositoryItem = {
-        id: 'index',
-        type: type,
-        name: indexFileName,
-        path: `${type}s/${indexFileName}`,
-        description: `${type.charAt(0).toUpperCase() + type.slice(1)}s Registry Index`
-      };
-      tabOps.openTab(indexItem);
+      return;
     }
+    
+    // Get the actual file from registry
+    const indexFile = fileRegistry.getFile(indexFileId);
+    if (!indexFile) {
+      console.error(`Index file ${indexFileId} not found in registry`);
+      return;
+    }
+    
+    // Create RepositoryItem that will construct correct fileId
+    // openTab does: fileId = `${type}-${id}` = `parameter-index`
+    const indexItem: RepositoryItem = {
+      id: 'index', // So openTab constructs: parameter-index ✓
+      type: type,  // Use base type (parameter, context, etc)
+      name: indexFile.name || `${type}s-index.yaml`,
+      path: indexFile.path || `${type}s-index.yaml`,
+      description: `${type.charAt(0).toUpperCase() + type.slice(1)}s Registry Index`
+    };
+    
+    tabOps.openTab(indexItem, 'interactive');
   };
 
   const getIndexIsDirty = (type: ObjectType): boolean => {
     const indexFileId = `${type}-index`;
-    // Check if index file exists in registry and is dirty
     const indexFile = fileRegistry.getFile(indexFileId);
     return indexFile?.isDirty || false;
   };
 
   return (
     <div className="navigator-content">
-      {/* Search at top */}
-      <div className="navigator-search-box">
-        <input
-          type="text"
-          placeholder="🔍 Search..."
-          value={state.searchQuery}
-          onChange={(e) => operations.setSearchQuery(e.target.value)}
-          className="navigator-search-input"
-        />
-      </div>
-      
-      {/* Repository and Branch selectors */}
-      <div className="navigator-selectors">
-        <div className="navigator-selector">
-          <label>Repository</label>
-          <select 
-            value={state.selectedRepo}
-            onChange={(e) => operations.selectRepository(e.target.value)}
-            className="navigator-select"
-          >
-            <option value="">Select repository...</option>
-            {state.availableRepos?.map(repo => (
-              <option key={repo} value={repo}>{repo}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="navigator-selector">
-          <label>Branch</label>
-          <select 
-            value={state.selectedBranch}
-            onChange={(e) => operations.selectBranch(e.target.value)}
-            className="navigator-select"
-            disabled={!state.selectedRepo || !state.availableBranches || state.availableBranches.length === 0}
-          >
-            <option value="">Select branch...</option>
-            {state.availableBranches?.map(branch => (
-              <option key={branch} value={branch}>{branch}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div className="navigator-divider" />
+      {/* Header with search and filters */}
+      <NavigatorHeader />
 
       {/* Object tree */}
       <div className="navigator-tree">
@@ -153,7 +313,7 @@ export function NavigatorContent() {
             <ObjectTypeSection
               title="Graphs"
               icon="📊"
-              items={graphItems}
+              entries={groupedEntries.graph}
               sectionType="graph"
               isExpanded={state.expandedSections.includes('graphs')}
               onToggle={() => {
@@ -163,15 +323,15 @@ export function NavigatorContent() {
                   operations.expandSection('graphs');
                 }
               }}
-              onItemClick={handleItemClick}
-              onItemContextMenu={handleItemContextMenu}
+              onEntryClick={handleItemClick}
+              onEntryContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
             />
 
             <ObjectTypeSection
               title="Parameters"
               icon="📋"
-              items={paramItems}
+              entries={groupedEntries.parameter}
               sectionType="parameter"
               isExpanded={state.expandedSections.includes('parameters')}
               onToggle={() => {
@@ -181,8 +341,8 @@ export function NavigatorContent() {
                   operations.expandSection('parameters');
                 }
               }}
-              onItemClick={handleItemClick}
-              onItemContextMenu={handleItemContextMenu}
+              onEntryClick={handleItemClick}
+              onEntryContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('parameter')}
               indexIsDirty={getIndexIsDirty('parameter')}
@@ -191,7 +351,7 @@ export function NavigatorContent() {
             <ObjectTypeSection
               title="Contexts"
               icon="📄"
-              items={contextItems}
+              entries={groupedEntries.context}
               sectionType="context"
               isExpanded={state.expandedSections.includes('contexts')}
               onToggle={() => {
@@ -201,8 +361,8 @@ export function NavigatorContent() {
                   operations.expandSection('contexts');
                 }
               }}
-              onItemClick={handleItemClick}
-              onItemContextMenu={handleItemContextMenu}
+              onEntryClick={handleItemClick}
+              onEntryContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('context')}
               indexIsDirty={getIndexIsDirty('context')}
@@ -211,7 +371,7 @@ export function NavigatorContent() {
             <ObjectTypeSection
               title="Cases"
               icon="🗂"
-              items={caseItems}
+              entries={groupedEntries.case}
               sectionType="case"
               isExpanded={state.expandedSections.includes('cases')}
               onToggle={() => {
@@ -221,8 +381,8 @@ export function NavigatorContent() {
                   operations.expandSection('cases');
                 }
               }}
-              onItemClick={handleItemClick}
-              onItemContextMenu={handleItemContextMenu}
+              onEntryClick={handleItemClick}
+              onEntryContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('case')}
               indexIsDirty={getIndexIsDirty('case')}
@@ -231,7 +391,7 @@ export function NavigatorContent() {
             <ObjectTypeSection
               title="Nodes"
               icon="🔵"
-              items={nodeItems}
+              entries={groupedEntries.node}
               sectionType="node"
               isExpanded={state.expandedSections.includes('nodes')}
               onToggle={() => {
@@ -241,8 +401,8 @@ export function NavigatorContent() {
                   operations.expandSection('nodes');
                 }
               }}
-              onItemClick={handleItemClick}
-              onItemContextMenu={handleItemContextMenu}
+              onEntryClick={handleItemClick}
+              onEntryContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('node')}
               indexIsDirty={getIndexIsDirty('node')}
@@ -251,7 +411,7 @@ export function NavigatorContent() {
         )}
       </div>
 
-      {/* Navigator item context menu */}
+      {/* Context menus */}
       {contextMenu && (
         <NavigatorItemContextMenu
           item={contextMenu.item}
@@ -261,7 +421,6 @@ export function NavigatorContent() {
         />
       )}
       
-      {/* Navigator section context menu */}
       {sectionContextMenu && (
         <NavigatorSectionContextMenu
           sectionType={sectionContextMenu.type}
@@ -273,4 +432,3 @@ export function NavigatorContent() {
     </div>
   );
 }
-
