@@ -150,7 +150,8 @@ export interface NavigatorState {
  * Repository item (from navigator tree)
  */
 export interface RepositoryItem {
-  id: string;
+  id: string; // Normalized ID for display
+  fileId?: string; // Actual fileId in FileRegistry (may include extension)
   type: ObjectType;
   name: string;
   path: string;

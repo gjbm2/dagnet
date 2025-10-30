@@ -29,6 +29,13 @@
   position: relative;
 }
 
+.search-input-container {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .navigator-search-input {
   flex: 1;
   padding: 6px 32px 6px 8px;
@@ -38,6 +45,31 @@
   outline: none;
   transition: border-color 0.15s ease;
   box-sizing: border-box;
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.15s ease;
+}
+
+.search-clear-btn:hover {
+  background-color: #e9ecef;
+  color: #333;
 }
 
 .navigator-search-input:focus {
@@ -517,7 +549,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px 6px 32px; /* Indent more than regular items */
+  padding: 6px 12px 6px 16px; /* Reduced indent - half of previous */
   font-size: 12px;
   font-weight: 500;
   color: #555;

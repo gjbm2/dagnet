@@ -301,7 +301,7 @@ class FileRegistry {
    */
   async updateIndexOnCreate(type: 'parameter' | 'context' | 'case' | 'node', itemId: string, metadata?: any): Promise<void> {
     const indexFileId = `${type}-index`;
-    const indexFileName = `${type}s-index.yaml`;
+    const indexFileName = `${indexFileId}.yaml`;  // parameter-index.yaml, not parameters-index.yaml
     
     try {
       // Load or create index file
@@ -313,7 +313,7 @@ class FileRegistry {
           fileId: indexFileId,
           type: type,
           name: indexFileName,
-          path: `${type}s/${indexFileName}`,
+          path: indexFileName,  // Index files go at repo root, not in subdirectories
           data: {
             version: '1.0.0',
             entries: []

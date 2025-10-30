@@ -15,6 +15,7 @@
 import { fileRegistry } from '../contexts/TabContext';
 import { ObjectType, RepositoryItem, ViewMode } from '../types';
 import { db } from '../db/appDatabase';
+import { credentialsManager } from '../lib/credentials';
 
 export interface CreateFileOptions {
   openInTab?: boolean;
@@ -117,7 +118,13 @@ class FileOperationsService {
 
     // 2. Create file in FileRegistry
     const fileId = `${type}-${name}`;
-    const filePath = `${type}s/${name}.yaml`;
+    
+    // Determine correct file path
+    // Index files go to repo root: parameter-index.yaml
+    // Regular files go to subdirectories: parameters/my-param.yaml
+    const filePath = fileId.endsWith('-index') 
+      ? `${fileId}.yaml` 
+      : `${type}s/${name}.yaml`;
     
     const file = fileRegistry.getOrCreateFile(
       fileId,
@@ -228,6 +235,40 @@ class FileOperationsService {
     console.log(`FileOperationsService: Deleting file ${fileId}`);
 
     const file = fileRegistry.getFile(fileId);
+    const [type] = fileId.split('-');
+    const isIndexOnlyEntry = !file && ['parameter', 'context', 'case', 'node'].includes(type);
+
+    // Handle index-only entries (no file yet)
+    if (isIndexOnlyEntry) {
+      if (!skipConfirm && this.dialogOps) {
+        const confirm = await this.dialogOps.showConfirm({
+          title: 'Remove from index',
+          message: `Remove "${fileId}" from the ${type} index?`,
+          confirmLabel: 'Remove',
+          cancelLabel: 'Cancel',
+          confirmVariant: 'danger'
+        });
+        
+        if (!confirm) return false;
+      }
+
+      // Remove from index only
+      try {
+        await (fileRegistry as any).updateIndexOnDelete(type, fileId);
+        
+        // Refresh Navigator
+        if (this.navigatorOps) {
+          await this.navigatorOps.refreshItems();
+        }
+        
+        console.log(`FileOperationsService: Removed ${fileId} from index`);
+        return true;
+      } catch (error) {
+        console.error(`FileOperationsService: Failed to remove ${fileId} from index:`, error);
+        return false;
+      }
+    }
+
     if (!file) {
       console.warn(`FileOperationsService: File ${fileId} not found`);
       return false;
@@ -236,12 +277,13 @@ class FileOperationsService {
     // 1. Check for open tabs
     if (!force && file.viewTabs && file.viewTabs.length > 0) {
       if (this.dialogOps) {
-        const confirm = await this.dialogOps.showConfirm(
-          'File has open tabs',
-          `"${file.name || fileId}" has ${file.viewTabs.length} open tab(s). Close them first?`,
-          'Close Tabs & Delete',
-          'Cancel'
-        );
+        const confirm = await this.dialogOps.showConfirm({
+          title: 'File has open tabs',
+          message: `"${file.name || fileId}" has ${file.viewTabs.length} open tab(s). Close them first?`,
+          confirmLabel: 'Close Tabs & Delete',
+          cancelLabel: 'Cancel',
+          confirmVariant: 'danger'
+        });
         
         if (!confirm) return false;
         
@@ -255,12 +297,13 @@ class FileOperationsService {
     // 2. Check for dirty state
     if (!force && file.isDirty) {
       if (this.dialogOps) {
-        const confirm = await this.dialogOps.showConfirm(
-          'Unsaved changes',
-          `"${file.name || fileId}" has unsaved changes. Delete anyway?`,
-          'Delete',
-          'Cancel'
-        );
+        const confirm = await this.dialogOps.showConfirm({
+          title: 'Unsaved changes',
+          message: `"${file.name || fileId}" has unsaved changes. Delete anyway?`,
+          confirmLabel: 'Delete',
+          cancelLabel: 'Cancel',
+          confirmVariant: 'danger'
+        });
         
         if (!confirm) return false;
       } else {
@@ -268,19 +311,71 @@ class FileOperationsService {
       }
     }
 
-    // 3. Confirmation dialog
+    // 3. Determine if file is committed to repository
+    const isCommitted = file.source?.repository !== 'local' && file.sha;
+    const isLocal = file.isLocal || file.source?.repository === 'local';
+
+    // 4. Confirmation dialog with appropriate message
     if (!skipConfirm && this.dialogOps) {
-      const confirm = await this.dialogOps.showConfirm(
-        'Delete file',
-        `Are you sure you want to delete "${file.name || fileId}"?`,
-        'Delete',
-        'Cancel'
-      );
+      const message = isCommitted
+        ? `Delete "${file.name || fileId}" from local workspace AND remote repository?`
+        : `Delete "${file.name || fileId}" from local workspace?`;
+      
+      const confirm = await this.dialogOps.showConfirm({
+        title: 'Delete file',
+        message,
+        confirmLabel: 'Delete',
+        cancelLabel: 'Cancel',
+        confirmVariant: 'danger'
+      });
       
       if (!confirm) return false;
     }
 
-    // 4. Delete from FileRegistry (also updates index)
+    // 5. Delete from repository if committed
+    if (isCommitted && file.path) {
+      try {
+        const credsResult = await credentialsManager.loadCredentials();
+        if (!credsResult.success || !credsResult.credentials?.git) {
+          throw new Error('No credentials available');
+        }
+
+        const repoName = file.source?.repository;
+        const gitCreds = credsResult.credentials.git.find((r: any) => r.name === repoName);
+        
+        if (!gitCreds) {
+          throw new Error(`Repository "${repoName}" not found in credentials`);
+        }
+
+        // Delete from Git
+        const gitService = await import('./gitService').then(m => m.gitService);
+        const deleteResult = await gitService.deleteFile(
+          file.path,
+          `Delete ${file.name || fileId}`,
+          file.source?.branch || 'main'
+        );
+        
+        if (!deleteResult.success) {
+          throw new Error(deleteResult.error || 'Failed to delete from repository');
+        }
+        
+        console.log(`FileOperationsService: Deleted ${fileId} from repository`);
+      } catch (error) {
+        console.error(`FileOperationsService: Failed to delete ${fileId} from repository:`, error);
+        if (this.dialogOps) {
+          const continueAnyway = await this.dialogOps.showConfirm({
+            title: 'Repository delete failed',
+            message: `Failed to delete from repository: ${error instanceof Error ? error.message : 'Unknown error'}. Continue with local delete?`,
+            confirmLabel: 'Continue',
+            cancelLabel: 'Cancel'
+          });
+          if (!continueAnyway) return false;
+        }
+        // Continue with local delete even if repo delete fails
+      }
+    }
+
+    // 6. Delete from FileRegistry (also updates index)
     try {
       await fileRegistry.deleteFile(fileId);
     } catch (error) {
@@ -288,7 +383,7 @@ class FileOperationsService {
       return false;
     }
 
-    // 5. Remove from Navigator
+    // 7. Remove from Navigator
     if (this.navigatorOps) {
       await this.navigatorOps.refreshItems();
     }

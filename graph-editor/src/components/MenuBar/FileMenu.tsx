@@ -416,6 +416,20 @@ export function FileMenu() {
 
             <Menubar.Item 
               className="menubar-item" 
+              onSelect={async () => {
+                if (activeTab) {
+                  await fileOperationsService.deleteFile(activeTab.fileId);
+                }
+              }}
+              disabled={!activeTab}
+            >
+              Delete
+            </Menubar.Item>
+
+            <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item 
+              className="menubar-item" 
               onSelect={handlePullLatest}
             >
               Pull Latest

@@ -102,6 +102,18 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     });
     items.push({ label: '', onClick: () => {}, divider: true });
     
+    // Danger actions
+    items.push({
+      label: 'Delete',
+      onClick: async () => {
+        const success = await fileOperationsService.deleteFile(tab.fileId);
+        if (success) {
+          onClose();
+        }
+      }
+    });
+    items.push({ label: '', onClick: () => {}, divider: true });
+    
     // Tab operations
     items.push({
       label: 'Close',

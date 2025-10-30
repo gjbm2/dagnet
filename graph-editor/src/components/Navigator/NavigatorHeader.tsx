@@ -38,13 +38,24 @@ export function NavigatorHeader() {
     <div className="navigator-header">
       {/* Full-width search bar with filter dropdown */}
       <div className="navigator-search-container">
-        <input
-          type="text"
-          placeholder="🔍 Search parameters, contexts, cases..."
-          value={state.searchQuery}
-          onChange={(e) => operations.setSearchQuery(e.target.value)}
-          className="navigator-search-input"
-        />
+        <div className="search-input-container">
+          <input
+            type="text"
+            placeholder="🔍 Search parameters, contexts, cases..."
+            value={state.searchQuery}
+            onChange={(e) => operations.setSearchQuery(e.target.value)}
+            className="navigator-search-input"
+          />
+          {state.searchQuery && (
+            <button
+              className="search-clear-btn"
+              onClick={() => operations.setSearchQuery('')}
+              title="Clear search"
+            >
+              ×
+            </button>
+          )}
+        </div>
         
         {/* Filter dropdown button */}
         <div className="navigator-filter-dropdown" ref={filterDropdownRef}>
@@ -167,14 +178,7 @@ export function NavigatorHeader() {
 
       {/* Control buttons */}
       <div className="navigator-controls">
-
-        <button
-          className="navigator-control-btn"
-          onClick={operations.toggleNavigator}
-          title="Close Navigator"
-        >
-          ×
-        </button>
+        {/* No close button - navigator is controlled by the pin/unpin button in AppShell */}
       </div>
     </div>
   );

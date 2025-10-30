@@ -434,6 +434,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         })
         .map(file => ({
           id: file.fileId.replace(`${file.type}-`, ''),
+          fileId: file.fileId, // Store actual fileId so we don't have to reconstruct
           type: file.type,
           name: file.name || file.fileId,
           path: file.path || '',

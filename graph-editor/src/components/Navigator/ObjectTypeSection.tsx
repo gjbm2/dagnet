@@ -19,7 +19,7 @@ interface NavigatorEntry {
   tags?: string[];
   path?: string;
   // Type-specific properties for sub-categorization
-  parameter_type?: 'probability' | 'monetary_cost' | 'time_cost' | 'standard_deviation';
+  parameter_type?: 'probability' | 'cost_gbp' | 'cost_time' | 'standard_deviation';
   node_type?: string;
   case_type?: string;
 }
@@ -93,18 +93,18 @@ export function ObjectTypeSection({
 
     const groups: Record<string, NavigatorEntry[]> = {
       'probability': [],
-      'monetary_cost': [],
-      'time_cost': [],
+      'cost_gbp': [],
+      'cost_time': [],
       'other': []
     };
 
     for (const entry of entries) {
       if (entry.parameter_type === 'probability') {
         groups.probability.push(entry);
-      } else if (entry.parameter_type === 'monetary_cost') {
-        groups.monetary_cost.push(entry);
-      } else if (entry.parameter_type === 'time_cost') {
-        groups.time_cost.push(entry);
+      } else if (entry.parameter_type === 'cost_gbp') {
+        groups.cost_gbp.push(entry);
+      } else if (entry.parameter_type === 'cost_time') {
+        groups.cost_time.push(entry);
       } else {
         groups.other.push(entry);
       }
@@ -116,8 +116,8 @@ export function ObjectTypeSection({
   // Sub-category display names
   const subCategoryNames: Record<string, string> = {
     'probability': '📊 Probability',
-    'monetary_cost': '💷 Cost (GBP)',
-    'time_cost': '⏱️ Cost (Time)',
+    'cost_gbp': '💷 Cost (GBP)',
+    'cost_time': '⏱️ Cost (Time)',
     'other': '📦 Other'
   };
 
