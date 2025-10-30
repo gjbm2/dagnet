@@ -26,6 +26,10 @@ interface NavigatorEntry {
   path?: string;
   lastModified?: number;
   lastOpened?: number;
+  // Type-specific metadata for sub-categorization
+  parameter_type?: 'probability' | 'cost_gbp' | 'cost_time' | 'standard_deviation';
+  node_type?: string;
+  case_type?: string;
 }
 
 /**
@@ -123,7 +127,11 @@ export function NavigatorContent() {
           tags: item.tags,
           path: item.file_path,
           lastModified: item.lastModified,
-          lastOpened: item.lastOpened
+          lastOpened: item.lastOpened,
+          // Type-specific metadata for sub-categorization
+          parameter_type: item.parameter_type,
+          node_type: item.node_type,
+          case_type: item.case_type
         });
       }
     };

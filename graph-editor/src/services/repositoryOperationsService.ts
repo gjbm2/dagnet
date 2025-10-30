@@ -58,7 +58,7 @@ class RepositoryOperationsService {
 
     // Reload Navigator
     if (this.navigatorOps) {
-      await this.navigatorOps.loadItems();
+      await this.navigatorOps.refreshItems();
     }
 
     console.log(`✅ RepositoryOperationsService: Pulled latest successfully`);
@@ -91,7 +91,7 @@ class RepositoryOperationsService {
 
     // Reload Navigator
     if (this.navigatorOps) {
-      await this.navigatorOps.loadItems();
+      await this.navigatorOps.refreshItems();
     }
 
     console.log(`✅ RepositoryOperationsService: Cloned successfully`);
@@ -140,9 +140,22 @@ class RepositoryOperationsService {
           ? file.data 
           : JSON.stringify(file.data, null, 2);
 
+        // Determine correct file path
+        let filePath = file.path;
+        if (!filePath) {
+          // Check if this is an index file
+          if (file.fileId.endsWith('-index')) {
+            // Index files go to repo root: parameter-index.yaml, not parameters/parameter-index.yaml
+            filePath = `${file.fileId}.yaml`;
+          } else {
+            // Regular files go to subdirectories: parameters/my-param.yaml
+            filePath = `${file.type}s/${file.fileId}.yaml`;
+          }
+        }
+
         // Commit to Git
         await (gitService as any).commitFile(
-          file.path || `${file.type}s/${file.fileId}.yaml`,
+          filePath,
           content,
           message,
           branch,
@@ -204,7 +217,7 @@ class RepositoryOperationsService {
 
     // Reload Navigator
     if (this.navigatorOps) {
-      await this.navigatorOps.loadItems();
+      await this.navigatorOps.refreshItems();
     }
 
     console.log(`✅ RepositoryOperationsService: Discarded ${discardedCount} changes`);

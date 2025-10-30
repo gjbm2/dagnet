@@ -25,7 +25,8 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   const { state: navState, operations: navOps } = useNavigatorContext();
   
   // Check if this item has any open tabs
-  const fileId = `${item.type}-${item.id}`;
+  // Use actual fileId if available, otherwise reconstruct (for backwards compat)
+  const fileId = item.fileId || `${item.type}-${item.id}`;
   const openTabs = tabs.filter(t => t.fileId === fileId);
 
   // Commit modal state

@@ -104,7 +104,9 @@ class WorkspaceService {
             }
 
             // Create FileState
-            const fileId = `${dir.type}-${file.name}`;
+            // Strip extension from fileId - IDs should not have extensions
+            const fileName = file.name.replace(/\.(yaml|yml|json)$/, '');
+            const fileId = `${dir.type}-${fileName}`;
             const fileSha = fileContent.data.sha || file.sha; // Use SHA from file content response
             const fileState: FileState = {
               fileId,

@@ -44,7 +44,7 @@ properties:
         
         type:
           type: string
-          enum: [probability, monetary_cost, time_cost, standard_deviation]
+          enum: [probability, cost_gbp, cost_time, standard_deviation]
           description: "Parameter type classification"
         
         status:

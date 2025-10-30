@@ -36,7 +36,7 @@ export interface RegistryItem {
   tags?: string[];
   
   // Type-specific metadata
-  parameter_type?: 'probability' | 'monetary_cost' | 'time_cost' | 'standard_deviation';
+  parameter_type?: 'probability' | 'cost_gbp' | 'cost_time' | 'standard_deviation';
   node_type?: string;
   case_type?: string;
   
@@ -125,6 +125,13 @@ class RegistryService {
         existing.lastModified = file.lastModified;
         existing.lastOpened = file.lastOpened;
         
+        // Extract type from file data if available (overrides index type)
+        if (file.data?.type) {
+          if (type === 'parameter') existing.parameter_type = file.data.type;
+          else if (type === 'node') existing.node_type = file.data.type;
+          else if (type === 'case') existing.case_type = file.data.type;
+        }
+        
         console.log(`RegistryService: Updated ${file.fileId} - isDirty: ${existing.isDirty}, isOpen: ${existing.isOpen}`);
       } else {
         // Orphan file (not in index)
@@ -139,7 +146,11 @@ class RegistryService {
           inIndex: false,
           isOrphan: true,
           lastModified: file.lastModified,
-          lastOpened: file.lastOpened
+          lastOpened: file.lastOpened,
+          // Extract type from file data
+          parameter_type: type === 'parameter' && file.data?.type ? file.data.type : undefined,
+          node_type: type === 'node' && file.data?.type ? file.data.type : undefined,
+          case_type: type === 'case' && file.data?.type ? file.data.type : undefined
         });
       }
     }
