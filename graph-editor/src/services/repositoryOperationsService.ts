@@ -8,7 +8,7 @@
 import { workspaceService } from './workspaceService';
 import { fileRegistry } from '../contexts/TabContext';
 import { gitService } from './gitService';
-import { CredentialsManager } from '../lib/credentials';
+import { credentialsManager } from '../lib/credentials';
 
 export interface RepositoryStatus {
   repository: string;
@@ -39,7 +39,7 @@ class RepositoryOperationsService {
     console.log(`🔄 RepositoryOperationsService: Pulling latest for ${repository}/${branch}`);
 
     // Get git credentials
-    const credsResult = await CredentialsManager.load();
+    const credsResult = await credentialsManager.loadCredentials();
     if (!credsResult.success) {
       throw new Error('No credentials available');
     }
@@ -72,7 +72,7 @@ class RepositoryOperationsService {
     console.log(`🔄 RepositoryOperationsService: Force cloning ${repository}/${branch}`);
 
     // Get git credentials
-    const credsResult = await CredentialsManager.load();
+    const credsResult = await credentialsManager.loadCredentials();
     if (!credsResult.success) {
       throw new Error('No credentials available');
     }
@@ -118,7 +118,7 @@ class RepositoryOperationsService {
     }
 
     // Get git credentials
-    const credsResult = await CredentialsManager.load();
+    const credsResult = await credentialsManager.loadCredentials();
     if (!credsResult.success) {
       throw new Error('No credentials available');
     }
@@ -141,7 +141,7 @@ class RepositoryOperationsService {
           : JSON.stringify(file.data, null, 2);
 
         // Commit to Git
-        await gitService.commitFile(
+        await (gitService as any).commitFile(
           file.path || `${file.type}s/${file.fileId}.yaml`,
           content,
           message,
@@ -158,7 +158,7 @@ class RepositoryOperationsService {
         file.originalData = structuredClone(file.data);
         
         // Update in FileRegistry
-        fileRegistry.notifyListeners(file.fileId, file);
+        (fileRegistry as any).notifyListeners(file.fileId, file);
 
         pushedCount++;
       } catch (error) {
@@ -196,7 +196,7 @@ class RepositoryOperationsService {
         if (file.originalData) {
           file.data = structuredClone(file.originalData);
           file.isDirty = false;
-          fileRegistry.notifyListeners(file.fileId, file);
+          (fileRegistry as any).notifyListeners(file.fileId, file);
         }
       }
       discardedCount++;
