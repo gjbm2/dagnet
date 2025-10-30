@@ -52,7 +52,7 @@ class WorkspaceService {
 
     try {
       // Configure git service
-      gitService.setCurrentRepo({
+      (gitService as any).setCurrentRepo({
         repoOwner: gitCreds.owner,
         repoName: gitCreds.repo,
         branch,
@@ -266,7 +266,7 @@ class WorkspaceService {
     }
 
     // Configure git service
-    gitService.setCurrentRepo({
+    (gitService as any).setCurrentRepo({
       repoOwner: gitCreds.owner,
       repoName: gitCreds.repo,
       branch,

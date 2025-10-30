@@ -137,8 +137,6 @@ class FileOperationsService {
       name: `${name}.yaml`,
       path: filePath,
       type: type,
-      size: 0,
-      lastModified: new Date().toISOString(),
       isLocal: true
     };
 
@@ -397,7 +395,7 @@ class FileOperationsService {
     await db.files.put(file);
     
     // Notify listeners
-    fileRegistry.notifyListeners(fileId, file);
+    (fileRegistry as any).notifyListeners(fileId, file);
     
     console.log(`FileOperationsService: Saved ${fileId}`);
     return true;
@@ -463,7 +461,7 @@ class FileOperationsService {
     await db.files.put(file);
     
     // Notify listeners
-    fileRegistry.notifyListeners(fileId, file);
+    (fileRegistry as any).notifyListeners(fileId, file);
     
     console.log(`FileOperationsService: Reverted ${fileId}`);
     return true;
