@@ -56,13 +56,15 @@ export function NavigatorContent() {
   useEffect(() => {
     const loadAllItems = async () => {
       try {
+        console.log('📦 NavigatorContent: Loading registry items...');
         const [parameters, contexts, cases, nodes] = await Promise.all([
-          registryService.getParameters(),
-          registryService.getContexts(),
-          registryService.getCases(),
-          registryService.getNodes()
+          registryService.getParameters(tabs),
+          registryService.getContexts(tabs),
+          registryService.getCases(tabs),
+          registryService.getNodes(tabs)
         ]);
         
+        console.log(`📦 NavigatorContent: Loaded ${parameters.length} parameters, ${contexts.length} contexts, ${cases.length} cases, ${nodes.length} nodes`);
         setRegistryItems({ parameters, contexts, cases, nodes });
       } catch (error) {
         console.error('Failed to load registry items:', error);
@@ -70,7 +72,36 @@ export function NavigatorContent() {
     };
     
     loadAllItems();
-  }, [state.selectedRepo, state.selectedBranch]); // Reload when repo/branch changes
+  }, [state.selectedRepo, state.selectedBranch, items.length, tabs.length]); // Reload when repo/branch changes OR when files/tabs change
+
+  // Listen for file dirty state changes and refresh registry items
+  useEffect(() => {
+    const handleFileDirtyChanged = () => {
+      console.log('🔄 NavigatorContent: File dirty state changed, refreshing registry items...');
+      // Trigger a refresh of registry items
+      const loadAllItems = async () => {
+        try {
+          const [parameters, contexts, cases, nodes] = await Promise.all([
+            registryService.getParameters(tabs),
+            registryService.getContexts(tabs),
+            registryService.getCases(tabs),
+            registryService.getNodes(tabs)
+          ]);
+          
+          setRegistryItems({ parameters, contexts, cases, nodes });
+        } catch (error) {
+          console.error('Failed to refresh registry items:', error);
+        }
+      };
+      
+      loadAllItems();
+    };
+
+    window.addEventListener('dagnet:fileDirtyChanged', handleFileDirtyChanged);
+    return () => {
+      window.removeEventListener('dagnet:fileDirtyChanged', handleFileDirtyChanged);
+    };
+  }, [tabs]);
 
   // Build NavigatorEntry objects from registry service + graph files
   const navigatorEntries = useMemo(() => {
@@ -346,6 +377,7 @@ export function NavigatorContent() {
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('parameter')}
               indexIsDirty={getIndexIsDirty('parameter')}
+              groupBySubCategories={state.groupBySubCategories}
             />
 
             <ObjectTypeSection

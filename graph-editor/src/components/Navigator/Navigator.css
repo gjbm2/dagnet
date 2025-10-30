@@ -495,4 +495,43 @@
   .navigator-tree::-webkit-scrollbar-thumb:hover {
     background: #505050;
   }
+  
+  /* Sub-categories dark mode */
+  .sub-category-header {
+    background: #222;
+    color: #aaa;
+    border-bottom-color: #333;
+  }
+  
+  .sub-category-header:hover {
+    background: #2a2a2a;
+  }
+}
+
+/* Sub-categories */
+.sub-category {
+  margin: 0;
+}
+
+.sub-category-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 32px; /* Indent more than regular items */
+  font-size: 12px;
+  font-weight: 500;
+  color: #555;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e8e8e8;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.sub-category-header:hover {
+  background: #eef0f2;
+}
+
+.sub-category-items {
+  padding-left: 16px; /* Extra indent for items within sub-category */
 }

@@ -8,6 +8,7 @@ import { DeleteModal } from './DeleteModal';
 import { NewFileModal } from './NewFileModal';
 import { gitService } from '../services/gitService';
 import { fileRegistry } from '../contexts/TabContext';
+import { fileOperationsService } from '../services/fileOperationsService';
 
 interface NavigatorItemContextMenuProps {
   item: RepositoryItem;
@@ -220,13 +221,28 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     });
     items.push({ label: '', onClick: () => {}, divider: true });
     
+    // Discard Changes (if dirty)
+    const currentFile = fileRegistry.getFile(fileId);
+    if (currentFile?.isDirty) {
+      items.push({
+        label: 'Discard Changes',
+        onClick: async () => {
+          await fileOperationsService.revertFile(fileId);
+          onClose();
+        }
+      });
+      items.push({ label: '', onClick: () => {}, divider: true });
+    }
+    
     // Danger actions
     items.push({
-      label: 'Delete from Repository...',
-      onClick: () => {
-        setIsDeleteModalOpen(true);
-      },
-      keepMenuOpen: true
+      label: 'Delete',
+      onClick: async () => {
+        const success = await fileOperationsService.deleteFile(fileId);
+        if (success) {
+          onClose();
+        }
+      }
     });
     items.push({ label: '', onClick: () => {}, divider: true });
     
@@ -244,127 +260,18 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   }, [item, openTabs, operations]);
 
   const handleCreateFile = async (name: string, type: ObjectType) => {
-    // Create a new file with default content based on type
-    const newFileId = `${type}-${name}`;
+    await fileOperationsService.createFile(name, type, {
+      openInTab: true,
+      viewMode: 'interactive'
+    });
     
-    let defaultData: any;
-    if (type === 'graph') {
-      defaultData = {
-        nodes: [],
-        edges: [],
-        policies: {
-          default_outcome: 'abandon',
-          overflow_policy: 'error',
-          free_edge_policy: 'complement'
-        },
-        metadata: {
-          version: '1.0.0',
-          created_at: new Date().toISOString(),
-          author: 'Graph Editor',
-          description: '',
-          name: `${name}.json`
-        }
-      };
-    } else {
-      // YAML files (parameter, context, case)
-      defaultData = {
-        id: name,
-        name: name,
-        description: '',
-        created_at: new Date().toISOString()
-      };
-    }
-    
-    // Create file in registry
-    await fileRegistry.getOrCreateFile(
-      newFileId,
-      type,
-      { repository: 'local', path: `${type}s/${name}`, branch: navState.selectedBranch || 'main' },
-      defaultData
-    );
-    
-    // Update index file if this is a parameter/context/case/node
-    if (type === 'parameter' || type === 'context' || type === 'case' || type === 'node') {
-      await fileRegistry.updateIndexOnCreate(type, newFileId);
-    }
-    
-    // Add to navigator as local/uncommitted item
-    const newItem = {
-      id: name,
-      type: type,
-      name: name,
-      path: `${type}s/${name}.${type === 'graph' ? 'json' : 'yaml'}`,
-      description: '',
-      isLocal: true
-    };
-    
-    navOps.addLocalItem(newItem);
-    
-    // Open the new file in a tab
-    await operations.openTab(newItem, 'interactive');
-    
-    // Close modals
     setIsNewFileModalOpen(false);
     onClose();
   };
   
   const handleDuplicate = async (name: string, type: ObjectType) => {
-    // First, ensure the file is loaded by opening it (which loads it into fileRegistry)
-    // This is necessary because the file may not be in the registry yet
-    let currentFile = fileRegistry.getFile(fileId);
+    await fileOperationsService.duplicateFile(fileId, name, true);
     
-    if (!currentFile) {
-      // File not loaded yet - open it first to load it into the registry
-      console.log(`NavigatorItemContextMenu: File ${fileId} not in registry, opening to load it first`);
-      await operations.openTab(item, 'interactive');
-      
-      // Now try to get it again
-      currentFile = fileRegistry.getFile(fileId);
-      if (!currentFile) {
-        throw new Error('Failed to load file for duplication');
-      }
-    }
-    
-    // Clone the data and update the id/name to the new value
-    const duplicatedData = { ...currentFile.data };
-    
-    // Update ID and name fields with the new name
-    if (type === 'graph') {
-      // For graphs, update metadata name
-      if (duplicatedData.metadata) {
-        duplicatedData.metadata.name = `${name}.json`;
-      }
-    } else {
-      // For YAML files (parameter, context, case), update id and name
-      duplicatedData.id = name;
-      duplicatedData.name = name;
-    }
-    
-    // Create new file with duplicated data (will be marked dirty on save)
-    const newFileId = `${type}-${name}`;
-    await fileRegistry.getOrCreateFile(
-      newFileId,
-      type,
-      { repository: 'local', path: `${type}s/${name}`, branch: currentFile.source?.branch || 'main' },
-      duplicatedData
-    );
-    
-    // Add to navigator as local/uncommitted item
-    const newItem = {
-      id: name,
-      type: type,
-      name: name,
-      path: `${type}s/${name}.${type === 'graph' ? 'json' : 'yaml'}`,
-      description: currentFile.data.description || '',
-      isLocal: true
-    };
-    
-    navOps.addLocalItem(newItem);
-    
-    // Open the duplicated file in a new tab
-    await operations.openTab(newItem, 'interactive');
-    
-    // Close modals
     setIsDuplicateModalOpen(false);
     onClose();
   };
