@@ -51,15 +51,13 @@ class WorkspaceService {
     await db.workspaces.put(workspace);
 
     try {
-      // Configure git service
-      (gitService as any).setCurrentRepo({
-        repoOwner: gitCreds.owner,
-        repoName: gitCreds.repo,
-        branch,
-        graphsPath: gitCreds.graphsPath || 'graphs',
-        paramsPath: gitCreds.paramsPath || 'params',
-        githubToken: gitCreds.token
-      });
+      // Configure git service with full credentials
+      const fullCredentials = {
+        version: '1.0.0',
+        defaultGitRepo: gitCreds.name,
+        git: [gitCreds]
+      };
+      gitService.setCredentials(fullCredentials);
 
       const fileIds: string[] = [];
 
@@ -265,15 +263,13 @@ class WorkspaceService {
       return;
     }
 
-    // Configure git service
-    (gitService as any).setCurrentRepo({
-      repoOwner: gitCreds.owner,
-      repoName: gitCreds.repo,
-      branch,
-      graphsPath: gitCreds.graphsPath || 'graphs',
-      paramsPath: gitCreds.paramsPath || 'params',
-      githubToken: gitCreds.token
-    });
+    // Configure git service with full credentials
+    const fullCredentials = {
+      version: '1.0.0',
+      defaultGitRepo: gitCreds.name,
+      git: [gitCreds]
+    };
+    gitService.setCredentials(fullCredentials);
 
     // For now, simple approach: re-clone everything
     // TODO: Implement smart diff-based sync using commit SHAs
