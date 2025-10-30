@@ -167,13 +167,6 @@ export function NavigatorHeader() {
 
       {/* Control buttons */}
       <div className="navigator-controls">
-        <button
-          className={`navigator-control-btn ${state.isPinned ? 'active' : ''}`}
-          onClick={operations.togglePin}
-          title={state.isPinned ? 'Unpin Navigator' : 'Pin Navigator'}
-        >
-          📌
-        </button>
 
         <button
           className="navigator-control-btn"
