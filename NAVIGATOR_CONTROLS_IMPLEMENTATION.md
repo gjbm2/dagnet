@@ -132,3 +132,4 @@ See `NAVIGATOR_CONTROLS_DESIGN.md` for detailed future enhancements:
 - Search within filtered results
 - Keyboard shortcuts (F/S/G)
 
+
