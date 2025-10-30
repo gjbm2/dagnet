@@ -211,6 +211,26 @@
   margin: 8px 0;
 }
 
+.filter-action-btn {
+  all: unset;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  background-color: #f8f9fa;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.filter-action-btn:hover {
+  background-color: #e9ecef;
+  border-color: #0066cc;
+  color: #0066cc;
+}
+
 /* Control buttons */
 .navigator-controls {
   display: flex;

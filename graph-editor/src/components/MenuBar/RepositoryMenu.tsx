@@ -38,14 +38,16 @@ export function RepositoryMenu() {
   };
 
   const handleForceClone = async () => {
-    if (!confirm(`Force re-clone ${state.selectedRepo}/${state.selectedBranch}? This will discard any local changes.`)) {
+    if (!confirm(`Force Full Reload: Delete local workspace and re-clone ${state.selectedRepo}/${state.selectedBranch} from Git?\n\nThis will discard any uncommitted changes.`)) {
       return;
     }
     try {
-      await repositoryOperationsService.cloneWorkspace(state.selectedRepo, state.selectedBranch);
-      console.log(`✅ Force clone complete`);
+      await navOps.forceFullReload();
+      console.log(`✅ Force reload complete`);
+      alert('Workspace reloaded successfully!');
     } catch (error) {
-      console.error('Failed to force clone:', error);
+      console.error('Failed to force reload:', error);
+      alert('Failed to reload workspace: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -131,7 +133,7 @@ export function RepositoryMenu() {
               className="menubar-item" 
               onSelect={handleForceClone}
             >
-              Force Clone Repository
+              Force Full Reload
             </Menubar.Item>
 
             <Menubar.Item 

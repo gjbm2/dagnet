@@ -171,6 +171,7 @@ export function NavigatorHeader() {
                   <span>Tags</span>
                 </label>
               </div>
+
             </div>
           )}
         </div>
