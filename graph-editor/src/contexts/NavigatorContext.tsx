@@ -54,7 +54,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       console.log('🚀 NavigatorContext: Starting initialization...');
       const savedState = await loadStateFromDB();
       console.log('📁 NavigatorContext: State loaded from DB, now loading credentials...');
-      await loadCredentialsAndUpdateRepo(savedState);
+      const repoBranch = await loadCredentialsAndUpdateRepo(savedState);
+      // Proactively load items once repo/branch are known to avoid timing issues
+      if (repoBranch?.repo && repoBranch?.branch) {
+        await loadItems(repoBranch.repo, repoBranch.branch);
+      }
       console.log('✅ NavigatorContext: Initialization complete');
       setIsInitialized(true);
     };
@@ -62,9 +66,16 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Listen for file dirty state changes and trigger re-load
+  // NOTE: Don't reload for credentials changes - those only apply on "Apply and Reload"
   useEffect(() => {
     const handleFileDirtyChanged = (event: any) => {
       const { fileId, isDirty } = event.detail;
+      
+      // Ignore credentials file - it shouldn't trigger workspace reload
+      if (fileId === 'credentials-credentials') {
+        return;
+      }
+      
       console.log(`🔄 NavigatorContext: File ${fileId} dirty state changed to ${isDirty}, triggering refresh...`);
       // Trigger a full reload of items to pick up dirty state changes
     if (state.selectedRepo && state.selectedBranch) {
@@ -88,7 +99,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   /**
    * Load credentials and update selected repository
    */
-  const loadCredentialsAndUpdateRepo = async (savedState: any) => {
+  const loadCredentialsAndUpdateRepo = async (savedState: any): Promise<{ repo: string; branch: string } | null> => {
     try {
       console.log('🔑 NavigatorContext: Loading credentials...');
       const result = await credentialsManager.loadCredentials();
@@ -96,7 +107,24 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       
       if (result.success && result.credentials) {
         const availableRepos = result.credentials.git.map(repo => repo.name);
-        const defaultRepo = result.credentials.defaultGitRepo || availableRepos[0];
+        
+        // Determine default repo (NEW: prefer isDefault flag, fallback to defaultGitRepo or first repo)
+        const repoWithDefaultFlag = result.credentials.git.find(r => r.isDefault);
+        let defaultRepo = repoWithDefaultFlag?.name;
+        console.log(`🔑 NavigatorContext: Repo with isDefault=true:`, repoWithDefaultFlag);
+        console.log(`🔑 NavigatorContext: defaultRepo from isDefault flag:`, defaultRepo);
+        
+        if (!defaultRepo) {
+          // Check if defaultGitRepo is valid (exists in available repos)
+          if (result.credentials.defaultGitRepo && availableRepos.includes(result.credentials.defaultGitRepo)) {
+            defaultRepo = result.credentials.defaultGitRepo;
+            console.log(`🔑 NavigatorContext: Using deprecated defaultGitRepo field:`, defaultRepo);
+          } else {
+            // Fall back to first available repo
+            defaultRepo = availableRepos[0];
+            console.log(`🔑 NavigatorContext: Falling back to first available repo:`, defaultRepo);
+          }
+        }
         
         // Use saved repo if it exists and is valid, otherwise use default
         const savedRepoName = savedState?.selectedRepo;
@@ -111,7 +139,9 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         console.log(`🔑 NavigatorContext: Selected git creds:`, gitCreds);
         
         if (gitCreds) {
-          console.log(`🔑 NavigatorContext: Updating repo to ${gitCreds.name} (${gitCreds.owner}/${gitCreds.repo})`);
+          // Get repo name (support both 'name' field and deprecated 'repo' field)
+          const repoName = gitCreds.repo || gitCreds.name;
+          console.log(`🔑 NavigatorContext: Updating repo to ${gitCreds.name} (${gitCreds.owner}/${repoName})`);
           
           // Fetch branches for the selected repository
           console.log(`🔑 NavigatorContext: Fetching branches for ${gitCreds.name}...`);
@@ -134,14 +164,15 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
             return newState;
           });
           
-          // Don't call loadItems here - let useEffect handle it
-          // This prevents duplicate calls and ensures consistent flow
+          // Return chosen repo/branch to allow caller to immediately load
+          return { repo: gitCreds.name, branch: branchToUse };
         } else {
           console.log('🔑 NavigatorContext: No git credentials found');
           setState(prev => ({
             ...prev,
             availableRepos
           }));
+          return null;
         }
       } else {
         console.log('🔑 NavigatorContext: No credentials available:', result.error);
@@ -149,9 +180,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           ...prev,
           availableRepos: []
         }));
+        return null;
       }
     } catch (error) {
       console.error('🔑 NavigatorContext: Failed to load credentials:', error);
+      return null;
     }
   };
 
@@ -254,7 +287,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
       const { gitService } = await import('../services/gitService');
       // @ts-ignore - Dynamic import type inference issue
-      const branchesResult = await gitService.getBranches(gitCreds.owner, gitCreds.repo, gitCreds.token);
+      const branchesResult = await gitService.getBranches(gitCreds.owner, gitCreds.repo || gitCreds.name, gitCreds.token);
       
       if (branchesResult.success && branchesResult.data) {
         const branches = branchesResult.data.map((branch: any) => branch.name);
@@ -386,6 +419,17 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       
       if (!credentialsResult.success || !credentialsResult.credentials) {
         console.log('📦 NavigatorContext: No credentials available, cannot load repository items');
+        // Clear items and registry indexes
+        setItems([]);
+        setState(prev => ({
+          ...prev,
+          registryIndexes: {
+            parameters: undefined,
+            contexts: undefined,
+            cases: undefined,
+            nodes: undefined
+          }
+        }));
         setIsLoading(false);
         return;
       }
@@ -396,6 +440,17 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       
       if (!gitCreds) {
         console.log(`📦 NavigatorContext: No credentials found for repository ${repo}`);
+        // Clear items and registry indexes
+        setItems([]);
+        setState(prev => ({
+          ...prev,
+          registryIndexes: {
+            parameters: undefined,
+            contexts: undefined,
+            cases: undefined,
+            nodes: undefined
+          }
+        }));
         setIsLoading(false);
         return;
       }
@@ -442,11 +497,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           isLocal: file.isLocal
         }));
       
-      // Load registry indexes from FileStates (not Git API)
-      const parametersIndexFile = fileRegistry.getFile('parameter-index') || await db.files.get('parameter-index');
-      const contextsIndexFile = fileRegistry.getFile('context-index') || await db.files.get('context-index');
-      const casesIndexFile = fileRegistry.getFile('case-index') || await db.files.get('case-index');
-      const nodesIndexFile = fileRegistry.getFile('node-index') || await db.files.get('node-index');
+      // Load registry indexes from current workspace files only (not from stale IDB)
+      const parametersIndexFile = workspaceFiles.find(f => f.fileId === 'parameter-index');
+      const contextsIndexFile = workspaceFiles.find(f => f.fileId === 'context-index');
+      const casesIndexFile = workspaceFiles.find(f => f.fileId === 'case-index');
+      const nodesIndexFile = workspaceFiles.find(f => f.fileId === 'node-index');
 
       console.log(`📦 WorkspaceService: Loaded ${workspaceFiles.length} files total, ${items.length} non-index items`);
       console.log(`📦 WorkspaceService: Items by type:`, items.reduce((acc, item) => {
@@ -647,6 +702,48 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     addLocalItem,
     removeLocalItem,
     refreshItems,
+    // Allow external callers (e.g., credentials editor) to reload creds and refresh
+    reloadCredentials: async () => {
+      console.log('🔄 NavigatorContext: Reloading credentials and workspace...');
+      
+      // Get the OLD repo/branch before reloading credentials
+      const oldRepo = state.selectedRepo;
+      const oldBranch = state.selectedBranch;
+      console.log(`🔄 NavigatorContext: Old workspace: ${oldRepo}/${oldBranch}`);
+      
+      // Reload credentials and determine NEW repo/branch
+      // DON'T use saved state - force re-evaluation of default repo from credentials
+      const repoBranch = await loadCredentialsAndUpdateRepo(null);
+      
+      if (repoBranch?.repo && repoBranch?.branch) {
+        console.log(`🔄 NavigatorContext: New workspace: ${repoBranch.repo}/${repoBranch.branch}`);
+        
+        // Delete OLD workspace (if it exists and is different from new)
+        if (oldRepo && oldBranch) {
+          console.log(`🔄 NavigatorContext: Deleting old workspace ${oldRepo}/${oldBranch}...`);
+          await workspaceService.deleteWorkspace(oldRepo, oldBranch);
+        }
+        
+        // Force re-clone NEW workspace with new credentials
+        console.log('🔄 NavigatorContext: Cloning new workspace with updated credentials...');
+        const credentialsResult = await credentialsManager.loadCredentials();
+        if (credentialsResult.success && credentialsResult.credentials) {
+          const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === repoBranch.repo);
+          if (gitCreds) {
+            // Delete the new workspace if it exists (to force fresh clone with new creds)
+            const newWorkspaceExists = await workspaceService.workspaceExists(repoBranch.repo, repoBranch.branch);
+            if (newWorkspaceExists) {
+              console.log(`🔄 NavigatorContext: Deleting existing ${repoBranch.repo}/${repoBranch.branch} to force re-clone`);
+              await workspaceService.deleteWorkspace(repoBranch.repo, repoBranch.branch);
+            }
+            await workspaceService.cloneWorkspace(repoBranch.repo, repoBranch.branch, gitCreds);
+          }
+        }
+        
+        // Load items from new workspace
+        await loadItems(repoBranch.repo, repoBranch.branch);
+      }
+    },
     
     // Filter and sort operations
     setViewMode,

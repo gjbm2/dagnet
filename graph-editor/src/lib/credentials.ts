@@ -347,7 +347,10 @@ export class CredentialsManager {
     
     // Validate each Git credential
     for (const gitCred of credentials.git) {
-      if (!gitCred.name || !gitCred.owner || !gitCred.repo) {
+      // name and owner are required
+      // repo is optional (deprecated - name is used as repo name)
+      if (!gitCred.name || !gitCred.owner) {
+        console.warn('Invalid git credential - missing name or owner:', gitCred);
         return false;
       }
       // Token is optional (for public repositories)

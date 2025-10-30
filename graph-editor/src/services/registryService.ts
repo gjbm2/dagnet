@@ -73,9 +73,10 @@ class RegistryService {
   async getItems(type: 'parameter' | 'context' | 'case' | 'node', tabs: any[] = []): Promise<RegistryItem[]> {
     const itemsMap = new Map<string, RegistryItem>();
     
-    // 1. Load index file
+    // 1. Load index file from FileRegistry only (don't load stale data from IDB)
+    // The workspace loading process should have already loaded the correct index file into FileRegistry
     const indexFileId = `${type}-index`;
-    const indexFile = fileRegistry.getFile(indexFileId) || await db.files.get(indexFileId);
+    const indexFile = fileRegistry.getFile(indexFileId);
     
     // 2. Process index entries
     if (indexFile?.data) {

@@ -76,7 +76,7 @@ export function NavigatorContent() {
     };
     
     loadAllItems();
-  }, [state.selectedRepo, state.selectedBranch, items.length, tabs.length]); // Reload when repo/branch changes OR when files/tabs change
+  }, [state.selectedRepo, state.selectedBranch, items.length, tabs.length, state.registryIndexes]); // Reload when repo/branch changes OR when files/tabs change OR when indexes load
 
   // Listen for file dirty state changes and refresh registry items
   useEffect(() => {

@@ -139,15 +139,8 @@ class FileRegistry {
     file.data = newData;
     const wasDirty = file.isDirty;
     
-    // Special handling for settings and credentials files - they are always persisted immediately
-    // so they should never be marked as dirty
-    if (fileId === 'settings-settings' || fileId === 'credentials-credentials') {
-      file.isDirty = false;
-      // Update originalData to match current data since these are auto-saved
-      file.originalData = structuredClone(newData);
-    } else {
-      file.isDirty = newDataStr !== originalDataStr;
-    }
+    // Check if data differs from original
+    file.isDirty = newDataStr !== originalDataStr;
     
     file.lastModified = Date.now();
 
@@ -181,17 +174,27 @@ class FileRegistry {
     const file = this.files.get(fileId);
     if (!file) return;
 
+    console.log(`FileRegistry.markSaved[${fileId}]: Marking as saved`, {
+      wasDirty: file.isDirty,
+      dataSize: JSON.stringify(file.data).length,
+      originalDataSize: JSON.stringify(file.originalData).length
+    });
+
     file.originalData = structuredClone(file.data);
     file.isDirty = false;
     file.lastSaved = Date.now();
 
     await db.files.put(file);
+    console.log(`FileRegistry.markSaved[${fileId}]: Saved to IDB`);
+    
     this.notifyListeners(fileId, file);
+    console.log(`FileRegistry.markSaved[${fileId}]: Notified ${this.listeners.get(fileId)?.size || 0} listeners`);
     
     // Fire custom event so tab indicators can update
     window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
       detail: { fileId, isDirty: false } 
     }));
+    console.log(`FileRegistry.markSaved[${fileId}]: Fired dagnet:fileDirtyChanged event`);
   }
 
   /**
@@ -555,7 +558,6 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       console.log('TabContext: Creating credentials file from schema defaults');
       await fileRegistry.getOrCreateFile(credentialsFileId, 'credentials', { repository: 'local', path: 'credentials.yaml', branch: 'main' }, {
         version: '1.0.0',
-        defaultGitRepo: '',
         git: []
       });
     }
@@ -828,7 +830,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
               gitBasePath: gitCreds.basePath || '',
               gitBranch: selectedBranch,
               gitRepoOwner: gitCreds.owner,
-              gitRepoName: gitCreds.repo,
+              gitRepoName: gitCreds.repo || gitCreds.name,
               gitToken: gitCreds.token
             });
           } else {

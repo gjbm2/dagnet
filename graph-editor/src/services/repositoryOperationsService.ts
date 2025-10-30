@@ -160,7 +160,7 @@ class RepositoryOperationsService {
           message,
           branch,
           gitCreds.owner,
-          gitCreds.repo,
+          gitCreds.repo || gitCreds.name,
           gitCreds.token,
           file.sha // Include SHA for conflict detection
         );
