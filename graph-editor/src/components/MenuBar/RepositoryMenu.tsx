@@ -37,18 +37,8 @@ export function RepositoryMenu() {
     setIsSwitchBranchModalOpen(true);
   };
 
-  const handleForceClone = async () => {
-    if (!confirm(`Force Full Reload: Delete local workspace and re-clone ${state.selectedRepo}/${state.selectedBranch} from Git?\n\nThis will discard any uncommitted changes.`)) {
-      return;
-    }
-    try {
-      await navOps.forceFullReload();
-      console.log(`✅ Force reload complete`);
-      alert('Workspace reloaded successfully!');
-    } catch (error) {
-      console.error('Failed to force reload:', error);
-      alert('Failed to reload workspace: ' + (error instanceof Error ? error.message : String(error)));
-    }
+  const handleForceClone = () => {
+    repositoryOperationsService.forceFullReload(state.selectedRepo, state.selectedBranch);
   };
 
   const handlePullLatest = async () => {

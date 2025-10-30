@@ -77,11 +77,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       
-      console.log(`🔄 NavigatorContext: File ${fileId} dirty state changed to ${isDirty}, triggering refresh...`);
-      // Trigger a full reload of items to pick up dirty state changes
-    if (state.selectedRepo && state.selectedBranch) {
-      loadItems(state.selectedRepo, state.selectedBranch);
-    }
+      console.log(`🔄 NavigatorContext: File ${fileId} dirty state changed to ${isDirty}`);
+      // NOTE: No need to reload items! The Navigator will automatically update
+      // because NavigatorContent subscribes to registry changes via registryService.
+      // Reloading here causes unnecessary work and can create race conditions.
     };
 
     window.addEventListener('dagnet:fileDirtyChanged', handleFileDirtyChanged);
@@ -747,30 +746,36 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       if (repoBranch?.repo && repoBranch?.branch) {
         console.log(`🔄 NavigatorContext: New workspace: ${repoBranch.repo}/${repoBranch.branch}`);
         
-        // Delete OLD workspace (if it exists and is different from new)
-        if (oldRepo && oldBranch) {
-          console.log(`🔄 NavigatorContext: Deleting old workspace ${oldRepo}/${oldBranch}...`);
-          await workspaceService.deleteWorkspace(oldRepo, oldBranch);
-        }
-        
-        // Force re-clone NEW workspace with new credentials
-        console.log('🔄 NavigatorContext: Cloning new workspace with updated credentials...');
-        const credentialsResult = await credentialsManager.loadCredentials();
-        if (credentialsResult.success && credentialsResult.credentials) {
-          const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === repoBranch.repo);
-          if (gitCreds) {
-            // Delete the new workspace if it exists (to force fresh clone with new creds)
-            const newWorkspaceExists = await workspaceService.workspaceExists(repoBranch.repo, repoBranch.branch);
-            if (newWorkspaceExists) {
-              console.log(`🔄 NavigatorContext: Deleting existing ${repoBranch.repo}/${repoBranch.branch} to force re-clone`);
-              await workspaceService.deleteWorkspace(repoBranch.repo, repoBranch.branch);
+        try {
+          // Force re-clone NEW workspace with new credentials
+          console.log('🔄 NavigatorContext: Cloning new workspace with updated credentials...');
+          const credentialsResult = await credentialsManager.loadCredentials();
+          if (credentialsResult.success && credentialsResult.credentials) {
+            const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === repoBranch.repo);
+            if (gitCreds) {
+              // Delete the new workspace if it exists (to force fresh clone with new creds)
+              const newWorkspaceExists = await workspaceService.workspaceExists(repoBranch.repo, repoBranch.branch);
+              if (newWorkspaceExists) {
+                console.log(`🔄 NavigatorContext: Deleting existing ${repoBranch.repo}/${repoBranch.branch} to force re-clone`);
+                await workspaceService.deleteWorkspace(repoBranch.repo, repoBranch.branch);
+              }
+              await workspaceService.cloneWorkspace(repoBranch.repo, repoBranch.branch, gitCreds);
             }
-            await workspaceService.cloneWorkspace(repoBranch.repo, repoBranch.branch, gitCreds);
           }
+          
+          // Only delete OLD workspace AFTER successfully cloning the new one
+          if (oldRepo && oldBranch && (oldRepo !== repoBranch.repo || oldBranch !== repoBranch.branch)) {
+            console.log(`🔄 NavigatorContext: Deleting old workspace ${oldRepo}/${oldBranch}...`);
+            await workspaceService.deleteWorkspace(oldRepo, oldBranch);
+          }
+          
+          // Load items from new workspace
+          await loadItems(repoBranch.repo, repoBranch.branch);
+        } catch (error) {
+          console.error('❌ NavigatorContext: Failed to reload credentials:', error);
+          // Re-throw with more helpful context
+          throw new Error(`Failed to clone repository with new credentials: ${error instanceof Error ? error.message : String(error)}`);
         }
-        
-        // Load items from new workspace
-        await loadItems(repoBranch.repo, repoBranch.branch);
       }
     },
     

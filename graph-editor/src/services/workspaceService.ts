@@ -158,6 +158,17 @@ class WorkspaceService {
             ? `${dirConfig.type}-index`
             : `${dirConfig.type}-${fileNameWithoutExt}`;
 
+            // Get file modification time from metadata (standardized across all file types)
+            let fileModTime = Date.now();
+            if (data?.metadata) {
+              // All file types now use metadata.updated_at / metadata.created_at
+              if (data.metadata.updated_at) {
+                fileModTime = new Date(data.metadata.updated_at).getTime();
+              } else if (data.metadata.created_at) {
+                fileModTime = new Date(data.metadata.created_at).getTime();
+              }
+            }
+            
             const fileState: FileState = {
               fileId,
             type: dirConfig.type,
@@ -175,7 +186,7 @@ class WorkspaceService {
               isLoaded: true,
               isLocal: false,
               viewTabs: [],
-              lastModified: Date.now(),
+              lastModified: fileModTime,
             sha: treeItem.sha,
               lastSynced: Date.now()
             };
@@ -263,6 +274,12 @@ class WorkspaceService {
       
       // Create clean FileState with original fileId for FileRegistry
       const cleanFileState = { ...file, fileId: actualFileId };
+      
+      console.log(`📦 loadWorkspaceFromIDB: Loaded file ${actualFileId}`, {
+        lastModified: cleanFileState.lastModified,
+        'data.metadata.updated': cleanFileState.data?.metadata?.updated,
+        'data.updated_at': cleanFileState.data?.updated_at
+      });
       
       // Use the internal map directly since files are already in IDB
       (fileRegistry as any).files.set(actualFileId, cleanFileState);

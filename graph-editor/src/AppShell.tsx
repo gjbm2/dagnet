@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import DockLayout, { LayoutData } from 'rc-dock';
+import YAML from 'yaml';
 import { TabProvider, useTabContext, fileRegistry } from './contexts/TabContext';
 import { NavigatorProvider, useNavigatorContext } from './contexts/NavigatorContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext';
@@ -43,7 +44,8 @@ function AppShellContent() {
     });
     
     repositoryOperationsService.initialize({
-      navigatorOps: navOperations
+      navigatorOps: navOperations,
+      dialogOps
     });
     
     console.log('✅ Services initialized');
@@ -55,10 +57,10 @@ function AppShellContent() {
   const [isHovering, setIsHovering] = useState(false);
   const navButtonRef = React.useRef<HTMLDivElement>(null);
   
-  // Navigator resizing - load from localStorage or default to 280
+  // Navigator resizing - load from localStorage or default to 300
   const [navWidth, setNavWidth] = useState(() => {
     const saved = localStorage.getItem('navigator-width');
-    return saved ? parseInt(saved, 10) : 280;
+    return saved ? parseInt(saved, 10) : 300;
   });
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartX = React.useRef(0);
@@ -1021,12 +1023,40 @@ function AppShellContent() {
               };
               gitService.setCredentials(credentialsWithRepo);
 
+              // IMPORTANT: Update file timestamps BEFORE committing to Git
+              const nowISO = new Date().toISOString();
               const filesToCommit = files.map(file => {
+                // Get the file from registry to update its metadata
+                const fileState = fileRegistry.getFile(file.fileId);
+                let content = file.content;
+                
+                // Update timestamp in the file content itself (standardized metadata structure)
+                if (fileState?.data) {
+                  // All file types now use metadata.updated_at
+                  if (!fileState.data.metadata) {
+                    fileState.data.metadata = {
+                      created_at: nowISO,
+                      version: '1.0.0'
+                    };
+                  }
+                  fileState.data.metadata.updated_at = nowISO;
+                  
+                  // Set author from credentials userName if available
+                  if (gitCreds?.userName && !fileState.data.metadata.author) {
+                    fileState.data.metadata.author = gitCreds.userName;
+                  }
+                  
+                  // Re-serialize with updated timestamp
+                  content = fileState.type === 'graph' 
+                    ? JSON.stringify(fileState.data, null, 2)
+                    : YAML.stringify(fileState.data);
+                }
+                
                 const basePath = gitCreds.basePath || '';
                 const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
                 return {
                   path: fullPath,
-                  content: file.content,
+                  content,
                   sha: file.sha
                 };
               });

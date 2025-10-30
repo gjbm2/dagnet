@@ -176,11 +176,6 @@ export function NavigatorHeader() {
           )}
         </div>
       </div>
-
-      {/* Control buttons */}
-      <div className="navigator-controls">
-        {/* No close button - navigator is controlled by the pin/unpin button in AppShell */}
-      </div>
     </div>
   );
 }

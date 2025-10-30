@@ -21,12 +21,14 @@ export interface RepositoryStatus {
 
 class RepositoryOperationsService {
   private navigatorOps: any = null;
+  private dialogOps: any = null;
 
   /**
    * Initialize with dependencies
    */
-  initialize(deps: { navigatorOps: any }) {
+  initialize(deps: { navigatorOps: any; dialogOps?: any }) {
     this.navigatorOps = deps.navigatorOps;
+    this.dialogOps = deps.dialogOps;
   }
 
   /**
@@ -95,6 +97,76 @@ class RepositoryOperationsService {
     }
 
     console.log(`✅ RepositoryOperationsService: Cloned successfully`);
+  }
+
+  /**
+   * Force full reload - delete workspace and re-clone from Git
+   * This is the main entry point for "Force Full Reload" command
+   * Can be called from menus, context menus, keyboard shortcuts, etc.
+   * 
+   * @param skipConfirm - Skip confirmation dialog (for programmatic calls)
+   */
+  async forceFullReload(repository: string, branch: string, skipConfirm: boolean = false): Promise<void> {
+    console.log(`🔄 RepositoryOperationsService: Force full reload ${repository}/${branch}`);
+
+    // Confirmation dialog
+    if (!skipConfirm && this.dialogOps) {
+      const confirmed = await this.dialogOps.showConfirm({
+        title: 'Force Full Reload',
+        message:
+          `Delete local workspace and re-clone ${repository}/${branch} from Git?\n\n` +
+          'This will:\n' +
+          '• Discard all uncommitted changes\n' +
+          '• Clear local workspace cache\n' +
+          '• Re-clone the repository into IndexedDB',
+        confirmLabel: 'Force Reload',
+        cancelLabel: 'Cancel',
+        confirmVariant: 'danger'
+      });
+      if (!confirmed) {
+        return; // User cancelled
+      }
+    }
+
+    try {
+      // Get git credentials
+      const credsResult = await credentialsManager.loadCredentials();
+      if (!credsResult.success) {
+        throw new Error('No credentials available');
+      }
+
+      const gitCreds = credsResult.credentials?.git?.find(
+        (repo: any) => repo.name === repository
+      );
+
+      if (!gitCreds) {
+        throw new Error(`Repository "${repository}" not found in credentials`);
+      }
+
+      // Delete workspace
+      await workspaceService.deleteWorkspace(repository, branch);
+      
+      // Re-clone from Git
+      await workspaceService.cloneWorkspace(repository, branch, gitCreds);
+
+      // Reload Navigator to reflect fresh workspace
+      if (this.navigatorOps) {
+        await this.navigatorOps.refreshItems();
+      }
+
+      console.log(`✅ RepositoryOperationsService: Force reload complete`);
+    } catch (error) {
+      // Show error dialog
+      if (this.dialogOps) {
+        await this.dialogOps.showConfirm({
+          title: 'Error',
+          message: `Failed to reload workspace: ${error instanceof Error ? error.message : String(error)}`,
+          confirmLabel: 'OK',
+          cancelLabel: ''
+        });
+      }
+      throw error;
+    }
   }
 
   /**

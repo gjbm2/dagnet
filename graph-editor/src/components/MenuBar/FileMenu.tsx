@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
+import { useDialog } from '../../contexts/DialogContext';
 import { db } from '../../db/appDatabase';
 import { encodeStateToUrl } from '../../lib/shareUrl';
 import { CommitModal } from '../CommitModal';
@@ -25,6 +26,7 @@ import { fileOperationsService } from '../../services/fileOperationsService';
 export function FileMenu() {
   const { activeTabId, tabs, operations } = useTabContext();
   const { operations: navOps, state: navState } = useNavigatorContext();
+  const { showConfirm } = useDialog();
 
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-');
@@ -286,15 +288,20 @@ export function FileMenu() {
   };
 
   const handleClearData = async () => {
-    const confirmed = window.confirm(
-      'Clear ALL application data?\n\n' +
-      'This will:\n' +
-      '- Close all tabs\n' +
-      '- Clear all cached files\n' +
-      '- Reset layout\n' +
-      '- Keep settings intact\n\n' +
-      'This action cannot be undone!'
-    );
+    const confirmed = await showConfirm({
+      title: 'Clear Application Data',
+      message: 
+        'Clear ALL application data?\n\n' +
+        'This will:\n' +
+        '• Close all tabs\n' +
+        '• Clear all cached files\n' +
+        '• Reset layout\n' +
+        '• Keep settings intact\n\n' +
+        'This action cannot be undone!',
+      confirmLabel: 'Clear Data',
+      cancelLabel: 'Cancel',
+      confirmVariant: 'danger'
+    });
     
     if (!confirmed) return;
 
@@ -310,20 +317,32 @@ export function FileMenu() {
       window.location.reload();
     } catch (error) {
       console.error('Failed to clear data:', error);
-      alert('Failed to clear data: ' + error);
+      await showConfirm({
+        title: 'Error',
+        message: `Failed to clear data: ${error}`,
+        confirmLabel: 'OK',
+        cancelLabel: '',
+        confirmVariant: 'primary'
+      });
     }
   };
 
   const handleClearAllData = async () => {
-    const confirmed = window.confirm(
-      'Clear ALL application data and settings?\n\n' +
-      'This will:\n' +
-      '- Close all tabs\n' +
-      '- Clear all cached files\n' +
-      '- Reset layout and settings\n' +
-      '- Clear all user preferences\n\n' +
-      'This action cannot be undone!'
-    );
+    const confirmed = await showConfirm({
+      title: 'Clear ALL Data and Settings',
+      message: 
+        'Clear ALL application data and settings?\n\n' +
+        'This will:\n' +
+        '• Close all tabs\n' +
+        '• Clear all cached files\n' +
+        '• Reset layout and settings\n' +
+        '• Clear all user preferences\n' +
+        '• Remove all credentials\n\n' +
+        'This action cannot be undone!',
+      confirmLabel: 'Clear Everything',
+      cancelLabel: 'Cancel',
+      confirmVariant: 'danger'
+    });
     
     if (!confirmed) return;
 
@@ -342,7 +361,13 @@ export function FileMenu() {
       window.location.reload();
     } catch (error) {
       console.error('Failed to clear data:', error);
-      alert('Failed to clear data: ' + error);
+      await showConfirm({
+        title: 'Error',
+        message: `Failed to clear data: ${error}`,
+        confirmLabel: 'OK',
+        cancelLabel: '',
+        confirmVariant: 'primary'
+      });
     }
   };
 

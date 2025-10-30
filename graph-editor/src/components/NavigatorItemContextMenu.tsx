@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import YAML from 'yaml';
 import { useTabContext } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { RepositoryItem, ObjectType } from '../types';
@@ -25,8 +26,7 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   const { state: navState, operations: navOps } = useNavigatorContext();
   
   // Check if this item has any open tabs
-  // Use actual fileId if available, otherwise reconstruct (for backwards compat)
-  const fileId = item.fileId || `${item.type}-${item.id}`;
+  const fileId = `${item.type}-${item.id}`;
   const openTabs = tabs.filter(t => t.fileId === fileId);
 
   // Commit modal state
@@ -68,13 +68,40 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
       };
       gitService.setCredentials(credentialsWithRepo);
 
-      // Prepare files with proper paths including basePath
+      // IMPORTANT: Update file timestamps BEFORE committing to Git
+      const nowISO = new Date().toISOString();
       const filesToCommit = files.map(file => {
+        // Get the file from registry to update its metadata
+        const fileState = fileRegistry.getFile(file.fileId);
+        let content = file.content;
+        
+        // Update timestamp in the file content itself (standardized metadata structure)
+        if (fileState?.data) {
+          // All file types now use metadata.updated_at
+          if (!fileState.data.metadata) {
+            fileState.data.metadata = {
+              created_at: nowISO,
+              version: '1.0.0'
+            };
+          }
+          fileState.data.metadata.updated_at = nowISO;
+          
+          // Set author from credentials userName if available
+          if (gitCreds?.userName && !fileState.data.metadata.author) {
+            fileState.data.metadata.author = gitCreds.userName;
+          }
+          
+          // Re-serialize with updated timestamp
+          content = fileState.type === 'graph' 
+            ? JSON.stringify(fileState.data, null, 2)
+            : YAML.stringify(fileState.data);
+        }
+        
         const basePath = gitCreds.basePath || '';
         const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
         return {
           path: fullPath,
-          content: file.content,
+          content,
           sha: file.sha
         };
       });

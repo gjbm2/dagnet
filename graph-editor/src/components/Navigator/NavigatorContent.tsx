@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
+import { NavigatorControls, FilterMode, SortMode, GroupMode } from './NavigatorControls';
 import { ObjectTypeSection } from './ObjectTypeSection';
 import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
 import { NavigatorSectionContextMenu } from '../NavigatorSectionContextMenu';
@@ -147,6 +148,14 @@ export function NavigatorContent() {
         const fileId = `graph-${item.id}`;
         const file = fileRegistry.getFile(fileId);
         const itemTabs = tabs.filter(t => t.fileId === fileId);
+        
+        if (file) {
+          console.log(`🗂 NavigatorContent: Graph entry for ${item.id}`, {
+            fileId,
+            lastModified: file.lastModified,
+            'data.metadata.updated': file.data?.metadata?.updated
+          });
+        }
         
         entriesMap.set(item.id, {
           id: item.id,
@@ -338,10 +347,48 @@ export function NavigatorContent() {
     return indexFile?.isDirty || false;
   };
 
+  // Map state to control props
+  const filterMode: FilterMode = state.showDirtyOnly ? 'dirty' 
+    : state.showOpenOnly ? 'open' 
+    : state.showLocalOnly ? 'local' 
+    : 'all';
+  
+  const sortMode: SortMode = (state.sortBy || 'name') as SortMode;
+  
+  const groupMode: GroupMode = state.groupByTags ? 'tags' 
+    : state.groupBySubCategories ? 'type' 
+    : 'none';
+  
+  // Handlers for control changes
+  const handleFilterChange = (filter: FilterMode) => {
+    operations.setShowDirtyOnly(filter === 'dirty');
+    operations.setShowOpenOnly(filter === 'open');
+    operations.setShowLocalOnly(filter === 'local');
+  };
+  
+  const handleSortChange = (sort: SortMode) => {
+    operations.setSortBy(sort);
+  };
+  
+  const handleGroupChange = (group: GroupMode) => {
+    operations.setGroupByTags(group === 'tags');
+    operations.setGroupBySubCategories(group === 'type');
+  };
+
   return (
     <div className="navigator-content">
       {/* Header with search and filters */}
       <NavigatorHeader />
+      
+      {/* Filter/Sort/Group Controls */}
+      <NavigatorControls
+        filter={filterMode}
+        sortBy={sortMode}
+        groupBy={groupMode}
+        onFilterChange={handleFilterChange}
+        onSortChange={handleSortChange}
+        onGroupChange={handleGroupChange}
+      />
 
       {/* Object tree */}
       <div className="navigator-tree">
