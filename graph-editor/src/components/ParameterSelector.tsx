@@ -6,6 +6,7 @@ import { useTabContext } from '../contexts/TabContext';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { NewFileModal } from './NewFileModal';
 import { fileRegistry } from '../contexts/TabContext';
+import { registryService, RegistryItem } from '../services/registryService';
 
 interface ParameterSelectorProps {
   /** The type of item being selected (parameter, context, case, or node) */
@@ -46,7 +47,7 @@ export function ParameterSelector({
   autoFocus = false,
   parameterType
 }: ParameterSelectorProps) {
-  const { state, operations: navOps, items: navItems } = useNavigatorContext();
+  const { operations: navOps } = useNavigatorContext();
   const { operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
   const { graph } = useGraphStore(); // Get current graph to check for used IDs
@@ -54,6 +55,7 @@ export function ParameterSelector({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isNewFileModalOpen, setIsNewFileModalOpen] = useState(false);
   const [selectedRegistryId, setSelectedRegistryId] = useState<string | null>(null);
+  const [registryItems, setRegistryItems] = useState<RegistryItem[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
 
@@ -67,53 +69,39 @@ export function ParameterSelector({
     }
   }, [value]);
 
-  // Get registry items for this type
-  const registryItems = state.registryIndexes ? (() => {
-    const key = `${type}s` as keyof typeof state.registryIndexes;
-    const index = state.registryIndexes[key];
-    
-    if (!index) return [];
-    
-    // Extract IDs from the registry index
-    if (type === 'parameter' && 'parameters' in index) {
-      let params = (index as any).parameters.map((p: any) => ({ 
-        id: p.id, 
-        name: p.name, 
-        description: p.description, 
-        file_path: p.file_path,
-        type: p.type, // Include parameter type for filtering
-        isLocal: false
-      }));
-      
-      // Filter by parameter type if specified
-      if (parameterType) {
-        params = params.filter((p: any) => p.type === parameterType);
+  // Load registry items from central service
+  useEffect(() => {
+    const loadItems = async () => {
+      try {
+        let items: RegistryItem[];
+        
+        if (type === 'parameter' && parameterType) {
+          // Filter parameters by type
+          items = await registryService.getParametersByType(parameterType);
+        } else {
+          // Load all items of this type
+          items = await registryService.getItems(type);
+        }
+        
+        setRegistryItems(items);
+      } catch (error) {
+        console.error(`Failed to load ${type} items:`, error);
+        setRegistryItems([]);
       }
-      
-      return params;
-    } else if (type === 'context' && 'contexts' in index) {
-      return (index as any).contexts.map((c: any) => ({ id: c.id, name: c.name, description: c.description, file_path: c.file_path, isLocal: false }));
-    } else if (type === 'case' && 'cases' in index) {
-      return (index as any).cases.map((c: any) => ({ id: c.id, name: c.name, description: c.description, file_path: c.file_path, isLocal: false }));
-    } else if (type === 'node' && 'nodes' in index) {
-      return (index as any).nodes.map((n: any) => ({ id: n.id, name: n.name, description: n.description, file_path: n.file_path, isLocal: false }));
-    }
-    return [];
-  })() : [];
+    };
+    
+    loadItems();
+  }, [type, parameterType]);
 
-  // Also include local (uncommitted) items of this type from the navigator
-  const localItems = navItems
-    .filter(item => item.type === type && item.isLocal)
-    .map(item => ({
-      id: item.id,
-      name: item.name || item.id,
-      description: item.description,
-      file_path: undefined,
-      isLocal: true
-    }));
-
-  // Combine registry and local items
-  const allItems = [...registryItems, ...localItems];
+  // Map RegistryItem to format expected by selector
+  const allItems = registryItems.map(item => ({
+    id: item.id,
+    name: item.name || item.id,
+    description: item.description,
+    file_path: item.file_path,
+    type: item.parameter_type || item.node_type || item.case_type,
+    isLocal: item.isLocal
+  }));
 
   // Get list of used IDs in the current graph (for nodes only)
   const usedIdsInGraph = type === 'node' && graph ? 

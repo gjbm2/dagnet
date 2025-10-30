@@ -45,21 +45,21 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   // Track if we've initialized the selected files
   const initializedRef = useRef(false);
 
-  // Get dirty files that can be committed
-  const dirtyTabs = operations.getDirtyTabs();
-  const commitableFiles = useMemo(() => {
-    return dirtyTabs
-      .filter(tab => {
-        const fileId = tab.fileId;
-        const type = fileId.split('-')[0] as ObjectType;
+  // Get dirty files that can be committed - calculate directly to avoid infinite loops
+  const getCommittableFiles = () => {
+    if (!isOpen) return [];
+    
+    const dirtyFiles = fileRegistry.getDirtyFiles();
+    return dirtyFiles
+      .filter(file => {
+        const type = file.fileId.split('-')[0] as ObjectType;
         // Only allow graph, parameter, context, case files
         return ['graph', 'parameter', 'context', 'case'].includes(type);
       })
-      .map(tab => {
-        const fileId = tab.fileId;
+      .map(file => {
+        const fileId = file.fileId;
         const type = fileId.split('-')[0] as ObjectType;
         const name = fileId.split('-').slice(1).join('-');
-        const file = fileRegistry.getFile(fileId);
         
         // Determine file extension and path
         const extension = type === 'graph' ? 'json' : 'yaml';
@@ -72,22 +72,17 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
           name: nameWithoutExt,
           type,
           path: `${type}s/${fileName}`,
-          content: file?.data ? JSON.stringify(file.data, null, 2) : '',
-          sha: undefined // Will be determined during commit
+          content: file.data ? JSON.stringify(file.data, null, 2) : '',
+          sha: file.sha
         };
       });
-  }, [dirtyTabs]);
+  };
+  
+  const commitableFiles = getCommittableFiles();
 
-  // Initialize selected files when modal opens
+  // Initialize selected files when modal opens - use a separate effect for modal state
   useEffect(() => {
     if (isOpen && !initializedRef.current) {
-      if (preselectedFiles.length > 0) {
-        setSelectedFiles(new Set(preselectedFiles));
-      } else {
-        // Select all commitable files by default
-        const fileIds = commitableFiles.map(f => f.fileId);
-        setSelectedFiles(new Set(fileIds));
-      }
       initializedRef.current = true;
     } else if (!isOpen) {
       // Reset when modal closes
@@ -97,8 +92,20 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
       setError(null);
       setSuccess(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, preselectedFiles]); // commitableFiles not needed due to ref guard
+  }, [isOpen]);
+
+  // Initialize selected files when commitableFiles change (but only if modal is open and not initialized)
+  useEffect(() => {
+    if (isOpen && initializedRef.current && commitableFiles.length > 0 && selectedFiles.size === 0) {
+      if (preselectedFiles.length > 0) {
+        setSelectedFiles(new Set(preselectedFiles));
+      } else {
+        // Select all commitable files by default
+        const fileIds = commitableFiles.map(f => f.fileId);
+        setSelectedFiles(new Set(fileIds));
+      }
+    }
+  }, [commitableFiles, preselectedFiles, isOpen, selectedFiles.size]);
 
   // Load available branches
   useEffect(() => {

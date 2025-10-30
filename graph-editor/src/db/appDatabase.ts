@@ -1,11 +1,12 @@
 import Dexie, { Table } from 'dexie';
-import { FileState, TabState, AppState, SettingsData } from '../types';
+import { FileState, TabState, AppState, SettingsData, WorkspaceState } from '../types';
 import { CredentialsData } from '../types/credentials';
 
 /**
  * IndexedDB database for persisting app state
  * 
  * Stores:
+ * - workspaces: Workspace metadata (repo, branch, lastSynced)
  * - files: FileState records (single source of truth for file data)
  * - tabs: TabState records (views of files)
  * - appState: Application-level state (layout, navigator, etc.)
@@ -14,6 +15,7 @@ import { CredentialsData } from '../types/credentials';
  */
 export class AppDatabase extends Dexie {
   // Tables
+  workspaces!: Table<WorkspaceState, string>;
   files!: Table<FileState, string>;
   tabs!: Table<TabState, string>;
   appState!: Table<AppState, string>;
@@ -37,6 +39,19 @@ export class AppDatabase extends Dexie {
       settings: 'id',
       
       // id is primary key, timestamp for sorting
+      credentials: 'id, source, timestamp'
+    });
+    
+    // Version 2: Add workspaces table
+    this.version(2).stores({
+      // Add workspaces table
+      workspaces: 'id, repository, branch, lastSynced',
+      
+      // Keep existing tables
+      files: 'fileId, type, isDirty, source.repository, source.branch, lastModified',
+      tabs: 'id, fileId, viewMode',
+      appState: 'id, updatedAt',
+      settings: 'id',
       credentials: 'id, source, timestamp'
     });
   }

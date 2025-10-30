@@ -93,7 +93,7 @@ class FileRegistry {
           type,
           data,
           originalData: structuredClone(data),
-          isDirty: source?.repository === 'local', // Local files are dirty by default
+          isDirty: false, // Files are clean when first loaded
           source,
           viewTabs: [],
           lastModified: Date.now()
@@ -327,13 +327,29 @@ class FileRegistry {
         this.files.set(indexFileId, indexFile);
       }
       
-      // Ensure data structure exists
+      // Ensure data structure exists (match Git repo format)
       if (!indexFile.data) {
-        indexFile.data = { version: '1.0.0', entries: [] };
+        indexFile.data = { 
+          version: '1.0.0',
+          created_at: new Date().toISOString(),
+          parameters: type === 'parameter' ? [] : undefined,
+          contexts: type === 'context' ? [] : undefined,
+          cases: type === 'case' ? [] : undefined,
+          nodes: type === 'node' ? [] : undefined
+        };
+        // Remove undefined keys
+        Object.keys(indexFile.data).forEach(key => {
+          if (indexFile.data[key] === undefined) {
+            delete indexFile.data[key];
+          }
+        });
       }
       
+      // Get the correct array key based on type
+      const arrayKey = `${type}s` as 'parameters' | 'contexts' | 'cases' | 'nodes';
+      const entries = indexFile.data[arrayKey] || [];
+      
       // Add entry to index
-      const entries = indexFile.data.entries || [];
       const newEntry = {
         id: itemId.replace(`${type}-`, ''),
         file_path: `${type}s/${itemId.replace(`${type}-`, '')}.yaml`,
@@ -345,7 +361,8 @@ class FileRegistry {
       entries.push(newEntry);
       indexFile.data = {
         ...indexFile.data,
-        entries
+        [arrayKey]: entries,
+        updated_at: new Date().toISOString()
       };
       indexFile.isDirty = true;
       indexFile.lastModified = Date.now();
@@ -371,18 +388,21 @@ class FileRegistry {
     
     try {
       const indexFile = this.getFile(indexFileId);
-      if (!indexFile || !indexFile.data?.entries) {
+      const arrayKey = `${type}s` as 'parameters' | 'contexts' | 'cases' | 'nodes';
+      
+      if (!indexFile || !indexFile.data?.[arrayKey]) {
         console.warn(`FileRegistry: No index file found for ${type}`);
         return;
       }
       
       // Remove entry from index
       const itemIdBase = itemId.replace(`${type}-`, '');
-      const entries = indexFile.data.entries.filter((entry: any) => entry.id !== itemIdBase);
+      const entries = indexFile.data[arrayKey].filter((entry: any) => entry.id !== itemIdBase);
       
       indexFile.data = {
         ...indexFile.data,
-        entries
+        [arrayKey]: entries,
+        updated_at: new Date().toISOString()
       };
       indexFile.isDirty = true;
       indexFile.lastModified = Date.now();
@@ -437,6 +457,13 @@ class FileRegistry {
       console.log(`FileRegistry: Calling ${callbacks.size} callbacks with NEW data object`);
       callbacks.forEach(callback => callback(fileCopy));
     }
+  }
+
+  /**
+   * Get all files
+   */
+  getAllFiles(): FileState[] {
+    return Array.from(this.files.values());
   }
 
   /**
@@ -936,32 +963,9 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     
     console.log(`closeTab: isDirty=${file?.isDirty}, isLastView=${isLastView}, viewTabs=${file?.viewTabs.length}`);
     
-    // Check if file is dirty and this is the last view (unless forced)
-    if (!force && file?.isDirty && isLastView) {
-      const fileName = tab.title.replace(/ \(.*\)$/, '');
-      console.log(`closeTab: Showing confirmation for dirty file ${fileName}`);
-      
-      const confirmed = await showConfirm({
-        title: 'Unsaved Changes',
-        message: `"${fileName}" has unsaved changes.\n\nDo you want to discard your changes?`,
-        confirmLabel: 'Discard Changes',
-        cancelLabel: 'Keep Editing',
-        confirmVariant: 'danger'
-      });
-      
-      if (!confirmed) {
-        console.log(`closeTab: ❌ User cancelled close`);
-        return false;
-      }
-      
-      console.log(`closeTab: User confirmed discard, reverting ${tab.fileId}`);
-      await fileRegistry.revertFile(tab.fileId);
-      
-      if (file.type === 'graph') {
-        const { cleanupGraphStore } = await import('./GraphStoreContext');
-        cleanupGraphStore(tab.fileId);
-      }
-    }
+    // Files now persist in IndexedDB - no need to warn about dirty files
+    // The file will remain in the workspace even if all tabs are closed
+    console.log(`closeTab: Closing tab ${tabId} for file ${tab.fileId} (file persists in workspace)`);
 
     // ATOMIC REMOVAL - all steps with proper state management
     console.log(`closeTab: Step 1 - Remove from file registry`);
@@ -1054,7 +1058,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     const dirtyFiles = fileRegistry.getDirtyFiles();
     const dirtyFileIds = new Set(dirtyFiles.map(f => f.fileId));
     return tabs.filter(tab => dirtyFileIds.has(tab.fileId));
-  }, [tabs]);
+  }, [tabs, fileRegistry]);
 
   /**
    * Save a tab

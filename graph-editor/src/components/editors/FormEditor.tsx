@@ -28,7 +28,11 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   const [canRedo, setCanRedo] = useState(false);
 
   // Determine object type from fileId
-  const objectType = fileId.split('-')[0] as 'parameter' | 'context' | 'case' | 'credentials';
+  // Handle index files specially (e.g., 'parameter-index' → 'parameter-index')
+  const fileIdParts = fileId.split('-');
+  const objectType = fileIdParts.length > 1 && fileIdParts[fileIdParts.length - 1] === 'index'
+    ? fileId // Use full fileId for index files
+    : fileIdParts[0]; // Use first part for regular files
 
   // Load schema based on object type (using central registry)
   useEffect(() => {
