@@ -9,6 +9,7 @@ export interface GitRepositoryCredential {
   name: string; // Unique identifier and repository name
   isDefault?: boolean; // Mark as default repo (NEW in v1.1.0)
   owner: string;
+  userName?: string; // Display name for file authorship (used in metadata.author)
   repo?: string; // DEPRECATED: Use 'name' instead (will be removed in v2.0.0)
   token: string;
   basePath?: string;

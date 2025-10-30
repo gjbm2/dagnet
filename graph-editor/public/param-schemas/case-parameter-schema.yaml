@@ -8,6 +8,7 @@ required:
   - parameter_type
   - name
   - case
+  - metadata
 
 properties:
   parameter_id:
@@ -174,4 +175,38 @@ properties:
         role:
           type: string
           enum: [owner, analyst, developer]
+          
+  metadata:
+    type: object
+    description: Metadata about this case definition
+    required: [created_at, version]
+    properties:
+      created_at:
+        type: string
+        format: date-time
+        description: ISO 8601 timestamp when case was created
+      updated_at:
+        type: string
+        format: date-time
+        description: ISO 8601 timestamp when case was last updated
+      author:
+        type: string
+        minLength: 2
+        maxLength: 64
+        description: Author or team responsible for this case
+      version:
+        type: string
+        pattern: ^\d+\.\d+\.\d+$
+        description: Semantic version of this case definition
+        examples: ["1.0.0", "1.2.3"]
+      status:
+        type: string
+        enum: [active, deprecated, draft, archived]
+        default: active
+        description: Current status of this case definition
+      tags:
+        type: array
+        items:
+          type: string
+        description: Tags for categorization (duplicates root-level tags for consistency)
 

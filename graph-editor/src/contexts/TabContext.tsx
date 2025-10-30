@@ -180,12 +180,45 @@ class FileRegistry {
       originalDataSize: JSON.stringify(file.originalData).length
     });
 
+    const now = Date.now();
+    const nowISO = new Date(now).toISOString();
+    
+    // Update internal file metadata timestamp so it persists across page reloads
+    // This ensures sort by "Modified" works correctly after refresh
+    if (file.data) {
+      if (file.type === 'graph' && file.data.metadata) {
+        file.data.metadata.updated = nowISO;
+      } else if (file.type === 'parameter' || file.type === 'context' || file.type === 'case' || file.type === 'node') {
+        file.data.updated_at = nowISO;
+      }
+    }
+
     file.originalData = structuredClone(file.data);
     file.isDirty = false;
-    file.lastSaved = Date.now();
+    file.lastSaved = now;
+    file.lastModified = now;
 
+    console.log(`📝 markSaved[${fileId}]: Setting timestamps`, {
+      nowISO,
+      now,
+      'data.metadata.updated': file.data?.metadata?.updated,
+      'data.updated_at': file.data?.updated_at,
+      lastModified: file.lastModified
+    });
+
+    // Save to IDB - need to update BOTH prefixed and unprefixed versions
+    // Unprefixed version (used by FileRegistry)
     await db.files.put(file);
-    console.log(`FileRegistry.markSaved[${fileId}]: Saved to IDB`);
+    
+    // Also update prefixed version if it exists (used by workspace loading)
+    if (file.source?.repository && file.source?.branch) {
+      const prefixedId = `${file.source.repository}-${file.source.branch}-${fileId}`;
+      const prefixedFile = { ...file, fileId: prefixedId };
+      await db.files.put(prefixedFile);
+      console.log(`FileRegistry.markSaved[${fileId}]: Updated prefixed version ${prefixedId}`);
+    }
+    
+    console.log(`FileRegistry.markSaved[${fileId}]: Saved to IDB with updated timestamp`);
     
     this.notifyListeners(fileId, file);
     console.log(`FileRegistry.markSaved[${fileId}]: Notified ${this.listeners.get(fileId)?.size || 0} listeners`);

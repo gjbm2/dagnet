@@ -23,7 +23,7 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   const [formData, setFormData] = useState<any>(null);
   const initialDataRef = useRef<string>('');
   const hasLoadedRef = useRef(false);
-  const firstChangeIgnoredRef = useRef(false); // Track if we've ignored the first spurious onChange
+  const formLoadTimeRef = useRef<number>(0); // Track when form data was loaded
   
   // Undo/redo history
   const historyRef = useRef<any[]>([]);
@@ -102,6 +102,7 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
         if (!hasLoadedRef.current) {
           initialDataRef.current = dataStr;
           hasLoadedRef.current = true;
+          formLoadTimeRef.current = Date.now(); // Record when form data was loaded
           console.log('FormEditor: Stored initial data snapshot');
         } else {
           // After initial load, add external changes to history (like revert or JSON editor changes)
@@ -116,7 +117,7 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   useEffect(() => {
     hasLoadedRef.current = false;
     initialDataRef.current = '';
-    firstChangeIgnoredRef.current = false;
+    formLoadTimeRef.current = 0;
     setFormData(null);
     historyRef.current = [];
     historyIndexRef.current = -1;
@@ -172,7 +173,7 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
           background: '#fff',
           position: 'sticky',
           top: 0,
-          zIndex: 10
+          zIndex: 1
         }}>
           <button
             onClick={handleApplySettings}
@@ -287,10 +288,11 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   const handleFormChange = (form: any) => {
     const newFormData = form.formData;
     
-    // Ignore the very first onChange event from RJSF (it's always fired during initialization)
-    if (!firstChangeIgnoredRef.current) {
-      console.log('FormEditor: Ignoring first onChange (RJSF initialization artifact)');
-      firstChangeIgnoredRef.current = true;
+    // Ignore onChange events that happen within 300ms of form load (RJSF initialization artifacts)
+    // But respect ANY change after that window - those are real user edits
+    const timeSinceLoad = Date.now() - formLoadTimeRef.current;
+    if (hasLoadedRef.current && timeSinceLoad < 300) {
+      console.log(`FormEditor: Ignoring onChange within initialization window (${timeSinceLoad}ms after load)`);
       setFormData(newFormData);
       return;
     }
