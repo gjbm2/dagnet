@@ -70,7 +70,7 @@ class RegistryService {
    * Get all items of a specific type (parameter, context, case, or node)
    * Returns the superset of index entries + actual files
    */
-  async getItems(type: 'parameter' | 'context' | 'case' | 'node'): Promise<RegistryItem[]> {
+  async getItems(type: 'parameter' | 'context' | 'case' | 'node', tabs: any[] = []): Promise<RegistryItem[]> {
     const itemsMap = new Map<string, RegistryItem>();
     
     // 1. Load index file
@@ -106,9 +106,11 @@ class RegistryService {
       }
     }
     
-    // 3. Process actual files from FileRegistry
+    // 3. Process actual files from FileRegistry - get fresh data
     const allFiles = fileRegistry.getAllFiles();
-    const typeFiles = allFiles.filter(f => f.type === type);
+    const typeFiles = allFiles.filter(f => f.type === type && f.fileId !== `${type}-index`); // Skip index files
+    
+    console.log(`RegistryService: Processing ${typeFiles.length} ${type} files for dirty state`);
     
     for (const file of typeFiles) {
       const normalizedId = this.normalizeId(file.fileId, type);
@@ -119,9 +121,11 @@ class RegistryService {
         existing.hasFile = true;
         existing.isLocal = file.isLocal || false;
         existing.isDirty = file.isDirty || false;
-        existing.isOpen = (file.viewTabs?.length || 0) > 0;
+        existing.isOpen = tabs.some((tab: any) => tab.fileId === file.fileId);
         existing.lastModified = file.lastModified;
         existing.lastOpened = file.lastOpened;
+        
+        console.log(`RegistryService: Updated ${file.fileId} - isDirty: ${existing.isDirty}, isOpen: ${existing.isOpen}`);
       } else {
         // Orphan file (not in index)
         itemsMap.set(normalizedId, {
@@ -131,7 +135,7 @@ class RegistryService {
           hasFile: true,
           isLocal: file.isLocal || false,
           isDirty: file.isDirty || false,
-          isOpen: (file.viewTabs?.length || 0) > 0,
+          isOpen: tabs.some((tab: any) => tab.fileId === file.fileId),
           inIndex: false,
           isOrphan: true,
           lastModified: file.lastModified,
@@ -153,15 +157,15 @@ class RegistryService {
   /**
    * Get all parameters
    */
-  async getParameters(): Promise<RegistryItem[]> {
-    return this.getItems('parameter');
+  async getParameters(tabs: any[] = []): Promise<RegistryItem[]> {
+    return this.getItems('parameter', tabs);
   }
 
   /**
    * Get parameters filtered by type
    */
-  async getParametersByType(parameterType: 'probability' | 'cost_gbp' | 'cost_time'): Promise<RegistryItem[]> {
-    const allParams = await this.getParameters();
+  async getParametersByType(parameterType: 'probability' | 'cost_gbp' | 'cost_time', tabs: any[] = []): Promise<RegistryItem[]> {
+    const allParams = await this.getParameters(tabs);
     
     // Map UI types to schema types
     const schemaTypeMap: Record<string, string> = {
@@ -177,22 +181,22 @@ class RegistryService {
   /**
    * Get all contexts
    */
-  async getContexts(): Promise<RegistryItem[]> {
-    return this.getItems('context');
+  async getContexts(tabs: any[] = []): Promise<RegistryItem[]> {
+    return this.getItems('context', tabs);
   }
 
   /**
    * Get all cases
    */
-  async getCases(): Promise<RegistryItem[]> {
-    return this.getItems('case');
+  async getCases(tabs: any[] = []): Promise<RegistryItem[]> {
+    return this.getItems('case', tabs);
   }
 
   /**
    * Get all nodes
    */
-  async getNodes(): Promise<RegistryItem[]> {
-    return this.getItems('node');
+  async getNodes(tabs: any[] = []): Promise<RegistryItem[]> {
+    return this.getItems('node', tabs);
   }
 
   /**

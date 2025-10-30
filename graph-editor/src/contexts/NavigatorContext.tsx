@@ -5,6 +5,7 @@ import { credentialsManager } from '../lib/credentials';
 import { gitConfig } from '../config/gitConfig';
 import { workspaceService } from '../services/workspaceService';
 import { fileRegistry } from './TabContext';
+import { registryService } from '../services/registryService';
 
 /**
  * Navigator Context
@@ -38,7 +39,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     showDirtyOnly: false,
     showOpenOnly: false,
     sortBy: 'name',
-    groupBySubCategories: false,
+    groupBySubCategories: true, // Enable by default
     groupByTags: false
   });
 
@@ -59,6 +60,23 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     };
     initialize();
   }, []);
+
+  // Listen for file dirty state changes and trigger re-load
+  useEffect(() => {
+    const handleFileDirtyChanged = (event: any) => {
+      const { fileId, isDirty } = event.detail;
+      console.log(`🔄 NavigatorContext: File ${fileId} dirty state changed to ${isDirty}, triggering refresh...`);
+      // Trigger a full reload of items to pick up dirty state changes
+    if (state.selectedRepo && state.selectedBranch) {
+      loadItems(state.selectedRepo, state.selectedBranch);
+    }
+    };
+
+    window.addEventListener('dagnet:fileDirtyChanged', handleFileDirtyChanged);
+    return () => {
+      window.removeEventListener('dagnet:fileDirtyChanged', handleFileDirtyChanged);
+    };
+  }, [state.selectedRepo, state.selectedBranch]);
 
   // Save state to IndexedDB whenever it changes (but not on initial mount)
   useEffect(() => {

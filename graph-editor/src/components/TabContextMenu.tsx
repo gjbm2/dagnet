@@ -4,6 +4,7 @@ import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { NewFileModal } from './NewFileModal';
 import { ObjectType } from '../types';
+import { fileOperationsService } from '../services/fileOperationsService';
 
 interface TabContextMenuProps {
   tabId: string;
@@ -57,6 +58,19 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
       label: 'Revert',
       onClick: () => operations.revertTab(tabId)
     });
+    
+    // Discard Changes (if dirty)
+    const currentFile = fileRegistry.getFile(tab.fileId);
+    if (currentFile?.isDirty) {
+      items.push({
+        label: 'Discard Changes',
+        onClick: async () => {
+          await fileOperationsService.revertFile(tab.fileId);
+          onClose();
+        }
+      });
+    }
+    
     items.push({
       label: 'Duplicate...',
       onClick: () => {
@@ -126,55 +140,9 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
   const handleDuplicate = async (name: string, type: ObjectType) => {
     if (!tab) return;
     
-    // Get current file data
-    const currentFile = fileRegistry.getFile(tab.fileId);
-    if (!currentFile) {
-      throw new Error('File not found');
-    }
+    await fileOperationsService.duplicateFile(tab.fileId, name, true);
     
-    // Clone the data and update the id/name to the new value
-    const duplicatedData = { ...currentFile.data };
-    
-    // Update ID and name fields with the new name
-    if (type === 'graph') {
-      // For graphs, update metadata name
-      if (duplicatedData.metadata) {
-        duplicatedData.metadata.name = `${name}.json`;
-      }
-    } else {
-      // For YAML files (parameter, context, case), update id and name
-      duplicatedData.id = name;
-      duplicatedData.name = name;
-    }
-    
-    // Create new file with duplicated data (will be marked dirty on save)
-    const newFileId = `${type}-${name}`;
-    await fileRegistry.getOrCreateFile(
-      newFileId,
-      type,
-      { repository: 'local', path: `${type}s/${name}`, branch: currentFile.source?.branch || 'main' },
-      duplicatedData
-    );
-    
-    // Add to navigator as local/uncommitted item
-    const item = {
-      id: name,
-      type: type,
-      name: name,
-      path: `${type}s/${name}.${type === 'graph' ? 'json' : 'yaml'}`,
-      description: currentFile.data.description || '',
-      isLocal: true
-    };
-    
-    navOps.addLocalItem(item);
-    
-    // Open the duplicated file in a new tab
-    await operations.openTab(item, 'interactive');
-    
-    // Close the duplicate modal
     setIsDuplicateModalOpen(false);
-    
-    // Close the context menu
     onClose();
   };
 

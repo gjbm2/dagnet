@@ -8,6 +8,7 @@ import { CommitModal } from '../CommitModal';
 import { NewFileModal } from '../NewFileModal';
 import { gitService } from '../../services/gitService';
 import { ObjectType } from '../../types';
+import { fileOperationsService } from '../../services/fileOperationsService';
 
 /**
  * File Menu
@@ -67,68 +68,31 @@ export function FileMenu() {
   };
   
   const handleCreateFile = async (name: string, type: ObjectType) => {
-    // Create a new file with default content based on type
-    const fileId = `${type}-${name}`;
+    // Use centralized file operations service
+    const metadata = type === 'graph' ? {
+      policies: {
+        default_outcome: 'abandon',
+        overflow_policy: 'error',
+        free_edge_policy: 'complement'
+      },
+      version: '1.0.0',
+      author: 'Graph Editor'
+    } : {};
     
-    let defaultData: any;
-    if (type === 'graph') {
-      defaultData = {
-        nodes: [],
-        edges: [],
-        policies: {
-          default_outcome: 'abandon',
-          overflow_policy: 'error',
-          free_edge_policy: 'complement'
-        },
-        metadata: {
-          version: '1.0.0',
-          created_at: new Date().toISOString(),
-          author: 'Graph Editor',
-          description: '',
-          name: `${name}.json`
-        }
-      };
-    } else {
-      // YAML files (parameter, context, case)
-      defaultData = {
-        id: name,
-        name: name,
-        description: '',
-        created_at: new Date().toISOString()
-      };
-    }
-    
-    // Create file in registry
-    await fileRegistry.getOrCreateFile(
-      fileId,
-      type,
-      { repository: 'local', path: `${type}s/${name}`, branch: navState.selectedBranch || 'main' },
-      defaultData
-    );
-    
-    // Update index file if this is a parameter/context/case/node
-    if (type === 'parameter' || type === 'context' || type === 'case' || type === 'node') {
-      await fileRegistry.updateIndexOnCreate(type, fileId);
-    }
-    
-    // Add to navigator as local/uncommitted item
-    const item = {
-      id: name,
-      type: type,
-      name: name,
-      path: `${type}s/${name}.${type === 'graph' ? 'json' : 'yaml'}`,
-      description: '',
-      isLocal: true
-    };
-    
-    navOps.addLocalItem(item);
-    
-    // Open the new file in a tab
-    await operations.openTab(item, 'interactive');
+    await fileOperationsService.createFile(name, type, {
+      openInTab: true,
+      viewMode: 'interactive',
+      metadata
+    });
   };
 
   const handleOpen = () => {
     navOps.toggleNavigator();
+  };
+
+  const handleDiscardChanges = async () => {
+    if (!activeTab) return;
+    await fileOperationsService.revertFile(activeTab.fileId);
   };
 
 
@@ -442,10 +406,10 @@ export function FileMenu() {
 
             <Menubar.Item 
               className="menubar-item" 
-              onSelect={handleRevert}
+              onSelect={handleDiscardChanges}
               disabled={!activeTab || !isDirty}
             >
-              Revert
+              Discard Changes
             </Menubar.Item>
 
             <Menubar.Separator className="menubar-separator" />

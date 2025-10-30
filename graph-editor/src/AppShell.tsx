@@ -2,9 +2,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import DockLayout, { LayoutData } from 'rc-dock';
 import { TabProvider, useTabContext, fileRegistry } from './contexts/TabContext';
 import { NavigatorProvider, useNavigatorContext } from './contexts/NavigatorContext';
-import { DialogProvider } from './contexts/DialogContext';
+import { DialogProvider, useDialog } from './contexts/DialogContext';
 import { ValidationProvider } from './contexts/ValidationContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { fileOperationsService } from './services/fileOperationsService';
+import { repositoryOperationsService } from './services/repositoryOperationsService';
 import { MenuBar } from './components/MenuBar';
 import { NavigatorContent } from './components/Navigator';
 import { TabContextMenu } from './components/TabContextMenu';
@@ -29,13 +31,82 @@ import './styles/file-state-indicators.css'; // File state visual indicators
 function AppShellContent() {
   const { tabs, activeTabId, operations: tabOperations } = useTabContext();
   const { state: navState, operations: navOperations } = useNavigatorContext();
+  const dialogOps = useDialog();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
+  
+  // Initialize services once
+  useEffect(() => {
+    fileOperationsService.initialize({
+      navigatorOps: navOperations,
+      tabOps: tabOperations,
+      dialogOps
+    });
+    
+    repositoryOperationsService.initialize({
+      navigatorOps: navOperations
+    });
+    
+    console.log('✅ Services initialized');
+  }, [navOperations, tabOperations, dialogOps]);
 
   console.log('AppShell render - navState:', navState);
   
   // Track hover state for unpinned navigator
   const [isHovering, setIsHovering] = useState(false);
   const navButtonRef = React.useRef<HTMLDivElement>(null);
+  
+  // Navigator resizing - load from localStorage or default to 280
+  const [navWidth, setNavWidth] = useState(() => {
+    const saved = localStorage.getItem('navigator-width');
+    return saved ? parseInt(saved, 10) : 280;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartX = React.useRef(0);
+  const resizeStartWidth = React.useRef(0);
+  
+  // Handle navigator resizing with proper mouse tracking
+  useEffect(() => {
+    if (!isResizing) return;
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // Calculate delta from start position
+      const delta = e.clientX - resizeStartX.current;
+      const newWidth = resizeStartWidth.current + delta;
+      
+      // Apply constraints
+      const MIN_WIDTH = 200;
+      const MAX_WIDTH = 800;
+      const constrainedWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth));
+      
+      setNavWidth(constrainedWidth);
+    };
+    
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      // Save to localStorage
+      localStorage.setItem('navigator-width', navWidth.toString());
+      // Re-enable text selection
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    
+    // Disable text selection and set cursor during resize
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isResizing, navWidth]);
 
   // Tab context menu state
   const [contextMenu, setContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
@@ -667,14 +738,13 @@ function AppShellContent() {
         <MenuBar />
       </div>
       
-      {/* Content area - grid layout */}
+      {/* Content area - flex layout for dynamic navigator width */}
       <div style={{ 
         flex: 1, 
-        display: 'grid',
-        gridTemplateColumns: navState.isPinned ? '240px 1fr' : '1fr',
+        display: 'flex',
+        flexDirection: 'row',
         position: 'relative', 
         overflow: 'hidden',
-        transition: 'grid-template-columns 0.2s ease',
         boxSizing: 'border-box',
         minHeight: 0
       }}>
@@ -694,7 +764,7 @@ function AppShellContent() {
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              zIndex: 1001,
+              zIndex: 10, // Behind menu bar dropdowns
               cursor: 'pointer',
               userSelect: 'none',
               boxSizing: 'border-box',
@@ -714,12 +784,16 @@ function AppShellContent() {
           <div style={{ 
             display: 'flex',
             flexDirection: 'column',
-            borderRight: '1px solid #e0e0e0',
+            borderRight: isResizing ? '2px solid #0066cc' : '1px solid #e0e0e0',
             background: '#f8f9fa',
             overflow: 'hidden',
             position: 'relative',
             boxSizing: 'border-box',
-            minWidth: 0
+            width: `${navWidth}px`,
+            minWidth: '200px',
+            maxWidth: '800px',
+            flexShrink: 0,
+            transition: isResizing ? 'none' : 'width 0.1s ease-out'
           }}>
             {/* Navigator header - same height as tab bar */}
             <div style={{
@@ -733,12 +807,20 @@ function AppShellContent() {
               cursor: 'pointer',
               userSelect: 'none',
               flexShrink: 0,
-              boxSizing: 'border-box'
+              boxSizing: 'border-box',
+              overflow: 'hidden', // Prevent text overflow
+              whiteSpace: 'nowrap' // Keep text on one line
             }}
             onClick={() => navOperations.togglePin()}
             >
-              <span style={{ fontSize: '12px', lineHeight: 1 }}>▼</span>
-              <span style={{ fontSize: '13px', fontWeight: 500, lineHeight: 1 }}>Navigator</span>
+              <span style={{ fontSize: '12px', lineHeight: 1, flexShrink: 0 }}>▼</span>
+              <span style={{ 
+                fontSize: '13px', 
+                fontWeight: 500, 
+                lineHeight: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}>Navigator</span>
             </div>
             
             {/* Navigator content */}
@@ -746,21 +828,39 @@ function AppShellContent() {
               <NavigatorContent />
             </div>
             
-            {/* Resize handle */}
+            {/* Resize handle - always visible with subtle border */}
             <div 
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Capture starting positions
+                resizeStartX.current = e.clientX;
+                resizeStartWidth.current = navWidth;
+                setIsResizing(true);
+              }}
               style={{
                 position: 'absolute',
-                right: 0,
+                right: '0',
                 top: 0,
                 bottom: 0,
-                width: '4px',
+                width: '3px',
                 cursor: 'col-resize',
-                background: 'transparent'
+                background: isResizing ? '#0066cc' : 'transparent',
+                borderLeft: isResizing ? 'none' : '1px solid #e0e0e0',
+                zIndex: 1, // Low z-index so context menus appear above it
+                transition: isResizing ? 'none' : 'background 0.2s, border 0.2s'
               }}
-              onMouseDown={(e) => {
-                // TODO: Implement resize logic
-                console.log('Resize handle clicked');
+              onMouseEnter={(e) => {
+                if (!isResizing) {
+                  e.currentTarget.style.background = 'rgba(0, 102, 204, 0.3)';
+                }
               }}
+              onMouseLeave={(e) => {
+                if (!isResizing) {
+                  e.currentTarget.style.background = 'transparent';
+                }
+              }}
+              title="Drag to resize Navigator"
             />
           </div>
         )}
@@ -776,7 +876,7 @@ function AppShellContent() {
               width: '240px',
               borderRight: '1px solid #e0e0e0',
               background: '#f8f9fa',
-              zIndex: 1000,
+              zIndex: 10, // Behind menu bar (which is z-index: 1000+)
               boxShadow: '4px 0 16px rgba(0, 0, 0, 0.2)',
               display: 'flex',
               flexDirection: 'column',
@@ -819,20 +919,25 @@ function AppShellContent() {
           </div>
         )}
         
-        {/* rc-dock - only render after layout is loaded */}
+        {/* rc-dock wrapper - takes remaining flex space */}
         {layoutLoaded && (
-          <>
-          <DockLayout
-            ref={setDockLayoutRef}
+          <div style={{
+            flex: 1,
+            minWidth: 0,
+            height: '100%',
+            position: 'relative',
+            overflow: 'hidden'
+          }}>
+            <DockLayout
+              ref={setDockLayoutRef}
               defaultLayout={layout}
-            loadTab={loadTab}
-            onLayoutChange={handleLayoutChange}
-            groups={customGroups}
-            style={{ 
-              width: '100%',
-              height: '100%',
-              paddingLeft: navState.isPinned ? '0' : '0' // rc-dock starts at 0, button overlays it
-            }}
+              loadTab={loadTab}
+              onLayoutChange={handleLayoutChange}
+              groups={customGroups}
+              style={{ 
+                width: '100%',
+                height: '100%'
+              }}
             />
             
             {/* Welcome screen when no tabs - positioned BEHIND dock panels */}
@@ -840,7 +945,7 @@ function AppShellContent() {
               <div style={{
                 position: 'absolute',
                 top: 0,
-                left: navState.isPinned ? '240px' : '0',
+                left: '0',
                 right: 0,
                 bottom: 0,
                 display: 'flex',
@@ -861,7 +966,7 @@ function AppShellContent() {
                 </p>
               </div>
             )}
-          </>
+          </div>
         )}
 
         {/* Tab Context Menu */}

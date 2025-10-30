@@ -4,6 +4,7 @@ import { useTabContext } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { SwitchRepositoryModal } from '../modals/SwitchRepositoryModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
+import { repositoryOperationsService } from '../../services/repositoryOperationsService';
 
 /**
  * Repository Menu
@@ -40,37 +41,65 @@ export function RepositoryMenu() {
     if (!confirm(`Force re-clone ${state.selectedRepo}/${state.selectedBranch}? This will discard any local changes.`)) {
       return;
     }
-    console.log('Force cloning repository...');
-    const { workspaceService } = await import('../../services/workspaceService');
-    await workspaceService.deleteWorkspace(state.selectedRepo, state.selectedBranch);
-    await navOps.refreshItems(); // This will trigger loadItems which will re-clone
+    try {
+      await repositoryOperationsService.cloneWorkspace(state.selectedRepo, state.selectedBranch);
+      console.log(`✅ Force clone complete`);
+    } catch (error) {
+      console.error('Failed to force clone:', error);
+    }
   };
 
   const handlePullLatest = async () => {
-    console.log('Pulling latest from', state.selectedBranch);
-    const { workspaceService } = await import('../../services/workspaceService');
-    await workspaceService.deleteWorkspace(state.selectedRepo, state.selectedBranch);
-    await navOps.refreshItems(); // This will trigger loadItems which will re-clone
+    try {
+      await repositoryOperationsService.pullLatest(state.selectedRepo, state.selectedBranch);
+      console.log(`✅ Pull complete`);
+    } catch (error) {
+      console.error('Failed to pull latest:', error);
+    }
   };
 
-  const handlePushChanges = () => {
-    // TODO: Implement push all dirty files
-    console.log('Push changes to', state.selectedBranch);
+  const handlePushChanges = async () => {
+    try {
+      const message = prompt('Commit message:') || 'Update files';
+      const count = await repositoryOperationsService.pushChanges(
+        state.selectedRepo,
+        state.selectedBranch,
+        message
+      );
+      console.log(`✅ Pushed ${count} files`);
+    } catch (error) {
+      console.error('Failed to push changes:', error);
+    }
   };
 
   const handleRefreshStatus = async () => {
-    console.log('Refreshing repository status');
-    await navOps.refreshItems();
+    try {
+      const status = await repositoryOperationsService.getStatus(state.selectedRepo, state.selectedBranch);
+      console.log('Repository status:', status);
+      alert(`Repository: ${status.repository}/${status.branch}\nDirty files: ${status.dirtyFiles}\nLocal only: ${status.localOnlyFiles}`);
+    } catch (error) {
+      console.error('Failed to get status:', error);
+    }
   };
 
   const handleShowDirtyFiles = () => {
-    // TODO: Open modal showing all dirty files
-    console.log('Show dirty files:', dirtyTabs);
+    const dirtyFiles = repositoryOperationsService.getDirtyFiles();
+    console.log('Dirty files:', dirtyFiles);
+    alert(`Dirty files:\n${dirtyFiles.map(f => f.fileId).join('\n')}`);
   };
 
-  const handleDiscardLocalChanges = () => {
-    // TODO: Open confirmation modal to discard all local changes
-    console.log('Discard local changes');
+  const handleDiscardLocalChanges = async () => {
+    if (!confirm('Discard all local changes? This cannot be undone.')) return;
+    
+    try {
+      const count = await repositoryOperationsService.discardLocalChanges(
+        state.selectedRepo,
+        state.selectedBranch
+      );
+      console.log(`✅ Discarded ${count} changes`);
+    } catch (error) {
+      console.error('Failed to discard changes:', error);
+    }
   };
 
   return (
