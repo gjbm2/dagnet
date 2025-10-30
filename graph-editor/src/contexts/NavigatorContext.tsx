@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { NavigatorState, NavigatorOperations, RepositoryItem, ObjectType } from '../types';
 import { db } from '../db/appDatabase';
 import { credentialsManager } from '../lib/credentials';
@@ -47,6 +47,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   const [localItems, setLocalItems] = useState<RepositoryItem[]>([]); // Items not yet committed
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const loadingRef = useRef(false); // Track loading state synchronously to prevent race conditions
 
   // Load state from IndexedDB and credentials on mount
   useEffect(() => {
@@ -329,7 +330,9 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         selectedBranch
       }));
 
-      // Load items for this repository with the selected branch
+      console.log(`🔄 NavigatorContext: Loading items for ${repo}/${selectedBranch} (loadItems will clear FileRegistry)`);
+      
+      // Load items for this repository with the selected branch (loadItems will clear FileRegistry)
       await loadItems(repo, selectedBranch);
     }
   }, []);
@@ -338,13 +341,23 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    * Select branch
    */
   const selectBranch = useCallback(async (branch: string) => {
-    setState(prev => ({
-      ...prev,
-      selectedBranch: branch
-    }));
+    console.log(`🔄 NavigatorContext: selectBranch called with: ${branch}`);
+    
+    // Get current repo from state
+    let currentRepo = state.selectedRepo;
+    
+    setState(prev => {
+      currentRepo = prev.selectedRepo; // Get latest value
+      return {
+        ...prev,
+        selectedBranch: branch
+      };
+    });
 
-    // Reload items for new branch
-    await loadItems(state.selectedRepo, branch);
+    console.log(`🔄 NavigatorContext: Loading items for ${currentRepo}/${branch}`);
+    
+    // Reload items for new branch (loadItems will clear FileRegistry)
+    await loadItems(currentRepo, branch);
   }, [state.selectedRepo]);
 
   /**
@@ -410,7 +423,22 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Prevent concurrent loads (use ref for synchronous check)
+    if (loadingRef.current) {
+      console.log(`⚠️ WorkspaceService: Already loading, ignoring duplicate call`);
+      return;
+    }
+
+    loadingRef.current = true;
     setIsLoading(true);
+    
+    // Clear FileRegistry before loading new workspace to prevent file ID collisions
+    // Files from different repos can have same IDs (e.g. parameter-checkout-duration)
+    console.log(`🧹 WorkspaceService: Clearing FileRegistry before loading ${repo}/${branch}`);
+    const registrySize = (fileRegistry as any).files.size;
+    (fileRegistry as any).files.clear();
+    (fileRegistry as any).listeners.clear();
+    console.log(`🧹 WorkspaceService: Cleared ${registrySize} files from FileRegistry`);
     
     try {
       // Get credentials
@@ -532,6 +560,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       console.error('Failed to load items:', error);
       setItems([]);
     } finally {
+      loadingRef.current = false;
       setIsLoading(false);
     }
   }, []); // Empty deps - uses params, not external state
@@ -742,6 +771,52 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         
         // Load items from new workspace
         await loadItems(repoBranch.repo, repoBranch.branch);
+      }
+    },
+    
+    // Force full reload - delete workspace and re-clone (escape hatch for smart pull issues)
+    forceFullReload: async () => {
+      console.log('🔄 NavigatorContext: Force full reload requested...');
+      
+      if (!state.selectedRepo || !state.selectedBranch) {
+        console.warn('⚠️ NavigatorContext: No repo/branch selected, cannot force reload');
+        return;
+      }
+      
+      const repo = state.selectedRepo;
+      const branch = state.selectedBranch;
+      
+      try {
+        setIsLoading(true);
+        
+        // Delete workspace
+        console.log(`🗑️ NavigatorContext: Deleting workspace ${repo}/${branch}...`);
+        await workspaceService.deleteWorkspace(repo, branch);
+        
+        // Get credentials
+        const credentialsResult = await credentialsManager.loadCredentials();
+        if (!credentialsResult.success || !credentialsResult.credentials) {
+          throw new Error('Failed to load credentials');
+        }
+        
+        const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === repo);
+        if (!gitCreds) {
+          throw new Error(`Git credentials not found for ${repo}`);
+        }
+        
+        // Re-clone
+        console.log(`📦 NavigatorContext: Re-cloning workspace ${repo}/${branch}...`);
+        await workspaceService.cloneWorkspace(repo, branch, gitCreds);
+        
+        // Reload items
+        await loadItems(repo, branch);
+        
+        console.log('✅ NavigatorContext: Force reload complete!');
+      } catch (error) {
+        console.error('❌ NavigatorContext: Force reload failed:', error);
+        alert('Force reload failed: ' + (error instanceof Error ? error.message : String(error)));
+      } finally {
+        setIsLoading(false);
       }
     },
     

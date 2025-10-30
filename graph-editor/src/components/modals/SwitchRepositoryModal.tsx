@@ -29,6 +29,12 @@ export function SwitchRepositoryModal({ isOpen, onClose }: SwitchRepositoryModal
   const dirtyTabs = tabOps.getDirtyTabs();
   const hasDirtyFiles = dirtyTabs.length > 0;
   const availableRepos = navState.availableRepos.filter(repo => repo !== navState.selectedRepo);
+  
+  console.log('🔄 SwitchRepositoryModal:', {
+    currentRepo: navState.selectedRepo,
+    allRepos: navState.availableRepos,
+    filteredRepos: availableRepos
+  });
 
   const handleSwitch = async (action: 'commit' | 'discard' | 'cancel') => {
     if (action === 'cancel') {

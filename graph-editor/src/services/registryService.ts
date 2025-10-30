@@ -109,6 +109,7 @@ class RegistryService {
     
     // 3. Process actual files from FileRegistry - get fresh data
     const allFiles = fileRegistry.getAllFiles();
+    console.log(`RegistryService.getItems(${type}): FileRegistry has ${allFiles.length} total files`);
     const typeFiles = allFiles.filter(f => f.type === type && f.fileId !== `${type}-index`); // Skip index files
     
     console.log(`RegistryService: Processing ${typeFiles.length} ${type} files for dirty state`);

@@ -1,3 +1,5 @@
+import { Octokit } from '@octokit/rest';
+import { throttling } from '@octokit/plugin-throttling';
 import { gitConfig } from '../config/gitConfig';
 import { CredentialsData, GitRepositoryCredential } from '../types/credentials';
 
@@ -44,13 +46,30 @@ export interface GitOperationResult {
   message?: string;
 }
 
+// Create Octokit with throttling plugin
+const OctokitWithPlugins = Octokit.plugin(throttling);
+
 class GitService {
   private config = gitConfig;
   private credentials: CredentialsData | null = null;
   private currentRepo: GitRepositoryCredential | null = null;
+  private octokit: Octokit;
 
   constructor(credentials?: CredentialsData) {
     this.credentials = credentials || null;
+    // Initialize Octokit with throttling
+    this.octokit = new OctokitWithPlugins({
+      throttle: {
+        onRateLimit: (retryAfter: number, options: any, octokit: any, retryCount: number) => {
+          console.warn(`⚠️ GitService: Rate limit hit, retrying after ${retryAfter}s (attempt ${retryCount})`);
+          return retryCount < 3; // Retry up to 3 times
+        },
+        onSecondaryRateLimit: (retryAfter: number, options: any, octokit: any) => {
+          console.warn(`⚠️ GitService: Secondary rate limit hit, retrying after ${retryAfter}s`);
+          return true; // Always retry on secondary rate limits
+        }
+      }
+    });
     this.setCurrentRepo();
   }
 
@@ -79,6 +98,25 @@ class GitService {
   setCredentials(credentials: CredentialsData): void {
     this.credentials = credentials;
     this.setCurrentRepo();
+    
+    // Reinitialize Octokit with new token
+    const authToken = this.currentRepo?.token || this.config.githubToken;
+    if (authToken && authToken.trim() !== '') {
+      this.octokit = new OctokitWithPlugins({
+        auth: authToken,
+        throttle: {
+          onRateLimit: (retryAfter: number, options: any, octokit: any, retryCount: number) => {
+            console.warn(`⚠️ GitService: Rate limit hit, retrying after ${retryAfter}s (attempt ${retryCount})`);
+            return retryCount < 3;
+          },
+          onSecondaryRateLimit: (retryAfter: number, options: any, octokit: any) => {
+            console.warn(`⚠️ GitService: Secondary rate limit hit, retrying after ${retryAfter}s`);
+            return true;
+          }
+        }
+      });
+      console.log('✅ GitService: Octokit reinitialized with new credentials');
+    }
   }
 
   /**
@@ -528,6 +566,249 @@ class GitService {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
         message: 'Failed to fetch repository info'
+      };
+    }
+  }
+
+  // =========================================================================
+  // Git Data API Methods (for batch operations)
+  // =========================================================================
+
+  /**
+   * Get repository tree recursively (all files at once)
+   * This is much more efficient than listing directories one by one
+   */
+  async getRepositoryTree(
+    branch: string = this.config.branch,
+    recursive: boolean = true
+  ): Promise<GitOperationResult> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      console.log(`📦 GitService.getRepositoryTree: Fetching tree for ${owner}/${repo}@${branch} (recursive: ${recursive})`);
+
+      // 1. Get branch reference
+      const refResponse = await this.octokit.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`
+      });
+      const commitSha = refResponse.data.object.sha;
+      console.log(`📦 GitService.getRepositoryTree: Branch HEAD at commit ${commitSha.substring(0, 8)}`);
+
+      // 2. Get commit to find tree SHA
+      const commitResponse = await this.octokit.git.getCommit({
+        owner,
+        repo,
+        commit_sha: commitSha
+      });
+      const treeSha = commitResponse.data.tree.sha;
+      console.log(`📦 GitService.getRepositoryTree: Tree SHA: ${treeSha.substring(0, 8)}`);
+
+      // 3. Get entire tree in ONE API call
+      const treeResponse = await this.octokit.git.getTree({
+        owner,
+        repo,
+        tree_sha: treeSha,
+        recursive: recursive ? 'true' : undefined
+      });
+
+      console.log(`📦 GitService.getRepositoryTree: Got ${treeResponse.data.tree.length} items`);
+
+      return {
+        success: true,
+        data: {
+          tree: treeResponse.data.tree,
+          commitSha,
+          treeSha
+        },
+        message: `Successfully fetched tree with ${treeResponse.data.tree.length} items`
+      };
+    } catch (error) {
+      console.error('❌ GitService.getRepositoryTree: Error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to fetch repository tree'
+      };
+    }
+  }
+
+  /**
+   * Get blob content by SHA (more efficient than fetching by path)
+   */
+  async getBlobContent(sha: string): Promise<GitOperationResult> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      console.log(`📦 GitService.getBlobContent: Fetching blob ${sha.substring(0, 8)} for ${owner}/${repo}`);
+
+      const blobResponse = await this.octokit.git.getBlob({
+        owner,
+        repo,
+        file_sha: sha
+      });
+
+      // Decode base64 content (atob works in browser, Buffer is Node.js)
+      const content = atob(blobResponse.data.content);
+
+      return {
+        success: true,
+        data: {
+          sha,
+          content,
+          size: blobResponse.data.size
+        },
+        message: 'Successfully fetched blob'
+      };
+    } catch (error) {
+      console.error(`❌ GitService.getBlobContent: Failed to fetch blob ${sha.substring(0, 8)}:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: `Failed to fetch blob ${sha}`
+      };
+    }
+  }
+
+  /**
+   * Create a blob (for atomic commits)
+   */
+  async createBlob(content: string): Promise<GitOperationResult> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      const blobResponse = await this.octokit.git.createBlob({
+        owner,
+        repo,
+        content: Buffer.from(content).toString('base64'),
+        encoding: 'base64'
+      });
+
+      return {
+        success: true,
+        data: {
+          sha: blobResponse.data.sha
+        },
+        message: 'Successfully created blob'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to create blob'
+      };
+    }
+  }
+
+  /**
+   * Create a tree with multiple files (for atomic commits)
+   */
+  async createTree(
+    baseTreeSha: string,
+    files: Array<{ path: string; sha: string; mode?: '100644' | '100755' | '040000' | '160000' | '120000' }>
+  ): Promise<GitOperationResult> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      const treeResponse = await this.octokit.git.createTree({
+        owner,
+        repo,
+        base_tree: baseTreeSha,
+        tree: files.map(file => ({
+          path: file.path,
+          mode: file.mode || '100644', // Default to regular file
+          type: 'blob',
+          sha: file.sha
+        }))
+      });
+
+      return {
+        success: true,
+        data: {
+          sha: treeResponse.data.sha
+        },
+        message: 'Successfully created tree'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to create tree'
+      };
+    }
+  }
+
+  /**
+   * Create a commit
+   */
+  async createCommit(
+    message: string,
+    treeSha: string,
+    parentShas: string[]
+  ): Promise<GitOperationResult> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      const commitResponse = await this.octokit.git.createCommit({
+        owner,
+        repo,
+        message,
+        tree: treeSha,
+        parents: parentShas
+      });
+
+      return {
+        success: true,
+        data: {
+          sha: commitResponse.data.sha
+        },
+        message: 'Successfully created commit'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to create commit'
+      };
+    }
+  }
+
+  /**
+   * Update branch reference to point to a new commit
+   */
+  async updateRef(
+    branch: string,
+    commitSha: string,
+    force: boolean = false
+  ): Promise<GitOperationResult> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      await this.octokit.git.updateRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+        sha: commitSha,
+        force
+      });
+
+      return {
+        success: true,
+        data: { commitSha },
+        message: `Successfully updated ${branch} to ${commitSha.substring(0, 8)}`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: `Failed to update branch ${branch}`
       };
     }
   }
