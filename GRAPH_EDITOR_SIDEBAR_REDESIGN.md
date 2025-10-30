@@ -148,33 +148,53 @@ function GraphEditor() {
 ├─────────────────────────────────┤
 │                                 │
 │  ▼ Basic Properties             │ ← Accordion section
-│  ├─ Slug                        │ ← SELECTOR (connection to node registry)
-│  │  [checkout-flow      ▼][⋮]  │   Standard selector with sync menu
-│  ├─ Label: [input]              │
-│  └─ Description: [textarea]     │
+│  ┌───────────────────────────┐  │
+│  │ Slug                      │  │ ← CONNECTION FIELD (5px blue border)
+│  │ [checkout-flow      ▼][⋮]│  │   Pastel styling draws eye to connection
+│  └───────────────────────────┘  │
+│  Label: [input]                 │
+│  Description: [textarea]        │
 │                                 │
 │  ▼ ☑ Case Configuration         │ ← Checkbox toggles section
-│  ├─ Case                        │ ← SELECTOR (connection to case registry)
-│  │  [ab-test            ▼][⋮]  │   Standard selector with sync menu
-│  ├─ Variants:                   │
-│  │  ├─ control    ●──── 50%    │ ← Sliders (existing UI)
-│  │  └─ treatment  ●──── 50%    │
-│  └─ Status: [active ▼]         │
+│  ┌───────────────────────────┐  │
+│  │ Case                      │  │ ← CONNECTION FIELD (5px purple border)
+│  │ [ab-test            ▼][⋮]│  │   Pastel styling draws eye to connection
+│  └───────────────────────────┘  │
+│  Variants:                      │
+│  ├─ control    ●──── 50%       │ ← Sliders (existing UI)
+│  └─ treatment  ●──── 50%       │
+│  Status: [active ▼]            │
 │                                 │
 │  ▼ Probability (Edge only)      │
-│  ├─ Parameter                   │ ← SELECTOR (connection to param registry)
-│  │  [conversion-rate    ▼][⋮]  │   Standard selector with sync menu
-│  ├─ Base: ●──────────── 0.75   │ ← Slider (existing UI)
-│  └─ Stdev: [0.05]              │ ← Input (standard styling)
+│  ┌───────────────────────────┐  │
+│  │ Parameter                 │  │ ← CONNECTION FIELD (5px orange border)
+│  │ [conversion-rate    ▼][⋮]│  │   Pastel styling draws eye to connection
+│  └───────────────────────────┘  │
+│  Base: ●──────────── 0.75      │ ← Slider (existing UI)
+│  Stdev: [0.05]                 │ ← Input (standard styling)
+│                                 │
+│  ▼ Cost 1 (Edge only)           │
+│  ┌───────────────────────────┐  │
+│  │ Parameter                 │  │ ← CONNECTION FIELD (5px orange border)
+│  │ [time-cost          ▼][⋮]│  │   Each cost has independent connection
+│  └───────────────────────────┘  │
+│  Value: [2.5]                   │
+│                                 │
+│  ▼ Cost 2 (Edge only)           │
+│  ┌───────────────────────────┐  │
+│  │ Parameter                 │  │ ← CONNECTION FIELD (5px orange border)
+│  │ [money-cost         ▼][⋮]│  │   Each cost has independent connection
+│  └───────────────────────────┘  │
+│  Value: [150]                   │
 │                                 │
 └─────────────────────────────────┘
 ```
 
-**Key Points**:
-- **Slug, Case, Parameter = STANDARD SELECTOR COMPONENT** (connects to registry)
-- Each selector has integrated `[⋮]` sync menu
-- All use ONE selector component class with connection-type styling
-- Accordions match Navigator style
+**Key Visual Design**:
+- **CONNECTION FIELDS = Prominent 5px pastel borders** to draw user attention
+- **Color-coded by type**: Blue (node), Purple (case), Orange (parameter), Green (context)
+- Each connection field is a contained box with the standard selector + `[⋮]` sync menu
+- Other inputs (Label, Description, Value, Stdev) have standard minimal styling
 
 #### Panel 2: What-If Analysis
 
@@ -246,19 +266,21 @@ function GraphEditor() {
 
 ## 4. Implementation Plan
 
-### Phase 1: Move WhatsApp to FAB (1-2 days)
+### Phase 1: Icon Bar Foundation (3-4 days)
 
 **Tasks**:
-1. Create `WhatsAppFloatingButton` component
-2. Position at `top-right` of GraphCanvas
-3. Implement dropdown menu with existing export functions
-4. Remove WhatsApp section from Properties Panel
-5. Test on mobile (FAB should remain accessible)
+1. Create icon bar component (48px width, right edge of canvas)
+2. Implement three states: minimized (icon view), maximized (panel view), floating (rc-dock)
+3. Add hover preview overlay system (shows panel content on hover when minimized)
+4. Implement click to toggle maximize/minimize
+5. State management: per-tab persistence of sidebar state
+6. Smart auto-open logic: opens on first selection per tab, then respects user preference
 
 **Files**:
-- `graph-editor/src/components/WhatsAppFloatingButton.tsx` (NEW)
-- `graph-editor/src/components/editors/GraphEditor.tsx` (modify)
-- `graph-editor/src/components/PropertiesPanel.tsx` (remove WhatsApp section)
+- `graph-editor/src/components/SidebarIconBar.tsx` (NEW)
+- `graph-editor/src/components/SidebarHoverPreview.tsx` (NEW)
+- `graph-editor/src/components/editors/GraphEditor.tsx` (modify for icon bar integration)
+- `graph-editor/src/hooks/useSidebarState.ts` (NEW - per-tab state management)
 
 ### Phase 2: Convert Sidebar to rc-dock Panels (3-4 days)
 
@@ -356,10 +378,6 @@ function GraphEditor() {
 ┃            │ C  │         │ D  │          ┃     ├─ control (50%)    ┃
 ┃            └────┘         └────┘          ┃     └─ treatment (50%)  ┃
 ┃                                            ┃                         ┃
-┃                          [⚙️ WhatsApp ▼]   ┃  ▼ Entry Conditions     ┃
-┃                                  ↑         ┃  └─ ...                 ┃
-┃                                  │         ┃                         ┃
-┃                              FAB button    ┃                         ┃
 ┃                                            ┃                         ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━┛
                                                    ↑
@@ -370,7 +388,75 @@ function GraphEditor() {
 
 ## 7. Final Design Decisions
 
-### 7.1 Object Creation - Existing Affordances
+### 7.1 Icon Bar + rc-dock Integration
+
+**How They Work Together**:
+
+The sidebar has **three states**:
+
+1. **Minimized (Icon Bar)** - Default state
+   - 48px wide vertical bar on right edge
+   - Shows 3 icons (🎭 What-If, 📝 Properties, 🛠️ Tools)
+   - **Hover preview**: Hovering over icon shows overlay with panel content
+   - **Click to open**: Clicking icon maximizes sidebar to full panel view
+   
+2. **Maximized (rc-dock Panels)** - User opened sidebar
+   - 300px wide sidebar with rc-dock tab system
+   - Shows one panel at a time (three tabs at top)
+   - User can switch between panels via tabs
+   - **Floating**: User can drag tabs out (rc-dock native feature)
+   - **Minimize button**: Click to return to icon bar mode
+   
+3. **Floating (rc-dock Windows)** - User dragged panel out
+   - Panel becomes floating window
+   - Can be docked back **while sidebar is maximized** (rc-dock native)
+   - If user closes floating panel → returns as icon in icon bar
+   - **Cannot dock back when sidebar is minimized** (icon bar is custom UI, not rc-dock)
+
+**State Persistence** (per-tab):
+```typescript
+interface SidebarState {
+  mode: 'minimized' | 'maximized';        // Icon bar or full panel view
+  activePanel: 'what-if' | 'properties' | 'tools';  // Which tab is selected
+  floatingPanels: string[];               // Which panels are floating
+  hasAutoOpened: boolean;                 // Smart auto-open tracker
+}
+```
+
+---
+
+### 7.2 Smart Auto-Open Logic
+
+**Behavior**: Sidebar opens automatically once per tab, then respects user preference
+
+```typescript
+function handleNodeOrEdgeSelected(tabId: string) {
+  const state = getSidebarState(tabId);
+  
+  // First selection in this tab?
+  if (!state.hasAutoOpened && state.mode === 'minimized') {
+    // Auto-open Properties panel
+    setSidebarState(tabId, {
+      mode: 'maximized',
+      activePanel: 'properties',
+      hasAutoOpened: true
+    });
+  }
+  
+  // User has manually minimized before? Respect their choice
+  // (Don't auto-open again)
+}
+```
+
+**User Actions That Override**:
+- User clicks minimize → sidebar goes to icon bar, `hasAutoOpened` stays true
+- Subsequent selections → sidebar stays minimized (user preference respected)
+- User clicks icon → sidebar opens (manual action)
+- User hovers icon → preview shows (quick access, doesn't change state)
+
+---
+
+### 7.3 Object Creation - Existing Affordances
 
 **Decision**: Use existing right-click context menu for object creation
 
@@ -415,14 +501,37 @@ function createNode(position: { x: number, y: number }): void {
 
 ---
 
-### 7.2 Sidebar Panel Structure - THREE Panels
+### 7.3 Keyboard Shortcuts
+
+**Proposed Shortcuts** (following VS Code conventions):
+
+| Shortcut | Action | Context |
+|----------|--------|---------|
+| `Ctrl/Cmd + B` | Toggle sidebar (minimize ↔ maximize) | Global |
+| `Ctrl/Cmd + Shift + W` | Open What-If panel | Sidebar maximized |
+| `Ctrl/Cmd + Shift + P` | Open Properties panel | Sidebar maximized |
+| `Ctrl/Cmd + Shift + T` | Open Tools panel | Sidebar maximized |
+| `Ctrl/Cmd + 1/2/3` | Switch to panel 1/2/3 | Sidebar maximized |
+| `Esc` | Close dropdowns/overlays | When dropdown open |
+| `Tab` | Navigate between form fields | Properties panel |
+| `Enter` | Confirm selection | Dropdown menu |
+| `Up/Down` | Navigate dropdown items | Dropdown menu |
+
+**Implementation Notes**:
+- Register shortcuts in GraphEditor component
+- Shortcuts disabled when modal/dialog open
+- Visual indicators (tooltip showing shortcut on hover)
+
+---
+
+### 7.4 Sidebar Panel Structure - THREE Panels
 
 **Decision**: Three panels of equal width (300px each)
 
-1. **🎭 What-If** - Scenario analysis
-   - Case overrides
+1. **🎭 What-If** - Temporary analysis overrides (ephemeral, per-tab)
+   - Case variant overrides
    - Conditional probability overrides
-   - Clear all functionality
+   - Clear button
    
 2. **📝 Properties** - Context-sensitive editor
    - Graph properties (no selection)
@@ -453,7 +562,7 @@ function createNode(position: { x: number, y: number }): void {
 │   ┌───┐      ┌───┐        │ ▼ Cond. (1) │
 │   │ A │─────▶│ B │        │ • visited(A)│
 │   └───┘      └───┘        │             │
-│                            │ [Clear All] │
+│                            │ [Clear]     │
 └────────────────────────────┴─────────────┘
 ```
 
@@ -464,43 +573,326 @@ function createNode(position: { x: number, y: number }): void {
 
 ---
 
-### 7.3 Auto-Open Properties - Smart Behavior
+### 7.5 Full Properties Panel Content Specification
 
-**Decision**: Auto-open Properties ONCE per tab, then respect user preference
+This section defines complete field lists for each selection context.
+
+#### 7.5.1 Graph Properties (No Selection)
+
+```
+┌─────────────────────────────────────┐
+│ 📝 Properties                       │
+├─────────────────────────────────────┤
+│ ▼ Graph Metadata                    │
+│ ├─ Name: [text input]               │
+│ ├─ Description: [textarea]          │
+│ ├─ Version: [text, read-only]       │
+│ ├─ Author: [text, read-only]        │
+│ ├─ Created: [date, read-only]       │
+│ └─ Modified: [date, read-only]      │
+│                                     │
+│ ▼ Statistics                        │
+│ ├─ Total Nodes: [15]                │
+│ ├─ Total Edges: [23]                │
+│ ├─ Case Nodes: [3]                  │
+│ └─ Conditional Edges: [2]           │
+└─────────────────────────────────────┘
+```
+
+#### 7.5.2 Node Properties (Standard Node, No Case)
+
+**Field Order** (top to bottom):
+
+```
+┌─────────────────────────────────────┐
+│ 📝 Properties                       │
+├─────────────────────────────────────┤
+│ ▼ Basic Properties                  │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Slug                        ┃  │  ← CONNECTION (blue border)
+│ ┃ 🔌 [checkout-flow   ▼][⋮]  ┃  │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
+│ Label: [Checkout Flow]             │
+│ Description: [textarea]            │
+│ Tags: [chip input]                 │
+│                                    │
+│ ▼ Node Behavior                    │
+│ ☐ Start                           │
+│ ☐ Terminal                        │
+│ Outcome Type: [success ▼]         │
+│   Options: success, failure, neutral│
+│                                    │
+│ ▼ ☐ Case Configuration             │  ← Collapsed by default
+│   (Expands when checkbox enabled)  │
+└─────────────────────────────────────┘
+```
+
+#### 7.5.3 Edge Properties (Standard Edge, No Conditionals)
+
+**Field Order** (top to bottom):
+
+```
+┌─────────────────────────────────────┐
+│ ➡️ Properties                        │
+├─────────────────────────────────────┤
+│ ▼ Probability                       │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Parameter                   ┃  │  ← CONNECTION (orange border)
+│ ┃ 🔌 [conversion-rate ▼][⋮]  ┃  │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
+│ Base: ●──────────── 0.75          │ ← existing slider component
+│ Stdev: [0.05]                     │
+│                                    │
+│ ▼ Cost 1                           │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Parameter                   ┃  │  ← CONNECTION (orange border)
+│ ┃ 🔌 [time-cost       ▼][⋮]  ┃  │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
+│ Monetary: [$2.50]                 │
+│ ± [$0.50]                         │
+│ Time: [5.0] sec                   │
+│ ± [0.5] sec                       │
+│                                    │
+│ ▼ Cost 2                           │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Parameter                   ┃  │  ← CONNECTION (orange border)
+│ ┃ 🔌 [money-cost      ▼][⋮]  ┃  │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
+│ Monetary: [$1.00]                 │
+│ ± [$0.25]                         │
+│ Time: [2.0] sec                   │
+│ ± [0.2] sec                       │
+│                                    │
+│ ▼ ☐ Conditional Probabilities      │  ← Collapsed by default
+│   (Expands when checkbox enabled)  │
+└─────────────────────────────────────┘
+```
+
+---
+
+### 7.6 Tools Panel - Full Specification
+
+**Purpose**: Provide quick access to existing canvas manipulation tools
+
+**Content**: All tools lifted from existing View menu and graph controls
+
+```
+┌─────────────────────────────────────┐
+│ 🛠️ Tools                            │
+├─────────────────────────────────────┤
+│ ▼ Layout                            │
+│ [Auto-Layout]                       │  ← Calls existing auto-layout - with sub menus (like existing View menu)
+│ [Force Re-route]                    │  ← Calls existing re-route
+│                                     │
+│ Edge scaling:         │
+│ Global ────x──── Local                     │  ← Slider for edge spacing (re-use existing view menu component)
+│ ☑ Uniform Edge Width                │  ← Checkbox
+│                                     │
+│ ▼ Visibility                        │
+│ [Hide Unselected]                   │  ← Toggles visibility
+│ [Show All]                          │  ← Restores visibility
+└─────────────────────────────────────┘
+```
+
+**Implementation**:
+- **Refactor through service**: Create `graphToolsService.ts` to centralize logic
+- **Single code path**: Menu bar and Tools panel both call service methods
+- **Existing functionality**: No new features, just convenient access
 
 ```typescript
-interface TabState {
-  propertiesAutoOpened: boolean;  // Has Properties auto-opened in this tab?
-  propertiesUserClosed: boolean;  // Did user explicitly close it?
-}
-
-function handleSelection(nodeId: string, tabState: TabState) {
-  if (!tabState.propertiesAutoOpened && !tabState.propertiesUserClosed) {
-    // First selection in this tab - auto-open Properties
-    openPropertiesPanel();
-    tabState.propertiesAutoOpened = true;
+// graph-editor/src/services/graphToolsService.ts
+export const graphToolsService = {
+  autoLayout(graph: GraphData): GraphData {
+    // Existing auto-layout logic
+  },
+  
+  forceReroute(graph: GraphData): GraphData {
+    // Existing re-route logic
+  },
+  
+  setMassGenerosity(graph: GraphData, value: number): GraphData {
+    // Update edge spacing
+  },
+  
+  toggleUniformEdgeWidth(enabled: boolean): void {
+    // Update render settings
+  },
+  
+  hideUnselected(graph: GraphData, selectedIds: string[]): GraphData {
+    // Hide non-selected nodes
+  },
+  
+  showAll(graph: GraphData): GraphData {
+    // Restore all visibility
   }
-  // Subsequent selections - respect user's panel state
+};
+```
+
+---
+
+### 7.7 Accordion Behavior Specification
+
+**Behavior**:
+- **Multiple open**: Yes, multiple accordions can be open simultaneously
+- **State persistence**: Per-tab, stored in tab state
+- **Animation**: Yes, smooth expand/collapse (150ms ease-in-out) - not critical
+- **Nested accordions**: Not supported in initial implementation
+- **Default states**:
+  - Basic Properties: Open
+  - Case Configuration: Closed (unless node is case)
+  - Conditional Probabilities: Closed (unless edge has conditionals)
+  - Node Behavior: Open
+  - Layout/Scaling/Visibility (Tools): Open
+
+```typescript
+interface AccordionState {
+  [accordionId: string]: boolean;  // true = open, false = closed
 }
 
-function handlePropertiesClose() {
-  // User explicitly closed - don't auto-open again
-  tabState.propertiesUserClosed = true;
+// Per-tab storage
+interface TabState {
+  sidebarState: SidebarState;
+  accordionStates: AccordionState;
 }
 ```
 
-**Behavior**:
-1. User opens graph → All panels minimized (icon bar)
-2. User selects node → Properties auto-opens (first time only)
-3. User closes Properties → Stays closed
-4. User selects another node → Properties stays closed (respects preference)
-5. User can manually open Properties from icon bar anytime
+---
 
-**Benefits**:
-- ✅ Helpful on first selection (shows relevant UI)
-- ✅ Not annoying on subsequent selections
-- ✅ Respects user's workspace preference
-- ✅ Clear mental model (once per tab)
+### 7.8 Conditional Probabilities - Complete Workflow
+
+**Scenario**: User wants to set edge A→B probability to 0.9 if user visited nodes X and Y
+
+#### Step 1: Enable Conditional Probabilities on Edge
+
+```
+1. User selects edge A→B
+2. Properties panel shows edge properties
+3. User checks "☑ Conditional Probabilities" checkbox
+4. Accordion expands to show conditional probability editor
+```
+
+#### Step 2: Add First Condition
+
+```
+┌─────────────────────────────────────┐
+│ ▼ ☑ Conditional Probabilities       │
+│                                     │
+│ [+ Add Condition]                   │  ← User clicks
+│                                     │
+└─────────────────────────────────────┘
+```
+
+After click, new condition card appears:
+
+```
+┌─────────────────────────────────────┐
+│ ▼ ☑ Conditional Probabilities       │
+│                                     │
+│ ┌─────────────────────────────┐ [×]│  ← Delete button
+│ │ Condition 1                 │    │
+│ │ Color: [🔵]                 │    │  ← Color selector
+│ │                             │    │
+│ │ IF VISITED:                 │    │
+│ │ ┏━━━━━━━━━━━━━━━━━━━━━━━┓  │    │
+│ │ ┃ 🔌 [Select nodes ▼][⋮]┃  │    │  ← Node selector (CONNECTION)
+│ │ ┗━━━━━━━━━━━━━━━━━━━━━━━┛  │    │
+│ │ [+ Add Node]                │    │  ← Add multiple nodes (AND logic)
+│ │                             │    │
+│ │ THEN:                       │    │
+│ │ ┏━━━━━━━━━━━━━━━━━━━━━━━┓  │    │
+│ │ ┃ Parameter              ┃  │    │  ← Param selector (CONNECTION) for probability sub-type
+│ │ ┃ 🔌 [high-conv ▼][⋮]   ┃  │    │
+│ │ ┗━━━━━━━━━━━━━━━━━━━━━━━┛  │    │
+│ | Base: ●──────────── 0.75     |     │ ← existing slider component
+│ | Stdev: [0.05]                |     │
+│ └─────────────────────────────┘    │
+│                                     │
+│ [+ Add Condition]                   │  ← Add more (OR logic)
+│                                     │
+└─────────────────────────────────────┘
+```
+
+#### Step 3: User Selects Nodes (Multi-Select)
+
+```
+User clicks "Select nodes ▼" dropdown:
+
+┌─────────────────────────────────────┐
+│ 📋 Current Graph (5)                │  ← Only for "If Visited" context
+│ ├─ • node-a                         │
+│ ├─ • node-b                         │
+│ ├─ 🔌 node-x (Used in Cond A→C)    │  ← In-use indicator + sub-line
+│ ├─ • node-y                         │
+│ └─ • node-z                         │
+│                                     │
+│ 📑 Node Registry (12)               │
+│ ├─ • checkout-node                  │
+│ ├─ • payment-node                   │
+│ └─ ...                              │
+│                                     │
+│ Showing 17 of 17                    │
+└─────────────────────────────────────┘
+```
+
+User selects "node-x", dropdown closes, chip appears:
+
+```
+│ IF VISITED:                 │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ 🔌 [              ▼][⋮]┃  │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━┛  │
+│ [node-x ×]                  │  ← Chip with delete
+│ [+ Add Node]                │
+```
+
+User clicks "[+ Add Node]" to add "node-y" (AND condition):
+
+```
+│ IF VISITED:                 │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ 🔌 [              ▼][⋮]┃  │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━┛  │
+│ [node-x ×] [node-y ×]       │  ← Multiple chips = AND
+│ [+ Add Node]                │
+```
+
+#### Step 4: User Selects Parameter
+
+User clicks parameter selector, chooses "high-conversion":
+
+```
+│ THEN:                       │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Parameter              ┃  │
+│ ┃ 🔌 [high-conv     ▼][⋮]┃  │  ← Now connected (black plug)
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━┛  │
+│ Probability: 0.90           │  ← Auto-populated from parameter
+│ Color: [🔵]                 │  ← Auto-populated or user-selectable
+```
+
+#### Step 5: Add Second Condition (OR logic)
+
+User clicks "[+ Add Condition]" to add alternative scenario:
+
+
+```
+
+#### Step 6: Canvas Visualization Updates
+
+As user adds conditions, the edge on canvas updates:
+- Edge color shows first matching condition color
+- Tooltip shows "Conditional: 2 rules"
+- Existing canvas visualization renders condition indicators
+
+**Logic**:
+- **Within a condition**: Multiple nodes = AND (all must be visited)
+- **Between conditions**: Multiple conditions = OR (first match wins)
+- **Evaluation order**: Top to bottom (reorder by dragging cards)
+
+**Deletion**:
+- Click [×] on chip → Removes that node from condition
+- Click [×] on card → Deletes entire condition
+- Uncheck "Conditional Probabilities" → Removes all conditions, reverts to base probability
 
 ---
 
@@ -508,61 +900,105 @@ function handlePropertiesClose() {
 
 ### ✅ Recommended Approach
 
-1. **Icon Bar with Hover Preview** - VS Code-style panel access
-2. **Three Panels (equal width)** - What-If, Properties, Tools
-3. **Smart Auto-Open** - Properties opens once per tab, then respects user
-4. **Existing Creation Methods** - Right-click context menu (no new UI)
-5. **Phased Implementation** - Icon bar first, then panels, defer palette
+1. **Icon Bar + rc-dock Integration** - Icon bar for minimized state, rc-dock for maximized panels
+2. **Three Panels** - What-If, Properties, Tools (300px width when maximized)
+3. **Smart Auto-Open** - Properties opens on first selection per tab, then respects user
+4. **Hover Preview** - Quick access to panel content when sidebar is minimized
+5. **Per-Tab State** - All sidebar and accordion states persist per-tab
+6. **Keyboard Shortcuts** - VS Code-style shortcuts for toggle/navigation
+7. **Existing Creation Methods** - Right-click context menu (no palette needed)
 
 ### 🎯 Expected Outcomes
 
-- ✅ **Cleaner canvas** - Icon bar only takes 48px when minimized
-- ✅ **Quick access** - Hover preview for instant panel viewing
+- ✅ **Cleaner canvas** - Icon bar only takes 48px when minimized (default)
+- ✅ **Quick access** - Hover preview for instant viewing without state change
 - ✅ **Less annoying** - Smart auto-open respects user preferences
-- ✅ **Professional UX** - VS Code-style panel management
-- ✅ **Unified creation** - Consistent object creation across all methods
-- ✅ **Future-proof** - Easy to add object types and tools
+- ✅ **Professional UX** - VS Code-style panel management with rc-dock power
+- ✅ **Flexible layout** - Panels can float, dock, resize via rc-dock
+- ✅ **Consistent experience** - Tools panel uses same code paths as menus
+- ✅ **Future-proof** - Easy to add new panels or object types
 
-### 📋 Implementation Phases
+### 📋 Implementation Phases (Aligned with Section 4)
 
 **Phase 1: Icon Bar Foundation (3-4 days)**
-- Icon bar component (48px, right edge)
+- Icon bar component (48px, right edge, minimized state)
+- Three icon states: minimized, maximized, floating
 - Hover preview overlay system
-- State management (iconbar/sidebar/floating)
-- Click to dock/undock functionality
-
-**Phase 2: Tools Panel (1-2 days)**
-- Extract existing tools from GraphEditor
-- Auto-layout controls
-- Mass generosity slider
-- Uniform scaling toggle
-- Visibility controls (hide/show)
-
-**Phase 3: What-If Panel (1-2 days)**
-- Extract from existing WhatIfAnalysisControl
-- Maintain current functionality (dropdowns + chips)
-- Integration with icon bar
-
-**Phase 4: Properties Panel (2-3 days)**
 - Smart auto-open logic (once per tab)
-- Split into Graph/Node/Edge variants
-- Case node toggle (simple boolean)
-- Conditional probability UI
+- Per-tab state persistence (SidebarState interface)
+
+**Phase 2: Convert Sidebar to rc-dock Panels (3-4 days)**
+- Replace CollapsibleSection with rc-dock layout
+- Three tabs: What-If, Properties, Tools
+- Floatable/dockable configuration
+- Integration with icon bar (minimize/maximize)
+- Handle floating panel close → return to icon bar
+
+**Phase 3: Accordion Styling for Properties (2-3 days)**
+- Create accordion components (or reuse/enhance CollapsibleSection)
+- Apply to Properties panel (Graph/Node/Edge contexts)
+- Per-tab accordion state persistence
+- Smooth animations (150ms, non-critical)
+
+**Phase 4: Case & Conditional Wiring (2-3 days)**
+- Full node properties specification (Slug first, Case configuration)
+- Full edge properties specification (Probability + Cost 1 + Cost 2)
+- Conditional probability workflow (multi-node selector, parameter connection)
+- Case node boolean toggle + variants editor
+- Validation and canvas synchronization
 
 **Phase 5: Polish & Testing (2-3 days)**
-- Keyboard shortcuts
-- State persistence per-tab
-- rc-dock floating integration
-- Testing & bug fixes
+- Keyboard shortcuts implementation (Ctrl/Cmd + B, etc.)
+- Tools panel (refactor through graphToolsService)
+- Responsive design considerations
+- Accessibility audit
+- Performance testing (large graphs, long dropdowns)
+- User testing and bug fixes
 
-**Total Estimate: 9-13 days** (reduced by removing object palette)
+**Total Estimate: 13-16 days**
 
 ### 📋 Next Steps
 
-1. ✅ Design approved - Three panels (What-If, Properties, Tools)
-2. ✅ Object palette deferred - Use existing right-click menu
-3. 🔄 Start Phase 1 - Icon bar foundation
-4. 🔄 Iterate on feedback after each phase
+1. ✅ Design clarified - Icon bar AND rc-dock work together
+2. ✅ All ambiguities resolved - State management, workflow, specifications
+3. ✅ Full property lists defined - Graph, Node, Edge
+4. ✅ Conditional probability workflow narrated - Step-by-step interaction
+5. ✅ Color selector specified - HTML5 native picker
+6. ✅ Inline creation specified - Create new registry items from selector
+7. 🔄 **Ready for implementation** - Start Phase 1
+
+### 🎯 Design Decisions Summary
+
+**✅ Resolved**:
+- Icon bar + rc-dock integration (how they work together)
+- State management (per-tab, SidebarState interface)
+- Smart auto-open logic (once per tab)
+- Keyboard shortcuts (full set proposed)
+- Property panel content (Graph, Node, Edge - all fields)
+- Tools panel content (existing menu items refactored)
+- Accordion behavior (multiple open, per-tab persistence)
+- Conditional probabilities workflow (complete step-by-step)
+- **Color selector**: HTML5 native picker with 9 presets + custom
+- **Inline creation**: Create new registry item when typed ID doesn't exist
+- **Design consolidation**: Removed duplicate Section 9.4, clarified source of truth
+
+**📐 Document Structure** (Source of Truth):
+- **Section 7.5**: Functional specifications (field lists, order, behavior)
+- **Section 7.8**: Interaction workflows (conditional probabilities step-by-step)
+- **Section 9**: Visual design (colors, borders, styling, mockups)
+- **Rule**: If conflicts exist, Section 7.x takes precedence over Section 9.x
+
+**⏳ Deferred to Implementation Phase**:
+- Reordering condition cards (drag handle UI)
+- Smart sorting (in-use first vs alphabetical)
+- Template selection for complex types
+- Multi-select for conditional "visited" nodes (Phase 2+)
+
+**⏳ Deferred to Phase 5 (Polish)**:
+- Mobile/responsive breakpoints
+- Accessibility specifics (ARIA labels, focus management)
+- Performance optimizations (virtual scrolling, debouncing)
+- Preview pane for registry items on hover
 
 ---
 
@@ -613,6 +1049,22 @@ if (selection && !propertiesAutoOpened && !propertiesUserClosed) {
 
 ## 9. Visual Language & Color System
 
+**Purpose of This Section**: This section provides the **visual design specification** for components defined functionally in earlier sections.
+
+**Relationship to Other Sections**:
+- **Section 7.5**: Functional specifications (what fields, what order, what behavior)
+- **Section 9**: Visual design (colors, borders, styling, layout)
+- **Section 7.8**: Interaction workflows (step-by-step user flows)
+
+**⚠️ SOURCE OF TRUTH**:
+- **Functional specs**: Section 7.5 (field lists, order, behavior)
+- **Interaction flows**: Section 7.8 (conditional probabilities complete workflow)
+- **Visual styling**: Section 9 (colors, borders, input styling)
+
+If there are conflicts, the functional spec in Section 7.x takes precedence over visual mockups in Section 9.x.
+
+---
+
 ### 9.1 Object Type Color Palette
 
 **Purpose**: Provide consistent visual language across Navigator, tabs, and Properties panel
@@ -650,23 +1102,27 @@ if (selection && !propertiesAutoOpened && !propertiesUserClosed) {
 ├─────────────────────────────────────────┤
 │ ▼ Basic Properties                      │
 │                                         │
-│ Slug: [checkout-flow    ▼][⋮]         │ ← Selector + sync menu
-│       ^^^^^^^^^^^^^^^^^                 │   (canonical reference)
-│       Node slug IS the connection       │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Slug                             ┃  │ ← CONNECTION (5px blue border)
+│ ┃ [checkout-flow      ▼][⋮]       ┃  │   Pastel blue background
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
 │                                         │
-│ Label: [Checkout Flow            ]     │
-│ Description: [textarea...        ]     │
+│ Label: [Checkout Flow            ]     │ ← Standard input (minimal)
+│ Description: [textarea...        ]     │ ← Standard input (minimal)
 │                                         │
 │ ▼ ☑ Case Configuration                 │ ← Checkbox in section header
 │                                         │
-│ Case: [checkout-ab-test ▼][⋮]         │ ← Selector + sync menu
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Case                             ┃  │ ← CONNECTION (5px purple border)
+│ ┃ [checkout-ab-test   ▼][⋮]       ┃  │   Pastel purple background
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
 │                                         │
 │ Variants:                               │
 │ ├─ control    ●────────────── 50%      │ ← Slider (existing style)
 │ ├─ treatment  ●────────────── 50%      │
 │ └─ [+ Add Variant]                     │
 │                                         │
-│ Status: [active ▼]                     │
+│ Status: [active ▼]                     │ ← Standard dropdown (minimal)
 └─────────────────────────────────────────┘
 ```
 
@@ -700,33 +1156,44 @@ if (selection && !propertiesAutoOpened && !propertiesUserClosed) {
 ├─────────────────────────────────────────┤
 │ ▼ Probability                           │
 │                                         │
-│ Parameter: [conversion-rate ▼][⋮]     │ ← Selector + sync menu
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Parameter                        ┃  │ ← CONNECTION (5px orange border)
+│ ┃ [conversion-rate    ▼][⋮]       ┃  │   Pastel orange background
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
 │                                         │
 │ Base:  ●────────────────── 0.75        │ ← Slider (existing style)
-│ Stdev: [0.05              ]            │ ← Standardized input
+│ Stdev: [0.05              ]            │ ← Standardized input (minimal)
 │                                         │
 │ ▼ Cost 1                                │
 │                                         │
-│ Parameter: [cost-checkout   ▼][⋮]     │ ← Selector + sync menu
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Parameter                        ┃  │ ← CONNECTION (5px orange border)
+│ ┃ [cost-checkout      ▼][⋮]       ┃  │   Pastel orange background
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
 │                                         │
-│ Monetary: [$2.50              ]        │
+│ Monetary: [$2.50              ]        │ ← Standardized input (minimal)
 │ ± [0.50              ]                 │
 │ Time:     [5.0                ] sec    │
 │ ± [0.5               ] sec             │
 │                                         │
 │ ▼ Cost 2                                │
 │                                         │
-│ Parameter: [cost-alt        ▼][⋮]     │ ← Selector + sync menu
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓  │
+│ ┃ Parameter                        ┃  │ ← CONNECTION (5px orange border)
+│ ┃ [cost-alt           ▼][⋮]       ┃  │   Pastel orange background
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  │
 │                                         │
-│ Monetary: [$1.00              ]        │
+│ Monetary: [$1.00              ]        │ ← Standardized input (minimal)
 │ ± [0.25              ]                 │
 │ Time:     [2.0                ] sec    │
 │ ± [0.2               ] sec             │
 │                                         │
-│ ▼ Conditional Probabilities             │
-│   [See detailed mockup below]          │
+│ ▼ ☑ Conditional Probabilities           │
+│   [See Section 7.8 for complete workflow]│
 └─────────────────────────────────────────┘
 ```
+
+**Note**: For conditional probability interaction flow and complete field layout, see **Section 7.8**.
 
 **Sync Menu** (same [⋮] icon pattern):
 ```
@@ -835,116 +1302,86 @@ if (selection && !propertiesAutoOpened && !propertiesUserClosed) {
 
 ---
 
-### 9.4 Conditional Probabilities - Detailed Mockup
-
-**Context**: Edges can have conditional probabilities based on visited nodes
-
-```
-┌─────────────────────────────────────────────────────┐
-│ ➡️ Edge Properties: A → B                            │
-├─────────────────────────────────────────────────────┤
-│ ▼ Conditional Probabilities                         │
-│                                                     │
-│   ┌───────────────────────────────────────────┐   │
-│   │ Condition 1                          [×]  │   │
-│   ├───────────────────────────────────────────┤   │
-│   │                                           │   │
-│   │ Parameter: [high-conv     ▼][⋮]         │   │ ← Selector + sync menu
-│   │                                           │   │
-│   │ If visited (AND):                         │   │
-│   │ [Select node... ▼]           [+ Add]     │   │ ← Existing selector
-│   │   • node-checkout                [×]      │   │ ← Chips
-│   │   • node-payment                 [×]      │   │
-│   │                                           │   │
-│   │ Then probability: ●──────── 0.90         │   │ ← Slider
-│   │       Stdev: [0.03              ]         │   │
-│   │                                           │   │
-│   │ Color: [●][○][○][○][○][Custom]          │   │ ← Color selector
-│   └───────────────────────────────────────────┘   │
-│                                                     │
-│   ┌───────────────────────────────────────────┐   │
-│   │ Condition 2                          [×]  │   │
-│   ├───────────────────────────────────────────┤   │
-│   │                                           │   │
-│   │ Parameter: [low-conv      ▼][⋮]         │   │ ← Selector + sync menu
-│   │                                           │   │
-│   │ If visited (AND):                         │   │
-│   │ [Select node... ▼]           [+ Add]     │   │
-│   │   • node-abandoned               [×]      │   │
-│   │                                           │   │
-│   │ Then probability: ●──────── 0.20         │   │
-│   │       Stdev: [0.10              ]         │   │
-│   │                                           │   │
-│   │ Color: [○][●][○][○][○][Custom]          │   │ ← Red selected
-│   └───────────────────────────────────────────┘   │
-│                                                     │
-│   [+ Add Condition]                                │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-```
-
-**Behavior**:
-1. **Inline Editing**: No modal, expand condition card in place
-2. **Parameter Connection**: Each condition can connect to parameter (existing selector)
-3. **Node Selection**: Use existing selector component (shows graph nodes + node registry)
-4. **Multiple Nodes**: Add multiple node chips per condition
-5. **AND Logic**: All listed nodes must be visited (implicit)
-6. **Color Selector**: Standard component with 5 preset colors + custom option
-7. **Evaluation Order**: Conditions checked in order, first match wins
-8. **Fallback**: If no condition matches, use base probability
-
----
-
 ### 9.5 Color Selector Component
 
-**Purpose**: Standard component for selecting visual indicators
+**Purpose**: Standard component for selecting visual indicators (used in conditional probabilities, case variants, etc.)
 
+**Default View** (inline, no modal):
 ```
-┌─────────────────────────────────────┐
-│ Color Selector                      │
-├─────────────────────────────────────┤
-│                                     │
-│ Preset Colors:                      │
-│ [●] [○] [○] [○] [○]                │
-│ Green Red Blue Yellow Black         │
-│                                     │
-│ [Custom...]                         │
-│                                     │
-└─────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ Color:                                                 │
+│ [●] [○] [○] [○] [○] [○] [○] [○] [○] [Custom...]      │
+│  ↑   Red Blue Ylw Prpl Orng Cyan Pink Blk              │
+│  Green (selected)                                      │
+└────────────────────────────────────────────────────────┘
 ```
 
 **When "Custom..." clicked**:
+Opens **HTML5 native color picker** (`<input type="color">`) - no custom modal needed
+
 ```
-┌─────────────────────────────────────┐
-│ Custom Color                        │
-├─────────────────────────────────────┤
-│                                     │
-│ ┌─────┐                            │
-│ │     │ ← Color picker (HTML5)     │
-│ └─────┘                            │
-│                                     │
-│ Hex: [#FF5733]                     │
-│                                     │
-│ [Cancel] [Apply]                   │
-└─────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ Color:                                                 │
+│ [○] [○] [○] [○] [○] [○] [○] [○] [○] [■]              │
+│                                          ↑             │
+│                                    User clicked        │
+│                                    Browser's native    │
+│                                    picker opened       │
+└────────────────────────────────────────────────────────┘
 ```
 
-**Preset Colors** (bold & bright for visibility):
-- 🟢 Green: `#10B981` (Emerald 500)
-- 🔴 Red: `#EF4444` (Red 500)
-- 🔵 Blue: `#3B82F6` (Blue 500)
-- 🟡 Yellow: `#F59E0B` (Amber 500)
-- ⚫ Black: `#1F2937` (Gray 800)
+After user selects custom color, the custom swatch shows the chosen color:
+```
+│ [○] [○] [○] [○] [○] [○] [○] [○] [○] [■]              │
+│                                          ↑             │
+│                                       #FF5733          │
+│                                    (user's choice)     │
+```
 
-**Usage**:
+**Preset Colors** (bold & bright for canvas visibility):
+- 🟢 Green: `#10B981` (Emerald 500) - Success/positive
+- 🔴 Red: `#EF4444` (Red 500) - Error/high priority
+- 🔵 Blue: `#3B82F6` (Blue 500) - Default/neutral
+- 🟡 Yellow: `#F59E0B` (Amber 500) - Warning/attention
+- 🟣 Purple: `#A78BFA` (Purple 400) - Alternative
+- 🟠 Orange: `#FB923C` (Orange 400) - Emphasis
+- 🩵 Cyan: `#06B6D4` (Cyan 500) - Information
+- 🩷 Pink: `#EC4899` (Pink 500) - Highlight
+
+**Implementation**:
 ```tsx
 <ColorSelector
   value="#10B981"
   onChange={(color) => setConditionColor(color)}
-  presets={['#10B981', '#EF4444', '#3B82F6', '#F59E0B', '#1F2937']}
-  allowCustom={true}
+  presets={[
+    '#10B981', // Green
+    '#EF4444', // Red
+    '#3B82F6', // Blue
+    '#F59E0B', // Yellow
+    '#A78BFA', // Purple
+    '#FB923C', // Orange
+    '#06B6D4', // Cyan
+    '#EC4899', // Pink
+    '#1F2937'  // Black
+  ]}
+  allowCustom={true}  // Shows "Custom..." button with HTML5 picker
 />
 ```
+
+**HTML5 Color Picker**:
+- Uses `<input type="color">` - native browser picker
+- No need for custom modal or hex input field
+- Browser handles all color selection UX
+- Returns hex value (e.g., `#FF5733`)
+- Works consistently across modern browsers
+- Accessible and familiar to users
+
+**Behavior**:
+1. User clicks one of 5 preset color circles → Immediate selection
+2. User clicks "Custom..." → HTML5 color picker opens
+3. User chooses color in native picker → Custom swatch updates
+4. Custom color is saved to component state
+5. On next open, custom color persists and shows in custom swatch
 
 ---
 
@@ -1131,75 +1568,491 @@ if (selection && !propertiesAutoOpened && !propertiesUserClosed) {
 
 ---
 
-### 9.6 Standard Selector Component (Universal Connection UI)
+### 9.6 Standard Selector Component - Comprehensive Design
 
-**Purpose**: ONE selector component for ALL registry connections  
-**Enhancement**: Extend existing selector with `[⋮]` sync menu integration  
-**Visual Styling**: Connection type determines border/background color (pastel)
+**Purpose**: ONE universal selector component for ALL registry connections  
+**Key Feature**: This is a core affordance of the application - connecting graph items to registry definitions
+
+---
+
+#### Component Anatomy
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ CONNECTION FIELD (5px pastel border by type)            │
+│ ┌─────────────────────────────────────────────────────┐ │
+│ │ [●] [checkout-flow_____________] [×] [⋮]           │ │
+│ │  ↑          ↑                     ↑    ↑            │ │
+│ │  │          │                     │    │            │ │
+│ │  │          │                     │    └─ Sync menu │ │
+│ │  │          │                     └───── Clear btn  │ │
+│ │  │          └────────────────────────── Text input  │ │
+│ │  └───────────────────────────────────── Status icon │ │
+│ └─────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Visual Mockup** (disconnected state):
+```
+┌───────────────────────────────────────────┐
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ │
+│ ┃ 🔌 Select parameter...    [×] [⋮] ┃ │ ← 5px orange border (parameter)
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │   Pastel orange background
+└───────────────────────────────────────────┘
+  ↑                             ↑    ↑
+  Grey plug (disconnected)      │    Sync menu (disabled)
+                                Clear button (hidden)
+```
+
+**Visual Mockup** (connected state, typing):
+```
+┌───────────────────────────────────────────┐
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ │
+│ ┃ 🔌 conv|                  [×] [⋮] ┃ │ ← 6px orange border (connected)
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │   Stronger shadow (plug is black)
+│   ┌───────────────────────────────────┐   │   Text input = live filter
+│   │ 📑 Parameter Registry (5)         │   │ ← Dropdown menu
+│   ├───────────────────────────────────┤   │
+│   │ • conv-base                       │   │
+│   │                                   │   │
+│   │ 🔌 conv-premium                   │   │ ← Already connected (grey plug)
+│   │    Used in Edge A→B               │   │ ← Usage info sub-line (small, grey)
+│   │                                   │   │
+│   │ • conv-standard                   │   │
+│   │ ...                               │   │
+│   ├───────────────────────────────────┤   │
+│   │ Showing 5 of 15 • 1 in use        │   │ ← Status bar
+│   └───────────────────────────────────┘   │
+└───────────────────────────────────────────┘
+  ↑
+  Black plug (connected to registry)
+```
+
+---
+
+#### Component Elements
+
+**1. Connection Status Icon** (left edge, inside field):
+- `🔌` Plug icon: Visual metaphor for connection
+- Grey (`#9CA3AF`): Not connected / disconnected
+- Black (`#1F2937`): Connected to registry
+- Position: 8px from left edge, vertically centered
+- Size: 14×14px
+- **Reusable**: Same icon used on canvas, in dropdowns, Navigator to indicate connection state
+
+**2. Text Input** (center, flex-grow):
+- Type: `<input type="text">` with autocomplete
+- Behavior: 
+  - Typing filters dropdown list in real-time
+  - Up/Down arrows navigate filtered list
+  - Enter selects highlighted item
+  - Escape closes dropdown
+- Placeholder: "Select {type}..." (e.g., "Select parameter...")
+- Font: 14px, system font
+
+**3. Clear Button** (right, before sync):
+- Icon: `×` (multiplication sign, not 'x')
+- Visibility: Only shown when value is set
+- Action: Clears value, resets to disconnected state
+- Size: 20×20px clickable area
+- Color: #6B7280 (gray), hover: #374151 (darker)
+
+**4. Sync Menu Button** (right edge, inside field):
+- Icon: `⋮` (vertical ellipsis)
+- Visibility: Always visible (disabled when no value)
+- Action: Opens sync menu dropdown
+- Size: 20×20px clickable area
+- States:
+  - Disabled (no value): #D1D5DB (light grey)
+  - Enabled: #6B7280 (grey), hover: #374151 (darker)
+
+**5. Outer Container** (connection field):
+- Border: 5px solid (disconnected) / 6px solid (connected)
+- Border color: Type-specific pastel (blue/purple/orange/green)
+- Border radius: 8px
+- Padding: 12px
+- Background: Linear gradient (pastel → white)
+- Shadow: 
+  - Disconnected: none
+  - Connected: `0 3px 10px rgba(0, 0, 0, 0.12)`
+  - Modified: Amber tint overlay
+
+---
+
+#### Dropdown Menu Design
+
+**⚠️ DESIGN NOTE**: The dropdown menu logic requires deeper consideration. Key questions:
+1. When should "Current Graph" group appear vs just "Registry"? ONLY WHEN SELETING NODES FOR 'VISITED' CONDITIONAL P PURPOSES
+2. How to visually indicate items already connected/in-use elsewhere? PLUG ICON
+3. Should we support multi-select or creation of new items inline? NO
+4. How to handle hierarchical/nested registries (e.g., parameter sub-types)? NOT YET
+5. Remember to ensure that visual styling mirrors that used in nav bar
+
+**Contextual Grouping Logic**:
+
+| Context | Show "Current Graph"? | Show "Registry"? | Rationale |
+|---------|----------------------|------------------|-----------|
+| Node Slug | ❌ **No** | ✅ Yes (node registry) | Attaching same node to itself doesn't make sense |
+| Edge Parameter | ❌ No | ✅ Yes (param registry) | Edge params are always registry connections |
+| Case ID | ❌ No | ✅ Yes (case registry) | Cases are always registry connections |
+| Context ID | ❌ No | ✅ Yes (context registry) | Contexts are always registry connections |
+| Conditional "If Visited" | ✅ **Yes** | ✅ Yes (node registry) | Need to check if specific graph nodes were visited |
+
+**Proposed Structure** (Registry-only context, e.g., parameter/case/context selection):
+```
+┌─────────────────────────────────────────┐
+│ 📑 Parameter Registry (15)              │ ← Single group header
+├─────────────────────────────────────────┤
+│ • conv-base                             │ ← Available item
+│                                         │
+│ 🔌 conv-premium                         │ ← Already in use (grey plug)
+│    Used in Edge A→B                     │ ← Usage info (smaller, grey, sub-line)
+│                                         │
+│ • conv-standard                         │
+│                                         │
+│ 🔌 conv-high                            │
+│    Used in Node checkout-flow           │
+│                                         │
+│ • conv-baseline                         │
+│ ... (10 more)                           │
+├─────────────────────────────────────────┤
+│ Showing 15 of 15 • 2 in use            │ ← Status bar
+└─────────────────────────────────────────┘
+
+Note: Text input at top acts as live filter (no separate filter field)
+```
+
+**Proposed Structure** (Mixed context - conditional "If Visited" nodes only):
+```
+┌─────────────────────────────────────────┐
+│ 📋 Current Graph (3)                    │ ← Collapsible
+│ • checkout-flow                         │
+│                                         │
+│ 🔌 payment-flow                         │
+│    Used in Edge C→D                     │
+│                                         │
+│ • confirmation                          │
+├─────────────────────────────────────────┤
+│ 📑 Node Registry (12)                   │ ← Collapsible
+│ • abandoned-cart                        │
+│                                         │
+│ • checkout-v2                           │
+│                                         │
+│ 🔌 payment-gateway                      │
+│    Used 3 times                         │
+│                                         │
+│ ... (9 more)                            │
+├─────────────────────────────────────────┤
+│ Showing 15 of 15 • 3 in use            │ ← Status bar
+└─────────────────────────────────────────┘
+
+Note: "Current Graph" only shown for conditional "If Visited" context
+```
+
+**Connection State Indicators**:
+1. **🔌 Plug Icon** (grey): Item is already connected/in-use elsewhere
+2. **Usage Sub-Line**: Second line below item name, small text (11px), grey, indented
+   - Examples: "Used in Edge A→B" or "Used in Node checkout-flow" or "Used 3 times"
+   - Provides context without taking horizontal space from long item names
+3. **Still Selectable**: User can reuse same item (common pattern)
+4. **Visual Distinction**: Slightly muted text color for in-use items
+
+**Dropdown Features**:
+1. **Contextual Grouping**: "Current Graph" only shown for conditional "If Visited" context
+2. **Collapsible Groups**: Only when multiple groups present (mixed context only)
+3. **Live Filtering**: Main text input acts as filter - dropdown updates as user types
+4. **Connection Indicators**: 🔌 plug icon + usage sub-line for items already in use
+5. **Navigator-Style Items**: Consistent visual treatment
+6. **Status Bar**: Bottom bar shows counts: "Showing 3 of 15 • 2 in use"
+7. **Inline Creation**: Create new registry item when typed ID doesn't exist (see below)
+8. **Keyboard Navigation**:
+   - Up/Down: Navigate items (skip group headers)
+   - Enter: Select highlighted item
+   - Escape: Close dropdown
+
+---
+
+#### Inline Creation Workflow
+
+**Trigger**: User types an ID that doesn't exist in any filtered results
+
+**Scenario**: User types "new-checkout-param" in parameter selector but it doesn't exist
+
+**UI State 1** - No matches found:
+```
+┌─────────────────────────────────────────┐
+│ 🔌 new-checkout-param     [×] [⋮]      │ ← User typed this
+└─────────────────────────────────────────┘
+  ┌───────────────────────────────────────┐
+  │ 📑 Parameter Registry (0)             │
+  ├───────────────────────────────────────┤
+  │ No matches found for                  │
+  │ "new-checkout-param"                  │
+  │                                       │
+  │ ┌───────────────────────────────────┐ │
+  │ │ [+ Create "new-checkout-param"]   │ │ ← Create button appears
+  │ └───────────────────────────────────┘ │
+  ├───────────────────────────────────────┤
+  │ Showing 0 of 15                       │
+  └───────────────────────────────────────┘
+```
+
+**Action Flow**:
+
+1. **User clicks "[+ Create...]"**
+   - System creates new file:
+     - Type: Determined by selector type (parameter/case/context/node)
+     - ID: Taken from user's input text (`new-checkout-param`)
+     - Schema: Default template for that type
+     - Location: Appropriate registry path (`params/new-checkout-param.yaml`)
+   
+2. **File is created and loaded**:
+   - New file added to FileRegistry (local, dirty, not saved)
+   - File marked as dirty (needs save/commit)
+   - File opens in new tab for editing (optional: can be deferred)
+
+3. **Connection is made**:
+   - Selector automatically connects to newly created item
+   - UI updates to connected state (black plug, 6px border)
+   - Dropdown closes
+
+4. **User can now edit**:
+   - New tab shows form editor for the new item
+   - User fills in fields (name, description, distribution, etc.)
+   - User saves/commits when ready
+
+**UI State 2** - After creation:
+```
+┌─────────────────────────────────────────┐
+│ 🔌 new-checkout-param     [×] [⋮]      │ ← Now connected (black plug)
+└─────────────────────────────────────────┘
+  ↑
+  Connected to newly created parameter
+  (6px border, shadow appears)
+```
+
+**TypeScript Interface Updates**:
 
 ```typescript
-// Enhance existing Selector component with integrated sync menu
-// This is the ONLY selector component - used for node slug, case, parameter, context connections
 interface SelectorProps {
-  type: 'case' | 'parameter' | 'context' | 'node';  // Determines visual styling
+  // ... existing props ...
+  
+  // Creation handler
+  onCreate?: (id: string) => Promise<void>;  // Handler to create new item
+  allowInlineCreation?: boolean;             // Enable/disable feature (default: true)
+}
+```
+
+**Implementation Notes**:
+
+1. **Validation**: Check if ID is valid for that type (alphanumeric, hyphens, etc.)
+2. **Error Handling**: Show error if creation fails (permissions, duplicate, invalid ID)
+3. **Feedback**: Brief toast/notification confirming creation
+4. **Undo**: User can delete newly created file if it was a mistake
+5. **Auto-open**: Optionally open the new file in editor tab for immediate editing
+6. **Template Selection**: For complex types, might need to choose template (defer to Phase 2)
+
+**Dropdown Layout**:
+1. **Max Height**: 300px with scroll for long lists
+2. **Smart Sorting**: Open question - in-use items first? Or maintain alphabetical?
+
+**Future Enhancements** (defer to Phase 2+):
+- Multi-select: Select multiple items (for conditional "visited" nodes - add chips)
+- Preview pane: Show item details on hover
+- Recent items: "Recently Used" section at top
+
+---
+
+#### TypeScript Interface
+
+```typescript
+interface SelectorItem {
+  id: string;
+  name: string;
+  inUse?: boolean;              // Item is already connected elsewhere
+  usageInfo?: string;           // e.g., "Used in Edge A→B" or "Used 3 times" (shown on sub-line)
+}
+
+interface SelectorProps {
+  // Core
+  type: 'case' | 'parameter' | 'context' | 'node';  // Visual styling + determines grouping logic
   value: string | null;
   onChange: (value: string | null) => void;
   placeholder?: string;
-  // NEW: Sync handlers (integrated [⋮] menu)
+  
+  // Data sources (contextual - see Dropdown Menu Design section)
+  graphItems?: Array<SelectorItem>;     // Items in current graph (conditionally shown)
+  registryItems?: Array<SelectorItem>;  // Items in registry (always shown)
+  
+  // Context control
+  showGraphItems?: boolean;    // Override default logic for showing "Current Graph" group
+  
+  // Sync handlers (stubbed for now)
   onSyncFrom?: () => void;   // Pull from registry
   onSyncTo?: () => void;     // Push to registry
   onRetrieve?: () => void;   // Retrieve latest (live data from external source)
+  
+  // State
+  isConnected?: boolean;     // Show black vs grey plug icon
+  isModified?: boolean;      // Show amber tint
+  disabled?: boolean;
 }
 
-export function Selector({
-  type,
-  value,
-  onChange,
-  placeholder,
-  onSyncFrom,
-  onSyncTo,
-  onRetrieve
-}: SelectorProps) {
+export function Selector(props: SelectorProps) {
+  const {
+    type,
+    value,
+    onChange,
+    placeholder = `Select ${type}...`,
+    graphItems = [],
+    registryItems = [],
+    onSyncFrom,
+    onSyncTo,
+    onRetrieve,
+    isConnected = !!value,
+    isModified = false,
+    disabled = false
+  } = props;
+  
+  const [inputValue, setInputValue] = useState(value || '');
+  const [showDropdown, setShowDropdown] = useState(false);
   const [showSyncMenu, setShowSyncMenu] = useState(false);
+  const [filterTerm, setFilterTerm] = useState('');
+  
+  // Filter items based on input
+  const filteredGraphItems = graphItems.filter(item => 
+    item.name.toLowerCase().includes(inputValue.toLowerCase())
+  );
+  const filteredRegistryItems = registryItems.filter(item => 
+    item.name.toLowerCase().includes(inputValue.toLowerCase())
+  );
   
   return (
-    <div className="selector-container">
-      {/* Existing dropdown */}
-      <select value={value || ''} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{placeholder}</option>
-        {/* Current graph items */}
-        <optgroup label="Current Graph">
-          {/* ... graph items ... */}
-        </optgroup>
-        {/* Registry items */}
-        <optgroup label="Registry">
-          {/* ... registry items ... */}
-        </optgroup>
-      </select>
+    <div 
+      className={`connection-field ${isConnected ? 'connected' : ''} ${isModified ? 'modified' : ''}`}
+      data-type={type}
+    >
+      {/* Connection status icon - plug icon */}
+      <span className={`connection-icon ${isConnected ? 'connected' : 'disconnected'}`}>
+        🔌
+      </span>
       
-      {/* NEW: Sync menu icon (only when value is set) */}
-      {value && (onSyncFrom || onSyncTo || onRetrieve) && (
-        <div className="selector-sync-menu">
-          <button 
-            className="selector-sync-icon"
-            onClick={() => setShowSyncMenu(!showSyncMenu)}
-            title="Sync options"
-          >
-            ⋮
-          </button>
-          
-          {showSyncMenu && (
-            <div className="selector-sync-dropdown">
-              {onSyncFrom && (
-                <button onClick={onSyncFrom}>↓ Pull from Registry</button>
-              )}
-              {onSyncTo && (
-                <button onClick={onSyncTo}>↑ Push to Registry</button>
-              )}
-              {onRetrieve && (
-                <button onClick={onRetrieve}>🔄 Retrieve Latest (live)</button>
-              )}
+      {/* Text input with autocomplete */}
+      <input
+        type="text"
+        className="selector-input"
+        value={inputValue}
+        onChange={(e) => {
+          setInputValue(e.target.value);
+          setShowDropdown(true);
+        }}
+        onFocus={() => setShowDropdown(true)}
+        placeholder={placeholder}
+        disabled={disabled}
+      />
+      
+      {/* Dropdown menu */}
+      {showDropdown && !disabled && (
+        <div className="selector-dropdown">
+          {/* Current Graph section (conditionally shown - only for "If Visited" context) */}
+          {showGraphItems && filteredGraphItems.length > 0 && (
+            <div className="selector-group">
+              <div className="selector-group-header">
+                📋 Current Graph ({filteredGraphItems.length})
+              </div>
+              {filteredGraphItems.map(item => (
+                <div 
+                  key={item.id}
+                  className={`selector-item-wrapper ${item.inUse ? 'in-use' : ''}`}
+                  onClick={() => {
+                    onChange(item.id);
+                    setInputValue(item.name);
+                    setShowDropdown(false);
+                  }}
+                >
+                  <div className="selector-item">
+                    {item.inUse ? '🔌' : '•'} {item.name}
+                  </div>
+                  {item.usageInfo && (
+                    <div className="selector-item-usage">{item.usageInfo}</div>
+                  )}
+                </div>
+              ))}
             </div>
+          )}
+          
+          {/* Registry section (always shown) */}
+          {filteredRegistryItems.length > 0 && (
+            <div className="selector-group">
+              <div className="selector-group-header">
+                📑 {type.charAt(0).toUpperCase() + type.slice(1)} Registry ({filteredRegistryItems.length})
+              </div>
+              {filteredRegistryItems.map(item => (
+                <div 
+                  key={item.id}
+                  className={`selector-item-wrapper ${item.inUse ? 'in-use' : ''}`}
+                  onClick={() => {
+                    onChange(item.id);
+                    setInputValue(item.name);
+                    setShowDropdown(false);
+                  }}
+                >
+                  <div className="selector-item">
+                    {item.inUse ? '🔌' : '•'} {item.name}
+                  </div>
+                  {item.usageInfo && (
+                    <div className="selector-item-usage">{item.usageInfo}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {/* Status bar at bottom */}
+          <div className="selector-status">
+            Showing {filteredGraphItems.length + filteredRegistryItems.length} of {graphItems.length + registryItems.length}
+            {(graphItems.filter(i => i.inUse).length + registryItems.filter(i => i.inUse).length) > 0 && 
+              ` • ${graphItems.filter(i => i.inUse).length + registryItems.filter(i => i.inUse).length} in use`
+            }
+          </div>
+        </div>
+      )}
+      
+      {/* Clear button (only when value exists) */}
+      {value && !disabled && (
+        <button 
+          className="selector-clear"
+          onClick={() => {
+            onChange(null);
+            setInputValue('');
+          }}
+          title="Clear selection"
+        >
+          ×
+        </button>
+      )}
+      
+      {/* Sync menu button */}
+      <button 
+        className="selector-sync-icon"
+        onClick={() => setShowSyncMenu(!showSyncMenu)}
+        disabled={!value || disabled}
+        title="Sync options"
+      >
+        ⋮
+      </button>
+      
+      {/* Sync menu dropdown */}
+      {showSyncMenu && value && (
+        <div className="selector-sync-dropdown">
+          {onSyncFrom && (
+            <button onClick={onSyncFrom}>↓ Pull from Registry</button>
+          )}
+          {onSyncTo && (
+            <button onClick={onSyncTo}>↑ Push to Registry</button>
+          )}
+          {onRetrieve && (
+            <button onClick={onRetrieve}>🔄 Retrieve Latest (live)</button>
           )}
         </div>
       )}
@@ -1208,87 +2061,277 @@ export function Selector({
 }
 ```
 
-**CSS for Type-Specific Styling**:
+---
+
+#### CSS Implementation
+
 ```css
-/* Container with connection-type styling */
-.selector-container {
+/* ========================================
+   CONNECTION FIELD - Outer container
+   ======================================== */
+.connection-field {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   position: relative;
-  padding: 8px;
-  border-radius: 6px;
-  border: 2px solid transparent;
+  padding: 12px;
+  border-radius: 8px;
+  border: 5px solid transparent;  /* 5px border for prominence */
+  margin: 8px 0;
   transition: all 0.2s;
 }
 
-/* Type-specific pastel styling (for connection fields) */
-.selector-container[data-type="node"] {
-  border-color: #BFDBFE;  /* Blue 200 */
+/* Type-specific PASTEL borders - visual language */
+.connection-field[data-type="node"] {
+  border-color: #BFDBFE;  /* Blue 200 - pastel */
   background: linear-gradient(to right, #EFF6FF, white);
 }
 
-.selector-container[data-type="case"] {
-  border-color: #DDD6FE;  /* Purple 200 */
+.connection-field[data-type="case"] {
+  border-color: #DDD6FE;  /* Purple 200 - pastel */
   background: linear-gradient(to right, #FAF5FF, white);
 }
 
-.selector-container[data-type="parameter"] {
-  border-color: #FED7AA;  /* Orange 200 */
+.connection-field[data-type="parameter"] {
+  border-color: #FED7AA;  /* Orange 200 - pastel */
   background: linear-gradient(to right, #FFF7ED, white);
 }
 
-.selector-container[data-type="context"] {
-  border-color: #BBF7D0;  /* Green 200 */
+.connection-field[data-type="context"] {
+  border-color: #BBF7D0;  /* Green 200 - pastel */
   background: linear-gradient(to right, #F0FDF4, white);
 }
 
-/* Connected state (has value) */
-.selector-container.connected {
-  border-width: 3px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+/* Connected state (has value) - even more prominent */
+.connection-field.connected {
+  border-width: 6px;  /* Thicker when connected */
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
 }
 
-/* Sync menu button */
+/* Modified state (user has changed value from registry) */
+.connection-field.modified {
+  background: linear-gradient(to right, #FEF3C7, white);  /* Amber tint */
+}
+
+/* ========================================
+   CONNECTION STATUS ICON (left edge) - PLUG
+   ======================================== */
+.connection-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  filter: grayscale(1);  /* Default grey */
+  opacity: 0.5;
+  transition: all 0.2s;
+}
+
+.connection-icon.disconnected {
+  filter: grayscale(1);  /* Grey plug */
+  opacity: 0.4;
+}
+
+.connection-icon.connected {
+  filter: grayscale(0);  /* Full color (or black if using monochrome icon) */
+  opacity: 1;
+}
+
+/* ========================================
+   TEXT INPUT (center, flex-grow)
+   ======================================== */
+.selector-input {
+  flex: 1;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  min-width: 0;  /* Allow flex shrink */
+}
+
+.selector-input::placeholder {
+  color: #9CA3AF;
+  font-style: italic;
+}
+
+.selector-input:disabled {
+  color: #D1D5DB;
+  cursor: not-allowed;
+}
+
+/* ========================================
+   CLEAR BUTTON (right, before sync)
+   ======================================== */
+.selector-clear {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: #6B7280;
+  padding: 0;
+  transition: color 0.15s;
+}
+
+.selector-clear:hover {
+  color: #374151;
+}
+
+/* ========================================
+   SYNC MENU BUTTON (right edge)
+   ======================================== */
 .selector-sync-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: white;
   border: 1px solid #D1D5DB;
   border-radius: 4px;
-  padding: 4px 8px;
   cursor: pointer;
   font-size: 16px;
+  line-height: 1;
   color: #6B7280;
-  flex-shrink: 0;
+  padding: 0;
+  transition: all 0.15s;
 }
 
-.selector-sync-icon:hover {
+.selector-sync-icon:hover:not(:disabled) {
   background: #F3F4F6;
   border-color: #9CA3AF;
+  color: #374151;
 }
 
-.selector-sync-dropdown {
+.selector-sync-icon:disabled {
+  color: #D1D5DB;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ========================================
+   DROPDOWN MENU
+   ======================================== */
+.selector-dropdown {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 4px);
+  left: 0;
   right: 0;
-  margin-top: 4px;
   background: white;
   border: 1px solid #D1D5DB;
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 1000;
-  min-width: 180px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Dropdown group (Current Graph / Registry) */
+.selector-group {
+  border-bottom: 1px solid #E5E7EB;
+}
+
+.selector-group:last-child {
+  border-bottom: none;
+}
+
+.selector-group-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #6B7280;
+  background: #F9FAFB;
+  border-bottom: 1px solid #E5E7EB;
+  letter-spacing: 0.05em;
+}
+
+/* Dropdown item wrapper (contains item + usage sub-line) */
+.selector-item-wrapper {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.selector-item-wrapper:hover {
+  background: #F3F4F6;
+}
+
+.selector-item-wrapper:active {
+  background: #E5E7EB;
+}
+
+/* Item name line (Navigator-style) */
+.selector-item {
+  padding: 8px 12px 4px 20px;  /* Less bottom padding for sub-line */
+  font-size: 13px;
+  color: #374151;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Usage info sub-line */
+.selector-item-usage {
+  padding: 0 12px 6px 36px;  /* Indented, aligned with item text */
+  font-size: 11px;
+  color: #9CA3AF;
+  font-style: italic;
+  line-height: 1.2;
+}
+
+/* Items already in use - slightly muted */
+.selector-item-wrapper.in-use .selector-item {
+  color: #6B7280;
+}
+
+/* Status bar (at bottom) */
+.selector-status {
+  padding: 6px 12px;
+  border-top: 1px solid #E5E7EB;
+  background: #F9FAFB;
+  font-size: 11px;
+  color: #6B7280;
+  text-align: center;
+}
+
+/* ========================================
+   SYNC MENU DROPDOWN
+   ======================================== */
+.selector-sync-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: white;
+  border: 1px solid #D1D5DB;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1001;  /* Above dropdown menu */
+  min-width: 200px;
 }
 
 .selector-sync-dropdown button {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border: none;
   background: none;
   cursor: pointer;
   font-size: 13px;
   color: #374151;
+  transition: background 0.1s;
 }
 
 .selector-sync-dropdown button:hover {
@@ -1302,6 +2345,53 @@ export function Selector({
 .selector-sync-dropdown button:last-child {
   border-radius: 0 0 6px 6px;
 }
+```
+
+---
+
+#### Usage Example
+
+```tsx
+// Example 1: Parameter selector in Edge Properties (registry-only context)
+<Selector
+  type="parameter"
+  value={edge.probability?.parameter_id}
+  onChange={(paramId) => updateEdgeParameter(paramId)}
+  placeholder="Select parameter..."
+  showGraphItems={false}  // Edge params don't need "Current Graph" group
+  registryItems={[
+    { id: 'param-1', name: 'conv-base' },
+    { id: 'param-2', name: 'conv-premium', inUse: true, usageInfo: 'Used in Edge A→B' },
+    { id: 'param-3', name: 'conv-standard' },
+    { id: 'param-4', name: 'conv-high-very-long-parameter-name', inUse: true, usageInfo: 'Used in Node checkout-flow' }
+  ]}
+  isConnected={!!edge.probability?.parameter_id}
+  isModified={edge.probability?.value !== registryValue}
+  onSyncFrom={() => pullFromRegistry(edge.probability?.parameter_id)}
+  onSyncTo={() => pushToRegistry(edge.probability)}
+  onRetrieve={() => fetchLiveData(edge.probability?.parameter_id)}
+/>
+
+// Example 2: Node selector for Conditional "If Visited" (mixed context - only case that shows graph items)
+<Selector
+  type="node"
+  value={condition.nodeId}
+  onChange={(nodeId) => updateCondition(nodeId)}
+  placeholder="Select node..."
+  showGraphItems={true}  // ONLY true for conditional "If Visited" context
+  graphItems={[
+    { id: 'node-1', name: 'checkout-flow' },
+    { id: 'node-2', name: 'payment-flow', inUse: true, usageInfo: 'Used in Edge C→D' }
+  ]}
+  registryItems={[
+    { id: 'node-reg-1', name: 'abandoned-cart' },
+    { id: 'node-reg-2', name: 'checkout-v2' },
+    { id: 'node-reg-3', name: 'payment-gateway', inUse: true, usageInfo: 'Used 3 times' }
+  ]}
+  isConnected={!!condition.nodeId}
+  onSyncFrom={() => pullNodeDefinition(condition.nodeId)}
+  onSyncTo={() => pushNodeDefinition(condition.nodeId)}
+/>
 ```
 
 ---

@@ -218,3 +218,4 @@ Other `alert()` and `window.confirm()` calls in FileMenu.tsx that could be updat
 
 These can be replaced with toast notifications or similar custom dialogs in a future update.
 
+
