@@ -1,0 +1,92 @@
+/* Sidebar Icon Bar - 48px vertical strip on right edge */
+.sidebar-icon-bar {
+  width: 48px;
+  height: 100%;
+  background: #F9FAFB;
+  border-left: 1px solid #E5E7EB;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  gap: 12px;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.04);
+  z-index: 100;
+  position: relative;
+}
+
+/* Individual icon button */
+.sidebar-icon {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  background: white;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  font-size: 20px;
+  padding: 0;
+}
+
+/* Hover state */
+.sidebar-icon:hover,
+.sidebar-icon.hovered {
+  background: #EFF6FF;
+  border-color: #3B82F6;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
+  transform: scale(1.05);
+}
+
+/* Active/pressed state */
+.sidebar-icon:active {
+  transform: scale(0.95);
+}
+
+/* Floating indicator (orange dot) */
+.sidebar-icon.floating {
+  border-color: #FB923C;
+}
+
+.floating-indicator {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  background: #FB923C;
+  border-radius: 50%;
+  font-size: 8px;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Icon emoji */
+.sidebar-icon .icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  filter: grayscale(0.3);
+  transition: filter 0.2s;
+}
+
+.sidebar-icon:hover .icon,
+.sidebar-icon.hovered .icon {
+  filter: grayscale(0);
+}
+
+/* Focus styles for accessibility */
+.sidebar-icon:focus {
+  outline: 2px solid #3B82F6;
+  outline-offset: 2px;
+}
+
+.sidebar-icon:focus:not(:focus-visible) {
+  outline: none;
+}
+

@@ -6,9 +6,13 @@ import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import ConditionalProbabilitiesSection from './ConditionalProbabilitiesSection';
+import CollapsibleSection from './CollapsibleSection';
 import { getNextAvailableColor } from '@/lib/conditionalColors';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { ParameterSelector } from './ParameterSelector';
+import { EnhancedSelector } from './EnhancedSelector';
+import { ColorSelector } from './ColorSelector';
+import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 
 interface PropertiesPanelProps {
   selectedNodeId: string | null;
@@ -476,24 +480,26 @@ export default function PropertiesPanel({
           <div>
             {selectedNode ? (
               <div>
-                <div style={{ marginBottom: '20px' }}>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Label</label>
-                  <input
-                    data-field="label"
-                    value={localNodeData.label || ''}
-                    onChange={(e) => setLocalNodeData({...localNodeData, label: e.target.value})}
-                    onBlur={() => {
-                      // Update both label and slug in a single graph update to avoid race conditions
-                      if (!graph || !selectedNodeId) return;
-                      const next = structuredClone(graph);
-                      const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                      if (nodeIndex >= 0) {
-                        next.nodes[nodeIndex].label = localNodeData.label;
-                        // Also update slug if it was auto-generated (ONLY on first commit)
-                        if (!slugManuallyEdited && localNodeData.slug && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
-                          next.nodes[nodeIndex].slug = localNodeData.slug;
-                        }
-                        // Mark this node's label as committed (slug is now immutable)
+                {/* Basic Info Section */}
+                <CollapsibleSection title="Basic Info" defaultOpen={true}>
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Label</label>
+                    <input
+                      data-field="label"
+                      value={localNodeData.label || ''}
+                      onChange={(e) => setLocalNodeData({...localNodeData, label: e.target.value})}
+                      onBlur={() => {
+                        // Update both label and slug in a single graph update to avoid race conditions
+                        if (!graph || !selectedNodeId) return;
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        if (nodeIndex >= 0) {
+                          next.nodes[nodeIndex].label = localNodeData.label;
+                          // Also update slug if it was auto-generated (ONLY on first commit)
+                          if (!slugManuallyEdited && localNodeData.slug && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
+                            next.nodes[nodeIndex].slug = localNodeData.slug;
+                          }
+                          // Mark this node's label as committed (slug is now immutable)
                         hasLabelBeenCommittedRef.current[selectedNodeId] = true;
                         if (next.metadata) {
                           next.metadata.updated_at = new Date().toISOString();
@@ -638,72 +644,63 @@ export default function PropertiesPanel({
                   </div>
                 </div>
 
-                <ParameterSelector
+                <EnhancedSelector
                   type="node"
-                    value={localNodeData.slug || ''}
-                  autoFocus={!localNodeData.slug} // Auto-focus if no slug yet
-                  onChange={async (newSlug) => {
-                    console.log('PropertiesPanel: ParameterSelector onChange:', { newSlug, currentSlug: localNodeData.slug });
+                  value={localNodeData.slug || ''}
+                  autoFocus={!localNodeData.slug}
+                  onChange={(newSlug) => {
+                    console.log('PropertiesPanel: EnhancedSelector onChange:', { newSlug, currentSlug: localNodeData.slug });
                     
                     // Update local state immediately
                     setLocalNodeData({...localNodeData, slug: newSlug});
                     setSlugManuallyEdited(true);
                     
-                    // Load node data from registry and do ALL updates in one batch
-                    if (newSlug && graph && selectedNodeId) {
-                      try {
-                        const { paramRegistryService } = await import('../services/paramRegistryService');
-                        const nodeData = await paramRegistryService.loadNode(newSlug);
-                        
-                        // Clone graph and update ALL fields at once
+                    // Update the graph with new slug
+                    updateNode('slug', newSlug);
+                  }}
+                  onPullFromRegistry={async () => {
+                    if (!localNodeData.slug || !graph || !selectedNodeId) return;
+                    
+                    try {
+                      const { paramRegistryService } = await import('../services/paramRegistryService');
+                      const nodeData = await paramRegistryService.loadNode(localNodeData.slug);
+                      
+                      if (nodeData) {
                         const next = structuredClone(graph);
                         const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
                         
                         if (nodeIndex >= 0) {
                           const node = next.nodes[nodeIndex];
                           
-                          // UPDATE SLUG FIRST
-                          node.slug = newSlug;
-                          
-                          // Auto-populate label from registry name (always override default "Node X" labels)
-                          if (nodeData) {
-                            const isDefaultLabel = node.label && /^Node \d+$/.test(node.label);
-                            if (nodeData.name && (isDefaultLabel || !node.label)) {
-                              node.label = nodeData.name;
-                              setLocalNodeData((prev: any) => ({...prev, slug: newSlug, label: nodeData.name}));
-                            }
-                            
-                            // Only populate empty fields (don't overwrite existing data)
-                            if (!node.description && nodeData.description) {
-                              node.description = nodeData.description;
-                              setLocalNodeData((prev: any) => ({...prev, description: nodeData.description}));
-                            }
-                            
-                            if ((!node.tags || node.tags.length === 0) && nodeData.tags) {
-                              node.tags = nodeData.tags;
-                              setLocalNodeData((prev: any) => ({...prev, tags: nodeData.tags}));
-                            }
-                            
-                            console.log('Populated node fields from registry:', { slug: newSlug, label: nodeData.name, description: nodeData.description, tags: nodeData.tags });
+                          // Pull all fields from registry
+                          if (nodeData.name) {
+                            node.label = nodeData.name;
+                            setLocalNodeData((prev: any) => ({...prev, label: nodeData.name}));
+                          }
+                          if (nodeData.description) {
+                            node.description = nodeData.description;
+                            setLocalNodeData((prev: any) => ({...prev, description: nodeData.description}));
+                          }
+                          if (nodeData.tags) {
+                            node.tags = nodeData.tags;
+                            setLocalNodeData((prev: any) => ({...prev, tags: nodeData.tags}));
                           }
                           
                           if (next.metadata) {
                             next.metadata.updated_at = new Date().toISOString();
                           }
                           
-                          // Single setGraph call with ALL updates
                           setGraph(next);
-                          saveHistoryState(`Update node slug`, selectedNodeId || undefined);
+                          saveHistoryState(`Pull node data from registry`, selectedNodeId);
                         }
-                      } catch (error) {
-                        console.log('Could not load node data from registry:', error);
-                        // Even if registry load fails, still update the slug
-                        updateNode('slug', newSlug);
                       }
-                    } else {
-                      // No registry data to load, just update the slug
-                      updateNode('slug', newSlug);
+                    } catch (error) {
+                      console.error('Failed to pull from registry:', error);
                     }
+                  }}
+                  onPushToRegistry={async () => {
+                    // TODO: Implement push to registry
+                    console.log('Push to registry not yet implemented');
                   }}
                   label="Node ID (Slug)"
                   placeholder="Select or enter node ID..."
@@ -780,7 +777,9 @@ export default function PropertiesPanel({
                     }}
                   />
                 </div>
+                </CollapsibleSection>
 
+                <CollapsibleSection title="Node Details" defaultOpen={false}>
                 <div style={{ marginBottom: '20px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Outcome Type</label>
                   <select
@@ -807,8 +806,11 @@ export default function PropertiesPanel({
                   </select>
                 </div>
 
+                </CollapsibleSection>
+
                 {/* Case Node Fields */}
                 {nodeType === 'case' && (
+                  <CollapsibleSection title="Case Configuration" defaultOpen={true}>
                   <>
                     {/* Case Mode Selector */}
                     <div style={{ marginBottom: '20px' }}>
@@ -924,14 +926,38 @@ export default function PropertiesPanel({
 
                     {/* Case ID or Parameter ID */}
                       {caseMode === 'registry' ? (
-                      <ParameterSelector
+                      <EnhancedSelector
                         type="parameter"
-                            value={caseData.parameter_id}
+                        value={caseData.parameter_id}
                         onChange={(newParameterId) => {
-                              setCaseData({...caseData, parameter_id: newParameterId});
-                          // TODO: Load parameter from registry and populate case data
+                          setCaseData({...caseData, parameter_id: newParameterId});
                         }}
-                        label="Parameter ID"
+                        onPullFromRegistry={async () => {
+                          if (!caseData.parameter_id || !graph || !selectedNodeId) return;
+                          
+                          try {
+                            let paramData: any = null;
+                            const localFile = fileRegistry.getFile(`parameter-${caseData.parameter_id}.yaml`);
+                            if (localFile) {
+                              paramData = localFile.data;
+                            } else {
+                              const { paramRegistryService } = await import('../services/paramRegistryService');
+                              paramData = await paramRegistryService.loadParameter(caseData.parameter_id);
+                            }
+                            
+                            if (paramData && paramData.values) {
+                              // TODO: Load case data from parameter
+                              console.log('Loaded case parameter data:', paramData);
+                            }
+                          } catch (error) {
+                            console.error('Failed to pull case parameter from registry:', error);
+                          }
+                        }}
+                        onPushToRegistry={async () => {
+                          // TODO: Implement push to registry
+                          console.log('Push to registry not yet implemented');
+                        }}
+                        label="Case Parameter"
                         placeholder="Select or enter parameter ID..."
                       />
                     ) : (
@@ -1322,6 +1348,7 @@ export default function PropertiesPanel({
                       </div>
                     </div>
                   </>
+                  </CollapsibleSection>
                 )}
 
                 <div style={{ marginBottom: '20px' }}>
@@ -1394,84 +1421,63 @@ export default function PropertiesPanel({
                 </div>
 
                 {/* Parameter ID for probability - connect to parameter registry */}
-                <ParameterSelector
+                <EnhancedSelector
                   type="parameter"
                   parameterType="probability"
                   value={(selectedEdge as any)?.parameter_id || ''}
-                  autoFocus={!(selectedEdge as any)?.parameter_id && !selectedEdge?.p?.mean} // Auto-focus if no parameter and no probability set
-                  onChange={async (newParamId) => {
-                    console.log('PropertiesPanel: Edge ParameterSelector onChange:', { newParamId, currentParamId: (selectedEdge as any)?.parameter_id });
+                  autoFocus={!(selectedEdge as any)?.parameter_id && !selectedEdge?.p?.mean}
+                  onChange={(newParamId) => {
+                    console.log('PropertiesPanel: EnhancedSelector onChange:', { newParamId });
+                    updateEdge('parameter_id', newParamId || undefined);
+                  }}
+                  onPullFromRegistry={async () => {
+                    const currentParamId = (selectedEdge as any)?.parameter_id;
+                    if (!currentParamId || !graph || !selectedEdgeId) return;
                     
-                    // Load parameter data from registry and do ALL updates in one batch
-                    if (newParamId && graph && selectedEdgeId) {
-                      try {
-                        // Try loading from FileRegistry first (for local/open files)
-                        let paramData: any = null;
-                        const localFile = fileRegistry.getFile(`parameter-${newParamId}.yaml`);
-                        if (localFile) {
-                          paramData = localFile.data;
-                          console.log('Loaded parameter from FileRegistry (local):', newParamId);
-                        } else {
-                          // Fall back to registry service for committed files
-                          const { paramRegistryService } = await import('../services/paramRegistryService');
-                          paramData = await paramRegistryService.loadParameter(newParamId);
-                          console.log('Loaded parameter from registry service:', newParamId);
-                        }
-                        
-                        // Clone graph and update ALL fields at once
+                    try {
+                      let paramData: any = null;
+                      const localFile = fileRegistry.getFile(`parameter-${currentParamId}.yaml`);
+                      if (localFile) {
+                        paramData = localFile.data;
+                      } else {
+                        const { paramRegistryService } = await import('../services/paramRegistryService');
+                        paramData = await paramRegistryService.loadParameter(currentParamId);
+                      }
+                      
+                      if (paramData && paramData.values && paramData.values.length > 0) {
                         const next = structuredClone(graph);
                         const edgeIndex = next.edges.findIndex((e: any) => 
                           e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
                         );
                         
-                          if (edgeIndex >= 0) {
+                        if (edgeIndex >= 0) {
                           const edge = next.edges[edgeIndex] as any;
+                          const primaryValue = paramData.values[paramData.values.length - 1];
                           
-                          // UPDATE PARAMETER_ID
-                          edge.parameter_id = newParamId;
-                          
-                          // Auto-populate p.mean and p.stdev from parameter (if it has probability data)
-                          if (paramData && paramData.values && paramData.values.length > 0) {
-                            // For now, use the first (or most recent) value
-                            // TODO: In the future, support time windows and context selection
-                            const primaryValue = paramData.values[paramData.values.length - 1]; // Use last (most recent) value
-                            
-                            if (primaryValue.mean !== undefined && primaryValue.mean !== null) {
-                              edge.p = { ...edge.p, mean: primaryValue.mean };
-                              setLocalEdgeData((prev: any) => ({...prev, parameter_id: newParamId, probability: primaryValue.mean}));
-                            }
-                            if (primaryValue.stdev !== undefined && primaryValue.stdev !== null) {
-                              edge.p = { ...edge.p, stdev: primaryValue.stdev };
-                              setLocalEdgeData((prev: any) => ({...prev, stdev: primaryValue.stdev}));
-                            }
-                            
-                            console.log('Populated edge fields from parameter registry:', { 
-                              parameter_id: newParamId, 
-                              mean: primaryValue.mean, 
-                              stdev: primaryValue.stdev,
-                              valueCount: paramData.values.length,
-                              hasWindows: paramData.values.some(v => v.window_from),
-                              hasContexts: paramData.values.some(v => v.context_id)
-                            });
+                          if (primaryValue.mean !== undefined && primaryValue.mean !== null) {
+                            edge.p = { ...edge.p, mean: primaryValue.mean };
+                            setLocalEdgeData((prev: any) => ({...prev, probability: primaryValue.mean}));
+                          }
+                          if (primaryValue.stdev !== undefined && primaryValue.stdev !== null) {
+                            edge.p = { ...edge.p, stdev: primaryValue.stdev };
+                            setLocalEdgeData((prev: any) => ({...prev, stdev: primaryValue.stdev}));
                           }
                           
                           if (next.metadata) {
                             next.metadata.updated_at = new Date().toISOString();
                           }
                           
-                          // Single setGraph call with ALL updates
                           setGraph(next);
-                          saveHistoryState(`Update edge parameter`, undefined, selectedEdgeId || undefined);
+                          saveHistoryState(`Pull probability from registry`, undefined, selectedEdgeId);
                         }
-                      } catch (error) {
-                        console.log('Could not load parameter data from registry:', error);
-                        // Even if registry load fails, still update the parameter_id
-                        updateEdge('parameter_id', newParamId);
                       }
-                    } else {
-                      // No parameter selected (cleared), remove parameter_id
-                      updateEdge('parameter_id', newParamId || undefined);
+                    } catch (error) {
+                      console.error('Failed to pull from registry:', error);
                     }
+                  }}
+                  onPushToRegistry={async () => {
+                    // TODO: Implement push to registry
+                    console.log('Push to registry not yet implemented');
                   }}
                   label="Probability Parameter"
                   placeholder="Select or enter parameter ID..."
@@ -1610,24 +1616,19 @@ export default function PropertiesPanel({
 
                 {/* Conditional Probabilities */}
                 {selectedEdge && graph && (
-                  <ConditionalProbabilitiesSection
-                    edge={selectedEdge}
-                    graph={graph}
-                    setGraph={setGraph}
-                    localConditionalP={localConditionalP}
-                    setLocalConditionalP={setLocalConditionalP}
-                    saveHistoryState={saveHistoryState}
-                    onLocalUpdate={(conditionalP) => {
-                      // Update local state immediately (like variants)
-                      setLocalConditionalP(conditionalP);
-                      // Also update graph
-                      if (graph && selectedEdgeId) {
+                  <ConditionalProbabilityEditor
+                    conditions={localConditionalP}
+                    onChange={(newConditions) => {
+                      setLocalConditionalP(newConditions);
+                      
+                      // Update graph immediately
+                      if (selectedEdgeId) {
                         const nextGraph = structuredClone(graph);
                         const edgeIndex = nextGraph.edges.findIndex((e: any) => 
                           e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
                         );
                         if (edgeIndex >= 0) {
-                          nextGraph.edges[edgeIndex].conditional_p = conditionalP.length > 0 ? conditionalP : undefined;
+                          nextGraph.edges[edgeIndex].conditional_p = newConditions.length > 0 ? newConditions as any : undefined;
                           
                           if (!nextGraph.metadata) {
                             nextGraph.metadata = {
@@ -1643,29 +1644,7 @@ export default function PropertiesPanel({
                         }
                       }
                     }}
-                    onUpdateColor={(color) => {
-                      const nextGraph = structuredClone(graph);
-                      const edgeIndex = nextGraph.edges.findIndex((e: any) => 
-                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                      );
-                      if (edgeIndex >= 0) {
-                        if (!nextGraph.edges[edgeIndex].display) {
-                          nextGraph.edges[edgeIndex].display = {};
-                        }
-                        nextGraph.edges[edgeIndex].display!.conditional_color = color;
-                        if (!nextGraph.metadata) {
-                          nextGraph.metadata = {
-                            version: '1.0.0',
-                            created_at: new Date().toISOString(),
-                            updated_at: new Date().toISOString()
-                          };
-                        } else {
-                          nextGraph.metadata.updated_at = new Date().toISOString();
-                        }
-                        setGraph(nextGraph);
-                        saveHistoryState('Update conditional color', undefined, selectedEdgeId || undefined);
-                      }
-                    }}
+                    graph={graph}
                   />
                 )}
 
@@ -1811,29 +1790,28 @@ export default function PropertiesPanel({
                   </div>
                   
                   {/* Parameter Selector */}
-                  <ParameterSelector
+                  <EnhancedSelector
                     type="parameter"
                     parameterType="cost_gbp"
                     value={(selectedEdge as any)?.cost_gbp_parameter_id || ''}
-                    onChange={async (newParamId) => {
-                      console.log('PropertiesPanel: Cost GBP ParameterSelector onChange:', { newParamId });
+                    onChange={(newParamId) => {
+                      updateEdge('cost_gbp_parameter_id', newParamId || undefined);
+                    }}
+                    onPullFromRegistry={async () => {
+                      const currentParamId = (selectedEdge as any)?.cost_gbp_parameter_id;
+                      if (!currentParamId || !graph || !selectedEdgeId) return;
                       
-                      if (newParamId && graph && selectedEdgeId) {
-                        try {
-                          // Try loading from FileRegistry first (for local/open files)
-                          let paramData: any = null;
-                          const localFile = fileRegistry.getFile(`parameter-${newParamId}.yaml`);
-                          if (localFile) {
-                            paramData = localFile.data;
-                            console.log('Loaded cost_gbp parameter from FileRegistry (local):', newParamId);
-                          } else {
-                            // Fall back to registry service for committed files
-                            const { paramRegistryService } = await import('../services/paramRegistryService');
-                            paramData = await paramRegistryService.loadParameter(newParamId);
-                            console.log('Loaded cost_gbp parameter from registry service:', newParamId);
-                          }
-                          
-                          // Clone graph and update ALL fields at once
+                      try {
+                        let paramData: any = null;
+                        const localFile = fileRegistry.getFile(`parameter-${currentParamId}.yaml`);
+                        if (localFile) {
+                          paramData = localFile.data;
+                        } else {
+                          const { paramRegistryService } = await import('../services/paramRegistryService');
+                          paramData = await paramRegistryService.loadParameter(currentParamId);
+                        }
+                        
+                        if (paramData && paramData.values && paramData.values.length > 0) {
                           const next = structuredClone(graph);
                           const edgeIndex = next.edges.findIndex((e: any) => 
                             e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
@@ -1841,58 +1819,41 @@ export default function PropertiesPanel({
                           
                           if (edgeIndex >= 0) {
                             const edge = next.edges[edgeIndex] as any;
-                            edge.cost_gbp_parameter_id = newParamId;
+                            const sortedValues = [...paramData.values].sort((a, b) => {
+                              if (!a.window_from) return -1;
+                              if (!b.window_from) return 1;
+                              return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
+                            });
+                            const latestValue = sortedValues[0];
                             
-                            // Auto-populate cost_gbp from parameter (use latest value)
-                            if (paramData && paramData.values && paramData.values.length > 0) {
-                              const sortedValues = [...paramData.values].sort((a, b) => {
-                                if (!a.window_from) return -1;
-                                if (!b.window_from) return 1;
-                                return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
-                              });
-                              const latestValue = sortedValues[0];
-                              
-                              edge.cost_gbp = {
-                                mean: latestValue.mean,
-                                stdev: latestValue.stdev,
-                                distribution: latestValue.distribution
-                              };
-                              
-                              console.log('Populated GBP cost from parameter:', { 
-                                parameter_id: newParamId, 
-                                mean: latestValue.mean, 
-                                stdev: latestValue.stdev,
-                                cost_gbp_object: edge.cost_gbp
-                              });
-                              
-                              // Update local edge data immediately with the new cost values
-                              setLocalEdgeData((prev: any) => ({
-                                ...prev,
-                                cost_gbp_parameter_id: newParamId,
-                                cost_gbp: {
-                                  mean: latestValue.mean,
-                                  stdev: latestValue.stdev,
-                                  distribution: latestValue.distribution
-                                }
-                              }));
-                            }
+                            edge.cost_gbp = {
+                              mean: latestValue.mean,
+                              stdev: latestValue.stdev,
+                              distribution: latestValue.distribution
+                            };
+                            
+                            setLocalEdgeData((prev: any) => ({
+                              ...prev,
+                              cost_gbp: edge.cost_gbp
+                            }));
                             
                             if (next.metadata) {
                               next.metadata.updated_at = new Date().toISOString();
                             }
                             
                             setGraph(next);
-                            saveHistoryState(`Update cost GBP parameter`, undefined, selectedEdgeId || undefined);
+                            saveHistoryState(`Pull cost GBP from registry`, undefined, selectedEdgeId);
                           }
-                        } catch (error) {
-                          console.log('Could not load cost parameter:', error);
-                          updateEdge('cost_gbp_parameter_id', newParamId);
                         }
-                      } else {
-                        updateEdge('cost_gbp_parameter_id', newParamId || undefined);
+                      } catch (error) {
+                        console.error('Failed to pull cost_gbp from registry:', error);
                       }
                     }}
-                    label="Link to Parameter"
+                    onPushToRegistry={async () => {
+                      // TODO: Implement push to registry
+                      console.log('Push to registry not yet implemented');
+                    }}
+                    label="Cost (£) Parameter"
                     placeholder="Select cost_gbp parameter..."
                   />
                   
@@ -1988,29 +1949,28 @@ export default function PropertiesPanel({
                   </div>
                   
                   {/* Parameter Selector */}
-                  <ParameterSelector
+                  <EnhancedSelector
                     type="parameter"
                     parameterType="cost_time"
                     value={(selectedEdge as any)?.cost_time_parameter_id || ''}
-                    onChange={async (newParamId) => {
-                      console.log('PropertiesPanel: Cost Time ParameterSelector onChange:', { newParamId });
+                    onChange={(newParamId) => {
+                      updateEdge('cost_time_parameter_id', newParamId || undefined);
+                    }}
+                    onPullFromRegistry={async () => {
+                      const currentParamId = (selectedEdge as any)?.cost_time_parameter_id;
+                      if (!currentParamId || !graph || !selectedEdgeId) return;
                       
-                      if (newParamId && graph && selectedEdgeId) {
-                        try {
-                          // Try loading from FileRegistry first (for local/open files)
-                          let paramData: any = null;
-                          const localFile = fileRegistry.getFile(`parameter-${newParamId}.yaml`);
-                          if (localFile) {
-                            paramData = localFile.data;
-                            console.log('Loaded cost_time parameter from FileRegistry (local):', newParamId);
-                          } else {
-                            // Fall back to registry service for committed files
-                            const { paramRegistryService } = await import('../services/paramRegistryService');
-                            paramData = await paramRegistryService.loadParameter(newParamId);
-                            console.log('Loaded cost_time parameter from registry service:', newParamId);
-                          }
-                          
-                          // Clone graph and update ALL fields at once
+                      try {
+                        let paramData: any = null;
+                        const localFile = fileRegistry.getFile(`parameter-${currentParamId}.yaml`);
+                        if (localFile) {
+                          paramData = localFile.data;
+                        } else {
+                          const { paramRegistryService } = await import('../services/paramRegistryService');
+                          paramData = await paramRegistryService.loadParameter(currentParamId);
+                        }
+                        
+                        if (paramData && paramData.values && paramData.values.length > 0) {
                           const next = structuredClone(graph);
                           const edgeIndex = next.edges.findIndex((e: any) => 
                             e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
@@ -2018,58 +1978,41 @@ export default function PropertiesPanel({
                           
                           if (edgeIndex >= 0) {
                             const edge = next.edges[edgeIndex] as any;
-                            edge.cost_time_parameter_id = newParamId;
+                            const sortedValues = [...paramData.values].sort((a, b) => {
+                              if (!a.window_from) return -1;
+                              if (!b.window_from) return 1;
+                              return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
+                            });
+                            const latestValue = sortedValues[0];
                             
-                            // Auto-populate cost_time from parameter (use latest value)
-                            if (paramData && paramData.values && paramData.values.length > 0) {
-                              const sortedValues = [...paramData.values].sort((a, b) => {
-                                if (!a.window_from) return -1;
-                                if (!b.window_from) return 1;
-                                return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
-                              });
-                              const latestValue = sortedValues[0];
-                              
-                              edge.cost_time = {
-                                mean: latestValue.mean,
-                                stdev: latestValue.stdev,
-                                distribution: latestValue.distribution
-                              };
-                              
-                              console.log('Populated time cost from parameter:', { 
-                                parameter_id: newParamId, 
-                                mean: latestValue.mean, 
-                                stdev: latestValue.stdev,
-                                cost_time_object: edge.cost_time
-                              });
-                              
-                              // Update local edge data immediately with the new cost values
-                              setLocalEdgeData((prev: any) => ({
-                                ...prev,
-                                cost_time_parameter_id: newParamId,
-                                cost_time: {
-                                  mean: latestValue.mean,
-                                  stdev: latestValue.stdev,
-                                  distribution: latestValue.distribution
-                                }
-                              }));
-                            }
+                            edge.cost_time = {
+                              mean: latestValue.mean,
+                              stdev: latestValue.stdev,
+                              distribution: latestValue.distribution
+                            };
+                            
+                            setLocalEdgeData((prev: any) => ({
+                              ...prev,
+                              cost_time: edge.cost_time
+                            }));
                             
                             if (next.metadata) {
                               next.metadata.updated_at = new Date().toISOString();
                             }
                             
                             setGraph(next);
-                            saveHistoryState(`Update cost time parameter`, undefined, selectedEdgeId || undefined);
+                            saveHistoryState(`Pull cost time from registry`, undefined, selectedEdgeId);
                           }
-                        } catch (error) {
-                          console.log('Could not load cost parameter:', error);
-                          updateEdge('cost_time_parameter_id', newParamId);
                         }
-                      } else {
-                        updateEdge('cost_time_parameter_id', newParamId || undefined);
+                      } catch (error) {
+                        console.error('Failed to pull cost_time from registry:', error);
                       }
                     }}
-                    label="Link to Parameter"
+                    onPushToRegistry={async () => {
+                      // TODO: Implement push to registry
+                      console.log('Push to registry not yet implemented');
+                    }}
+                    label="Cost (Time) Parameter"
                     placeholder="Select cost_time parameter..."
                   />
                   

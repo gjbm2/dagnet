@@ -108,6 +108,16 @@ export interface TabState {
     targetPanel?: string;
     // Node visibility state (per-tab, not per-file)
     hiddenNodes?: Set<string>; // Set of node IDs that are hidden
+    // NEW: Sidebar state (Phase 1 - Icon Bar)
+    sidebarState?: {
+      mode: 'minimized' | 'maximized';
+      activePanel: 'what-if' | 'properties' | 'tools';
+      floatingPanels: string[];
+      hasAutoOpened: boolean;
+      whatIfOpen: boolean;
+      propertiesOpen: boolean;
+      toolsOpen: boolean;
+    };
   };
   
   // UI state

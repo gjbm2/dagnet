@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import './CollapsibleSection.css';
 
 interface CollapsibleSectionProps {
   title: string | React.ReactNode;
@@ -6,6 +7,8 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
   isOpen?: boolean;
   onToggle?: () => void;
+  icon?: string;
+  badge?: string;
 }
 
 export default function CollapsibleSection({ 
@@ -13,52 +16,62 @@ export default function CollapsibleSection({
   defaultOpen = true, 
   children, 
   isOpen: externalIsOpen, 
-  onToggle 
+  onToggle,
+  icon,
+  badge
 }: CollapsibleSectionProps) {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = useState<number | undefined>(undefined);
   
   // Use external state if provided, otherwise use internal state
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
   const handleToggle = onToggle || (() => setInternalIsOpen(!internalIsOpen));
 
+  // Measure content height for smooth animation
+  useEffect(() => {
+    if (contentRef.current) {
+      setContentHeight(contentRef.current.scrollHeight);
+    }
+  }, [children, isOpen]);
+
   return (
-    <div style={{ borderBottom: '1px solid #e9ecef' }}>
+    <div className="collapsible-section">
       {/* Header */}
       <div
+        className="collapsible-section-header"
         onClick={handleToggle}
-        style={{
-          width: '100%',
-          padding: '12px 16px',
-          background: '#f8f9fa',
-          border: 'none',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          cursor: 'pointer',
-          fontSize: '14px',
-          fontWeight: '600',
-          color: '#212529',
-          textAlign: 'left'
-        }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-          {title}
+        <div className="collapsible-section-header-left">
+          <span className={`collapsible-section-expand-icon ${isOpen ? 'open' : ''}`}>
+            ▶
+          </span>
+          
+          {icon && (
+            <span className="collapsible-section-icon">{icon}</span>
+          )}
+          
+          <div className="collapsible-section-title">
+            {title}
+          </div>
+          
+          {badge && (
+            <span className="collapsible-section-badge">{badge}</span>
+          )}
         </div>
-        <span style={{ 
-          fontSize: '18px',
-          transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-          transition: 'transform 0.2s'
-        }}>
-          ▼
-        </span>
       </div>
 
-      {/* Content */}
-      {isOpen && (
-        <div>
+      {/* Content (animated) */}
+      <div 
+        className={`collapsible-section-content ${isOpen ? 'open' : ''}`}
+        style={{
+          maxHeight: isOpen ? `${contentHeight}px` : '0px'
+        }}
+      >
+        <div ref={contentRef} className="collapsible-section-content-inner">
           {children}
         </div>
-      )}
+      </div>
     </div>
   );
 }

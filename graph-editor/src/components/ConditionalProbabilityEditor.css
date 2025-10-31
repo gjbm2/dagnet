@@ -1,0 +1,207 @@
+/* Conditional Probability Editor Component Styling */
+
+.conditional-probability-editor {
+  margin-bottom: 16px;
+}
+
+/* Header */
+.conditional-probability-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.conditional-probability-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #1F2937;
+}
+
+.conditional-probability-add-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: #3B82F6;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.conditional-probability-add-btn:hover {
+  background: #2563EB;
+}
+
+/* Empty State */
+.conditional-probability-empty {
+  padding: 20px;
+  text-align: center;
+  color: #6B7280;
+  font-size: 13px;
+  background: #F9FAFB;
+  border: 1px dashed #D1D5DB;
+  border-radius: 4px;
+}
+
+/* Condition Card */
+.conditional-probability-condition {
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  background: #fff;
+}
+
+/* Condition Header (Collapsible) */
+.conditional-probability-condition-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  cursor: pointer;
+  background: #F9FAFB;
+  border-radius: 6px 6px 0 0;
+  transition: background-color 0.15s ease;
+}
+
+.conditional-probability-condition-header:hover {
+  background: #F3F4F6;
+}
+
+.conditional-probability-condition-icon {
+  font-size: 10px;
+  color: #6B7280;
+  transition: transform 0.2s ease;
+}
+
+.conditional-probability-condition-label {
+  flex: 1;
+  font-weight: 500;
+  font-size: 13px;
+  color: #1F2937;
+}
+
+.conditional-probability-condition-summary {
+  font-weight: 400;
+  color: #6B7280;
+  font-size: 12px;
+}
+
+.conditional-probability-remove-btn {
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: #9CA3AF;
+  cursor: pointer;
+  font-size: 14px;
+  transition: color 0.2s ease;
+}
+
+.conditional-probability-remove-btn:hover {
+  color: #EF4444;
+}
+
+/* Condition Content */
+.conditional-probability-condition-content {
+  padding: 16px;
+  border-top: 1px solid #E5E7EB;
+}
+
+.conditional-probability-field {
+  margin-bottom: 16px;
+}
+
+.conditional-probability-field:last-child {
+  margin-bottom: 0;
+}
+
+.conditional-probability-field > label {
+  display: block;
+  font-weight: 500;
+  font-size: 13px;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+.conditional-probability-field-label {
+  display: block;
+  font-size: 11px;
+  color: #6B7280;
+  margin-bottom: 4px;
+}
+
+/* Chips for selected nodes */
+.conditional-probability-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-height: 32px;
+  padding: 4px;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 4px;
+}
+
+.conditional-probability-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #DBEAFE;
+  color: #1E40AF;
+  border: 1px solid #93C5FD;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.conditional-probability-chip button {
+  background: none;
+  border: none;
+  color: #1E40AF;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  transition: color 0.2s ease;
+}
+
+.conditional-probability-chip button:hover {
+  color: #1E3A8A;
+}
+
+/* Manual Input Fields */
+.conditional-probability-manual-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.conditional-probability-manual-inputs input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #D1D5DB;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.conditional-probability-manual-inputs input:focus {
+  outline: none;
+  border-color: #3B82F6;
+}
+
+/* Help Text */
+.conditional-probability-help {
+  margin-top: 12px;
+  padding: 12px;
+  background: #EFF6FF;
+  border: 1px solid #DBEAFE;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #1E40AF;
+}
+
