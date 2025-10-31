@@ -1,0 +1,95 @@
+/* Color Selector Component Styling */
+
+.color-selector {
+  margin-bottom: 16px;
+}
+
+.color-selector-label {
+  font-weight: 500;
+  font-size: 14px;
+  display: block;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+/* Presets grid */
+.color-selector-presets {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* Individual preset button */
+.color-selector-preset {
+  width: 40px;
+  height: 40px;
+  border: 2px solid #E5E7EB;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #6B7280;
+}
+
+.color-selector-preset:hover:not(:disabled) {
+  border-color: #9CA3AF;
+  transform: scale(1.05);
+}
+
+.color-selector-preset.selected {
+  border-color: #1F2937;
+  border-width: 3px;
+}
+
+.color-selector-preset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Custom color button */
+.color-selector-preset.custom {
+  background: linear-gradient(135deg, 
+    #FF6B6B 0%, 
+    #4ECDC4 25%, 
+    #45B7D1 50%, 
+    #96CEB4 75%, 
+    #FFEAA7 100%);
+}
+
+/* Checkmark for selected */
+.color-selector-checkmark {
+  color: #fff;
+  font-weight: bold;
+  font-size: 20px;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+}
+
+/* Current color display */
+.color-selector-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 4px;
+}
+
+.color-selector-current-swatch {
+  width: 24px;
+  height: 24px;
+  border: 2px solid #E5E7EB;
+  border-radius: 4px;
+}
+
+.color-selector-current-value {
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  color: #6B7280;
+}
+

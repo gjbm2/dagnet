@@ -180,15 +180,9 @@ class RegistryService {
   async getParametersByType(parameterType: 'probability' | 'cost_gbp' | 'cost_time', tabs: any[] = []): Promise<RegistryItem[]> {
     const allParams = await this.getParameters(tabs);
     
-    // Map UI types to schema types
-    const schemaTypeMap: Record<string, string> = {
-      'probability': 'probability',
-      'cost_gbp': 'monetary_cost',
-      'cost_time': 'time_cost'
-    };
-    
-    const schemaType = schemaTypeMap[parameterType];
-    return allParams.filter(p => p.parameter_type === schemaType);
+    // Schema uses 'type' field directly with values: probability, cost_gbp, cost_time
+    // This is stored in RegistryItem.parameter_type
+    return allParams.filter(p => p.parameter_type === parameterType);
   }
 
   /**

@@ -1,12 +1,39 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, createContext, useContext } from 'react';
 import { EditorProps, GraphData } from '../../types';
 import { useFileState, useTabContext } from '../../contexts/TabContext';
 import { GraphStoreProvider, useGraphStore } from '../../contexts/GraphStoreContext';
+import DockLayout, { LayoutData } from 'rc-dock';
 import GraphCanvas from '../GraphCanvas';
 import PropertiesPanel from '../PropertiesPanel';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import WhatIfAnalysisHeader from '../WhatIfAnalysisHeader';
 import CollapsibleSection from '../CollapsibleSection';
+import SidebarIconBar from '../SidebarIconBar';
+import SidebarHoverPreview from '../SidebarHoverPreview';
+import WhatIfPanel from '../panels/WhatIfPanel';
+import PropertiesPanelWrapper from '../panels/PropertiesPanelWrapper';
+import ToolsPanel from '../panels/ToolsPanel';
+import { useSidebarState } from '../../hooks/useSidebarState';
+import { getGraphSidebarLayout, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
+import { dockGroups } from '../../layouts/defaultLayout';
+
+// Context to share selection state with sidebar panels
+interface SelectionContextType {
+  selectedNodeId: string | null;
+  selectedEdgeId: string | null;
+  onSelectedNodeChange: (id: string | null) => void;
+  onSelectedEdgeChange: (id: string | null) => void;
+}
+
+const SelectionContext = createContext<SelectionContextType | null>(null);
+
+export function useSelectionContext() {
+  const context = useContext(SelectionContext);
+  if (!context) {
+    throw new Error('useSelectionContext must be used within SelectionContext.Provider');
+  }
+  return context;
+}
 
 /**
  * Graph Editor Inner Component
@@ -21,15 +48,130 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const myTab = tabs.find(t => t.id === tabId);
   const tabState = myTab?.editorState || {};
   
+  // NEW: Sidebar state management (Phase 1)
+  const { state: sidebarState, operations: sidebarOps } = useSidebarState(tabId);
+  const [hoveredPanel, setHoveredPanel] = useState<'what-if' | 'properties' | 'tools' | null>(null);
+  
   // Tab-specific state (persisted per tab, not per file!)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(tabState.selectedNodeId ?? null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(tabState.selectedEdgeId ?? null);
-  const [sidebarOpen, setSidebarOpen] = useState(tabState.sidebarOpen ?? true);
+  
+  // OLD sidebar state - will be deprecated after Phase 2
+  // For now, sync with new sidebar state
+  const [sidebarOpen, setSidebarOpen] = useState(
+    tabState.sidebarOpen ?? (sidebarState.mode === 'maximized')
+  );
   const [whatIfOpen, setWhatIfOpen] = useState(tabState.whatIfOpen ?? false);
   const [propertiesOpen, setPropertiesOpen] = useState(tabState.propertiesOpen ?? true);
+  
   const [useUniformScaling, setUseUniformScaling] = useState(tabState.useUniformScaling ?? false);
   const [massGenerosity, setMassGenerosity] = useState(tabState.massGenerosity ?? 0.5);
   const [autoReroute, setAutoReroute] = useState(tabState.autoReroute ?? true);
+  
+  // Sync old sidebar state with new sidebar mode
+  useEffect(() => {
+    if (sidebarState.mode === 'minimized') {
+      setSidebarOpen(false);
+    } else if (sidebarState.mode === 'maximized') {
+      setSidebarOpen(true);
+    }
+  }, [sidebarState.mode]);
+  
+  // NEW: rc-dock layout for sidebar (Phase 2)
+  const sidebarDockRef = useRef<DockLayout>(null);
+  const [sidebarLayout, setSidebarLayout] = useState<LayoutData | null>(null);
+  
+  // Wrapped selection handlers with smart auto-open logic
+  const handleNodeSelection = React.useCallback((nodeId: string | null) => {
+    setSelectedNodeId(nodeId);
+    if (nodeId) {
+      // Smart auto-open: opens Properties on first selection
+      sidebarOps.handleSelection();
+    }
+  }, [sidebarOps]);
+  
+  const handleEdgeSelection = React.useCallback((edgeId: string | null) => {
+    setSelectedEdgeId(edgeId);
+    if (edgeId) {
+      // Smart auto-open: opens Properties on first selection
+      sidebarOps.handleSelection();
+    }
+  }, [sidebarOps]);
+  
+  // Icon bar handlers
+  const handleIconClick = React.useCallback((panel: 'what-if' | 'properties' | 'tools') => {
+    // Click on icon - maximize sidebar and show the panel
+    sidebarOps.maximize(panel);
+  }, [sidebarOps]);
+  
+  const handleIconHover = React.useCallback((panel: 'what-if' | 'properties' | 'tools' | null) => {
+    // Hover on icon - show preview
+    setHoveredPanel(panel);
+  }, []);
+  
+  // Initialize sidebar layout (only when mode changes or layout doesn't exist)
+  useEffect(() => {
+    if (sidebarState.mode === 'maximized' && !sidebarLayout) {
+      const layout = getGraphSidebarLayout();
+      
+      // Replace placeholder content with actual React components
+      if (layout.dockbox.children?.[0] && 'tabs' in layout.dockbox.children[0]) {
+        const panel = layout.dockbox.children[0];
+        panel.tabs.forEach(tab => {
+          if (tab.id === 'what-if-tab') {
+            tab.content = <WhatIfPanel tabId={tabId} />;
+          } else if (tab.id === 'properties-tab') {
+            tab.content = (
+              <PropertiesPanelWrapper tabId={tabId} />
+            );
+          } else if (tab.id === 'tools-tab') {
+            tab.content = (
+              <ToolsPanel
+                onAutoLayout={(dir) => autoLayoutRef.current?.(dir || 'LR')}
+                onForceReroute={() => forceRerouteRef.current?.()}
+                massGenerosity={massGenerosity}
+                onMassGenerosityChange={setMassGenerosity}
+                useUniformScaling={useUniformScaling}
+                onUniformScalingChange={setUseUniformScaling}
+                onHideUnselected={() => hideUnselectedRef.current?.()}
+                onShowAll={() => {/* TODO: implement showAll */}}
+              />
+            );
+          }
+        });
+        
+        // Set active tab based on sidebar state
+        panel.activeId = PANEL_TO_TAB_ID[sidebarState.activePanel];
+      }
+      
+      setSidebarLayout(layout);
+    } else if (sidebarState.mode === 'minimized') {
+      // Clear layout when minimized
+      setSidebarLayout(null);
+    }
+  }, [sidebarState.mode, sidebarLayout, tabId, selectedNodeId, selectedEdgeId, 
+      handleNodeSelection, handleEdgeSelection, massGenerosity, useUniformScaling, sidebarState.activePanel]);
+  
+  // Update rc-dock active tab when activePanel changes (while maximized)
+  useEffect(() => {
+    if (sidebarState.mode === 'maximized' && sidebarDockRef.current && sidebarLayout) {
+      const targetTabId = PANEL_TO_TAB_ID[sidebarState.activePanel];
+      const dockLayout = sidebarDockRef.current;
+      
+      // Find and activate the target tab
+      if (dockLayout.getLayout) {
+        const layout = dockLayout.getLayout();
+        if (layout.dockbox && layout.dockbox.children) {
+          layout.dockbox.children.forEach((panel: any) => {
+            if (panel.tabs && panel.tabs.some((t: any) => t.id === targetTabId)) {
+              panel.activeId = targetTabId;
+            }
+          });
+          dockLayout.loadLayout(layout);
+        }
+      }
+    }
+  }, [sidebarState.activePanel, sidebarState.mode, sidebarLayout]);
   
   // Refs for GraphCanvas exposed functions
   const addNodeRef = React.useRef<(() => void) | null>(null);
@@ -48,7 +190,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     nodeCount: data?.nodes?.length,
     isDirty,
     graphInStore: !!graph,
-    graphNodeCount: graph?.nodes?.length
+    graphNodeCount: graph?.nodes?.length,
+    sidebarMode: sidebarState.mode,
+    sidebarOpen,
+    hoveredPanel
   });
 
   // Bidirectional sync with loop prevention
@@ -325,21 +470,31 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   }
 
   console.log('GraphEditor: About to render GraphCanvas with', data.nodes?.length, 'nodes');
-  console.log('GraphEditor: Rendering with props:', {
+  console.log('GraphEditor: Rendering with state:', {
+    sidebarState: sidebarState,
     sidebarOpen,
     selectedNodeId,
-    selectedEdgeId
+    selectedEdgeId,
+    sidebarLayoutExists: !!sidebarLayout
   });
 
+  const selectionContextValue: SelectionContextType = {
+    selectedNodeId,
+    selectedEdgeId,
+    onSelectedNodeChange: handleNodeSelection,
+    onSelectedEdgeChange: handleEdgeSelection
+  };
+
   return (
-    <div style={{ 
-      display: 'grid', 
-      gridTemplateColumns: sidebarOpen ? '1fr 350px' : '1fr', 
-      height: '100%',
-      transition: 'grid-template-columns 0.3s ease-in-out',
-      overflow: 'hidden',
-      background: '#f0f0f0' // Debug: add background to see if container renders
-    }}>
+    <SelectionContext.Provider value={selectionContextValue}>
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: sidebarState.mode === 'maximized' ? '1fr 300px' : sidebarState.mode === 'minimized' ? '1fr 48px' : '1fr', 
+        height: '100%',
+        transition: 'grid-template-columns 0.3s ease-in-out',
+        overflow: 'hidden',
+        background: '#f0f0f0' // Debug: add background to see if container renders
+      }}>
       {/* Main Graph Canvas */}
       <div style={{ 
         position: 'relative',
@@ -348,8 +503,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
         background: '#e0e0e0' // Debug: add background to see canvas container
       }}>
         <GraphCanvas
-          onSelectedNodeChange={setSelectedNodeId}
-          onSelectedEdgeChange={setSelectedEdgeId}
+          onSelectedNodeChange={handleNodeSelection}
+          onSelectedEdgeChange={handleEdgeSelection}
           useUniformScaling={useUniformScaling}
           massGenerosity={massGenerosity}
           autoReroute={autoReroute}
@@ -364,8 +519,56 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
         />
       </div>
 
-      {/* Right Sidebar */}
-      {sidebarOpen && (
+      {/* NEW: Icon Bar (Phase 1) - shown when sidebar is minimized */}
+      {sidebarState.mode === 'minimized' && (
+        <div style={{ 
+          position: 'relative',
+          height: '100%',
+          width: '48px',
+          background: '#F9FAFB',
+          borderLeft: '1px solid #E5E7EB'
+        }}>
+          <SidebarIconBar
+            state={sidebarState}
+            onIconClick={handleIconClick}
+            onIconHover={handleIconHover}
+          />
+          
+          {/* Hover Preview - absolutely positioned to overlay canvas */}
+          {hoveredPanel && (
+            <div 
+              style={{ position: 'absolute', top: 0, right: '48px', height: '100%', width: '300px', zIndex: 999 }}
+              onMouseEnter={() => {
+                console.log('[GraphEditor] Mouse entered preview');
+              }}
+              onMouseLeave={() => {
+                console.log('[GraphEditor] Mouse left preview');
+                setHoveredPanel(null);
+              }}
+            >
+              <SidebarHoverPreview
+                panel={hoveredPanel}
+                tabId={tabId}
+                selectedNodeId={selectedNodeId}
+                selectedEdgeId={selectedEdgeId}
+                onSelectedNodeChange={handleNodeSelection}
+                onSelectedEdgeChange={handleEdgeSelection}
+                massGenerosity={massGenerosity}
+                onMassGenerosityChange={setMassGenerosity}
+                useUniformScaling={useUniformScaling}
+                onUniformScalingChange={setUseUniformScaling}
+                onAutoLayout={() => autoLayoutRef.current?.('LR')}
+                onForceReroute={() => forceRerouteRef.current?.()}
+                onHideUnselected={() => hideUnselectedRef.current?.()}
+                onShowAll={() => {/* TODO: implement showAll */}}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* NEW: rc-dock Sidebar (Phase 2) - shown when maximized */}
+      {sidebarState.mode === 'maximized' && sidebarLayout && (
         <div style={{ 
           display: 'flex', 
           flexDirection: 'column', 
@@ -375,108 +578,54 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           position: 'relative',
           overflow: 'hidden'
         }}>
-          {/* Hide sidebar button */}
+          {/* Minimize sidebar button */}
           <button
-            onClick={() => setSidebarOpen(false)}
+            onClick={() => sidebarOps.minimize()}
             style={{
               position: 'absolute',
-              left: '-12px',
+              left: '-16px',
               top: '50%',
               transform: 'translateY(-50%)',
               zIndex: 1000,
-              width: '24px',
-              height: '24px',
-              background: '#fff',
-              border: '1px solid #e9ecef',
-              borderRadius: '50%',
+              width: '32px',
+              height: '48px',
+              background: '#3B82F6',
+              border: '2px solid #fff',
+              borderRadius: '8px 0 0 8px',
               cursor: 'pointer',
-              fontSize: '12px',
-              color: '#666',
+              fontSize: '16px',
+              color: '#fff',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+              boxShadow: '-2px 0 8px rgba(0,0,0,0.15)',
+              transition: 'background-color 0.2s ease',
             }}
-            title="Hide Sidebar (Ctrl/Cmd + B)"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#2563EB';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = '#3B82F6';
+            }}
+            title="Minimize Sidebar (Ctrl/Cmd + B)"
           >
             ◀
           </button>
 
-          <div style={{ 
-            flex: 1, 
-            overflow: 'auto',
-            display: 'flex',
-            flexDirection: 'column'
-          }}>
-            {/* What-If Analysis */}
-            <CollapsibleSection 
-              title={<WhatIfAnalysisHeader tabId={tabId} />} 
-              isOpen={whatIfOpen}
-              onToggle={() => setWhatIfOpen(!whatIfOpen)}
-            >
-              <div style={{ padding: '16px' }}>
-                <WhatIfAnalysisControl tabId={tabId} />
-              </div>
-            </CollapsibleSection>
-
-            {/* Properties Panel */}
-            <CollapsibleSection 
-              title={
-                selectedNodeId 
-                  ? (() => {
-                      const selectedNodes = graph?.nodes?.filter((n: any) => n.selected) || [];
-                      return selectedNodes.length > 1 
-                        ? `${selectedNodes.length} nodes selected`
-                        : 'Node Properties';
-                    })()
-                  : selectedEdgeId 
-                    ? 'Edge Properties'
-                    : 'Graph Properties'
-              } 
-              isOpen={propertiesOpen}
-              onToggle={() => setPropertiesOpen(!propertiesOpen)}
-            >
-              <PropertiesPanel 
-                selectedNodeId={selectedNodeId} 
-                onSelectedNodeChange={setSelectedNodeId}
-                selectedEdgeId={selectedEdgeId}
-                onSelectedEdgeChange={setSelectedEdgeId}
-                tabId={tabId}
-              />
-            </CollapsibleSection>
+          {/* rc-dock layout for sidebar panels */}
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            <DockLayout
+              ref={sidebarDockRef}
+              defaultLayout={sidebarLayout}
+              groups={dockGroups}
+              style={{ width: '100%', height: '100%' }}
+            />
           </div>
         </div>
       )}
-
-      {/* Show sidebar button (when hidden) */}
-      {!sidebarOpen && (
-        <button
-          onClick={() => setSidebarOpen(true)}
-          style={{
-            position: 'absolute',
-            right: '12px',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            zIndex: 1000,
-            width: '24px',
-            height: '24px',
-            background: '#fff',
-            border: '1px solid #e9ecef',
-            borderRadius: '50%',
-            cursor: 'pointer',
-            fontSize: '12px',
-            color: '#666',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-          }}
-          title="Show Sidebar (Ctrl/Cmd + B)"
-        >
-          ▶
-        </button>
-      )}
-    </div>
+      
+      </div>
+    </SelectionContext.Provider>
   );
 }
 
