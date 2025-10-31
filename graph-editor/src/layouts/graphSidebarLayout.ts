@@ -1,34 +1,53 @@
 import { LayoutData } from 'rc-dock';
 
 /**
- * Default layout for graph editor sidebar panels
+ * Full layout for graph editor including canvas and sidebar panels
  * 
- * Structure: Vertical tabs (What-If, Properties, Tools)
- * Displayed when sidebar is in 'maximized' mode
+ * Structure: 
+ * - Main area (left, flex): Canvas panel
+ * - Sidebar (right, 300px): What-If/Properties/Tools tabs
+ * 
+ * This layout spans the entire graph editor, allowing floatbox to move freely
  */
-export function getGraphSidebarLayout(): LayoutData {
+export function getGraphEditorLayout(): LayoutData {
   return {
     dockbox: {
-      mode: 'vertical',
+      mode: 'horizontal',
       children: [
+        // Main canvas area (left, takes most space)
+        {
+          id: 'graph-canvas-panel',
+          size: 1000, // Flex weight (will take remaining space)
+          tabs: [
+            {
+              id: 'canvas-tab',
+              title: '', // No title - we don't want tab bar for canvas
+              content: null as any, // Will be replaced with GraphCanvas
+              cached: true,
+              closable: false,
+              group: 'graph-canvas'
+            }
+          ]
+        },
+        // Sidebar panels (right, fixed width)
         {
           id: 'graph-sidebar-panel',
-          size: 300, // Width when maximized
+          size: 300,
           tabs: [
             {
               id: 'what-if-tab',
               title: '🎭 What-If',
               content: null as any, // Will be replaced with WhatIfPanel
               cached: true,
-              closable: false,
+              closable: true,  // Allow closing
               group: 'graph-panels'
             },
             {
               id: 'properties-tab',
-              title: '📝 Properties',
+              title: '📝 Props',
               content: null as any, // Will be replaced with PropertiesPanel
               cached: true,
-              closable: false,
+              closable: true,
               group: 'graph-panels'
             },
             {
@@ -36,13 +55,40 @@ export function getGraphSidebarLayout(): LayoutData {
               title: '🛠️ Tools',
               content: null as any, // Will be replaced with ToolsPanel
               cached: true,
-              closable: false,
+              closable: true,
               group: 'graph-panels'
             }
-          ],
-          panelLock: {
-            panelStyle: 'graph-sidebar'
-          }
+          ]
+        }
+      ]
+    },
+    floatbox: {
+      mode: 'float',
+      children: []
+    }
+  };
+}
+
+/**
+ * Minimized layout - only canvas, no sidebar
+ */
+export function getGraphEditorLayoutMinimized(): LayoutData {
+  return {
+    dockbox: {
+      mode: 'horizontal',
+      children: [
+        {
+          id: 'graph-canvas-panel',
+          tabs: [
+            {
+              id: 'canvas-tab',
+              title: '',
+              content: null as any,
+              cached: true,
+              closable: false,
+              group: 'graph-canvas'
+            }
+          ]
         }
       ]
     },

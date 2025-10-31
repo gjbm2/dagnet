@@ -965,11 +965,11 @@ function AppShellContent() {
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                background: '#fafafa',
+                background: '#f0ede7',
                 zIndex: 0, /* Behind everything */
                 pointerEvents: 'auto' // Allow clicking on links
               }}>
-                <h1 style={{ fontSize: '32px', marginBottom: '16px', color: '#333' }}>DagNet</h1>
+                <img src="/dagnet2.png" alt="DagNet" style={{ marginBottom: '16px', maxWidth: '400px', height: 'auto' }} />
                 <p style={{ fontSize: '14px', marginBottom: '24px', color: '#666' }}>Conversion Graph Editor</p>
                 <p style={{ fontSize: '12px', color: '#999' }}>Open a file from the Navigator to get started</p>
                 <p style={{ fontSize: '11px', color: '#aaa', marginTop: '40px' }}>
