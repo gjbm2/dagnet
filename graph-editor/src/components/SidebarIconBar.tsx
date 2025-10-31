@@ -18,14 +18,26 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
   const [hoveredIcon, setHoveredIcon] = useState<'what-if' | 'properties' | 'tools' | null>(null);
   
   const handleMouseEnter = (panel: 'what-if' | 'properties' | 'tools') => {
+    // Only allow hover when actually minimized (not transitioning, not maximized)
+    if (state.mode !== 'minimized' || state.isTransitioning) return;
+    
     setHoveredIcon(panel);
     onIconHover(panel);
   };
   
   const handleMouseLeave = () => {
+    // Clear hover state when mouse leaves icon bar
     setHoveredIcon(null);
     onIconHover(null);
   };
+  
+  // Clear hover when sidebar is not minimized
+  React.useEffect(() => {
+    if (state.mode !== 'minimized' && hoveredIcon) {
+      setHoveredIcon(null);
+      onIconHover(null);
+    }
+  }, [state.mode, hoveredIcon, onIconHover]);
   
   const handleClick = (panel: 'what-if' | 'properties' | 'tools') => {
     onIconClick(panel);
@@ -65,7 +77,7 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
         onClick={() => handleClick('properties')}
         onMouseEnter={() => handleMouseEnter('properties')}
         onMouseLeave={handleMouseLeave}
-        title="Properties (Ctrl/Cmd + Shift + P)"
+        title="Props (Ctrl/Cmd + Shift + P)"
         aria-label="Open Properties Panel"
       >
         <span className="icon">📝</span>

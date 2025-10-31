@@ -135,13 +135,27 @@ export const dockGroups = {
     newWindow: false
   },
   
-  // Graph-specific panels (for nested rc-dock in graph editor)
+  // Graph-specific panels (for nested rc-dock in graph editor)  
   'graph-panels': {
-    floatable: true,
-    maximizable: true,
-    tabLocked: true,
+    floatable: 'singleTab' as any,  // Allow dragging individual tabs out to float
+    maximizable: false,              // Disable maximize button (not useful in sidebar context)
+    tabLocked: false,                // Allow reordering tabs
     animated: true,
-    newWindow: false
+    newWindow: false                 // Keep within same window (not browser popup)
+  },
+  
+  // Graph canvas panel - completely locked, no tab controls
+  'graph-canvas': {
+    floatable: false,
+    maximizable: false,
+    tabLocked: true,
+    animated: false,
+    newWindow: false,
+    panelLock: {
+      panelStyle: 'graph-canvas',
+      minWidth: 200,
+      minHeight: 200
+    }
   }
 };
 

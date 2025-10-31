@@ -10,6 +10,7 @@ export interface SidebarState {
   activePanel: 'what-if' | 'properties' | 'tools';  // Which tab is selected
   floatingPanels: string[];               // Which panels are floating
   hasAutoOpened: boolean;                 // Smart auto-open tracker (once per tab)
+  isTransitioning: boolean;               // True during minimize/maximize animation
   
   // Panel-specific open/closed states (when in maximized mode)
   whatIfOpen: boolean;
@@ -25,6 +26,7 @@ export const DEFAULT_SIDEBAR_STATE: SidebarState = {
   activePanel: 'properties',
   floatingPanels: [],
   hasAutoOpened: false,
+  isTransitioning: false,
   whatIfOpen: false,
   propertiesOpen: true,
   toolsOpen: false
@@ -49,6 +51,7 @@ export function useSidebarState(tabId?: string) {
     storedState?.activePanel,
     storedState?.floatingPanels?.join(','),
     storedState?.hasAutoOpened,
+    storedState?.isTransitioning,
     storedState?.whatIfOpen,
     storedState?.propertiesOpen,
     storedState?.toolsOpen
@@ -60,11 +63,19 @@ export function useSidebarState(tabId?: string) {
     ...memoizedStoredState
   }));
   
+  // Track if we're currently updating to prevent circular syncs
+  const isUpdatingRef = useRef(false);
+  
   /**
    * Update sidebar state (local only)
    */
   const updateState = useCallback((updates: Partial<SidebarState>) => {
+    isUpdatingRef.current = true;
     setState(prev => ({ ...prev, ...updates }));
+    // Reset flag after current event loop
+    setTimeout(() => {
+      isUpdatingRef.current = false;
+    }, 0);
   }, []);
   
   // Persist local state changes to tab state (separate effect to avoid circular updates)
@@ -90,7 +101,11 @@ export function useSidebarState(tabId?: string) {
    * Minimize sidebar to icon bar
    */
   const minimize = useCallback(() => {
-    updateState({ mode: 'minimized' });
+    updateState({ mode: 'minimized', isTransitioning: true });
+    // Clear transition flag after animation completes (300ms)
+    setTimeout(() => {
+      updateState({ isTransitioning: false });
+    }, 300);
   }, [updateState]);
   
   /**
@@ -100,8 +115,13 @@ export function useSidebarState(tabId?: string) {
   const maximize = useCallback((panel?: 'what-if' | 'properties' | 'tools') => {
     updateState({ 
       mode: 'maximized',
-      activePanel: panel || state.activePanel
+      activePanel: panel || state.activePanel,
+      isTransitioning: true
     });
+    // Clear transition flag after animation completes (300ms)
+    setTimeout(() => {
+      updateState({ isTransitioning: false });
+    }, 300);
   }, [updateState, state.activePanel]);
   
   /**
@@ -171,8 +191,9 @@ export function useSidebarState(tabId?: string) {
   }, [state.floatingPanels, updateState]);
   
   // Sync local state with tab state when tab or stored state changes
+  // BUT: Don't sync if we just updated locally (prevents circular loop)
   useEffect(() => {
-    if (memoizedStoredState) {
+    if (memoizedStoredState && !isUpdatingRef.current) {
       setState({
         ...DEFAULT_SIDEBAR_STATE,
         ...memoizedStoredState

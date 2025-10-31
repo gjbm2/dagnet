@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef, createContext, useContext } from 'react';
+import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import { EditorProps, GraphData } from '../../types';
 import { useFileState, useTabContext } from '../../contexts/TabContext';
 import { GraphStoreProvider, useGraphStore } from '../../contexts/GraphStoreContext';
 import DockLayout, { LayoutData } from 'rc-dock';
+import './GraphEditor.css';
 import GraphCanvas from '../GraphCanvas';
 import PropertiesPanel from '../PropertiesPanel';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
@@ -14,7 +15,7 @@ import WhatIfPanel from '../panels/WhatIfPanel';
 import PropertiesPanelWrapper from '../panels/PropertiesPanelWrapper';
 import ToolsPanel from '../panels/ToolsPanel';
 import { useSidebarState } from '../../hooks/useSidebarState';
-import { getGraphSidebarLayout, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
+import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
 
 // Context to share selection state with sidebar panels
@@ -57,10 +58,6 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(tabState.selectedEdgeId ?? null);
   
   // OLD sidebar state - will be deprecated after Phase 2
-  // For now, sync with new sidebar state
-  const [sidebarOpen, setSidebarOpen] = useState(
-    tabState.sidebarOpen ?? (sidebarState.mode === 'maximized')
-  );
   const [whatIfOpen, setWhatIfOpen] = useState(tabState.whatIfOpen ?? false);
   const [propertiesOpen, setPropertiesOpen] = useState(tabState.propertiesOpen ?? true);
   
@@ -68,110 +65,232 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const [massGenerosity, setMassGenerosity] = useState(tabState.massGenerosity ?? 0.5);
   const [autoReroute, setAutoReroute] = useState(tabState.autoReroute ?? true);
   
-  // Sync old sidebar state with new sidebar mode
-  useEffect(() => {
-    if (sidebarState.mode === 'minimized') {
-      setSidebarOpen(false);
-    } else if (sidebarState.mode === 'maximized') {
-      setSidebarOpen(true);
-    }
-  }, [sidebarState.mode]);
-  
-  // NEW: rc-dock layout for sidebar (Phase 2)
-  const sidebarDockRef = useRef<DockLayout>(null);
-  const [sidebarLayout, setSidebarLayout] = useState<LayoutData | null>(null);
+  // NEW: rc-dock layout for entire graph editor (Phase 2)
+  const dockRef = useRef<DockLayout>(null);
+  const [dockLayout, setDockLayout] = useState<LayoutData | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(300); // Track sidebar width for minimize button positioning
+  const sidebarResizeObserverRef = useRef<ResizeObserver | null>(null);
   
   // Wrapped selection handlers with smart auto-open logic
+  const prevSelectedNodeRef = useRef<string | null>(null);
+  const prevSelectedEdgeRef = useRef<string | null>(null);
+  
   const handleNodeSelection = React.useCallback((nodeId: string | null) => {
+    const changed = prevSelectedNodeRef.current !== nodeId;
     setSelectedNodeId(nodeId);
-    if (nodeId) {
-      // Smart auto-open: opens Properties on first selection
+    if (nodeId && changed) {
+      // Smart auto-open: opens Properties on first selection (only when selection changes)
       sidebarOps.handleSelection();
     }
+    prevSelectedNodeRef.current = nodeId;
   }, [sidebarOps]);
   
   const handleEdgeSelection = React.useCallback((edgeId: string | null) => {
+    const changed = prevSelectedEdgeRef.current !== edgeId;
     setSelectedEdgeId(edgeId);
-    if (edgeId) {
-      // Smart auto-open: opens Properties on first selection
+    if (edgeId && changed) {
+      // Smart auto-open: opens Properties on first selection (only when selection changes)
       sidebarOps.handleSelection();
     }
+    prevSelectedEdgeRef.current = edgeId;
   }, [sidebarOps]);
   
   // Icon bar handlers
   const handleIconClick = React.useCallback((panel: 'what-if' | 'properties' | 'tools') => {
-    // Click on icon - maximize sidebar and show the panel
+    // Click on icon - just update state, let the effect handle the layout
     sidebarOps.maximize(panel);
   }, [sidebarOps]);
   
   const handleIconHover = React.useCallback((panel: 'what-if' | 'properties' | 'tools' | null) => {
-    // Hover on icon - show preview
-    setHoveredPanel(panel);
-  }, []);
-  
-  // Initialize sidebar layout (only when mode changes or layout doesn't exist)
-  useEffect(() => {
-    if (sidebarState.mode === 'maximized' && !sidebarLayout) {
-      const layout = getGraphSidebarLayout();
-      
-      // Replace placeholder content with actual React components
-      if (layout.dockbox.children?.[0] && 'tabs' in layout.dockbox.children[0]) {
-        const panel = layout.dockbox.children[0];
-        panel.tabs.forEach(tab => {
-          if (tab.id === 'what-if-tab') {
-            tab.content = <WhatIfPanel tabId={tabId} />;
-          } else if (tab.id === 'properties-tab') {
-            tab.content = (
-              <PropertiesPanelWrapper tabId={tabId} />
-            );
-          } else if (tab.id === 'tools-tab') {
-            tab.content = (
-              <ToolsPanel
-                onAutoLayout={(dir) => autoLayoutRef.current?.(dir || 'LR')}
-                onForceReroute={() => forceRerouteRef.current?.()}
-                massGenerosity={massGenerosity}
-                onMassGenerosityChange={setMassGenerosity}
-                useUniformScaling={useUniformScaling}
-                onUniformScalingChange={setUseUniformScaling}
-                onHideUnselected={() => hideUnselectedRef.current?.()}
-                onShowAll={() => {/* TODO: implement showAll */}}
-              />
-            );
-          }
-        });
-        
-        // Set active tab based on sidebar state
-        panel.activeId = PANEL_TO_TAB_ID[sidebarState.activePanel];
-      }
-      
-      setSidebarLayout(layout);
-    } else if (sidebarState.mode === 'minimized') {
-      // Clear layout when minimized
-      setSidebarLayout(null);
+    // Hover on icon - show preview (only when minimized)
+    if (sidebarState.mode === 'minimized') {
+      setHoveredPanel(panel);
     }
-  }, [sidebarState.mode, sidebarLayout, tabId, selectedNodeId, selectedEdgeId, 
-      handleNodeSelection, handleEdgeSelection, massGenerosity, useUniformScaling, sidebarState.activePanel]);
+  }, [sidebarState.mode]);
+  
+  // Clear hover preview when sidebar maximizes
+  useEffect(() => {
+    if (sidebarState.mode === 'maximized') {
+      setHoveredPanel(null);
+    }
+  }, [sidebarState.mode]);
+  
+  // Setup ResizeObserver to track sidebar width in real-time during drag
+  useEffect(() => {
+    // Cleanup existing observer
+    if (sidebarResizeObserverRef.current) {
+      sidebarResizeObserverRef.current.disconnect();
+      sidebarResizeObserverRef.current = null;
+    }
+    
+    if (sidebarState.mode === 'maximized') {
+      // Wait for DOM to be ready
+      setTimeout(() => {
+        const sidebarPanelElement = document.querySelector('[data-dockid="graph-sidebar-panel"]');
+        if (sidebarPanelElement) {
+          // Create ResizeObserver to track width changes in real-time
+          sidebarResizeObserverRef.current = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+              const width = entry.contentRect.width;
+              setSidebarWidth(width);
+            }
+          });
+          
+          sidebarResizeObserverRef.current.observe(sidebarPanelElement);
+        }
+      }, 100); // Small delay to ensure DOM is ready
+    }
+    
+    // Cleanup on unmount or mode change
+    return () => {
+      if (sidebarResizeObserverRef.current) {
+        sidebarResizeObserverRef.current.disconnect();
+        sidebarResizeObserverRef.current = null;
+      }
+    };
+  }, [sidebarState.mode, dockLayout]);
+  
+  // Helper function to create layout with proper content injection
+  const createLayoutWithContent = useCallback((mode: 'minimized' | 'maximized') => {
+    const layout = mode === 'maximized' 
+      ? getGraphEditorLayout() 
+      : getGraphEditorLayoutMinimized();
+    
+    // Inject GraphCanvas into canvas tab
+    if (layout.dockbox.children?.[0] && 'tabs' in layout.dockbox.children[0]) {
+      const canvasPanel = layout.dockbox.children[0];
+      const canvasTab = canvasPanel.tabs.find(t => t.id === 'canvas-tab');
+      if (canvasTab) {
+        canvasTab.content = (
+          <GraphCanvas
+            onSelectedNodeChange={handleNodeSelection}
+            onSelectedEdgeChange={handleEdgeSelection}
+            useUniformScaling={useUniformScaling}
+            massGenerosity={massGenerosity}
+            autoReroute={autoReroute}
+            onAddNodeRef={addNodeRef}
+            onDeleteSelectedRef={deleteSelectedRef}
+            onAutoLayoutRef={autoLayoutRef}
+            onForceRerouteRef={forceRerouteRef}
+            onHideUnselectedRef={hideUnselectedRef}
+            whatIfAnalysis={myTab?.editorState?.whatIfAnalysis}
+            caseOverrides={myTab?.editorState?.caseOverrides}
+            conditionalOverrides={myTab?.editorState?.conditionalOverrides}
+          />
+        );
+      }
+    }
+    
+    // Inject sidebar panels if maximized
+    if (mode === 'maximized' && layout.dockbox.children?.[1] && 'tabs' in layout.dockbox.children[1]) {
+      const sidebarPanel = layout.dockbox.children[1];
+      sidebarPanel.tabs.forEach(tab => {
+        if (tab.id === 'what-if-tab') {
+          tab.content = <WhatIfPanel tabId={tabId} />;
+        } else if (tab.id === 'properties-tab') {
+          tab.content = <PropertiesPanelWrapper tabId={tabId} />;
+        } else if (tab.id === 'tools-tab') {
+          tab.content = (
+            <ToolsPanel
+              onAutoLayout={(dir) => autoLayoutRef.current?.(dir || 'LR')}
+              onForceReroute={() => forceRerouteRef.current?.()}
+              massGenerosity={massGenerosity}
+              onMassGenerosityChange={setMassGenerosity}
+              useUniformScaling={useUniformScaling}
+              onUniformScalingChange={setUseUniformScaling}
+              onHideUnselected={() => hideUnselectedRef.current?.()}
+              onShowAll={() => {/* TODO: implement showAll */}}
+            />
+          );
+        }
+      });
+      
+      // Set active tab based on sidebar state
+      sidebarPanel.activeId = PANEL_TO_TAB_ID[sidebarState.activePanel];
+    }
+    
+    return layout;
+  }, [tabId, massGenerosity, useUniformScaling, autoReroute, 
+      sidebarState.activePanel, myTab?.editorState, handleNodeSelection, handleEdgeSelection]);
+  
+  // Initialize dock layout (only on mount)
+  useEffect(() => {
+    // Only initialize if we don't have a layout yet
+    if (dockLayout) return;
+    
+    const layout = createLayoutWithContent(sidebarState.mode);
+    setDockLayout(layout);
+  }, [dockLayout, sidebarState.mode, createLayoutWithContent]);
+  
+  // Track previous mode to detect changes
+  const prevModeRef = useRef<'minimized' | 'maximized'>(sidebarState.mode);
+  const pendingLayoutRef = useRef<LayoutData | null>(null);
+  
+  // Update layout state when mode changes (triggers re-render with new defaultLayout)
+  useEffect(() => {
+    if (!dockLayout) {
+      // Initialize prevModeRef when layout is first created
+      if (prevModeRef.current !== sidebarState.mode) {
+        prevModeRef.current = sidebarState.mode;
+      }
+      return;
+    }
+    
+    // Only update if mode actually changed
+    if (prevModeRef.current === sidebarState.mode) return;
+    
+    console.log('[GraphEditor] Sidebar mode changed:', prevModeRef.current, '->', sidebarState.mode);
+    
+    // Update prevModeRef FIRST to prevent re-running when state updates
+    prevModeRef.current = sidebarState.mode;
+    
+    // Create new layout
+    const layout = createLayoutWithContent(sidebarState.mode);
+    
+    // If dockRef exists, preserve floating tabs
+    if (dockRef.current) {
+      const currentLayout = dockRef.current.getLayout();
+      if (currentLayout?.floatbox && currentLayout.floatbox.children && currentLayout.floatbox.children.length > 0) {
+        layout.floatbox = currentLayout.floatbox as any;
+      }
+    }
+    
+    // Store pending layout and update state (this triggers re-render)
+    pendingLayoutRef.current = layout;
+    setDockLayout(layout);
+    
+    // Apply layout to rc-dock after state update completes
+    requestAnimationFrame(() => {
+      if (pendingLayoutRef.current && dockRef.current) {
+        console.log('[GraphEditor] Applying layout update to rc-dock');
+        dockRef.current.loadLayout(pendingLayoutRef.current);
+        pendingLayoutRef.current = null;
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarState.mode, dockLayout]);
   
   // Update rc-dock active tab when activePanel changes (while maximized)
   useEffect(() => {
-    if (sidebarState.mode === 'maximized' && sidebarDockRef.current && sidebarLayout) {
+    if (sidebarState.mode === 'maximized' && dockRef.current && dockLayout) {
       const targetTabId = PANEL_TO_TAB_ID[sidebarState.activePanel];
-      const dockLayout = sidebarDockRef.current;
+      const dock = dockRef.current;
       
-      // Find and activate the target tab
-      if (dockLayout.getLayout) {
-        const layout = dockLayout.getLayout();
+      // Find and activate the target tab in sidebar panel
+      if (dock.getLayout) {
+        const layout = dock.getLayout();
         if (layout.dockbox && layout.dockbox.children) {
+          // Find sidebar panel (second child) and set active tab
           layout.dockbox.children.forEach((panel: any) => {
             if (panel.tabs && panel.tabs.some((t: any) => t.id === targetTabId)) {
               panel.activeId = targetTabId;
             }
           });
-          dockLayout.loadLayout(layout);
+          dock.loadLayout(layout);
         }
       }
     }
-  }, [sidebarState.activePanel, sidebarState.mode, sidebarLayout]);
+  }, [sidebarState.activePanel, sidebarState.mode, dockLayout]);
   
   // Refs for GraphCanvas exposed functions
   const addNodeRef = React.useRef<(() => void) | null>(null);
@@ -192,7 +311,6 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     graphInStore: !!graph,
     graphNodeCount: graph?.nodes?.length,
     sidebarMode: sidebarState.mode,
-    sidebarOpen,
     hoveredPanel
   });
 
@@ -472,10 +590,9 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   console.log('GraphEditor: About to render GraphCanvas with', data.nodes?.length, 'nodes');
   console.log('GraphEditor: Rendering with state:', {
     sidebarState: sidebarState,
-    sidebarOpen,
     selectedNodeId,
     selectedEdgeId,
-    sidebarLayoutExists: !!sidebarLayout
+    dockLayoutExists: !!dockLayout
   });
 
   const selectionContextValue: SelectionContextType = {
@@ -488,143 +605,213 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   return (
     <SelectionContext.Provider value={selectionContextValue}>
       <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: sidebarState.mode === 'maximized' ? '1fr 300px' : sidebarState.mode === 'minimized' ? '1fr 48px' : '1fr', 
-        height: '100%',
-        transition: 'grid-template-columns 0.3s ease-in-out',
-        overflow: 'hidden',
-        background: '#f0f0f0' // Debug: add background to see if container renders
-      }}>
-      {/* Main Graph Canvas */}
-      <div style={{ 
         position: 'relative',
         height: '100%',
-        overflow: 'hidden',
-        background: '#e0e0e0' // Debug: add background to see canvas container
+        width: '100%',
+        overflow: 'hidden'
       }}>
-        <GraphCanvas
-          onSelectedNodeChange={handleNodeSelection}
-          onSelectedEdgeChange={handleEdgeSelection}
-          useUniformScaling={useUniformScaling}
-          massGenerosity={massGenerosity}
-          autoReroute={autoReroute}
-          onAddNodeRef={addNodeRef}
-          onDeleteSelectedRef={deleteSelectedRef}
-          onAutoLayoutRef={autoLayoutRef}
-          onForceRerouteRef={forceRerouteRef}
-          onHideUnselectedRef={hideUnselectedRef}
-          whatIfAnalysis={myTab?.editorState?.whatIfAnalysis}
-          caseOverrides={myTab?.editorState?.caseOverrides}
-          conditionalOverrides={myTab?.editorState?.conditionalOverrides}
-        />
-      </div>
-
-      {/* NEW: Icon Bar (Phase 1) - shown when sidebar is minimized */}
-      {sidebarState.mode === 'minimized' && (
-        <div style={{ 
-          position: 'relative',
-          height: '100%',
-          width: '48px',
-          background: '#F9FAFB',
-          borderLeft: '1px solid #E5E7EB'
-        }}>
-          <SidebarIconBar
-            state={sidebarState}
-            onIconClick={handleIconClick}
-            onIconHover={handleIconHover}
+        {/* Main DockLayout - spans entire graph editor */}
+        {dockLayout && (
+          <DockLayout
+            ref={dockRef}
+            defaultLayout={dockLayout}
+            groups={dockGroups as any}
+            style={{ width: '100%', height: '100%' }}
+            onLayoutChange={(newLayout) => {
+              // Track which panels are floating
+              const floatingTabIds = newLayout.floatbox?.children?.map((box: any) => {
+                return box.tabs?.map((tab: any) => tab.id) || [];
+              }).flat() || [];
+              
+              console.log('Layout changed. Floating tabs:', floatingTabIds);
+              
+              // Check if sidebar tabs were closed
+              const allTabIds = new Set<string>();
+              const collectTabs = (node: any) => {
+                if (node.tabs) {
+                  node.tabs.forEach((tab: any) => allTabIds.add(tab.id));
+                }
+                if (node.children) {
+                  node.children.forEach(collectTabs);
+                }
+              };
+              
+              if (newLayout.dockbox) collectTabs(newLayout.dockbox);
+              if (newLayout.floatbox) collectTabs(newLayout.floatbox);
+              
+              console.log('All visible tabs:', Array.from(allTabIds));
+              
+              // If sidebar tabs are closed (not just floating), restore them to dock
+              const expectedSidebarTabs = ['what-if-tab', 'properties-tab', 'tools-tab'];
+              const missingSidebarTabs = expectedSidebarTabs.filter(id => !allTabIds.has(id));
+              
+              if (missingSidebarTabs.length > 0) {
+                console.log('Sidebar tabs missing (closed):', missingSidebarTabs);
+                
+                // If in maximized mode, restore missing tabs to sidebar dock
+                if (sidebarState.mode === 'maximized' && dockRef.current) {
+                  console.log('Restoring closed tabs to sidebar dock');
+                  
+                  // For each missing tab, restore it by reloading with full layout
+                  setTimeout(() => {
+                    if (dockRef.current) {
+                      const layout = getGraphEditorLayout();
+                      
+                      // Inject canvas
+                      if (layout.dockbox.children?.[0] && 'tabs' in layout.dockbox.children[0]) {
+                        const canvasPanel = layout.dockbox.children[0];
+                        const canvasTab = canvasPanel.tabs.find(t => t.id === 'canvas-tab');
+                        if (canvasTab) {
+                          canvasTab.content = (
+                            <GraphCanvas
+                              onSelectedNodeChange={handleNodeSelection}
+                              onSelectedEdgeChange={handleEdgeSelection}
+                              useUniformScaling={useUniformScaling}
+                              massGenerosity={massGenerosity}
+                              autoReroute={autoReroute}
+                              onAddNodeRef={addNodeRef}
+                              onDeleteSelectedRef={deleteSelectedRef}
+                              onAutoLayoutRef={autoLayoutRef}
+                              onForceRerouteRef={forceRerouteRef}
+                              onHideUnselectedRef={hideUnselectedRef}
+                              whatIfAnalysis={myTab?.editorState?.whatIfAnalysis}
+                              caseOverrides={myTab?.editorState?.caseOverrides}
+                              conditionalOverrides={myTab?.editorState?.conditionalOverrides}
+                            />
+                          );
+                        }
+                      }
+                      
+                      // Inject sidebar panels
+                      if (layout.dockbox.children?.[1] && 'tabs' in layout.dockbox.children[1]) {
+                        const sidebarPanel = layout.dockbox.children[1];
+                        sidebarPanel.tabs.forEach(tab => {
+                          if (tab.id === 'what-if-tab') {
+                            tab.content = <WhatIfPanel tabId={tabId} />;
+                          } else if (tab.id === 'properties-tab') {
+                            tab.content = <PropertiesPanelWrapper tabId={tabId} />;
+                          } else if (tab.id === 'tools-tab') {
+                            tab.content = (
+                              <ToolsPanel
+                                onAutoLayout={(dir) => autoLayoutRef.current?.(dir || 'LR')}
+                                onForceReroute={() => forceRerouteRef.current?.()}
+                                massGenerosity={massGenerosity}
+                                onMassGenerosityChange={setMassGenerosity}
+                                useUniformScaling={useUniformScaling}
+                                onUniformScalingChange={setUseUniformScaling}
+                                onHideUnselected={() => hideUnselectedRef.current?.()}
+                                onShowAll={() => {/* TODO: implement showAll */}}
+                              />
+                            );
+                          }
+                        });
+                        
+                        // Keep active tab
+                        sidebarPanel.activeId = PANEL_TO_TAB_ID[sidebarState.activePanel];
+                      }
+                      
+                      // Preserve any remaining floating tabs (cast to avoid type errors)
+                      if (newLayout.floatbox && newLayout.floatbox.children && newLayout.floatbox.children.length > 0) {
+                        layout.floatbox = newLayout.floatbox as any;
+                      }
+                      
+                      dockRef.current.loadLayout(layout);
+                    }
+                  }, 0);
+                }
+              }
+            }}
           />
-          
-          {/* Hover Preview - absolutely positioned to overlay canvas */}
-          {hoveredPanel && (
-            <div 
-              style={{ position: 'absolute', top: 0, right: '48px', height: '100%', width: '300px', zIndex: 999 }}
-              onMouseEnter={() => {
-                console.log('[GraphEditor] Mouse entered preview');
-              }}
-              onMouseLeave={() => {
-                console.log('[GraphEditor] Mouse left preview');
-                setHoveredPanel(null);
-              }}
-            >
-              <SidebarHoverPreview
-                panel={hoveredPanel}
-                tabId={tabId}
-                selectedNodeId={selectedNodeId}
-                selectedEdgeId={selectedEdgeId}
-                onSelectedNodeChange={handleNodeSelection}
-                onSelectedEdgeChange={handleEdgeSelection}
-                massGenerosity={massGenerosity}
-                onMassGenerosityChange={setMassGenerosity}
-                useUniformScaling={useUniformScaling}
-                onUniformScalingChange={setUseUniformScaling}
-                onAutoLayout={() => autoLayoutRef.current?.('LR')}
-                onForceReroute={() => forceRerouteRef.current?.()}
-                onHideUnselected={() => hideUnselectedRef.current?.()}
-                onShowAll={() => {/* TODO: implement showAll */}}
-              />
-            </div>
-          )}
-        </div>
-      )}
+        )}
 
-      {/* NEW: rc-dock Sidebar (Phase 2) - shown when maximized */}
-      {sidebarState.mode === 'maximized' && sidebarLayout && (
-        <div style={{ 
-          display: 'flex', 
-          flexDirection: 'column', 
-          height: '100%',
-          background: '#fff',
-          borderLeft: '1px solid #e9ecef',
-          position: 'relative',
-          overflow: 'hidden'
-        }}>
-          {/* Minimize sidebar button */}
+        {/* Icon Bar - absolutely positioned on right edge when minimized */}
+        {sidebarState.mode === 'minimized' && (
+          <div style={{ 
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            height: '100%',
+            width: '48px',
+            background: '#F9FAFB',
+            borderLeft: '1px solid #E5E7EB',
+            zIndex: 100
+          }}>
+            <SidebarIconBar
+              state={sidebarState}
+              onIconClick={handleIconClick}
+              onIconHover={handleIconHover}
+            />
+          </div>
+        )}
+        
+        {/* Hover Preview - absolutely positioned adjacent to icon bar */}
+        {sidebarState.mode === 'minimized' && hoveredPanel && (
+          <div 
+            style={{ 
+              position: 'absolute', 
+              top: 0, 
+              right: '48px', // Immediately adjacent to icon bar (no gap)
+              height: '100%', 
+              width: '300px', 
+              zIndex: 150 
+            }}
+            onMouseEnter={() => {
+              console.log('[GraphEditor] Mouse entered preview');
+            }}
+            onMouseLeave={() => {
+              console.log('[GraphEditor] Mouse left preview');
+              setHoveredPanel(null);
+            }}
+          >
+            <SidebarHoverPreview
+              panel={hoveredPanel}
+              tabId={tabId}
+              selectedNodeId={selectedNodeId}
+              selectedEdgeId={selectedEdgeId}
+              onSelectedNodeChange={handleNodeSelection}
+              onSelectedEdgeChange={handleEdgeSelection}
+              massGenerosity={massGenerosity}
+              onMassGenerosityChange={setMassGenerosity}
+              useUniformScaling={useUniformScaling}
+              onUniformScalingChange={setUseUniformScaling}
+              onAutoLayout={() => autoLayoutRef.current?.('LR')}
+              onForceReroute={() => forceRerouteRef.current?.()}
+              onHideUnselected={() => hideUnselectedRef.current?.()}
+              onShowAll={() => {/* TODO: implement showAll */}}
+            />
+          </div>
+        )}
+
+        {/* Minimize Button - absolutely positioned when sidebar is maximized */}
+        {sidebarState.mode === 'maximized' && (
           <button
             onClick={() => sidebarOps.minimize()}
+            className="graph-minimize-button"
             style={{
               position: 'absolute',
-              left: '-16px',
+              right: `${sidebarWidth - 6}px`, // Sidebar width minus button overlap
               top: '50%',
               transform: 'translateY(-50%)',
-              zIndex: 1000,
-              width: '32px',
-              height: '48px',
-              background: '#3B82F6',
-              border: '2px solid #fff',
-              borderRadius: '8px 0 0 8px',
+              zIndex: 200,
+              width: '20px',
+              height: '60px',
+              border: '1px solid #dee2e6',
+              borderRight: 'none',
+              borderRadius: '4px 0 0 4px',
               cursor: 'pointer',
-              fontSize: '16px',
-              color: '#fff',
+              fontSize: '10px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '-2px 0 8px rgba(0,0,0,0.15)',
-              transition: 'background-color 0.2s ease',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = '#2563EB';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = '#3B82F6';
+              transition: 'all 0.2s ease',
+              padding: 0,
             }}
             title="Minimize Sidebar (Ctrl/Cmd + B)"
-          >
-            ◀
-          </button>
-
-          {/* rc-dock layout for sidebar panels */}
-          <div style={{ flex: 1, overflow: 'hidden' }}>
-            <DockLayout
-              ref={sidebarDockRef}
-              defaultLayout={sidebarLayout}
-              groups={dockGroups}
-              style={{ width: '100%', height: '100%' }}
-            />
-          </div>
-        </div>
+        >
+          ▶
+        </button>
       )}
-      
-      </div>
+    </div>
     </SelectionContext.Provider>
   );
 }

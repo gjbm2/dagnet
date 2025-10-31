@@ -1,0 +1,70 @@
+/* Graph Editor Styles */
+
+/* Hide tab bar for canvas panel - we don't want tabs visible for the canvas */
+.dock-panel[data-panel-id="graph-canvas-panel"] .dock-bar {
+  display: none !important;
+}
+
+/* Ensure canvas panel takes full space without tab bar */
+.dock-panel[data-panel-id="graph-canvas-panel"] .dock-panel-content {
+  top: 0 !important;
+}
+
+/* Style for graph-canvas group panels */
+[data-dock-id="canvas-tab"] {
+  background: transparent;
+}
+
+/* Ensure sidebar panels have proper styling */
+.dock-panel[data-panel-id="graph-sidebar-panel"] {
+  border-left: 1px solid #d0d5d8;
+  background: #f8f9fa; /* Slightly darker than pure white */
+}
+
+/* Make resize handle less prominent */
+.dock-splitter {
+  background: #e9ecef !important;
+  border-color: transparent !important;
+  width: 4px !important; /* Thinner resize handle */
+}
+
+.dock-splitter:hover {
+  background: #ced4da !important;
+}
+
+/* Minimize button styling - matches resize handle */
+.graph-minimize-button {
+  background: #e9ecef !important;
+  border-color: #dee2e6 !important;
+  color: #495057 !important;
+}
+
+.graph-minimize-button:hover {
+  background: #d0d5d8 !important;
+  color: #212529 !important;
+}
+
+/* Hide close button on sidebar tabs when docked in home position */
+.dock-panel[data-panel-id="graph-sidebar-panel"] .dock-tab .dock-tab-close-btn {
+  display: none !important;
+}
+
+/* Show close button on floating sidebar tabs */
+.dock-box.dock-float .dock-tab .dock-tab-close-btn {
+  display: inline-block !important;
+}
+
+/* Show close button when sidebar tab is dragged to different position (not in home panel) */
+.dock-panel:not([data-panel-id="graph-sidebar-panel"]) .dock-tab[data-dockid*="what-if-tab"] .dock-tab-close-btn,
+.dock-panel:not([data-panel-id="graph-sidebar-panel"]) .dock-tab[data-dockid*="properties-tab"] .dock-tab-close-btn,
+.dock-panel:not([data-panel-id="graph-sidebar-panel"]) .dock-tab[data-dockid*="tools-tab"] .dock-tab-close-btn {
+  display: inline-block !important;
+}
+
+/* Floating panels styling */
+.dock-box.dock-float {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
