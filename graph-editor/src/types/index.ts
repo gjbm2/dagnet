@@ -112,6 +112,8 @@ export interface TabState {
     sidebarState?: {
       mode: 'minimized' | 'maximized';
       activePanel: 'what-if' | 'properties' | 'tools';
+      sidebarWidth?: number; // Track sidebar width for minimize button positioning
+      isResizing?: boolean; // Track if sidebar is being resized
       floatingPanels: string[];
       hasAutoOpened: boolean;
       whatIfOpen: boolean;

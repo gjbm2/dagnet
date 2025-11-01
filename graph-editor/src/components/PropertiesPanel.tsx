@@ -76,6 +76,7 @@ export default function PropertiesPanel({
   
   // Load local data when selection changes (but not on every graph update)
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP1: Node selection changed`);
     if (selectedNodeId && graph) {
       // Detect if we just deselected and reselected the same node (e.g., on blur)
       const isReselectingSameNode = prevSelectedNodeIdRef.current === selectedNodeId && 
@@ -154,6 +155,7 @@ export default function PropertiesPanel({
 
   // Load edge data when selection changes (but not on every graph update)
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP2: Edge selection changed`);
     if (selectedEdgeId && graph) {
       // Only reload if we're switching to a different edge
       if (lastLoadedEdgeRef.current !== selectedEdgeId) {
@@ -202,6 +204,7 @@ export default function PropertiesPanel({
   // Auto-generate slug from label when label changes (only on FIRST commit)
   // This updates the LOCAL state only, not the graph state
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP3: Auto-generate slug`);
     if (selectedNodeId && graph && localNodeData.label && !slugManuallyEdited) {
       // Check if the node actually exists in the graph to prevent race conditions
       const nodeExists = graph.nodes.some((n: any) => n.id === selectedNodeId);
@@ -237,6 +240,7 @@ export default function PropertiesPanel({
   }, [localNodeData.label, selectedNodeId, graph, slugManuallyEdited]);
   
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP4: Reload edge on graph change`);
     if (selectedEdgeId && graph) {
       // Reload if we're switching to a different edge OR if the graph has changed
       if (lastLoadedEdgeRef.current !== selectedEdgeId) {
@@ -304,6 +308,7 @@ export default function PropertiesPanel({
 
   // Handle keyboard shortcuts
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP5: Setup keyboard shortcuts`);
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't handle shortcuts when user is typing in form fields
       const target = e.target as HTMLElement;

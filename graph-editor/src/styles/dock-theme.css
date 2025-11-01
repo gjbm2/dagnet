@@ -132,13 +132,27 @@ body, body * {
    DIVIDERS
    ============================================================ */
 
-/* Dividers (resizable) */
+/* Dividers (resizable) - small and grey */
 .dock-divider {
-  background-color: #e0e0e0;
+  background-color: #dee2e6 !important;
 }
 
 .dock-divider:hover {
-  background-color: #1976d2;
+  background-color: #adb5bd !important;
+}
+
+/* Vertical dividers (left-right split) - constrain width */
+.dock-box.dock-hbox > .dock-divider {
+  width: 1px !important;
+  min-width: 1px !important;
+  max-width: 1px !important;
+}
+
+/* Horizontal dividers (top-bottom split) - constrain height */
+.dock-box.dock-vbox > .dock-divider {
+  height: 1px !important;
+  min-height: 1px !important;
+  max-height: 1px !important;
 }
 
 /* ============================================================

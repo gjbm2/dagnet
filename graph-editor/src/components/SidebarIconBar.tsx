@@ -5,7 +5,7 @@ import './SidebarIconBar.css';
 interface SidebarIconBarProps {
   state: SidebarState;
   onIconClick: (panel: 'what-if' | 'properties' | 'tools') => void;
-  onIconHover: (panel: 'what-if' | 'properties' | 'tools' | null) => void;
+  onIconHover?: (panel: 'what-if' | 'properties' | 'tools' | null) => void;
 }
 
 /**
@@ -18,24 +18,29 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
   const [hoveredIcon, setHoveredIcon] = useState<'what-if' | 'properties' | 'tools' | null>(null);
   
   const handleMouseEnter = (panel: 'what-if' | 'properties' | 'tools') => {
+    console.log(`[${new Date().toISOString()}] [SidebarIconBar] handleMouseEnter: panel=${panel}, mode=${state.mode}, isTransitioning=${state.isTransitioning}`);
     // Only allow hover when actually minimized (not transitioning, not maximized)
-    if (state.mode !== 'minimized' || state.isTransitioning) return;
-    
+    if (state.mode !== 'minimized' || state.isTransitioning) {
+      console.log(`[${new Date().toISOString()}] [SidebarIconBar] Hover blocked: not minimized or transitioning`);
+      return;
+    }
     setHoveredIcon(panel);
-    onIconHover(panel);
+    console.log(`[${new Date().toISOString()}] [SidebarIconBar] Calling onIconHover(${panel})`);
+    onIconHover?.(panel);
   };
   
   const handleMouseLeave = () => {
-    // Clear hover state when mouse leaves icon bar
+    console.log(`[${new Date().toISOString()}] [SidebarIconBar] handleMouseLeave`);
+    // Let parent decide when to clear preview (it cancels if preview is entered)
     setHoveredIcon(null);
-    onIconHover(null);
+    onIconHover?.(null);
   };
   
   // Clear hover when sidebar is not minimized
   React.useEffect(() => {
     if (state.mode !== 'minimized' && hoveredIcon) {
       setHoveredIcon(null);
-      onIconHover(null);
+      onIconHover?.(null);
     }
   }, [state.mode, hoveredIcon, onIconHover]);
   

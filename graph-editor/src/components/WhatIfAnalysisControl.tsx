@@ -1,55 +1,92 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
+import { useWhatIfContext } from '../contexts/WhatIfContext';
 import { getConditionalColor, getConditionSignature } from '@/lib/conditionalColors';
 
 export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
+  console.log(`[${new Date().toISOString()}] [WhatIfControl] RENDER START`);
   const { graph } = useGraphStore();
   const { tabs, operations: tabOps } = useTabContext();
+  const whatIfCtx = useWhatIfContext();
+  const ts = () => new Date().toISOString();
   const myTab = tabs.find(t => t.id === tabId);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // What-if state is now per-tab, not per-file
-  const whatIfAnalysis = myTab?.editorState?.whatIfAnalysis;
-  const caseOverrides = myTab?.editorState?.caseOverrides || {};
-  const conditionalOverrides = myTab?.editorState?.conditionalOverrides || {};
+  // What-if state: prefer fast context (visual), fallback to tab state
+  const whatIfAnalysis = (whatIfCtx?.whatIfAnalysis !== undefined ? whatIfCtx?.whatIfAnalysis : myTab?.editorState?.whatIfAnalysis);
+  const caseOverrides = (whatIfCtx?.caseOverrides !== undefined ? whatIfCtx?.caseOverrides : (myTab?.editorState?.caseOverrides || {}));
+  const conditionalOverrides = (whatIfCtx?.conditionalOverrides !== undefined ? whatIfCtx?.conditionalOverrides : (myTab?.editorState?.conditionalOverrides || {}));
   
   // Helper to update tab's what-if state
   const setWhatIfAnalysis = (analysis: any) => {
+    if (whatIfCtx?.setWhatIfAnalysis) {
+      console.log(`[${ts()}] [WhatIfControl] setWhatIfAnalysis`);
+      whatIfCtx.setWhatIfAnalysis(analysis);
+      return;
+    }
     if (tabId) {
+      console.log(`[${ts()}] [WhatIfControl] setWhatIfAnalysis via tabOps.updateTabState`);
       tabOps.updateTabState(tabId, { whatIfAnalysis: analysis });
     }
   };
   
   const setCaseOverride = (nodeId: string, variantName: string | null) => {
+    performance.mark('whatif-setCaseOverride-start');
+    console.log(`[${ts()}] [WhatIfControl] setCaseOverride called:`, { nodeId, variantName, tabId });
+    // Mark start of a What-If update for latency measurement
+    window.dispatchEvent(new CustomEvent('dagnet:whatif-start', { detail: { t0: performance.now(), tabId } }));
+    performance.mark('whatif-after-dispatch');
+    // No-op if value unchanged
+    const current = (whatIfCtx?.caseOverrides ?? myTab?.editorState?.caseOverrides ?? {}) as Record<string, string>;
+    if ((variantName === null && !(nodeId in current)) || (variantName !== null && current[nodeId] === variantName)) {
+      console.log(`[${ts()}] [WhatIfControl] setCaseOverride no-op (unchanged)`);
+      performance.mark('whatif-noop-end');
+      performance.measure('⚡ whatif-noop', 'whatif-setCaseOverride-start', 'whatif-noop-end');
+      return;
+    }
+    performance.mark('whatif-before-context-update');
+    if (whatIfCtx?.setCaseOverride) {
+      whatIfCtx.setCaseOverride(nodeId, variantName);
+      performance.mark('whatif-after-context-update');
+      performance.measure('⚡ whatif-context-update', 'whatif-before-context-update', 'whatif-after-context-update');
+      performance.measure('⚡ whatif-setCaseOverride-TOTAL', 'whatif-setCaseOverride-start', 'whatif-after-context-update');
+      console.log(`[${ts()}] [WhatIfControl] setCaseOverride completed (context path)`);
+      return;
+    }
     if (!tabId) return;
     const newOverrides = { ...caseOverrides };
-    if (variantName === null) {
-      delete newOverrides[nodeId];
-    } else {
-      newOverrides[nodeId] = variantName;
-    }
+    if (variantName === null) delete newOverrides[nodeId]; else newOverrides[nodeId] = variantName;
+    console.log(`[${ts()}] [WhatIfControl] updateTabState(caseOverrides) start`);
     tabOps.updateTabState(tabId, { caseOverrides: newOverrides });
+    performance.mark('whatif-after-tabstate-update');
+    performance.measure('⚡ whatif-tabstate-update', 'whatif-before-context-update', 'whatif-after-tabstate-update');
+    performance.measure('⚡ whatif-setCaseOverride-TOTAL', 'whatif-setCaseOverride-start', 'whatif-after-tabstate-update');
+    console.log(`[${ts()}] [WhatIfControl] setCaseOverride completed (tabOps path)`);
   };
   
   const setConditionalOverride = (edgeId: string, value: Set<string> | null) => {
-    if (!tabId) return;
-    const newOverrides = { ...conditionalOverrides };
-    if (value === null) {
-      delete newOverrides[edgeId];
-    } else {
-      newOverrides[edgeId] = value;
+    if (whatIfCtx?.setConditionalOverride) {
+      console.log(`[${ts()}] [WhatIfControl] setConditionalOverride`);
+      whatIfCtx.setConditionalOverride(edgeId, value);
+      return;
     }
+    if (!tabId) return;
+    const newOverrides = { ...conditionalOverrides } as Record<string, Set<string>>;
+    if (value === null) delete newOverrides[edgeId]; else newOverrides[edgeId] = value;
+    console.log(`[${ts()}] [WhatIfControl] updateTabState(conditionalOverrides) start`);
     tabOps.updateTabState(tabId, { conditionalOverrides: newOverrides });
   };
   
   const clearAllOverrides = () => {
+    if (whatIfCtx?.clearAllOverrides) {
+      console.log(`[${ts()}] [WhatIfControl] clearAllOverrides via context`);
+      whatIfCtx.clearAllOverrides();
+      return;
+    }
     if (!tabId) return;
-    tabOps.updateTabState(tabId, { 
-      whatIfAnalysis: null,
-      caseOverrides: {},
-      conditionalOverrides: {}
-    });
+    console.log(`[${ts()}] [WhatIfControl] clearAllOverrides via tabOps.updateTabState`);
+    tabOps.updateTabState(tabId, { whatIfAnalysis: null, caseOverrides: {}, conditionalOverrides: {} });
   };
 
   // Get all case nodes and conditional edges
@@ -328,15 +365,34 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                       }} />
                       {node.label || node.slug}
                     </div>
-                    <select
+                  <select
                       value={caseOverrides[node.id] || ''}
+                      onMouseDown={() => {
+                        console.log(`[${ts()}] [WhatIfControl] dropdown onMouseDown - suspending layout for 3s`);
+                        window.dispatchEvent(new CustomEvent('dagnet:suspendLayout', { 
+                          detail: { ms: 3000 }
+                        }));
+                      }}
+                      onFocus={() => {
+                        console.log(`[${ts()}] [WhatIfControl] dropdown onFocus - suspending layout for 3s`);
+                        window.dispatchEvent(new CustomEvent('dagnet:suspendLayout', { 
+                          detail: { ms: 3000 }
+                        }));
+                      }}
                       onChange={(e) => {
+                        performance.mark('dropdown-onChange-start');
+                        console.log(`[${ts()}] [WhatIfControl] dropdown onChange fired`);
                         const variantName = e.target.value;
+                        performance.mark('dropdown-before-setCaseOverride');
                         if (variantName) {
                           setCaseOverride(node.id, variantName);
                         } else {
                           setCaseOverride(node.id, null);
                         }
+                        performance.mark('dropdown-after-setCaseOverride');
+                        performance.measure('⚡ dropdown-onChange-TOTAL', 'dropdown-onChange-start', 'dropdown-after-setCaseOverride');
+                        performance.measure('⚡ dropdown-setCaseOverride-call', 'dropdown-before-setCaseOverride', 'dropdown-after-setCaseOverride');
+                        console.log(`[${ts()}] [WhatIfControl] dropdown onChange completed`);
                       }}
                       style={{
                         width: '100%',
@@ -427,6 +483,18 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                         
                         return matchingCond ? matchingCond.condition.visited.join(',') : '';
                       })()}
+                      onMouseDown={() => {
+                        console.log(`[${ts()}] [WhatIfControl] conditional dropdown onMouseDown - suspending layout for 3s`);
+                        window.dispatchEvent(new CustomEvent('dagnet:suspendLayout', { 
+                          detail: { ms: 3000 }
+                        }));
+                      }}
+                      onFocus={() => {
+                        console.log(`[${ts()}] [WhatIfControl] conditional dropdown onFocus - suspending layout for 3s`);
+                        window.dispatchEvent(new CustomEvent('dagnet:suspendLayout', { 
+                          detail: { ms: 3000 }
+                        }));
+                      }}
                       onChange={(e) => {
                         const value = e.target.value;
                         if (!tabId) return;

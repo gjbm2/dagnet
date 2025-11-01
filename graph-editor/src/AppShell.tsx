@@ -697,15 +697,15 @@ function AppShellContent() {
 
   // Save layout to IndexedDB when it changes
   const handleLayoutChange = React.useCallback((newLayout: LayoutData, currentTabId?: string) => {
-    console.log('AppShell: handleLayoutChange called, currentTabId:', currentTabId);
+    console.log(`[${new Date().toISOString()}] [AppShell] onLayoutChange called, currentTabId:`, currentTabId);
     
     // Update active tab when rc-dock changes active tab (when user clicks tabs)
     // BUT don't do this if we're in the middle of updating tabs (prevents infinite loop)
     if (currentTabId && currentTabId !== activeTabId && !isUpdatingTabsRef.current) {
-      console.log('AppShell: rc-dock switched active tab to:', currentTabId);
+      console.log(`[${new Date().toISOString()}] [AppShell] rc-dock switched active tab to:`, currentTabId);
       tabOperations.switchTab(currentTabId);
     } else if (isUpdatingTabsRef.current) {
-      console.log('AppShell: Ignoring layout change during tab update (preventing loop)');
+      console.log(`[${new Date().toISOString()}] [AppShell] Ignoring layout change during tab update (preventing loop)`);
     }
 
     if (!prevLayoutRef.current) {

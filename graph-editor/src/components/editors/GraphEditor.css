@@ -1,13 +1,53 @@
 /* Graph Editor Styles */
 
-/* Hide tab bar for canvas panel - we don't want tabs visible for the canvas */
-.dock-panel[data-panel-id="graph-canvas-panel"] .dock-bar {
+/* Hide canvas tab bar - target it by the canvas tab inside it */
+.dock-bar:has([data-node-key="canvas-tab"]) {
+  display: none !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+}
+
+/* Hide any tab bar that has no actual tabs */
+.dock-bar:not(:has(.dock-tab)) {
+  display: none !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+}
+
+/* Fallback if :has() not supported - hide parent of canvas tab */
+[data-node-key="canvas-tab"] {
   display: none !important;
 }
 
+.dock-tab[data-node-key="canvas-tab"] {
+  display: none !important;
+}
+
+/* Hide the bar containing the canvas tab */
+.dock-panel[data-panel-id="graph-canvas-panel"] .dock-bar {
+  display: none !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+}
+
 /* Ensure canvas panel takes full space without tab bar */
-.dock-panel[data-panel-id="graph-canvas-panel"] .dock-panel-content {
+.dock-panel[data-panel-id="graph-canvas-panel"] .dock-content,
+.dock-panel[data-panel-id="graph-canvas-panel"] > .dock-content {
   top: 0 !important;
+  height: 100% !important;
 }
 
 /* Style for graph-canvas group panels */
@@ -21,22 +61,52 @@
   background: #f8f9fa; /* Slightly darker than pure white */
 }
 
-/* Make resize handle less prominent */
+/* Hide sidebar panel when it has size 0 (minimized state) */
+.dock-panel[data-panel-id="graph-sidebar-panel"][style*="width: 0px"],
+.dock-panel[data-panel-id="graph-sidebar-panel"][style*="width:0px"] {
+  display: none !important;
+}
+
+/* Make resize handles small and grey */
 .dock-splitter {
-  background: #e9ecef !important;
-  border-color: transparent !important;
-  width: 4px !important; /* Thinner resize handle */
+  background: #dee2e6 !important;
 }
 
 .dock-splitter:hover {
-  background: #ced4da !important;
+  background: #adb5bd !important;
 }
 
-/* Minimize button styling - matches resize handle */
+/* Vertical splitters (in horizontal boxes - left-right split) - constrain width */
+.dock-box.dock-hbox > .dock-splitter {
+  width: 1px !important;
+  min-width: 1px !important;
+  max-width: 1px !important;
+}
+
+/* Horizontal splitters (in vertical boxes - top-bottom split) - constrain height */
+.dock-box.dock-vbox > .dock-splitter {
+  height: 1px !important;
+  min-height: 1px !important;
+  max-height: 1px !important;
+}
+
+
+/* Minimize button styling - taller and thinner */
 .graph-minimize-button {
   background: #e9ecef !important;
-  border-color: #dee2e6 !important;
+  border: 1px solid #dee2e6 !important;
+  border-right: none !important;
+  border-radius: 4px 0 0 4px !important;
   color: #495057 !important;
+  width: 12px !important; /* Significantly thinner */
+  height: 180px !important; /* Three times taller (was 60px) */
+  font-size: 10px !important;
+  padding: 0 !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: background 0.2s ease, color 0.2s ease !important; /* Don't transition position */
 }
 
 .graph-minimize-button:hover {
@@ -44,21 +114,31 @@
   color: #212529 !important;
 }
 
-/* Hide close button on sidebar tabs when docked in home position */
-.dock-panel[data-panel-id="graph-sidebar-panel"] .dock-tab .dock-tab-close-btn {
+/* Hide minimize button during resize to avoid lurching */
+.graph-minimize-button.resizing {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Hide close buttons on sidebar tabs when docked in home position (second panel in main hbox) */
+.dock-box.dock-hbox > .dock-panel.dock-style-graph-panels .dock-tab-close-btn {
   display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  pointer-events: none !important;
 }
 
-/* Show close button on floating sidebar tabs */
-.dock-box.dock-float .dock-tab .dock-tab-close-btn {
+/* Show close button on floating panels (in fbox) - MUST override hide rule */
+.dock-box.dock-fbox .dock-panel .dock-tab-close-btn,
+.dock-fbox .dock-tab-close-btn {
   display: inline-block !important;
-}
-
-/* Show close button when sidebar tab is dragged to different position (not in home panel) */
-.dock-panel:not([data-panel-id="graph-sidebar-panel"]) .dock-tab[data-dockid*="what-if-tab"] .dock-tab-close-btn,
-.dock-panel:not([data-panel-id="graph-sidebar-panel"]) .dock-tab[data-dockid*="properties-tab"] .dock-tab-close-btn,
-.dock-panel:not([data-panel-id="graph-sidebar-panel"]) .dock-tab[data-dockid*="tools-tab"] .dock-tab-close-btn {
-  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  width: auto !important;
+  height: auto !important;
+  pointer-events: auto !important;
 }
 
 /* Floating panels styling */

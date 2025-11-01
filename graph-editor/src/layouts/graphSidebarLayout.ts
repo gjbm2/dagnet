@@ -29,17 +29,19 @@ export function getGraphEditorLayout(): LayoutData {
             }
           ]
         },
-        // Sidebar panels (right, fixed width)
+        // Sidebar panels (right, constrained width)
         {
           id: 'graph-sidebar-panel',
           size: 300,
+          minWidth: 250,  // Won't shrink below 250px
+          maxWidth: 500,  // Won't grow above 500px
           tabs: [
             {
               id: 'what-if-tab',
               title: '🎭 What-If',
               content: null as any, // Will be replaced with WhatIfPanel
               cached: true,
-              closable: true,  // Allow closing
+              closable: true,  // Always closable - CSS will hide button when docked
               group: 'graph-panels'
             },
             {
@@ -70,7 +72,7 @@ export function getGraphEditorLayout(): LayoutData {
 }
 
 /**
- * Minimized layout - only canvas, no sidebar
+ * Minimized layout - canvas + hidden sidebar (size: 0)
  */
 export function getGraphEditorLayoutMinimized(): LayoutData {
   return {
@@ -79,6 +81,7 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
       children: [
         {
           id: 'graph-canvas-panel',
+          size: 1000,
           tabs: [
             {
               id: 'canvas-tab',
@@ -87,6 +90,38 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
               cached: true,
               closable: false,
               group: 'graph-canvas'
+            }
+          ]
+        },
+        // Sidebar panel with size: 0 (hidden but present)
+        {
+          id: 'graph-sidebar-panel',
+          size: 0,
+          maxWidth: 500,  // Same constraint as maximized
+          tabs: [
+            {
+              id: 'what-if-tab',
+              title: '🎭 What-If',
+              content: null as any,
+              cached: true,
+              closable: true,  // Always closable - CSS will hide button when docked
+              group: 'graph-panels'
+            },
+            {
+              id: 'properties-tab',
+              title: '📝 Props',
+              content: null as any,
+              cached: true,
+              closable: true,
+              group: 'graph-panels'
+            },
+            {
+              id: 'tools-tab',
+              title: '🛠️ Tools',
+              content: null as any,
+              cached: true,
+              closable: true,
+              group: 'graph-panels'
             }
           ]
         }
