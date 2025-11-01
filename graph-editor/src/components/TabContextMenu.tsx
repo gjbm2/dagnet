@@ -79,6 +79,21 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
       keepMenuOpen: true
     });
     
+    // Graph-specific operations (only for graph tabs)
+    if (tab.fileId.startsWith('graph-') && tab.viewMode === 'interactive') {
+      items.push({ label: '', onClick: () => {}, divider: true });
+      items.push({
+        label: 'Reset Sidebar',
+        onClick: () => {
+          // Dispatch event to reset sidebar for this specific tab
+          window.dispatchEvent(new CustomEvent('dagnet:resetSidebar', { 
+            detail: { tabId } 
+          }));
+          onClose();
+        }
+      });
+    }
+    
     // Git operations
     items.push({ label: '', onClick: () => {}, divider: true });
     items.push({

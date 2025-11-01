@@ -16,6 +16,10 @@ export interface SidebarState {
   whatIfOpen: boolean;
   propertiesOpen: boolean;
   toolsOpen: boolean;
+  
+  // Per-tab positioning state for minimize button
+  sidebarWidth?: number;                  // Tracked width of sidebar panel
+  isResizing?: boolean;                   // True during resize drag
 }
 
 /**
@@ -29,7 +33,9 @@ export const DEFAULT_SIDEBAR_STATE: SidebarState = {
   isTransitioning: false,
   whatIfOpen: false,
   propertiesOpen: true,
-  toolsOpen: false
+  toolsOpen: false,
+  sidebarWidth: 300,  // Default sidebar width
+  isResizing: false    // Not resizing by default
 };
 
 /**
@@ -54,14 +60,22 @@ export function useSidebarState(tabId?: string) {
     storedState?.isTransitioning,
     storedState?.whatIfOpen,
     storedState?.propertiesOpen,
-    storedState?.toolsOpen
+    storedState?.toolsOpen,
+    storedState?.sidebarWidth,
+    storedState?.isResizing
   ]);
   
   // Local state initialized from tab state
-  const [state, setState] = useState<SidebarState>(() => ({
-    ...DEFAULT_SIDEBAR_STATE,
-    ...memoizedStoredState
-  }));
+  const [state, setState] = useState<SidebarState>(() => {
+    const initialState = {
+      ...DEFAULT_SIDEBAR_STATE,
+      ...memoizedStoredState,
+      // ALWAYS force isTransitioning to false on load - it's a transient animation flag
+      isTransitioning: false
+    };
+    console.log(`[${new Date().toISOString()}] [useSidebarState] Initializing state:`, initialState);
+    return initialState;
+  });
   
   // Track if we're currently updating to prevent circular syncs
   const isUpdatingRef = useRef(false);
@@ -78,9 +92,20 @@ export function useSidebarState(tabId?: string) {
     }, 0);
   }, []);
   
+  // ONE-TIME FIX: Force clear isTransitioning on mount if it's stuck in stored state
+  const hasClearedTransitionRef = useRef(false);
+  useEffect(() => {
+    if (!hasClearedTransitionRef.current && state.isTransitioning) {
+      console.log(`[${new Date().toISOString()}] [useSidebarState] ONE-TIME FIX: Clearing stuck isTransitioning flag`);
+      updateState({ isTransitioning: false });
+      hasClearedTransitionRef.current = true;
+    }
+  }, [state.isTransitioning, updateState]);
+  
   // Persist local state changes to tab state (separate effect to avoid circular updates)
   const prevStateRef = useRef<SidebarState>(state);
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [useSidebarState] useEffect#SB1: Persist sidebar state (changed=${prevStateRef.current !== state})`);
     // Only persist if state actually changed (not initial mount or tab switch)
     if (tabId && tabOps.updateTabState && prevStateRef.current !== state) {
       // Use a flag to track if this change came from us or from tab state
@@ -89,9 +114,14 @@ export function useSidebarState(tabId?: string) {
         state.activePanel === memoizedStoredState.activePanel;
       
       if (!stateMatchesMemoized) {
+        console.log(`[${new Date().toISOString()}] [useSidebarState] Persisting state to tab:`, state);
+        // Never persist isTransitioning - it's a transient animation flag
+        const { isTransitioning, ...stateToSave } = state;
         tabOps.updateTabState(tabId, {
-          sidebarState: state
+          sidebarState: { ...stateToSave, isTransitioning: false }
         });
+      } else {
+        console.log(`[${new Date().toISOString()}] [useSidebarState] Skipping persist (matches memoized)`);
       }
     }
     prevStateRef.current = state;
@@ -101,9 +131,11 @@ export function useSidebarState(tabId?: string) {
    * Minimize sidebar to icon bar
    */
   const minimize = useCallback(() => {
+    console.log(`[${new Date().toISOString()}] [useSidebarState] minimize: Setting isTransitioning=true`);
     updateState({ mode: 'minimized', isTransitioning: true });
     // Clear transition flag after animation completes (300ms)
     setTimeout(() => {
+      console.log(`[${new Date().toISOString()}] [useSidebarState] minimize: Clearing isTransitioning after 300ms`);
       updateState({ isTransitioning: false });
     }, 300);
   }, [updateState]);
@@ -113,6 +145,7 @@ export function useSidebarState(tabId?: string) {
    * Opens the specified panel (or activePanel if none specified)
    */
   const maximize = useCallback((panel?: 'what-if' | 'properties' | 'tools') => {
+    console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Setting isTransitioning=true, panel=${panel}`);
     updateState({ 
       mode: 'maximized',
       activePanel: panel || state.activePanel,
@@ -120,6 +153,7 @@ export function useSidebarState(tabId?: string) {
     });
     // Clear transition flag after animation completes (300ms)
     setTimeout(() => {
+      console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Clearing isTransitioning after 300ms`);
       updateState({ isTransitioning: false });
     }, 300);
   }, [updateState, state.activePanel]);
@@ -190,13 +224,40 @@ export function useSidebarState(tabId?: string) {
     });
   }, [state.floatingPanels, updateState]);
   
+  /**
+   * Update sidebar width (for minimize button positioning)
+   */
+  const setSidebarWidth = useCallback((width: number) => {
+    updateState({ sidebarWidth: width });
+  }, [updateState]);
+  
+  /**
+   * Update resizing state (for hiding minimize button during resize)
+   */
+  const setIsResizing = useCallback((resizing: boolean) => {
+    updateState({ isResizing: resizing });
+  }, [updateState]);
+  
+  /**
+   * Reset sidebar to default state (for recovery from weird docking configurations)
+   */
+  const resetToDefault = useCallback(() => {
+    console.log('Resetting sidebar to default state');
+    updateState({
+      ...DEFAULT_SIDEBAR_STATE
+    });
+  }, [updateState]);
+  
   // Sync local state with tab state when tab or stored state changes
   // BUT: Don't sync if we just updated locally (prevents circular loop)
   useEffect(() => {
     if (memoizedStoredState && !isUpdatingRef.current) {
+      console.log(`[${new Date().toISOString()}] [useSidebarState] Syncing from stored state:`, memoizedStoredState);
       setState({
         ...DEFAULT_SIDEBAR_STATE,
-        ...memoizedStoredState
+        ...memoizedStoredState,
+        // ALWAYS force isTransitioning to false - it's a transient animation flag
+        isTransitioning: false
       });
     }
   }, [memoizedStoredState]);
@@ -211,8 +272,11 @@ export function useSidebarState(tabId?: string) {
     markAutoOpened,
     floatPanel,
     unfloatPanel,
+    setSidebarWidth,
+    setIsResizing,
+    resetToDefault,
     updateState
-  }), [minimize, maximize, toggle, switchPanel, handleSelection, markAutoOpened, floatPanel, unfloatPanel, updateState]);
+  }), [minimize, maximize, toggle, switchPanel, handleSelection, markAutoOpened, floatPanel, unfloatPanel, setSidebarWidth, setIsResizing, resetToDefault, updateState]);
   
   return {
     state,

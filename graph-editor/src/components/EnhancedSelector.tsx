@@ -62,6 +62,7 @@ export function EnhancedSelector({
   onPushToRegistry,
   onRetrieveLatest
 }: EnhancedSelectorProps) {
+  console.log(`[${new Date().toISOString()}] [EnhancedSelector] RENDER (type=${type}, value=${value})`);
   const { operations: navOps } = useNavigatorContext();
   const { operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
@@ -80,6 +81,7 @@ export function EnhancedSelector({
   // Sync inputValue with value prop
   const prevValueRef = useRef(value);
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES1: Sync inputValue with value prop`);
     if (prevValueRef.current !== value) {
       setInputValue(value);
       prevValueRef.current = value;
@@ -88,6 +90,7 @@ export function EnhancedSelector({
 
   // Load registry items
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES2: Load registry items`);
     const loadItems = async () => {
       try {
         let items: RegistryItem[];
@@ -171,6 +174,7 @@ export function EnhancedSelector({
 
   // Auto-focus
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES3: Auto-focus`);
     if (autoFocus && inputRef.current && !value) {
       const timer = setTimeout(() => {
         if (inputRef.current) {
@@ -186,6 +190,7 @@ export function EnhancedSelector({
 
   // Close dropdowns when clicking outside
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES4: Setup click outside listener`);
     const handleClickOutside = (e: MouseEvent) => {
       if (
         wrapperRef.current && 

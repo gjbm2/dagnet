@@ -15,10 +15,10 @@ import { GuardedOperationModal } from '../modals/GuardedOperationModal';
  * Uses @rjsf/mui with Material Design styling
  * Schemas and file type metadata are centrally managed in fileTypeRegistry
  */
-export function FormEditor({ fileId, readonly = false }: EditorProps) {
+export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { tabId?: string }) {
   const { data, isDirty, updateData } = useFileState(fileId);
   const { operations: navOperations } = useNavigatorContext();
-  const { operations: tabOperations } = useTabContext();
+  const { activeTabId, operations: tabOperations } = useTabContext();
   const [schema, setSchema] = useState<RJSFSchema | null>(null);
   const [formData, setFormData] = useState<any>(null);
   const initialDataRef = useRef<string>('');
@@ -257,6 +257,11 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
   // Listen for undo/redo keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // CRITICAL: Only process if THIS tab is the active tab
+      if (activeTabId !== tabId) {
+        return; // Not our tab, ignore all keyboard events
+      }
+      
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
         e.preventDefault();
         undo();
@@ -268,7 +273,7 @@ export function FormEditor({ fileId, readonly = false }: EditorProps) {
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canUndo, canRedo]);
+  }, [canUndo, canRedo, activeTabId, tabId]);
 
   // Expose undo/redo capability to Edit menu
   useEffect(() => {

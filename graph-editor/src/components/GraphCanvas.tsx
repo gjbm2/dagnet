@@ -59,12 +59,17 @@ interface GraphCanvasProps {
   whatIfAnalysis?: any;
   caseOverrides?: Record<string, string>;
   conditionalOverrides?: Record<string, Set<string>>;
+  // Tab identification for keyboard event filtering
+  tabId?: string;
+  activeTabId?: string | null;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides, conditionalOverrides }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides, conditionalOverrides, tabId, activeTabId }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
+        tabId={tabId}
+        activeTabId={activeTabId}
         onSelectedNodeChange={onSelectedNodeChange}
         onSelectedEdgeChange={onSelectedEdgeChange}
         onDoubleClickNode={onDoubleClickNode}
@@ -86,10 +91,35 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {} }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {}, tabId, activeTabId: activeTabIdProp }: GraphCanvasProps) {
   const store = useGraphStore();
   const { graph, setGraph } = store;
-  const { operations: tabOperations, activeTabId, tabs } = useTabContext();
+  const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
+  const ts = () => new Date().toISOString();
+  const whatIfStartRef = useRef<number | null>(null);
+  
+  // Track graph store reference changes to detect loops
+  const prevGraphRef = useRef(graph);
+  const graphChangeCountRef = useRef(0);
+  useEffect(() => {
+    if (prevGraphRef.current !== graph) {
+      graphChangeCountRef.current++;
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] GRAPH STORE NEW REFERENCE (count: ${graphChangeCountRef.current}, nodes: ${graph?.nodes?.length || 0}, edges: ${graph?.edges?.length || 0})`);
+      prevGraphRef.current = graph;
+    }
+  }, [graph]);
+  useEffect(() => {
+    const handler = (e: any) => {
+      if (e?.detail?.tabId && tabId && e.detail.tabId !== tabId) return;
+      whatIfStartRef.current = e.detail?.t0 ?? performance.now();
+      console.log(`[${ts()}] [GraphCanvas] what-if start received`, { t0: whatIfStartRef.current, tabId });
+    };
+    window.addEventListener('dagnet:whatif-start', handler as any);
+    return () => window.removeEventListener('dagnet:whatif-start', handler as any);
+  }, []);
+  
+  // Use prop if provided, otherwise fall back to context
+  const activeTabId = activeTabIdProp ?? activeTabIdContext;
   const saveHistoryState = store.saveHistoryState;
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
   
@@ -105,15 +135,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
   
+  // Track array reference changes to detect loops
+  const prevNodesRef = useRef(nodes);
+  const prevEdgesRef = useRef(edges);
+  const nodesChangeCountRef = useRef(0);
+  const edgesChangeCountRef = useRef(0);
+  useEffect(() => {
+    if (prevNodesRef.current !== nodes) {
+      nodesChangeCountRef.current++;
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] NODES ARRAY NEW REFERENCE (count: ${nodesChangeCountRef.current}, length: ${nodes.length})`);
+      prevNodesRef.current = nodes;
+    }
+    if (prevEdgesRef.current !== edges) {
+      edgesChangeCountRef.current++;
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] EDGES ARRAY NEW REFERENCE (count: ${edgesChangeCountRef.current}, length: ${edges.length})`);
+      prevEdgesRef.current = edges;
+    }
+  }, [nodes, edges]);
+  
   // Custom onEdgesChange handler to prevent automatic deletion
   const onEdgesChange = useCallback((changes: any[]) => {
-    console.log('onEdgesChange called with changes:', changes);
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] onEdgesChange called (${changes.length} changes)`);
     
     // Filter out remove changes to prevent automatic deletion
     const filteredChanges = changes.filter(change => change.type !== 'remove');
     
     if (filteredChanges.length !== changes.length) {
-      console.log('Filtered out remove changes to prevent automatic deletion');
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] Filtered out ${changes.length - filteredChanges.length} remove changes`);
     }
     
     // Call the base handler with filtered changes
@@ -140,6 +188,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Custom onNodesChange handler to detect position changes for auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] onNodesChange called (${changes.length} changes)`);
     // Call the base handler first
     onNodesChangeBase(changes);
     
@@ -148,6 +197,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (autoReroute && !isSyncingRef.current) {
       const positionChanges = changes.filter(change => change.type === 'position');
       if (positionChanges.length > 0) {
+        console.log(`[${new Date().toISOString()}] [GraphCanvas] Position changes detected, triggering reroute`);
         // Trigger re-routing by incrementing the flag
         // This will run during drag (for visual feedback) and won't save history
         setShouldReroute(prev => prev + 1);
@@ -690,6 +740,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Focus probability input when edge context menu opens
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC3: Focus edge probability input`);
     if (edgeContextMenu && edgeProbabilityInputRef.current) {
       // Initialize display state with current probability value
       setEdgeProbabilityDisplay(String(contextMenuLocalData?.probability || 0));
@@ -902,7 +953,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Reset position tracking and perform immediate re-route when autoReroute is toggled ON
   useEffect(() => {
-    console.log('Auto re-route toggled:', autoReroute);
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC4: Auto re-route toggled:`, autoReroute);
     if (autoReroute) {
       // Initialize position tracking when enabling
       console.log('Initializing position tracking and performing immediate re-route');
@@ -928,6 +979,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Perform re-routing when shouldReroute flag changes (with small delay after node movement)
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC5: Perform re-routing`);
     if ((shouldReroute > 0 && autoReroute) || forceReroute) {
       console.log('Re-route triggered:', { shouldReroute, autoReroute, forceReroute });
       // Add a small delay to ensure node positions are fully updated
@@ -1557,66 +1609,104 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
   }, [useUniformScaling, massGenerosity, nodes, setEdges]);
   
-  // Recalculate edge widths when what-if changes (separate effect to avoid loops)
+  // Recalculate edge widths when what-if changes (throttled to one per frame)
+  const recomputeInProgressRef = useRef(false);
+  const visualWhatIfUpdateRef = useRef(false);
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC1: What-If recompute triggered (edges=${edges.length})`);
     if (edges.length === 0) return;
-    
-    // Force re-render of edges by updating their data and recalculating offsets
-    setEdges(prevEdges => {
-      // First pass: update edge data without calculateWidth functions
-      const edgesWithWidth = prevEdges.map(edge => ({
-        ...edge,
-        data: {
-          ...edge.data
-          // Don't add calculateWidth here - will be added after offsets are calculated
-        }
-      }));
-      
-      // Second pass: add calculateWidth functions with updated edge data
-      const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
-        ...edge,
-        data: {
-          ...edge.data,
-          calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
-        }
-      }));
-      
-      // Recalculate offsets for mass-based scaling modes
-      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
-      
-      // Attach offsets to edge data for the ConversionEdge component
-      return edgesWithOffsets.map(edge => ({
-        ...edge,
-        data: {
-          ...edge.data,
-          sourceOffsetX: edge.sourceOffsetX,
-          sourceOffsetY: edge.sourceOffsetY,
-          targetOffsetX: edge.targetOffsetX,
-          targetOffsetY: edge.targetOffsetY,
-          scaledWidth: edge.scaledWidth,
-          // Pass what-if overrides to edges
-          caseOverrides: caseOverrides,
-          conditionalOverrides: conditionalOverrides
-        }
-      }));
+    if (recomputeInProgressRef.current) {
+      console.log(`[${ts()}] [GraphCanvas] what-if recompute skipped (in progress)`);
+      return;
+    }
+    recomputeInProgressRef.current = true;
+    const t0 = performance.now();
+    requestAnimationFrame(() => {
+      try {
+        visualWhatIfUpdateRef.current = true; // mark as visual-only update
+        setEdges(prevEdges => {
+          const t1 = performance.now();
+          // First pass: update edge data without calculateWidth functions
+          const edgesWithWidth = prevEdges.map(edge => ({
+            ...edge,
+            data: {
+              ...edge.data
+            }
+          }));
+          // Second pass: add calculateWidth functions with updated edge data
+          const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
+            ...edge,
+            data: {
+              ...edge.data,
+              calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
+            }
+          }));
+          const t2 = performance.now();
+          // Recalculate offsets for mass-based scaling modes
+          const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
+          const t3 = performance.now();
+          console.log(`[${ts()}] [GraphCanvas] what-if recompute timings`, { mapMs: Math.round(t2 - t1), offsetsMs: Math.round(t3 - t2) });
+          // Attach offsets to edge data for the ConversionEdge component
+          return edgesWithOffsets.map(edge => ({
+            ...edge,
+            data: {
+              ...edge.data,
+              sourceOffsetX: edge.sourceOffsetX,
+              sourceOffsetY: edge.sourceOffsetY,
+              targetOffsetX: edge.targetOffsetX,
+              targetOffsetY: edge.targetOffsetY,
+              scaledWidth: edge.scaledWidth,
+              // Pass what-if overrides to edges
+              caseOverrides: caseOverrides,
+              conditionalOverrides: conditionalOverrides
+            }
+          }));
+        });
+      } finally {
+        const tEnd = performance.now();
+        console.log(`[${ts()}] [GraphCanvas] what-if recompute done`, { totalMs: Math.round(tEnd - t0) });
+        recomputeInProgressRef.current = false;
+        // Clear the visual-only flag after queue flush
+        setTimeout(() => { visualWhatIfUpdateRef.current = false; }, 0);
+      }
     });
-  }, [overridesVersion, whatIfAnalysis, setEdges, nodes]);
+  }, [overridesVersion, whatIfAnalysis, setEdges, nodes, edges.length]);
+
+  useEffect(() => {
+    // Log when overridesVersion propagates into canvas and compute latency
+    if (whatIfStartRef.current != null) {
+      const dt = performance.now() - whatIfStartRef.current;
+      console.log(`[${ts()}] [GraphCanvas] what-if applied`, { dtMs: Math.round(dt) });
+      whatIfStartRef.current = null;
+    } else {
+      console.log(`[${ts()}] [GraphCanvas] overrides changed (no start marker)`);
+    }
+  }, [overridesVersion]);
   
   // Sync FROM ReactFlow TO graph when user makes changes in the canvas
   // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
   useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC2: Sync ReactFlow→Store triggered`);
     if (!graph) return;
+    if (visualWhatIfUpdateRef.current) {
+      // Skip syncing visual-only what-if changes back to graph store
+      // Prevents global rerenders and race conditions
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] skip store sync (what-if visual update)`);
+      return;
+    }
     if (isSyncingRef.current) {
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Skipped (already syncing)`);
       return;
     }
     
     // BLOCK ReactFlow→Graph sync during node dragging to prevent multiple graph updates
     if (isDraggingNodeRef.current) {
-      console.log('⏸️ Blocking ReactFlow→Graph sync during node drag');
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Blocked (dragging)`);
       return;
     }
     
     if (nodes.length === 0 && graph.nodes.length > 0) {
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Skipped (nodes empty)`);
       return;
     }
     
@@ -1624,9 +1714,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (updatedGraph) {
       const updatedJson = JSON.stringify(updatedGraph);
       if (updatedJson === lastSyncedReactFlowRef.current) {
+        console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Skipped (no changes)`);
         return;
       }
       
+      console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: SYNCING to store`);
       isSyncingRef.current = true;
       lastSyncedReactFlowRef.current = updatedJson;
       setGraph(updatedGraph);
@@ -1636,6 +1728,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Reset sync flag
       setTimeout(() => {
         isSyncingRef.current = false;
+        console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Sync flag reset`);
       }, 0);
     }
   }, [nodes, edges]); // Removed 'graph' and 'setGraph' from dependencies
@@ -2083,6 +2176,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Track Shift key state and handle mouse events globally
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // CRITICAL: Only process if THIS tab is the active tab
+      if (activeTabId !== tabId) {
+        return; // Not our tab, ignore all keyboard events
+      }
+      
       if (e.key === 'Shift') {
         setIsShiftHeld(true);
       }
@@ -2218,7 +2316,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       window.removeEventListener('mousemove', handleMouseMove, true);
       window.removeEventListener('mouseup', handleMouseUp, true);
     };
-  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected]);
+  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected, activeTabId, tabId]);
 
 
   // Track selected nodes for probability calculation
