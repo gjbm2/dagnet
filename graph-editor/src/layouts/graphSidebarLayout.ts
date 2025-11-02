@@ -33,8 +33,6 @@ export function getGraphEditorLayout(): LayoutData {
         {
           id: 'graph-sidebar-panel',
           size: 300,
-          minWidth: 250,  // Won't shrink below 250px
-          maxWidth: 500,  // Won't grow above 500px
           tabs: [
             {
               id: 'what-if-tab',
@@ -97,7 +95,6 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
         {
           id: 'graph-sidebar-panel',
           size: 0,
-          maxWidth: 500,  // Same constraint as maximized
           tabs: [
             {
               id: 'what-if-tab',

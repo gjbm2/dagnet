@@ -11,7 +11,6 @@ export interface SidebarState {
   floatingPanels: string[];               // Which panels are floating (for backwards compat and quick checks)
   savedDockLayout?: any;                  // Saved rc-dock layout structure (components stripped)
   hasAutoOpened: boolean;                 // Smart auto-open tracker (once per tab)
-  isTransitioning: boolean;               // True during minimize/maximize animation
   
   // Panel-specific open/closed states (when in maximized mode)
   whatIfOpen: boolean;
@@ -31,7 +30,6 @@ export const DEFAULT_SIDEBAR_STATE: SidebarState = {
   activePanel: 'properties',
   floatingPanels: [],
   hasAutoOpened: false,
-  isTransitioning: false,
   whatIfOpen: false,
   propertiesOpen: true,
   toolsOpen: false,
@@ -58,7 +56,6 @@ export function useSidebarState(tabId?: string) {
     storedState?.activePanel,
     storedState?.floatingPanels?.join(','),
     storedState?.hasAutoOpened,
-    storedState?.isTransitioning,
     storedState?.whatIfOpen,
     storedState?.propertiesOpen,
     storedState?.toolsOpen,
@@ -80,9 +77,7 @@ export function useSidebarState(tabId?: string) {
       ...DEFAULT_SIDEBAR_STATE,
       ...memoizedStoredState,
       // Ensure floatingPanels is always an array (might be undefined in old saved states)
-      floatingPanels: memoizedStoredState?.floatingPanels || [],
-      // ALWAYS force isTransitioning to false on load - it's a transient animation flag
-      isTransitioning: false
+      floatingPanels: memoizedStoredState?.floatingPanels || []
     };
     console.log(`[${new Date().toISOString()}] [useSidebarState] Initial state result:`, initialState);
     return initialState;
@@ -103,15 +98,6 @@ export function useSidebarState(tabId?: string) {
     }, 0);
   }, []);
   
-  // ONE-TIME FIX: Force clear isTransitioning on mount if it's stuck in stored state
-  const hasClearedTransitionRef = useRef(false);
-  useEffect(() => {
-    if (!hasClearedTransitionRef.current && state.isTransitioning) {
-      console.log(`[${new Date().toISOString()}] [useSidebarState] ONE-TIME FIX: Clearing stuck isTransitioning flag`);
-      updateState({ isTransitioning: false });
-      hasClearedTransitionRef.current = true;
-    }
-  }, [state.isTransitioning, updateState]);
   
   // Persist local state changes to tab state (separate effect to avoid circular updates)
   const prevStateRef = useRef<SidebarState>(state);
@@ -132,11 +118,10 @@ export function useSidebarState(tabId?: string) {
         state.savedDockLayout === memoizedStoredState.savedDockLayout; // Reference equality check
       
       if (!stateMatchesMemoized) {
-        // Strip out hasAutoOpened (session-only, not persisted)
-        const { isTransitioning, hasAutoOpened, ...stateToSave } = state;
-        console.log(`[${new Date().toISOString()}] [useSidebarState] Persisting state to tab (mode=${stateToSave.mode}, width=${stateToSave.sidebarWidth}):`, stateToSave);
+        // Note: hasAutoOpened is session-only and not persisted to IndexedDB
+        console.log(`[${new Date().toISOString()}] [useSidebarState] Persisting state to tab (mode=${state.mode}, width=${state.sidebarWidth}):`, state);
         tabOps.updateTabState(tabId, {
-          sidebarState: { ...stateToSave, isTransitioning: false }
+          sidebarState: state
         });
       } else {
         console.log(`[${new Date().toISOString()}] [useSidebarState] Skipping persist (matches memoized)`);
@@ -149,13 +134,8 @@ export function useSidebarState(tabId?: string) {
    * Minimize sidebar to icon bar
    */
   const minimize = useCallback(() => {
-    console.log(`[${new Date().toISOString()}] [useSidebarState] minimize: Setting isTransitioning=true`);
-    updateState({ mode: 'minimized', isTransitioning: true });
-    // Clear transition flag after animation completes (300ms)
-    setTimeout(() => {
-      console.log(`[${new Date().toISOString()}] [useSidebarState] minimize: Clearing isTransitioning after 300ms`);
-      updateState({ isTransitioning: false });
-    }, 300);
+    console.log(`[${new Date().toISOString()}] [useSidebarState] minimize: Minimizing sidebar`);
+    updateState({ mode: 'minimized' });
   }, [updateState]);
   
   /**
@@ -163,7 +143,7 @@ export function useSidebarState(tabId?: string) {
    * Opens the specified panel (or activePanel if none specified)
    */
   const maximize = useCallback((panel?: 'what-if' | 'properties' | 'tools') => {
-    console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Setting isTransitioning=true, panel=${panel}, currentWidth=${state.sidebarWidth}`);
+    console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Maximizing sidebar, panel=${panel}, currentWidth=${state.sidebarWidth}`);
     
     // CRITICAL: If sidebar width is 0 or very small (collapsed), restore to default 300px
     const restoredWidth = (!state.sidebarWidth || state.sidebarWidth < 50) ? 300 : state.sidebarWidth;
@@ -171,14 +151,8 @@ export function useSidebarState(tabId?: string) {
     updateState({ 
       mode: 'maximized',
       activePanel: panel || state.activePanel,
-      sidebarWidth: restoredWidth,
-      isTransitioning: true
+      sidebarWidth: restoredWidth
     });
-    // Clear transition flag after animation completes (300ms)
-    setTimeout(() => {
-      console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Clearing isTransitioning after 300ms`);
-      updateState({ isTransitioning: false });
-    }, 300);
   }, [updateState, state.activePanel, state.sidebarWidth]);
   
   /**
@@ -296,9 +270,7 @@ export function useSidebarState(tabId?: string) {
         ...DEFAULT_SIDEBAR_STATE,
         ...memoizedStoredState,
         // Ensure floatingPanels is always an array
-        floatingPanels: memoizedStoredState.floatingPanels || [],
-        // ALWAYS force isTransitioning to false - it's a transient animation flag
-        isTransitioning: false
+        floatingPanels: memoizedStoredState.floatingPanels || []
       };
       
       // AFTER spreading, restore session-only hasAutoOpened

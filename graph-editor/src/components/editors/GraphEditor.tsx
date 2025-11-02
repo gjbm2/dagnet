@@ -517,10 +517,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
             // Find sidebar panel using its stable ID
             const sidebar = containerRef.current.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
             
-            if (sidebar && sidebarState.width > 50) {
+            if (sidebar && sidebarState.sidebarWidth && sidebarState.sidebarWidth > 50) {
               sidebar.style.flex = 'none';
-              sidebar.style.width = `${sidebarState.width}px`;
-              console.log(`[GraphEditor ${fileId}] ResizeObserver RETRY: Applied stored width ${sidebarState.width}px to restored sidebar`);
+              sidebar.style.width = `${sidebarState.sidebarWidth}px`;
+              console.log(`[GraphEditor ${fileId}] ResizeObserver RETRY: Applied stored width ${sidebarState.sidebarWidth}px to restored sidebar`);
             }
           }, 200);
         }
@@ -682,11 +682,11 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       
       // If specific tabs requested, filter to only those
       if (sidebarTabsToInclude) {
-        sidebarPanel.tabs = sidebarPanel.tabs.filter(tab => sidebarTabsToInclude.includes(tab.id));
+        sidebarPanel.tabs = sidebarPanel.tabs.filter((tab: any) => sidebarTabsToInclude.includes(tab.id));
         console.log(`[GraphEditor ${fileId}] Creating layout with only sidebar tabs:`, sidebarTabsToInclude);
       }
       
-      sidebarPanel.tabs.forEach(tab => {
+      sidebarPanel.tabs.forEach((tab: any) => {
         if (tab.id === 'what-if-tab') {
           tab.content = whatIfComponent;
         } else if (tab.id === 'properties-tab') {
@@ -698,10 +698,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       
       // Set active tab based on sidebar state (if that tab exists in the filtered list)
       const desiredActiveId = PANEL_TO_TAB_ID[sidebarState.activePanel];
-      if (sidebarPanel.tabs.some(t => t.id === desiredActiveId)) {
+      if (sidebarPanel.tabs.some((t: any) => t.id === desiredActiveId)) {
         sidebarPanel.activeId = desiredActiveId;
       } else if (sidebarPanel.tabs.length > 0) {
-        sidebarPanel.activeId = sidebarPanel.tabs[0].id;
+        sidebarPanel.activeId = (sidebarPanel.tabs[0] as any).id;
       }
     }
     
@@ -1364,28 +1364,28 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                     // Get current layout
                     const currentLayout = dockRef.current.getLayout();
                     
-                    // Find existing sidebar panel
-                    let sidebarPanel = null;
-                    if (currentLayout.dockbox?.children) {
-                      for (const child of currentLayout.dockbox.children) {
-                        if (child.id === 'graph-sidebar-panel' && 'tabs' in child) {
-                          sidebarPanel = child;
-                          break;
-                        }
-                      }
-                    }
-                    
-                    // Check if sidebar has any existing sidebar tabs (not just Canvas)
-                    const existingSidebarTabs = sidebarPanel?.tabs?.filter(t => 
-                      t.id === 'what-if-tab' || t.id === 'properties-tab' || t.id === 'tools-tab'
-                    ) || [];
+              // Find existing sidebar panel
+              let sidebarPanel: any = null;
+              if (currentLayout.dockbox?.children) {
+                for (const child of currentLayout.dockbox.children) {
+                  if (child.id === 'graph-sidebar-panel' && 'tabs' in child) {
+                    sidebarPanel = child;
+                    break;
+                  }
+                }
+              }
+              
+              // Check if sidebar has any existing sidebar tabs (not just Canvas)
+              const existingSidebarTabs = sidebarPanel?.tabs?.filter((t: any) => 
+                t.id === 'what-if-tab' || t.id === 'properties-tab' || t.id === 'tools-tab'
+              ) || [];
                     
                     if (existingSidebarTabs.length > 0) {
                       // Sidebar already has tabs - just add the missing ones
                       console.log('[GraphEditor] Sidebar has existing tabs, adding missing tabs to it:', missingSidebarTabs);
                       
-                      missingSidebarTabs.forEach(tabId => {
-                        let component = null;
+                      missingSidebarTabs.forEach((tabId: string) => {
+                        let component: React.ReactElement | null = null;
                         let title = '';
                         if (tabId === 'what-if-tab') {
                           component = whatIfComponent;
