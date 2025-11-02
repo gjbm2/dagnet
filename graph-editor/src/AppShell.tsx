@@ -788,13 +788,14 @@ function AppShellContent() {
       if (rect.left < minX || (rect.left === minX && rect.top < minY)) {
         minX = rect.left;
         minY = rect.top;
-        topLeftPanel = panel;
+        topLeftPanel = panel as Element;
       }
     });
     
     if (topLeftPanel) {
-      topLeftPanel.classList.add('top-left-docked-panel');
-      const dockBar = topLeftPanel.querySelector('.dock-bar') as HTMLElement;
+      const panel = topLeftPanel as Element; // Type assertion to help TypeScript
+      panel.classList.add('top-left-docked-panel');
+      const dockBar = panel.querySelector('.dock-bar') as HTMLElement;
       
       // Force padding via inline style as CSS isn't applying for some reason
       if (dockBar && !navState.isPinned) {
@@ -806,9 +807,9 @@ function AppShellContent() {
       const computedPadding = dockBar ? window.getComputedStyle(dockBar).paddingLeft : 'N/A';
       const appShell = document.querySelector('.app-shell');
       const appShellClasses = appShell ? appShell.className : 'N/A';
-      console.log(`AppShell: Marked top-left docked panel (dockid=${topLeftPanel.getAttribute('data-dockid')}) at x=${minX}, y=${minY}`);
+      console.log(`AppShell: Marked top-left docked panel (dockid=${panel.getAttribute('data-dockid')}) at x=${minX}, y=${minY}`);
       console.log(`AppShell: app-shell classes="${appShellClasses}", computed paddingLeft=${computedPadding}`);
-      console.log(`AppShell: panel classes="${topLeftPanel.className}"`);
+      console.log(`AppShell: panel classes="${panel.className}"`);
     }
   }, []);
   
