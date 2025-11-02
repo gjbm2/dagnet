@@ -18,10 +18,10 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
   const [hoveredIcon, setHoveredIcon] = useState<'what-if' | 'properties' | 'tools' | null>(null);
   
   const handleMouseEnter = (panel: 'what-if' | 'properties' | 'tools') => {
-    console.log(`[${new Date().toISOString()}] [SidebarIconBar] handleMouseEnter: panel=${panel}, mode=${state.mode}, isTransitioning=${state.isTransitioning}`);
-    // Only allow hover when actually minimized (not transitioning, not maximized)
-    if (state.mode !== 'minimized' || state.isTransitioning) {
-      console.log(`[${new Date().toISOString()}] [SidebarIconBar] Hover blocked: not minimized or transitioning`);
+    console.log(`[${new Date().toISOString()}] [SidebarIconBar] handleMouseEnter: panel=${panel}, mode=${state.mode}`);
+    // Only allow hover when actually minimized
+    if (state.mode !== 'minimized') {
+      console.log(`[${new Date().toISOString()}] [SidebarIconBar] Hover blocked: not minimized`);
       return;
     }
     setHoveredIcon(panel);
