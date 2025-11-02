@@ -742,7 +742,93 @@ function AppShellContent() {
     setTimeout(() => {
       layoutService.saveLayout(newLayout);
     }, 1000);
+    
+    // Mark top-left docked panel for Navigator button padding
+    markTopLeftDockedPanel();
   }, [extractTabIds, tabOperations, activeTabId]);
+  
+  // Mark the top-left docked panel with a class for CSS targeting
+  const markTopLeftDockedPanel = React.useCallback(() => {
+    // Remove existing marks
+    document.querySelectorAll('.top-left-docked-panel').forEach(el => {
+      el.classList.remove('top-left-docked-panel');
+    });
+    
+    // Find all dock-panels in the app-shell (not in floatbox, not in GraphEditor)
+    const allPanels = Array.from(document.querySelectorAll('.app-shell .dock-panel'));
+    
+    if (allPanels.length === 0) {
+      console.log('AppShell: No dock-panels found');
+      return;
+    }
+    
+    // Filter out floating panels and GraphEditor panels
+    const dockedPanels = allPanels.filter(panel => {
+      const isInFloatbox = panel.closest('.dock-fbox') !== null;
+      const isInGraphEditor = panel.closest('.graph-editor-dock-container') !== null;
+      return !isInFloatbox && !isInGraphEditor;
+    });
+    
+    if (dockedPanels.length === 0) {
+      console.log('AppShell: No docked app-level panels found (all are floating or in GraphEditor)');
+      return;
+    }
+    
+    console.log(`AppShell: Found ${dockedPanels.length} docked app-level panels`);
+    
+    // Find the top-left panel by position
+    let topLeftPanel: Element | null = null;
+    let minX = Infinity;
+    let minY = Infinity;
+    
+    dockedPanels.forEach(panel => {
+      const rect = panel.getBoundingClientRect();
+      console.log(`AppShell: Panel at x=${rect.left}, y=${rect.top}, dockid=${panel.getAttribute('data-dockid')}`);
+      // Consider panels that are at the leftmost position and topmost
+      if (rect.left < minX || (rect.left === minX && rect.top < minY)) {
+        minX = rect.left;
+        minY = rect.top;
+        topLeftPanel = panel;
+      }
+    });
+    
+    if (topLeftPanel) {
+      topLeftPanel.classList.add('top-left-docked-panel');
+      const dockBar = topLeftPanel.querySelector('.dock-bar') as HTMLElement;
+      
+      // Force padding via inline style as CSS isn't applying for some reason
+      if (dockBar && !navState.isPinned) {
+        dockBar.style.paddingLeft = '115px';
+      } else if (dockBar && navState.isPinned) {
+        dockBar.style.paddingLeft = '4px';
+      }
+      
+      const computedPadding = dockBar ? window.getComputedStyle(dockBar).paddingLeft : 'N/A';
+      const appShell = document.querySelector('.app-shell');
+      const appShellClasses = appShell ? appShell.className : 'N/A';
+      console.log(`AppShell: Marked top-left docked panel (dockid=${topLeftPanel.getAttribute('data-dockid')}) at x=${minX}, y=${minY}`);
+      console.log(`AppShell: app-shell classes="${appShellClasses}", computed paddingLeft=${computedPadding}`);
+      console.log(`AppShell: panel classes="${topLeftPanel.className}"`);
+    }
+  }, []);
+  
+  // Run markTopLeftDockedPanel after layout changes and on resize
+  React.useEffect(() => {
+    if (!dockLayoutRef) return;
+    
+    // Initial mark - run multiple times to ensure it catches the DOM after React finishes rendering
+    setTimeout(markTopLeftDockedPanel, 50);
+    setTimeout(markTopLeftDockedPanel, 200);
+    setTimeout(markTopLeftDockedPanel, 500);
+    
+    // Watch for window resize
+    const handleResize = () => {
+      markTopLeftDockedPanel();
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [dockLayoutRef, markTopLeftDockedPanel]);
 
   return (
     <div className={`app-shell ${navState.isPinned ? 'nav-pinned' : 'nav-unpinned'}`} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', overflow: 'hidden' }}>

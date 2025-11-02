@@ -203,14 +203,18 @@ export function GraphStoreProvider({
             console.log(`GraphStoreProvider: Cleaning up store for ${fileId}`);
             const storeToClean = storeRegistry.get(fileId);
             if (storeToClean) {
+              // CRITICAL: Delete from registry FIRST to prevent race condition
+              // where new instance tries to reuse the store while we're clearing it
+              storeRegistry.delete(fileId);
+              
+              // Then clean up the store state
               storeToClean.setState({ 
                 graph: null,
                 history: []
               });
-              storeRegistry.delete(fileId);
             }
           }
-        }, 5000); // 5 second grace period
+        }, 1000); // 1 second grace period
       }
     };
   }, [fileId]);

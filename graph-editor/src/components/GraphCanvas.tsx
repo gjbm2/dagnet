@@ -3630,6 +3630,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onSelectionChange={onSelectionChange}
         onNodeDragStart={onNodeDragStart}
         onNodeDragStop={onNodeDragStop}
+        onNodeDoubleClick={(event, node) => {
+          event.preventDefault();
+          // Select the node first, then open Properties panel
+          onSelectedNodeChange(node.id);
+          window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+        }}
+        onEdgeDoubleClick={(event, edge) => {
+          event.preventDefault();
+          // Select the edge first, then open Properties panel
+          onSelectedEdgeChange(edge.id);
+          window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+        }}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
         onEdgeContextMenu={onEdgeContextMenu}
@@ -4034,6 +4046,29 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             zIndex: 10000
           }}
         >
+          {/* Properties option */}
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              // Select the node first, then open Properties panel
+              onSelectedNodeChange(nodeContextMenu.nodeId);
+              // Dispatch event to open Properties panel
+              window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+              setNodeContextMenu(null);
+            }}
+            style={{
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              borderRadius: '2px',
+              borderBottom: '1px solid #eee'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          >
+            📝 Properties
+          </div>
+          
           {/* Hide/Unhide option */}
           {activeTabId && tabOperations.isNodeHidden(activeTabId, nodeContextMenu.nodeId) ? (
             <div
@@ -4450,6 +4485,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
 
           
+          {/* Properties option */}
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              // Dispatch event to open Properties panel
+              window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+              setEdgeContextMenu(null);
+            }}
+            style={{
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              borderRadius: '2px',
+              borderTop: '1px solid #eee',
+              marginTop: '8px'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          >
+            📝 Properties
+          </div>
+          
           {/* Delete option */}
           <div
             onClick={(e) => {
@@ -4461,9 +4518,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               cursor: 'pointer',
               fontSize: '13px',
               color: '#dc3545',
-              borderRadius: '2px',
-              borderTop: '1px solid #eee',
-              marginTop: '8px'
+              borderRadius: '2px'
             }}
             onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
             onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
 import { EditorProps, GraphData } from '../../types';
 import { useFileState, useTabContext } from '../../contexts/TabContext';
 import { GraphStoreProvider, useGraphStore } from '../../contexts/GraphStoreContext';
@@ -103,6 +103,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const hoverLeaveTimerRef = useRef<number | null>(null);
   const [isHoverLocked, setIsHoverLocked] = useState(false);
   const suspendLayoutUntilRef = useRef<number>(0);
+  const isResizingRef = useRef<boolean>(false);
   // const [usePlainWhatIfOverlay, setUsePlainWhatIfOverlay] = useState(false);
   
   // Tab-specific state (persisted per tab, not per file!)
@@ -130,6 +131,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const [dockLayout, setDockLayout] = useState<LayoutData | null>(null);
   const sidebarResizeObserverRef = useRef<ResizeObserver | null>(null);
   const containerResizeObserverRef = useRef<ResizeObserver | null>(null);
+  const hboxResizeObserverRef = useRef<ResizeObserver | null>(null);
+  const [splitterCenterY, setSplitterCenterY] = useState<number>(0); // Vertical center of splitter in pixels from top
   const lastSidebarWidthRef = useRef<number>(-1);
   const sidebarWidthRafRef = useRef<number | null>(null);
   
@@ -165,38 +168,13 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   
   const handleIconHover = React.useCallback((panel: 'what-if' | 'properties' | 'tools' | null) => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover called: panel=${panel}, mode=${sidebarState.mode}, isHoverLocked=${isHoverLocked}`);
-    if (sidebarState.mode !== 'minimized') {
-      console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover blocked: not minimized`);
-      return;
-    }
-    if (isHoverLocked) {
-      console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover blocked: hover locked`);
-      return;
-    }
+    if (sidebarState.mode !== 'minimized') return;
+    if (isHoverLocked) return;
+    
+    // Only set panel on hover (icon enter), ignore null (icon leave)
     if (panel) {
-      // Cancel pending close and show immediately
-      if (hoverLeaveTimerRef.current) {
-        console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover: Canceling pending close timer`);
-        window.clearTimeout(hoverLeaveTimerRef.current);
-        hoverLeaveTimerRef.current = null;
-      }
       console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover: Setting hoveredPanel to ${panel}`);
       setHoveredPanel(panel);
-    } else {
-      // Schedule close, can be cancelled by preview mouse enter
-      if (hoverLeaveTimerRef.current) {
-        window.clearTimeout(hoverLeaveTimerRef.current);
-      }
-      console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover: Scheduling close in 180ms`);
-      hoverLeaveTimerRef.current = window.setTimeout(() => {
-        if (!isHoverLocked) {
-          console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover: Timer fired, clearing hoveredPanel`);
-          setHoveredPanel(null);
-        } else {
-          console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover: Timer fired but hover locked, not clearing`);
-        }
-        hoverLeaveTimerRef.current = null;
-      }, 180);
     }
   }, [sidebarState.mode, isHoverLocked]);
   
@@ -240,6 +218,18 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     };
     window.addEventListener('dagnet:openSidebarPanel' as any, handler);
     return () => window.removeEventListener('dagnet:openSidebarPanel' as any, handler);
+  }, [sidebarOps]);
+  
+  // Listen for request to open Properties panel (from context menu or double-click)
+  useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#4b: Setup dagnet:openPropertiesPanel listener`);
+    const handler = () => {
+      console.log(`[${new Date().toISOString()}] [GraphEditor] EVENT: dagnet:openPropertiesPanel received`);
+      // Maximize sidebar to Properties panel
+      sidebarOps.maximize('properties');
+    };
+    window.addEventListener('dagnet:openPropertiesPanel' as any, handler);
+    return () => window.removeEventListener('dagnet:openPropertiesPanel' as any, handler);
   }, [sidebarOps]);
   
   // Removed: usePlainWhatIf overlay handler (hover preview deprecated)
@@ -288,18 +278,59 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   
   // Detect resize start/end to hide minimize button during resize
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#6: Setup resize detection listeners`);
+    console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] useEffect#6: Setup resize detection listeners`);
+    
+    if (!containerRef.current) return;
+    
     const handleMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (target.classList.contains('dock-splitter')) {
-        console.log(`[${new Date().toISOString()}] [GraphEditor] Resize started - hiding minimize button`);
+      
+      // Debug logging
+      const hasContainer = !!containerRef.current;
+      const isInContainer = containerRef.current?.contains(target);
+      const isDockDiv = target.classList.contains('dock-divider');
+      const isDockSplit = target.classList.contains('dock-splitter');
+      
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] mousedown debug:`, {
+        hasContainer,
+        isInContainer,
+        isDockDiv,
+        isDockSplit,
+        className: target.className,
+        tagName: target.tagName
+      });
+      
+      // Only respond if the splitter is within THIS container
+      if (!containerRef.current?.contains(target)) {
+        console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] mousedown IGNORED (not in container)`);
+        return;
+      }
+      
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] mousedown on:`, target.className, target.tagName);
+      if (target.classList.contains('dock-divider') || target.classList.contains('dock-splitter')) {
+        console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] ✅ Splitter clicked! Setting isResizing=true`);
+        isResizingRef.current = true;
         sidebarOps.setIsResizing(true);
       }
     };
     
     const handleMouseUp = () => {
       if (sidebarState.isResizing) {
-        console.log(`[${new Date().toISOString()}] [GraphEditor] Resize ended - showing minimize button`);
+        console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Resize ended - capturing final width`);
+        
+        // CRITICAL: Capture the final width BEFORE clearing isResizing
+        // Find sidebar using its stable ID (works regardless of position)
+        const sidebarPanel = containerRef.current?.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
+        if (sidebarPanel) {
+          const finalWidth = Math.round(sidebarPanel.getBoundingClientRect().width);
+          console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Final width after resize: ${finalWidth}px (integer)`);
+          sidebarOps.setSidebarWidth(finalWidth);
+        } else {
+          console.warn(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Could not find sidebar panel to capture final width`);
+        }
+        
+        // Now clear the resizing flag
+        isResizingRef.current = false;
         sidebarOps.setIsResizing(false);
       }
     };
@@ -311,92 +342,62 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       document.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [sidebarState.isResizing, sidebarOps]);
+  }, [sidebarState.isResizing, sidebarOps, fileId]);
   
-  // Container resize observer - maintains sidebar absolute pixel width when container resizes
-  const lastContainerWidthRef = useRef<number>(0);
-  const isAdjustingLayoutRef = useRef<boolean>(false);
-  // containerResizeObserverRef already declared at top of component
-  
-  useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#6b: Setup container ResizeObserver (mode=${sidebarState.mode})`);
+  // Apply CSS-based fixed width to sidebar panel
+  // Using useLayoutEffect so it runs synchronously after DOM updates but before paint
+  useLayoutEffect(() => {
+    console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] useEffect#6b: Apply fixed width CSS (mode=${sidebarState.mode}, width=${sidebarState.sidebarWidth}, isResizing=${sidebarState.isResizing})`);
     
-    // Cleanup existing observer
-    if (containerResizeObserverRef.current) {
-      containerResizeObserverRef.current.disconnect();
-      containerResizeObserverRef.current = null;
+    if (!containerRef.current) {
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] useEffect#6b: No containerRef`);
+      return;
     }
     
-    if (sidebarState.mode === 'maximized' && containerRef.current) {
-      const container = containerRef.current;
-      
-      // Capture initial container width
-      const initialWidth = Math.round(container.getBoundingClientRect().width);
-      lastContainerWidthRef.current = initialWidth;
-      console.log(`[${new Date().toISOString()}] [GraphEditor] Container observer: Initial container width = ${initialWidth}px`);
-      
-      // Observe the container - when it resizes, recalculate layout to maintain sidebar width
-      containerResizeObserverRef.current = new ResizeObserver((entries) => {
-        // Skip if we're already adjusting to prevent circular loop
-        if (isAdjustingLayoutRef.current) {
-          return;
-        }
-        
-        const newContainerWidth = Math.round(container.getBoundingClientRect().width);
-        
-        // Only react to significant changes (> 10px) to avoid noise
-        const widthDelta = Math.abs(newContainerWidth - lastContainerWidthRef.current);
-        if (widthDelta < 10) {
-          return;
-        }
-        
-        console.log(`[${new Date().toISOString()}] [GraphEditor] 🔍 Container resized: ${lastContainerWidthRef.current}px → ${newContainerWidth}px`);
-        
-        // Get the stored sidebar width (the width we want to maintain)
-        const targetSidebarWidth = sidebarState.sidebarWidth || 300;
-        
-        // Back-calculate flex weights to maintain the TARGET width in the new container
-        const canvasFlexWeight = newContainerWidth - targetSidebarWidth;
-        const sidebarFlexWeight = targetSidebarWidth;
-        
-        console.log(`[${new Date().toISOString()}] [GraphEditor] Adjusting flex to maintain ${targetSidebarWidth}px: canvas=${canvasFlexWeight}, sidebar=${sidebarFlexWeight}`);
-        
-        if (dockRef.current && canvasFlexWeight > 0 && sidebarFlexWeight > 0) {
-          // Set flag BEFORE any changes
-          isAdjustingLayoutRef.current = true;
-          
-          // Update layout with new flex weights
-          const currentLayout = dockRef.current.getLayout();
-          if (currentLayout?.dockbox?.children) {
-            const mainBox = currentLayout.dockbox.children.find((child: any) => child.mode === 'horizontal');
-            if (mainBox && mainBox.children && mainBox.children.length >= 2) {
-              mainBox.children[0].size = canvasFlexWeight;
-              mainBox.children[1].size = sidebarFlexWeight;
-              dockRef.current.loadLayout(currentLayout);
-            }
-          }
-          
-          // Update last container width AFTER successful layout update
-          lastContainerWidthRef.current = newContainerWidth;
-          
-          // Reset flag after delay (long enough for sidebar observer to skip)
-          setTimeout(() => {
-            isAdjustingLayoutRef.current = false;
-          }, 200);
-        }
-      });
-      
-      containerResizeObserverRef.current.observe(container);
-      console.log(`[${new Date().toISOString()}] [GraphEditor] Container ResizeObserver attached`);
+    // Find sidebar using its stable ID (works regardless of position)
+    const sidebarPanel = containerRef.current.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
+    if (!sidebarPanel) {
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] useEffect#6b: No sidebar panel found`);
+      return;
     }
     
-    return () => {
-      if (containerResizeObserverRef.current) {
-        containerResizeObserverRef.current.disconnect();
-        containerResizeObserverRef.current = null;
-      }
-    };
-  }, [sidebarState.mode, fileId]); // Removed sidebarOps to prevent loop
+    // If minimized, force width to 0
+    if (sidebarState.mode === 'minimized') {
+      sidebarPanel.style.flex = '0 0 0px';
+      sidebarPanel.style.width = '0px';
+      sidebarPanel.style.minWidth = '0px';
+      sidebarPanel.style.maxWidth = '0px';
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Forced width to 0 (minimized)`);
+      return;
+    }
+    
+    // If maximized and user is actively resizing, allow rc-dock to resize freely
+    // but DON'T lock the width - just remove the min/max constraints
+    if (sidebarState.mode === 'maximized' && sidebarState.isResizing) {
+      const currentWidth = sidebarPanel.getBoundingClientRect().width;
+      sidebarPanel.style.flex = `0 0 ${currentWidth}px`;
+      sidebarPanel.style.minWidth = '';
+      sidebarPanel.style.maxWidth = '';
+      sidebarPanel.style.width = `${currentWidth}px`;
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Unlocked for resizing (current width ${currentWidth}px)`);
+      return;
+    }
+    
+    // If maximized and NOT resizing, apply fixed width (but keep it resizable!)
+    if (sidebarState.mode === 'maximized') {
+      const targetWidth = sidebarState.sidebarWidth || 300;
+      const currentWidth = sidebarPanel.getBoundingClientRect().width;
+      
+      // Set flex basis and width, but DON'T lock with min/max
+      // This allows the width to be corrected but keeps the splitter visible
+      sidebarPanel.style.flex = `0 0 ${targetWidth}px`;
+      sidebarPanel.style.width = `${targetWidth}px`;
+      sidebarPanel.style.minWidth = ''; // Clear any previous constraints
+      sidebarPanel.style.maxWidth = ''; // Clear any previous constraints
+      
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Applied fixed width ${targetWidth}px to sidebar (was ${currentWidth}px before CSS)`);
+    }
+  }, [sidebarState.mode, sidebarState.sidebarWidth, sidebarState.isResizing, fileId]);
   
   // Setup ResizeObserver to track sidebar width in real-time during drag
   useEffect(() => {
@@ -417,45 +418,59 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           return;
         }
         
-        // Find the OFFICIAL sidebar panel - must be the second child of the main horizontal box
-        // and must contain all three sidebar tabs (what-if, properties, tools)
+        // Find the OFFICIAL sidebar panel using its stable ID
+        // rc-dock adds the panel ID as a data attribute: data-dockid="graph-sidebar-panel"
         let sidebarPanelElement: HTMLElement | null = null;
         
-        // Find the main dockbox's horizontal container
-        const mainHbox = containerRef.current.querySelector('.dock-box.dock-hbox');
-        if (mainHbox) {
-          // The sidebar should be the second panel child in this hbox
-          const panels = mainHbox.querySelectorAll(':scope > .dock-panel');
-          if (panels.length >= 2) {
-            const potentialSidebar = panels[1] as HTMLElement;
-            
-            // Verify it has all three sidebar tabs
-            const hasWhatIf = potentialSidebar.querySelector('[data-node-key="what-if-tab"]');
-            const hasProps = potentialSidebar.querySelector('[data-node-key="properties-tab"]');
-            const hasTools = potentialSidebar.querySelector('[data-node-key="tools-tab"]');
-            
-            if (hasWhatIf || hasProps || hasTools) {
-              sidebarPanelElement = potentialSidebar;
-              console.log(`[GraphEditor ${fileId}] Found official sidebar panel (second child of hbox)`);
-            }
-          }
+        sidebarPanelElement = containerRef.current.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
+        
+        if (sidebarPanelElement) {
+          console.log(`[GraphEditor ${fileId}] Found official sidebar panel via data-dockid`);
         }
         
         if (sidebarPanelElement) {
           // Set initial width immediately
           const rect = sidebarPanelElement.getBoundingClientRect();
           const width = Math.round(rect.width);
-          console.log(`[GraphEditor ${fileId}] ResizeObserver: Initial sidebar width:`, width);
-          lastSidebarWidthRef.current = width;
-          sidebarOps.setSidebarWidth(width);
+          const storedWidth = sidebarState.sidebarWidth;
+          console.log(`[GraphEditor ${fileId}] ResizeObserver: Initial sidebar width: ${width}px (stored: ${storedWidth}px)`);
+          
+          // Apply CSS fixed width IMMEDIATELY if we have a stored width
+          if (storedWidth && !sidebarState.isResizing) {
+            sidebarPanelElement.style.flex = `0 0 ${storedWidth}px`;
+            sidebarPanelElement.style.width = `${storedWidth}px`;
+            sidebarPanelElement.style.minWidth = '';
+            sidebarPanelElement.style.maxWidth = '';
+            console.log(`[GraphEditor ${fileId}] ResizeObserver: Applied stored width ${storedWidth}px (was ${width}px)`);
+            lastSidebarWidthRef.current = storedWidth;
+          } else if (!storedWidth) {
+            // No stored width - capture the initial rendered width
+            console.log(`[GraphEditor ${fileId}] ResizeObserver: No stored width, capturing initial width ${width}px`);
+            lastSidebarWidthRef.current = width;
+            sidebarOps.setSidebarWidth(width);
+          } else {
+            // isResizing=true, don't apply CSS
+            lastSidebarWidthRef.current = width;
+            console.log(`[GraphEditor ${fileId}] ResizeObserver: isResizing=true, skipping CSS application`);
+          }
           
           // Create ResizeObserver to track width changes in real-time
           sidebarResizeObserverRef.current = new ResizeObserver(() => {
             const t0 = performance.now();
             console.log(`[${new Date().toISOString()}] [GraphEditor] 🔍 ResizeObserver callback fired (t0=${t0.toFixed(2)}ms)`);
-            // Skip if we're in the middle of a layout adjustment to prevent circular loop
-            if (isAdjustingLayoutRef.current) {
-              console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] ResizeObserver: Skipping (layout adjustment in progress)`);
+            
+            // CRITICAL: Skip updates while user is actively resizing
+            // When isResizing=true, we remove CSS constraints and the panel may temporarily collapse
+            // We only want to capture the FINAL width after user releases mouse
+            if (isResizingRef.current) {
+              console.log(`[${new Date().toISOString()}] [GraphEditor] 🔍 ResizeObserver: Skipping (isResizing=true)`);
+              return;
+            }
+            
+            // CRITICAL: Never persist width when sidebar is minimized
+            // The width will be 0 or 1px, which would corrupt the stored maximized width
+            if (sidebarState.mode === 'minimized') {
+              console.log(`[${new Date().toISOString()}] [GraphEditor] 🔍 ResizeObserver: Skipping (sidebar minimized)`);
               return;
             }
             
@@ -474,8 +489,18 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
             }
             sidebarWidthRafRef.current = requestAnimationFrame(() => {
               const t2 = performance.now();
-              console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] 🔍 ResizeObserver: RAF executing (scheduled ${(t2-t0).toFixed(2)}ms ago) - setting sidebar width to ${newWidth}`);
-              sidebarOps.setSidebarWidth(newWidth);
+              // CRITICAL: Always use integer width to prevent rounding loops
+              const intWidth = Math.round(newWidth);
+              
+              // Don't update if it matches the stored width (CSS is correcting it)
+              if (intWidth === sidebarState.sidebarWidth) {
+                console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] 🔍 ResizeObserver: RAF - width ${intWidth}px matches stored, skipping update`);
+                sidebarWidthRafRef.current = null;
+                return;
+              }
+              
+              console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] 🔍 ResizeObserver: RAF executing (scheduled ${(t2-t0).toFixed(2)}ms ago) - setting sidebar width to ${intWidth}px (integer)`);
+              sidebarOps.setSidebarWidth(intWidth);
               sidebarWidthRafRef.current = null;
               const t3 = performance.now();
               console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] 🔍 ResizeObserver: RAF completed in ${(t3-t2).toFixed(2)}ms`);
@@ -485,6 +510,19 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           sidebarResizeObserverRef.current.observe(sidebarPanelElement);
         } else {
           console.error(`[GraphEditor ${fileId}] ResizeObserver: Could not find sidebar panel in this container`);
+          // Retry after a longer delay - the panel might be restoring from a closed state
+          setTimeout(() => {
+            if (!containerRef.current) return;
+            
+            // Find sidebar panel using its stable ID
+            const sidebar = containerRef.current.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
+            
+            if (sidebar && sidebarState.width > 50) {
+              sidebar.style.flex = 'none';
+              sidebar.style.width = `${sidebarState.width}px`;
+              console.log(`[GraphEditor ${fileId}] ResizeObserver RETRY: Applied stored width ${sidebarState.width}px to restored sidebar`);
+            }
+          }, 200);
         }
       }, 100); // Small delay to ensure DOM is ready
     }
@@ -497,6 +535,52 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       }
     };
   }, [sidebarState.mode, dockLayout, sidebarOps, fileId]);
+  
+  // Track vertical position of the hbox (where the splitter actually is)
+  useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#7b: Setup hbox position tracker`);
+    
+    if (hboxResizeObserverRef.current) {
+      hboxResizeObserverRef.current.disconnect();
+      hboxResizeObserverRef.current = null;
+    }
+    
+    if (!containerRef.current) return;
+    
+    const updateSplitterPosition = () => {
+      const hbox = containerRef.current?.querySelector('.dock-box.dock-hbox') as HTMLElement;
+      if (hbox) {
+        const rect = hbox.getBoundingClientRect();
+        const containerRect = containerRef.current!.getBoundingClientRect();
+        
+        // Calculate center Y relative to container
+        const centerY = rect.top - containerRect.top + (rect.height / 2);
+        setSplitterCenterY(centerY);
+        console.log(`[${new Date().toISOString()}] [GraphEditor] Splitter center Y: ${centerY}px (hbox top=${rect.top - containerRect.top}, height=${rect.height})`);
+      }
+    };
+    
+    // Initial position
+    setTimeout(() => {
+      updateSplitterPosition();
+      
+      // Set up observer
+      const hbox = containerRef.current?.querySelector('.dock-box.dock-hbox') as HTMLElement;
+      if (hbox) {
+        hboxResizeObserverRef.current = new ResizeObserver(() => {
+          updateSplitterPosition();
+        });
+        hboxResizeObserverRef.current.observe(hbox);
+      }
+    }, 100);
+    
+    return () => {
+      if (hboxResizeObserverRef.current) {
+        hboxResizeObserverRef.current.disconnect();
+        hboxResizeObserverRef.current = null;
+      }
+    };
+  }, [dockLayout]);
   
   // DIAGNOSTIC: Log What-If state changes
   useEffect(() => {
@@ -550,7 +634,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   ), [massGenerosity, useUniformScaling]);
   
   // Helper function to create layout structure (uses stable components)
-  const createLayoutStructure = useCallback((mode: 'minimized' | 'maximized') => {
+  const createLayoutStructure = useCallback((
+    mode: 'minimized' | 'maximized',
+    sidebarTabsToInclude?: string[] // e.g. ['properties-tab'] or ['what-if-tab', 'tools-tab']
+  ) => {
     const layout = mode === 'maximized' 
       ? getGraphEditorLayout() 
       : getGraphEditorLayoutMinimized();
@@ -592,6 +679,13 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     // Inject stable sidebar panel components (ALWAYS - even in minimized mode, panels exist with size:0)
     if (layout.dockbox.children?.[1] && 'tabs' in layout.dockbox.children[1]) {
       const sidebarPanel = layout.dockbox.children[1];
+      
+      // If specific tabs requested, filter to only those
+      if (sidebarTabsToInclude) {
+        sidebarPanel.tabs = sidebarPanel.tabs.filter(tab => sidebarTabsToInclude.includes(tab.id));
+        console.log(`[GraphEditor ${fileId}] Creating layout with only sidebar tabs:`, sidebarTabsToInclude);
+      }
+      
       sidebarPanel.tabs.forEach(tab => {
         if (tab.id === 'what-if-tab') {
           tab.content = whatIfComponent;
@@ -602,8 +696,13 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
         }
       });
       
-      // Set active tab based on sidebar state
-      sidebarPanel.activeId = PANEL_TO_TAB_ID[sidebarState.activePanel];
+      // Set active tab based on sidebar state (if that tab exists in the filtered list)
+      const desiredActiveId = PANEL_TO_TAB_ID[sidebarState.activePanel];
+      if (sidebarPanel.tabs.some(t => t.id === desiredActiveId)) {
+        sidebarPanel.activeId = desiredActiveId;
+      } else if (sidebarPanel.tabs.length > 0) {
+        sidebarPanel.activeId = sidebarPanel.tabs[0].id;
+      }
     }
     
     return layout;
@@ -614,21 +713,86 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   
   // Initialize dock layout (only on mount)
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#9: Initialize dock layout check (dockLayout=${!!dockLayout})`);
+    console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#9: Initialize dock layout check (dockLayout=${!!dockLayout}, savedLayout=${!!sidebarState.savedDockLayout})`);
     // Only initialize if we don't have a layout yet
-    if (dockLayout) return;
+    if (dockLayout) {
+      console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#9: Skipping init - dockLayout already exists`);
+      return;
+    }
     
-    const layout = createLayoutStructure(sidebarState.mode);
+    let layout;
+    
+    if (sidebarState.savedDockLayout) {
+      // Restore saved layout structure
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Restoring saved dock layout`);
+      layout = sidebarState.savedDockLayout;
+      
+      // Re-inject React components and titles into all tabs (recursively)
+      const reinjectComponents = (node: any) => {
+        if (node.tabs) {
+          node.tabs.forEach((tab: any) => {
+            if (tab.id === 'canvas-tab') {
+              tab.content = canvasComponent;
+              tab.title = '';
+            } else if (tab.id === 'what-if-tab') {
+              tab.content = whatIfComponent;
+              tab.title = '🎭 What-If';
+            } else if (tab.id === 'properties-tab') {
+              tab.content = propertiesComponent;
+              tab.title = '📝 Props';
+            } else if (tab.id === 'tools-tab') {
+              tab.content = toolsComponent;
+              tab.title = '🛠️ Tools';
+            }
+          });
+        }
+        if (node.children) {
+          node.children.forEach(reinjectComponents);
+        }
+      };
+      
+      if (layout.dockbox) reinjectComponents(layout.dockbox);
+      if (layout.floatbox) {
+        reinjectComponents(layout.floatbox);
+        
+        // Log the positions we're restoring
+        layout.floatbox.children?.forEach((fp: any) => {
+          const tabId = fp.tabs?.[0]?.id;
+          console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Restoring position for ${tabId}: x=${fp.x}, y=${fp.y}, w=${fp.w}, h=${fp.h}`);
+        });
+      }
+      
+      // Set sidebar panel size in layout if mode is maximized
+      if (sidebarState.mode === 'maximized' && sidebarState.sidebarWidth) {
+        const setSidebarSize = (node: any) => {
+          if (node.id === 'graph-sidebar-panel') {
+            node.size = sidebarState.sidebarWidth;
+            console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Set sidebar panel size to ${sidebarState.sidebarWidth}px in restored layout`);
+          }
+          if (node.children) {
+            node.children.forEach(setSidebarSize);
+          }
+        };
+        if (layout.dockbox) setSidebarSize(layout.dockbox);
+      }
+      
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Layout restored, components re-injected`);
+    } else {
+      // No saved layout, create default
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] No saved layout, creating default`);
+      layout = createLayoutStructure(sidebarState.mode);
+    }
+    
     setDockLayout(layout);
     
-    // Capture actual rendered sidebar width after layout is created
-    if (sidebarState.mode === 'maximized') {
+    // Capture actual rendered sidebar width ONLY if no width is stored
+    if (sidebarState.mode === 'maximized' && !sidebarState.sidebarWidth) {
       setTimeout(() => {
         if (containerRef.current) {
           const sidebarEl = containerRef.current.querySelector('[data-panel-id="graph-sidebar-panel"], [data-node-key="what-if-tab"], [data-node-key="properties-tab"]')?.closest('.dock-panel') as HTMLElement;
           if (sidebarEl) {
-            const actualWidth = sidebarEl.getBoundingClientRect().width;
-            console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Initializing with actual rendered sidebar width:`, actualWidth);
+            const actualWidth = Math.round(sidebarEl.getBoundingClientRect().width);
+            console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Initializing with actual rendered sidebar width: ${actualWidth}px (no stored width)`);
             sidebarOps.setSidebarWidth(actualWidth);
           }
         }
@@ -652,49 +816,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     console.log(`[${new Date().toISOString()}] [GraphEditor] Sidebar mode changed:`, prevModeRef.current, '->', sidebarState.mode);
     prevModeRef.current = sidebarState.mode;
     
-    // Update sidebar width immediately based on mode
-    if (sidebarState.mode === 'maximized') {
-      sidebarOps.setSidebarWidth(300);
-    } else {
-      sidebarOps.setSidebarWidth(0);
-    }
-    
-    // Create layout structure with stable component instances
-    const layout = createLayoutStructure(sidebarState.mode);
-    
-    // Preserve floating tabs and re-inject stable components
-    const currentLayout = dockRef.current.getLayout();
-    if (currentLayout?.floatbox && currentLayout.floatbox.children && currentLayout.floatbox.children.length > 0) {
-      console.log('[GraphEditor] Preserving floating tabs and re-injecting components');
-      
-      // Re-inject stable components into all floating tabs (directly modify, don't clone)
-      const reinjectComponents = (node: any) => {
-        if (node.tabs) {
-          node.tabs.forEach((tab: any) => {
-            // Re-inject stable component references
-            if (tab.id === 'what-if-tab') {
-              tab.content = whatIfComponent;
-            } else if (tab.id === 'properties-tab') {
-              tab.content = propertiesComponent;
-            } else if (tab.id === 'tools-tab') {
-              tab.content = toolsComponent;
-            }
-          });
-        }
-        if (node.children) {
-          node.children.forEach(reinjectComponents);
-        }
-      };
-      
-      // Directly modify the existing floatbox (no cloning needed)
-      currentLayout.floatbox.children?.forEach(reinjectComponents);
-      layout.floatbox = currentLayout.floatbox as any;
-    }
-    
-    // Apply directly via loadLayout WITHOUT remounting
-    console.log('[GraphEditor] Applying layout via loadLayout (no remount)');
-    dockRef.current.loadLayout(layout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // NO loadLayout() needed! The CSS effect (useLayoutEffect#6b) handles minimize/maximize
+    // by setting the sidebar panel width to 0 or the stored width.
+    // This preserves floating panels because we never destroy/recreate the layout.
+    console.log(`[${new Date().toISOString()}] [GraphEditor] Mode change handled by CSS (no loadLayout call)`);
   }, [sidebarState.mode]);
   
   // Update rc-dock active tab when activePanel changes (while maximized)
@@ -1101,9 +1226,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       }}>
       <div 
         ref={containerRef}
+        className="graph-editor-dock-container"
         style={{ 
         position: 'relative',
-          height: '100%',
+        height: '100%',
           width: '100%',
           overflow: 'hidden'
         }}>
@@ -1130,6 +1256,51 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
               }).flat() || [];
               
               console.log(`[${new Date().toISOString()}] [GraphEditor] Layout changed. Floating tabs:`, floatingTabIds);
+              
+              // Update sidebar state with current floating panels
+              const sidebarFloatingIds = floatingTabIds.filter(id => 
+                id === 'what-if-tab' || id === 'properties-tab' || id === 'tools-tab'
+              );
+              if (JSON.stringify(sidebarFloatingIds.sort()) !== JSON.stringify(sidebarState.floatingPanels.sort())) {
+                console.log(`[${new Date().toISOString()}] [GraphEditor] Updating floatingPanels:`, sidebarFloatingIds);
+                sidebarOps.updateState({ floatingPanels: sidebarFloatingIds });
+              }
+              
+              // Save the entire dock layout structure (strip React components and sidebar panel size)
+              // This preserves all panel positions (docked AND floating)
+              const layoutToSave = JSON.parse(JSON.stringify(newLayout, (key, value) => {
+                // Strip out React components
+                if (key === 'content') return undefined;
+                return value;
+              }));
+              
+              // Remove size from sidebar panel (we manage this separately)
+              const stripSidebarSize = (node: any) => {
+                if (node.id === 'graph-sidebar-panel') {
+                  delete node.size;
+                }
+                if (node.children) {
+                  node.children.forEach(stripSidebarSize);
+                }
+              };
+              if (layoutToSave.dockbox) stripSidebarSize(layoutToSave.dockbox);
+              
+              // Log floating panel positions being saved
+              if (layoutToSave.floatbox?.children) {
+                layoutToSave.floatbox.children.forEach((fp: any) => {
+                  const tabId = fp.tabs?.[0]?.id;
+                  console.log(`[${new Date().toISOString()}] [GraphEditor] Saving position for ${tabId}: x=${fp.x}, y=${fp.y}, w=${fp.w}, h=${fp.h}`);
+                });
+              }
+              
+              console.log(`[${new Date().toISOString()}] [GraphEditor] Saving dock layout structure (persisting to IndexedDB)`);
+              sidebarOps.updateState({ savedDockLayout: layoutToSave });
+              
+              // If ALL panels are floating, auto-minimize the sidebar
+              if (sidebarFloatingIds.length === 3 && sidebarState.mode === 'maximized') {
+                console.log(`[${new Date().toISOString()}] [GraphEditor] All panels floating - auto-minimizing sidebar`);
+                sidebarOps.minimize();
+              }
               
               // DIAGNOSTIC: Check floating panel structure
               if (floatingTabIds.length > 0 && containerRef.current) {
@@ -1183,31 +1354,111 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
               
               if (missingSidebarTabs.length > 0) {
                 console.log('[GraphEditor] Sidebar tabs missing (closed):', missingSidebarTabs);
+                console.log('[GraphEditor] Current sidebar mode:', sidebarState.mode);
+                console.log('[GraphEditor] Current floating panels:', sidebarState.floatingPanels);
                 
-                // If in maximized mode, restore missing tabs to sidebar dock using stable components
-                if (sidebarState.mode === 'maximized' && dockRef.current) {
-                  console.log('[GraphEditor] Restoring closed tabs to sidebar dock with stable components');
-                  
+                if (dockRef.current) {
                   setTimeout(() => {
-                    if (dockRef.current) {
-                      // Use createLayoutStructure helper to get layout with stable components
-                      const layout = createLayoutStructure('maximized');
-                      
-                      // Preserve any remaining floating tabs (non-sidebar tabs)
-                      if (newLayout.floatbox && newLayout.floatbox.children && newLayout.floatbox.children.length > 0) {
-                        // Only preserve floating tabs that aren't sidebar tabs
-                        const nonSidebarFloating = newLayout.floatbox.children.filter((box: any) => {
-                          const tabIds = box.tabs?.map((t: any) => t.id) || [];
-                          return !tabIds.some((id: string) => expectedSidebarTabs.includes(id));
-                        });
-                        
-                        if (nonSidebarFloating.length > 0) {
-                          layout.floatbox = { ...newLayout.floatbox, children: nonSidebarFloating } as any;
+                    if (!dockRef.current) return;
+                    
+                    // Get current layout
+                    const currentLayout = dockRef.current.getLayout();
+                    
+                    // Find existing sidebar panel
+                    let sidebarPanel = null;
+                    if (currentLayout.dockbox?.children) {
+                      for (const child of currentLayout.dockbox.children) {
+                        if (child.id === 'graph-sidebar-panel' && 'tabs' in child) {
+                          sidebarPanel = child;
+                          break;
                         }
                       }
+                    }
+                    
+                    // Check if sidebar has any existing sidebar tabs (not just Canvas)
+                    const existingSidebarTabs = sidebarPanel?.tabs?.filter(t => 
+                      t.id === 'what-if-tab' || t.id === 'properties-tab' || t.id === 'tools-tab'
+                    ) || [];
+                    
+                    if (existingSidebarTabs.length > 0) {
+                      // Sidebar already has tabs - just add the missing ones
+                      console.log('[GraphEditor] Sidebar has existing tabs, adding missing tabs to it:', missingSidebarTabs);
                       
-                      console.log('[GraphEditor] Loading layout with restored tabs');
-                      dockRef.current.loadLayout(layout);
+                      missingSidebarTabs.forEach(tabId => {
+                        let component = null;
+                        let title = '';
+                        if (tabId === 'what-if-tab') {
+                          component = whatIfComponent;
+                          title = '🎭 What-If';
+                        } else if (tabId === 'properties-tab') {
+                          component = propertiesComponent;
+                          title = '📝 Props';
+                        } else if (tabId === 'tools-tab') {
+                          component = toolsComponent;
+                          title = '🛠️ Tools';
+                        }
+                        
+                        if (component && sidebarPanel) {
+                          sidebarPanel.tabs.push({
+                            id: tabId,
+                            title: title,
+                            content: component,
+                            cached: true,
+                            closable: true,
+                            group: 'graph-panels'
+                          });
+                        }
+                      });
+                      
+                      // Re-inject components into floating panels
+                      const reinjectFloating = (node: any) => {
+                        if (node.tabs) {
+                          node.tabs.forEach((tab: any) => {
+                            if (tab.id === 'what-if-tab') tab.content = whatIfComponent;
+                            else if (tab.id === 'properties-tab') tab.content = propertiesComponent;
+                            else if (tab.id === 'tools-tab') tab.content = toolsComponent;
+                          });
+                        }
+                        if (node.children) node.children.forEach(reinjectFloating);
+                      };
+                      if (currentLayout.floatbox) reinjectFloating(currentLayout.floatbox);
+                      
+                      console.log('[GraphEditor] Reloading layout with added tabs');
+                      dockRef.current.loadLayout(currentLayout);
+                      dockRef.current.forceUpdate();
+                      
+                      // Update dockLayout state to trigger ResizeObserver re-initialization
+                      setDockLayout(currentLayout);
+                      
+                    } else {
+                      // Sidebar is empty (only Canvas) - rebuild with missing tabs
+                      console.log('[GraphEditor] Sidebar is empty, rebuilding with tabs:', missingSidebarTabs);
+                      
+                      const freshLayout = createLayoutStructure(sidebarState.mode, missingSidebarTabs);
+                      
+                      // Preserve the floatbox from current layout
+                      if (currentLayout.floatbox) {
+                        freshLayout.floatbox = currentLayout.floatbox;
+                        
+                        const reinjectFloating = (node: any) => {
+                          if (node.tabs) {
+                            node.tabs.forEach((tab: any) => {
+                              if (tab.id === 'what-if-tab') tab.content = whatIfComponent;
+                              else if (tab.id === 'properties-tab') tab.content = propertiesComponent;
+                              else if (tab.id === 'tools-tab') tab.content = toolsComponent;
+                            });
+                          }
+                          if (node.children) node.children.forEach(reinjectFloating);
+                        };
+                        reinjectFloating(freshLayout.floatbox);
+                      }
+                      
+                      console.log('[GraphEditor] Loading fresh layout');
+                      dockRef.current.loadLayout(freshLayout);
+                      dockRef.current.forceUpdate();
+                      
+                      // Update dockLayout state to trigger ResizeObserver re-initialization
+                      setDockLayout(freshLayout);
                     }
                   }, 0);
                 }
@@ -1216,7 +1467,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           />
         )}
 
-        {/* Icon Bar - absolutely positioned on right edge when minimized */}
+        {/* Icon Bar - when minimized */}
         {sidebarState.mode === 'minimized' && (
           <div style={{ 
             position: 'absolute',
@@ -1226,22 +1477,58 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
             width: '48px',
             background: '#F9FAFB',
             borderLeft: '1px solid #E5E7EB',
-            zIndex: 100
+            zIndex: 100,
+            pointerEvents: 'auto'
           }}>
             <SidebarIconBar
               state={sidebarState}
               onIconClick={handleIconClick}
               onIconHover={handleIconHover}
             />
-              </div>
+          </div>
         )}
         
+        {/* Hover Preview Panel - shows when hovering over icons */}
+        {sidebarState.mode === 'minimized' && hoveredPanel && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: '48px',
+              bottom: 0,
+              width: '350px',
+              zIndex: 99,
+              pointerEvents: 'auto'
+            }}
+            onMouseLeave={() => {
+              console.log(`[${new Date().toISOString()}] [GraphEditor] Hover panel onMouseLeave - clearing hover if not locked`);
+              if (!isHoverLocked) {
+                setHoveredPanel(null);
+              }
+            }}
+          >
+            <SidebarHoverPreview
+              panel={hoveredPanel}
+              tabId={tabId}
+              selectedNodeId={selectedNodeId} 
+              selectedEdgeId={selectedEdgeId}
+              onSelectedNodeChange={handleNodeSelection}
+              onSelectedEdgeChange={handleEdgeSelection}
+            />
+          </div>
+        )}
+
         {/* Toggle Button - visible in both minimized and maximized states */}
+        {/* Disabled if all panels are floating (sidebar is empty) */}
+        {sidebarState.floatingPanels.length < 3 && (
         <button
           onClick={() => {
+            console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Minimize button clicked (current mode: ${sidebarState.mode})`);
             if (sidebarState.mode === 'minimized') {
+              console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Calling maximize()`);
               sidebarOps.maximize();
             } else {
+              console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Calling minimize()`);
               sidebarOps.minimize();
             }
           }}
@@ -1251,7 +1538,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
             right: sidebarState.mode === 'maximized' 
               ? `${sidebarState.sidebarWidth ?? 300}px` 
               : '48px', // When minimized, position at icon bar
-            top: '50%',
+              top: splitterCenterY > 0 ? `${splitterCenterY}px` : '50%',
             transform: 'translateY(-50%)',
             zIndex: 100, // Same z-index as sidebar panels
           }}
@@ -1259,40 +1546,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
         >
           {sidebarState.mode === 'minimized' ? '◀' : '▶'}
         </button>
-
-        {/* Hover Preview Panel - shows when hovering over minimized icons */}
-        {sidebarState.mode === 'minimized' && hoveredPanel && (
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              right: '48px', // Position to the left of the icon bar
-              bottom: 0,
-              width: '350px',
-              zIndex: 99, // Below icon bar (100) but above canvas
-              pointerEvents: 'auto'
-            }}
-            onMouseEnter={() => {
-              console.log(`[${new Date().toISOString()}] [GraphEditor] Hover panel wrapper onMouseEnter - panel=${hoveredPanel}`);
-              setHoveredPanel(hoveredPanel); // Keep it open
-            }}
-            onMouseLeave={() => {
-              console.log(`[${new Date().toISOString()}] [GraphEditor] Hover panel wrapper onMouseLeave - clearing if not locked`);
-              if (!isHoverLocked) {
-                setHoveredPanel(null);
-              }
-            }}
-          >
-            <SidebarHoverPreview
-              panel={hoveredPanel}
-              tabId={tabId}
-              selectedNodeId={selectedNodeId}
-              selectedEdgeId={selectedEdgeId}
-              onSelectedNodeChange={handleNodeSelection}
-              onSelectedEdgeChange={handleEdgeSelection}
-            />
-          </div>
-        )}
+      )}
     </div>
       </WhatIfProvider>
     </SelectionContext.Provider>
@@ -1310,3 +1564,4 @@ export function GraphEditor(props: EditorProps<GraphData> & { tabId?: string }) 
     </GraphStoreProvider>
   );
 }
+

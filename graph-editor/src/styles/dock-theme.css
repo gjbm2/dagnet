@@ -70,13 +70,15 @@ body, body * {
 }
 
 /* Space for Navigator button when navigator is unpinned */
-.app-shell.nav-unpinned .dock-bar {
-  padding-left: 115px !important; /* Space for Navigator button */
+/* Apply ONLY to the top-left docked panel (marked by JavaScript) */
+
+.app-shell.nav-unpinned .top-left-docked-panel > .dock-bar {
+  padding: 0 4px 0 115px !important;
 }
 
 /* No padding when navigator is pinned */
 .app-shell.nav-pinned .dock-bar {
-  padding-left: 4px !important;
+  padding: 0 4px !important;
 }
 
 /* Individual tabs */

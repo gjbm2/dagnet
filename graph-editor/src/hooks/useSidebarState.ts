@@ -8,7 +8,8 @@ import { useTabContext } from '../contexts/TabContext';
 export interface SidebarState {
   mode: 'minimized' | 'maximized';        // Icon bar or full panel view
   activePanel: 'what-if' | 'properties' | 'tools';  // Which tab is selected
-  floatingPanels: string[];               // Which panels are floating
+  floatingPanels: string[];               // Which panels are floating (for backwards compat and quick checks)
+  savedDockLayout?: any;                  // Saved rc-dock layout structure (components stripped)
   hasAutoOpened: boolean;                 // Smart auto-open tracker (once per tab)
   isTransitioning: boolean;               // True during minimize/maximize animation
   
@@ -66,14 +67,24 @@ export function useSidebarState(tabId?: string) {
   ]);
   
   // Local state initialized from tab state
+  // Use ref for hasAutoOpened to prevent sync from overwriting it
+  const hasAutoOpenedRef = useRef<boolean>(false);
+  
   const [state, setState] = useState<SidebarState>(() => {
+    console.log(`[${new Date().toISOString()}] [useSidebarState] Initializing state from:`, { 
+      memoizedStoredState, 
+      floatingPanels: memoizedStoredState?.floatingPanels,
+      sidebarWidth: memoizedStoredState?.sidebarWidth
+    });
     const initialState = {
       ...DEFAULT_SIDEBAR_STATE,
       ...memoizedStoredState,
+      // Ensure floatingPanels is always an array (might be undefined in old saved states)
+      floatingPanels: memoizedStoredState?.floatingPanels || [],
       // ALWAYS force isTransitioning to false on load - it's a transient animation flag
       isTransitioning: false
     };
-    console.log(`[${new Date().toISOString()}] [useSidebarState] Initializing state:`, initialState);
+    console.log(`[${new Date().toISOString()}] [useSidebarState] Initial state result:`, initialState);
     return initialState;
   });
   
@@ -109,14 +120,21 @@ export function useSidebarState(tabId?: string) {
     // Only persist if state actually changed (not initial mount or tab switch)
     if (tabId && tabOps.updateTabState && prevStateRef.current !== state) {
       // Use a flag to track if this change came from us or from tab state
+      // Note: We skip comparing savedDockLayout because it's large and may have circular refs
+      // Instead, we rely on the fact that savedDockLayout only changes when the layout actually changes
       const stateMatchesMemoized = memoizedStoredState && 
         state.mode === memoizedStoredState.mode &&
-        state.activePanel === memoizedStoredState.activePanel;
+        state.activePanel === memoizedStoredState.activePanel &&
+        state.sidebarWidth === memoizedStoredState.sidebarWidth &&
+        state.isResizing === memoizedStoredState.isResizing &&
+        // hasAutoOpened is session-only, not persisted, so don't compare it
+        JSON.stringify(state.floatingPanels.sort()) === JSON.stringify((memoizedStoredState.floatingPanels || []).sort()) &&
+        state.savedDockLayout === memoizedStoredState.savedDockLayout; // Reference equality check
       
       if (!stateMatchesMemoized) {
-        console.log(`[${new Date().toISOString()}] [useSidebarState] Persisting state to tab:`, state);
-        // Never persist isTransitioning - it's a transient animation flag
-        const { isTransitioning, ...stateToSave } = state;
+        // Strip out hasAutoOpened (session-only, not persisted)
+        const { isTransitioning, hasAutoOpened, ...stateToSave } = state;
+        console.log(`[${new Date().toISOString()}] [useSidebarState] Persisting state to tab (mode=${stateToSave.mode}, width=${stateToSave.sidebarWidth}):`, stateToSave);
         tabOps.updateTabState(tabId, {
           sidebarState: { ...stateToSave, isTransitioning: false }
         });
@@ -145,10 +163,15 @@ export function useSidebarState(tabId?: string) {
    * Opens the specified panel (or activePanel if none specified)
    */
   const maximize = useCallback((panel?: 'what-if' | 'properties' | 'tools') => {
-    console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Setting isTransitioning=true, panel=${panel}`);
+    console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Setting isTransitioning=true, panel=${panel}, currentWidth=${state.sidebarWidth}`);
+    
+    // CRITICAL: If sidebar width is 0 or very small (collapsed), restore to default 300px
+    const restoredWidth = (!state.sidebarWidth || state.sidebarWidth < 50) ? 300 : state.sidebarWidth;
+    
     updateState({ 
       mode: 'maximized',
       activePanel: panel || state.activePanel,
+      sidebarWidth: restoredWidth,
       isTransitioning: true
     });
     // Clear transition flag after animation completes (300ms)
@@ -156,7 +179,7 @@ export function useSidebarState(tabId?: string) {
       console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Clearing isTransitioning after 300ms`);
       updateState({ isTransitioning: false });
     }, 300);
-  }, [updateState, state.activePanel]);
+  }, [updateState, state.activePanel, state.sidebarWidth]);
   
   /**
    * Toggle sidebar between minimized and maximized
@@ -189,8 +212,18 @@ export function useSidebarState(tabId?: string) {
    * Call this when user selects a node or edge
    */
   const handleSelection = useCallback(() => {
+    // Only auto-open once per tab session (use ref, not state)
+    if (hasAutoOpenedRef.current) {
+      console.log(`[${new Date().toISOString()}] [useSidebarState] handleSelection: Already auto-opened, skipping`);
+      return;
+    }
+    
+    // Set ref immediately to prevent race conditions
+    hasAutoOpenedRef.current = true;
+    
     if (state.mode === 'minimized') {
-      // Sidebar is minimized - maximize and show Properties
+      // Sidebar is minimized - maximize and show Properties (first time only)
+      console.log(`[${new Date().toISOString()}] [useSidebarState] handleSelection: Auto-opening sidebar (first selection)`);
       updateState({
         mode: 'maximized',
         activePanel: 'properties',
@@ -198,10 +231,12 @@ export function useSidebarState(tabId?: string) {
         hasAutoOpened: true
       });
     } else if (state.mode === 'maximized') {
-      // Sidebar is already maximized - just switch to Properties tab
+      // Sidebar is already maximized - just switch to Properties tab (first time only)
+      console.log(`[${new Date().toISOString()}] [useSidebarState] handleSelection: Switching to Properties (first selection)`);
       updateState({
         activePanel: 'properties',
-        propertiesOpen: true
+        propertiesOpen: true,
+        hasAutoOpened: true
       });
     }
   }, [state.mode, updateState]);
@@ -252,15 +287,26 @@ export function useSidebarState(tabId?: string) {
   // BUT: Don't sync if we just updated locally (prevents circular loop)
   useEffect(() => {
     if (memoizedStoredState && !isUpdatingRef.current) {
-      console.log(`[${new Date().toISOString()}] [useSidebarState] Syncing from stored state:`, memoizedStoredState);
-      setState({
+      console.log(`[${new Date().toISOString()}] [useSidebarState] Syncing from stored state (floatingPanels=${memoizedStoredState.floatingPanels?.length || 0}):`, memoizedStoredState);
+      
+      // Preserve session-only state (hasAutoOpened) - don't let sync overwrite it
+      const currentHasAutoOpened = state.hasAutoOpened;
+      
+      const newState = {
         ...DEFAULT_SIDEBAR_STATE,
         ...memoizedStoredState,
+        // Ensure floatingPanels is always an array
+        floatingPanels: memoizedStoredState.floatingPanels || [],
         // ALWAYS force isTransitioning to false - it's a transient animation flag
         isTransitioning: false
-      });
+      };
+      
+      // AFTER spreading, restore session-only hasAutoOpened
+      newState.hasAutoOpened = currentHasAutoOpened;
+      
+      setState(newState);
     }
-  }, [memoizedStoredState]);
+  }, [memoizedStoredState, state.hasAutoOpened]);
   
   // Memoize operations object to prevent unnecessary re-renders
   const operations = useMemo(() => ({
