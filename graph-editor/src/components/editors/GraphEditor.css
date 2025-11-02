@@ -120,8 +120,8 @@
   pointer-events: none !important;
 }
 
-/* Hide close buttons on sidebar tabs when docked in home position (second panel in main hbox) */
-.dock-box.dock-hbox > .dock-panel.dock-style-graph-panels .dock-tab-close-btn {
+/* Hide close buttons on sidebar tabs when docked in their home position (graph-sidebar-panel) */
+[data-dockid="graph-sidebar-panel"] .dock-tab-close-btn {
   display: none !important;
   visibility: hidden !important;
   opacity: 0 !important;
