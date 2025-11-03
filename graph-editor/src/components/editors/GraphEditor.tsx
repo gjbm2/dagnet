@@ -345,42 +345,6 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     };
   }, [sidebarState.isResizing, sidebarOps, fileId]);
   
-  // Global click handler for close buttons on floating sidebar panels
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      
-      // Check if click is on a close button
-      if (target.classList.contains('dock-tab-close-btn')) {
-        // Only handle if it's in this GraphEditor instance
-        if (!containerRef.current?.contains(target)) return;
-        
-        // Find the tab element and get its data-node-key
-        const tab = target.closest('.dock-tab') as HTMLElement;
-        const tabId = tab?.getAttribute('data-node-key');
-        
-        console.log(`[GraphEditor ${fileId}] Close button clicked, tab element:`, tab, 'tabId:', tabId);
-        
-        if (tabId && dockRef.current) {
-          console.log(`[GraphEditor ${fileId}] Close button clicked for tab: ${tabId}`);
-          e.stopPropagation();
-          e.preventDefault();
-          
-          // Find the tab in rc-dock and remove it
-          const tabData = dockRef.current.find(tabId);
-          console.log(`[GraphEditor ${fileId}] Found tab data:`, tabData);
-          if (tabData && 'title' in tabData) {
-            console.log(`[GraphEditor ${fileId}] Removing tab from layout: ${tabId}`);
-            dockRef.current.dockMove(tabData, null, 'remove');
-          }
-        }
-      }
-    };
-    
-    document.addEventListener('click', handleClick, true);
-    return () => document.removeEventListener('click', handleClick, true);
-  }, [fileId]);
-  
   // Apply CSS-based fixed width to sidebar panel
   // Using useLayoutEffect so it runs synchronously after DOM updates but before paint
   useLayoutEffect(() => {
@@ -773,33 +737,54 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
               tab.title = '';
             } else if (tab.id === 'what-if-tab') {
               tab.content = whatIfComponent;
-              tab.title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              tab.title = React.createElement('div', { 
+                className: 'dock-tab-title', 
+                style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+              },
                 React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'What-If'),
-                React.createElement('div', { 
-                  className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
-                }, '✕')
+                React.createElement('span', { 
+                  style: { 
+                    flex: 1, 
+                    minWidth: 0, 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis', 
+                    whiteSpace: 'nowrap' 
+                  } 
+                }, 'What-If')
               );
             } else if (tab.id === 'properties-tab') {
               tab.content = propertiesComponent;
-              tab.title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              tab.title = React.createElement('div', { 
+                className: 'dock-tab-title', 
+                style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+              },
                 React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'Props'),
-                React.createElement('div', { 
-                  className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
-                }, '✕')
+                React.createElement('span', { 
+                  style: { 
+                    flex: 1, 
+                    minWidth: 0, 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis', 
+                    whiteSpace: 'nowrap' 
+                  } 
+                }, 'Props')
               );
             } else if (tab.id === 'tools-tab') {
               tab.content = toolsComponent;
-              tab.title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              tab.title = React.createElement('div', { 
+                className: 'dock-tab-title', 
+                style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+              },
                 React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'Tools'),
-                React.createElement('div', { 
-                  className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
-                }, '✕')
+                React.createElement('span', { 
+                  style: { 
+                    flex: 1, 
+                    minWidth: 0, 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis', 
+                    whiteSpace: 'nowrap' 
+                  } 
+                }, 'Tools')
               );
             }
           });
@@ -1324,6 +1309,28 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                 sidebarOps.updateState({ floatingPanels: sidebarFloatingIds });
               }
               
+              // Dynamic closable management: tabs should be closable ONLY when NOT in their home position
+              const SIDEBAR_TAB_IDS = ['what-if-tab', 'properties-tab', 'tools-tab'];
+              if (dockRef.current) {
+                SIDEBAR_TAB_IDS.forEach(tabId => {
+                  const tabData = dockRef.current!.find(tabId);
+                  // Type guard: ensure it's a TabData (has 'parent' and 'closable' properties)
+                  if (tabData && 'parent' in tabData && 'closable' in tabData) {
+                    // Check if tab is in its home panel
+                    const isAtHome = tabData.parent?.id === 'graph-sidebar-panel';
+                    // Closable ONLY when NOT at home (floating or docked elsewhere)
+                    const shouldBeClosable = !isAtHome;
+                    
+                    // Update if changed (avoid unnecessary updates)
+                    if (tabData.closable !== shouldBeClosable) {
+                      console.log(`[GraphEditor] Tab ${tabId}: closable ${tabData.closable} → ${shouldBeClosable} (isAtHome: ${isAtHome})`);
+                      // Update by finding and modifying the tab in the layout
+                      (tabData as any).closable = shouldBeClosable;
+                    }
+                  }
+                });
+              }
+              
               // Save the entire dock layout structure (strip React components and sidebar panel size)
               // This preserves all panel positions (docked AND floating)
               const layoutToSave = JSON.parse(JSON.stringify(newLayout, (key, value) => {
@@ -1447,33 +1454,54 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                         let title = '';
                         if (tabId === 'what-if-tab') {
                           component = whatIfComponent;
-                          title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                          title = React.createElement('div', { 
+                            className: 'dock-tab-title', 
+                            style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                          },
                             React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                            React.createElement('span', { style: { flex: 1 } }, 'What-If'),
-                            React.createElement('div', { 
-                              className: 'dock-tab-close-btn',
-                              style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
-                            }, '✕')
+                            React.createElement('span', { 
+                              style: { 
+                                flex: 1, 
+                                minWidth: 0, 
+                                overflow: 'hidden', 
+                                textOverflow: 'ellipsis', 
+                                whiteSpace: 'nowrap' 
+                              } 
+                            }, 'What-If')
                           ) as any;
                         } else if (tabId === 'properties-tab') {
                           component = propertiesComponent;
-                          title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                          title = React.createElement('div', { 
+                            className: 'dock-tab-title', 
+                            style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                          },
                             React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                            React.createElement('span', { style: { flex: 1 } }, 'Props'),
-                            React.createElement('div', { 
-                              className: 'dock-tab-close-btn',
-                              style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
-                            }, '✕')
+                            React.createElement('span', { 
+                              style: { 
+                                flex: 1, 
+                                minWidth: 0, 
+                                overflow: 'hidden', 
+                                textOverflow: 'ellipsis', 
+                                whiteSpace: 'nowrap' 
+                              } 
+                            }, 'Props')
                           ) as any;
                         } else if (tabId === 'tools-tab') {
                           component = toolsComponent;
-                          title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                          title = React.createElement('div', { 
+                            className: 'dock-tab-title', 
+                            style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                          },
                             React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                            React.createElement('span', { style: { flex: 1 } }, 'Tools'),
-                            React.createElement('div', { 
-                              className: 'dock-tab-close-btn',
-                              style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
-                            }, '✕')
+                            React.createElement('span', { 
+                              style: { 
+                                flex: 1, 
+                                minWidth: 0, 
+                                overflow: 'hidden', 
+                                textOverflow: 'ellipsis', 
+                                whiteSpace: 'nowrap' 
+                              } 
+                            }, 'Tools')
                           ) as any;
                         }
                         
@@ -1483,7 +1511,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                             title: title,
                             content: component,
                             cached: true,
-                            closable: true,
+                            closable: false,  // Start as false; dynamic logic will update based on position
                             group: 'graph-panels'
                           });
                         }
