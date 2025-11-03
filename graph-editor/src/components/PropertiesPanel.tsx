@@ -2230,7 +2230,7 @@ export default function PropertiesPanel({
                                             console.log(`[ConditionalP] First node selected - creating group for condition ${index}`);
                                             
                                             // Assign a color for this group
-                                            const color = getNextAvailableColor(nextGraph);
+                                            const color = getNextAvailableColor(nextGraph as any);
                                             const groupName = newConditions[index].condition.visited.sort().join('_');
                                             
                                             // Update current edge

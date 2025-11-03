@@ -262,7 +262,7 @@ export function ObjectTypeSection({
                 e.stopPropagation();
                 onIndexClick();
               }}
-              title={`Open ${title} Index${indexIsDirty ? ' (modified)' : ''}`}
+              aria-label={`Open ${title} Index${indexIsDirty ? ' (modified)' : ''}`}
             />
             {indexIsDirty && <span className="status-dot dirty" style={{ marginLeft: '4px' }} />}
           </div>
