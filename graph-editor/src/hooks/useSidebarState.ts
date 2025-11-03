@@ -60,7 +60,8 @@ export function useSidebarState(tabId?: string) {
     storedState?.propertiesOpen,
     storedState?.toolsOpen,
     storedState?.sidebarWidth,
-    storedState?.isResizing
+    storedState?.isResizing,
+    storedState?.savedDockLayout  // Include layout to match comparison logic
   ]);
   
   // Local state initialized from tab state

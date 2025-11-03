@@ -33,6 +33,12 @@ function serializeEditorState(editorState: any): any {
     serialized.hiddenNodes = serialized.hiddenNodes instanceof Set ? Array.from(serialized.hiddenNodes) : serialized.hiddenNodes;
   }
   
+  // Strip out savedDockLayout from sidebarState (contains React elements that can't be serialized)
+  if (serialized.sidebarState?.savedDockLayout) {
+    serialized.sidebarState = { ...serialized.sidebarState };
+    delete serialized.sidebarState.savedDockLayout;
+  }
+  
   return serialized;
 }
 

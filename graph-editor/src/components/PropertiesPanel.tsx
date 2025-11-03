@@ -14,7 +14,7 @@ import { EnhancedSelector } from './EnhancedSelector';
 import { ColorSelector } from './ColorSelector';
 import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
-import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock } from 'lucide-react';
+import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson } from 'lucide-react';
 import './PropertiesPanel.css';
 
 interface PropertiesPanelProps {
@@ -486,37 +486,39 @@ export default function PropertiesPanel({
       {/* Content */}
       <div className="properties-panel-content">
         {!selectedNodeId && !selectedEdgeId && (
-          <div className="graph-metadata-section">
-            <div className="property-section">
-              <label className="property-label">Description</label>
-              <textarea
-                className="property-input"
-                value={graph.metadata?.description || ''}
-                onChange={(e) => updateGraph(['metadata', 'description'], e.target.value)}
-                placeholder="Enter graph description..."
-              />
-            </div>
+          <>
+            <CollapsibleSection title="Graph Metadata" defaultOpen={true} icon={FileJson}>
+              <div className="property-section">
+                <label className="property-label">Description</label>
+                <textarea
+                  className="property-input"
+                  value={graph.metadata?.description || ''}
+                  onChange={(e) => updateGraph(['metadata', 'description'], e.target.value)}
+                  placeholder="Enter graph description..."
+                />
+              </div>
 
-            <div className="property-section">
-              <label className="property-label">Version</label>
-              <input
-                className="property-input"
-                value={graph.metadata?.version || ''}
-                onChange={(e) => updateGraph(['metadata', 'version'], e.target.value)}
-                placeholder="1.0.0"
-              />
-            </div>
+              <div className="property-section">
+                <label className="property-label">Version</label>
+                <input
+                  className="property-input"
+                  value={graph.metadata?.version || ''}
+                  onChange={(e) => updateGraph(['metadata', 'version'], e.target.value)}
+                  placeholder="1.0.0"
+                />
+              </div>
 
-            <div className="property-section">
-              <label className="property-label">Author</label>
-              <input
-                className="property-input"
-                value={graph.metadata?.author || ''}
-                onChange={(e) => updateGraph(['metadata', 'author'], e.target.value)}
-                placeholder="Your name"
-              />
-            </div>
-          </div>
+              <div className="property-section">
+                <label className="property-label">Author</label>
+                <input
+                  className="property-input"
+                  value={graph.metadata?.author || ''}
+                  onChange={(e) => updateGraph(['metadata', 'author'], e.target.value)}
+                  placeholder="Your name"
+                />
+              </div>
+            </CollapsibleSection>
+          </>
         )}
 
         {selectedNodeId && (
@@ -1254,19 +1256,21 @@ export default function PropertiesPanel({
                   {/* Description */}
                   <div style={{ marginBottom: '16px' }}>
                     <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Description</label>
-                    <input
+                    <textarea
                       data-field="description"
                       value={localEdgeData.description || ''}
                       onChange={(e) => setLocalEdgeData({...localEdgeData, description: e.target.value})}
                       onBlur={() => updateEdge('description', localEdgeData.description)}
-                      onKeyDown={(e) => e.key === 'Enter' && updateEdge('description', localEdgeData.description)}
-                      placeholder="Edge description"
+                      placeholder="Edge description..."
                       style={{ 
                         width: '100%', 
                         padding: '8px', 
                         border: '1px solid #ddd', 
                         borderRadius: '4px',
-                        boxSizing: 'border-box'
+                        boxSizing: 'border-box',
+                        minHeight: '60px',
+                        resize: 'vertical',
+                        fontFamily: 'inherit'
                       }}
                     />
                   </div>
@@ -2120,9 +2124,12 @@ export default function PropertiesPanel({
                                     alignItems: 'center',
                                     gap: '4px',
                                     padding: '4px 8px',
-                                    background: '#e9ecef',
+                                    background: '#DBEAFE',
                                     borderRadius: '12px',
-                                    fontSize: '12px'
+                                    fontSize: '12px',
+                                    color: '#1E40AF',
+                                    border: '1px solid #93C5FD',
+                                    animation: 'chipAppear 0.3s ease-out'
                                   }}>
                                     <span>visited({nodeId})</span>
                                     <button
@@ -2139,11 +2146,29 @@ export default function PropertiesPanel({
                                         
                                         if (selectedEdgeId && graph) {
                                           const nextGraph = structuredClone(graph);
-                                          const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
+                                          const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
                                             edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
                                           );
-                                          if (edgeIndex >= 0) {
-                                            nextGraph.edges[edgeIndex].conditional_p = newConditions as any;
+                                          
+                                          if (currentEdgeIndex >= 0) {
+                                            const currentEdge = nextGraph.edges[currentEdgeIndex];
+                                            const sourceNode = currentEdge.from;
+                                            
+                                            // Update current edge
+                                            nextGraph.edges[currentEdgeIndex].conditional_p = newConditions as any;
+                                            
+                                            // Also update siblings to keep group in sync
+                                            const newGroupName = newConditions[index].condition.visited.sort().join('_');
+                                            nextGraph.edges.forEach((edge: any, idx: number) => {
+                                              if (idx !== currentEdgeIndex && edge.from === sourceNode && edge.conditional_p && edge.conditional_p[index]) {
+                                                edge.conditional_p[index].condition.visited = [...newConditions[index].condition.visited];
+                                                // Update group name
+                                                if (edge.display) {
+                                                  edge.display.conditional_group = newGroupName;
+                                                }
+                                              }
+                                            });
+                                            
                                             if (nextGraph.metadata) {
                                               nextGraph.metadata.updated_at = new Date().toISOString();
                                             }
@@ -2176,6 +2201,10 @@ export default function PropertiesPanel({
                                   if (nodeId) {
                                     const newConditions = [...localConditionalP];
                                     const existingVisited = newConditions[index].condition?.visited || [];
+                                    
+                                    // Track if this is the first node being added (group creation trigger)
+                                    const wasEmpty = existingVisited.length === 0;
+                                    
                                     if (!existingVisited.includes(nodeId)) {
                                       newConditions[index] = {
                                         ...newConditions[index],
@@ -2187,16 +2216,87 @@ export default function PropertiesPanel({
                                       
                                       if (selectedEdgeId && graph) {
                                         const nextGraph = structuredClone(graph);
-                                        const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
+                                        const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
                                           edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
                                         );
-                                        if (edgeIndex >= 0) {
-                                          nextGraph.edges[edgeIndex].conditional_p = newConditions as any;
+                                        
+                                        if (currentEdgeIndex >= 0) {
+                                          const currentEdge = nextGraph.edges[currentEdgeIndex];
+                                          const sourceNode = currentEdge.from;
+                                          
+                                          // **GROUP CREATION**: If this is the FIRST node added (was empty, now has content)
+                                          // create matching conditions on all sibling edges
+                                          if (wasEmpty) {
+                                            console.log(`[ConditionalP] First node selected - creating group for condition ${index}`);
+                                            
+                                            // Assign a color for this group
+                                            const color = getNextAvailableColor(nextGraph);
+                                            const groupName = newConditions[index].condition.visited.sort().join('_');
+                                            
+                                            // Update current edge
+                                            nextGraph.edges[currentEdgeIndex].conditional_p = newConditions as any;
+                                            if (!nextGraph.edges[currentEdgeIndex].display) {
+                                              nextGraph.edges[currentEdgeIndex].display = {};
+                                            }
+                                            nextGraph.edges[currentEdgeIndex].display.conditional_color = color;
+                                            nextGraph.edges[currentEdgeIndex].display.conditional_group = groupName;
+                                            
+                                            // Create matching condition on all sibling edges
+                                            nextGraph.edges.forEach((edge: any, idx: number) => {
+                                              if (idx !== currentEdgeIndex && edge.from === sourceNode) {
+                                                // Ensure conditional_p array exists
+                                                if (!edge.conditional_p) {
+                                                  edge.conditional_p = [];
+                                                }
+                                                
+                                                // Update existing condition at this index OR create new one
+                                                if (edge.conditional_p[index]) {
+                                                  // Update existing empty condition with the visited nodes
+                                                  edge.conditional_p[index].condition.visited = [...newConditions[index].condition.visited];
+                                                } else {
+                                                  // Create new condition for sibling (in case sibling doesn't have this condition yet)
+                                                  edge.conditional_p.push({
+                                                    condition: { visited: [...newConditions[index].condition.visited] },
+                                                    p: {}
+                                                  });
+                                                }
+                                                
+                                                // Set the same color and group
+                                                if (!edge.display) {
+                                                  edge.display = {};
+                                                }
+                                                edge.display.conditional_color = color;
+                                                edge.display.conditional_group = groupName;
+                                              }
+                                            });
+                                            
+                                            console.log(`[ConditionalP] Group created with color ${color}, group name: ${groupName}`);
+                                          } else {
+                                            // Group already exists - just update the visited nodes across all siblings
+                                            nextGraph.edges[currentEdgeIndex].conditional_p = newConditions as any;
+                                            
+                                            // Update siblings too
+                                            const groupName = newConditions[index].condition.visited.sort().join('_');
+                                            nextGraph.edges.forEach((edge: any, idx: number) => {
+                                              if (idx !== currentEdgeIndex && edge.from === sourceNode && edge.conditional_p && edge.conditional_p[index]) {
+                                                edge.conditional_p[index].condition.visited = [...newConditions[index].condition.visited];
+                                                // Update group name
+                                                if (edge.display) {
+                                                  edge.display.conditional_group = groupName;
+                                                }
+                                              }
+                                            });
+                                          }
+                                          
                                           if (nextGraph.metadata) {
                                             nextGraph.metadata.updated_at = new Date().toISOString();
                                           }
                                           setGraph(nextGraph);
-                                          saveHistoryState('Add node to conditional probability', undefined, selectedEdgeId);
+                                          saveHistoryState(
+                                            wasEmpty ? 'Create conditional probability group' : 'Add node to conditional probability',
+                                            undefined,
+                                            selectedEdgeId
+                                          );
                                         }
                                       }
                                     }
@@ -2336,6 +2436,85 @@ export default function PropertiesPanel({
                                     }
                                   }
                                 }}
+                                onRebalance={(newValue) => {
+                                  // Rebalance across sibling edges with the same condition
+                                  if (selectedEdgeId && graph) {
+                                    const nextGraph = structuredClone(graph);
+                                    const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
+                                      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+                                    );
+                                    
+                                    if (currentEdgeIndex >= 0) {
+                                      const currentEdge = nextGraph.edges[currentEdgeIndex];
+                                      const sourceNode = currentEdge.from;
+                                      
+                                      // Ensure conditional_p array and condition exist
+                                      if (!currentEdge.conditional_p || !currentEdge.conditional_p[index]) {
+                                        return; // Can't rebalance if condition doesn't exist
+                                      }
+                                      
+                                      // Update current edge's probability
+                                      if (!nextGraph.edges[currentEdgeIndex].conditional_p![index].p) {
+                                        nextGraph.edges[currentEdgeIndex].conditional_p![index].p = {};
+                                      }
+                                      nextGraph.edges[currentEdgeIndex].conditional_p![index].p!.mean = newValue;
+                                      
+                                      // Find all sibling edges with the same condition at the same index
+                                      const siblings = nextGraph.edges.filter((edge: any, idx: number) => 
+                                        idx !== currentEdgeIndex && 
+                                        edge.from === sourceNode &&
+                                        edge.conditional_p &&
+                                        edge.conditional_p[index] &&
+                                        edge.conditional_p[index].condition &&
+                                        currentEdge.conditional_p &&
+                                        currentEdge.conditional_p[index] &&
+                                        currentEdge.conditional_p[index].condition &&
+                                        JSON.stringify(edge.conditional_p[index].condition.visited.sort()) === 
+                                        JSON.stringify(currentEdge.conditional_p[index].condition.visited.sort())
+                                      );
+                                      
+                                      if (siblings.length > 0) {
+                                        // Calculate remaining probability
+                                        const remainingProbability = roundTo4DP(1 - newValue);
+                                        
+                                        // Calculate current total of siblings
+                                        const siblingsTotal = siblings.reduce((sum, sibling) => {
+                                          return sum + (sibling.conditional_p![index]?.p?.mean || 0);
+                                        }, 0);
+                                        
+                                        // Rebalance siblings proportionally
+                                        siblings.forEach((sibling) => {
+                                          const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                          if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p && nextGraph.edges[siblingIndex].conditional_p![index]) {
+                                            const siblingCurrentValue = sibling.conditional_p![index]?.p?.mean || 0;
+                                            const newSiblingValue = siblingsTotal > 0
+                                              ? roundTo4DP((siblingCurrentValue / siblingsTotal) * remainingProbability)
+                                              : roundTo4DP(remainingProbability / siblings.length);
+                                            
+                                            if (!nextGraph.edges[siblingIndex].conditional_p![index].p) {
+                                              nextGraph.edges[siblingIndex].conditional_p![index].p = {};
+                                            }
+                                            nextGraph.edges[siblingIndex].conditional_p![index].p!.mean = newSiblingValue;
+                                          }
+                                        });
+                                      }
+                                      
+                                      if (nextGraph.metadata) {
+                                        nextGraph.metadata.updated_at = new Date().toISOString();
+                                      }
+                                      setGraph(nextGraph);
+                                      saveHistoryState('Rebalance conditional probabilities', undefined, selectedEdgeId);
+                                      
+                                      // Update local state to reflect the changes
+                                      const newConditions = [...localConditionalP];
+                                      newConditions[index] = {
+                                        ...newConditions[index],
+                                        p: { ...newConditions[index].p, mean: newValue }
+                                      };
+                                      setLocalConditionalP(newConditions);
+                                    }
+                                  }
+                                }}
                               />
                             </div>
 
@@ -2453,6 +2632,7 @@ export default function PropertiesPanel({
                         [newConditions.length - 1]: false
                       }));
                       
+                      // Add ONLY to current edge (not siblings yet - group will be created when first node is selected)
                       if (selectedEdgeId && graph) {
                         const nextGraph = structuredClone(graph);
                         const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
@@ -2460,26 +2640,14 @@ export default function PropertiesPanel({
                         );
                         
                         if (currentEdgeIndex >= 0) {
-                          const currentEdge = nextGraph.edges[currentEdgeIndex];
-                          const sourceNode = currentEdge.from;
-                          
-                          // Apply the new conditional probability to this edge
+                          // Apply the new conditional probability to this edge only
                           nextGraph.edges[currentEdgeIndex].conditional_p = newConditions as any;
-                          
-                          // Also apply to all sibling edges (edges from the same source node)
-                          nextGraph.edges.forEach((edge: any, idx: number) => {
-                            if (idx !== currentEdgeIndex && edge.from === sourceNode) {
-                              // Add the new condition to siblings
-                              const siblingConditions = edge.conditional_p || [];
-                              edge.conditional_p = [...siblingConditions, newCondition];
-                            }
-                          });
                           
                           if (nextGraph.metadata) {
                             nextGraph.metadata.updated_at = new Date().toISOString();
                           }
                           setGraph(nextGraph);
-                          saveHistoryState('Add conditional probability to edge and siblings', undefined, selectedEdgeId);
+                          saveHistoryState('Add conditional probability', undefined, selectedEdgeId);
                         }
                       }
                     }}

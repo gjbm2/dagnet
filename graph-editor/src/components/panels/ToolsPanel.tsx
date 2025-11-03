@@ -1,18 +1,14 @@
 import React from 'react';
+import CollapsibleSection from '../CollapsibleSection';
+import EdgeScalingControl from '../EdgeScalingControl';
+import { Layout, Maximize2, Eye } from 'lucide-react';
 import './ToolsPanel.css';
+import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 
 interface ToolsPanelProps {
   // Layout tools
   onAutoLayout?: (direction?: 'LR' | 'RL' | 'TB' | 'BT') => void;
   onForceReroute?: () => void;
-  
-  // Mass generosity
-  massGenerosity: number;
-  onMassGenerosityChange: (value: number) => void;
-  
-  // Scaling
-  useUniformScaling: boolean;
-  onUniformScalingChange: (value: boolean) => void;
   
   // Visibility
   onHideUnselected?: () => void;
@@ -28,19 +24,29 @@ interface ToolsPanelProps {
 export default function ToolsPanel({
   onAutoLayout,
   onForceReroute,
-  massGenerosity,
-  onMassGenerosityChange,
-  useUniformScaling,
-  onUniformScalingChange,
   onHideUnselected,
   onShowAll
 }: ToolsPanelProps) {
+  const viewPrefs = useViewPreferencesContext();
+  if (!viewPrefs) {
+    // Should never happen since ToolsPanel is always inside GraphEditor with provider
+    console.error('ToolsPanel: ViewPreferencesContext not available');
+    return <div className="tools-panel"><div className="panel-body">View preferences not available</div></div>;
+  }
+  
+  const {
+    useUniformScaling,
+    massGenerosity,
+    autoReroute,
+    setUseUniformScaling,
+    setMassGenerosity,
+    setAutoReroute
+  } = viewPrefs;
   return (
     <div className="tools-panel">
       <div className="panel-body">
         {/* Layout Tools */}
-        <div className="tools-section">
-          <h3>Layout</h3>
+        <CollapsibleSection title="Layout" defaultOpen={true} icon={Layout}>
           <button 
             onClick={() => onAutoLayout?.('LR')} 
             className="tool-button"
@@ -63,37 +69,28 @@ export default function ToolsPanel({
             Force Re-route
           </button>
           
-          <div className="tool-control">
-            <label htmlFor="mass-generosity">Mass Generosity:</label>
-            <input
-              id="mass-generosity"
-              type="range"
-              min="0"
-              max="1"
-              step="0.1"
-              value={massGenerosity}
-              onChange={(e) => onMassGenerosityChange(parseFloat(e.target.value))}
-            />
-            <span className="tool-value">{(massGenerosity * 100).toFixed(0)}%</span>
-          </div>
-        </div>
-        
-        {/* Scaling Tools */}
-        <div className="tools-section">
-          <h3>Scaling</h3>
           <label className="tool-checkbox">
             <input
               type="checkbox"
-              checked={useUniformScaling}
-              onChange={(e) => onUniformScalingChange(e.target.checked)}
+              checked={autoReroute}
+              onChange={(e) => setAutoReroute(e.target.checked)}
             />
-            <span>Uniform Edge Width</span>
+            <span>Auto Re-route</span>
           </label>
-        </div>
+        </CollapsibleSection>
+        
+        {/* Edge Scaling Tools */}
+        <CollapsibleSection title="Edge Scaling" defaultOpen={true} icon={Maximize2}>
+          <EdgeScalingControl
+            useUniformScaling={useUniformScaling}
+            massGenerosity={massGenerosity}
+            onUniformScalingChange={setUseUniformScaling}
+            onMassGenerosityChange={setMassGenerosity}
+          />
+        </CollapsibleSection>
         
         {/* Visibility Tools */}
-        <div className="tools-section">
-          <h3>Visibility</h3>
+        <CollapsibleSection title="Visibility" defaultOpen={true} icon={Eye}>
           <button 
             onClick={() => onHideUnselected?.()} 
             className="tool-button"
@@ -108,7 +105,7 @@ export default function ToolsPanel({
           >
             Show All
           </button>
-        </div>
+        </CollapsibleSection>
       </div>
     </div>
   );

@@ -3,13 +3,13 @@
 ## In Progress
 
 ### High Priority
-1. Connect Case Params to param registry 
-2. Connect Conditoin p to param reg
-3. GIT_BATCH_OPERATIONS_MD
 4. Google sheets pull through params
 5. Context support
 
 ### Medium Priority
+- GIT_BATCH_OPERATIONS_MD
+- Turn 'Path analysis' into a proper rc floating dock at the bottom left, but movebale (and re-dockable)
+- Allow snapshotted 'delta analysis' views within what if panel; show colour-coded overlayed edges
 - **Drag & Drop from Navigator to Graph** - See [DRAG_DROP_PROPOSAL.md](./DRAG_DROP_PROPOSAL.md) for full spec
   - Drag nodes/cases/parameters from navigator and drop on canvas to create/connect
   - Estimated: 36-48 hours full implementation, 28-38 hours MVP
@@ -58,7 +58,7 @@ III. ideally it would do this on a batch basis if user retrieved 'All' (i.e. col
 
 for I. we want the same mapping to apply when connect-selector is used in node props and edge props (i.e. draw through the relevant data into any unpopulated fields on the graph when we first connect a node or edge).
 
-for II. the one I would like to prototype with is Google Sheets. I have a general idea that we need a Google Service account for this and the connection credentials for this. Beyond that I haven't looked deeper, so you need to research how to do that.
+for II. the two I would like to prototype with are Google Sheets and Ampltiude. For Sheets, I have a general idea that we need a Google Service account for this and the connection credentials for this. Beyond that I haven't looked deeper, so you need to research how to do that. For Amplitude, I know precisely what I want: A detailed discussion is in /AMPLITUDE_INTEGRATION.MD. The initial release of it though can be simpler: a pull from amplitude based on events defined between node pairs (markov chain order 0). THEN we'll get cleverer later. We'll need to add to the graph schema AND node schema to include event_id. We'll also probably need to add a NEW CLASS OF FILE TO THE SYSTEM GLOBALLY, "Events" which is a way we can tie together event references between (a) nodes (b) amplitude (c) the system -- _unless_ we think on reflection we can get away with just an event_id on node...let's think this through pros & cons. The point is that 'events' are canonical & immutable and just the SORT of thing that perhaps ought to live in a registry....?
 
 ---
 

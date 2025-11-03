@@ -29,6 +29,7 @@ import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
+import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
@@ -48,9 +49,6 @@ interface GraphCanvasProps {
   onDoubleClickNode?: (id: string, field: string) => void;
   onDoubleClickEdge?: (id: string, field: string) => void;
   onSelectEdge?: (id: string) => void;
-  useUniformScaling: boolean;
-  massGenerosity: number; // 0 = pure global (Sankey), 1 = pure local, 0.5 = balanced
-  autoReroute: boolean;
   onAddNodeRef?: React.MutableRefObject<(() => void) | null>;
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
   onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
@@ -65,7 +63,7 @@ interface GraphCanvasProps {
   activeTabId?: string | null;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides, conditionalOverrides, tabId, activeTabId }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides, conditionalOverrides, tabId, activeTabId }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -76,9 +74,6 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onDoubleClickNode={onDoubleClickNode}
         onDoubleClickEdge={onDoubleClickEdge}
         onSelectEdge={onSelectEdge}
-        useUniformScaling={useUniformScaling}
-        massGenerosity={massGenerosity}
-        autoReroute={autoReroute}
         onAddNodeRef={onAddNodeRef}
         onDeleteSelectedRef={onDeleteSelectedRef}
         onAutoLayoutRef={onAutoLayoutRef}
@@ -92,10 +87,16 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, useUniformScaling, massGenerosity, autoReroute, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {}, tabId, activeTabId: activeTabIdProp }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {}, tabId, activeTabId: activeTabIdProp }: GraphCanvasProps) {
   const store = useGraphStore();
   const { graph, setGraph } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
+  const viewPrefs = useViewPreferencesContext();
+  
+  // Fallback to defaults if context not available (shouldn't happen in normal use)
+  const useUniformScaling = viewPrefs?.useUniformScaling ?? false;
+  const massGenerosity = viewPrefs?.massGenerosity ?? 0.5;
+  const autoReroute = viewPrefs?.autoReroute ?? true;
   const ts = () => new Date().toISOString();
   const whatIfStartRef = useRef<number | null>(null);
   
@@ -4078,49 +4079,68 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           </div>
           
           {/* Hide/Unhide option */}
-          {activeTabId && tabOperations.isNodeHidden(activeTabId, nodeContextMenu.nodeId) ? (
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                if (activeTabId) {
-                  tabOperations.unhideNode(activeTabId, nodeContextMenu.nodeId);
-                }
-                setNodeContextMenu(null);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                color: '#28a745',
-                borderRadius: '2px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-            >
-              👁️ Show node
-            </div>
-          ) : (
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                if (activeTabId) {
-                  tabOperations.hideNode(activeTabId, nodeContextMenu.nodeId);
-                }
-                setNodeContextMenu(null);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                color: '#6c757d',
-                borderRadius: '2px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-            >
-              🙈 Hide node
-            </div>
-          )}
+          {(() => {
+            // Get all selected nodes (including the context menu target)
+            const selectedNodes = nodes.filter(n => n.selected || n.id === nodeContextMenu.nodeId);
+            const selectedNodeIds = selectedNodes.map(n => n.id);
+            const allHidden = selectedNodeIds.every(id => activeTabId && tabOperations.isNodeHidden(activeTabId, id));
+            const someHidden = selectedNodeIds.some(id => activeTabId && tabOperations.isNodeHidden(activeTabId, id));
+            const isMultiSelect = selectedNodeIds.length > 1;
+            
+            if (allHidden) {
+              // All selected nodes are hidden - show "Show" option
+              return (
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (activeTabId) {
+                      selectedNodeIds.forEach(nodeId => {
+                        tabOperations.unhideNode(activeTabId, nodeId);
+                      });
+                    }
+                    setNodeContextMenu(null);
+                  }}
+                  style={{
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    color: '#28a745',
+                    borderRadius: '2px'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                >
+                  👁️ Show {isMultiSelect ? `${selectedNodeIds.length} nodes` : 'node'}
+                </div>
+              );
+            } else {
+              // At least one node is visible - show "Hide" option
+              return (
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (activeTabId) {
+                      selectedNodeIds.forEach(nodeId => {
+                        tabOperations.hideNode(activeTabId, nodeId);
+                      });
+                    }
+                    setNodeContextMenu(null);
+                  }}
+                  style={{
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    color: '#6c757d',
+                    borderRadius: '2px'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                >
+                  🙈 Hide {isMultiSelect ? `${selectedNodeIds.length} nodes` : 'node'}
+                </div>
+              );
+            }
+          })()}
           
           {/* Delete option */}
           <div
