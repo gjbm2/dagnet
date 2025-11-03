@@ -179,6 +179,9 @@ export default function ConditionalProbabilitiesSection({
                           const newConditions = [...conditions];
                           let visited = [...condition.condition.visited];
                           
+                          // Track if this is the first node being selected (group creation trigger)
+                          const wasEmpty = visited.length === 0;
+                          
                           if (e.target.checked) {
                             // ALWAYS use slug for new entries (immutable references)
                             if (!visited.includes(node.slug) && !visited.includes(node.id)) {
@@ -193,6 +196,101 @@ export default function ConditionalProbabilitiesSection({
                             ...condition,
                             condition: { visited }
                           };
+                          
+                          // **GROUP CREATION**: If this is the FIRST node selection (was empty, now has content)
+                          // create matching conditions on all sibling edges
+                          const isFirstNodeSelected = wasEmpty && visited.length > 0 && e.target.checked;
+                          
+                          if (isFirstNodeSelected) {
+                            console.log(`[ConditionalP] First node selected - creating group for condition ${index} with visited:`, visited);
+                            
+                            const nextGraph = structuredClone(graph);
+                            const siblings = getSiblingEdges(edge, nextGraph);
+                            const color = getNextAvailableColor(nextGraph);
+                            
+                            console.log(`[ConditionalP] Found ${siblings.length} sibling edges, assigning color: ${color}`);
+                            
+                            // Update ALL siblings (including current edge) to create the group
+                            const allEdgesInGroup = [edge, ...siblings];
+                            
+                            allEdgesInGroup.forEach(siblingEdge => {
+                              const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+                                e.id === siblingEdge.id || `${e.from}->${e.to}` === siblingEdge.id
+                              );
+                              
+                              if (edgeIndex >= 0) {
+                                const targetEdge = nextGraph.edges[edgeIndex];
+                                
+                                // Ensure conditional_p array exists
+                                if (!targetEdge.conditional_p) {
+                                  targetEdge.conditional_p = [];
+                                }
+                                
+                                // Update existing condition at this index OR create new one
+                                if (targetEdge.conditional_p[index]) {
+                                  // Update existing empty condition with the visited nodes
+                                  targetEdge.conditional_p[index].condition.visited = [...visited];
+                                  console.log(`[ConditionalP] Updated existing condition at index ${index} on edge ${targetEdge.id}`);
+                                } else {
+                                  // Create new condition for sibling (shouldn't normally happen, but safety)
+                                  targetEdge.conditional_p.push({
+                                    condition: { visited: [...visited] },
+                                    p: { 
+                                      mean: targetEdge.p?.mean ?? 0.5,
+                                      ...(targetEdge.p?.stdev !== undefined ? { stdev: targetEdge.p.stdev } : {})
+                                    }
+                                  });
+                                  console.log(`[ConditionalP] Created new condition on sibling edge ${targetEdge.id}`);
+                                }
+                                
+                                // Set the same color for the group
+                                if (!targetEdge.display) {
+                                  targetEdge.display = {};
+                                }
+                                targetEdge.display.conditional_color = color;
+                              }
+                            });
+                            
+                            // Update metadata
+                            if (!nextGraph.metadata) nextGraph.metadata = {} as any;
+                            nextGraph.metadata.updated_at = new Date().toISOString();
+                            
+                            // Apply changes
+                            setGraph(nextGraph);
+                            saveHistoryState('Create conditional probability group', undefined, edge.id);
+                            
+                            console.log(`[ConditionalP] Group created successfully`);
+                          } else if (visited.length > 0) {
+                            // If group already exists (visited was already non-empty), update all siblings
+                            const nextGraph = structuredClone(graph);
+                            const siblings = getSiblingEdges(edge, nextGraph);
+                            const allEdgesInGroup = [edge, ...siblings];
+                            
+                            // Find edges that have this condition (same index)
+                            allEdgesInGroup.forEach(siblingEdge => {
+                              const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+                                e.id === siblingEdge.id || `${e.from}->${e.to}` === siblingEdge.id
+                              );
+                              
+                              if (edgeIndex >= 0) {
+                                const targetEdge = nextGraph.edges[edgeIndex];
+                                
+                                // Update condition at this index if it exists
+                                if (targetEdge.conditional_p && targetEdge.conditional_p[index]) {
+                                  targetEdge.conditional_p[index].condition.visited = [...visited];
+                                }
+                              }
+                            });
+                            
+                            // Update metadata
+                            if (!nextGraph.metadata) nextGraph.metadata = {} as any;
+                            nextGraph.metadata.updated_at = new Date().toISOString();
+                            
+                            // Apply changes
+                            setGraph(nextGraph);
+                            saveHistoryState('Update conditional probability group', undefined, edge.id);
+                          }
+                          
                           onLocalUpdate(newConditions);
                         }}
                         style={{ marginRight: '6px' }}
@@ -616,7 +714,8 @@ export default function ConditionalProbabilitiesSection({
           <button
             type="button"
             onClick={() => {
-              // Create new condition for this edge (copying its current base probability)
+              // Create new condition ONLY on this edge initially (not on siblings yet)
+              // Group will be created when user selects the first node (defining the condition)
               const newCondition = {
                 condition: { visited: [] },
                 p: { 
@@ -625,46 +724,21 @@ export default function ConditionalProbabilitiesSection({
                 }
               };
               
-              // Get all sibling edges (same source node)
-              const siblings = getSiblingEdges(edge, graph);
-              
-              // Assign a fresh color for this condition group
-              const color = getNextAvailableColor(graph);
-              
-              // Update ALL siblings (including this edge) in one transaction
+              // Update only the current edge
               const nextGraph = structuredClone(graph);
-              const edgeIds = [edge.id, ...siblings.map(s => s.id)];
+              const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+                e.id === edge.id || `${e.from}->${e.to}` === edge.id
+              );
               
-              edgeIds.forEach(edgeId => {
-                const edgeIndex = nextGraph.edges.findIndex((e: any) => 
-                  e.id === edgeId || `${e.from}->${e.to}` === edgeId
-                );
+              if (edgeIndex >= 0) {
+                const targetEdge = nextGraph.edges[edgeIndex];
                 
-                if (edgeIndex >= 0) {
-                  const targetEdge = nextGraph.edges[edgeIndex];
-                  
-                  // Create condition using this edge's base probability
-                  const conditionForThisEdge = {
-                    condition: { visited: [] },
-                    p: { 
-                      mean: targetEdge.p?.mean ?? 0.5,
-                      ...(targetEdge.p?.stdev !== undefined ? { stdev: targetEdge.p.stdev } : {})
-                    }
-                  };
-                  
-                  // Add condition
-                  if (!targetEdge.conditional_p) {
-                    targetEdge.conditional_p = [];
-                  }
-                  targetEdge.conditional_p.push(conditionForThisEdge);
-                  
-                  // Set color
-                  if (!targetEdge.display) {
-                    targetEdge.display = {};
-                  }
-                  targetEdge.display.conditional_color = color;
+                // Add condition to this edge only
+                if (!targetEdge.conditional_p) {
+                  targetEdge.conditional_p = [];
                 }
-              });
+                targetEdge.conditional_p.push(newCondition);
+              }
               
               // Update metadata
               if (!nextGraph.metadata) nextGraph.metadata = {} as any;

@@ -18,7 +18,10 @@ import { useSidebarState } from '../../hooks/useSidebarState';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
 import { WhatIfProvider, useWhatIfContext } from '../../contexts/WhatIfContext';
+import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { Sparkles, FileText, Wrench } from 'lucide-react';
+import { SelectorModal } from '../SelectorModal';
+import { ItemBase } from '../../hooks/useItemFiltering';
 
 // Context to share selection state with sidebar panels
 interface SelectionContextType {
@@ -26,6 +29,15 @@ interface SelectionContextType {
   selectedEdgeId: string | null;
   onSelectedNodeChange: (id: string | null) => void;
   onSelectedEdgeChange: (id: string | null) => void;
+  openSelectorModal: (config: SelectorModalConfig) => void;
+}
+
+interface SelectorModalConfig {
+  type: 'parameter' | 'context' | 'case' | 'node';
+  items: ItemBase[];
+  currentValue: string;
+  onSelect: (value: string) => void;
+  onOpenItem?: (itemId: string) => void;
 }
 
 const SelectionContext = createContext<SelectionContextType | null>(null);
@@ -50,6 +62,9 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   // This ensures multiple tabs of the same file have independent state
   const myTab = tabs.find(t => t.id === tabId);
   const tabState = myTab?.editorState || {};
+  
+  // DEBUG: Log when tabState changes
+  console.log(`[GraphEditor ${fileId}] tabState:`, tabState);
   // Local What-If state for immediate UI response (persisted to tab state asynchronously)
   const [whatIfLocal, setWhatIfLocal] = useState({
     whatIfAnalysis: tabState.whatIfAnalysis,
@@ -111,13 +126,22 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(tabState.selectedNodeId ?? null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(tabState.selectedEdgeId ?? null);
   
+  // Selector modal state (scoped to graph editor window)
+  const [selectorModalConfig, setSelectorModalConfig] = useState<SelectorModalConfig | null>(null);
+  
   // OLD sidebar state - will be deprecated after Phase 2
   const [whatIfOpen, setWhatIfOpen] = useState(tabState.whatIfOpen ?? false);
   const [propertiesOpen, setPropertiesOpen] = useState(tabState.propertiesOpen ?? true);
   
-  const [useUniformScaling, setUseUniformScaling] = useState(tabState.useUniformScaling ?? false);
-  const [massGenerosity, setMassGenerosity] = useState(tabState.massGenerosity ?? 0.5);
-  const [autoReroute, setAutoReroute] = useState(tabState.autoReroute ?? true);
+  // Removed local view prefs state; handled by ViewPreferencesProvider
+
+  // Sync local state with tab state when tab state changes (e.g., from menu actions or tab switches)
+  // Only update if different to avoid infinite loops
+  // View preferences sync is handled in ViewPreferencesProvider
+
+  // When edge scaling state changes, we don't reload layout (would cause loop)
+  // Instead, toolsComponent is not memoized and will have fresh props on next render
+  // The layout structure includes toolsComponent in its dependencies, so it will update
   
   // Refs for GraphCanvas exposed functions (must be declared before component creation)
   const addNodeRef = React.useRef<(() => void) | null>(null);
@@ -628,7 +652,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     });
   }, [myTab?.editorState?.whatIfAnalysis, myTab?.editorState?.caseOverrides, myTab?.editorState?.conditionalOverrides, fileId]);
   
-  // Canvas component - NOT memoized so it updates when What-If state changes
+  // Canvas component - recreate when edge scaling props change so GraphCanvas receives updates
   const CanvasHost: React.FC = () => {
     const whatIf = useWhatIfContext();
     return (
@@ -637,9 +661,6 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
         activeTabId={activeTabId}
         onSelectedNodeChange={handleNodeSelection}
         onSelectedEdgeChange={handleEdgeSelection}
-        useUniformScaling={useUniformScaling}
-        massGenerosity={massGenerosity}
-        autoReroute={autoReroute}
         onAddNodeRef={addNodeRef}
         onDeleteSelectedRef={deleteSelectedRef}
         onAutoLayoutRef={autoLayoutRef}
@@ -651,24 +672,25 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       />
     );
   };
-  const canvasComponent = (<CanvasHost />);
+  // Canvas component - no memoization, recreate every render so props are always fresh
+  const canvasComponent = <CanvasHost />;
   
   const whatIfComponent = useMemo(() => <WhatIfPanel tabId={tabId} />, [tabId]);
   
   const propertiesComponent = useMemo(() => <PropertiesPanelWrapper tabId={tabId} />, [tabId]);
   
+  // Tools panel - pass current state as props so it displays correctly
+  // Use events for changes (same pattern as View menu)
   const toolsComponent = useMemo(() => (
     <ToolsPanel
       onAutoLayout={(dir) => autoLayoutRef.current?.(dir || 'LR')}
       onForceReroute={() => forceRerouteRef.current?.()}
-      massGenerosity={massGenerosity}
-      onMassGenerosityChange={setMassGenerosity}
-      useUniformScaling={useUniformScaling}
-      onUniformScalingChange={setUseUniformScaling}
       onHideUnselected={() => hideUnselectedRef.current?.()}
-      onShowAll={() => {/* TODO: implement showAll */}}
+      onShowAll={() => {
+        window.dispatchEvent(new CustomEvent('dagnet:showAll'));
+      }}
     />
-  ), [massGenerosity, useUniformScaling]);
+  ), []);
   
   // Helper function to create layout structure (uses stable components)
   const createLayoutStructure = useCallback((
@@ -743,7 +765,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     }
     
     return layout;
-  }, [sidebarState.activePanel, sidebarState.sidebarWidth, fileId, canvasComponent, whatIfComponent, propertiesComponent, toolsComponent]);
+  }, [sidebarState.activePanel, sidebarState.sidebarWidth, fileId, whatIfComponent, propertiesComponent, toolsComponent]);
   
   // Watch What-If state: no layout reloads needed; CanvasHost reads from context
   // (left intentionally empty to avoid expensive rc-dock loadLayout calls)
@@ -1117,48 +1139,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   // Listen for menu bar commands
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#16: Setup menu bar listeners`);
-    // Broadcast current state to menu bar
-    const broadcastState = () => {
-      window.dispatchEvent(new CustomEvent('dagnet:graphStateUpdate', { 
-        detail: { useUniformScaling, massGenerosity, autoReroute }
-      }));
-    };
-    broadcastState();
+    // View preferences are handled via context; no broadcast needed
 
     // Listen for menu commands
-    const handleSetUniformScaling = (e: CustomEvent) => {
-      console.log(`[${new Date().toISOString()}] [GraphEditor] EVENT: dagnet:setUniformScaling received`, e.detail);
-      // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
-      
-      const newValue = e.detail.value;
-      setUseUniformScaling(newValue);
-      if (tabId) {
-        tabOps.updateTabState(tabId, { useUniformScaling: newValue });
-      }
-    };
-
-    const handleSetMassGenerosity = (e: CustomEvent) => {
-      // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
-      
-      const newValue = e.detail.value;
-      setMassGenerosity(newValue);
-      if (tabId) {
-        tabOps.updateTabState(tabId, { massGenerosity: newValue });
-      }
-    };
-
-    const handleSetAutoReroute = (e: CustomEvent) => {
-      // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
-      
-      const newValue = e.detail.value;
-      setAutoReroute(newValue);
-      if (tabId) {
-        tabOps.updateTabState(tabId, { autoReroute: newValue });
-      }
-    };
+    // Removed view preference handlers
 
     const handleAddNode = () => {
       // Only handle if this is the active tab's editor
@@ -1196,9 +1180,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       }
     };
 
-    window.addEventListener('dagnet:setUniformScaling' as any, handleSetUniformScaling);
-    window.addEventListener('dagnet:setMassGenerosity' as any, handleSetMassGenerosity);
-    window.addEventListener('dagnet:setAutoReroute' as any, handleSetAutoReroute);
+    // View preference listeners removed; handled via context
     window.addEventListener('dagnet:addNode' as any, handleAddNode);
     window.addEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
     window.addEventListener('dagnet:forceReroute' as any, handleForceReroute);
@@ -1213,19 +1195,28 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       }
     };
 
+    const handleShowAll = async () => {
+      // Only handle if this is the active tab's editor
+      if (tabId !== activeTabId) return;
+      
+      if (tabId) {
+        await tabOps.showAllNodes(tabId);
+      }
+    };
+
     window.addEventListener('dagnet:hideUnselected' as any, handleHideUnselected);
+    window.addEventListener('dagnet:showAll' as any, handleShowAll);
 
     return () => {
-      window.removeEventListener('dagnet:setUniformScaling' as any, handleSetUniformScaling);
-      window.removeEventListener('dagnet:setMassGenerosity' as any, handleSetMassGenerosity);
-      window.removeEventListener('dagnet:setAutoReroute' as any, handleSetAutoReroute);
+      // View preference listeners removed
       window.removeEventListener('dagnet:addNode' as any, handleAddNode);
       window.removeEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
       window.removeEventListener('dagnet:forceReroute' as any, handleForceReroute);
       window.removeEventListener('dagnet:autoLayout' as any, handleAutoLayout);
       window.removeEventListener('dagnet:hideUnselected' as any, handleHideUnselected);
+      window.removeEventListener('dagnet:showAll' as any, handleShowAll);
     };
-  }, [useUniformScaling, massGenerosity, autoReroute, tabId, activeTabId]);
+  }, [tabId, activeTabId, tabOps]);
 
   if (!data) {
     console.log('GraphEditor: No data yet, showing loading...');
@@ -1270,12 +1261,14 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     selectedNodeId,
     selectedEdgeId,
     onSelectedNodeChange: handleNodeSelection,
-    onSelectedEdgeChange: handleEdgeSelection
+    onSelectedEdgeChange: handleEdgeSelection,
+    openSelectorModal: (config) => setSelectorModalConfig(config)
   };
 
   const SUPPRESS_LAYOUT_HANDLERS = false; // Re-enabled: needed for restore-closed-tabs logic
   return (
     <SelectionContext.Provider value={selectionContextValue}>
+      <ViewPreferencesProvider tabId={tabId}>
       <WhatIfProvider value={{
         whatIfAnalysis: whatIfLocal.whatIfAnalysis,
         caseOverrides: whatIfLocal.caseOverrides,
@@ -1692,8 +1685,25 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           {sidebarState.mode === 'minimized' ? '◀' : '▶'}
         </button>
       )}
+
+        {/* Selector Modal - overlays entire graph window */}
+        {selectorModalConfig && (
+          <SelectorModal
+            isOpen={true}
+            onClose={() => setSelectorModalConfig(null)}
+            type={selectorModalConfig.type}
+            items={selectorModalConfig.items}
+            currentValue={selectorModalConfig.currentValue}
+            onSelect={(value) => {
+              selectorModalConfig.onSelect(value);
+              setSelectorModalConfig(null);
+            }}
+            onOpenItem={selectorModalConfig.onOpenItem}
+          />
+        )}
     </div>
       </WhatIfProvider>
+      </ViewPreferencesProvider>
     </SelectionContext.Provider>
   );
 }

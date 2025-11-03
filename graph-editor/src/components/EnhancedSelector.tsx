@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Plug, Zap, X, ExternalLink, FilePlus } from 'lucide-react';
+import { Plug, Zap, X, ExternalLink, FilePlus, Maximize2 } from 'lucide-react';
 import { ObjectType } from '../types';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useValidationMode } from '../contexts/ValidationContext';
@@ -8,6 +8,8 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { fileRegistry } from '../contexts/TabContext';
 import { registryService, RegistryItem } from '../services/registryService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
+import { useSelectionContext } from './editors/GraphEditor';
+import { ItemBase } from '../hooks/useItemFiltering';
 import './EnhancedSelector.css';
 
 interface EnhancedSelectorProps {
@@ -87,6 +89,9 @@ export function EnhancedSelector({
   const [showSyncMenu, setShowSyncMenu] = useState(false);
   const [registryItems, setRegistryItems] = useState<RegistryItem[]>([]);
   
+  // Get context to open modal
+  const selectionContext = useSelectionContext();
+  
   const inputRef = useRef<HTMLInputElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const syncMenuRef = useRef<HTMLDivElement>(null);
@@ -145,8 +150,14 @@ export function EnhancedSelector({
   }));
 
   // Get current graph nodes (for showCurrentGraphGroup)
-  const currentGraphItems = showCurrentGraphGroup && graph ? 
-    graph.nodes.map((n: any) => n.slug).filter(Boolean) : [];
+  const currentGraphItems = showCurrentGraphGroup && graph && type === 'node' ? 
+    graph.nodes.map((n: any) => ({
+      id: n.slug || n.id,
+      name: n.label || n.slug || n.id,
+      description: '',
+      type: 'node',
+      isLocal: true
+    })).filter(item => item.id) : [];
 
   // Get used IDs in graph (for dimming)
   const usedIdsInGraph = type === 'node' && graph ? 
@@ -161,20 +172,25 @@ export function EnhancedSelector({
            (item.description && item.description.toLowerCase().includes(query));
   });
 
+  // Filter current graph items by input
+  const filteredGraphItems = currentGraphItems.filter((item: any) => {
+    const query = inputValue.toLowerCase();
+    return item.id.toLowerCase().includes(query) || 
+           (item.name && item.name.toLowerCase().includes(query));
+  });
+
   // Group items
   const groupedItems: { group: string; items: any[] }[] = [];
   
-  if (showCurrentGraphGroup && currentGraphItems.length > 0) {
-    const graphItems = filteredItems.filter((item: any) => 
-      currentGraphItems.includes(item.id)
-    );
-    if (graphItems.length > 0) {
-      groupedItems.push({ group: 'Current Graph', items: graphItems });
-    }
+  // Add current graph nodes first (if enabled)
+  if (showCurrentGraphGroup && filteredGraphItems.length > 0) {
+    groupedItems.push({ group: 'Current Graph', items: filteredGraphItems });
   }
   
+  // Add registry items (excluding ones already in current graph)
+  const currentGraphIds = new Set(currentGraphItems.map(item => item.id));
   const registryGroupItems = filteredItems.filter((item: any) => 
-    !showCurrentGraphGroup || !currentGraphItems.includes(item.id)
+    !showCurrentGraphGroup || !currentGraphIds.has(item.id)
   );
   if (registryGroupItems.length > 0) {
     groupedItems.push({ 
@@ -592,31 +608,102 @@ export function EnhancedSelector({
             left: `${dropdownPosition.left}px`
           }}
         >
-          {/* Close button */}
-          <button
-            type="button"
-            onClick={() => setShowSuggestions(false)}
-            className="enhanced-selector-dropdown-close"
-            title="Close dropdown"
-            style={{
-              position: 'absolute',
-              top: '8px',
-              right: '8px',
-              background: 'none',
-              border: 'none',
-              padding: '4px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              color: '#9CA3AF',
-              transition: 'color 0.2s',
-              zIndex: 10
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.color = '#6B7280'}
-            onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
-          >
-            <X size={16} strokeWidth={2} />
-          </button>
+          {/* Floating buttons - Expand and Close */}
+          <div style={{
+            position: 'sticky',
+            top: '4px',
+            right: '4px',
+            zIndex: 10,
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: '2px',
+            padding: '0 4px',
+            pointerEvents: 'none'
+          }}>
+            <button
+              type="button"
+              onClick={() => {
+                setShowSuggestions(false);
+                // Open modal at GraphEditor level
+                selectionContext.openSelectorModal({
+                  type,
+                  items: [...currentGraphItems, ...allItems].map(item => ({
+                    ...item,
+                    hasFile: !!item.file_path || item.isLocal,
+                    isOpen: tabs.some((tab: any) => tab.fileId === `${type}-${item.id}`),
+                    isDirty: fileRegistry.getFile(`${type}-${item.id}`)?.isDirty || false
+                  } as ItemBase)),
+                  currentValue: inputValue,
+                  onSelect: (selectedId) => {
+                    setInputValue(selectedId);
+                    onChange(selectedId);
+                  },
+                  onOpenItem
+                });
+              }}
+              className="enhanced-selector-expand-btn"
+              title="Open advanced selector (full view)"
+              style={{
+                background: 'white',
+                border: '1px solid #e9ecef',
+                padding: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#6B7280',
+                borderRadius: '4px',
+                transition: 'all 0.15s',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+                pointerEvents: 'auto'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#f3f4f6';
+                e.currentTarget.style.color = '#374151';
+                e.currentTarget.style.borderColor = '#d1d5db';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'white';
+                e.currentTarget.style.color = '#6B7280';
+                e.currentTarget.style.borderColor = '#e9ecef';
+              }}
+            >
+              <Maximize2 size={14} strokeWidth={2} />
+            </button>
+            
+            <button
+              type="button"
+              onClick={() => setShowSuggestions(false)}
+              className="enhanced-selector-dropdown-close"
+              title="Close dropdown"
+              style={{
+                background: 'white',
+                border: '1px solid #e9ecef',
+                padding: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                color: '#9CA3AF',
+                borderRadius: '4px',
+                transition: 'all 0.15s',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+                pointerEvents: 'auto'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = '#6B7280';
+                e.currentTarget.style.background = '#f3f4f6';
+                e.currentTarget.style.borderColor = '#d1d5db';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = '#9CA3AF';
+                e.currentTarget.style.background = 'white';
+                e.currentTarget.style.borderColor = '#e9ecef';
+              }}
+            >
+              <X size={14} strokeWidth={2} />
+            </button>
+          </div>
 
           {/* Create new button */}
           {isNewId && (
