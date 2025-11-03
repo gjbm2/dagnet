@@ -18,6 +18,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
+import { getObjectTypeTheme } from './theme/objectTypeTheme';
 import 'rc-dock/dist/rc-dock.css'; // Import rc-dock base styles
 import './styles/dock-theme.css'; // Safe customizations
 import './styles/active-tab-highlight.css'; // Active tab highlighting
@@ -243,38 +244,39 @@ function AppShellContent() {
       if (isInLayout && !hasBeenAdded) {
         // Tab exists in layout (placeholder from loadTab) - UPDATE with real content
         console.log(`AppShell: Updating placeholder tab ${tab.id} with real content`);
-        const EditorComponent = getEditorComponent(tab.fileId.split('-')[0] as any, tab.viewMode);
+        const objectType = tab.fileId.split('-')[0] as any;
+        const EditorComponent = getEditorComponent(objectType, tab.viewMode);
+        const theme = getObjectTypeTheme(objectType);
+        const IconComponent = theme.icon;
         
         const realTab = {
           id: tab.id,
           title: (
             <div 
-              style={{ display: 'flex', alignItems: 'center', width: '100%' }}
+              className="dock-tab-title"
               data-tab-id={tab.id}
               data-is-focused="false"
               data-is-dirty="false"
+              data-object-type={objectType}
               onClick={() => tabOperations.switchTab(tab.id)}
             >
-              <span style={{ flex: 1 }}>{tab.title}</span>
+              <IconComponent 
+                size={14} 
+                strokeWidth={2}
+                style={{ color: theme.accentColor, marginRight: '6px', flexShrink: 0 }}
+              />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.title}</span>
               <div
-                className="custom-tab-close-btn"
+                className="dock-tab-close-btn"
                 onClick={async (e) => {
                   e.stopPropagation();
                   await tabOperations.closeTab(tab.id);
                 }}
                 style={{
-                  width: '14px',
-                  height: '14px',
                   marginLeft: '8px',
                   cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: '2px',
-                  fontSize: '10px'
+                  borderRadius: '2px'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.1)'}
-                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 ✕
               </div>
@@ -300,39 +302,39 @@ function AppShellContent() {
       } else if (!isInLayout && !hasBeenAdded) {
         // New tab not in layout - ADD to rc-dock
         console.log(`AppShell: Adding new tab ${tab.id} to rc-dock`);
-        const EditorComponent = getEditorComponent(tab.fileId.split('-')[0] as any, tab.viewMode);
+        const objectType = tab.fileId.split('-')[0] as any;
+        const EditorComponent = getEditorComponent(objectType, tab.viewMode);
+        const theme = getObjectTypeTheme(objectType);
+        const IconComponent = theme.icon;
         
         const dockTab = {
           id: tab.id,
           title: (
             <div 
-              style={{ display: 'flex', alignItems: 'center', width: '100%' }}
+              className="dock-tab-title"
               data-tab-id={tab.id}
               data-is-focused="false"
               data-is-dirty="false"
+              data-object-type={objectType}
               onClick={() => tabOperations.switchTab(tab.id)}
             >
-              {tab.icon && <span style={{ marginRight: '6px', fontSize: '14px' }}>{tab.icon}</span>}
-              <span style={{ flex: 1 }}>{tab.title}</span>
+              <IconComponent 
+                size={14} 
+                strokeWidth={2}
+                style={{ color: theme.accentColor, marginRight: '6px', flexShrink: 0 }}
+              />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.title}</span>
               <div
-                className="custom-tab-close-btn"
+                className="dock-tab-close-btn"
                 onClick={async (e) => {
                   e.stopPropagation();
                   await tabOperations.closeTab(tab.id);
                 }}
                 style={{
-                  width: '14px',
-                  height: '14px',
                   marginLeft: '8px',
                   cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: '2px',
-                  fontSize: '10px'
+                  borderRadius: '2px'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.1)'}
-                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 ✕
               </div>
@@ -620,21 +622,30 @@ function AppShellContent() {
         };
       }
       
-      const EditorComponent = getEditorComponent(tab.fileId.split('-')[0] as any, tab.viewMode);
+      const objectType = tab.fileId.split('-')[0] as any;
+      const EditorComponent = getEditorComponent(objectType, tab.viewMode);
+      const theme = getObjectTypeTheme(objectType);
+      const IconComponent = theme.icon;
       
       // Return full TabData with content
       return {
         id: tab.id,
         title: (
           <div 
-            style={{ display: 'flex', alignItems: 'center', width: '100%' }}
+            className="dock-tab-title"
             data-tab-id={tab.id}
             data-is-focused={tab.id === activeTabId ? 'true' : 'false'}
+            data-object-type={objectType}
             onClick={() => {
               console.log('Tab title clicked (from loadTab), setting active:', tab.id);
               tabOperations.switchTab(tab.id);
             }}
           >
+            <IconComponent 
+              size={14} 
+              strokeWidth={2}
+              style={{ color: theme.accentColor, marginRight: '6px', flexShrink: 0 }}
+            />
             <span style={{ flex: 1 }}>{tab.title}</span>
             <div
               className="custom-tab-close-btn"

@@ -6,6 +6,7 @@ import { useTabContext } from '../contexts/TabContext';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { fileRegistry } from '../contexts/TabContext';
 import { registryService, RegistryItem } from '../services/registryService';
+import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import './EnhancedSelector.css';
 
 interface EnhancedSelectorProps {
@@ -77,6 +78,10 @@ export function EnhancedSelector({
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const syncMenuRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  
+  // Get theme colors and icon for this type
+  const theme = getObjectTypeTheme(type as any);
+  const IconComponent = theme.icon;
 
   // Sync inputValue with value prop
   const prevValueRef = useRef(value);
@@ -305,9 +310,21 @@ export function EnhancedSelector({
   const displayLabel = label || `${type.charAt(0).toUpperCase() + type.slice(1)}`;
 
   return (
-    <div className="enhanced-selector" ref={wrapperRef}>
+    <div 
+      className="enhanced-selector" 
+      ref={wrapperRef}
+      style={{
+        '--selector-accent-color': theme.accentColor,
+        '--selector-light-color': theme.lightColor
+      } as React.CSSProperties}
+    >
       {/* Label */}
       <label className="enhanced-selector-label" htmlFor={`selector-${type}`}>
+        <IconComponent 
+          size={14} 
+          strokeWidth={2}
+          style={{ color: theme.accentColor, marginRight: '4px' }}
+        />
         {displayLabel}:
       </label>
 
@@ -410,7 +427,14 @@ export function EnhancedSelector({
           {/* Grouped items */}
           {groupedItems.map(({ group, items }) => (
             <div key={group}>
-              <div className="enhanced-selector-group">{group}</div>
+              <div className="enhanced-selector-group">
+                <IconComponent 
+                  size={12} 
+                  strokeWidth={2}
+                  style={{ color: theme.accentColor, marginRight: '6px' }}
+                />
+                {group}
+              </div>
               {items.map((item: any) => {
                 const isUsed = usedIdsInGraph.has(item.id);
                 const isItemConnected = usedIdsInGraph.has(item.id);
@@ -423,6 +447,11 @@ export function EnhancedSelector({
                   >
                     {/* Main line */}
                     <div className="enhanced-selector-item-main">
+                      <IconComponent 
+                        size={12} 
+                        strokeWidth={2}
+                        style={{ color: theme.accentColor, marginRight: '6px', opacity: 0.5 }}
+                      />
                       <span className="enhanced-selector-item-id">{item.id}</span>
                       
                       {item.isLocal && (

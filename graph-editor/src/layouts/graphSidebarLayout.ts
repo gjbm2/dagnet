@@ -1,4 +1,6 @@
 import { LayoutData } from 'rc-dock';
+import React from 'react';
+import { Sparkles, FileText, Wrench } from 'lucide-react';
 
 /**
  * Full layout for graph editor including canvas and sidebar panels
@@ -36,15 +38,29 @@ export function getGraphEditorLayout(): LayoutData {
           tabs: [
             {
               id: 'what-if-tab',
-              title: '🎭 What-If',
+              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'What-If'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              ),
               content: null as any, // Will be replaced with WhatIfPanel
               cached: true,
-              closable: true,  // Always closable - CSS will hide button when docked
+              closable: true,  // Handled by our custom close button
               group: 'graph-panels'
             },
             {
               id: 'properties-tab',
-              title: '📝 Props',
+              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'Props'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              ),
               content: null as any, // Will be replaced with PropertiesPanel
               cached: true,
               closable: true,
@@ -52,7 +68,14 @@ export function getGraphEditorLayout(): LayoutData {
             },
             {
               id: 'tools-tab',
-              title: '🛠️ Tools',
+              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'Tools'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              ),
               content: null as any, // Will be replaced with ToolsPanel
               cached: true,
               closable: true,
@@ -98,15 +121,29 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
           tabs: [
             {
               id: 'what-if-tab',
-              title: '🎭 What-If',
+              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'What-If'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              ),
               content: null as any,
               cached: true,
-              closable: true,  // Always closable - CSS will hide button when docked
+              closable: true,
               group: 'graph-panels'
             },
             {
               id: 'properties-tab',
-              title: '📝 Props',
+              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'Props'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              ),
               content: null as any,
               cached: true,
               closable: true,
@@ -114,7 +151,14 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
             },
             {
               id: 'tools-tab',
-              title: '🛠️ Tools',
+              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'Tools'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              ),
               content: null as any,
               cached: true,
               closable: true,

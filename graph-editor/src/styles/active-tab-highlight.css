@@ -5,13 +5,69 @@
 
 /* DIRTY tab highlighting - unsaved changes (orange = standard IDE convention) */
 [data-tab-id][data-is-dirty="true"] span {
-  color: #ff8c00 !important;
+  color: #ea580c !important; /* Darker orange for better contrast */
 }
 
 [data-tab-id][data-is-dirty="true"]::after {
   content: ' ●';
-  color: #ff8c00;
+  color: #ea580c; /* Darker orange for better contrast */
   font-size: 10px;
   font-weight: bold;
 }
 
+/* Subtle background tint for ALL tabs based on object type */
+/* Apply to parent tab, not the title div */
+.dock-tab:has([data-object-type="node"]) {
+  background-color: rgba(59, 130, 246, 0.08) !important; /* Subtle blue tint */
+}
+
+.dock-tab:has([data-object-type="case"]) {
+  background-color: rgba(167, 139, 250, 0.08) !important; /* Subtle purple tint */
+}
+
+.dock-tab:has([data-object-type="context"]) {
+  background-color: rgba(52, 211, 153, 0.08) !important; /* Subtle green tint */
+}
+
+.dock-tab:has([data-object-type="parameter"]) {
+  background-color: rgba(251, 146, 60, 0.08) !important; /* Subtle orange tint */
+}
+
+.dock-tab:has([data-object-type="edge"]) {
+  background-color: rgba(99, 102, 241, 0.08) !important; /* Subtle indigo tint */
+}
+
+.dock-tab:has([data-object-type="graph"]) {
+  background-color: rgba(251, 191, 36, 0.08) !important; /* Subtle amber tint */
+}
+
+/* Active tab underlines - darker version of each class color with transition */
+.dock-tab.dock-tab-active:has([data-object-type="node"]) {
+  border-bottom-color: #1d4ed8 !important; /* Dark blue */
+  transition: border-bottom-color 0.2s ease;
+}
+
+.dock-tab.dock-tab-active:has([data-object-type="case"]) {
+  border-bottom-color: #7c3aed !important; /* Dark purple */
+  transition: border-bottom-color 0.2s ease;
+}
+
+.dock-tab.dock-tab-active:has([data-object-type="context"]) {
+  border-bottom-color: #059669 !important; /* Dark green */
+  transition: border-bottom-color 0.2s ease;
+}
+
+.dock-tab.dock-tab-active:has([data-object-type="parameter"]) {
+  border-bottom-color: #ea580c !important; /* Dark orange */
+  transition: border-bottom-color 0.2s ease;
+}
+
+.dock-tab.dock-tab-active:has([data-object-type="edge"]) {
+  border-bottom-color: #4338ca !important; /* Dark indigo */
+  transition: border-bottom-color 0.2s ease;
+}
+
+.dock-tab.dock-tab-active:has([data-object-type="graph"]) {
+  border-bottom-color: #d97706 !important; /* Dark amber/yellow */
+  transition: border-bottom-color 0.2s ease;
+}

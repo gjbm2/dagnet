@@ -86,27 +86,63 @@ body, body * {
   font-size: 13px;
   color: #666;
   border-radius: 0;
+  margin-right: 8px; /* Space for drop zones - don't make too small */
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); /* Notch on top-right */
+  transition: border-bottom-color 0.2s ease; /* Animate underline color change */
+  max-width: 200px; /* Prevent tabs from getting too wide */
+}
+
+/* Tab title container - ensure no wrapping */
+.dock-tab-title {
+  display: flex !important;
+  align-items: center !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  max-width: 100% !important;
 }
 
 .dock-tab:hover {
-  background-color: #e8e8e8;
+  color: inherit !important; /* Override rc-dock's blue hover color */
+  filter: brightness(0.95); /* Darken by 5% on hover */
 }
 
-/* Active tab */
+/* Active tab - default to black if no object type specified */
 .dock-tab-active {
   font-weight: 500;
-  color: #000;
-  background-color: #fff !important;
-  border-bottom: 2px solid #1976d2;
+  color: #000 !important; /* Override rc-dock's blue */
+  border-bottom: 2px solid #424242 !important; /* Default black */
+  transition: border-bottom-color 0.2s ease; /* Animate underline color change */
 }
 
-/* Tab close button */
+.dock-tab-active:hover {
+  color: #000 !important; /* Keep black on hover */
+}
+
+/* Hide rc-dock's blue ink-bar */
+.dock-ink-bar {
+  display: none !important;
+}
+
+/* Tab close button - base styles */
 .dock-tab-close-btn {
-  opacity: 0.6;
+  opacity: 0; /* Hidden by default, show on tab hover */
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  font-size: 12px; /* Slightly larger X */
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Show close button on tab hover */
+.dock-tab:hover .dock-tab-close-btn {
+  opacity: 0.7;
 }
 
 .dock-tab-close-btn:hover {
-  opacity: 1;
+  opacity: 1 !important;
   background-color: rgba(0, 0, 0, 0.1);
 }
 

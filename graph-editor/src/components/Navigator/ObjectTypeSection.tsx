@@ -1,6 +1,8 @@
 import React from 'react';
 import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
+import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
+import { ChevronRight, FileText, TrendingUp, Coins, Clock, Package } from 'lucide-react';
 import '../../styles/file-state-indicators.css';
 
 /**
@@ -58,9 +60,63 @@ export function ObjectTypeSection({
   indexIsDirty = false,
   groupBySubCategories = false
 }: ObjectTypeSectionProps) {
-  const { tabs } = useTabContext();
+  const { tabs, activeTabId } = useTabContext();
   const fileRegistry = useFileRegistry();
   const [subCategoryStates, setSubCategoryStates] = React.useState<Record<string, boolean>>({});
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const sectionRef = React.useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = React.useState<number>(0);
+  
+  // Get theme colors and icon for this object type
+  const theme = getObjectTypeTheme(sectionType);
+  const IconComponent = theme.icon;
+  
+  // Get the fileId of the active tab for comparison
+  const activeTab = tabs.find(t => t.id === activeTabId);
+  const activeFileId = activeTab?.fileId;
+  
+  // Scroll to active item when it changes
+  React.useEffect(() => {
+    if (!activeFileId || !isExpanded) return;
+    
+    setTimeout(() => {
+      // Find the active item element
+      const activeElement = sectionRef.current?.querySelector('.navigator-item.active');
+      if (!activeElement) return;
+      
+      // Find the actual scrollable container (the one with overflow: auto)
+      let scrollContainer = sectionRef.current?.parentElement;
+      while (scrollContainer && scrollContainer !== document.body) {
+        const overflowY = window.getComputedStyle(scrollContainer).overflowY;
+        if (overflowY === 'auto' || overflowY === 'scroll') {
+          break;
+        }
+        scrollContainer = scrollContainer.parentElement;
+      }
+      
+      if (!scrollContainer || scrollContainer === document.body) return;
+      
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const elementRect = activeElement.getBoundingClientRect();
+      
+      // Account for sticky header height (approx 45px)
+      const stickyHeaderHeight = 45;
+      const effectiveTop = containerRect.top + stickyHeaderHeight;
+      
+      // Check if element is out of view (accounting for sticky header)
+      const isOutOfView = elementRect.top < effectiveTop || 
+                         elementRect.bottom > containerRect.bottom;
+      
+      if (isOutOfView) {
+        // Calculate scroll position needed
+        const scrollOffset = elementRect.top - effectiveTop;
+        scrollContainer.scrollBy({ 
+          top: scrollOffset,
+          behavior: 'smooth'
+        });
+      }
+    }, 100); // Small delay to ensure DOM is ready
+  }, [activeFileId, isExpanded]);
 
   // Load sub-category collapse states from localStorage
   React.useEffect(() => {
@@ -69,6 +125,45 @@ export function ObjectTypeSection({
       setSubCategoryStates(JSON.parse(saved));
     }
   }, [sectionType]);
+
+  // Measure content height for smooth animation
+  React.useEffect(() => {
+    if (contentRef.current && isExpanded) {
+      // Use a small delay to ensure DOM has updated
+      const timeoutId = setTimeout(() => {
+        if (contentRef.current) {
+          const height = contentRef.current.scrollHeight;
+          setContentHeight(height);
+          console.log(`[Navigator] ${sectionType} content height:`, height);
+        }
+      }, 10);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [entries, isExpanded, subCategoryStates, sectionType]);
+
+  // Scroll section into view when expanded
+  React.useEffect(() => {
+    if (isExpanded && sectionRef.current) {
+      // Small delay to allow animation to start
+      setTimeout(() => {
+        if (sectionRef.current) {
+          const rect = sectionRef.current.getBoundingClientRect();
+          const isVisible = (
+            rect.top >= 0 &&
+            rect.bottom <= window.innerHeight
+          );
+          
+          // Only scroll if the section is not fully visible
+          if (!isVisible) {
+            sectionRef.current.scrollIntoView({ 
+              behavior: 'smooth', 
+              block: 'nearest'
+            });
+          }
+        }
+      }, 50);
+    }
+  }, [isExpanded]);
 
   // Save sub-category collapse states to localStorage
   const toggleSubCategory = (subCatName: string) => {
@@ -113,18 +208,26 @@ export function ObjectTypeSection({
     return groups;
   }, [entries, groupBySubCategories, sectionType]);
 
-  // Sub-category display names
-  const subCategoryNames: Record<string, string> = {
-    'probability': '📊 Probability',
-    'cost_gbp': '💷 Cost (GBP)',
-    'cost_time': '⏱️ Cost (Time)',
-    'other': '📦 Other'
+  // Sub-category display names with icons
+  const subCategoryConfig: Record<string, { name: string; icon: React.ElementType }> = {
+    'probability': { name: 'Probability', icon: TrendingUp },
+    'cost_gbp': { name: 'Cost (GBP)', icon: Coins },
+    'cost_time': { name: 'Cost (Time)', icon: Clock },
+    'other': { name: 'Other', icon: Package }
   };
 
   return (
-    <div className="object-type-section">
+    <div 
+      ref={sectionRef} 
+      className="object-type-section"
+      data-type={sectionType}
+      style={{
+        '--section-accent-color': theme.accentColor,
+        '--section-light-color': theme.lightColor
+      } as React.CSSProperties}
+    >
       <div 
-        className="section-header"
+        className={`section-header ${isExpanded ? 'is-expanded' : ''}`}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -134,34 +237,46 @@ export function ObjectTypeSection({
         }}
       >
         <div className="section-header-left" onClick={onToggle}>
-          <span className="section-expand-icon">
-            {isExpanded ? '▼' : '▶'}
-          </span>
-          <span className="section-icon">{icon}</span>
+          <ChevronRight 
+            className={`section-expand-icon ${isExpanded ? 'expanded' : ''}`}
+            size={14}
+            strokeWidth={2}
+          />
+          <IconComponent 
+            className="section-icon" 
+            size={16} 
+            strokeWidth={2}
+            style={{ color: theme.accentColor }}
+          />
           <span className="section-title">{title}</span>
-          <span className="section-count">({entries.length})</span>
+          <span className="section-count">{entries.length}</span>
         </div>
         
         {/* Index file icon - only for types that have indexes */}
         {(sectionType === 'parameter' || sectionType === 'context' || sectionType === 'case' || sectionType === 'node') && onIndexClick && (
           <div className="section-header-right">
-            <span 
+            <FileText 
               className={`section-index-icon ${indexIsDirty ? 'dirty' : ''}`}
+              size={16}
+              strokeWidth={2}
               onClick={(e) => {
                 e.stopPropagation();
                 onIndexClick();
               }}
               title={`Open ${title} Index${indexIsDirty ? ' (modified)' : ''}`}
-            >
-              📑
-            </span>
+            />
             {indexIsDirty && <span className="status-dot dirty" style={{ marginLeft: '4px' }} />}
           </div>
         )}
       </div>
 
-      {isExpanded && (
-        <div className="section-items">
+      <div 
+        ref={contentRef}
+        className={`section-items ${isExpanded ? 'expanded' : 'collapsed'}`}
+        style={{
+          maxHeight: isExpanded ? `${contentHeight}px` : '0px'
+        }}
+      >
           {entries.length === 0 ? (
             <div className="section-empty">No {title.toLowerCase()} found</div>
           ) : groupBySubCategories && sectionType === 'parameter' ? (
@@ -176,18 +291,26 @@ export function ObjectTypeSection({
                     className="sub-category-header"
                     onClick={() => toggleSubCategory(subCatKey)}
                   >
-                    <span className="section-expand-icon" style={{ fontSize: '10px' }}>
-                      {isSubCatExpanded ? '▼' : '▶'}
-                    </span>
-                    <span>{subCategoryNames[subCatKey]}</span>
-                    <span className="section-count">({subCatEntries.length})</span>
+                    <ChevronRight 
+                      className={`section-expand-icon ${isSubCatExpanded ? 'expanded' : ''}`}
+                      size={14}
+                      strokeWidth={2}
+                    />
+                    {React.createElement(subCategoryConfig[subCatKey].icon, { 
+                      size: 14,
+                      strokeWidth: 2,
+                      style: { flexShrink: 0, marginRight: '4px' }
+                    })}
+                    <span>{subCategoryConfig[subCatKey].name}</span>
+                    <span className="section-count">{subCatEntries.length}</span>
                   </div>
                   
                   {isSubCatExpanded && (
                     <div className="sub-category-items">
                       {subCatEntries.map(entry => {
                         const tabCount = getTabCount(entry);
-                        const isActive = entry.isOpen && tabs.some(t => t.fileId === `${entry.type}-${entry.id}`);
+                        const entryFileId = `${entry.type}-${entry.id}`;
+                        const isActive = activeFileId === entryFileId;
                         
                         return (
                           <div
@@ -203,15 +326,11 @@ export function ObjectTypeSection({
                             }}
                             title={entry.isOrphan ? '⚠️ Orphan file (not in index)' : entry.isLocal ? `${entry.name} (local only)` : entry.name}
                           >
-                            <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''}`}>
+                            <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
                               {entry.name}
                             </span>
                             
                             <span className="navigator-item-status">
-                              <span className="status-dots">
-                                {entry.isDirty && <span className="status-dot dirty" title="Modified" />}
-                                {entry.isOpen && <span className="status-dot open" title="Open" />}
-                              </span>
                               {tabCount > 1 && <span className="tab-count" title={`${tabCount} tabs open`}>{tabCount}</span>}
                               {!entry.hasFile && entry.inIndex && <span className="file-badge create" title="Create file">[create]</span>}
                               {entry.isOrphan && <span className="file-badge orphan" title="Orphan file (not in index)">⚠️</span>}
@@ -229,7 +348,8 @@ export function ObjectTypeSection({
             // Render flat list (no sub-categories)
             entries.map(entry => {
               const tabCount = getTabCount(entry);
-              const isActive = entry.isOpen && tabs.some(t => t.fileId === `${entry.type}-${entry.id}`);
+              const entryFileId = `${entry.type}-${entry.id}`;
+              const isActive = activeFileId === entryFileId;
               
               return (
                 <div
@@ -245,15 +365,11 @@ export function ObjectTypeSection({
                   }}
                   title={entry.isOrphan ? '⚠️ Orphan file (not in index)' : entry.isLocal ? `${entry.name} (local only)` : entry.name}
                 >
-                  <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''}`}>
+                  <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
                     {entry.name}
                   </span>
                   
                   <span className="navigator-item-status">
-                    <span className="status-dots">
-                      {entry.isDirty && <span className="status-dot dirty" title="Modified" />}
-                      {entry.isOpen && <span className="status-dot open" title="Open" />}
-                    </span>
                     {tabCount > 1 && <span className="tab-count" title={`${tabCount} tabs open`}>{tabCount}</span>}
                     {!entry.hasFile && entry.inIndex && <span className="file-badge create" title="Create file">[create]</span>}
                     {entry.isOrphan && <span className="file-badge orphan" title="Orphan file (not in index)">⚠️</span>}
@@ -263,8 +379,7 @@ export function ObjectTypeSection({
               );
             })
           )}
-        </div>
-      )}
+      </div>
     </div>
   );
 }

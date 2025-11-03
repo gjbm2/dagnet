@@ -18,6 +18,7 @@ import { useSidebarState } from '../../hooks/useSidebarState';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
 import { WhatIfProvider, useWhatIfContext } from '../../contexts/WhatIfContext';
+import { Sparkles, FileText, Wrench } from 'lucide-react';
 
 // Context to share selection state with sidebar panels
 interface SelectionContextType {
@@ -736,13 +737,34 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
               tab.title = '';
             } else if (tab.id === 'what-if-tab') {
               tab.content = whatIfComponent;
-              tab.title = '🎭 What-If';
+              tab.title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'What-If'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              );
             } else if (tab.id === 'properties-tab') {
               tab.content = propertiesComponent;
-              tab.title = '📝 Props';
+              tab.title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'Props'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              );
             } else if (tab.id === 'tools-tab') {
               tab.content = toolsComponent;
-              tab.title = '🛠️ Tools';
+              tab.title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { style: { flex: 1 } }, 'Tools'),
+                React.createElement('div', { 
+                  className: 'dock-tab-close-btn',
+                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                }, '✕')
+              );
             }
           });
         }
@@ -1389,13 +1411,34 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                         let title = '';
                         if (tabId === 'what-if-tab') {
                           component = whatIfComponent;
-                          title = '🎭 What-If';
+                          title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                            React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement('span', { style: { flex: 1 } }, 'What-If'),
+                            React.createElement('div', { 
+                              className: 'dock-tab-close-btn',
+                              style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                            }, '✕')
+                          ) as any;
                         } else if (tabId === 'properties-tab') {
                           component = propertiesComponent;
-                          title = '📝 Props';
+                          title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                            React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement('span', { style: { flex: 1 } }, 'Props'),
+                            React.createElement('div', { 
+                              className: 'dock-tab-close-btn',
+                              style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                            }, '✕')
+                          ) as any;
                         } else if (tabId === 'tools-tab') {
                           component = toolsComponent;
-                          title = '🛠️ Tools';
+                          title = React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+                            React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement('span', { style: { flex: 1 } }, 'Tools'),
+                            React.createElement('div', { 
+                              className: 'dock-tab-close-btn',
+                              style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                            }, '✕')
+                          ) as any;
                         }
                         
                         if (component && sidebarPanel) {
