@@ -630,7 +630,7 @@ export function EnhancedSelector({
                   type,
                   items: [...currentGraphItems, ...allItems].map(item => ({
                     ...item,
-                    hasFile: !!item.file_path || item.isLocal,
+                    hasFile: !!('file_path' in item ? item.file_path : false) || item.isLocal,
                     isOpen: tabs.some((tab: any) => tab.fileId === `${type}-${item.id}`),
                     isDirty: fileRegistry.getFile(`${type}-${item.id}`)?.isDirty || false
                   } as ItemBase)),

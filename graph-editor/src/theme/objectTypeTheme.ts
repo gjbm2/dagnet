@@ -15,10 +15,11 @@ import {
   FileText,      // Context
   Sliders,       // Parameter
   ArrowRight,    // Edge
-  Settings       // Special
+  Settings,      // Special
+  Key            // Credentials
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'edge' | 'special';
+export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'edge' | 'special' | 'credentials';
 
 export interface ObjectTypeTheme {
   /** Light pastel background color */
@@ -82,6 +83,13 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     icon: Settings,
     label: 'Special',
     emoji: '⚙️'
+  },
+  credentials: {
+    lightColor: '#FEF3C7',  // light amber
+    accentColor: '#F59E0B', // amber
+    icon: Key,
+    label: 'Credentials',
+    emoji: '🔑'
   }
 };
 
