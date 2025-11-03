@@ -210,23 +210,29 @@
   gap: 3px;
 }
 
+/* This class appears unused - dock-tab-close-btn is the actual class used */
 .tab-close-btn {
   all: unset;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 15px;
+  font-weight: 600;
   color: #666;
+  background-color: rgba(0, 0, 0, 0.05);
   transition: all 0.15s ease;
+  margin-left: 4px;
 }
 
 .tab-close-btn:hover {
   background-color: #e0e0e0;
   color: #333;
+  transform: scale(1.1);
 }
 
 

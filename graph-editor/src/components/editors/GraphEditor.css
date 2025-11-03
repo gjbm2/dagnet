@@ -61,6 +61,11 @@
   background: #f8f9fa; /* Slightly darker than pure white */
 }
 
+/* Hide maximize button on graph editor sidebar panels */
+.graph-editor-dock-container .dock-panel-max-btn {
+  display: none !important;
+}
+
 /* Hide sidebar panel when it has size 0 (minimized state) */
 .dock-panel[data-panel-id="graph-sidebar-panel"][style*="width: 0px"],
 .dock-panel[data-panel-id="graph-sidebar-panel"][style*="width:0px"] {

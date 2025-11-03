@@ -38,47 +38,47 @@ export function getGraphEditorLayout(): LayoutData {
           tabs: [
             {
               id: 'what-if-tab',
-              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              title: React.createElement('div', { className: 'dock-tab-title' },
                 React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'What-If'),
+                React.createElement('span', { style: { flex: 1, minWidth: 0 } }, 'What-If'),
                 React.createElement('div', { 
                   className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                  style: { flexShrink: 0 }
                 }, '✕')
               ),
               content: null as any, // Will be replaced with WhatIfPanel
               cached: true,
-              closable: true,  // Handled by our custom close button
+              closable: false,  // We use custom close button in title
               group: 'graph-panels'
             },
             {
               id: 'properties-tab',
-              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              title: React.createElement('div', { className: 'dock-tab-title' },
                 React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'Props'),
+                React.createElement('span', { style: { flex: 1, minWidth: 0 } }, 'Props'),
                 React.createElement('div', { 
                   className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                  style: { flexShrink: 0 }
                 }, '✕')
               ),
               content: null as any, // Will be replaced with PropertiesPanel
               cached: true,
-              closable: true,
+              closable: false,  // We use custom close button in title
               group: 'graph-panels'
             },
             {
               id: 'tools-tab',
-              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              title: React.createElement('div', { className: 'dock-tab-title' },
                 React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'Tools'),
+                React.createElement('span', { style: { flex: 1, minWidth: 0 } }, 'Tools'),
                 React.createElement('div', { 
                   className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                  style: { flexShrink: 0 }
                 }, '✕')
               ),
               content: null as any, // Will be replaced with ToolsPanel
               cached: true,
-              closable: true,
+              closable: false,  // We use custom close button in title
               group: 'graph-panels'
             }
           ]
@@ -121,47 +121,47 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
           tabs: [
             {
               id: 'what-if-tab',
-              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              title: React.createElement('div', { className: 'dock-tab-title' },
                 React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'What-If'),
+                React.createElement('span', { style: { flex: 1, minWidth: 0 } }, 'What-If'),
                 React.createElement('div', { 
                   className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                  style: { flexShrink: 0 }
                 }, '✕')
               ),
               content: null as any,
               cached: true,
-              closable: true,
+              closable: false,  // We use custom close button in title
               group: 'graph-panels'
             },
             {
               id: 'properties-tab',
-              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              title: React.createElement('div', { className: 'dock-tab-title' },
                 React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'Props'),
+                React.createElement('span', { style: { flex: 1, minWidth: 0 } }, 'Props'),
                 React.createElement('div', { 
                   className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                  style: { flexShrink: 0 }
                 }, '✕')
               ),
               content: null as any,
               cached: true,
-              closable: true,
+              closable: false,  // We use custom close button in title
               group: 'graph-panels'
             },
             {
               id: 'tools-tab',
-              title: React.createElement('div', { className: 'dock-tab-title', style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%' } },
+              title: React.createElement('div', { className: 'dock-tab-title' },
                 React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
-                React.createElement('span', { style: { flex: 1 } }, 'Tools'),
+                React.createElement('span', { style: { flex: 1, minWidth: 0 } }, 'Tools'),
                 React.createElement('div', { 
                   className: 'dock-tab-close-btn',
-                  style: { marginLeft: '8px', cursor: 'pointer', borderRadius: '2px', flexShrink: 0 }
+                  style: { flexShrink: 0 }
                 }, '✕')
               ),
               content: null as any,
               cached: true,
-              closable: true,
+              closable: false,  // We use custom close button in title
               group: 'graph-panels'
             }
           ]
