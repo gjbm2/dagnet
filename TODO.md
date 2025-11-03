@@ -2,7 +2,7 @@
 
 ## In Progress
 
-### High Priority1
+### High Priority
 1. Connect Case Params to param registry 
 2. Connect Conditoin p to param reg
 3. GIT_BATCH_OPERATIONS_MD
@@ -10,6 +10,9 @@
 5. Context support
 
 ### Medium Priority
+- **Drag & Drop from Navigator to Graph** - See [DRAG_DROP_PROPOSAL.md](./DRAG_DROP_PROPOSAL.md) for full spec
+  - Drag nodes/cases/parameters from navigator and drop on canvas to create/connect
+  - Estimated: 36-48 hours full implementation, 28-38 hours MVP
 - Nodal levels in the editor (some nodes are 'tall') & Sankey L-R mode with dyanmic node sizes
 - auto-re-route doesn't start automatically (needs kicking)
 

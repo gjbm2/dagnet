@@ -1046,8 +1046,10 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       console.log(`[${new Date().toISOString()}] [GraphEditor] Keyboard event:`, { key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey });
       
       // Only handle if user isn't typing in an input field or Monaco editor
+      // Exception: inputs marked with data-allow-global-shortcuts="true" should pass through
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor')) {
+      const allowGlobalShortcuts = target.getAttribute?.('data-allow-global-shortcuts') === 'true';
+      if (!allowGlobalShortcuts && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor'))) {
         return;
       }
 

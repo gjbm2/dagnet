@@ -454,7 +454,7 @@ export function ParameterSelector({
           alignItems: 'center',
           gap: '4px'
         }}>
-          ⚠️ Not in registry. Consider using a registered {type}.
+          ⚠️ Not in registry. Consider a registered {type}.
         </div>
       )}
       
