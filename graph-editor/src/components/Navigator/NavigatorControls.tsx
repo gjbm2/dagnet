@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { List, Circle, CircleDot, HardDrive } from 'lucide-react';
+import { Filter, ArrowUpDown, FolderTree, Check, Circle, LucideIcon } from 'lucide-react';
 import './NavigatorControls.css';
 
 export type FilterMode = 'all' | 'dirty' | 'open' | 'local';
@@ -24,14 +24,14 @@ interface NavigatorControlsProps {
 interface DropdownOption<T> {
   value: T;
   label: string;
-  icon?: string;
+  showCheckmark?: boolean;
 }
 
 const FILTER_OPTIONS: DropdownOption<FilterMode>[] = [
-  { value: 'all', label: 'All', icon: '☑' },
-  { value: 'dirty', label: 'Dirty', icon: '○' },
-  { value: 'open', label: 'Open', icon: '○' },
-  { value: 'local', label: 'Local', icon: '○' },
+  { value: 'all', label: 'All', showCheckmark: true },
+  { value: 'dirty', label: 'Dirty', showCheckmark: true },
+  { value: 'open', label: 'Open', showCheckmark: true },
+  { value: 'local', label: 'Local', showCheckmark: true },
 ];
 
 const SORT_OPTIONS: DropdownOption<SortMode>[] = [
@@ -43,10 +43,10 @@ const SORT_OPTIONS: DropdownOption<SortMode>[] = [
 ];
 
 const GROUP_OPTIONS: DropdownOption<GroupMode>[] = [
-  { value: 'type', label: 'By Type', icon: '☑' },
-  { value: 'tags', label: 'By Tags', icon: '○' },
-  { value: 'status', label: 'By Status', icon: '○' },
-  { value: 'none', label: 'Flat list', icon: '○' },
+  { value: 'type', label: 'By Type', showCheckmark: true },
+  { value: 'tags', label: 'By Tags', showCheckmark: true },
+  { value: 'status', label: 'By Status', showCheckmark: true },
+  { value: 'none', label: 'Flat list', showCheckmark: true },
 ];
 
 function getFilterLabel(filter: FilterMode): string {
@@ -77,7 +77,7 @@ function getGroupLabel(group: GroupMode): string {
 }
 
 interface ControlDropdownProps<T extends string> {
-  icon: string;
+  icon: LucideIcon;
   label: string;
   value: T;
   options: DropdownOption<T>[];
@@ -85,7 +85,7 @@ interface ControlDropdownProps<T extends string> {
 }
 
 function ControlDropdown<T extends string>({
-  icon,
+  icon: IconComponent,
   label,
   value,
   options,
@@ -136,7 +136,7 @@ function ControlDropdown<T extends string>({
         title={label}
       >
         <span className="control-button-label">
-          <span className="control-button-icon">{icon}</span>
+          <IconComponent className="control-button-icon" size={14} strokeWidth={2} />
           <span className="control-button-text">{label}</span>
         </span>
         <span className="control-button-arrow">▾</span>
@@ -150,7 +150,11 @@ function ControlDropdown<T extends string>({
               className={`control-dropdown-item ${option.value === value ? 'active' : ''}`}
               onClick={() => handleSelect(option.value)}
             >
-              {option.icon && <span className="dropdown-item-icon">{option.icon}</span>}
+              {option.showCheckmark && (
+                <span className="dropdown-item-icon">
+                  {option.value === value ? <Check size={14} strokeWidth={2} /> : <Circle size={14} strokeWidth={2} />}
+                </span>
+              )}
               <span className="dropdown-item-label">{option.label}</span>
             </div>
           ))}
@@ -171,7 +175,7 @@ export function NavigatorControls({
   return (
     <div className="navigator-controls">
       <ControlDropdown
-        icon="🎯"
+        icon={Filter}
         label={getFilterLabel(filter)}
         value={filter}
         options={FILTER_OPTIONS}
@@ -179,7 +183,7 @@ export function NavigatorControls({
       />
       
       <ControlDropdown
-        icon="↕"
+        icon={ArrowUpDown}
         label={getSortLabel(sortBy)}
         value={sortBy}
         options={SORT_OPTIONS}
@@ -187,7 +191,7 @@ export function NavigatorControls({
       />
       
       <ControlDropdown
-        icon="📁"
+        icon={FolderTree}
         label={getGroupLabel(groupBy)}
         value={groupBy}
         options={GROUP_OPTIONS}

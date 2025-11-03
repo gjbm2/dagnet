@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { SidebarState } from '../hooks/useSidebarState';
+import { Sparkles, FileText, Wrench } from 'lucide-react';
 import './SidebarIconBar.css';
 
 interface SidebarIconBarProps {
@@ -70,7 +71,7 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
         title="What-If Analysis (Ctrl/Cmd + Shift + W)"
         aria-label="Open What-If Analysis"
       >
-        <span className="icon">🎭</span>
+        <Sparkles className="icon" size={20} strokeWidth={2} />
         {state.floatingPanels.includes('what-if') && (
           <span className="floating-indicator">↗</span>
         )}
@@ -85,7 +86,7 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
         title="Props (Ctrl/Cmd + Shift + P)"
         aria-label="Open Properties Panel"
       >
-        <span className="icon">📝</span>
+        <FileText className="icon" size={20} strokeWidth={2} />
         {state.floatingPanels.includes('properties') && (
           <span className="floating-indicator">↗</span>
         )}
@@ -100,7 +101,7 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
         title="Tools (Ctrl/Cmd + Shift + T)"
         aria-label="Open Tools Panel"
       >
-        <span className="icon">🛠️</span>
+        <Wrench className="icon" size={20} strokeWidth={2} />
         {state.floatingPanels.includes('tools') && (
           <span className="floating-indicator">↗</span>
         )}

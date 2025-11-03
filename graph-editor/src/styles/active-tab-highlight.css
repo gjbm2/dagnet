@@ -38,7 +38,7 @@
 }
 
 .dock-tab:has([data-object-type="graph"]) {
-  background-color: rgba(251, 191, 36, 0.08) !important; /* Subtle amber tint */
+  background-color: rgba(156, 163, 175, 0.08) !important; /* Subtle grey tint */
 }
 
 /* Active tab underlines - darker version of each class color with transition */
@@ -68,6 +68,6 @@
 }
 
 .dock-tab.dock-tab-active:has([data-object-type="graph"]) {
-  border-bottom-color: #d97706 !important; /* Dark amber/yellow */
+  border-bottom-color: #6B7280 !important; /* Dark grey */
   transition: border-bottom-color 0.2s ease;
 }

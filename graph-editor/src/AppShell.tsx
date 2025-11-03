@@ -292,6 +292,24 @@ function AppShellContent() {
         dockLayoutRef.updateTab(tab.id, realTab, false);
         setAddedTabs(prev => new Set([...prev, tab.id]));
         
+        // Check and update dirty state immediately after updating placeholder
+        setTimeout(() => {
+          const file = fileRegistry.getFile(tab.fileId);
+          console.log(`AppShell: Checking dirty state for placeholder tab ${tab.id}, file:`, file);
+          if (file) {
+            const tabElement = document.querySelector(`[data-tab-id="${tab.id}"]`);
+            console.log(`AppShell: Found tab element:`, tabElement);
+            if (tabElement) {
+              tabElement.setAttribute('data-is-dirty', String(file.isDirty));
+              console.log(`AppShell: ✅ Updated placeholder tab ${tab.id} dirty state to ${file.isDirty}`);
+            } else {
+              console.warn(`AppShell: ❌ Could not find tab element for ${tab.id}`);
+            }
+          } else {
+            console.warn(`AppShell: ❌ Could not find file ${tab.fileId} in registry`);
+          }
+        }, 50);
+        
       } else if (!isInLayout && !hasBeenAdded && !recentlyClosedRef.current.has(tab.id)) {
         // New tab not in layout - ADD to rc-dock (but not if recently closed)
         console.log(`AppShell: Adding new tab ${tab.id} to rc-dock`);
@@ -352,6 +370,25 @@ function AppShellContent() {
 
         dockLayoutRef.dockMove(dockTab, targetPanel, 'middle');
         setAddedTabs(prev => new Set([...prev, tab.id]));
+        
+        // Check and update dirty state immediately after adding tab
+        // Use setTimeout to ensure the DOM has updated
+        setTimeout(() => {
+          const file = fileRegistry.getFile(tab.fileId);
+          console.log(`AppShell: Checking dirty state for new tab ${tab.id}, file:`, file);
+          if (file) {
+            const tabElement = document.querySelector(`[data-tab-id="${tab.id}"]`);
+            console.log(`AppShell: Found tab element:`, tabElement);
+            if (tabElement) {
+              tabElement.setAttribute('data-is-dirty', String(file.isDirty));
+              console.log(`AppShell: ✅ Updated new tab ${tab.id} dirty state to ${file.isDirty}`);
+            } else {
+              console.warn(`AppShell: ❌ Could not find tab element for ${tab.id}`);
+            }
+          } else {
+            console.warn(`AppShell: ❌ Could not find file ${tab.fileId} in registry`);
+          }
+        }, 50);
       }
     });
   }, [tabs, dockLayoutRef, addedTabs, tabOperations, extractTabIds]);
@@ -431,13 +468,20 @@ function AppShellContent() {
     };
   }, [dockLayoutRef, activeTabId, tabs]);
 
-  // Listen for native close button clicks and trigger closeTab
+  // Listen for native close button clicks on MAIN APP TABS and trigger closeTab
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       
       // Check if click is on rc-dock's native close button
       if (target.classList.contains('dock-tab-close-btn')) {
+        // Only handle if it's NOT in a GraphEditor container (GraphEditor has its own logic)
+        const isInGraphEditor = target.closest('.graph-editor-dock-container');
+        if (isInGraphEditor) {
+          console.log('AppShell: Close button in GraphEditor, ignoring');
+          return; // Let GraphEditor handle it
+        }
+        
         e.stopPropagation();
         e.preventDefault();
         
@@ -445,7 +489,7 @@ function AppShellContent() {
         const tabEl = target.closest('.dock-tab') as HTMLElement;
         const tabId = tabEl?.getAttribute('data-node-key');
         
-        console.log('AppShell: Native close button clicked for tab:', tabId);
+        console.log('AppShell: Native close button clicked for main app tab:', tabId);
         
         if (tabId) {
           // Call closeTab which will dispatch dagnet:tabClosed event and handle everything
@@ -648,6 +692,7 @@ function AppShellContent() {
             className="dock-tab-title"
             data-tab-id={tab.id}
             data-is-focused={tab.id === activeTabId ? 'true' : 'false'}
+            data-is-dirty="false"
             data-object-type={objectType}
             onClick={() => {
               console.log('Tab title clicked (from loadTab), setting active:', tab.id);

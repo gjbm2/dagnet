@@ -94,12 +94,33 @@ class FileRegistry {
           data,
           originalData: structuredClone(data),
           isDirty: false, // Files are clean when first loaded
+          isInitializing: true, // Allow validation/normalization without marking dirty
           source,
           viewTabs: [],
           lastModified: Date.now()
         };
         
         await db.files.add(file);
+        
+        // Auto-complete initialization after a short delay (fallback for editors that don't explicitly signal)
+        setTimeout(() => {
+          this.completeInitialization(fileId);
+        }, 500);
+      } else {
+        // File loaded from IndexedDB
+        // If file is dirty, it must have already completed initialization
+        // (can't be dirty without user changes, which only happen after init)
+        if (file.isDirty && file.isInitializing) {
+          console.log(`FileRegistry: File ${fileId} loaded from DB as dirty, completing initialization`);
+          file.isInitializing = false;
+        }
+        
+        // If file is still initializing from a previous session, set up timeout
+        if (file.isInitializing) {
+          setTimeout(() => {
+            this.completeInitialization(fileId);
+          }, 500);
+        }
       }
       
       this.files.set(fileId, file);
@@ -139,17 +160,24 @@ class FileRegistry {
     file.data = newData;
     const wasDirty = file.isDirty;
     
-    // Check if data differs from original
-    file.isDirty = newDataStr !== originalDataStr;
+    // During initialization, update both data and originalData to establish normalized baseline
+    // This prevents form validation/normalization from marking files as dirty
+    if (file.isInitializing) {
+      console.log(`FileRegistry: ${fileId} is initializing, updating originalData to normalized state`);
+      file.originalData = structuredClone(newData);
+      file.isDirty = false;
+    } else {
+      // Normal dirty detection: compare against original
+      file.isDirty = newDataStr !== originalDataStr;
+    }
     
     file.lastModified = Date.now();
 
     if (wasDirty !== file.isDirty) {
       console.log(`FileRegistry: ${fileId} dirty state changed:`, wasDirty, '→', file.isDirty);
-      console.log('  oldData === newData:', oldDataStr === newDataStr);
-      console.log('  newData === original:', newDataStr === originalDataStr);
-      if (newDataStr !== originalDataStr && oldDataStr === newDataStr) {
-        console.warn('  ⚠️ File marked dirty on first load! Data was modified during initial load.');
+      if (!file.isInitializing) {
+        console.log('  oldData === newData:', oldDataStr === newDataStr);
+        console.log('  newData === original:', newDataStr === originalDataStr);
       }
     }
 
@@ -165,6 +193,24 @@ class FileRegistry {
         detail: { fileId, isDirty: file.isDirty } 
       }));
     }
+  }
+
+  /**
+   * Complete initialization phase for a file
+   * After this, normal dirty tracking applies
+   */
+  async completeInitialization(fileId: string): Promise<void> {
+    const file = this.files.get(fileId);
+    if (!file || !file.isInitializing) return;
+    
+    console.log(`FileRegistry: Completing initialization for ${fileId}`);
+    file.isInitializing = false;
+    
+    // Update in IndexedDB
+    await db.files.put(file);
+    
+    // Notify listeners of state change
+    this.notifyListeners(fileId, file);
   }
 
   /**

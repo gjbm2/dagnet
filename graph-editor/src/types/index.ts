@@ -57,6 +57,7 @@ export interface FileState<T = any> {
   data?: T;                    // Current state
   originalData?: T;            // For revert
   isDirty?: boolean;           // Shared across all views
+  isInitializing?: boolean;    // True during initial load/validation phase
   
   // Source
   source?: FileSource;

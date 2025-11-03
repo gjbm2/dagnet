@@ -65,19 +65,21 @@
   justify-content: center;
 }
 
-/* Icon emoji */
+/* Icon (Lucide) */
 .sidebar-icon .icon {
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  filter: grayscale(0.3);
-  transition: filter 0.2s;
+  color: #6B7280;
+  opacity: 0.8;
+  transition: color 0.2s, opacity 0.2s;
 }
 
 .sidebar-icon:hover .icon,
 .sidebar-icon.hovered .icon {
-  filter: grayscale(0);
+  color: #3B82F6;
+  opacity: 1;
 }
 
 /* Focus styles for accessibility */
