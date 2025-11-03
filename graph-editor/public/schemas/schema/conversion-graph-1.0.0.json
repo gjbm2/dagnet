@@ -56,7 +56,11 @@
             "entry_weight": { "type": "number", "minimum": 0 }
           }
         },
-        "costs": { "$ref": "#/$defs/Costs" },
+        "costs": { 
+          "$ref": "#/$defs/Costs",
+          "$comment": "DEPRECATED: Node costs are no longer used. Costs are only tracked on edges (cost_gbp and cost_time). Runner calculates per-node costs by accumulating edge costs along paths.",
+          "deprecated": true
+        },
         "residual_behavior": { "$ref": "#/$defs/ResidualBehavior" },
         "layout": {
           "type": "object",
@@ -151,7 +155,13 @@
       "properties": {
         "mean": { "type": "number", "minimum": 0, "maximum": 1 },
         "stdev": { "type": "number", "minimum": 0 },
-        "locked": { "type": "boolean", "default": false }
+        "locked": { "type": "boolean", "default": false },
+        "distribution": { 
+          "type": "string", 
+          "enum": ["normal", "beta", "uniform"],
+          "default": "beta",
+          "description": "Probability distribution type (beta recommended for probabilities)"
+        }
       }
     },
 
@@ -189,7 +199,7 @@
     "ConditionalProbability": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Conditional probability: probability that applies when specific condition is met",
+      "$comment": "Conditional probability: probability that applies when specific condition is met. Display names are auto-generated from condition in UI.",
       "required": ["condition", "p"],
       "properties": {
         "condition": { "$ref": "#/$defs/Condition" },
@@ -216,8 +226,10 @@
     },
 
     "Costs": {
+      "$comment": "DEPRECATED: This nested structure is no longer used. Use flat cost_gbp and cost_time fields on edges instead (both use CostParam). Kept for backward compatibility only.",
       "type": "object",
       "additionalProperties": false,
+      "deprecated": true,
       "properties": {
         "monetary": { "$ref": "#/$defs/MonetaryCost" },
         "time": { "$ref": "#/$defs/TimeCost" }
@@ -225,8 +237,10 @@
     },
 
     "MonetaryCost": {
+      "$comment": "DEPRECATED: No longer used. Use cost_gbp (CostParam) on edges instead. Currency is implicitly GBP.",
       "type": "object",
       "additionalProperties": false,
+      "deprecated": true,
       "properties": {
         "value": { "type": "number", "minimum": 0 },
         "stdev": { "type": "number", "minimum": 0 },
@@ -245,8 +259,10 @@
     },
 
     "TimeCost": {
+      "$comment": "DEPRECATED: No longer used. Use cost_time (CostParam) on edges instead. Units are implicitly days.",
       "type": "object",
       "additionalProperties": false,
+      "deprecated": true,
       "properties": {
         "value": { "type": "number", "minimum": 0 },
         "stdev": { "type": "number", "minimum": 0 },

@@ -346,6 +346,7 @@ export interface GraphData {
       stdev?: number;
       locked?: boolean;
       parameter_id?: string;
+      distribution?: 'normal' | 'beta' | 'uniform';
     };
     conditional_p?: Array<{
       condition: {
@@ -356,6 +357,7 @@ export interface GraphData {
         stdev?: number;
         locked?: boolean;
         parameter_id?: string;
+        distribution?: 'normal' | 'beta' | 'uniform';
       };
     }>;
     weight_default?: number;
