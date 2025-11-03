@@ -494,7 +494,6 @@ export function EnhancedSelector({
             placeholder={placeholder || `Select or enter ${type} ID...`}
             disabled={disabled}
             className="enhanced-selector-input"
-            data-allow-global-shortcuts="true"
             style={{
               color: inputTextColor,
               fontStyle: inputFontStyle

@@ -333,7 +333,7 @@ export default function PropertiesPanel({
             cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
             cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
             probability: edge.p?.mean || 0,
-            stdev: edge.p?.stdev || 0,
+            stdev: edge.p?.stdev,
             locked: edge.p?.locked || false,
             description: edge.description || '',
             cost_gbp: (edge as any).cost_gbp,
@@ -362,7 +362,7 @@ export default function PropertiesPanel({
             cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
             cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
             probability: edge.p?.mean || 0,
-            stdev: edge.p?.stdev || 0,
+            stdev: edge.p?.stdev,
             locked: edge.p?.locked || false,
             description: edge.description || '',
             cost_gbp: (edge as any).cost_gbp,
@@ -909,8 +909,8 @@ export default function PropertiesPanel({
                     />
 
                     {/* Case Status */}
-                    <div style={{ marginBottom: '20px' }}>
-                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Status</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
+                      <label style={{ fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>Status</label>
                       <select
                         value={caseData.status}
                         onChange={(e) => {
@@ -929,8 +929,8 @@ export default function PropertiesPanel({
                           }
                         }}
                         style={{ 
-                          width: '100%', 
-                          padding: '8px', 
+                          width: '150px', 
+                          padding: '6px 8px', 
                           border: '1px solid #ddd', 
                           borderRadius: '4px',
                           boxSizing: 'border-box'
@@ -1275,11 +1275,12 @@ export default function PropertiesPanel({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>
                       Weight Default
-                      <Info 
-                        size={14} 
-                        style={{ color: '#9CA3AF', cursor: 'help' }}
-                        title="Used to distribute residual probability among unspecified edges from the same source"
-                      />
+                      <span title="Used to distribute residual probability among unspecified edges from the same source">
+                        <Info 
+                          size={14} 
+                          style={{ color: '#9CA3AF', cursor: 'help' }}
+                        />
+                      </span>
                     </label>
                     <input
                       type="number"
@@ -1395,6 +1396,20 @@ export default function PropertiesPanel({
                     onCommit={(value) => {
                           updateEdge('probability', value);
                     }}
+                    isUnbalanced={(() => {
+                      if (!graph || !selectedEdge) return false;
+                      const currentEdge = selectedEdge;
+                      const siblings = graph.edges.filter((e: any) => {
+                        if (currentEdge.case_id && currentEdge.case_variant) {
+                          return e.from === currentEdge.from && 
+                                 e.case_id === currentEdge.case_id && 
+                                 e.case_variant === currentEdge.case_variant;
+                        }
+                        return e.from === currentEdge.from;
+                      });
+                      const total = siblings.reduce((sum, e: any) => sum + (e.p?.mean || 0), 0);
+                      return Math.abs(total - 1.0) > 0.001; // Allow small floating point errors
+                    })()}
                     onRebalance={(value) => {
                       if (graph && selectedEdgeId) {
                         const currentEdge = graph.edges.find((e: any) => e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
@@ -1454,70 +1469,65 @@ export default function PropertiesPanel({
                     showSlider={true}
                     showBalanceButton={true}
                   />
-                  {selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) && (
-                    <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
-                      For single-path variants, leave at 1.0. For multi-path variants, probabilities must sum to 1.0.
-                    </div>
-                  )}
 
                     {/* Std Dev - now shown for ALL edges */}
                     {/* Std Dev and Distribution - inline layout */}
-                    <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', marginTop: '16px' }}>
+                    <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', marginTop: '16px' }}>
                       {/* Std Dev */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
-                    <input
-                      data-field="stdev"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={localEdgeData.stdev !== undefined ? localEdgeData.stdev : ''}
-                      onChange={(e) => {
-                        const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                        setLocalEdgeData({...localEdgeData, stdev: value});
-                      }}
-                      onBlur={() => {
-                        updateEdge('stdev', localEdgeData.stdev);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          updateEdge('stdev', localEdgeData.stdev);
-                          e.currentTarget.blur();
-                        }
-                      }}
-                      placeholder="Optional"
-                      style={{ 
-                            width: '100px', 
+                        <input
+                          data-field="stdev"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={localEdgeData.stdev !== undefined ? localEdgeData.stdev : ''}
+                          onChange={(e) => {
+                            const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                            setLocalEdgeData({...localEdgeData, stdev: value});
+                          }}
+                          onBlur={() => {
+                            updateEdge('stdev', localEdgeData.stdev);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              updateEdge('stdev', localEdgeData.stdev);
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          placeholder="Optional"
+                          style={{ 
+                            width: '70px', 
                             padding: '6px 8px', 
-                        border: '1px solid #ddd', 
-                        borderRadius: '4px',
-                        boxSizing: 'border-box'
-                      }}
-                    />
-                  </div>
+                            border: '1px solid #ddd', 
+                            borderRadius: '4px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                      </div>
 
                       {/* Distribution */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Distribution</label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
                         <select
                           value={selectedEdge?.p?.distribution || 'beta'}
-                      onChange={(e) => {
+                          onChange={(e) => {
                             updateEdge('distribution', e.target.value);
                           }}
-                      style={{ 
-                            width: '120px', 
+                          style={{ 
+                            width: '90px', 
                             padding: '6px 8px', 
-                        border: '1px solid #ddd', 
-                        borderRadius: '4px',
-                        boxSizing: 'border-box'
-                      }}
+                            border: '1px solid #ddd', 
+                            borderRadius: '4px',
+                            boxSizing: 'border-box'
+                          }}
                         >
                           <option value="beta">Beta</option>
                           <option value="normal">Normal</option>
                           <option value="uniform">Uniform</option>
                         </select>
+                      </div>
                     </div>
-                  </div>
 
                     {/* Locked Probability - moved here from below */}
                     <div style={{ marginBottom: '16px' }}>
@@ -1659,52 +1669,52 @@ export default function PropertiesPanel({
                     </div>
 
                     {/* Std Dev and Distribution - inline layout */}
-                    <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
                       {/* Std Dev */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
-                      <input
-                        type="number"
+                        <input
+                          type="number"
                           min="0"
-                        step="0.01"
+                          step="0.01"
                           value={localEdgeData.cost_gbp?.stdev || ''}
-                        onChange={(e) => {
-                          const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                          setLocalEdgeData((prev: any) => ({
-                            ...prev,
-                            cost_gbp: { ...prev.cost_gbp, stdev: newValue }
-                          }));
-                        }}
-                        onBlur={() => {
-                          if (graph && selectedEdgeId) {
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((e: any) => 
-                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                            );
-                            if (edgeIndex >= 0) {
+                          onChange={(e) => {
+                            const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                            setLocalEdgeData((prev: any) => ({
+                              ...prev,
+                              cost_gbp: { ...prev.cost_gbp, stdev: newValue }
+                            }));
+                          }}
+                          onBlur={() => {
+                            if (graph && selectedEdgeId) {
+                              const next = structuredClone(graph);
+                              const edgeIndex = next.edges.findIndex((e: any) => 
+                                e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                              );
+                              if (edgeIndex >= 0) {
                                 (next.edges[edgeIndex] as any).cost_gbp = localEdgeData.cost_gbp;
                                 if (next.metadata) {
                                   next.metadata.updated_at = new Date().toISOString();
                                 }
-                              setGraph(next);
+                                setGraph(next);
                                 saveHistoryState('Update cost GBP std dev', undefined, selectedEdgeId);
+                              }
                             }
-                          }
-                        }}
+                          }}
                           placeholder="Optional"
-                            style={{ 
-                            width: '100px',
+                          style={{ 
+                            width: '70px',
                             padding: '6px 8px', 
-                              border: '1px solid #ddd', 
+                            border: '1px solid #ddd', 
                             borderRadius: '4px',
                             boxSizing: 'border-box'
-                        }}
-                      />
-                    </div>
+                          }}
+                        />
+                      </div>
 
                       {/* Distribution */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Distribution</label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
                         <select
                           value={localEdgeData.cost_gbp?.distribution || 'normal'}
                           onChange={(e) => {
@@ -1731,7 +1741,7 @@ export default function PropertiesPanel({
                             }
                           }}
                           style={{ 
-                            width: '120px', 
+                            width: '100px', 
                             padding: '6px 8px', 
                             border: '1px solid #ddd', 
                             borderRadius: '4px',
@@ -1744,8 +1754,8 @@ export default function PropertiesPanel({
                           <option value="uniform">Uniform</option>
                           <option value="beta">Beta</option>
                         </select>
-                  </div>
-                </div>
+                      </div>
+                    </div>
                   </CollapsibleSection>
                   
                   {/* SUB-SECTION 2.3: Cost (Time) */}
@@ -1869,111 +1879,106 @@ export default function PropertiesPanel({
                       />
                         </div>
 
-                    <div style={{ marginBottom: '16px' }}>
-                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Std Dev</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={localEdgeData.cost_time?.stdev || ''}
-                        onChange={(e) => {
-                          const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                          setLocalEdgeData((prev: any) => ({
-                            ...prev,
-                            cost_time: { ...prev.cost_time, stdev: newValue }
-                          }));
-                        }}
-                        onBlur={() => {
-                          if (graph && selectedEdgeId) {
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((e: any) => 
-                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                            );
-                            if (edgeIndex >= 0) {
-                              (next.edges[edgeIndex] as any).cost_time = localEdgeData.cost_time;
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
+                    {/* Std Dev and Distribution - inline layout */}
+                    <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+                      {/* Std Dev */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={localEdgeData.cost_time?.stdev || ''}
+                          onChange={(e) => {
+                            const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                            setLocalEdgeData((prev: any) => ({
+                              ...prev,
+                              cost_time: { ...prev.cost_time, stdev: newValue }
+                            }));
+                          }}
+                          onBlur={() => {
+                            if (graph && selectedEdgeId) {
+                              const next = structuredClone(graph);
+                              const edgeIndex = next.edges.findIndex((e: any) => 
+                                e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                              );
+                              if (edgeIndex >= 0) {
+                                (next.edges[edgeIndex] as any).cost_time = localEdgeData.cost_time;
+                                if (next.metadata) {
+                                  next.metadata.updated_at = new Date().toISOString();
+                                }
+                                setGraph(next);
+                                saveHistoryState('Update cost time std dev', undefined, selectedEdgeId);
                               }
-                              setGraph(next);
-                              saveHistoryState('Update cost time std dev', undefined, selectedEdgeId);
-                            }
                             }
                           }}
-                        placeholder="Optional"
+                          placeholder="Optional"
                           style={{
-                          width: '100%',
-                          padding: '8px', 
-                          border: '1px solid #ddd',
-                          borderRadius: '4px',
-                          boxSizing: 'border-box'
-                        }}
-                      />
+                            width: '70px',
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
                       </div>
 
-                    <div style={{ marginBottom: '16px' }}>
-                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Distribution</label>
-                      <select
-                        value={localEdgeData.cost_time?.distribution || 'lognormal'}
-                        onChange={(e) => {
-                          setLocalEdgeData((prev: any) => ({
-                            ...prev,
-                            cost_time: { ...prev.cost_time, distribution: e.target.value }
-                          }));
-                          if (graph && selectedEdgeId) {
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((edge: any) => 
-                              edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                            );
-                            if (edgeIndex >= 0) {
-                              if (!(next.edges[edgeIndex] as any).cost_time) {
-                                (next.edges[edgeIndex] as any).cost_time = {};
+                      {/* Distribution */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
+                        <select
+                          value={localEdgeData.cost_time?.distribution || 'lognormal'}
+                          onChange={(e) => {
+                            setLocalEdgeData((prev: any) => ({
+                              ...prev,
+                              cost_time: { ...prev.cost_time, distribution: e.target.value }
+                            }));
+                            if (graph && selectedEdgeId) {
+                              const next = structuredClone(graph);
+                              const edgeIndex = next.edges.findIndex((edge: any) => 
+                                edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+                              );
+                              if (edgeIndex >= 0) {
+                                if (!(next.edges[edgeIndex] as any).cost_time) {
+                                  (next.edges[edgeIndex] as any).cost_time = {};
+                                }
+                                (next.edges[edgeIndex] as any).cost_time.distribution = e.target.value;
+                                if (next.metadata) {
+                                  next.metadata.updated_at = new Date().toISOString();
+                                }
+                                setGraph(next);
+                                saveHistoryState('Update cost time distribution', undefined, selectedEdgeId);
                               }
-                              (next.edges[edgeIndex] as any).cost_time.distribution = e.target.value;
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                              saveHistoryState('Update cost time distribution', undefined, selectedEdgeId);
                             }
-                          }
-                        }}
-                        style={{ 
-                          width: '100%', 
-                          padding: '8px', 
-                          border: '1px solid #ddd', 
-                          borderRadius: '4px',
-                          boxSizing: 'border-box'
-                        }}
-                      >
-                        <option value="normal">Normal</option>
-                        <option value="lognormal">Lognormal</option>
-                        <option value="gamma">Gamma</option>
-                        <option value="uniform">Uniform</option>
-                        <option value="beta">Beta</option>
-                      </select>
-                  </div>
+                          }}
+                          style={{ 
+                            width: '100px', 
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '4px',
+                            boxSizing: 'border-box'
+                          }}
+                        >
+                          <option value="normal">Normal</option>
+                          <option value="lognormal">Lognormal</option>
+                          <option value="gamma">Gamma</option>
+                          <option value="uniform">Uniform</option>
+                          <option value="beta">Beta</option>
+                        </select>
+                      </div>
+                    </div>
                   </CollapsibleSection>
                 </CollapsibleSection>
 
                 {/* Conditional Probabilities */}
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'center',
-                    marginBottom: '12px'
-                  }}>
-                    <h3 style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>Conditional Probabilities</h3>
-                </div>
+                <CollapsibleSection title="Conditional Probabilities" icon={TrendingUp} defaultOpen={localConditionalP.length > 0}>
 
                   {localConditionalP.length === 0 && (
                     <div style={{ 
-                      padding: '12px', 
-                      background: '#f8f9fa', 
-                      borderRadius: '4px',
                       fontSize: '12px',
-                      color: '#666',
-                      marginBottom: '12px'
+                      color: '#9CA3AF',
+                      marginBottom: '12px',
+                      fontStyle: 'italic'
                     }}>
                       No conditional probabilities defined.
                     </div>
@@ -2147,7 +2152,7 @@ export default function PropertiesPanel({
                                           }
                                         }
                                       }}
-                                      style={{
+                    style={{ 
                                         border: 'none',
                                         background: 'transparent',
                                         cursor: 'pointer',
@@ -2334,91 +2339,94 @@ export default function PropertiesPanel({
                               />
                             </div>
 
-                            {/* Std Dev */}
-                            <div style={{ marginBottom: '16px' }}>
-                              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Std Dev</label>
-                              <input
-                                type="number"
-                                min="0"
-                                max="1"
-                                step="0.01"
-                                value={cond.p?.stdev || ''}
-                                onChange={(e) => {
-                                  const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                                  const newConditions = [...localConditionalP];
-                                  newConditions[index] = {
-                                    ...newConditions[index],
-                                    p: { ...newConditions[index].p, stdev: newValue }
-                                  };
-                                  setLocalConditionalP(newConditions);
-                                }}
-                                onBlur={() => {
-                                  if (selectedEdgeId && graph) {
-                                    const nextGraph = structuredClone(graph);
-                                    const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                    );
-                                    if (edgeIndex >= 0) {
-                                      nextGraph.edges[edgeIndex].conditional_p = localConditionalP as any;
-                                      if (nextGraph.metadata) {
-                                        nextGraph.metadata.updated_at = new Date().toISOString();
+                            {/* Std Dev and Distribution - stacked layout for space */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+                              {/* Std Dev */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="1"
+                                  step="0.01"
+                                  value={cond.p?.stdev || ''}
+                                  onChange={(e) => {
+                                    const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                    const newConditions = [...localConditionalP];
+                                    newConditions[index] = {
+                                      ...newConditions[index],
+                                      p: { ...newConditions[index].p, stdev: newValue }
+                                    };
+                                    setLocalConditionalP(newConditions);
+                                  }}
+                                  onBlur={() => {
+                                    if (selectedEdgeId && graph) {
+                                      const nextGraph = structuredClone(graph);
+                                      const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
+                                        edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+                                      );
+                                      if (edgeIndex >= 0) {
+                                        nextGraph.edges[edgeIndex].conditional_p = localConditionalP as any;
+                                        if (nextGraph.metadata) {
+                                          nextGraph.metadata.updated_at = new Date().toISOString();
+                                        }
+                                        setGraph(nextGraph);
+                                        saveHistoryState('Update conditional probability std dev', undefined, selectedEdgeId);
                                       }
-                                      setGraph(nextGraph);
-                                      saveHistoryState('Update conditional probability std dev', undefined, selectedEdgeId);
                                     }
-                                  }
-                                }}
-                                placeholder="Optional"
-                    style={{ 
-                      width: '100%', 
-                      padding: '8px', 
-                      border: '1px solid #ddd', 
-                      borderRadius: '4px', 
-                      boxSizing: 'border-box'
-                    }}
-                  />
-                            </div>
+                                  }}
+                                  placeholder="Optional"
+                                  style={{ 
+                                    width: '70px', 
+                                    padding: '6px 8px', 
+                                    border: '1px solid #ddd', 
+                                    borderRadius: '4px', 
+                                    boxSizing: 'border-box'
+                                  }}
+                                />
+                              </div>
 
-                            {/* Distribution */}
-                            <div style={{ marginBottom: '16px' }}>
-                              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Distribution</label>
-                              <select
-                                value={cond.p?.distribution || 'beta'}
-                                onChange={(e) => {
-                                  const newConditions = [...localConditionalP];
-                                  newConditions[index] = {
-                                    ...newConditions[index],
-                                    p: { ...newConditions[index].p, distribution: e.target.value as any }
-                                  };
-                                  setLocalConditionalP(newConditions);
-                                  
-                                  if (selectedEdgeId && graph) {
-                                    const nextGraph = structuredClone(graph);
-                                    const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                    );
-                                    if (edgeIndex >= 0) {
-                                      nextGraph.edges[edgeIndex].conditional_p = newConditions as any;
-                                      if (nextGraph.metadata) {
-                                        nextGraph.metadata.updated_at = new Date().toISOString();
+                              {/* Distribution */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
+                                <select
+                                  value={cond.p?.distribution || 'beta'}
+                                  onChange={(e) => {
+                                    const newConditions = [...localConditionalP];
+                                    newConditions[index] = {
+                                      ...newConditions[index],
+                                      p: { ...newConditions[index].p, distribution: e.target.value as any }
+                                    };
+                                    setLocalConditionalP(newConditions);
+                                    
+                                    if (selectedEdgeId && graph) {
+                                      const nextGraph = structuredClone(graph);
+                                      const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
+                                        edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+                                      );
+                                      if (edgeIndex >= 0) {
+                                        nextGraph.edges[edgeIndex].conditional_p = newConditions as any;
+                                        if (nextGraph.metadata) {
+                                          nextGraph.metadata.updated_at = new Date().toISOString();
+                                        }
+                                        setGraph(nextGraph);
+                                        saveHistoryState('Update conditional probability distribution', undefined, selectedEdgeId);
                                       }
-                                      setGraph(nextGraph);
-                                      saveHistoryState('Update conditional probability distribution', undefined, selectedEdgeId);
                                     }
-                                  }
-                                }}
-                                style={{ 
-                                  width: '100%', 
-                                  padding: '8px', 
-                                  border: '1px solid #ddd', 
-                                  borderRadius: '4px',
-                                  boxSizing: 'border-box'
-                                }}
-                              >
-                                <option value="normal">Normal</option>
-                                <option value="beta">Beta</option>
-                                <option value="uniform">Uniform</option>
-                              </select>
+                                  }}
+                                  style={{ 
+                                    width: '90px', 
+                                    padding: '6px 8px', 
+                                    border: '1px solid #ddd', 
+                                    borderRadius: '4px',
+                                    boxSizing: 'border-box'
+                                  }}
+                                >
+                                  <option value="normal">Normal</option>
+                                  <option value="beta">Beta</option>
+                                  <option value="uniform">Uniform</option>
+                                </select>
+                              </div>
                             </div>
                 </div>
                 )}
@@ -2430,6 +2438,7 @@ export default function PropertiesPanel({
                 <button
                     type="button"
                     className="property-add-btn"
+                    style={{ width: '100%' }}
                   onClick={() => {
                       const newCondition = {
                         condition: { visited: [] },
@@ -2479,19 +2488,7 @@ export default function PropertiesPanel({
                     + Conditional Probability
                   </button>
 
-                  {localConditionalP.length > 0 && (
-                    <div style={{ 
-                      fontSize: '11px', 
-                      color: '#666', 
-                      marginTop: '8px',
-                      padding: '8px',
-                      background: '#f8f9fa',
-                      borderRadius: '4px'
-                    }}>
-                      💡 Conditions are evaluated top-to-bottom (OR logic). Within each condition, all nodes must be visited (AND logic).
-                    </div>
-                  )}
-                </div>
+                </CollapsibleSection>
 
                 {/* Case Edge Info */}
                 {selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) && (() => {
