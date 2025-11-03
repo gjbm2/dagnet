@@ -39,8 +39,25 @@ export default function CollapsibleSection({
 
   // Measure content height for smooth animation
   useEffect(() => {
+    const updateHeight = () => {
+      if (contentRef.current) {
+        setContentHeight(contentRef.current.scrollHeight);
+      }
+    };
+    
+    updateHeight();
+    
+    // Use ResizeObserver to detect when content changes size (e.g., nested sections expanding)
     if (contentRef.current) {
-      setContentHeight(contentRef.current.scrollHeight);
+      const resizeObserver = new ResizeObserver(() => {
+        updateHeight();
+      });
+      
+      resizeObserver.observe(contentRef.current);
+      
+      return () => {
+        resizeObserver.disconnect();
+      };
     }
   }, [children, isOpen]);
 
