@@ -1483,7 +1483,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                             title: title,
                             content: component,
                             cached: true,
-                            closable: false,  // We use custom close button in title
+                            closable: true,
                             group: 'graph-panels'
                           });
                         }

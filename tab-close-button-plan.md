@@ -1,6 +1,6 @@
 ## Tab Close Button Refactor – Implementation Proposal
 
-### 1. Background & Current State (and why recent attempts failed)
+### 1. Background & Current State
 
 The workspace currently relies on rc-dock to render tab chrome for two distinct docking contexts:
 
@@ -12,12 +12,6 @@ Recent iterations attempted to control close-button visibility using CSS overrid
 1. Duplicate close buttons (rc-dock’s native button + custom button).
 2. Inconsistent padding, because CSS attempted to compensate independent of rc-dock’s own layout logic.
 3. Lack of differentiation between tabs in their home slot versus tabs that were floated or re-docked elsewhere.
-4. **Root cause recap (last 20 minutes):** while experimenting we repeatedly:
-   - Hid rc-dock’s native close button globally, unintentionally removing the only close button for main app tabs.
-   - Added custom close buttons and padding purely through CSS, ignoring rc-dock’s `closable` flag and DOM structure described in `graph-editor/src/docs/SIDEBAR_AND_PANELS_ARCHITECTURE.md`.
-   - Failed to scope CSS by docking context (top-level vs `.graph-editor-dock-container`), producing padding and visibility bugs for non-closable tabs.
-   - Ignored the panel lifecycle mechanics documented in *SIDEBAR_AND_PANELS_ARCHITECTURE.md* (e.g. expectations around floating panels and `floatingPanels` bookkeeping), hence the layout logic never flipped `closable` and CSS hacks were used instead.
-   - Worked without a full mental model of the nested rc-dock instances; every change fought the framework instead of using the existing state machinery.
 
 ### 2. Target Behaviour
 
@@ -32,12 +26,10 @@ Recent iterations attempted to control close-button visibility using CSS overrid
 1. **Remove CSS-based suppression/creation of close buttons**
    - Delete custom `.dock-tab-close-btn` overrides and the auxiliary `tab-close-btn` stylings currently used to fake the control.
    - Let rc-dock render (or not render) its native close button purely via the `closable` flag.
-   - Re-align with the architectural rule from `SIDEBAR_AND_PANELS_ARCHITECTURE.md`: “Close buttons (✕) should be hidden when tabs are in their home position, visible elsewhere.”
 
 2. **Authoritative control via tab metadata**
    - Sidebar tabs should be created with `closable: false` (already true in the layout definitions, but needs to stay consistent for dynamic additions in `GraphEditor.tsx`).
    - Introduce runtime logic that inspects layout changes and toggles `closable` to `true` when a sidebar tab leaves its home slot, and back to `false` when it returns.
-   - This honours the persisted state design described under “Panel ID Tracking” and “Close Button Visibility” in `SIDEBAR_AND_PANELS_ARCHITECTURE.md`.
 
 3. **Scoped styling updates**
    - Adjust CSS so that:
@@ -45,7 +37,6 @@ Recent iterations attempted to control close-button visibility using CSS overrid
      - Tabs with `closable: false` keep tight padding.
      - rc-dock’s native close button (`.dock-tab-close`) receives explicit sizing/colour for visibility.
    - All styles remain context-aware: selector chains should differentiate main app tabs vs. GraphEditor sidebar tabs.
-   - Tie selectors to stable identifiers highlighted in the architecture doc (`data-dockid="graph-sidebar-panel"`, `.graph-editor-dock-container`) instead of brittle structural guesses.
 
 4. **Layout-change observer enhancements**
    - The existing `handleLayoutChange` in `GraphEditor.tsx` already fires on structural changes. Extend it to:
@@ -53,22 +44,10 @@ Recent iterations attempted to control close-button visibility using CSS overrid
      - Use `dockLayoutRef.current.find(tabId)` to locate each tab and determine whether its containing panel is the home panel (`graph-sidebar-panel` within the GraphEditor dock container).
      - Call `dockLayoutRef.current.updateTab(tabId, { closable: boolean })` if the value needs to switch. Guard with a memo map to avoid churn.
    - Ensure updates run after rc-dock settles (setTimeout 0 or microtask) to avoid race conditions.
-   - Sync this logic with the `floatingPanels` bookkeeping already described in `SIDEBAR_AND_PANELS_ARCHITECTURE.md` so state persistence remains consistent.
 
 5. **Migration / cleanup tasks**
    - Remove legacy global listeners or CSS hacks (`:has`, negative margins, etc.) introduced during the quick fixes.
    - Re-run visual QA to confirm there is exactly one close button per closable tab, aligned with rc-dock’s expected padding.
-   - Document the resulting behavior in `SIDEBAR_AND_PANELS_ARCHITECTURE.md` so future contributors follow the authoritative approach rather than re-introducing CSS-based overrides.
-
-### 3a. Lessons Learned (why the previous approach failed)
-
-- **Misunderstood rc-dock cascade:** rc-dock already adds/removes its close button based on `closable`. Overriding the DOM directly caused duplicates and broken padding.
-- **Ignored architecture contract:** The architecture doc specifies that sidebar close visibility depends on location. The CSS-only approach bypassed the business logic that tracks floating panels.
-- **Brittle selectors:** Global selectors (`.dock-tab-close-btn`, negative margins) caught unrelated tabs (navigator, menu), causing padding despite non-closable configuration.
-- **Lack of state synchronisation:** Without toggling `closable` when tabs moved, CSS couldn’t determine intent, leading to contradictory states.
-- **No consistent mental model:** Skipping the layout lifecycle (initial render, component reinjection, `floatingPanels` updates) meant each patch contradicted rc-dock’s own behaviour.
-
-The new proposal resolves these by centering on rc-dock’s intended control surface (`closable`) plus the layout/state mechanisms already present in the sidebar architecture.
 
 ### 4. Implementation Outline
 

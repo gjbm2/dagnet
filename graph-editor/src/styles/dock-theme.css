@@ -72,13 +72,8 @@ body, body * {
 /* Space for Navigator button when navigator is unpinned */
 /* Apply ONLY to the top-left docked panel (marked by JavaScript) */
 
-.app-shell.nav-unpinned .top-left-docked-panel .dock-bar {
+.app-shell.nav-unpinned .top-left-docked-panel > .dock-bar {
   padding: 0 4px 0 115px !important;
-}
-
-/* Override: nested rc-dock instances (GraphEditor sidebar) should NOT get the padding */
-.app-shell.nav-unpinned .top-left-docked-panel .graph-editor-dock-container .dock-bar {
-  padding: 0 4px !important;
 }
 
 /* No padding when navigator is pinned */
@@ -94,31 +89,16 @@ body, body * {
   margin-right: 8px; /* Space for drop zones - don't make too small */
   clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); /* Notch on top-right */
   transition: border-bottom-color 0.2s ease; /* Animate underline color change */
-  max-width: 240px; /* Allow tabs to be wider for close button */
-  min-width: 80px; /* Minimum width for readability */
-  position: relative; /* For absolute positioning of close button */
+  max-width: 200px; /* Prevent tabs from getting too wide */
 }
 
-/* Tab button (rc-dock's clickable area) - base padding */
-.dock-tab-btn {
-  padding: 6px 12px !important;
-}
-
-/* Tab title container - ensure no wrapping and proper spacing */
+/* Tab title container - ensure no wrapping */
 .dock-tab-title {
   display: flex !important;
   align-items: center !important;
   white-space: nowrap !important;
-  gap: 10px !important; /* More space between all elements */
-  width: 100% !important;
-}
-
-/* Tab title text - allow it to shrink and show ellipsis */
-.dock-tab-title > span {
   overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  white-space: nowrap !important;
-  min-width: 0 !important; /* Allow flex item to shrink below content size */
+  max-width: 100% !important;
 }
 
 .dock-tab:hover {
@@ -143,54 +123,27 @@ body, body * {
   display: none !important;
 }
 
-/* Hide rc-dock's built-in close buttons ONLY in GraphEditor sidebar (we use custom ones there) */
-.graph-editor-dock-container .dock-tab .dock-tab-close,
-.graph-editor-dock-container .dock-tab-btn .dock-tab-close,
-.graph-editor-dock-container .dock-tab-btn > button,
-.graph-editor-dock-container button.dock-tab-btn-close,
-.graph-editor-dock-container .dock-tab-close-btn-wrapper,
-.graph-editor-dock-container .dock-tab svg,
-.graph-editor-dock-container span.dock-tab-close-x {
-  display: none !important;
-  visibility: hidden !important;
-  width: 0 !important;
-  height: 0 !important;
-  opacity: 0 !important;
-}
-
-/* Custom tab close button (used in GraphEditor sidebar) - positioned absolutely */
-.graph-editor-dock-container .dock-tab-close-btn {
-  opacity: 1; /* Always fully visible */
-  transition: all 0.15s ease;
-  font-size: 15px; /* Larger X for better visibility */
-  font-weight: 600; /* Bold X */
-  width: 22px;
-  height: 22px;
-  min-width: 22px; /* Prevent shrinking */
+/* Tab close button - base styles */
+.dock-tab-close-btn {
+  opacity: 0; /* Hidden by default, show on tab hover */
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  font-size: 12px; /* Slightly larger X */
+  width: 16px;
+  height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  border-radius: 4px;
-  color: #666;
-  background-color: rgba(0, 0, 0, 0.05);
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 10;
 }
 
-/* GraphEditor sidebar tabs get extra padding for custom close buttons */
-.graph-editor-dock-container .dock-tab-btn {
-  padding-right: 36px !important;
+/* Show close button on tab hover */
+.dock-tab:hover .dock-tab-close-btn {
+  opacity: 0.7;
 }
 
-/* Highlight custom close button on hover */
-.graph-editor-dock-container .dock-tab-close-btn:hover {
-  background-color: rgba(0, 0, 0, 0.2);
-  color: #000;
-  transform: scale(1.1) translateY(-50%); /* Keep centered while scaling */
+.dock-tab-close-btn:hover {
+  opacity: 1 !important;
+  background-color: rgba(0, 0, 0, 0.1);
 }
 
 /* ============================================================
