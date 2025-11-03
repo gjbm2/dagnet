@@ -10,6 +10,8 @@ interface ColorSelectorProps {
   label?: string;
   /** Whether the selector is disabled */
   disabled?: boolean;
+  /** Compact mode: shows only current color swatch, opens popup on click */
+  compact?: boolean;
 }
 
 // Standard preset colors (9 options)
@@ -38,20 +40,42 @@ export function ColorSelector({
   value,
   onChange,
   label = 'Color',
-  disabled = false
+  disabled = false,
+  compact = false
 }: ColorSelectorProps) {
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customColor, setCustomColor] = useState(value);
+  const [showPopup, setShowPopup] = useState(false);
   const colorInputRef = useRef<HTMLInputElement>(null);
+  const compactSwatchRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
 
   // Update customColor when value changes externally
   useEffect(() => {
     setCustomColor(value);
   }, [value]);
+  
+  // Click outside to close popup
+  useEffect(() => {
+    if (!compact || !showPopup) return;
+    
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popupRef.current && !popupRef.current.contains(e.target as Node) &&
+          compactSwatchRef.current && !compactSwatchRef.current.contains(e.target as Node)) {
+        setShowPopup(false);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [compact, showPopup]);
 
   const handlePresetClick = (presetValue: string) => {
     onChange(presetValue);
     setShowCustomPicker(false);
+    if (compact) {
+      setShowPopup(false);
+    }
   };
 
   const handleCustomClick = () => {
@@ -66,11 +90,88 @@ export function ColorSelector({
     const newColor = e.target.value;
     setCustomColor(newColor);
     onChange(newColor);
+    if (compact) {
+      setShowPopup(false);
+    }
   };
 
   // Check if current value is a preset
   const isPreset = PRESET_COLORS.some(preset => preset.value === value);
 
+  // Compact mode: just show a small color swatch
+  if (compact) {
+    return (
+      <div className="color-selector-compact">
+        <div
+          ref={compactSwatchRef}
+          className="color-selector-compact-swatch"
+          style={{ backgroundColor: value }}
+          onClick={() => !disabled && setShowPopup(!showPopup)}
+          title="Change color"
+        />
+        {showPopup && (
+          <div ref={popupRef} className="color-selector-compact-popup">
+            {/* Preset colors grid */}
+            <div className="color-selector-presets">
+              {PRESET_COLORS.map(preset => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  className={`color-selector-preset ${value === preset.value ? 'selected' : ''}`}
+                  style={{ backgroundColor: preset.value }}
+                  onClick={() => handlePresetClick(preset.value)}
+                  disabled={disabled}
+                  title={preset.name}
+                >
+                  {value === preset.value && (
+                    <span className="color-selector-checkmark">✓</span>
+                  )}
+                </button>
+              ))}
+
+              {/* Custom color button */}
+              <button
+                type="button"
+                className={`color-selector-preset custom ${!isPreset ? 'selected' : ''}`}
+                style={{ 
+                  backgroundColor: !isPreset ? value : '#fff',
+                  border: '2px dashed #9CA3AF'
+                }}
+                onClick={handleCustomClick}
+                disabled={disabled}
+                title="Custom color"
+              >
+                {!isPreset && (
+                  <span className="color-selector-checkmark">✓</span>
+                )}
+                {isPreset && <span style={{ fontSize: '16px' }}>+</span>}
+              </button>
+            </div>
+
+            {/* Hidden HTML5 color input - positioned near popup for better picker placement */}
+            <input
+              ref={colorInputRef}
+              type="color"
+              value={customColor}
+              onChange={handleCustomColorChange}
+              style={{ 
+                position: 'absolute',
+                bottom: '0',
+                left: '0',
+                width: '1px',
+                height: '1px',
+                opacity: 0,
+                pointerEvents: 'none'
+              }}
+              disabled={disabled}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Normal mode
   return (
     <div className="color-selector">
       {/* Label */}
@@ -114,13 +215,21 @@ export function ColorSelector({
           {isPreset && <span style={{ fontSize: '16px' }}>+</span>}
         </button>
 
-        {/* Hidden HTML5 color input */}
+        {/* Hidden HTML5 color input - positioned for better picker placement */}
         <input
           ref={colorInputRef}
           type="color"
           value={customColor}
           onChange={handleCustomColorChange}
-          style={{ display: 'none' }}
+          style={{ 
+            position: 'absolute',
+            bottom: '0',
+            left: '0',
+            width: '1px',
+            height: '1px',
+            opacity: 0,
+            pointerEvents: 'none'
+          }}
           disabled={disabled}
         />
       </div>

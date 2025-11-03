@@ -578,3 +578,4 @@ Similar pattern to case/parameter drops:
 - Focus management after drop
 - Touch device support (may need separate implementation)
 
+

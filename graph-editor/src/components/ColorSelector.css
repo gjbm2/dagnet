@@ -2,6 +2,7 @@
 
 .color-selector {
   margin-bottom: 16px;
+  position: relative;
 }
 
 .color-selector-label {
@@ -92,5 +93,42 @@
   font-size: 12px;
   font-family: 'Courier New', monospace;
   color: #6B7280;
+}
+
+/* Compact mode */
+.color-selector-compact {
+  position: relative;
+  display: inline-block;
+}
+
+.color-selector-compact-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 2px solid #ddd;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.color-selector-compact-swatch:hover {
+  border-color: #999;
+}
+
+.color-selector-compact-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  min-width: 200px;
+}
+
+.color-selector-compact-popup .color-selector-presets {
+  position: relative;
 }
 

@@ -313,3 +313,38 @@ select.property-input {
   margin-bottom: 12px;
 }
 
+
+/* Smaller, less prominent labels throughout properties panel */
+.properties-panel label,
+.properties-panel .property-label {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: #6B7280 !important;
+}
+
+/* Inline label layout (label left of field) */
+.property-field-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.property-field-inline label {
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.property-field-inline input,
+.property-field-inline select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* General text size reduction */
+.properties-panel input,
+.properties-panel select,
+.properties-panel textarea {
+  font-size: 13px !important;
+}
+
