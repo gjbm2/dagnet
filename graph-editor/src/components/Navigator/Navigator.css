@@ -36,9 +36,19 @@
   align-items: center;
 }
 
+.search-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #999;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .navigator-search-input {
   flex: 1;
-  padding: 6px 32px 6px 8px;
+  padding: 6px 32px 6px 32px; /* Left padding for search icon */
   border: 1px solid #d0d0d0;
   border-radius: 4px;
   font-size: 13px;

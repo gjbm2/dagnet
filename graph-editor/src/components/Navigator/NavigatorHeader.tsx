@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
+import { Search, Settings } from 'lucide-react';
 import './Navigator.css';
 
 /**
@@ -39,9 +40,10 @@ export function NavigatorHeader() {
       {/* Full-width search bar with filter dropdown */}
       <div className="navigator-search-container">
         <div className="search-input-container">
+          <Search className="search-icon" size={16} strokeWidth={2} />
           <input
             type="text"
-            placeholder="🔍 Search parameters, contexts, cases..."
+            placeholder="Search parameters, contexts, cases..."
             value={state.searchQuery}
             onChange={(e) => operations.setSearchQuery(e.target.value)}
             className="navigator-search-input"
@@ -64,7 +66,7 @@ export function NavigatorHeader() {
             onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
             title="Filter and Sort Options"
           >
-            ⚙️
+            <Settings size={16} strokeWidth={2} />
             {activeFilterCount > 0 && (
               <span className="filter-badge">{activeFilterCount}</span>
             )}

@@ -3,6 +3,7 @@ import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { roundTo4DP } from '@/utils/rounding';
 import ReactFlow, {
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
   useNodesState,
@@ -3665,7 +3666,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         snapGrid={[1, 1]}
         style={{ background: '#f8fafc' }}
       >
-        <Background />
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#ddd" />
         <Controls />
         <MiniMap />
         

@@ -8,6 +8,7 @@ import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
 import { NavigatorSectionContextMenu } from '../NavigatorSectionContextMenu';
 import { RepositoryItem, ObjectType } from '../../types';
 import { registryService, RegistryItem } from '../../services/registryService';
+import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
 import './Navigator.css';
 
 /**
@@ -45,6 +46,7 @@ export function NavigatorContent() {
   const fileRegistry = useFileRegistry();
   const [contextMenu, setContextMenu] = useState<{ item: RepositoryItem; x: number; y: number } | null>(null);
   const [sectionContextMenu, setSectionContextMenu] = useState<{ type: ObjectType; x: number; y: number } | null>(null);
+  const [dirtyStateVersion, setDirtyStateVersion] = useState(0); // Force re-render on dirty state changes
   const [registryItems, setRegistryItems] = useState<{
     parameters: RegistryItem[];
     contexts: RegistryItem[];
@@ -79,10 +81,14 @@ export function NavigatorContent() {
     loadAllItems();
   }, [state.selectedRepo, state.selectedBranch, items.length, tabs.length, state.registryIndexes]); // Reload when repo/branch changes OR when files/tabs change OR when indexes load
 
-  // Listen for file dirty state changes and refresh registry items
+  // Listen for file dirty state changes and refresh registry items + force re-render
   useEffect(() => {
     const handleFileDirtyChanged = () => {
       console.log('🔄 NavigatorContent: File dirty state changed, refreshing registry items...');
+      
+      // Force re-render by incrementing version (this will trigger navigatorEntries useMemo)
+      setDirtyStateVersion(v => v + 1);
+      
       // Trigger a refresh of registry items
       const loadAllItems = async () => {
         try {
@@ -175,7 +181,7 @@ export function NavigatorContent() {
     }
     
     return Array.from(entriesMap.values());
-  }, [items, tabs, registryItems]);
+  }, [items, tabs, registryItems, dirtyStateVersion]);
 
   // Apply filters and sorting
   const filteredAndSortedEntries = useMemo(() => {
@@ -398,7 +404,7 @@ export function NavigatorContent() {
           <>
             <ObjectTypeSection
               title="Graphs"
-              icon="📊"
+              icon={getObjectTypeTheme('graph').icon}
               entries={groupedEntries.graph}
               sectionType="graph"
               isExpanded={state.expandedSections.includes('graphs')}
@@ -416,7 +422,7 @@ export function NavigatorContent() {
 
             <ObjectTypeSection
               title="Parameters"
-              icon="📋"
+              icon={getObjectTypeTheme('parameter').icon}
               entries={groupedEntries.parameter}
               sectionType="parameter"
               isExpanded={state.expandedSections.includes('parameters')}
@@ -437,7 +443,7 @@ export function NavigatorContent() {
 
             <ObjectTypeSection
               title="Contexts"
-              icon="📄"
+              icon={getObjectTypeTheme('context').icon}
               entries={groupedEntries.context}
               sectionType="context"
               isExpanded={state.expandedSections.includes('contexts')}
@@ -457,7 +463,7 @@ export function NavigatorContent() {
 
             <ObjectTypeSection
               title="Cases"
-              icon="🗂"
+              icon={getObjectTypeTheme('case').icon}
               entries={groupedEntries.case}
               sectionType="case"
               isExpanded={state.expandedSections.includes('cases')}
@@ -477,7 +483,7 @@ export function NavigatorContent() {
 
             <ObjectTypeSection
               title="Nodes"
-              icon="🔵"
+              icon={getObjectTypeTheme('node').icon}
               entries={groupedEntries.node}
               sectionType="node"
               isExpanded={state.expandedSections.includes('nodes')}

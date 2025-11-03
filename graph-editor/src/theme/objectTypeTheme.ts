@@ -35,8 +35,8 @@ export interface ObjectTypeTheme {
 
 export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
   graph: {
-    lightColor: '#FEF3C7',  // light amber
-    accentColor: '#FBBF24', // amber
+    lightColor: '#F3F4F6',  // light grey
+    accentColor: '#9CA3AF', // grey
     icon: FileJson,
     label: 'Graph',
     emoji: '📊'

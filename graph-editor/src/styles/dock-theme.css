@@ -205,17 +205,10 @@ body, body * {
   overflow: hidden;
 }
 
-/* Minimum size for floating windows - try multiple selectors */
-.dock-box.dock-float,
-.dock-float,
-[data-float="true"] {
+/* Minimum size for floating windows - target the actual floating panel element */
+.dock-panel[style*="left:"],
+.dock-panel[style*="top:"] {
   min-width: 250px !important; /* Prevent tiny floating panels */
-  min-height: 200px !important;
-}
-
-/* Also apply to the fbox container */
-.dock-fbox > .dock-box {
-  min-width: 250px !important;
   min-height: 200px !important;
 }
 

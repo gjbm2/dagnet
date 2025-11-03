@@ -10,8 +10,10 @@
 5. Context support
 
 ### Medium Priority
-3. Nodal levels in the editor (some nodes are 'tall')   
-4. auto-re-route doesn't start automatically (needs kicking)
+- Nodal levels in the editor (some nodes are 'tall') & Sankey L-R mode with dyanmic node sizes
+- auto-re-route doesn't start automatically (needs kicking)
 
 ### Low Priority
-(None currently)
+- main app tabs are showing maximise button even when they're maximised, it seems
+- maxmised tabs are appearing on top (zorder) of navigator button (incorrect)
+- maximised tabs in main app are not reflecting padding

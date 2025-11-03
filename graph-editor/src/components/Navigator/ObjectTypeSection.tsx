@@ -2,7 +2,7 @@ import React from 'react';
 import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
-import { ChevronRight, FileText, TrendingUp, Coins, Clock, Package } from 'lucide-react';
+import { ChevronRight, FileText, TrendingUp, Coins, Clock, Package, LucideIcon } from 'lucide-react';
 import '../../styles/file-state-indicators.css';
 
 /**
@@ -28,7 +28,7 @@ interface NavigatorEntry {
 
 interface ObjectTypeSectionProps {
   title: string;
-  icon: string;
+  icon: LucideIcon;
   entries: NavigatorEntry[];
   sectionType: ObjectType;
   isExpanded: boolean;
@@ -48,7 +48,7 @@ interface ObjectTypeSectionProps {
  */
 export function ObjectTypeSection({
   title,
-  icon,
+  icon: IconComponent,
   entries,
   sectionType,
   isExpanded,
@@ -67,9 +67,8 @@ export function ObjectTypeSection({
   const sectionRef = React.useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = React.useState<number>(0);
   
-  // Get theme colors and icon for this object type
+  // Get theme colors for this object type
   const theme = getObjectTypeTheme(sectionType);
-  const IconComponent = theme.icon;
   
   // Get the fileId of the active tab for comparison
   const activeTab = tabs.find(t => t.id === activeTabId);
