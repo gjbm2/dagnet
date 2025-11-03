@@ -15,11 +15,13 @@ import {
   FileText,      // Context
   Sliders,       // Parameter
   ArrowRight,    // Edge
-  Settings,      // Special
-  Key            // Credentials
+  Settings,      // Settings & Special
+  Key,           // Credentials
+  Info,          // About
+  FileType       // Markdown
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'edge' | 'special' | 'credentials';
+export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'edge' | 'special' | 'credentials' | 'settings' | 'about' | 'markdown';
 
 export interface ObjectTypeTheme {
   /** Light pastel background color */
@@ -90,6 +92,27 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     icon: Key,
     label: 'Credentials',
     emoji: '🔑'
+  },
+  settings: {
+    lightColor: '#F3F4F6',  // light grey
+    accentColor: '#9CA3AF', // grey
+    icon: Settings,
+    label: 'Settings',
+    emoji: '⚙️'
+  },
+  about: {
+    lightColor: '#E0E7FF',  // light indigo
+    accentColor: '#6366F1', // indigo
+    icon: Info,
+    label: 'About',
+    emoji: 'ℹ️'
+  },
+  markdown: {
+    lightColor: '#F3F4F6',  // light grey
+    accentColor: '#6B7280', // grey-500
+    icon: FileType,
+    label: 'Document',
+    emoji: '📄'
   }
 };
 
