@@ -7,7 +7,8 @@
 .enhanced-selector-label {
   font-weight: 500;
   font-size: 14px;
-  display: block;
+  display: flex;
+  align-items: center;
   margin-bottom: 6px;
   color: #333;
 }
@@ -22,44 +23,14 @@
   transition: all 0.2s ease;
 }
 
-/* Type-specific pastel borders (5px thick when disconnected, 6px when connected) */
-.enhanced-selector-input-wrapper.type-node {
-  background: linear-gradient(to right, #DBEAFE 0%, #DBEAFE 100%); /* Light blue for nodes */
+/* Type-specific pastel borders using CSS variables from theme */
+.enhanced-selector-input-wrapper {
+  background: var(--selector-light-color, #f3f4f6);
   padding: 5px;
 }
 
-.enhanced-selector-input-wrapper.type-node.connected {
-  background: linear-gradient(to right, #93C5FD 0%, #93C5FD 100%); /* Darker blue when connected */
-  padding: 6px;
-}
-
-.enhanced-selector-input-wrapper.type-parameter {
-  background: linear-gradient(to right, #D1FAE5 0%, #D1FAE5 100%); /* Light green for parameters */
-  padding: 5px;
-}
-
-.enhanced-selector-input-wrapper.type-parameter.connected {
-  background: linear-gradient(to right, #6EE7B7 0%, #6EE7B7 100%); /* Darker green when connected */
-  padding: 6px;
-}
-
-.enhanced-selector-input-wrapper.type-case {
-  background: linear-gradient(to right, #FCE7F3 0%, #FCE7F3 100%); /* Light pink for cases */
-  padding: 5px;
-}
-
-.enhanced-selector-input-wrapper.type-case.connected {
-  background: linear-gradient(to right, #F9A8D4 0%, #F9A8D4 100%); /* Darker pink when connected */
-  padding: 6px;
-}
-
-.enhanced-selector-input-wrapper.type-context {
-  background: linear-gradient(to right, #FEF3C7 0%, #FEF3C7 100%); /* Light yellow for contexts */
-  padding: 5px;
-}
-
-.enhanced-selector-input-wrapper.type-context.connected {
-  background: linear-gradient(to right, #FDE68A 0%, #FDE68A 100%); /* Darker yellow when connected */
+.enhanced-selector-input-wrapper.connected {
+  background: var(--selector-accent-color, #9ca3af);
   padding: 6px;
 }
 
@@ -214,6 +185,8 @@
   color: #6B7280;
   background: #F9FAFB;
   border-bottom: 1px solid #E5E7EB;
+  display: flex;
+  align-items: center;
 }
 
 /* Suggestion items */

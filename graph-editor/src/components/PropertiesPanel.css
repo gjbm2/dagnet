@@ -1,0 +1,299 @@
+/* Standardized Property Panel Styles */
+
+/* Property input fields - standardized styling */
+.property-input {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  background: white;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+}
+
+.property-input:focus {
+  outline: none;
+  border-color: #0066cc;
+  box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+}
+
+.property-input:hover:not(:focus):not(:disabled) {
+  border-color: #999;
+}
+
+.property-input:disabled {
+  background-color: #f5f5f5;
+  color: #999;
+  cursor: not-allowed;
+}
+
+/* Connected to registry indicator */
+.property-input[data-connected="true"] {
+  background: linear-gradient(to right, #f3f4f6, white);
+  border-left: 3px solid #6366f1;
+}
+
+/* Modified from registry value */
+.property-input[data-modified="true"] {
+  background: #fef3c7;
+  border-left: 3px solid #fbbf24;
+}
+
+/* Textarea variant */
+textarea.property-input {
+  font-family: inherit;
+  min-height: 60px;
+  resize: vertical;
+}
+
+/* Select variant */
+select.property-input {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* Input with unit suffix */
+.property-input-with-unit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.property-input-with-unit input {
+  flex: 1;
+}
+
+.property-input-with-unit .unit {
+  font-size: 11px;
+  color: #666;
+  min-width: 30px;
+  flex-shrink: 0;
+}
+
+/* Labels */
+.property-label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: #333;
+}
+
+/* Section spacing */
+.property-section {
+  margin-bottom: 16px;
+}
+
+.property-section:last-child {
+  margin-bottom: 0;
+}
+
+/* Checkbox labels */
+.property-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #333;
+  padding: 4px 0;
+}
+
+.property-checkbox-label input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+/* Helper text */
+.property-helper-text {
+  font-size: 11px;
+  color: #666;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+/* Button group for toggles (e.g., Normal/Case) */
+.property-button-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.property-toggle-btn {
+  padding: 8px 16px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  flex: 1;
+}
+
+.property-toggle-btn:hover:not(.active) {
+  background: #f8f9fa;
+  border-color: #999;
+}
+
+.property-toggle-btn.active {
+  background: #0066cc;
+  color: #fff;
+  border-color: #0066cc;
+}
+
+.property-toggle-btn.active.case-type {
+  background: #8b5cf6;
+  border-color: #8b5cf6;
+}
+
+/* Read-only field styling */
+.property-readonly {
+  background: #f8f9fa;
+  color: #666;
+  border-color: #e0e0e0;
+  cursor: default;
+}
+
+/* Inline field layout */
+.property-inline-group {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.property-inline-group > div {
+  flex: 1;
+}
+
+/* Info box for special sections (e.g., What-If, Case Edge Summary) */
+.property-info-box {
+  padding: 12px;
+  background: #f0f7ff;
+  border-radius: 4px;
+  border: 2px solid currentColor;
+  margin-bottom: 16px;
+}
+
+.property-info-box.case-info {
+  background: #f8f9fa;
+  border-color: #e9ecef;
+}
+
+.property-info-box.what-if-info {
+  background: #fff9e6;
+  border-color: #ffd700;
+}
+
+/* Color picker styling */
+.property-color-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.property-color-picker input[type="color"] {
+  width: 60px;
+  height: 32px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.property-color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+
+/* Variant cards */
+.variant-card {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  background: #f9f9f9;
+}
+
+.variant-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.variant-card-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: #333;
+}
+
+.variant-remove-btn {
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  transition: background 0.15s ease;
+}
+
+.variant-remove-btn:hover {
+  background: #c82333;
+}
+
+/* Add button */
+.property-add-btn {
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.property-add-btn:hover {
+  background: #e9ecef;
+  border-color: #0066cc;
+  color: #0066cc;
+}
+
+/* Properties Panel container */
+.properties-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #f8f9fa;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.properties-panel-content {
+  padding: 8px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* Graph metadata section (no selection) */
+.graph-metadata-section {
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+

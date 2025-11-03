@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { List, Circle, CircleDot, HardDrive } from 'lucide-react';
 import './NavigatorControls.css';
 
 export type FilterMode = 'all' | 'dirty' | 'open' | 'local';
@@ -27,10 +28,10 @@ interface DropdownOption<T> {
 }
 
 const FILTER_OPTIONS: DropdownOption<FilterMode>[] = [
-  { value: 'all', label: 'All files', icon: '☑' },
-  { value: 'dirty', label: 'Dirty only', icon: '○' },
-  { value: 'open', label: 'Open only', icon: '○' },
-  { value: 'local', label: 'Local only', icon: '○' },
+  { value: 'all', label: 'All', icon: '☑' },
+  { value: 'dirty', label: 'Dirty', icon: '○' },
+  { value: 'open', label: 'Open', icon: '○' },
+  { value: 'local', label: 'Local', icon: '○' },
 ];
 
 const SORT_OPTIONS: DropdownOption<SortMode>[] = [

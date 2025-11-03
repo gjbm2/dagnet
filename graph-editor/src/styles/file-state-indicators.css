@@ -29,17 +29,7 @@
   display: inline-block;
 }
 
-.status-dot.open {
-  background-color: #0066cc;  /* Blue for open */
-}
-
-.status-dot.dirty {
-  background-color: #ff9800;  /* Orange for dirty */
-}
-
-.status-dot.open-dirty {
-  background: linear-gradient(135deg, #0066cc 50%, #ff9800 50%);
-}
+/* Status dots removed - using text colors instead (like Cursor IDE) */
 
 /* Multiple status dots */
 .status-dots {
@@ -137,8 +127,9 @@
   background-color: #e9ecef;
 }
 
+/* Active (focused) file - subtle grey background */
 .navigator-item.active {
-  background-color: #e3f2fd;
+  background-color: #e8e8e8;
 }
 
 .navigator-item-name {
@@ -148,6 +139,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Open files - blue text (like Cursor) */
+.navigator-item-name.is-open {
+  color: #0066cc;
+}
+
+/* Dirty files - darker orange text (like Cursor) */
+.navigator-item-name.is-dirty {
+  color: #ea580c; /* Darker orange for better contrast */
 }
 
 .navigator-item-name.local-only {
@@ -325,7 +326,7 @@
 }
 
 .section-index-icon.dirty {
-  color: #ff9800;
+  color: #ea580c; /* Darker orange for better contrast */
 }
 
 

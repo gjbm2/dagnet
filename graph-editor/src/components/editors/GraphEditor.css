@@ -120,25 +120,21 @@
   pointer-events: none !important;
 }
 
-/* Hide close buttons on sidebar tabs when docked in their home position (graph-sidebar-panel) */
+/* Hide close buttons on sidebar tabs ONLY when docked in their home position */
+/* Use the panel's data-dockid to identify the home sidebar panel */
 [data-dockid="graph-sidebar-panel"] .dock-tab-close-btn {
   display: none !important;
-  visibility: hidden !important;
-  opacity: 0 !important;
-  width: 0 !important;
-  height: 0 !important;
-  pointer-events: none !important;
 }
 
-/* Show close button on floating panels (in fbox) - MUST override hide rule */
-.dock-box.dock-fbox .dock-panel .dock-tab-close-btn,
-.dock-fbox .dock-tab-close-btn {
-  display: inline-block !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-  width: auto !important;
-  height: auto !important;
-  pointer-events: auto !important;
+/* Show close buttons on ALL other panels (floating, docked elsewhere, app tabs, etc.) */
+/* This rule is in dock-theme.css as the base behavior */
+
+/* Sidebar tabs - smaller font size (both docked and floating) */
+/* Use data-node-key to identify sidebar tabs regardless of position */
+[data-node-key="what-if-tab"] .dock-tab,
+[data-node-key="properties-tab"] .dock-tab,
+[data-node-key="tools-tab"] .dock-tab {
+  font-size: 11px !important;
 }
 
 /* Floating panels styling */

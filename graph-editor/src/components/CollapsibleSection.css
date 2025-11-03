@@ -1,27 +1,51 @@
-/* Collapsible Section Component Styling */
+/* Collapsible Section Component Styling - Adobe Lightroom inspired */
 
 .collapsible-section {
-  border-bottom: 1px solid #E5E7EB;
+  background: #fff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: visible; /* Allow sticky headers */
+  transition: box-shadow 0.2s ease;
+}
+
+.collapsible-section:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .collapsible-section:last-child {
-  border-bottom: none;
+  margin-bottom: 0;
 }
 
-/* Header */
+/* Header - card-like with better spacing */
 .collapsible-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 10px 12px;
   cursor: pointer;
   user-select: none;
-  background: #fff;
-  transition: background-color 0.15s ease;
+  background: #fafafa;
+  border-bottom: 1px solid transparent;
+  transition: all 0.2s ease;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-radius: 6px 6px 0 0;
 }
 
 .collapsible-section-header:hover {
-  background-color: #F9FAFB;
+  background-color: #f5f5f5;
+}
+
+/* Add border when section is open */
+.collapsible-section-header.is-open {
+  border-bottom-color: #e5e5e5;
+}
+
+/* Shadow when header is sticky */
+.collapsible-section-header.is-sticky {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .collapsible-section-header-left {
@@ -29,14 +53,18 @@
   align-items: center;
   gap: 8px;
   flex: 1;
+  min-width: 0;
 }
 
 /* Expand/collapse icon */
 .collapsible-section-expand-icon {
   font-size: 10px;
-  color: #6B7280;
-  transition: transform 0.2s ease;
+  color: #666;
+  transition: transform 0.25s ease;
   display: inline-block;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
 }
 
 .collapsible-section-expand-icon.open {
@@ -45,18 +73,23 @@
 
 /* Optional icon before title */
 .collapsible-section-icon {
-  font-size: 16px;
+  font-size: 14px;
+  flex-shrink: 0;
 }
 
-/* Title */
+/* Title - cleaner hierarchy */
 .collapsible-section-title {
   font-weight: 600;
-  font-size: 14px;
-  color: #1F2937;
+  font-size: 13px;
+  color: #333;
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Optional badge */
@@ -64,24 +97,46 @@
   font-size: 11px;
   padding: 2px 6px;
   border-radius: 3px;
-  background: #E5E7EB;
-  color: #6B7280;
+  background: #e5e5e5;
+  color: #666;
   font-weight: 500;
+  flex-shrink: 0;
 }
 
-/* Content container (animated) */
+/* Content container (animated with better easing) */
 .collapsible-section-content {
   overflow: hidden;
-  transition: max-height 0.3s ease;
+  transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   background: #fff;
+  border-radius: 0 0 6px 6px;
 }
 
 .collapsible-section-content.open {
   /* max-height is set inline based on content height */
 }
 
-/* Inner content padding */
+/* Inner content padding - more generous */
 .collapsible-section-content-inner {
-  padding: 16px;
+  padding: 14px;
+}
+
+/* Checkbox-enabled section variant - checkbox in top right */
+.collapsible-section-header.with-checkbox {
+  position: relative;
+}
+
+.collapsible-section-checkbox {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  cursor: pointer;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+}
+
+/* Adjust header right padding when checkbox present */
+.collapsible-section-header.with-checkbox .collapsible-section-header-left {
+  padding-right: 28px;
 }
 
