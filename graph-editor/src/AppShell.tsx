@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import DockLayout, { LayoutData } from 'rc-dock';
 import YAML from 'yaml';
 import { TabProvider, useTabContext, fileRegistry } from './contexts/TabContext';
@@ -35,6 +35,7 @@ function AppShellContent() {
   const { state: navState, operations: navOperations } = useNavigatorContext();
   const dialogOps = useDialog();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
+  const recentlyClosedRef = useRef<Set<string>>(new Set());
   
   // Initialize services once
   useEffect(() => {
@@ -263,23 +264,15 @@ function AppShellContent() {
               <IconComponent 
                 size={14} 
                 strokeWidth={2}
-                style={{ color: theme.accentColor, marginRight: '6px', flexShrink: 0 }}
+                style={{ color: theme.accentColor, flexShrink: 0 }}
               />
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.title}</span>
-              <div
-                className="dock-tab-close-btn"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  await tabOperations.closeTab(tab.id);
-                }}
-                style={{
-                  marginLeft: '8px',
-                  cursor: 'pointer',
-                  borderRadius: '2px'
-                }}
-              >
-                ✕
-              </div>
+              <span style={{ 
+                flex: 1, 
+                minWidth: 0, 
+                overflow: 'hidden', 
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}>{tab.title}</span>
             </div>
           ),
           content: (
@@ -290,7 +283,7 @@ function AppShellContent() {
               <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} onChange={() => {}} />
             </div>
           ),
-          closable: false,
+          closable: true,  // Main app tabs are always closable
           cached: true,
           group: 'main-content'
         };
@@ -299,8 +292,8 @@ function AppShellContent() {
         dockLayoutRef.updateTab(tab.id, realTab, false);
         setAddedTabs(prev => new Set([...prev, tab.id]));
         
-      } else if (!isInLayout && !hasBeenAdded) {
-        // New tab not in layout - ADD to rc-dock
+      } else if (!isInLayout && !hasBeenAdded && !recentlyClosedRef.current.has(tab.id)) {
+        // New tab not in layout - ADD to rc-dock (but not if recently closed)
         console.log(`AppShell: Adding new tab ${tab.id} to rc-dock`);
         const objectType = tab.fileId.split('-')[0] as any;
         const EditorComponent = getEditorComponent(objectType, tab.viewMode);
@@ -317,27 +310,20 @@ function AppShellContent() {
               data-is-dirty="false"
               data-object-type={objectType}
               onClick={() => tabOperations.switchTab(tab.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
             >
               <IconComponent 
                 size={14} 
                 strokeWidth={2}
-                style={{ color: theme.accentColor, marginRight: '6px', flexShrink: 0 }}
+                style={{ color: theme.accentColor, flexShrink: 0 }}
               />
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.title}</span>
-              <div
-                className="dock-tab-close-btn"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  await tabOperations.closeTab(tab.id);
-                }}
-                style={{
-                  marginLeft: '8px',
-                  cursor: 'pointer',
-                  borderRadius: '2px'
-                }}
-              >
-                ✕
-              </div>
+              <span style={{ 
+                flex: 1, 
+                minWidth: 0, 
+                overflow: 'hidden', 
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}>{tab.title}</span>
             </div>
           ),
           content: (
@@ -348,7 +334,7 @@ function AppShellContent() {
               <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} onChange={() => {}} />
             </div>
           ),
-          closable: false,
+          closable: true,  // Main app tabs are always closable
           cached: true,
           group: 'main-content'
         };
@@ -444,6 +430,33 @@ function AppShellContent() {
       window.removeEventListener('dagnet:openInFocusedPanel' as any, handleOpenInFocusedPanel);
     };
   }, [dockLayoutRef, activeTabId, tabs]);
+
+  // Listen for native close button clicks and trigger closeTab
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      
+      // Check if click is on rc-dock's native close button
+      if (target.classList.contains('dock-tab-close-btn')) {
+        e.stopPropagation();
+        e.preventDefault();
+        
+        // Find the tab element and get its data-node-key
+        const tabEl = target.closest('.dock-tab') as HTMLElement;
+        const tabId = tabEl?.getAttribute('data-node-key');
+        
+        console.log('AppShell: Native close button clicked for tab:', tabId);
+        
+        if (tabId) {
+          // Call closeTab which will dispatch dagnet:tabClosed event and handle everything
+          tabOperations.closeTab(tabId);
+        }
+      }
+    };
+    
+    document.addEventListener('click', handleClick, true);
+    return () => document.removeEventListener('click', handleClick, true);
+  }, [tabOperations]);
 
   // Listen for tab close events to immediately remove from rc-dock
   useEffect(() => {
@@ -640,39 +653,20 @@ function AppShellContent() {
               console.log('Tab title clicked (from loadTab), setting active:', tab.id);
               tabOperations.switchTab(tab.id);
             }}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
           >
             <IconComponent 
               size={14} 
               strokeWidth={2}
-              style={{ color: theme.accentColor, marginRight: '6px', flexShrink: 0 }}
+              style={{ color: theme.accentColor, flexShrink: 0 }}
             />
-            <span style={{ flex: 1 }}>{tab.title}</span>
-            <div
-              className="custom-tab-close-btn"
-              onClick={async (e) => {
-                e.stopPropagation();
-                console.log('Custom close button clicked for', tab.id);
-                const closed = await tabOperations.closeTab(tab.id);
-                if (!closed) {
-                  console.log('Tab close was cancelled, keeping tab');
-                }
-              }}
-              style={{
-                width: '14px',
-                height: '14px',
-                marginLeft: '8px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: '2px',
-                fontSize: '10px'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.1)'}
-              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-            >
-              ✕
-            </div>
+            <span style={{ 
+              flex: 1, 
+              minWidth: 0, 
+              overflow: 'hidden', 
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}>{tab.title}</span>
           </div>
         ),
         content: (
@@ -686,7 +680,7 @@ function AppShellContent() {
             <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} onChange={() => {}} />
           </div>
         ),
-        closable: false,
+        closable: true,  // Main app tabs are always closable
         cached: true,
         group: 'main-content'
       };
@@ -802,7 +796,13 @@ function AppShellContent() {
       
       if (closedTabIds.length > 0) {
       console.log('AppShell: Tabs removed from rc-dock:', closedTabIds);
-      // These were already removed by our custom close button
+      // Mark as recently closed to prevent re-adding
+      closedTabIds.forEach(id => recentlyClosedRef.current.add(id));
+      // Clear after a short delay (after TabContext has updated)
+      setTimeout(() => {
+        closedTabIds.forEach(id => recentlyClosedRef.current.delete(id));
+      }, 100);
+      
       // Just clean up tracking
       setAddedTabs(prev => {
         const next = new Set(prev);

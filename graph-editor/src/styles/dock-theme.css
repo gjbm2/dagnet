@@ -101,6 +101,11 @@ body, body * {
   max-width: 100% !important;
 }
 
+/* Add padding ONLY for closable tabs (those with close button) */
+.dock-tab:has(.dock-tab-close-btn) .dock-tab-title {
+  padding-right: 20px !important; /* Reserve space for close button (18px button + 4px + 8px margins) */
+}
+
 .dock-tab:hover {
   color: inherit !important; /* Override rc-dock's blue hover color */
   filter: brightness(0.95); /* Darken by 5% on hover */
@@ -123,27 +128,24 @@ body, body * {
   display: none !important;
 }
 
-/* Tab close button - base styles */
+/* Tab close button - rc-dock native button styling (browser tab style) */
 .dock-tab-close-btn {
-  opacity: 0; /* Hidden by default, show on tab hover */
-  transition: opacity 0.15s ease, background-color 0.15s ease;
-  font-size: 12px; /* Slightly larger X */
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-/* Show close button on tab hover */
-.dock-tab:hover .dock-tab-close-btn {
-  opacity: 0.7;
+  /* Don't hide by default - let rc-dock control visibility */
+  transition: background-color 0.15s ease;
+  margin-left: 4px !important; /* Reduced left spacing */
+  margin-right: 8px !important; /* Space on right side before tab edge */
+  cursor: pointer !important;
+  border-radius: 50% !important; /* Circular background */
+  padding: 4px !important;
+  width: 18px !important;
+  height: 18px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
 }
 
 .dock-tab-close-btn:hover {
-  opacity: 1 !important;
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: rgba(0, 0, 0, 0.12) !important; /* Slightly darker circle on hover */
 }
 
 /* ============================================================
@@ -201,6 +203,20 @@ body, body * {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   border-radius: 4px;
   overflow: hidden;
+}
+
+/* Minimum size for floating windows - try multiple selectors */
+.dock-box.dock-float,
+.dock-float,
+[data-float="true"] {
+  min-width: 250px !important; /* Prevent tiny floating panels */
+  min-height: 200px !important;
+}
+
+/* Also apply to the fbox container */
+.dock-fbox > .dock-box {
+  min-width: 250px !important;
+  min-height: 200px !important;
 }
 
 /* ============================================================
