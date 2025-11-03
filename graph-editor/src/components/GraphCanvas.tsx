@@ -2177,32 +2177,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Track Shift key state and handle mouse events globally
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // CRITICAL: Only process if THIS tab is the active tab
-      if (activeTabId !== tabId) {
-        return; // Not our tab, ignore all keyboard events
-      }
-      
       if (e.key === 'Shift') {
         setIsShiftHeld(true);
       }
       
-      // Handle Delete key for selected elements (only when not editing)
+      // Handle Delete key for selected elements
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        // Don't handle if user is typing in form fields or Monaco editor
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor')) {
-          return;
-        }
-        
+        console.log(`[GraphCanvas ${tabId}] Delete key detected`);
         const selectedNodes = nodes.filter(n => n.selected);
         const selectedEdges = edges.filter(e => e.selected);
         
-        console.log('Delete key pressed, selected nodes:', selectedNodes.length, 'selected edges:', selectedEdges.length);
+        console.log(`[GraphCanvas ${tabId}] Delete key pressed, selected nodes:`, selectedNodes.length, 'selected edges:', selectedEdges.length);
         
+        // If there are selected nodes or edges, delete them (even if focus is in an input)
         if (selectedNodes.length > 0 || selectedEdges.length > 0) {
           e.preventDefault();
-          console.log('Calling deleteSelected');
+          console.log(`[GraphCanvas ${tabId}] Calling deleteSelected`);
           deleteSelected();
+          return;
+        }
+        
+        console.log(`[GraphCanvas ${tabId}] No selected elements to delete`);
+        
+        // Otherwise, don't handle if user is typing in form fields or Monaco editor
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor')) {
+          console.log(`[GraphCanvas ${tabId}] Delete ignored - focus in input field`);
+          return;
         }
       }
     };
