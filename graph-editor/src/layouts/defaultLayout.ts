@@ -94,15 +94,12 @@ export const dockGroups = {
   // Main content tabs (graphs, parameters, etc.)
   'main-content': {
     floatable: true,
-    maximizable: true,
+    maximizable: true,  // Show maximize button on app tabs
     tabLocked: false,
     animated: true,
     newWindow: false,
-    // Inject Navigator button into tab bar
-    panelExtra: (panelData: any) => {
-      // This will be replaced with actual component in AppShell
-      return React.createElement('div', { style: { display: 'none' } });
-    },
+    // NOTE: No panelExtra - we position Navigator button separately in AppShell
+    // panelExtra would hide the rc-dock maximize button
     // Enable built-in tab context menu
     // This will show rc-dock's default context menu on right-click
     // We can customize with TabComponent if needed
@@ -138,7 +135,7 @@ export const dockGroups = {
   // Graph-specific panels (for nested rc-dock in graph editor)  
   'graph-panels': {
     floatable: 'singleTab' as any,  // Allow dragging individual tabs out to float
-    maximizable: false,              // Disable maximize button (not useful in sidebar context)
+    maximizable: false,              // HIDE maximize button (not useful in sidebar context)
     tabLocked: false,                // Allow reordering tabs
     animated: true,
     newWindow: false                 // Keep within same window (not browser popup)

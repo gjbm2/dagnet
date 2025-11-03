@@ -345,6 +345,42 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     };
   }, [sidebarState.isResizing, sidebarOps, fileId]);
   
+  // Global click handler for close buttons on floating sidebar panels
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      
+      // Check if click is on a close button
+      if (target.classList.contains('dock-tab-close-btn')) {
+        // Only handle if it's in this GraphEditor instance
+        if (!containerRef.current?.contains(target)) return;
+        
+        // Find the tab element and get its data-node-key
+        const tab = target.closest('.dock-tab') as HTMLElement;
+        const tabId = tab?.getAttribute('data-node-key');
+        
+        console.log(`[GraphEditor ${fileId}] Close button clicked, tab element:`, tab, 'tabId:', tabId);
+        
+        if (tabId && dockRef.current) {
+          console.log(`[GraphEditor ${fileId}] Close button clicked for tab: ${tabId}`);
+          e.stopPropagation();
+          e.preventDefault();
+          
+          // Find the tab in rc-dock and remove it
+          const tabData = dockRef.current.find(tabId);
+          console.log(`[GraphEditor ${fileId}] Found tab data:`, tabData);
+          if (tabData && 'title' in tabData) {
+            console.log(`[GraphEditor ${fileId}] Removing tab from layout: ${tabId}`);
+            dockRef.current.dockMove(tabData, null, 'remove');
+          }
+        }
+      }
+    };
+    
+    document.addEventListener('click', handleClick, true);
+    return () => document.removeEventListener('click', handleClick, true);
+  }, [fileId]);
+  
   // Apply CSS-based fixed width to sidebar panel
   // Using useLayoutEffect so it runs synchronously after DOM updates but before paint
   useLayoutEffect(() => {
@@ -1447,7 +1483,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
                             title: title,
                             content: component,
                             cached: true,
-                            closable: true,
+                            closable: false,  // We use custom close button in title
                             group: 'graph-panels'
                           });
                         }

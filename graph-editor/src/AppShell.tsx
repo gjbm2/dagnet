@@ -706,58 +706,6 @@ function AppShellContent() {
   // Track if we're in the middle of updating tabs to prevent loops
   const isUpdatingTabsRef = React.useRef(false);
 
-  // Save layout to IndexedDB when it changes
-  const handleLayoutChange = React.useCallback((newLayout: LayoutData, currentTabId?: string) => {
-    console.log(`[${new Date().toISOString()}] [AppShell] onLayoutChange called, currentTabId:`, currentTabId);
-    
-    // Update active tab when rc-dock changes active tab (when user clicks tabs)
-    // BUT don't do this if we're in the middle of updating tabs (prevents infinite loop)
-    if (currentTabId && currentTabId !== activeTabId && !isUpdatingTabsRef.current) {
-      console.log(`[${new Date().toISOString()}] [AppShell] rc-dock switched active tab to:`, currentTabId);
-      tabOperations.switchTab(currentTabId);
-    } else if (isUpdatingTabsRef.current) {
-      console.log(`[${new Date().toISOString()}] [AppShell] Ignoring layout change during tab update (preventing loop)`);
-    }
-
-    if (!prevLayoutRef.current) {
-      console.log('AppShell: First layout change, setting prevLayoutRef');
-      prevLayoutRef.current = newLayout;
-      return;
-    }
-
-      const prevTabIds = extractTabIds(prevLayoutRef.current);
-      const newTabIds = extractTabIds(newLayout);
-    
-      console.log('AppShell: Previous tab IDs:', prevTabIds);
-      console.log('AppShell: New tab IDs:', newTabIds);
-      
-    // Find tabs that were closed (in prev but not in new)
-      const closedTabIds = prevTabIds.filter(id => !newTabIds.includes(id));
-      
-      if (closedTabIds.length > 0) {
-      console.log('AppShell: Tabs removed from rc-dock:', closedTabIds);
-      // These were already removed by our custom close button
-      // Just clean up tracking
-      setAddedTabs(prev => {
-        const next = new Set(prev);
-        closedTabIds.forEach(id => next.delete(id));
-        return next;
-      });
-    } else {
-      console.log('AppShell: No tabs closed');
-    }
-
-    prevLayoutRef.current = newLayout;
-
-    // Debounce save to IndexedDB
-    setTimeout(() => {
-      layoutService.saveLayout(newLayout);
-    }, 1000);
-    
-    // Mark top-left docked panel for Navigator button padding
-    markTopLeftDockedPanel();
-  }, [extractTabIds, tabOperations, activeTabId]);
-  
   // Mark the top-left docked panel with a class for CSS targeting
   const markTopLeftDockedPanel = React.useCallback(() => {
     // Remove existing marks
@@ -822,9 +770,62 @@ function AppShellContent() {
       console.log(`AppShell: app-shell classes="${appShellClasses}", computed paddingLeft=${computedPadding}`);
       console.log(`AppShell: panel classes="${panel.className}"`);
     }
-  }, []);
+  }, [navState.isPinned]);
+
+  // Save layout to IndexedDB when it changes
+  const handleLayoutChange = React.useCallback((newLayout: LayoutData, currentTabId?: string) => {
+    console.log(`[${new Date().toISOString()}] [AppShell] onLayoutChange called, currentTabId:`, currentTabId);
+    
+    // Update active tab when rc-dock changes active tab (when user clicks tabs)
+    // BUT don't do this if we're in the middle of updating tabs (prevents infinite loop)
+    if (currentTabId && currentTabId !== activeTabId && !isUpdatingTabsRef.current) {
+      console.log(`[${new Date().toISOString()}] [AppShell] rc-dock switched active tab to:`, currentTabId);
+      tabOperations.switchTab(currentTabId);
+    } else if (isUpdatingTabsRef.current) {
+      console.log(`[${new Date().toISOString()}] [AppShell] Ignoring layout change during tab update (preventing loop)`);
+    }
+
+    if (!prevLayoutRef.current) {
+      console.log('AppShell: First layout change, setting prevLayoutRef');
+      prevLayoutRef.current = newLayout;
+      return;
+    }
+
+      const prevTabIds = extractTabIds(prevLayoutRef.current);
+      const newTabIds = extractTabIds(newLayout);
+    
+      console.log('AppShell: Previous tab IDs:', prevTabIds);
+      console.log('AppShell: New tab IDs:', newTabIds);
+      
+    // Find tabs that were closed (in prev but not in new)
+      const closedTabIds = prevTabIds.filter(id => !newTabIds.includes(id));
+      
+      if (closedTabIds.length > 0) {
+      console.log('AppShell: Tabs removed from rc-dock:', closedTabIds);
+      // These were already removed by our custom close button
+      // Just clean up tracking
+      setAddedTabs(prev => {
+        const next = new Set(prev);
+        closedTabIds.forEach(id => next.delete(id));
+        return next;
+      });
+    } else {
+      console.log('AppShell: No tabs closed');
+    }
+
+    prevLayoutRef.current = newLayout;
+
+    // Debounce save to IndexedDB
+    setTimeout(() => {
+      layoutService.saveLayout(newLayout);
+    }, 1000);
+    
+    // Mark top-left docked panel for Navigator button padding
+    // Delay slightly to let DOM update after layout change
+    setTimeout(markTopLeftDockedPanel, 100);
+  }, [extractTabIds, tabOperations, activeTabId, markTopLeftDockedPanel]);
   
-  // Run markTopLeftDockedPanel after layout changes and on resize
+  // Run markTopLeftDockedPanel after layout changes, nav state changes, and on resize
   React.useEffect(() => {
     if (!dockLayoutRef) return;
     
@@ -840,7 +841,7 @@ function AppShellContent() {
     
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [dockLayoutRef, markTopLeftDockedPanel]);
+  }, [dockLayoutRef, markTopLeftDockedPanel, navState.isPinned]);
 
   return (
     <div className={`app-shell ${navState.isPinned ? 'nav-pinned' : 'nav-unpinned'}`} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', overflow: 'hidden' }}>
