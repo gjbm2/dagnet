@@ -14,6 +14,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# Generated documentation index
+graph-editor/public/docs/index.json
+
 # IDE files
 .vscode/
 .idea/
