@@ -124,15 +124,6 @@ export function ColorSelector({
           disabled={disabled}
         />
       </div>
-
-      {/* Current color display */}
-      <div className="color-selector-current">
-        <div 
-          className="color-selector-current-swatch"
-          style={{ backgroundColor: value }}
-        />
-        <span className="color-selector-current-value">{value}</span>
-      </div>
     </div>
   );
 }

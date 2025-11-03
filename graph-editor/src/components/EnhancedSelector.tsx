@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Plug, Zap, X, ExternalLink, FilePlus } from 'lucide-react';
 import { ObjectType } from '../types';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useValidationMode } from '../contexts/ValidationContext';
@@ -34,6 +35,14 @@ interface EnhancedSelectorProps {
   onPullFromRegistry?: () => Promise<void>;
   onPushToRegistry?: () => Promise<void>;
   onRetrieveLatest?: () => Promise<void>;
+  /** Callback when connected item is clicked */
+  onOpenConnected?: () => void;
+  /** Callback when open icon is clicked in dropdown (without selecting) */
+  onOpenItem?: (itemId: string) => void;
+  /** Callback after creating new item to populate data */
+  onAfterCreate?: (newItem: any) => void;
+  /** Callback when field is cleared (for undo/redo history) */
+  onClear?: () => void;
 }
 
 /**
@@ -61,11 +70,15 @@ export function EnhancedSelector({
   usageContext,
   onPullFromRegistry,
   onPushToRegistry,
-  onRetrieveLatest
+  onRetrieveLatest,
+  onOpenConnected,
+  onOpenItem,
+  onAfterCreate,
+  onClear
 }: EnhancedSelectorProps) {
   console.log(`[${new Date().toISOString()}] [EnhancedSelector] RENDER (type=${type}, value=${value})`);
   const { operations: navOps } = useNavigatorContext();
-  const { operations: tabOps } = useTabContext();
+  const { tabs, operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
   const { graph } = useGraphStore();
   
@@ -78,6 +91,11 @@ export function EnhancedSelector({
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const syncMenuRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  
+  // State for dropdown positioning
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
+  const [isHovered, setIsHovered] = useState(false);
+  const [showShimmer, setShowShimmer] = useState(false);
   
   // Get theme colors and icon for this type
   const theme = getObjectTypeTheme(type as any);
@@ -193,9 +211,59 @@ export function EnhancedSelector({
     }
   }, [autoFocus, value, validationMode, allItems.length]);
 
+  // Calculate dropdown position (accounting for scroll offset)
+  useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES4: Calculate dropdown position`);
+    if (showSuggestions && inputRef.current) {
+      const updatePosition = () => {
+        const rect = inputRef.current!.getBoundingClientRect();
+        const dropdownWidth = 320; // Approximate dropdown width
+        const dropdownHeight = 300; // Approximate max dropdown height
+        
+        // Calculate initial position
+        let top = rect.bottom + 4; // 4px gap below input
+        let left = rect.left;
+        
+        // Ensure dropdown stays within viewport horizontally
+        const viewportWidth = window.innerWidth;
+        if (left + dropdownWidth > viewportWidth - 20) {
+          left = viewportWidth - dropdownWidth - 20; // 20px margin from right edge
+        }
+        if (left < 20) {
+          left = 20; // 20px margin from left edge
+        }
+        
+        // Ensure dropdown stays within viewport vertically
+        const viewportHeight = window.innerHeight;
+        if (top + dropdownHeight > viewportHeight - 20) {
+          // Show above input if there's not enough space below
+          if (rect.top - dropdownHeight - 4 > 20) {
+            top = rect.top - dropdownHeight - 4;
+          } else {
+            top = viewportHeight - dropdownHeight - 20;
+          }
+        }
+        
+        setDropdownPosition({ top, left });
+      };
+      
+      updatePosition();
+      
+      // Update position on scroll
+      const scrollContainer = inputRef.current.closest('.properties-panel, .dock-panel');
+      scrollContainer?.addEventListener('scroll', updatePosition);
+      window.addEventListener('scroll', updatePosition, true); // Use capture to catch all scroll events
+      
+      return () => {
+        scrollContainer?.removeEventListener('scroll', updatePosition);
+        window.removeEventListener('scroll', updatePosition, true);
+      };
+    }
+  }, [showSuggestions]);
+
   // Close dropdowns when clicking outside
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES4: Setup click outside listener`);
+    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES5: Setup click outside listener`);
     const handleClickOutside = (e: MouseEvent) => {
       if (
         wrapperRef.current && 
@@ -229,12 +297,26 @@ export function EnhancedSelector({
     onChange(item.id);
     setShowSuggestions(false);
     inputRef.current?.blur();
+    
+    // Trigger shimmer effect
+    setShowShimmer(true);
+    setTimeout(() => setShowShimmer(false), 600); // Match animation duration
+    
+    // If this is an existing item with data, call onAfterCreate to pull data
+    if (item.data && onAfterCreate) {
+      onAfterCreate(item.data);
+    }
   };
 
   const handleClear = () => {
     setInputValue('');
     onChange('');
     inputRef.current?.focus();
+    
+    // Call onClear callback for undo/redo history
+    if (onClear) {
+      onClear();
+    }
   };
 
   const handleInputFocus = () => {
@@ -255,8 +337,9 @@ export function EnhancedSelector({
   };
 
   const handleCreateNew = async () => {
+    // Prepare default data with the typed ID injected
     const defaultData = { 
-      id: inputValue, 
+      id: inputValue,  // INJECT the typed ID
       name: inputValue, 
       description: '',
       metadata: {
@@ -265,6 +348,7 @@ export function EnhancedSelector({
       }
     };
 
+    // Create the file in FileRegistry with injected ID
     const file = fileRegistry.getOrCreateFile(
       `${type}-${inputValue}.yaml`, 
       type, 
@@ -279,16 +363,24 @@ export function EnhancedSelector({
       type: type,
       size: 0,
       lastModified: new Date().toISOString(),
-      isLocal: true
+      isLocal: true,
+      data: defaultData  // Include the data in the item
     };
     
+    // Add to navigator and open tab
     await navOps.addLocalItem(newItem);
     await tabOps.openTab(newItem, 'interactive');
     await navOps.refreshItems();
 
+    // Update the selector value
     setInputValue(inputValue);
     onChange(inputValue);
     setShowSuggestions(false);
+    
+    // Call onAfterCreate if provided to allow parent to pull data
+    if (onAfterCreate) {
+      onAfterCreate(defaultData);
+    }
   };
 
   const handleSyncAction = async (action: 'pull' | 'push' | 'retrieve') => {
@@ -309,10 +401,37 @@ export function EnhancedSelector({
 
   const displayLabel = label || `${type.charAt(0).toUpperCase() + type.slice(1)}`;
 
+  // Determine visual treatment for the input field based on current value
+  const fileId = value ? `${type}-${value}` : '';
+  const fileState = fileId ? fileRegistry.getFile(fileId) : null;
+  const hasOpenTabs = fileId ? tabs.some((tab: any) => tab.fileId === fileId) : false;
+  const isDirty = fileState?.isDirty || false;
+  const currentItem = allItems.find((item: any) => item.id === value);
+  const isLocalFile = currentItem?.isLocal || false;
+  const inRegistryOnly = currentItem && !currentItem.file_path && !isLocalFile;
+  
+  // Determine input text color and style based on state priority
+  let inputTextColor = 'inherit';
+  let inputFontStyle = 'normal';
+  
+  if (isDirty) {
+    inputTextColor = '#ea580c'; // Orange for dirty
+  } else if (hasOpenTabs) {
+    inputTextColor = '#0066cc'; // Blue for open
+  } else if (inRegistryOnly) {
+    inputTextColor = '#6B7280'; // Grey for registry-only
+  }
+  
+  if (isLocalFile) {
+    inputFontStyle = 'italic';
+  }
+
   return (
     <div 
       className="enhanced-selector" 
       ref={wrapperRef}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
       style={{
         '--selector-accent-color': theme.accentColor,
         '--selector-light-color': theme.lightColor
@@ -330,13 +449,38 @@ export function EnhancedSelector({
 
       {/* Input wrapper with pastel border */}
       <div 
-        className={`enhanced-selector-input-wrapper type-${type} ${isConnected ? 'connected' : ''}`}
+        className={`enhanced-selector-input-wrapper type-${type} ${isConnected ? 'connected' : ''} ${showShimmer ? 'shimmer' : ''}`}
       >
         <div className={`enhanced-selector-inner ${showError ? 'error' : ''} ${showWarning ? 'warning' : ''}`}>
-          {/* Plug icon */}
-          <div className={`enhanced-selector-plug ${isConnected ? 'connected' : ''}`}>
-            {isConnected ? '🔌' : '⚪'}
-          </div>
+          {/* Plug icon - clickable when connected */}
+          <button
+            type="button"
+            className={`enhanced-selector-plug ${isConnected ? 'connected' : ''}`}
+            onClick={() => {
+              if (isConnected && onOpenConnected) {
+                onOpenConnected();
+              }
+            }}
+            disabled={!isConnected || !onOpenConnected}
+            title={isConnected ? "Open connected item" : "Not connected"}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '0 8px',
+              cursor: isConnected && onOpenConnected ? 'pointer' : 'default',
+              display: 'flex',
+              alignItems: 'center'
+            }}
+          >
+            <Plug 
+              size={16} 
+              strokeWidth={2}
+              style={{ 
+                color: isConnected ? '#1F2937' : '#D1D5DB',
+                transition: 'color 0.2s'
+              }}
+            />
+          </button>
 
           {/* Text input */}
           <input
@@ -350,17 +494,34 @@ export function EnhancedSelector({
             placeholder={placeholder || `Select or enter ${type} ID...`}
             disabled={disabled}
             className="enhanced-selector-input"
+            data-allow-global-shortcuts="true"
+            style={{
+              color: inputTextColor,
+              fontStyle: inputFontStyle
+            }}
           />
 
-          {/* Clear button */}
-          {inputValue && !disabled && (
+          {/* Clear button - only visible on hover */}
+          {inputValue && !disabled && isHovered && (
             <button
               type="button"
               onClick={handleClear}
               className="enhanced-selector-clear"
-              title="Clear"
+              title="Clear selection"
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: '0 4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                color: '#9CA3AF',
+                transition: 'color 0.2s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.color = '#6B7280'}
+              onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
             >
-              ✕
+              <X size={14} strokeWidth={2} />
             </button>
           )}
 
@@ -371,9 +532,21 @@ export function EnhancedSelector({
                 type="button"
                 onClick={() => setShowSyncMenu(!showSyncMenu)}
                 className="enhanced-selector-sync"
-                title="Sync options"
+                title="Data sync options"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: '0 8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  color: '#6B7280',
+                  transition: 'color 0.2s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.color = '#F59E0B'}
+                onMouseLeave={(e) => e.currentTarget.style.color = '#6B7280'}
               >
-                ⋮
+                <Zap size={16} strokeWidth={2} />
               </button>
 
               {/* Sync menu dropdown */}
@@ -412,7 +585,40 @@ export function EnhancedSelector({
 
       {/* Suggestions dropdown */}
       {showSuggestions && (groupedItems.length > 0 || isNewId || (!inputValue && registryItems.length > 0)) && validationMode !== 'none' && (
-        <div ref={suggestionsRef} className="enhanced-selector-suggestions">
+        <div 
+          ref={suggestionsRef} 
+          className="enhanced-selector-suggestions"
+          style={{
+            top: `${dropdownPosition.top}px`,
+            left: `${dropdownPosition.left}px`
+          }}
+        >
+          {/* Close button */}
+          <button
+            type="button"
+            onClick={() => setShowSuggestions(false)}
+            className="enhanced-selector-dropdown-close"
+            title="Close dropdown"
+            style={{
+              position: 'absolute',
+              top: '8px',
+              right: '8px',
+              background: 'none',
+              border: 'none',
+              padding: '4px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              color: '#9CA3AF',
+              transition: 'color 0.2s',
+              zIndex: 10
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.color = '#6B7280'}
+            onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
+          >
+            <X size={16} strokeWidth={2} />
+          </button>
+
           {/* Create new button */}
           {isNewId && (
             <div 
@@ -439,39 +645,110 @@ export function EnhancedSelector({
                 const isUsed = usedIdsInGraph.has(item.id);
                 const isItemConnected = usedIdsInGraph.has(item.id);
                 
+                // Check file state for visual treatment
+                const fileId = `${type}-${item.id}`;
+                const fileState = fileRegistry.getFile(fileId);
+                const hasOpenTabs = tabs.some((tab: any) => tab.fileId === fileId);
+                const isDirty = fileState?.isDirty || false;
+                const isLocal = item.isLocal || false;
+                const inRegistryOnly = !item.file_path && !isLocal;
+                
+                // Determine text color based on state priority: dirty > open > registry-only
+                let textColor = 'inherit';
+                let fontStyle = 'normal';
+                let opacity = 1;
+                
+                if (isDirty) {
+                  textColor = '#ea580c'; // Orange for dirty
+                } else if (hasOpenTabs) {
+                  textColor = '#0066cc'; // Blue for open
+                } else if (inRegistryOnly) {
+                  opacity = 0.7; // Grey for registry-only
+                }
+                
+                if (isLocal) {
+                  fontStyle = 'italic';
+                }
+                
                 return (
                   <div
                     key={item.id}
-                    onClick={() => handleSelectItem(item)}
                     className={`enhanced-selector-item ${inputValue === item.id ? 'selected' : ''} ${isUsed ? 'used' : ''}`}
                   >
-                    {/* Main line */}
-                    <div className="enhanced-selector-item-main">
-                      <IconComponent 
-                        size={12} 
-                        strokeWidth={2}
-                        style={{ color: theme.accentColor, marginRight: '6px', opacity: 0.5 }}
-                      />
-                      <span className="enhanced-selector-item-id">{item.id}</span>
-                      
-                      {item.isLocal && (
-                        <span className="enhanced-selector-item-badge local">local</span>
-                      )}
-                      
-                      {!item.file_path && !item.isLocal && (
-                        <span className="enhanced-selector-item-badge planned">planned</span>
-                      )}
-                      
-                      {isItemConnected && (
-                        <span className="enhanced-selector-item-badge connected">✓</span>
+                    <div
+                      onClick={() => handleSelectItem(item)}
+                      style={{ flex: 1, cursor: 'pointer' }}
+                    >
+                      {/* Main line */}
+                      <div className="enhanced-selector-item-main">
+                        <IconComponent 
+                          size={12} 
+                          strokeWidth={2}
+                          style={{ color: theme.accentColor, marginRight: '6px', opacity: 0.5 }}
+                        />
+                        <span 
+                          className="enhanced-selector-item-id"
+                          style={{ 
+                            color: textColor, 
+                            fontStyle,
+                            opacity
+                          }}
+                        >{item.id}</span>
+                        
+                        {item.isLocal && (
+                          <span className="enhanced-selector-item-badge local">local</span>
+                        )}
+                        
+                        {!item.file_path && !item.isLocal && (
+                          <span className="enhanced-selector-item-badge planned">planned</span>
+                        )}
+                        
+                        {isItemConnected && (
+                          <span className="enhanced-selector-item-badge connected">✓</span>
+                        )}
+                      </div>
+
+                      {/* Sub-line (usage info or description) */}
+                      {(item.description || usageContext) && (
+                        <div className="enhanced-selector-item-subline">
+                          {item.description || usageContext}
+                        </div>
                       )}
                     </div>
 
-                    {/* Sub-line (usage info or description) */}
-                    {(item.description || usageContext) && (
-                      <div className="enhanced-selector-item-subline">
-                        {item.description || usageContext}
-                      </div>
+                    {/* Open/Create button */}
+                    {onOpenItem && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenItem(item.id);
+                        }}
+                        className="enhanced-selector-item-action-btn"
+                        title={item.file_path || item.isLocal ? `Open ${type}` : `Create ${type}`}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          color: item.file_path || item.isLocal ? '#9CA3AF' : '#10B981',
+                          transition: 'color 0.2s'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.color = item.file_path || item.isLocal ? '#1F2937' : '#059669';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.color = item.file_path || item.isLocal ? '#9CA3AF' : '#10B981';
+                        }}
+                      >
+                        {item.file_path || item.isLocal ? (
+                          <ExternalLink size={14} strokeWidth={2} />
+                        ) : (
+                          <FilePlus size={14} strokeWidth={2} />
+                        )}
+                      </button>
                     )}
                   </div>
                 );
@@ -484,7 +761,7 @@ export function EnhancedSelector({
       {/* Validation messages */}
       {showWarning && (
         <div className="enhanced-selector-message warning">
-          ⚠️ Not in registry. Consider using a registered {type}.
+          ⚠️ Not in registry. Use an existing {type}.
         </div>
       )}
       

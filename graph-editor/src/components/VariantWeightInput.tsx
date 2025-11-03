@@ -40,6 +40,10 @@ export default function VariantWeightInput({
   const handleRebalance = (newValue: number) => {
     onRebalance(newValue, currentIndex, allVariants);
   };
+  
+  // Calculate if weights are unbalanced (don't sum to 1.0 within tolerance)
+  const totalWeight = allVariants.reduce((sum, v) => sum + (v.weight || 0), 0);
+  const isUnbalanced = Math.abs(totalWeight - 1.0) > 0.001;
 
   return (
     <ProbabilityInput
@@ -60,6 +64,7 @@ export default function VariantWeightInput({
       autoFocus={autoFocus}
       autoSelect={autoSelect}
       showBalanceButton={showBalanceButton}
+      isUnbalanced={isUnbalanced}
     />
   );
 }

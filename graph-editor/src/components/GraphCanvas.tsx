@@ -3245,26 +3245,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis]);
 
-  // Handle node drag start - save current state to history BEFORE any changes
+  // Handle node drag start - just set flag, don't save yet
   const onNodeDragStart = useCallback(() => {
-    // Save the CURRENT state (before drag) to history
-    console.log('🎯 Node drag started - saving current state to history');
-    saveHistoryState('Move node');
+    console.log('🎯 Node drag started - blocking sync during drag');
     
     // Block Graph→ReactFlow sync during drag to prevent interruption
     isDraggingNodeRef.current = true;
-  }, [saveHistoryState]);
+  }, []);
 
-  // Handle node drag stop - clear flag to allow ReactFlow→Graph sync
+  // Handle node drag stop - save final position to history
   const onNodeDragStop = useCallback(() => {
-    console.log('🎯 Node drag stopped - clearing flag to allow sync');
+    console.log('🎯 Node drag stopped - saving final position to history');
     
     // Clear the drag flag - this allows ReactFlow→Graph sync to run and update positions
     isDraggingNodeRef.current = false;
     
-    // The ReactFlow→Graph sync useEffect will now run and sync final positions
-    // No history save happens - we already saved at drag start
-  }, []);
+    // Save the FINAL position to history after the ReactFlow→Store sync completes
+    // Use setTimeout to ensure sync completes first
+    setTimeout(() => {
+      saveHistoryState('Move node');
+    }, 0);
+  }, [saveHistoryState]);
 
   // Add new node
   const addNode = useCallback(() => {

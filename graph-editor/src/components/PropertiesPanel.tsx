@@ -14,7 +14,7 @@ import { EnhancedSelector } from './EnhancedSelector';
 import { ColorSelector } from './ColorSelector';
 import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
-import { Box, Settings, Layers } from 'lucide-react';
+import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight } from 'lucide-react';
 import './PropertiesPanel.css';
 
 interface PropertiesPanelProps {
@@ -53,13 +53,18 @@ export default function PropertiesPanel({
   
   // Case node state
   const [nodeType, setNodeType] = useState<'normal' | 'case'>('normal');
-  const [caseMode, setCaseMode] = useState<'manual' | 'registry'>('manual');
   const [caseData, setCaseData] = useState({
     id: '',
     parameter_id: '',
     status: 'active' as 'active' | 'paused' | 'completed',
-    variants: [] as Array<{ name: string; weight: number; description?: string }>
+    variants: [] as Array<{ name: string; weight: number }>
   });
+  
+  // Track which variants are collapsed (by index)
+  const [collapsedVariants, setCollapsedVariants] = useState<Set<number>>(new Set());
+  
+  // Track which variant is being edited (name)
+  const [editingVariantIndex, setEditingVariantIndex] = useState<number | null>(null);
   
   // Track if user has manually edited the slug to prevent auto-generation
   const [slugManuallyEdited, setSlugManuallyEdited] = useState<boolean>(false);
@@ -70,6 +75,28 @@ export default function PropertiesPanel({
   // Local state for conditional probabilities (like variants)
   const [localConditionalP, setLocalConditionalP] = useState<any[]>([]);
   const lastLoadedEdgeRef = useRef<string | null>(null);
+
+  // Helper to open a file by type and ID
+  const openFileById = useCallback((type: 'case' | 'node' | 'parameter' | 'context', id: string) => {
+    const fileId = `${type}-${id}`;
+    
+    // Check if file is already open in a tab
+    const existingTab = tabs.find(tab => tab.fileId === fileId);
+    
+    if (existingTab) {
+      // Navigate to existing tab
+      tabOps.switchTab(existingTab.id);
+    } else {
+      // Open new tab
+      const item = {
+        id,
+        type,
+        name: id,
+        path: `${type}/${id}`,
+      };
+      tabOps.openTab(item, 'interactive', false);
+    }
+  }, [tabs, tabOps]);
   
 
   // Track the last loaded node to prevent reloading on every graph change
@@ -119,7 +146,6 @@ export default function PropertiesPanel({
               status: node.case.status || 'active',
               variants: node.case.variants || []
             });
-            setCaseMode(node.case.parameter_id ? 'registry' : 'manual');
           } else {
             console.log('Loading normal node');
             setNodeType('normal');
@@ -129,7 +155,6 @@ export default function PropertiesPanel({
               status: 'active',
               variants: []
             });
-            setCaseMode('manual');
           }
           
           // Reset manual edit flag when switching to a different node
@@ -155,6 +180,46 @@ export default function PropertiesPanel({
       lastLoadedNodeRef.current = null;
     }
   }, [selectedNodeId]);
+
+  // Reload node data when graph changes (for undo/redo support)
+  useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP1b: Graph changed, reloading selected node`);
+    if (selectedNodeId && graph && lastLoadedNodeRef.current === selectedNodeId) {
+      const node = graph.nodes.find((n: any) => n.id === selectedNodeId);
+      if (node) {
+        console.log('PropertiesPanel: Reloading node data after graph change, slug:', node.slug);
+        setLocalNodeData({
+          label: node.label || '',
+          slug: node.slug || '',
+          description: node.description || '',
+          absorbing: node.absorbing || false,
+          outcome_type: node.outcome_type,
+          tags: node.tags || [],
+          entry: node.entry || {},
+        });
+        
+        // Handle case node data
+        if (node.type === 'case' && node.case) {
+          console.log('Reloading case node after graph change:', node.case);
+          setNodeType('case');
+          setCaseData({
+            id: node.case.id || '',
+            parameter_id: node.case.parameter_id || '',
+            status: node.case.status || 'active',
+            variants: node.case.variants || []
+          });
+        } else {
+          setNodeType('normal');
+          setCaseData({
+            id: '',
+            parameter_id: '',
+            status: 'active',
+            variants: []
+          });
+        }
+      }
+    }
+  }, [graph, selectedNodeId]);
 
   // Load edge data when selection changes (but not on every graph update)
   useEffect(() => {
@@ -468,6 +533,9 @@ export default function PropertiesPanel({
                     // Update the graph with new slug
                     updateNode('slug', newSlug);
                   }}
+                  onClear={() => {
+                    // No need to save history - onChange already does it via updateNode
+                  }}
                   onPullFromRegistry={async () => {
                     if (!localNodeData.slug || !graph || !selectedNodeId) return;
                     
@@ -511,6 +579,14 @@ export default function PropertiesPanel({
                   onPushToRegistry={async () => {
                     // TODO: Implement push to registry
                     console.log('Push to registry not yet implemented');
+                  }}
+                  onOpenConnected={() => {
+                    if (localNodeData.slug) {
+                      openFileById('node', localNodeData.slug);
+                    }
+                  }}
+                  onOpenItem={(itemId) => {
+                    openFileById('node', itemId);
                   }}
                   label="Node ID (Slug)"
                   placeholder="Select or enter node ID..."
@@ -693,8 +769,8 @@ export default function PropertiesPanel({
                         parameter_id: '',
                         status: 'active' as 'active' | 'paused' | 'completed',
                         variants: [
-                          { name: 'control', weight: 0.5, description: 'Control variant' },
-                          { name: 'treatment', weight: 0.5, description: 'Treatment variant' }
+                          { name: 'control', weight: 0.5 },
+                          { name: 'treatment', weight: 0.5 }
                         ]
                       } : caseData;
                       setCaseData(newCaseData);
@@ -730,7 +806,6 @@ export default function PropertiesPanel({
                         status: 'active',
                         variants: []
                       });
-                      setCaseMode('manual');
                       if (graph && selectedNodeId) {
                         const next = structuredClone(graph);
                         const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
@@ -748,168 +823,83 @@ export default function PropertiesPanel({
                 >
                   {nodeType === 'case' && (
                   <>
-                    {/* Case Mode Selector */}
-                    <div className="property-section">
-                      <label className="property-label">Mode</label>
-                      <div className="property-button-group">
-                        <button
-                          type="button"
-                          className={`property-toggle-btn ${caseMode === 'manual' ? 'active' : ''}`}
-                          onClick={() => setCaseMode('manual')}
-                        >
-                          Manual
-                        </button>
-                        <button
-                          type="button"
-                          className={`property-toggle-btn ${caseMode === 'registry' ? 'active' : ''}`}
-                          onClick={() => setCaseMode('registry')}
-                        >
-                          Registry
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Quick Variant Selector - What-If Analysis */}
-                    {caseData.variants.length > 0 && (() => {
-                      const currentNodeColor = graph?.nodes.find((n: any) => n.id === selectedNodeId)?.layout?.color || '#e5e7eb';
-                      return (
-                        <div style={{ marginBottom: '20px', padding: '12px', background: '#f0f7ff', borderRadius: '4px', border: `2px solid ${currentNodeColor}` }}>
-                          <label style={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: '8px',
-                            marginBottom: '8px', 
-                            fontWeight: '600', 
-                            fontSize: '12px', 
-                            color: '#0066cc' 
-                          }}>
-                            <div style={{
-                              width: '16px',
-                              height: '16px',
-                              borderRadius: '2px',
-                              background: currentNodeColor,
-                              border: '1px solid rgba(0,0,0,0.2)',
-                              flexShrink: 0
-                            }} />
-                            Quick View Variants (What-If Analysis)
-                          </label>
-                        <select
-                          value={whatIfAnalysis?.caseNodeId === selectedNodeId ? whatIfAnalysis.selectedVariant : ""}
-                          onChange={(e) => {
-                            const variantName = e.target.value;
-                            if (variantName && selectedNodeId) {
-                              setWhatIfAnalysis({
-                                caseNodeId: selectedNodeId,
-                                selectedVariant: variantName
-                              });
-                            } else {
-                              setWhatIfAnalysis(null);
+                    {/* Case ID Selector */}
+                    <EnhancedSelector
+                      type="case"
+                      value={caseData.id}
+                      onChange={(newCaseId) => {
+                        setCaseData({...caseData, id: newCaseId});
+                        if (graph && selectedNodeId) {
+                          const next = structuredClone(graph);
+                          const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                          if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                            next.nodes[nodeIndex].case.id = newCaseId;
+                            if (next.metadata) {
+                              next.metadata.updated_at = new Date().toISOString();
                             }
-                          }}
-                          style={{ 
-                            width: '100%', 
-                            padding: '8px', 
-                            border: whatIfAnalysis?.caseNodeId === selectedNodeId ? '2px solid #0066cc' : '1px solid #c4e0ff', 
-                            borderRadius: '4px',
-                            boxSizing: 'border-box',
-                            fontSize: '12px',
-                            background: whatIfAnalysis?.caseNodeId === selectedNodeId ? '#fff9e6' : 'white',
-                            fontWeight: whatIfAnalysis?.caseNodeId === selectedNodeId ? 'bold' : 'normal'
-                          }}
-                        >
-                          <option value="">All variants (actual weights)</option>
-                          {caseData.variants.map((v, i) => (
-                            <option key={i} value={v.name}>
-                              {v.name} - What if 100%?
-                            </option>
-                          ))}
-                        </select>
-                        {whatIfAnalysis?.caseNodeId === selectedNodeId && (
-                          <div style={{
-                            marginTop: '8px',
-                            padding: '6px 8px',
-                            background: '#fff9e6',
-                            border: '1px solid #ffd700',
-                            borderRadius: '3px',
-                            fontSize: '11px',
-                            color: '#997400',
-                            fontWeight: 'bold'
-                          }}>
-                            🔬 WHAT-IF MODE: {whatIfAnalysis.selectedVariant} @ 100%
-                          </div>
-                        )}
-                      </div>
-                      );
-                    })()}
-
-                    {/* Case ID or Parameter ID */}
-                      {caseMode === 'registry' ? (
-                      <EnhancedSelector
-                        type="parameter"
-                        value={caseData.parameter_id}
-                        onChange={(newParameterId) => {
-                          setCaseData({...caseData, parameter_id: newParameterId});
-                        }}
-                        onPullFromRegistry={async () => {
-                          if (!caseData.parameter_id || !graph || !selectedNodeId) return;
-                          
-                          try {
-                            let paramData: any = null;
-                            const localFile = fileRegistry.getFile(`parameter-${caseData.parameter_id}.yaml`);
-                            if (localFile) {
-                              paramData = localFile.data;
-                            } else {
-                              const { paramRegistryService } = await import('../services/paramRegistryService');
-                              paramData = await paramRegistryService.loadParameter(caseData.parameter_id);
-                            }
-                            
-                            if (paramData && paramData.values) {
-                              // TODO: Load case data from parameter
-                              console.log('Loaded case parameter data:', paramData);
-                            }
-                          } catch (error) {
-                            console.error('Failed to pull case parameter from registry:', error);
+                            setGraph(next);
+                            saveHistoryState(newCaseId ? 'Update case ID' : 'Clear case ID', selectedNodeId || undefined);
                           }
-                        }}
-                        onPushToRegistry={async () => {
-                          // TODO: Implement push to registry
-                          console.log('Push to registry not yet implemented');
-                        }}
-                        label="Case Parameter"
-                        placeholder="Select or enter parameter ID..."
-                      />
-                    ) : (
-                      <div style={{ marginBottom: '20px' }}>
-                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
-                          Case ID
-                        </label>
-                        <input
-                          value={caseData.id}
-                          onChange={(e) => setCaseData({...caseData, id: e.target.value})}
-                          onBlur={() => {
+                        }
+                      }}
+                      onClear={() => {
+                        // onClear is redundant since onChange handles it, but keep for consistency
+                      }}
+                      onOpenConnected={() => {
+                        if (caseData.id) {
+                          openFileById('case', caseData.id);
+                        }
+                      }}
+                      onOpenItem={(itemId) => {
+                        openFileById('case', itemId);
+                      }}
+                      onPullFromRegistry={async () => {
+                        if (!caseData.id || !graph || !selectedNodeId) return;
+                        
+                        try {
+                          let caseRegistryData: any = null;
+                          const localFile = fileRegistry.getFile(`case-${caseData.id}`);
+                          if (localFile) {
+                            caseRegistryData = localFile.data;
+                          } else {
+                            const { paramRegistryService } = await import('../services/paramRegistryService');
+                            caseRegistryData = await paramRegistryService.loadCase(caseData.id);
+                          }
+                          
+                          if (caseRegistryData) {
+                            // Pull case configuration from registry
+                            const newCaseData = {
+                              id: caseData.id,
+                              parameter_id: caseData.parameter_id,
+                              status: caseRegistryData.status || caseData.status,
+                              variants: caseRegistryData.variants || caseData.variants
+                            };
+                            setCaseData(newCaseData);
+                            
                             if (graph && selectedNodeId) {
                               const next = structuredClone(graph);
                               const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
                               if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                next.nodes[nodeIndex].case.id = caseData.id;
+                                next.nodes[nodeIndex].case = newCaseData;
                                 if (next.metadata) {
                                   next.metadata.updated_at = new Date().toISOString();
                                 }
                                 setGraph(next);
                               }
                             }
-                          }}
-                          placeholder="case_001"
-                          style={{ 
-                            width: '100%', 
-                            padding: '8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            boxSizing: 'border-box'
-                          }}
-                        />
-                    </div>
-                    )}
+                            console.log('Pulled case configuration from registry:', caseRegistryData);
+                          }
+                        } catch (error) {
+                          console.error('Failed to pull case from registry:', error);
+                        }
+                      }}
+                      onPushToRegistry={async () => {
+                        // TODO: Implement push to registry
+                        console.log('Push case to registry not yet implemented');
+                      }}
+                      label="Case ID"
+                      placeholder="Select or enter case ID..."
+                    />
 
                     {/* Case Status */}
                     <div style={{ marginBottom: '20px' }}>
@@ -946,283 +936,256 @@ export default function PropertiesPanel({
                     </div>
 
                     {/* Case Node Color */}
-                    <div style={{ marginBottom: '20px' }}>
-                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Node Color</label>
-                      <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>
-                        Colors are auto-assigned from the palette. Customize:
-                      </div>
-                      <input
-                        type="color"
-                        value={(() => {
-                          const node = graph?.nodes.find((n: any) => n.id === selectedNodeId);
-                          return node?.layout?.color || '#4ade80'; // Default to first palette color if none assigned
-                        })()}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          if (graph && selectedNodeId) {
-                            const next = structuredClone(graph);
-                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                            if (nodeIndex >= 0) {
-                              if (!next.nodes[nodeIndex].layout) {
-                                next.nodes[nodeIndex].layout = { x: 0, y: 0 };
-                              }
-                              next.nodes[nodeIndex].layout.color = e.target.value;
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                            }
-                          }
-                        }}
-                        onInput={(e: React.FormEvent<HTMLInputElement>) => {
-                          e.stopPropagation();
-                          const target = e.target as HTMLInputElement;
-                          if (graph && selectedNodeId) {
-                            const next = structuredClone(graph);
-                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                            if (nodeIndex >= 0) {
-                              if (!next.nodes[nodeIndex].layout) {
-                                next.nodes[nodeIndex].layout = { x: 0, y: 0 };
-                              }
-                              next.nodes[nodeIndex].layout.color = target.value;
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                            }
-                          }
-                        }}
-                        style={{
-                          width: '60px',
-                          height: '32px',
-                          border: '1px solid #ddd',
-                          borderRadius: '4px',
-                          cursor: 'pointer'
-                        }}
-                      />
-                      {(() => {
+                    <ColorSelector
+                      label="Node Color"
+                      value={(() => {
                         const node = graph?.nodes.find((n: any) => n.id === selectedNodeId);
-                        return node?.layout?.color && (
-                          <button
-                            onClick={() => {
-                              if (graph && selectedNodeId) {
-                                const next = structuredClone(graph);
-                                const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                                if (nodeIndex >= 0 && next.nodes[nodeIndex].layout) {
-                                  // Remove color to trigger auto-assignment
-                                  delete next.nodes[nodeIndex].layout.color;
-                                  if (next.metadata) {
-                                    next.metadata.updated_at = new Date().toISOString();
-                                  }
-                                  setGraph(next);
-                                }
-                              }
-                            }}
-                            style={{
-                              marginLeft: '8px',
-                              padding: '6px 12px',
-                              fontSize: '11px',
-                              background: '#f1f1f1',
-                              border: '1px solid #ddd',
-                              borderRadius: '4px',
-                              cursor: 'pointer'
-                            }}
-                          >
-                            Reset to Auto
-                          </button>
-                        );
+                        return node?.layout?.color || '#10B981'; // Default to green (first preset) if none assigned
                       })()}
-                    </div>
+                      onChange={(color) => {
+                        if (graph && selectedNodeId) {
+                          const next = structuredClone(graph);
+                          const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                          if (nodeIndex >= 0) {
+                            if (!next.nodes[nodeIndex].layout) {
+                              next.nodes[nodeIndex].layout = { x: 0, y: 0 };
+                            }
+                            next.nodes[nodeIndex].layout.color = color;
+                            if (next.metadata) {
+                              next.metadata.updated_at = new Date().toISOString();
+                            }
+                            setGraph(next);
+                            saveHistoryState('Change node color', selectedNodeId || undefined);
+                          }
+                        }
+                      }}
+                    />
 
                     {/* Variants Section */}
                     <div style={{ marginBottom: '20px' }}>
                       <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variants</label>
-                      {caseData.variants.map((variant, index) => (
-                        <div key={index} style={{ 
-                          marginBottom: '12px', 
-                          padding: '12px', 
-                          border: '1px solid #ddd', 
-                          borderRadius: '4px',
-                          background: '#f9f9f9'
-                        }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                            <span style={{ fontWeight: '600', fontSize: '12px' }}>Variant {index + 1}</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const newVariants = caseData.variants.filter((_, i) => i !== index);
-                                setCaseData({...caseData, variants: newVariants});
-                                if (graph && selectedNodeId) {
-                                  const next = structuredClone(graph);
-                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                    next.nodes[nodeIndex].case.variants = newVariants;
-                                    if (next.metadata) {
-                                      next.metadata.updated_at = new Date().toISOString();
-                                    }
-                                    setGraph(next);
-                                    saveHistoryState('Remove case variant', selectedNodeId || undefined);
+                      {caseData.variants.map((variant, index) => {
+                        const isCollapsed = collapsedVariants.has(index);
+                        const isEditing = editingVariantIndex === index;
+                        
+                        return (
+                          <div key={index} className="variant-card">
+                            {/* Collapsible Header with Name */}
+                            <div 
+                              className="variant-card-header"
+                              style={{ cursor: 'pointer', userSelect: 'none' }}
+                              onClick={(e) => {
+                                // Only toggle if not clicking on edit button or remove button
+                                if (!(e.target as HTMLElement).closest('button')) {
+                                  const newCollapsed = new Set(collapsedVariants);
+                                  if (isCollapsed) {
+                                    newCollapsed.delete(index);
+                                  } else {
+                                    newCollapsed.add(index);
                                   }
+                                  setCollapsedVariants(newCollapsed);
                                 }
-                              }}
-                              style={{
-                                background: '#dc3545',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '3px',
-                                padding: '4px 8px',
-                                cursor: 'pointer',
-                                fontSize: '10px'
                               }}
                             >
-                              ✕ Remove
-                            </button>
-                          </div>
-                          
-                          <div style={{ marginBottom: '8px' }}>
-                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Name</label>
-                            <input
-                              value={variant.name}
-                              onChange={(e) => {
-                                const newVariants = [...caseData.variants];
-                                newVariants[index].name = e.target.value;
-                                setCaseData({...caseData, variants: newVariants});
-                              }}
-                              onBlur={() => {
-                                if (graph && selectedNodeId) {
-                                  const next = structuredClone(graph);
-                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                    next.nodes[nodeIndex].case.variants = caseData.variants;
-                                    if (next.metadata) {
-                                      next.metadata.updated_at = new Date().toISOString();
-                                    }
-                                    setGraph(next);
-                                  }
-                                }
-                              }}
-                              placeholder="control"
-                              style={{ 
-                                width: '100%', 
-                                padding: '6px', 
-                                border: '1px solid #ddd', 
-                                borderRadius: '3px',
-                                boxSizing: 'border-box',
-                                fontSize: '12px'
-                              }}
-                            />
-                          </div>
-                          
-                                                    
-                          <div style={{ marginBottom: '8px' }}>
-                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Weight (0-1)</label>
-                            <VariantWeightInput
-                              value={variant.weight}
-                              onChange={(value) => {
-                                const newVariants = [...caseData.variants];
-                                newVariants[index].weight = value;
-                                setCaseData({...caseData, variants: newVariants});
-                              }}
-                              onCommit={(value) => {
-                                if (graph && selectedNodeId) {
-                                  const next = structuredClone(graph);
-                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                    next.nodes[nodeIndex].case.variants = caseData.variants;
-                                    if (next.metadata) {
-                                      next.metadata.updated_at = new Date().toISOString();
-                                    }
-                                    setGraph(next);
-                                  }
-                                }
-                              }}
-                              onRebalance={(value, currentIndex, variants) => {
-                                if (graph && selectedNodeId) {
-                                  const rebalanceGraph = structuredClone(graph);
-                                  const nodeIndex = rebalanceGraph.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                                  if (nodeIndex >= 0 && rebalanceGraph.nodes[nodeIndex].case?.variants) {
-                                    rebalanceGraph.nodes[nodeIndex].case.variants[currentIndex].weight = value;
-                                    const remainingWeight = 1 - value;
-                                    const otherVariants = variants.filter((v: any, i: number) => i !== currentIndex);
-                                    const otherVariantsTotal = otherVariants.reduce((sum, v) => sum + (v.weight || 0), 0);
-                                    
-                                    if (otherVariantsTotal > 0) {
-                                      otherVariants.forEach(v => {
-                                        const otherIdx = rebalanceGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
-                                        if (otherIdx !== undefined && otherIdx >= 0) {
-                                          const currentWeight = v.weight || 0;
-                                          const newWeight = (currentWeight / otherVariantsTotal) * remainingWeight;
-                                          rebalanceGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = newWeight;
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                                {/* Collapse/Expand Icon */}
+                                {isCollapsed ? (
+                                  <ChevronRight size={16} style={{ color: '#6B7280', flexShrink: 0 }} />
+                                ) : (
+                                  <ChevronDown size={16} style={{ color: '#6B7280', flexShrink: 0 }} />
+                                )}
+                                
+                                {/* Editable Name */}
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={variant.name}
+                                    onChange={(e) => {
+                                      e.stopPropagation();
+                                      const newVariants = [...caseData.variants];
+                                      newVariants[index].name = e.target.value;
+                                      setCaseData({...caseData, variants: newVariants});
+                                    }}
+                                    onBlur={() => {
+                                      setEditingVariantIndex(null);
+                                      if (graph && selectedNodeId) {
+                                        const next = structuredClone(graph);
+                                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                        if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                          next.nodes[nodeIndex].case.variants = caseData.variants;
+                                          if (next.metadata) {
+                                            next.metadata.updated_at = new Date().toISOString();
+                                          }
+                                          setGraph(next);
+                                          saveHistoryState('Rename variant', selectedNodeId || undefined);
                                         }
-                                      });
-                                    } else {
-                                      const equalShare = remainingWeight / otherVariants.length;
-                                      otherVariants.forEach(v => {
-                                        const otherIdx = rebalanceGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
-                                        if (otherIdx !== undefined && otherIdx >= 0) {
-                                          rebalanceGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = equalShare;
-                                        }
-                                      });
-                                    }
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation();
+                                      if (e.key === 'Enter') {
+                                        (e.target as HTMLInputElement).blur();
+                                      }
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    autoFocus
+                                    style={{
+                                      flex: 1,
+                                      border: '1px solid #8B5CF6',
+                                      borderRadius: '3px',
+                                      padding: '2px 6px',
+                                      fontSize: '13px',
+                                      fontWeight: 600,
+                                      color: '#374151',
+                                      minWidth: 0
+                                    }}
+                                  />
+                                ) : (
+                                  <>
+                                    <span className="variant-card-title" style={{ flex: 1, minWidth: 0 }}>
+                                      {variant.name}
+                                    </span>
+                                    {/* Edit Button */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingVariantIndex(index);
+                                      }}
+                                      style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        padding: '4px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        color: '#9CA3AF',
+                                        transition: 'color 0.15s'
+                                      }}
+                                      onMouseEnter={(e) => e.currentTarget.style.color = '#6B7280'}
+                                      onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
+                                      title="Edit name"
+                                    >
+                                      <Edit3 size={14} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                              
+                              {/* Remove Button - hide when editing to avoid confusion */}
+                              {!isEditing && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const newVariants = caseData.variants.filter((_, i) => i !== index);
+                                    setCaseData({...caseData, variants: newVariants});
+                                    // Remove from collapsed set
+                                    const newCollapsed = new Set(collapsedVariants);
+                                    newCollapsed.delete(index);
+                                    setCollapsedVariants(newCollapsed);
                                     
-                                    if (rebalanceGraph.metadata) {
-                                      rebalanceGraph.metadata.updated_at = new Date().toISOString();
+                                    if (graph && selectedNodeId) {
+                                      const next = structuredClone(graph);
+                                      const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                      if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                        next.nodes[nodeIndex].case.variants = newVariants;
+                                        if (next.metadata) {
+                                          next.metadata.updated_at = new Date().toISOString();
+                                        }
+                                        setGraph(next);
+                                        saveHistoryState('Remove case variant', selectedNodeId || undefined);
+                                      }
                                     }
-                                    setGraph(rebalanceGraph);
-                                    saveHistoryState('Auto-rebalance case variant weights', selectedNodeId);
-                                  }
-                                }
-                              }}
-                              currentIndex={index}
-                              allVariants={caseData.variants}
-                              autoFocus={false}
-                              autoSelect={false}
-                              showSlider={true}
-                              showBalanceButton={true}
-                            />
-                          </div>
-                          
-                          
-                          <div>
-                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Description</label>
-                            <input
-                              value={variant.description || ''}
-                              onChange={(e) => {
-                                const newVariants = [...caseData.variants];
-                                newVariants[index].description = e.target.value;
-                                setCaseData({...caseData, variants: newVariants});
-                              }}
-                              onBlur={() => {
-                                if (graph && selectedNodeId) {
-                                  const next = structuredClone(graph);
-                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
-                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                    next.nodes[nodeIndex].case.variants = caseData.variants;
-                                    if (next.metadata) {
-                                      next.metadata.updated_at = new Date().toISOString();
+                                  }}
+                                  className="variant-remove-btn"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                            
+                            {/* Collapsible Content */}
+                            {!isCollapsed && (
+                              <div style={{ paddingTop: '8px' }}>
+                                <VariantWeightInput
+                                  value={variant.weight}
+                                  onChange={(value) => {
+                                    const newVariants = [...caseData.variants];
+                                    newVariants[index].weight = value;
+                                    setCaseData({...caseData, variants: newVariants});
+                                  }}
+                                  onCommit={(value) => {
+                                    if (graph && selectedNodeId) {
+                                      const next = structuredClone(graph);
+                                      const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                      if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                        next.nodes[nodeIndex].case.variants = caseData.variants;
+                                        if (next.metadata) {
+                                          next.metadata.updated_at = new Date().toISOString();
+                                        }
+                                        setGraph(next);
+                                        saveHistoryState('Update variant weight', selectedNodeId || undefined);
+                                      }
                                     }
-                                    setGraph(next);
-                                  }
-                                }
-                              }}
-                              placeholder="Original flow"
-                              style={{ 
-                                width: '100%', 
-                                padding: '6px', 
-                                border: '1px solid #ddd', 
-                                borderRadius: '3px',
-                                boxSizing: 'border-box',
-                                fontSize: '12px'
-                              }}
-                            />
+                                  }}
+                                  onRebalance={(value, currentIndex, variants) => {
+                                    if (graph && selectedNodeId) {
+                                      const rebalanceGraph = structuredClone(graph);
+                                      const nodeIndex = rebalanceGraph.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                      if (nodeIndex >= 0 && rebalanceGraph.nodes[nodeIndex].case?.variants) {
+                                        rebalanceGraph.nodes[nodeIndex].case.variants[currentIndex].weight = value;
+                                        const remainingWeight = 1 - value;
+                                        const otherVariants = variants.filter((v: any, i: number) => i !== currentIndex);
+                                        const otherVariantsTotal = otherVariants.reduce((sum, v) => sum + (v.weight || 0), 0);
+                                        
+                                        if (otherVariantsTotal > 0) {
+                                          otherVariants.forEach(v => {
+                                            const otherIdx = rebalanceGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
+                                            if (otherIdx !== undefined && otherIdx >= 0) {
+                                              const currentWeight = v.weight || 0;
+                                              const newWeight = (currentWeight / otherVariantsTotal) * remainingWeight;
+                                              // Round to 3 decimal places
+                                              rebalanceGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = Math.round(newWeight * 1000) / 1000;
+                                            }
+                                          });
+                                        } else {
+                                          const equalShare = remainingWeight / otherVariants.length;
+                                          otherVariants.forEach(v => {
+                                            const otherIdx = rebalanceGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
+                                            if (otherIdx !== undefined && otherIdx >= 0) {
+                                              // Round to 3 decimal places
+                                              rebalanceGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = Math.round(equalShare * 1000) / 1000;
+                                            }
+                                          });
+                                        }
+                                        
+                                        if (rebalanceGraph.metadata) {
+                                          rebalanceGraph.metadata.updated_at = new Date().toISOString();
+                                        }
+                                        setGraph(rebalanceGraph);
+                                        setCaseData({...caseData, variants: rebalanceGraph.nodes[nodeIndex].case!.variants!});
+                                        saveHistoryState('Auto-rebalance case variant weights', selectedNodeId);
+                                      }
+                                    }
+                                  }}
+                                  currentIndex={index}
+                                  allVariants={caseData.variants}
+                                  autoFocus={false}
+                                  autoSelect={false}
+                                  showSlider={true}
+                                  showBalanceButton={true}
+                                />
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                       
                       <button
                         type="button"
                         onClick={() => {
-                          const newVariants = [...caseData.variants, { name: `variant_${caseData.variants.length + 1}`, weight: 0.1, description: '' }];
+                          const newVariants = [...caseData.variants, { name: `variant_${caseData.variants.length + 1}`, weight: 0.1 }];
                           setCaseData({...caseData, variants: newVariants});
                           if (graph && selectedNodeId) {
                             const next = structuredClone(graph);
@@ -1237,33 +1200,11 @@ export default function PropertiesPanel({
                             }
                           }
                         }}
-                        style={{
-                          background: '#28a745',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          padding: '8px 16px',
-                          cursor: 'pointer',
-                          fontSize: '12px',
-                          fontWeight: '600',
-                          width: '100%'
-                        }}
+                        className="property-add-btn"
+                        style={{ width: '100%' }}
                       >
                         + Add Variant
                       </button>
-                      
-                      {/* Total Weight Display */}
-                      <div style={{ 
-                        marginTop: '8px', 
-                        padding: '8px', 
-                        background: '#f8f9fa', 
-                        borderRadius: '4px',
-                        fontSize: '12px',
-                        textAlign: 'center'
-                      }}>
-                        Total Weight: {caseData.variants.reduce((sum, v) => sum + v.weight, 0).toFixed(1)} 
-                        {Math.abs(caseData.variants.reduce((sum, v) => sum + v.weight, 0) - 1.0) < 0.001 ? ' ✓' : ' ⚠️'}
-                      </div>
                     </div>
                   </>
                   )}
@@ -1309,6 +1250,9 @@ export default function PropertiesPanel({
                   onChange={(newParamId) => {
                     console.log('PropertiesPanel: EnhancedSelector onChange:', { newParamId });
                     updateEdge('parameter_id', newParamId || undefined);
+                  }}
+                  onClear={() => {
+                    // No need to save history - onChange already does it via updateEdge
                   }}
                   onPullFromRegistry={async () => {
                     const currentParamId = (selectedEdge as any)?.parameter_id;
@@ -1358,6 +1302,15 @@ export default function PropertiesPanel({
                   onPushToRegistry={async () => {
                     // TODO: Implement push to registry
                     console.log('Push to registry not yet implemented');
+                  }}
+                  onOpenConnected={() => {
+                    const paramId = (selectedEdge as any)?.parameter_id;
+                    if (paramId) {
+                      openFileById('parameter', paramId);
+                    }
+                  }}
+                  onOpenItem={(itemId) => {
+                    openFileById('parameter', itemId);
                   }}
                   label="Probability Parameter"
                   placeholder="Select or enter parameter ID..."
@@ -1677,6 +1630,9 @@ export default function PropertiesPanel({
                     onChange={(newParamId) => {
                       updateEdge('cost_gbp_parameter_id', newParamId || undefined);
                     }}
+                    onClear={() => {
+                      // No need to save history - onChange already does it via updateEdge
+                    }}
                     onPullFromRegistry={async () => {
                       const currentParamId = (selectedEdge as any)?.cost_gbp_parameter_id;
                       if (!currentParamId || !graph || !selectedEdgeId) return;
@@ -1732,6 +1688,15 @@ export default function PropertiesPanel({
                     onPushToRegistry={async () => {
                       // TODO: Implement push to registry
                       console.log('Push to registry not yet implemented');
+                    }}
+                    onOpenConnected={() => {
+                      const paramId = (selectedEdge as any)?.cost_gbp_parameter_id;
+                      if (paramId) {
+                        openFileById('parameter', paramId);
+                      }
+                    }}
+                    onOpenItem={(itemId) => {
+                      openFileById('parameter', itemId);
                     }}
                     label="Cost (£) Parameter"
                     placeholder="Select cost_gbp parameter..."
@@ -1836,6 +1801,9 @@ export default function PropertiesPanel({
                     onChange={(newParamId) => {
                       updateEdge('cost_time_parameter_id', newParamId || undefined);
                     }}
+                    onClear={() => {
+                      // No need to save history - onChange already does it via updateEdge
+                    }}
                     onPullFromRegistry={async () => {
                       const currentParamId = (selectedEdge as any)?.cost_time_parameter_id;
                       if (!currentParamId || !graph || !selectedEdgeId) return;
@@ -1891,6 +1859,15 @@ export default function PropertiesPanel({
                     onPushToRegistry={async () => {
                       // TODO: Implement push to registry
                       console.log('Push to registry not yet implemented');
+                    }}
+                    onOpenConnected={() => {
+                      const paramId = (selectedEdge as any)?.cost_time_parameter_id;
+                      if (paramId) {
+                        openFileById('parameter', paramId);
+                      }
+                    }}
+                    onOpenItem={(itemId) => {
+                      openFileById('parameter', itemId);
                     }}
                     label="Cost (Time) Parameter"
                     placeholder="Select cost_time parameter..."

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Scale } from 'lucide-react';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { roundTo4DP } from '@/utils/rounding';
 
@@ -16,6 +17,7 @@ interface ProbabilityInputProps {
   className?: string;
   showSlider?: boolean;
   showBalanceButton?: boolean;
+  isUnbalanced?: boolean;
   inputType?: 'number' | 'range';
   disabled?: boolean;
   autoFocus?: boolean;
@@ -37,6 +39,7 @@ export default function ProbabilityInput({
   className = "",
   showSlider = true,
   showBalanceButton = false,
+  isUnbalanced = false,
   inputType = 'number',
   disabled = false,
   autoFocus = false,
@@ -228,13 +231,13 @@ export default function ProbabilityInput({
     style: {
       ...style,
       flex: 1,
-      minWidth: '168px',
+      minWidth: '80px', // Reduced from 168px to allow narrower sidebars
       height: '4px'
     }
   };
 
   return (
-    <div className={`probability-input ${className}`} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+    <div className={`probability-input ${className}`} style={{ display: 'flex', gap: '6px', alignItems: 'center', minWidth: 0, width: '100%' }}>
       {inputType === 'number' && (
         <input
           ref={inputRef}
@@ -271,17 +274,28 @@ export default function ProbabilityInput({
             onRebalance(value);
           }}
           style={{
-            padding: '4px 8px',
+            padding: '6px',
             fontSize: '11px',
-            background: '#f8f9fa',
-            border: '1px solid #ddd',
-            borderRadius: '3px',
+            background: isUnbalanced ? '#FEF3C7' : '#f8f9fa',
+            border: isUnbalanced ? '1px solid #F59E0B' : '1px solid #E5E7EB',
+            borderRadius: '4px',
             cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.2s ease',
+            color: isUnbalanced ? '#D97706' : '#6B7280',
             ...balanceButtonStyle
           }}
-          title="Rebalance siblings proportionally"
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = isUnbalanced ? '#FDE68A' : '#E5E7EB';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = isUnbalanced ? '#FEF3C7' : '#f8f9fa';
+          }}
+          title={isUnbalanced ? "Weights don't sum to 100% - Click to rebalance" : "Rebalance siblings proportionally"}
         >
-          ⚖️
+          <Scale size={14} strokeWidth={2} />
         </button>
       )}
     </div>
