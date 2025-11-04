@@ -126,3 +126,21 @@
   transition: stroke-width 0.3s ease-in-out !important;
 }
 
+/* Edge description text - ensure it appears on top of all other elements */
+.edge-description-text {
+  position: relative;
+  z-index: 9999 !important;
+  paint-order: normal;
+}
+
+.edge-description-text-element {
+  position: relative;
+  z-index: 10000 !important;
+  paint-order: stroke fill markers;
+  transition: opacity 0.2s ease;
+}
+
+.edge-description-text-element:hover {
+  opacity: 0.7;
+}
+

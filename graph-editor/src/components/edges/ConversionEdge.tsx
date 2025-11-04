@@ -85,6 +85,7 @@ export default function ConversionEdge({
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [adjustedLabelPosition, setAdjustedLabelPosition] = useState<{ x: number; y: number } | null>(null);
   const pathRef = React.useRef<SVGPathElement>(null);
+  const textPathRef = React.useRef<SVGPathElement>(null);
 
   // Generate tooltip content
   const getTooltipContent = () => {
@@ -278,6 +279,183 @@ export default function ConversionEdge({
     targetY: adjustedTargetY,
     targetPosition,
   });
+
+  // Create an offset path for text to follow (parallel to edge, offset by strokeWidth/2)
+  const offsetPath = React.useMemo(() => {
+    if (!data?.description) return '';
+    
+    // Parse the Bezier path to get control points
+    const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+    if (!nums || nums.length < 8) return edgePath;
+    
+    let [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
+    
+    // Determine edge direction: if going right-to-left, we need to reverse the path
+    // so text always reads left-to-right
+    const isRightToLeft = ex < sx;
+    
+    // If right-to-left, reverse the path by swapping start/end and control points
+    if (isRightToLeft) {
+      [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = [ex, ey, c2x, c2y, c1x, c1y, sx, sy];
+    }
+    
+    // Determine offset direction based on position in Sankey stack
+    // Goal: offset away from the node centerline
+    let offsetDirection = -1; // Default: upward for L-R edges
+    
+    if (graph && source) {
+      // Get all edges from the same source node
+      const sourceEdges = graph.edges.filter((e: any) => e.from === source);
+      
+      if (sourceEdges.length > 1) {
+        // Find the vertical center of all outgoing edges
+        const edgeYPositions = sourceEdges.map((e: any) => {
+          const edgeId = e.id || `${e.from}->${e.to}`;
+          // Get the start Y position of each edge (approximate from source node)
+          return sourceY;
+        });
+        
+        // Calculate this edge's relative position
+        // Use the current edge's Y position at start
+        const thisEdgeY = sy;
+        
+        // Get source node center Y
+        const sourceNodeCenterY = sourceY;
+        
+        // If this edge is below the source node center, offset downward (away from center)
+        // If above, offset upward (away from center)
+        if (thisEdgeY > sourceNodeCenterY) {
+          offsetDirection = 1; // Downward
+        } else {
+          offsetDirection = -1; // Upward
+        }
+      }
+    }
+    
+    // Calculate offset distance with direction
+    const offsetDistance = offsetDirection * (strokeWidth / 2 + 10);
+    
+    // For a Bezier curve, we need to offset all points perpendicular to the tangent
+    // Calculate tangent at start point
+    const startTangentX = c1x - sx;
+    const startTangentY = c1y - sy;
+    const startLen = Math.sqrt(startTangentX * startTangentX + startTangentY * startTangentY);
+    const startNormalX = startLen > 0 ? -startTangentY / startLen : 0;
+    const startNormalY = startLen > 0 ? startTangentX / startLen : 1;
+    
+    // Calculate tangent at end point
+    const endTangentX = ex - c2x;
+    const endTangentY = ey - c2y;
+    const endLen = Math.sqrt(endTangentX * endTangentX + endTangentY * endTangentY);
+    const endNormalX = endLen > 0 ? -endTangentY / endLen : 0;
+    const endNormalY = endLen > 0 ? endTangentX / endLen : 1;
+    
+    // Calculate tangent at control point 1
+    const c1TangentX = c2x - sx;
+    const c1TangentY = c2y - sy;
+    const c1Len = Math.sqrt(c1TangentX * c1TangentX + c1TangentY * c1TangentY);
+    const c1NormalX = c1Len > 0 ? -c1TangentY / c1Len : 0;
+    const c1NormalY = c1Len > 0 ? c1TangentX / c1Len : 1;
+    
+    // Calculate tangent at control point 2
+    const c2TangentX = ex - sx;
+    const c2TangentY = ey - sy;
+    const c2Len = Math.sqrt(c2TangentX * c2TangentX + c2TangentY * c2TangentY);
+    const c2NormalX = c2Len > 0 ? -c2TangentY / c2Len : 0;
+    const c2NormalY = c2Len > 0 ? c2TangentX / c2Len : 1;
+    
+    // Offset all points
+    const osx = sx + startNormalX * offsetDistance;
+    const osy = sy + startNormalY * offsetDistance;
+    const oc1x = c1x + c1NormalX * offsetDistance;
+    const oc1y = c1y + c1NormalY * offsetDistance;
+    const oc2x = c2x + c2NormalX * offsetDistance;
+    const oc2y = c2y + c2NormalY * offsetDistance;
+    const oex = ex + endNormalX * offsetDistance;
+    const oey = ey + endNormalY * offsetDistance;
+    
+    return `M ${osx},${osy} C ${oc1x},${oc1y} ${oc2x},${oc2y} ${oex},${oey}`;
+  }, [edgePath, strokeWidth, data?.description, graph, source]);
+
+  // Calculate startOffset and anchor - ensure text starts 15% from topological source
+  const textAlignment = React.useMemo<{ offset: string; anchor: 'start' | 'end' }>(() => {
+    if (!data?.description) return { offset: '15%', anchor: 'start' };
+    
+    // Check if path was reversed
+    const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+    if (!nums || nums.length < 8) return { offset: '15%', anchor: 'start' };
+    
+    const [origSx, , , , , , origEx] = nums.slice(0, 8).map(Number);
+    const isRightToLeft = origEx < origSx;
+    
+    // If path was reversed, use 85% offset and right-align (end anchor)
+    return isRightToLeft 
+      ? { offset: '85%', anchor: 'end' }
+      : { offset: '15%', anchor: 'start' };
+  }, [data?.description, edgePath]);
+
+  // Calculate wrapped text lines based on offset path length
+  const wrappedDescriptionLines = React.useMemo(() => {
+    if (!data?.description) return [];
+    
+    // Get the offset path length
+    const pathLength = textPathRef.current?.getTotalLength() || 0;
+    if (pathLength === 0) return [data.description]; // Fallback to single line
+    
+    // Estimate character width for 11px italic font (approximately 6.5px per character)
+    const charWidth = 6.5;
+    const maxCharsPerLine = Math.floor((pathLength * 0.9) / charWidth); // Use 90% of path length
+    
+    if (maxCharsPerLine <= 5) return []; // Too short to display text
+    
+    // Split text into words
+    const words = data.description.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
+    
+    for (const word of words) {
+      const testLine = currentLine ? `${currentLine} ${word}` : word;
+      
+      if (testLine.length <= maxCharsPerLine) {
+        currentLine = testLine;
+      } else {
+        if (currentLine) {
+          lines.push(currentLine);
+        }
+        // If single word is too long, break it up
+        if (word.length > maxCharsPerLine) {
+          let remaining = word;
+          while (remaining.length > maxCharsPerLine) {
+            lines.push(remaining.substring(0, maxCharsPerLine - 1) + '-');
+            remaining = remaining.substring(maxCharsPerLine - 1);
+          }
+          currentLine = remaining;
+        } else {
+          currentLine = word;
+        }
+      }
+    }
+    
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+    
+    // Limit to 3 lines max for readability
+    const limitedLines = lines.slice(0, 3);
+    
+    // If there are more lines than we're showing, add "..." to the last line
+    if (lines.length > 3) {
+      const lastLine = limitedLines[2];
+      // Replace end of last line with "..." if there's more content
+      if (lastLine.length > 3) {
+        limitedLines[2] = lastLine.substring(0, lastLine.length - 3) + '...';
+      } else {
+        limitedLines[2] = lastLine + '...';
+      }
+    }
+    
+    return limitedLines;
+  }, [data?.description, offsetPath, textPathRef.current]);
 
   // Helper function to get point on Bézier curve at parameter t (for label positioning)
   const getBezierPoint = (t: number, sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number) => {
@@ -946,6 +1124,16 @@ export default function ConversionEdge({
             fill={getEdgeColor()}
           />
         </marker>
+        {/* Define offset path for text to follow (parallel to edge) */}
+        {data?.description && (
+          <path
+            ref={textPathRef}
+            id={`edge-path-${id}`}
+            d={offsetPath}
+            fill="none"
+            stroke="none"
+          />
+        )}
       </defs>
       
       <path
@@ -1004,6 +1192,7 @@ export default function ConversionEdge({
           style={{ zIndex: selected ? 1000 : 1 }}
         />
       )}
+      
       
       <EdgeLabelRenderer>
         <div
@@ -1142,21 +1331,10 @@ export default function ConversionEdge({
                 )}
               </div>
             )}
-            {data?.description && (
-              <div style={{ 
-                fontSize: '9px', 
-                color: '#888', 
-                marginTop: '2px',
-                fontStyle: 'italic',
-                maxWidth: '80px',
-                textAlign: 'center',
-                lineHeight: '1.2'
-              }}>
-                {data.description}
-              </div>
-            )}
           </div>
         </div>
+        
+        
         {selected && (
           <>
               {/* Delete button */}
@@ -1274,6 +1452,53 @@ export default function ConversionEdge({
           </div>
         </div>
       )}
+      
+      {/* Description text - rendered last to appear on top of all other edge elements */}
+      <g className="edge-description-text" style={{ isolation: 'isolate' }}>
+        {data?.description && wrappedDescriptionLines.map((line, index) => {
+          // Reverse line order so first line is closest to edge
+          const reversedIndex = wrappedDescriptionLines.length - 1 - index;
+          const lineOffset = reversedIndex * 11; // 11px vertical spacing between lines
+          
+          return (
+            <text
+              key={`${id}-desc-${index}`}
+              className="edge-description-text-element"
+              style={{
+                fontSize: '9px',
+                fill: selected ? '#007bff' : '#666',
+                fontStyle: 'italic',
+                fontWeight: selected ? '600' : 'normal',
+                pointerEvents: 'auto',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                // Select the edge first
+                if (data?.onSelect) {
+                  data.onSelect(id);
+                }
+                // Open Properties Panel and focus the description field
+                window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+                window.dispatchEvent(new CustomEvent('dagnet:focusField', { detail: { field: 'description' } }));
+              }}
+            >
+            <textPath
+              href={`#edge-path-${id}`}
+              startOffset={textAlignment.offset}
+              textAnchor={textAlignment.anchor}
+              spacing="auto"
+              method="align"
+            >
+                <tspan dy={-lineOffset}>
+                  {line}
+                </tspan>
+              </textPath>
+            </text>
+          );
+        })}
+      </g>
     </>
   );
 }
