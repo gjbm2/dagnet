@@ -4,6 +4,11 @@
 **Purpose:** Document key decisions and discussion points  
 **Date:** 2025-11-04
 
+**Related Documents:**
+- [DATA_CONNECTIONS.md](./DATA_CONNECTIONS.md) — Main data connections specification
+- [DATA_CONNECTIONS_SCHEMA_VALIDATION.md](./DATA_CONNECTIONS_SCHEMA_VALIDATION.md) — Schema design & validation
+- [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md) — Query DSL, MSMDC algorithm, and UI
+
 This document captures the detailed discussions and decisions made during schema validation. It serves as a reference for understanding "why" certain design choices were made.
 
 ---

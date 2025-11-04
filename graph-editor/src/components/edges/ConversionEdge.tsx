@@ -281,12 +281,12 @@ export default function ConversionEdge({
   });
 
   // Create an offset path for text to follow (parallel to edge, offset by strokeWidth/2)
-  const offsetPath = React.useMemo(() => {
-    if (!data?.description) return '';
+  const [offsetPath, labelOffsetDirection] = React.useMemo(() => {
+    if (!data?.description) return ['', -1];
     
     // Parse the Bezier path to get control points
     const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
-    if (!nums || nums.length < 8) return edgePath;
+    if (!nums || nums.length < 8) return [edgePath, -1];
     
     let [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
     
@@ -374,7 +374,7 @@ export default function ConversionEdge({
     const oex = ex + endNormalX * offsetDistance;
     const oey = ey + endNormalY * offsetDistance;
     
-    return `M ${osx},${osy} C ${oc1x},${oc1y} ${oc2x},${oc2y} ${oex},${oey}`;
+    return [`M ${osx},${osy} C ${oc1x},${oc1y} ${oc2x},${oc2y} ${oex},${oey}`, offsetDirection];
   }, [edgePath, strokeWidth, data?.description, graph, source]);
 
   // Calculate startOffset and anchor - ensure text starts 15% from topological source
@@ -1158,7 +1158,7 @@ export default function ConversionEdge({
         id={`${id}-selection`}
         style={{
           stroke: 'transparent',
-          strokeWidth: 20,
+          strokeWidth: 8,
           fill: 'none',
           zIndex: selected ? 1000 : 1,
           transition: 'stroke-width 0.3s ease-in-out',
@@ -1460,6 +1460,10 @@ export default function ConversionEdge({
           const reversedIndex = wrappedDescriptionLines.length - 1 - index;
           const lineOffset = reversedIndex * 11; // 11px vertical spacing between lines
           
+          // When labels are below the edge (labelOffsetDirection = 1), use positive dy to push text away
+          // When labels are above the edge (labelOffsetDirection = -1), use negative dy to push text away
+          const dyOffset = labelOffsetDirection === 1 ? lineOffset : -lineOffset;
+          
           return (
             <text
               key={`${id}-desc-${index}`}
@@ -1491,7 +1495,7 @@ export default function ConversionEdge({
               spacing="auto"
               method="align"
             >
-                <tspan dy={-lineOffset}>
+                <tspan dy={dyOffset}>
                   {line}
                 </tspan>
               </textPath>
