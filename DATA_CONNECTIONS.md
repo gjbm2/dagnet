@@ -149,6 +149,54 @@ Data
 - 🔵 Blue dot: Data source configured, fresh data available
 - ⭕ Unfilled circle: No data source defined (manual only)
 
+### 2.4 Icon System & Visual Language
+
+**Design Decision:** Consistent icon language throughout data connection features to indicate entities, states, actions, and data flow pathways.
+
+#### Entity Icons
+- **Graph:** `TrendingUpDown` or `Waypoints` (use throughout app!)
+- **Param Files:** `Folders`
+- **External Data:** `DatabaseZap`
+
+#### State Icons
+- **Connection States:** 
+  - `Unplug` - No connection (manual values only)
+  - `Plug` - Connected to parameter file
+  - `HousePlug` - Connected to parameter file with live data source
+- **Data Source Status:**
+  - `Zap` - Live data source configured
+  - `ZapOff` - Manual data only
+- **Sync Status:**
+  - `Check` - Synced (graph matches param file)
+  - `AlertCircle` - Out of sync (values differ)
+  - `Clock` - Stale (last retrieve > refresh frequency)
+
+#### Action Icons
+- **Retrieve Live Data:** `Zap`
+- **Pull from Param:** `ArrowDown` (param file → graph)
+- **Push to Param:** `ArrowUp` (graph → param file)
+
+#### Pathway Visualization (Compound Icons)
+Show data flow direction using compound icon sequences:
+- **Via Parameter File (Default):** `DatabaseZap → Folders → TrendingUpDown`
+  - External source updates param file, then graph displays it
+  - Versioned, history preserved
+- **Direct to Graph (Override):** `DatabaseZap → TrendingUpDown`
+  - External source updates graph directly
+  - Not versioned, for casual analysis
+- **Sync Operations:** `TrendingUpDown ↔ Folders`
+  - Bidirectional sync between graph and param files
+
+#### Registry Icons (Updates)
+- **Cases:** `Option` (update from current icon)
+- **Events:** `FileExclamation` (new registry type)
+- **Parameters:** Keep current
+- **Nodes:** Keep current
+- **Contexts:** Keep current
+- **Graphs:** `TrendingUpDown` or `Waypoints` (update from current icon)
+
+**Implementation Note:** Define icon constants in `src/config/dataConnectionIcons.ts` for consistent usage across components.
+
 ---
 
 ## 3. Core Operations
