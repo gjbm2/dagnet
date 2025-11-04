@@ -13,6 +13,7 @@ import { ParameterSelector } from './ParameterSelector';
 import { EnhancedSelector } from './EnhancedSelector';
 import { ColorSelector } from './ColorSelector';
 import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
+import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson } from 'lucide-react';
 import './PropertiesPanel.css';
@@ -262,7 +263,8 @@ export default function PropertiesPanel({
             cost_time: edgeCostTime,
             weight_default: edge.weight_default || 0,
             display: edge.display || {},
-            locked: edge.p?.locked || false
+            locked: edge.p?.locked || false,
+            query: (edge as any).query || ''
           });
           setLocalConditionalP(edge.conditional_p || []);
           lastLoadedEdgeRef.current = selectedEdgeId;
@@ -1416,6 +1418,52 @@ export default function PropertiesPanel({
                   label=""
                   placeholder="Select or enter parameter ID..."
                 />
+
+                {/* Query Expression Editor - for data retrieval constraints */}
+                {(selectedEdge as any)?.parameter_id && (
+                  <div style={{ marginTop: '16px', marginBottom: '16px' }}>
+                    <label style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '4px', 
+                      marginBottom: '8px', 
+                      fontSize: '12px', 
+                      color: '#6B7280',
+                      fontWeight: '500'
+                    }}>
+                      Data Retrieval Query
+                      <span title="Define constraints for retrieving data from external sources (e.g., Amplitude). Uses node IDs to specify path constraints.">
+                        <Info 
+                          size={14} 
+                          style={{ color: '#9CA3AF', cursor: 'help' }}
+                        />
+                      </span>
+                    </label>
+                    <QueryExpressionEditor
+                      value={localEdgeData.query || ''}
+                      onChange={(newQuery) => {
+                        setLocalEdgeData({...localEdgeData, query: newQuery});
+                      }}
+                      onBlur={() => {
+                        if (localEdgeData.query !== (selectedEdge as any)?.query) {
+                          updateEdge('query', localEdgeData.query);
+                        }
+                      }}
+                      graph={graph}
+                      edgeId={selectedEdgeId || undefined}
+                      placeholder="from(node).to(node).exclude(...)"
+                      height="60px"
+                    />
+                    <div style={{ 
+                      fontSize: '11px', 
+                      color: '#6B7280', 
+                      marginTop: '4px',
+                      fontStyle: 'italic'
+                    }}>
+                      Example: from(checkout).to(purchase).exclude(abandoned-cart)
+                    </div>
+                  </div>
+                )}
 
                 {/* Probability field - shown for all edges, but with different meaning for case edges */}
                 <div style={{ marginBottom: '20px' }}>

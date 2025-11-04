@@ -2,7 +2,14 @@
 
 **Purpose:** Validate that schemas fit together before building implementation  
 **Status:** Pre-Implementation Analysis  
-**Date:** 2025-11-03 (Updated)
+**Date:** 2025-11-04 (Updated)
+
+**Related Documents:**
+- [DATA_CONNECTIONS.md](./DATA_CONNECTIONS.md) — Main data connections specification
+- [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md) — Query DSL, MSMDC algorithm, batch optimization, and UI design
+- [DATA_CONNECTION_SCHEMA_DATA_DISCUSSION.md](./DATA_CONNECTION_SCHEMA_DATA_DISCUSSION.md) — Design decisions
+
+**Note:** For detailed information on query expression language, MSMDC algorithm, query factorization for batch optimization, and the Query Constructor UI component, see [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md).
 
 ---
 

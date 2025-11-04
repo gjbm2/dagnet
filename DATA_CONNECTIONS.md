@@ -2,7 +2,14 @@
 
 **Version:** 0.2 (Revised)  
 **Status:** Draft for Review  
-**Date:** 2025-11-03 (Updated)
+**Date:** 2025-11-04 (Updated)
+
+**Related Documents:**
+- **[DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md](./DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md) — Consolidated actionable implementation plan** ⭐
+- [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md) — Detailed specification for query DSL, MSMDC algorithm, and UI
+- [QUERY_SELECTOR_DESIGN.md](./QUERY_SELECTOR_DESIGN.md) — UI component design & generalization
+- [DATA_CONNECTIONS_SCHEMA_VALIDATION.md](./DATA_CONNECTIONS_SCHEMA_VALIDATION.md) — Schema design & validation
+- [DATA_CONNECTION_SCHEMA_DATA_DISCUSSION.md](./DATA_CONNECTION_SCHEMA_DATA_DISCUSSION.md) — Design decisions
 
 ---
 
