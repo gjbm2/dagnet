@@ -60,13 +60,12 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       }))
     );
     
-    // Trigger the double-click callback to focus and select text in the label field
-    if (data.onDoubleClick) {
-      data.onDoubleClick(data.id, 'label');
-    }
+    // Open Properties Panel and focus the label field
+    window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+    window.dispatchEvent(new CustomEvent('dagnet:focusField', { detail: { field: 'label' } }));
     
     console.log('Node double-clicked and selected:', data.id);
-  }, [data.id, data.onDoubleClick, setNodes]);
+  }, [data.id, setNodes]);
 
   const handleDelete = useCallback(() => {
     data.onDelete(data.id);

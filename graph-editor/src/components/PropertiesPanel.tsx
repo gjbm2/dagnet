@@ -385,8 +385,19 @@ export default function PropertiesPanel({
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP5: Setup keyboard shortcuts`);
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't handle shortcuts when user is typing in form fields
       const target = e.target as HTMLElement;
+      
+      // Esc key: blur active field if in input/textarea
+      if (e.key === 'Escape') {
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+          target.blur();
+          console.log('PropertiesPanel: Blurred field on Esc');
+          e.preventDefault();
+          return;
+        }
+      }
+      
+      // Don't handle other shortcuts when user is typing in form fields
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
         return;
       }
@@ -397,6 +408,27 @@ export default function PropertiesPanel({
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectedEdgeId, graph, setGraph, onSelectedEdgeChange]);
+
+  // Listen for field focus requests
+  useEffect(() => {
+    const handleFocusField = (e: CustomEvent) => {
+      const { field } = e.detail;
+      console.log('PropertiesPanel: Focus field request:', field);
+      
+      // Wait for next tick to ensure DOM is ready
+      setTimeout(() => {
+        const element = document.querySelector(`[data-field="${field}"]`) as HTMLInputElement | HTMLTextAreaElement;
+        if (element) {
+          element.focus();
+          element.select(); // Select all text for easy editing
+          console.log('PropertiesPanel: Focused and selected field:', field);
+        }
+      }, 100);
+    };
+
+    window.addEventListener('dagnet:focusField' as any, handleFocusField as EventListener);
+    return () => window.removeEventListener('dagnet:focusField' as any, handleFocusField as EventListener);
+  }, []);
 
   const updateGraph = useCallback((path: string[], value: any) => {
     if (!graph) return;
