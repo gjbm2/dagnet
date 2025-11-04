@@ -121,6 +121,28 @@ https://dagnet.vercel.app/?case=high-conversion-scenario
 - URL parameter is cleaned up after loading
 - If the case doesn't exist, an error is shown
 
+### `?node=<node_name>`
+
+Opens a specific node file from the default repository for editing.
+
+**Usage:**
+```
+https://dagnet.vercel.app/?node=<node_name>
+```
+
+**Examples:**
+```
+https://dagnet.vercel.app/?node=landing-page
+https://dagnet.vercel.app/?node=checkout-flow
+https://dagnet.vercel.app/?node=confirmation-page
+```
+
+**How it works:**
+- Loads the node from `nodes/<name>.yaml` in the default repository
+- Opens the node in a new tab with form editor
+- URL parameter is cleaned up after loading
+- If the node doesn't exist, an error is shown
+
 ### `?clear`
 
 Clears all local application data and reloads the page (preserves settings).
@@ -196,6 +218,9 @@ You can open multiple files by combining parameters (though only the first one w
 ```
 # This will open the graph, but you can manually open the parameter
 https://dagnet.vercel.app/?graph=conversion-funnel&parameter=click-probability
+
+# Open a node definition
+https://dagnet.vercel.app/?node=landing-page
 ```
 
 **Note:** Currently, only the first parameter is processed automatically. Future versions may support opening multiple files simultaneously.
@@ -219,20 +244,118 @@ https://dagnet.vercel.app/?clearall
 
 # Load test data
 https://dagnet.vercel.app/?data={"nodes":[...],"edges":[...]}
+
+# Enable dev mode with custom settings
+https://dagnet.vercel.app/?settings={"development":{"devMode":true,"debugGitOperations":true}}
+
+# Load credentials for testing
+https://dagnet.vercel.app/?secret=test-secret-key
+```
+
+### Authentication & Configuration
+```
+# Load from system credentials
+https://dagnet.vercel.app/?secret=production-secret
+
+# Configure multiple repositories
+https://dagnet.vercel.app/?settings={"repositories":[{"name":"repo1","repoOwner":"org1","repoName":"repo1"}]}
+
+# Pre-configure and load graph
+https://dagnet.vercel.app/?secret=my-secret&graph=conversion-funnel
 ```
 
 ### `?settings=<json>`
 
-**⚠️ Not yet implemented** - Planned for future release
+**✅ Now implemented**
 
 Allows passing application settings via URL parameters.
 
-**Planned usage:**
+**Usage:**
 ```
-https://dagnet.vercel.app/?settings={"ui":{"theme":"dark"},"development":{"devMode":true}}
+https://dagnet.vercel.app/?settings=<url_encoded_json>
 ```
 
-**Security note:** Credentials will never be accepted via URL parameters for security reasons.
+**Examples:**
+```
+# Set theme to dark and enable dev mode
+https://dagnet.vercel.app/?settings=%7B%22development%22%3A%7B%22devMode%22%3Atrue%7D%7D
+
+# Configure multiple repositories
+https://dagnet.vercel.app/?settings=%7B%22repositories%22%3A%5B%7B%22name%22%3A%22my-repo%22%2C%22repoOwner%22%3A%22my-org%22%2C%22repoName%22%3A%22my-repo%22%7D%5D%7D
+```
+
+**Supported settings:**
+- `development.devMode`: Enable development mode
+- `development.debugGitOperations`: Enable Git operation debugging
+- `repositories`: Array of repository configurations (name, repoOwner, repoName)
+
+**Security note:** Authentication tokens and permissions cannot be passed via URL for security reasons. Use `?secret` or `?creds` parameters for authentication.
+
+### `?secret=<secret_key>`
+
+Loads system credentials using a secret key stored in environment variables.
+
+**Usage:**
+```
+https://dagnet.vercel.app/?secret=<secret_key>
+```
+
+**How it works:**
+1. The secret key is sent to the backend
+2. Backend retrieves encrypted credentials from environment variables
+3. Credentials are decrypted and returned to the client
+4. Credentials are stored in IndexedDB for the session
+5. URL parameter is cleaned up after loading
+
+**Use cases:**
+- Serverless deployments with environment-based credentials
+- Shared environments where credentials shouldn't be in URLs
+- Production deployments with centralized credential management
+
+**Security note:** The secret key itself doesn't contain credentials, just references them.
+
+### `?creds=<json_credentials>`
+
+Loads credentials directly from a JSON object in the URL.
+
+**Usage:**
+```
+https://dagnet.vercel.app/?creds=<url_encoded_json>
+```
+
+**How it works:**
+1. Credentials JSON is decoded from URL
+2. Validated against credentials schema
+3. Stored in IndexedDB for the session
+4. URL parameter is cleaned up after loading
+
+**Supported formats:**
+- Plain JSON (URL-encoded)
+- Encrypted credentials string
+
+**Credential structure:**
+```json
+{
+  "version": "1.0.0",
+  "git": [
+    {
+      "name": "my-repo",
+      "owner": "my-org",
+      "token": "ghp_xxx",
+      "branch": "main",
+      "isDefault": true
+    }
+  ],
+  "googleSheets": {
+    "token": "ya29.xxx"
+  },
+  "statsig": {
+    "token": "secret-xxx"
+  }
+}
+```
+
+**Security warning:** Only use this for temporary testing. Never share URLs with credentials in production.
 
 ### `?sheet=<sheet_id>&tab=<tab_name>&row=<row_number>`
 
@@ -300,10 +423,21 @@ if (urlParams.has('clear')) {
 
 ## Security Considerations
 
-1. **No credentials in URLs** - Authentication tokens are never accepted via URL parameters
+1. **Credential handling**:
+   - `?secret` parameter is safe - only references credentials, doesn't contain them
+   - `?creds` parameter contains actual credentials - use only for testing
+   - Never share URLs with `?creds` in production environments
+   - URL parameters with credentials are cleaned up after loading
+
 2. **Data validation** - All URL data is validated before processing
+
 3. **Size limits** - Very large data objects may exceed URL length limits
-4. **Clear parameter** - Use with caution as it destroys all local data
+
+4. **Clear parameters** - Use with caution as they destroy all local data:
+   - `?clear` - Clears app data but preserves settings
+   - `?clearall` - Clears everything including credentials
+
+5. **Settings parameter** - Cannot include auth/permissions for security reasons
 
 ## Troubleshooting
 

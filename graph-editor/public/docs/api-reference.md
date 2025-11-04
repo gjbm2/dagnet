@@ -10,26 +10,52 @@ DagNet provides a comprehensive API for programmatic access to graphs, parameter
 All API operations require proper authentication credentials:
 
 ```typescript
-interface Credentials {
+interface CredentialsData {
+  version?: string;
   git: GitRepositoryCredential[];
   statsig?: StatsigCredential;
   googleSheets?: GoogleSheetsCredential;
 }
 
 interface GitRepositoryCredential {
-  name: string;
-  owner: string;
-  repo: string;
+  name: string;              // Unique identifier and repository name
+  owner: string;             // GitHub organization or user
+  token: string;             // GitHub personal access token
+  basePath?: string;         // Base path within repository
+  branch?: string;           // Default branch (defaults to 'main')
+  isDefault?: boolean;       // Mark as default repository
+  userName?: string;         // Display name for file authorship
+  graphsPath?: string;       // Custom path for graphs
+  paramsPath?: string;       // Custom path for parameters
+  contextsPath?: string;     // Custom path for contexts
+  casesPath?: string;        // Custom path for cases
+  nodesPath?: string;        // Custom path for nodes
+}
+
+interface StatsigCredential {
   token: string;
-  basePath?: string;
-  branch?: string;
+}
+
+interface GoogleSheetsCredential {
+  token: string;
 }
 ```
 
 ### Token Management
-- **GitHub Tokens**: Required for repository access
+- **GitHub Tokens**: Required for repository access (read/write permissions)
 - **Statsig API Keys**: For experiment management integration
-- **Google Sheets**: For spreadsheet integration
+- **Google Sheets Tokens**: OAuth tokens for spreadsheet access
+
+### Credential Sources
+Credentials can be loaded from multiple sources:
+- **User Storage**: Stored in browser IndexedDB
+- **URL Parameters**: Passed via `?secret` or `?creds`
+- **System Environment**: Server-side environment variables
+- **Public Repositories**: Read-only access without authentication
+
+```typescript
+type CredentialSource = 'user' | 'system' | 'url' | 'none' | 'public';
+```
 
 ## Graph Operations
 
@@ -65,6 +91,7 @@ interface GraphNode {
     conversion_rate?: number;
     cost?: number;
     description?: string;
+    parameter?: string;  // Link to parameter file
   };
 }
 
@@ -74,6 +101,20 @@ interface GraphEdge {
   target: string;
   weight: number;
   label?: string;
+  costs?: {
+    monetary?: {
+      value: number;
+      stdev?: number;
+      distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform';
+      currency?: 'GBP' | 'USD' | 'EUR' | string;
+    };
+    time?: {
+      value: number;
+      stdev?: number;
+      distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform';
+      units?: 'days' | 'hours' | 'weeks';
+    };
+  };
 }
 ```
 
@@ -128,15 +169,39 @@ interface Parameter {
   description?: string;
   type: 'number' | 'string' | 'boolean' | 'object';
   default_value: any;
+  
+  // Enhanced value specification
+  value?: any;  // Current value (overrides default_value)
+  
+  // Bayesian analysis parameters
+  n?: number;                    // Sample size
+  k?: number;                    // Number of successes
+  window_to?: string;            // Time window (e.g., "2025-01-01")
+  
+  // Data source connection
+  data_source?: {
+    type: 'google_sheets' | 'amplitude' | 'manual';
+    config: {
+      spreadsheet_id?: string;   // For Google Sheets
+      range?: string;            // For Google Sheets
+      query?: any;               // For Amplitude
+      refresh_interval?: string;  // e.g., "1h", "1d"
+    };
+  };
+  
   constraints?: {
     min?: number;
     max?: number;
     options?: string[];
   };
+  
   metadata: {
     created_at: string;
     updated_at: string;
     tags?: string[];
+    author?: string;
+    version?: string;
+    last_synced?: string;       // When data was last synced
   };
 }
 ```
@@ -213,6 +278,201 @@ const experimentCase = {
 };
 
 await paramRegistryService.saveCase('test-variant-a', experimentCase);
+```
+
+## Node Management
+
+### Node Operations
+```typescript
+// Load node definitions
+const nodes = await nodeService.loadNodes();
+
+// Get specific node
+const node = await nodeService.loadNode('landing-page');
+
+// Create new node
+const newNode = {
+  id: 'landing-page',
+  name: 'Landing Page',
+  description: 'Main landing page for campaign',
+  type: 'conversion',
+  parameters: {
+    'conversion-rate': 'landing-conversion-rate',
+    'cost-per-visit': 'landing-cost'
+  },
+  metadata: {
+    created_at: new Date().toISOString(),
+    author: 'user@example.com'
+  }
+};
+
+await nodeService.saveNode('landing-page', newNode);
+```
+
+## Data Connections API
+
+### Connecting Parameters to Data Sources
+
+#### Google Sheets Connection
+```typescript
+// Configure Google Sheets data source
+const parameter = {
+  id: 'conversion-rate',
+  name: 'Conversion Rate',
+  type: 'number',
+  data_source: {
+    type: 'google_sheets',
+    config: {
+      spreadsheet_id: '1abc123def456',
+      range: 'Sheet1!A2:B2',
+      refresh_interval: '1h'
+    }
+  }
+};
+
+// Retrieve latest data from source
+const updatedParameter = await dataConnectionService.retrieveLatestData(parameter);
+```
+
+#### Amplitude Connection
+```typescript
+// Configure Amplitude data source
+const parameter = {
+  id: 'signup-conversion',
+  name: 'Signup Conversion Rate',
+  type: 'number',
+  data_source: {
+    type: 'amplitude',
+    config: {
+      query: {
+        event_type: 'signup',
+        group_by: ['date'],
+        metrics: ['conversion_rate']
+      },
+      refresh_interval: '6h'
+    }
+  },
+  n: 1000,  // Sample size for Bayesian analysis
+  k: 250    // Number of conversions
+};
+```
+
+### Data Synchronization Operations
+
+#### Pull from Parameter File
+```typescript
+// Update graph element with value from parameter file
+await dataConnectionService.pullFromParamFile(
+  graphElement,
+  parameterName
+);
+```
+
+#### Push to Parameter File
+```typescript
+// Update parameter file with value from graph element
+await dataConnectionService.pushToParamFile(
+  graphElement,
+  parameterName
+);
+```
+
+#### Retrieve Latest from Data Source
+```typescript
+// Fetch latest data from external source, update parameter, then graph
+await dataConnectionService.retrieveLatestData(
+  parameterName,
+  updateGraph = true
+);
+```
+
+#### Batch Operations
+```typescript
+// Update all graph elements from their linked parameters
+await dataConnectionService.updateAllFromParams(graphId);
+
+// Update all parameters from graph element values
+await dataConnectionService.updateAllParamsFromGraph(graphId);
+
+// Retrieve latest data for all parameters with data sources
+await dataConnectionService.retrieveLatestForAll(graphId);
+```
+
+## Credentials Management API
+
+### Loading Credentials
+```typescript
+// Initialize credentials manager
+const credentialsManager = CredentialsManager.getInstance();
+
+// Load from multiple sources (in priority order)
+const result = await credentialsManager.initialize();
+// Sources checked: URL → User Storage → System → Public
+
+// Load from specific source
+const urlResult = await credentialsManager.loadFromURL();
+const userResult = await credentialsManager.loadFromUserStorage();
+const systemResult = await credentialsManager.loadFromSystem();
+```
+
+### Managing Credentials
+```typescript
+// Save credentials to user storage
+await credentialsManager.saveCredentials({
+  version: '1.0.0',
+  git: [{
+    name: 'my-repo',
+    owner: 'my-org',
+    token: 'ghp_xxx',
+    branch: 'main',
+    isDefault: true
+  }]
+});
+
+// Get default Git credentials
+const defaultCreds = credentialsManager.getDefaultGitCredentials();
+
+// Clear credentials
+await credentialsManager.clearCredentials();
+```
+
+## Settings Management API
+
+### Application Settings
+```typescript
+interface SettingsData {
+  ui?: {
+    theme?: 'light' | 'dark' | 'auto';
+    defaultViewMode?: 'interactive' | 'raw-json' | 'raw-yaml';
+    autoSave?: boolean;
+    showLineNumbers?: boolean;
+    fontSize?: number;
+  };
+  development?: {
+    devMode?: boolean;
+    debugGitOperations?: boolean;
+  };
+  repositories?: Array<{
+    name: string;
+    repoOwner: string;
+    repoName: string;
+  }>;
+}
+
+// Load settings
+const settings = await db.settings.get('app');
+
+// Save settings
+await db.settings.put({
+  id: 'app',
+  ...settingsData
+});
+
+// Merge URL settings with existing settings
+import { parseURLSettings, mergeSettings } from './lib/urlSettings';
+
+const urlSettings = parseURLSettings(new URLSearchParams(window.location.search));
+const merged = mergeSettings(existingSettings, urlSettings);
 ```
 
 ## File Operations
@@ -336,42 +596,74 @@ try {
 
 ## Examples
 
-### Complete Workflow Example
+### Complete Workflow Example with Data Connections
 ```typescript
-async function analyzeConversionFunnel() {
+async function analyzeConversionFunnelWithLiveData() {
   try {
-    // 1. Load credentials
-    const credentials = await credentialsManager.loadCredentials();
+    // 1. Initialize credentials
+    const credentialsManager = CredentialsManager.getInstance();
+    await credentialsManager.initialize();
     
     // 2. Configure services
-    graphGitService.setCredentials(credentials);
-    paramRegistryService.setConfig({
-      source: 'git',
-      gitRepoOwner: credentials.git[0].owner,
-      gitRepoName: credentials.git[0].repo,
-      gitToken: credentials.git[0].token
-    });
+    const defaultCreds = credentialsManager.getDefaultGitCredentials();
+    graphGitService.setCredentials(defaultCreds);
     
     // 3. Load graph and parameters
     const graph = await graphGitService.getGraph('conversion-funnel', 'main');
     const parameters = await paramRegistryService.loadParameter('conversion-rate');
     
-    // 4. Run what-if analysis
-    const overrides = { 'conversion-rate': parameters.treatment_value };
+    // 4. Sync latest data from external sources
+    await dataConnectionService.retrieveLatestForAll(graph.id);
+    
+    // 5. Update graph elements from parameters
+    await dataConnectionService.updateAllFromParams(graph.id);
+    
+    // 6. Run what-if analysis with live data
+    const overrides = { 
+      'conversion-rate': parameters.value || parameters.default_value 
+    };
     const analysis = await whatIfService.analyze(graph, overrides);
     
-    // 5. Export results
+    // 7. Export results to Google Sheets
     await sheetsClient.updateSheet({
       spreadsheetId: 'analysis-results',
       range: 'Sheet1!A1',
       values: analysis.results
     });
     
+    // 8. Save updated parameters back to Git
+    if (parameters.data_source) {
+      await paramRegistryService.saveParameter(parameters.id, parameters);
+      await gitService.commit('Updated parameters with latest data', 'main');
+    }
+    
     return analysis;
   } catch (error) {
     console.error('Analysis failed:', error);
     throw error;
   }
+}
+
+// Example: Working with multiple repositories
+async function syncAcrossRepositories() {
+  const credentials = await credentialsManager.getCurrentCredentials();
+  
+  // Work with first repository
+  const repo1Data = await graphGitService.getGraph(
+    'conversion-funnel', 
+    'main',
+    credentials.git[0]
+  );
+  
+  // Work with second repository
+  const repo2Data = await paramRegistryService.loadParameter(
+    'shared-conversion-rate',
+    credentials.git[1]
+  );
+  
+  // Merge and analyze
+  const merged = mergeDataSources(repo1Data, repo2Data);
+  return await whatIfService.analyze(merged);
 }
 ```
 
