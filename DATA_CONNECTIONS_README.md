@@ -31,6 +31,8 @@ This folder contains comprehensive documentation for DagNet's Data Connections s
 | [DATA_CONNECTIONS.md](./DATA_CONNECTIONS.md) | **Main specification** | Understanding overall architecture |
 | [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md) | **Query DSL & algorithms** | Implementing query parser, MSMDC, batch optimization |
 | [QUERY_SELECTOR_DESIGN.md](./QUERY_SELECTOR_DESIGN.md) | **UI component design** | Building query editor or similar components |
+| [graph-editor/src/docs/query-expressions.md](./graph-editor/src/docs/query-expressions.md) | **Query syntax guide** (user-facing) | Learning query expression syntax, writing queries |
+| [graph-editor/src/docs/query-algorithms-white-paper.md](./graph-editor/src/docs/query-algorithms-white-paper.md) | **MSMDC & Factorization white paper** | Deep understanding of algorithms, mathematical analysis |
 
 ---
 
@@ -237,11 +239,11 @@ A: Read [DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md](./DATA_CONNECTIONS_IMPLEMENTAT
 
 ### **Q: How does the query language work?**
 
-A: See [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md) — Section 3 (Query Expression DSL).
+A: For user-friendly syntax guide, see [graph-editor/src/docs/query-expressions.md](./graph-editor/src/docs/query-expressions.md). For technical details, see [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md) — Section 3 (Query Expression DSL).
 
 ### **Q: What's the MSMDC algorithm?**
 
-A: See [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md) — Section 4 (MSMDC Algorithm). TL;DR: Automatically generates minimal constraints to uniquely identify a path.
+A: For formal treatment, see [graph-editor/src/docs/query-algorithms-white-paper.md](./graph-editor/src/docs/query-algorithms-white-paper.md). For implementation details, see [QUERY_EXPRESSION_SYSTEM.md](./QUERY_EXPRESSION_SYSTEM.md) — Section 4 (MSMDC Algorithm). TL;DR: Automatically generates minimal constraints to uniquely identify a path.
 
 ### **Q: How do I build a similar component?**
 
