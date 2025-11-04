@@ -3,8 +3,10 @@
 ## In Progress
 
 ### High Priority
-4. Google sheets pull through params
+4. Amplitude, Google sheets pull through params
 5. Context support
+6. Scenario viewer (snapshotting)
+7. Latency/lag management
 
 ### Medium Priority
 - GIT_BATCH_OPERATIONS_MD
