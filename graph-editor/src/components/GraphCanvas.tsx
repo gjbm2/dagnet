@@ -3637,7 +3637,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onConnect={onConnect}
         onReconnect={onEdgeUpdate}
         onSelectionChange={onSelectionChange}
-        onNodeDragStart={onNodeDragStart}
+        onNodeDragStart={onNodeDragStart} 
         onNodeDragStop={onNodeDragStop}
         onNodeDoubleClick={(event, node) => {
           event.preventDefault();
