@@ -24,11 +24,21 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     },
   }));
 
-  const edges: Edge[] = (graph.edges || []).map((e: any) => ({
+  const edges: Edge[] = (graph.edges || []).map((e: any) => {
+    // Resolve e.from and e.to to UUIDs (they can be either UUID or human-readable ID)
+    const sourceNode = graph.nodes.find((n: any) => n.uuid === e.from || n.id === e.from);
+    const targetNode = graph.nodes.find((n: any) => n.uuid === e.to || n.id === e.to);
+    
+    if (!sourceNode || !targetNode) {
+      console.warn(`Edge ${e.uuid || e.id} references non-existent nodes: from=${e.from}, to=${e.to}`);
+      return null;
+    }
+    
+    return {
     id: e.uuid || `${e.from}->${e.to}`,  // ReactFlow edge ID uses the UUID
     type: 'conversion',
-    source: e.from,
-    target: e.to,
+    source: sourceNode.uuid,  // ReactFlow needs UUID (node.id in ReactFlow is the UUID)
+    target: targetNode.uuid,  // ReactFlow needs UUID
     sourceHandle: e.fromHandle,
     targetHandle: e.toHandle,
     reconnectable: true, // CSS and callback will enforce selection requirement
@@ -54,9 +64,10 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       onEdgeUpdate: callbacks?.onEdgeUpdate,
       onReconnect: callbacks?.onReconnect,
     },
-  }));
+  };
+  }).filter(Boolean); // Remove null entries from invalid edges
 
-  return { nodes, edges };
+  return { nodes, edges: edges as Edge[] };
 }
 
 export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {

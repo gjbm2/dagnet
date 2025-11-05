@@ -4290,7 +4290,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
           {/* Conditional Probability editing section */}
           {(() => {
-            const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
+            const edge = graph?.edges?.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
             return edge?.conditional_p && edge.conditional_p.length > 0;
           })() && (
             <div style={{ marginBottom: '12px' }}>
@@ -4298,7 +4298,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                 Conditional Probabilities
               </label>
               {(() => {
-                const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
+                const edge = graph?.edges?.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
                 return edge?.conditional_p?.map((condP: any, cpIndex: number) => (
                   <div key={cpIndex} style={{ marginBottom: '8px', padding: '6px', border: '1px solid #eee', borderRadius: '3px' }}>
                     <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>
@@ -4440,10 +4440,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
           {/* Variant Weight editing for case edges */}
           {(() => {
-            const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
+            const edge = graph?.edges?.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
             return edge?.case_id && edge?.case_variant;
           })() && (() => {
-            const edge = graph?.edges?.find((e: any) => e.id === edgeContextMenu.edgeId);
+            const edge = graph?.edges?.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
             const caseNode = graph?.nodes?.find((n: any) => n.case?.id === edge?.case_id);
             const variant = caseNode?.case?.variants?.find((v: any) => v.name === edge?.case_variant);
             const variantIndex = caseNode?.case?.variants?.findIndex((v: any) => v.name === edge?.case_variant) ?? -1;

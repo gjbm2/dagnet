@@ -1,8 +1,8 @@
 # Data Connections: Consolidated Implementation Plan
 
 **Status:** Active Development  
-**Last Updated:** 2025-11-05 (Phase 0.0 complete)  
-**Current Phase:** Phase 0.1 - Schema Updates (Phase 0.0 ID/Slug Standardization ✅ COMPLETE)
+**Last Updated:** 2025-11-05 (Phase 0.0 & 0.1 complete)  
+**Current Phase:** Phase 0.3 - UpdateManager Implementation (Phase 0.0 & 0.1 ✅ COMPLETE)
 
 **Related Documents:**
 - [DATA_CONNECTIONS.md](./DATA_CONNECTIONS.md) — Main specification
@@ -50,6 +50,29 @@ This document provides a consolidated, actionable implementation plan for the Da
 - [x] Gate 0: ✅ **PASSED** - All code compiles, consistent naming throughout
 - [x] Documentation: `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md`
 
+**Phase 0.1: Schema Updates (Nov 5, 2025):**
+- [x] Updated 7 schema files (5 modified, 2 created)
+- [x] Updated conversion-graph-1.0.0.json with Phase 0.0 changes
+- [x] Updated parameter-schema.yaml with query DSL, evidence fields
+- [x] Updated node-schema.yaml with event_id field
+- [x] Updated case-parameter-schema.yaml with window_from/window_to
+- [x] Created event-schema.yaml and events-index-schema.yaml
+- [x] Updated credentials-schema.json with Amplitude and enhanced Google Sheets
+- [x] Migrated test.json and WA-case-conversion.json to new schema
+- [x] Documented conditional probability design (Query DSL strings)
+- [x] Gate 1: ✅ **PASSED** - All schemas updated, test files migrated
+
+**Phase 0.2: Field Mapping Validation (Gate 2) (Nov 5, 2025):**
+- [x] Systematic validation of all field mappings
+- [x] Fixed 8 critical field name mismatches (p.p → p.mean, etc.)
+- [x] Updated SCHEMA_FIELD_MAPPINGS.md with Phase 0.0 naming
+- [x] Updated MAPPING_TYPES.md with corrected field mappings
+- [x] Validated all 18 mapping configurations
+- [x] Documented orphaned fields (intentionally excluded)
+- [x] Gate 2: ✅ **PASSED** - All field mappings validated
+- [x] Documentation: `PROJECT_CONNECT/CURRENT/GATE_2_VALIDATION_RESULTS.md`
+- [x] Documentation: `PROJECT_CONNECT/PHASE_0.1_COMPLETE.md`
+
 **Query Expression System:**
 - [x] Query DSL syntax defined (`from().to().exclude().visited().case()`)
 - [x] Query parser implemented (regex-based, basic)
@@ -70,34 +93,15 @@ This document provides a consolidated, actionable implementation plan for the Da
 - [x] DATA_CONNECTION_SCHEMA_DATA_DISCUSSION.md (design rationale)
 - [x] PHASE_0.0_COMPLETE.md (ID/Slug refactor completion report)
 
-### 🚧 In Progress (Phase 0)
+### 🚧 In Progress (Phase 0.3)
 
-**Schema Updates (Gate 1):**
-- [ ] Update parameter-schema.yaml
-  - Add `query` field with `query_overridden` flag
-  - Add `n` and `k` to values array
-  - Add `window_to` alongside `window_from`
-  - Add `condition` object (for conditional probabilities)
-  - Add `source` and `connection` fields
-- [ ] Update conversion-graph schema
-  - Add unified `ParamValue` base type
-  - **DECISION:** Suffix pattern for overrides (`mean_overridden`, `stdev_overridden`, NOT nested)
-  - Edge.p structure: p (primary), evidence (n/k), overrides (suffix)
-  - Move `parameter_id` inside param objects
-  - Add override fields to Node (label, description, event_id)
-  - Add override fields to Edge (label, description, query)
-- [ ] Update node-schema.yaml
-  - Add `event_id` field
-- [ ] Update case-schema.yaml
-  - Add `schedules` array (time-windowed weights like param values)
-  - **Rename:** `start_date` → `window_from` (consistency with parameter schema)
-  - **Rename:** `end_date` → `window_to` (consistency with parameter schema)
-  - Add `description_overridden` flag (top-level)
-
-**Events Registry:**
-- [ ] Create event-schema.yaml
-- [ ] Create events-index-schema.yaml
-- [ ] Extend registryService for 'event' type
+**UpdateManager Implementation (Gate 3):**
+- [ ] Create `graph-editor/src/services/UpdateManager.ts`
+- [ ] Implement 18 mapping configurations
+- [ ] Add override flag respect logic
+- [ ] Build conflict resolution system
+- [ ] Write comprehensive tests
+- [ ] Gate 3: UpdateManager tests passing
 - [ ] Add Events section to Navigator
 
 **Credentials:**

@@ -1,8 +1,8 @@
 # PROJECT CONNECT: Data Connections System
 
-**Phase:** 0.1 (Phase 0.0 Complete, Schema Updates Ready)  
+**Phase:** 0.3 (Phase 0.0 & 0.1 Complete, Ready for UpdateManager)  
 **Start Date:** 2025-11-05  
-**Status:** 🟢 Phase 0.0 ID/Slug Standardization ✅ COMPLETE
+**Status:** 🟢 Phase 0.0 & 0.1 ✅ COMPLETE
 
 This directory contains all design documentation for the Data Connections system implementation.
 
@@ -24,7 +24,14 @@ This directory contains all design documentation for the Data Connections system
 - ✅ Documentation: `PHASE_0.0_COMPLETE.md`
 - ✅ "slug" completely purged from codebase
 
-**Next:** Phase 0.1 - Schema Updates (parameter, graph, node, case, event schemas)
+**Phase 0.1 Complete (Nov 5, 2025):**
+- ✅ Gate 1: All schemas updated (7 schema files)
+- ✅ Gate 2: Field mappings validated (8 critical fixes)
+- ✅ Conditional probability design documented
+- ✅ Test files migrated to new schema
+- ✅ Documentation: `PHASE_0.1_COMPLETE.md` and `GATE_2_VALIDATION_RESULTS.md`
+
+**Next:** Phase 0.3 - UpdateManager Implementation
 
 ---
 
@@ -47,6 +54,12 @@ The override pattern for auto-calculated fields. Includes UpdateManager class de
 ### 5. **PHASE_0.0_COMPLETE.md** ✅ COMPLETION REPORT
 Full report on Phase 0.0 ID/Slug Standardization refactor. Statistics, changes made, technical decisions, files affected.
 
+### 6. **PHASE_0.1_COMPLETE.md** ✅ COMPLETION REPORT
+Full report on Phase 0.1 Schema Updates & Field Mapping Validation. 7 schemas updated, 8 critical field name mismatches fixed.
+
+### 7. **GATE_2_VALIDATION_RESULTS.md** ✅ VALIDATION REPORT
+Systematic validation results for all field mappings. Documents all mismatches found and fixed.
+
 ---
 
 ## 📚 All Current Documents
@@ -63,10 +76,12 @@ Full report on Phase 0.0 ID/Slug Standardization refactor. Statistics, changes m
 5. `DATA_CONNECTIONS_SCHEMA_VALIDATION.md` - 8 core design principles
 6. `SCHEMA_MAPPING_COMPATIBILITY_REVIEW.md` - Complete compatibility review
 7. `SCHEMA_FIELD_MAPPINGS.md` - The "switchboard" for field mappings
+8. `GATE_2_VALIDATION_RESULTS.md` - Field mapping validation results
 
-**Query System:**
-8. `QUERY_EXPRESSION_SYSTEM.md` - Query DSL, MSMDC algorithm
-9. `QUERY_SELECTOR_DESIGN.md` - QueryExpressionEditor UI
+**Query System & Conditional Probabilities:**
+9. `QUERY_EXPRESSION_SYSTEM.md` - Query DSL, MSMDC algorithm
+10. `QUERY_SELECTOR_DESIGN.md` - QueryExpressionEditor UI
+11. `CONDITIONAL_PROBABILITY_DESIGN.md` - Conditional probability approach
 
 ### In `/REFERENCE/` (Background context only):
 
@@ -87,12 +102,12 @@ Full report on Phase 0.0 ID/Slug Standardization refactor. Statistics, changes m
 
 ## 🚀 Implementation Phases
 
-### Phase 0: Schemas & Foundation (4-5 days) - **CURRENT**
+### Phase 0: Schemas & Foundation (4-5 days)
 **4 Critical Gates:**
-- **Gate 0:** ID/Slug standardization (0.5 days)
-- **Gate 1:** All schemas updated + fresh sample files (2 days)
-- **Gate 2:** Field mappings validated (0.5 days)
-- **Gate 3:** UpdateManager tests passing (1.5 days)
+- ✅ **Gate 0:** ID/Slug standardization (0.5 days) — COMPLETE
+- ✅ **Gate 1:** All schemas updated + fresh sample files (2 days) — COMPLETE
+- ✅ **Gate 2:** Field mappings validated (0.5 days) — COMPLETE
+- 🚧 **Gate 3:** UpdateManager tests passing (1.5 days) — **CURRENT**
 
 **Key Decisions:**
 1. ✅ ID/slug standardization (`object.uuid`, `object.id`, `object.foreign_id`)
@@ -120,8 +135,10 @@ Out of current scope.
 PROJECT_CONNECT/
 ├── README.md                    ⭐ This file - start here
 ├── DOCUMENT_REVIEW.md           📋 Detailed review of all docs
+├── PHASE_0.0_COMPLETE.md        ✅ Phase 0.0 completion report
+├── PHASE_0.1_COMPLETE.md        ✅ Phase 0.1 completion report
 │
-├── CURRENT/                     ✅ Use these (9 docs)
+├── CURRENT/                     ✅ Use these (12 docs)
 │   ├── DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md
 │   ├── PHASE_0_READINESS_CHECK.md
 │   ├── OVERRIDE_PATTERN_DESIGN.md
@@ -195,5 +212,6 @@ All design decisions finalized 2025-11-05:
 ---
 
 **Last Updated:** 2025-11-05  
-**Next Milestone:** Phase 0.0 Implementation (ID/Slug Refactor)
+**Phase 0.0 & 0.1:** ✅ COMPLETE  
+**Next Milestone:** Phase 0.3 Implementation (UpdateManager)
 
