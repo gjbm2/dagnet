@@ -22,6 +22,14 @@ properties:
   description:
     type: string
     description: Detailed description of what this node represents
+  
+  event_id:
+    type: string
+    pattern: ^[a-z0-9_]+$
+    description: |
+      Reference to event in events registry (allows underscore for production event names).
+      Links this node to an analytics event for data retrieval.
+    examples: ["checkout_started", "purchase_completed", "page_view"]
     
   tags:
     type: array

@@ -1,0 +1,103 @@
+# Events Index Schema
+# This schema defines the structure for the events index file that lists
+# all events in the registry.
+
+type: object
+required: [events]
+additionalProperties: false
+
+properties:
+  events:
+    type: array
+    description: "Array of all events in the registry"
+    items:
+      type: object
+      required: [id, name]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z0-9_]+$'
+          description: "Event ID (must match event file id)"
+        
+        name:
+          type: string
+          description: "Human-readable event name"
+        
+        description:
+          type: string
+          description: "Brief description of the event"
+        
+        category:
+          type: string
+          enum: [user_action, system_event, milestone, conversion, page_view, error]
+          description: "Event category"
+        
+        file_path:
+          type: string
+          description: "Relative path to event YAML file (if rich definition exists)"
+          examples: 
+            - "events/conversion/purchase_completed.yaml"
+            - "events/user_action/checkout_started.yaml"
+        
+        tags:
+          type: array
+          items:
+            type: string
+          description: "Tags for filtering"
+  
+  metadata:
+    type: object
+    description: "Index metadata"
+    properties:
+      version:
+        type: string
+        pattern: '^\\d+\\.\\d+\\.\\d+$'
+        description: "Index format version"
+      
+      updated_at:
+        type: string
+        format: date-time
+        description: "When this index was last updated"
+      
+      total_events:
+        type: integer
+        minimum: 0
+        description: "Total number of events in the index"
+
+# Example events index
+examples:
+  - events:
+      # Index-only entry (no separate file, minimal definition)
+      - id: page_view
+        name: "Page View"
+        description: "User views a page"
+        category: "page_view"
+        tags: ["navigation"]
+      
+      # Entry with full file definition
+      - id: checkout_started
+        name: "Checkout Started"
+        description: "User initiates checkout process"
+        category: "user_action"
+        file_path: "events/conversion/checkout_started.yaml"
+        tags: ["checkout", "conversion"]
+      
+      - id: purchase_completed
+        name: "Purchase Completed"
+        description: "User completes purchase"
+        category: "conversion"
+        file_path: "events/conversion/purchase_completed.yaml"
+        tags: ["purchase", "revenue"]
+      
+      - id: add_to_cart
+        name: "Add to Cart"
+        description: "User adds item to shopping cart"
+        category: "user_action"
+        tags: ["cart", "ecommerce"]
+    
+    metadata:
+      version: "1.0.0"
+      updated_at: "2025-11-05T10:00:00Z"
+      total_events: 4
+
