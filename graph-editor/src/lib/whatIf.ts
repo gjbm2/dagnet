@@ -96,8 +96,12 @@ export function computeEffectiveEdgeProbability(
 ): number {
   if (!graph?.edges) return 0;
   
-  // Find the edge in the graph
-  const edge = graph.edges.find((e: any) => e.id === edgeId || `${e.from}->${e.to}` === edgeId);
+  // Find the edge in the graph (check both uuid and human-readable id after Phase 0.0 migration)
+  const edge = graph.edges.find((e: any) => 
+    e.uuid === edgeId ||           // ReactFlow uses UUID as edge ID
+    e.id === edgeId ||             // Human-readable ID
+    `${e.from}->${e.to}` === edgeId  // Fallback format
+  );
   if (!edge) return 0;
   
   // Start with base probability
@@ -202,7 +206,12 @@ export function getEdgeWhatIfDisplay(
 } | null {
   if (!graph?.edges) return null;
   
-  const edge = graph.edges.find((e: any) => e.id === edgeId || `${e.from}->${e.to}` === edgeId);
+  // Find the edge in the graph (check both uuid and human-readable id after Phase 0.0 migration)
+  const edge = graph.edges.find((e: any) => 
+    e.uuid === edgeId ||           // ReactFlow uses UUID as edge ID
+    e.id === edgeId ||             // Human-readable ID
+    `${e.from}->${e.to}` === edgeId  // Fallback format
+  );
   if (!edge) return null;
   
   // Check for conditional override (explicit or implicit)

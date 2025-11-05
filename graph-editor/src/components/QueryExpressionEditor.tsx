@@ -173,7 +173,7 @@ export function QueryExpressionEditor({
   
   // Get current edge to pre-fill from/to
   const currentEdge = edgeId && graph?.edges
-    ? graph.edges.find((e: any) => e.id === edgeId || `${e.from}->${e.to}` === edgeId)
+    ? graph.edges.find((e: any) => e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId)
     : null;
   
   // Merge nodes from graph and registry (using ids from graph, IDs from registry)
