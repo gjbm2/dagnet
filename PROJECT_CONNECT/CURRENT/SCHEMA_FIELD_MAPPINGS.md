@@ -12,11 +12,11 @@
 
 | Node Registry (param-registry/nodes/) | Graph Node (conversion-graph.json) | Notes |
 |---------------------------------------|-------------------------------------|-------|
-| `id` | `slug` | Connection field |
+| `id` | `id` | Connection field (human-readable) |
 | `name` | `label` | AUTO-SYNC (if not overridden) |
 | `description` | `description` | AUTO-SYNC (if not overridden) |
 | `event_id` | `event_id` | AUTO-SYNC (if not overridden) |
-| - | `id` | Graph-internal UUID |
+| - | `uuid` | Graph-internal UUID (system-generated) |
 | - | `label_overridden` | Override flag |
 | - | `description_overridden` | Override flag |
 | - | `event_id_overridden` | Override flag |
@@ -36,7 +36,7 @@
 | `id` | `p.parameter_id` | Connection field |
 | `name` | `label` | AUTO-SYNC (if not overridden) |
 | `description` | `description` | AUTO-SYNC (if not overridden) |
-| `values[latest].mean` | `p.p` | PRIMARY value (if not overridden) |
+| `values[latest].mean` | `p.mean` | PRIMARY value (if not overridden) |
 | `values[latest].stdev` | `p.stdev` | AUTO-SYNC (if not overridden) |
 | `values[latest].distribution` | `p.distribution` | AUTO-SYNC (if not overridden) |
 | `values[latest].n` | `p.evidence.n` | Evidence (NOT overridable) |
@@ -44,11 +44,12 @@
 | `values[latest].window_from` | `p.evidence.window_from` | Evidence time window |
 | `values[latest].window_to` | `p.evidence.window_to` | Evidence time window (optional) |
 | `query` | `query` | AUTO-SYNC from MSMDC (if not overridden) |
-| - | `id` | Graph-internal UUID |
-| - | `from`, `to` | Node references (structural) |
+| - | `uuid` | Graph-internal UUID (system-generated) |
+| - | `id` | Human-readable ID |
+| - | `from`, `to` | Node references (can be uuid or id) |
 | - | `label_overridden` | Override flag |
 | - | `description_overridden` | Override flag |
-| - | `p.p_overridden` | Override flag |
+| - | `p.mean_overridden` | Override flag |
 | - | `p.stdev_overridden` | Override flag |
 | - | `p.distribution_overridden` | Override flag |
 | - | `query_overridden` | Override flag |
@@ -59,7 +60,7 @@
 
 **Data Flow:** Bidirectional (pull/push)
 
-**CRITICAL:** `p` is PRIMARY (user edits), `n/k` is EVIDENCE (observations only)
+**CRITICAL:** `p.mean` is PRIMARY (user edits), `n/k` is EVIDENCE (observations only)
 
 ---
 
@@ -150,7 +151,7 @@ connection:
 
 | External Source | Graph Edge | Notes |
 |----------------|-----------|-------|
-| Result data | `p.p` OR `cost_gbp.amount` OR `cost_time.duration` | Primary value |
+| Result data | `p.mean` OR `cost_gbp.mean` OR `cost_time.mean` | Primary value |
 | Result data | `p.stdev` OR `cost_gbp.stdev` OR `cost_time.stdev` | Standard deviation |
 | Result data | `p.evidence.n` | Sample size (probability only) |
 | Result data | `p.evidence.k` | Successes (probability only) |
@@ -231,8 +232,8 @@ if (caseNode.case.id) {
 | External Source | Case File (schedules[] array) | Notes |
 |----------------|-------------------------------|-------|
 | Experiment config | `schedules[new].variants[name]` | Variant identifier → weight mapping |
-| Experiment config | `schedules[new].start_date` | Schedule period start |
-| Experiment config | `schedules[new].end_date` | Schedule period end (optional) |
+| Experiment config | `schedules[new].window_from` | Schedule period start |
+| Experiment config | `schedules[new].window_to` | Schedule period end (optional) |
 | - | `schedules[new].retrieved_at` | Timestamp |
 | - | `schedules[new].source` | Source type (statsig, optimizely, etc.) |
 
@@ -276,9 +277,10 @@ if (caseNode.case.id) {
 | Parameter Registry | `id` | Canonical parameter ID | `^[a-z0-9-]+$` |
 | Case Registry | `id` | Canonical case ID | `^[a-z0-9-]+$` |
 | Event Registry | `id` | Canonical event ID | `^[a-z0-9_]+$` (allows underscore!) |
-| Graph Node | `id` | Graph-internal UUID | UUID v4 |
-| Graph Node | `slug` | Reference to node registry | `^[a-z0-9-]+$` |
-| Graph Edge | `id` | Graph-internal UUID | UUID v4 |
+| Graph Node | `uuid` | Graph-internal system ID | UUID v4 |
+| Graph Node | `id` | Reference to node registry (human-readable) | `^[a-z0-9-]+$` |
+| Graph Edge | `uuid` | Graph-internal system ID | UUID v4 |
+| Graph Edge | `id` | Human-readable edge ID | `^[a-z0-9-]+$` |
 
 **Validation:** Event IDs use underscore (production event names), everything else uses hyphen
 
@@ -332,10 +334,10 @@ if (caseNode.case.id) {
 |--------|----------------|
 | Graph Node | `label_overridden`, `description_overridden`, `event_id_overridden` |
 | Graph Edge | `label_overridden`, `description_overridden`, `query_overridden` |
-| Graph Edge.p | `p_overridden`, `stdev_overridden`, `distribution_overridden` |
+| Graph Edge.p | `mean_overridden`, `stdev_overridden`, `distribution_overridden` |
 | Graph Case Node | `label_overridden`, `description_overridden` |
 | Graph Case Node variants | `weight_overridden` (per variant) |
-| Parameter File | `query_overridden`, `condition_overridden` |
+| Parameter File | `query_overridden` |
 
 **NO override flags on:**
 - Registry files (they ARE the source of truth)
@@ -350,8 +352,8 @@ if (caseNode.case.id) {
 // Graph Edge Probability Parameter
 interface EdgeProbabilityParam {
   // PRIMARY VALUES (user-facing, what user edits)
-  p: number;                      // Probability [0, 1]
-  p_overridden?: boolean;         // Auto-updates disabled?
+  mean: number;                   // Probability [0, 1]
+  mean_overridden?: boolean;      // Auto-updates disabled?
   
   stdev?: number;                 // Standard deviation
   stdev_overridden?: boolean;
@@ -436,16 +438,16 @@ variants:
 
 # DATA: Time-windowed weights from Statsig (like parameter values)
 schedules:
-  - start_date: "2025-11-01T00:00:00Z"
-    end_date: "2025-11-30T23:59:59Z"
+  - window_from: "2025-11-01T00:00:00Z"
+    window_to: "2025-11-30T23:59:59Z"
     variants:
       control: 0.5
       treatment: 0.5
     retrieved_at: "2025-11-01T08:00:00Z"
     source: statsig
   
-  - start_date: "2025-12-01T00:00:00Z"
-    # No end_date = current
+  - window_from: "2025-12-01T00:00:00Z"
+    # No window_to = current
     variants:
       control: 0.3
       treatment: 0.7      # Rolling out treatment

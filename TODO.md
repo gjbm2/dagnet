@@ -1,5 +1,21 @@
 # DagNet TODO
 
+## Recently Completed
+
+### Phase 0 (Data Connections Foundation) - Nov 5, 2025 ✅
+- **Phase 0.0:** ID/Slug Standardization - All `slug` → `id`, all `id` (UUID) → `uuid`
+- **Phase 0.1:** Schema Updates - 7 schemas updated, override patterns implemented
+- **Phase 0.2:** Field Mapping Validation (Gate 2) - 8 critical mismatches fixed
+- **Fixed:** Variant weight context menu slider (UUID/ID lookup issue resolved)
+- **Fixed:** Edge weight display issues (UUID/ID systematic fixes)
+- **Fixed:** Node PMF validation ("missing 100%" issue)
+- **Fixed:** Hide selected functionality (human-readable ID handling)
+- **Next:** Phase 0.3 - UpdateManager Implementation
+
+See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPLETE.md` for details.
+
+---
+
 ## In Progress
 
 ### High Priority

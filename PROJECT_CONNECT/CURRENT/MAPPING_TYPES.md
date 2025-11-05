@@ -447,10 +447,11 @@ class UpdateManager extends EventEmitter {
     // Graph → File
     'graph_to_file.CREATE.parameter': {
       fields: [
-        { source: 'edge.parameter_id', target: 'id' },
-        { source: 'edge.label', target: 'name' },
+        { source: 'edge.parameter_id', target: 'id' },  // Human-readable parameter ID
+        { source: 'edge.label', target: 'name' },  // Graph 'label' → Parameter 'name'
         { source: 'edge.description', target: 'description' },
-        // ... more fields
+        { source: 'edge.query', target: 'query' },
+        // Note: edge.uuid is NOT mapped (graph-internal only)
       ]
     },
     
@@ -464,7 +465,7 @@ class UpdateManager extends EventEmitter {
     
     'graph_to_file.APPEND.parameter': {
       fields: [
-        { source: 'edge.p.p', target: 'mean' },
+        { source: 'edge.p.mean', target: 'mean' },  // Probability value
         { source: 'edge.p.stdev', target: 'stdev' },
         { source: 'edge.p.evidence.n', target: 'n' },
         { source: 'edge.p.evidence.k', target: 'k' },
@@ -476,9 +477,11 @@ class UpdateManager extends EventEmitter {
     
     'graph_to_file.CREATE.case': {
       fields: [
-        { source: 'caseNode.id', target: 'id' },
-        { source: 'caseNode.label', target: 'name' },
-        // ... case file creation
+        { source: 'caseNode.case.id', target: 'parameter_id' },  // Case ID → parameter_id
+        { source: 'caseNode.label', target: 'name' },  // Graph 'label' → Case 'name'
+        { source: 'caseNode.description', target: 'description' },
+        { source: 'caseNode.case.variants', target: 'case.variants' },
+        // Note: caseNode.uuid is NOT mapped (graph-internal only)
       ]
     },
     
@@ -492,11 +495,11 @@ class UpdateManager extends EventEmitter {
     
     'graph_to_file.CREATE.node': {
       fields: [
-        { source: 'node.id', target: 'id' },
-        { source: 'node.label', target: 'label' },
+        { source: 'node.id', target: 'id' },  // Human-readable ID
+        { source: 'node.label', target: 'name' },  // Graph 'label' → Registry 'name'
         { source: 'node.description', target: 'description' },
         { source: 'node.event_id', target: 'event_id' },
-        // ... node registry fields
+        // Note: node.uuid is NOT mapped (system-generated, graph-internal only)
       ]
     },
     
@@ -526,10 +529,10 @@ class UpdateManager extends EventEmitter {
     // File → Graph
     'file_to_graph.UPDATE.parameter': {
       fields: [
-        { source: 'parameter.values[0].mean', target: 'edge.p.p', override: 'p.p_overridden' },
+        { source: 'parameter.values[0].mean', target: 'edge.p.mean', override: 'p.mean_overridden' },  // PRIMARY value
         { source: 'parameter.values[0].stdev', target: 'edge.p.stdev', override: 'p.stdev_overridden' },
-        { source: 'parameter.values[0].n', target: 'edge.p.evidence.n' },
-        { source: 'parameter.values[0].k', target: 'edge.p.evidence.k' },
+        { source: 'parameter.values[0].n', target: 'edge.p.evidence.n' },  // Evidence (NOT overridable)
+        { source: 'parameter.values[0].k', target: 'edge.p.evidence.k' },  // Evidence (NOT overridable)
         { source: 'parameter.query', target: 'edge.query', override: 'query_overridden' },
         // ... pull from file to graph
       ]
@@ -544,10 +547,10 @@ class UpdateManager extends EventEmitter {
     
     'file_to_graph.UPDATE.node': {
       fields: [
-        { source: 'nodeRegistry.label', target: 'node.label', override: 'label_overridden' },
+        { source: 'nodeRegistry.name', target: 'node.label', override: 'label_overridden' },  // Registry 'name' → Graph 'label'
         { source: 'nodeRegistry.description', target: 'node.description', override: 'description_overridden' },
         { source: 'nodeRegistry.event_id', target: 'node.event_id', override: 'event_id_overridden' },
-        // ... sync from registry (includes event_id when present)
+        // Note: Registry ID links via node.id (human-readable), not uuid
       ]
     },
     
@@ -557,9 +560,9 @@ class UpdateManager extends EventEmitter {
     // External → Graph
     'external_to_graph.UPDATE.parameter': {
       fields: [
-        { source: 'external.n', target: 'edge.p.evidence.n' },
-        { source: 'external.k', target: 'edge.p.evidence.k' },
-        { source: 'external.p', target: 'edge.p.p', override: 'p.p_overridden' },
+        { source: 'external.n', target: 'edge.p.evidence.n' },  // Evidence
+        { source: 'external.k', target: 'edge.p.evidence.k' },  // Evidence
+        { source: 'external.p', target: 'edge.p.mean', override: 'p.mean_overridden' },  // PRIMARY value
         { source: 'external.window_from', target: 'edge.p.evidence.window_from' },
         // ... direct external → graph
       ]
@@ -575,9 +578,9 @@ class UpdateManager extends EventEmitter {
     // External → File
     'external_to_file.APPEND.parameter': {
       fields: [
-        { source: 'external.n', target: 'n' },
-        { source: 'external.k', target: 'k' },
-        { source: 'external.p', target: 'mean' },
+        { source: 'external.n', target: 'n' },  // Evidence
+        { source: 'external.k', target: 'k' },  // Evidence
+        { source: 'external.p', target: 'mean' },  // Calculate p from n/k, store as mean
         { source: 'external.window_from', target: 'window_from' },
         { source: 'external.window_to', target: 'window_to' },
         // ... append external to values[]
