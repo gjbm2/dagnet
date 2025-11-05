@@ -521,7 +521,7 @@ class FileOperationsService {
     }
 
     try {
-      const indexFileId = file.type === 'event' ? 'events-index' : `${file.type}-index`;
+      const indexFileId = `${file.type}-index`; // FileIds use singular form
       const pluralKey = `${file.type}s`;
       
       // Load or create index file
@@ -609,7 +609,7 @@ class FileOperationsService {
     if (!file.data?.id) return;
 
     try {
-      const indexFileId = file.type === 'event' ? 'events-index' : `${file.type}-index`;
+      const indexFileId = `${file.type}-index`; // FileIds use singular form
       const pluralKey = `${file.type}s`;
       
       const indexFile = fileRegistry.getFile(indexFileId);
