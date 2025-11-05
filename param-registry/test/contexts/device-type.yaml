@@ -1,0 +1,37 @@
+# Context: Device Type
+# Created: 2025-11-05
+# Schema: context-schema.yaml
+
+id: device-type
+name: Device Type
+description: User's device category (desktop, mobile, tablet)
+dimension: device
+
+# Possible values for this context
+values:
+  - id: desktop
+    name: Desktop
+    description: Desktop and laptop computers
+    
+  - id: mobile
+    name: Mobile
+    description: Mobile phones (iOS and Android)
+    
+  - id: tablet
+    name: Tablet
+    description: Tablet devices (iPad, Android tablets)
+
+# Rules for determining context (optional)
+detection_rules:
+  source: user_agent
+  logic: |
+    Mobile detected via user agent string analysis.
+    Tablets detected by screen size and touch capability.
+    Desktop is default fallback.
+    
+# Usage notes
+notes: |
+  Device type significantly impacts conversion rates.
+  Mobile users typically have lower conversion but higher volume.
+  Consider device-specific optimization strategies.
+

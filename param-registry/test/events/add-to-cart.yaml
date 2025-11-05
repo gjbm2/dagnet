@@ -1,0 +1,47 @@
+# Event: Add to Cart
+# Created: 2025-11-05
+# Schema: event-schema.yaml
+
+id: add-to-cart
+name: Add to Cart
+description: User adds a product to their shopping cart
+category: commerce
+
+# Amplitude connector configuration
+connectors:
+  amplitude:
+    event_name: "[Amplitude] Product Added"
+    property_mappings:
+      product_id: "Product ID"
+      product_name: "Product Name"
+      price: "Price"
+      quantity: "Quantity"
+      cart_value: "Cart Total Value"
+    
+# Properties tracked for this event
+properties:
+  - name: product_id
+    type: string
+    required: true
+    description: "Unique identifier for the product"
+  
+  - name: product_name
+    type: string
+    required: true
+    description: "Name of the product"
+  
+  - name: price
+    type: number
+    required: true
+    description: "Price of the product"
+  
+  - name: quantity
+    type: integer
+    required: true
+    description: "Quantity added to cart"
+  
+  - name: cart_value
+    type: number
+    required: false
+    description: "Total cart value after addition"
+

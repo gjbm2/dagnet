@@ -1,0 +1,18 @@
+# Node: Checkout Start
+# Created: 2025-11-05
+# Schema: node-schema.yaml
+
+id: checkout-start
+name: Checkout Start
+description: User initiates the checkout process
+event_id: page-view
+
+# Additional metadata
+tags:
+  - commerce
+  - checkout
+
+notes: |
+  This is a high-intent stage. Users who reach here are serious about purchasing.
+  Common drop-off reasons: unexpected costs, required registration, payment issues.
+

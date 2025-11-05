@@ -1,0 +1,54 @@
+# Parameter: Homepage to Product Conversion
+# Created: 2025-11-05
+# Schema: parameter-schema.yaml
+# Type: Probability
+
+id: homepage-to-product
+name: Homepage to Product Conversion Rate
+description: Probability that a user who lands on homepage views a product page
+parameter_type: probability
+
+# Query expression (DSL for data retrieval)
+query: "from(homepage).to(product-page)"
+
+# Historical values (timestamped)
+values:
+  - mean: 0.42
+    stdev: 0.03
+    n: 5000
+    k: 2100
+    distribution: beta
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-01-31T23:59:59Z"
+    retrieved_at: "2025-02-01T09:00:00Z"
+    context_id: desktop
+    
+  - mean: 0.45
+    stdev: 0.025
+    n: 6000
+    k: 2700
+    distribution: beta
+    window_from: "2025-02-01T00:00:00Z"
+    window_to: "2025-02-28T23:59:59Z"
+    retrieved_at: "2025-03-01T09:00:00Z"
+    context_id: desktop
+
+# Data source configuration
+source:
+  type: amplitude
+  last_synced: "2025-03-01T09:00:00Z"
+
+connection:
+  amplitude_project: main
+  funnel_definition:
+    step_1: "[Amplitude] Page Viewed"
+    step_2: "[Amplitude] Page Viewed"
+    step_1_filters:
+      - property: "Page URL"
+        operator: "contains"
+        value: "/home"
+    step_2_filters:
+      - property: "Page URL"
+        operator: "contains"
+        value: "/product"
+

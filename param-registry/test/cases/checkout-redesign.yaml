@@ -1,29 +1,45 @@
-parameter_id: case-checkout-redesign
-parameter_type: case
-name: "Checkout Redesign Experiment"
-description: "Testing new checkout flow design"
+# Case: Checkout Redesign Test
+# Created: 2025-11-05
+# Schema: case-parameter-schema.yaml
 
-case:
-  id: checkout-redesign-2024
-  slug: checkout-redesign
-  status: active
-  
-  platform:
-    type: manual
-  
-  variants:
-    - name: control
-      weight: 0.5
-      description: "Original checkout flow"
-      
-    - name: treatment
-      weight: 0.5
-      description: "New simplified checkout"
+id: checkout-redesign
+name: Checkout Redesign A/B Test
+description: Testing new single-page checkout vs. multi-step checkout
 
-metadata:
-  created_at: "2025-10-25T00:00:00Z"
-  updated_at: "2025-10-25T00:00:00Z"
-  author: "product-team"
-  version: "1.0.0"
-  tags: ["checkout", "ux", "conversion"]
+# Variant definitions
+variants:
+  - name: control
+    description: Original multi-step checkout process
+    
+  - name: single-page
+    description: New simplified single-page checkout
+
+# Historical variant weights (timestamped schedules)
+schedules:
+  - variants:
+      - name: control
+        weight: 0.5
+      - name: single-page
+        weight: 0.5
+    window_from: "2025-01-15T00:00:00Z"
+    window_to: "2025-02-15T23:59:59Z"
+    notes: "Initial 50/50 split for testing"
+    
+  - variants:
+      - name: control
+        weight: 0.3
+      - name: single-page
+        weight: 0.7
+    window_from: "2025-02-16T00:00:00Z"
+    window_to: null
+    notes: "Single-page showing better conversion, increasing allocation"
+
+# External configuration
+source:
+  type: statsig
+  last_synced: "2025-02-16T09:00:00Z"
+
+connection:
+  statsig_experiment_id: "checkout_redesign_2025"
+  allocation_method: "stable"
 

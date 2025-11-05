@@ -1,146 +1,27 @@
-# Parameters Index - Test Data
-# Lists all available parameters in the test registry
+# Parameters Index
+# Created: 2025-11-05
 
-version: "1.0.0"
-created_at: "2025-01-15T10:00:00Z"
-updated_at: "2025-01-29T16:00:00Z"
+# Parameter registry for conversion graph edges
+# Each parameter represents a probability, cost, or duration value
 
 parameters:
-  # Probability Parameters
-  - id: conversion-rate-baseline
-    name: "Baseline Conversion Rate"
-    description: "Baseline conversion rate for e-commerce checkout processes"
-    file_path: "parameters/conversion-rate-baseline.yaml"
-    type: probability
-    status: active
-    tags: ["conversion", "checkout", "baseline"]
-    created_at: "2025-01-15T10:00:00Z"
-    updated_at: "2025-01-15T10:00:00Z"
-    author: "data-team"
-    version: "1.0.0"
-
-  - id: email-open-rate
-    name: "Email Campaign Open Rate"
-    description: "Email open rate showing improvement over time"
-    file_path: "parameters/email-open-rate.yaml"
-    type: probability
-    status: active
-    tags: ["email", "marketing", "engagement", "time-variant"]
-    created_at: "2024-01-15T10:00:00Z"
-    updated_at: "2024-10-15T14:30:00Z"
-    author: "marketing-team"
-    version: "1.3.0"
-
-  - id: cart-abandonment-rate
-    name: "Shopping Cart Abandonment Rate"
-    description: "Probability that a user will abandon their shopping cart"
-    file_path: "parameters/cart-abandonment-rate.yaml"
-    type: probability
-    status: active
-    tags: ["cart", "abandonment", "checkout", "conversion"]
-    created_at: "2025-01-18T10:00:00Z"
-    author: "ecommerce-team"
-    version: "1.0.0"
-
-  - id: add-to-cart-rate
-    name: "Add to Cart Conversion Rate"
-    description: "Probability that a product page visitor will add the item to their cart"
-    file_path: "parameters/add-to-cart-rate.yaml"
-    type: probability
-    status: active
-    tags: ["cart", "conversion", "product", "funnel"]
-    created_at: "2025-01-19T10:00:00Z"
-    author: "ecommerce-team"
-    version: "1.0.0"
-
-  - id: payment-success-rate
-    name: "Payment Processing Success Rate"
-    description: "Probability that a payment attempt will succeed"
-    file_path: "parameters/payment-success-rate.yaml"
-    type: probability
-    status: active
-    tags: ["payment", "checkout", "success-rate", "technical"]
-    created_at: "2025-01-17T10:00:00Z"
-    author: "payments-team"
-    version: "1.0.0"
-
-  - id: repeat-purchase-rate
-    name: "Repeat Purchase Rate (90 days)"
-    description: "Probability that a first-time customer will make a repeat purchase within 90 days"
-    file_path: "parameters/repeat-purchase-rate.yaml"
-    type: probability
-    status: active
-    tags: ["retention", "repeat", "customer-lifetime-value", "loyalty"]
-    created_at: "2025-01-12T10:00:00Z"
-    author: "analytics-team"
-    version: "1.0.0"
-
-  - id: conversion-by-device
-    name: "Checkout Conversion Rate by Device Type"
-    description: "Checkout conversion rate varies significantly by device type"
-    file_path: "parameters/conversion-by-device.yaml"
-    type: probability
-    status: active
-    tags: ["conversion", "checkout", "device", "context-dependent"]
-    created_at: "2025-01-20T10:00:00Z"
-    author: "analytics-team"
-    version: "1.0.0"
-
-  # Cost GBP Parameters
-  - id: email-campaign-cost
-    name: "Email Campaign Cost"
-    description: "Cost per email sent in marketing campaigns (GBP)"
-    file_path: "parameters/email-campaign-cost.yaml"
-    type: cost_gbp
-    status: active
-    tags: ["email", "marketing", "cost", "gbp", "time-variant"]
-    created_at: "2025-01-15T11:00:00Z"
-    updated_at: "2024-10-01T00:00:00Z"
-    author: "marketing-team"
-    version: "1.3.0"
-
-  - id: shipping-cost-uk
-    name: "UK Shipping Cost (Standard)"
-    description: "Standard shipping cost for UK domestic orders"
-    file_path: "parameters/shipping-cost-uk.yaml"
-    type: cost_gbp
-    status: active
-    tags: ["shipping", "cost", "uk", "logistics"]
-    created_at: "2025-01-16T10:00:00Z"
-    author: "logistics-team"
-    version: "1.0.0"
-
+  - id: homepage-to-product
+    name: Homepage to Product Conversion Rate
+    parameter_type: probability
+    file: parameters/homepage-to-product.yaml
+    
   - id: customer-support-cost
-    name: "Customer Support Cost per Interaction"
-    description: "Average cost per customer support interaction"
-    file_path: "parameters/customer-support-cost.yaml"
-    type: cost_gbp
-    status: active
-    tags: ["support", "cost", "customer-service", "operational"]
-    created_at: "2025-01-14T10:00:00Z"
-    author: "finance-team"
-    version: "1.0.0"
-
-  # Cost Time Parameters
+    name: Customer Support Cost per Contact
+    parameter_type: cost
+    file: parameters/customer-support-cost.yaml
+    
   - id: checkout-duration
-    name: "Checkout Duration"
-    description: "Average time for users to complete the checkout process (days)"
-    file_path: "parameters/checkout-duration.yaml"
-    type: cost_time
-    status: active
-    tags: ["checkout", "purchase", "time", "duration"]
-    created_at: "2025-01-15T12:00:00Z"
-    updated_at: "2025-01-15T12:00:00Z"
-    author: "ecommerce-team"
-    version: "1.0.0"
-
-  - id: return-processing-time
-    name: "Return Processing Time"
-    description: "Average time to process a product return (days)"
-    file_path: "parameters/return-processing-time.yaml"
-    type: cost_time
-    status: active
-    tags: ["returns", "time", "operations", "customer-service"]
-    created_at: "2025-01-13T10:00:00Z"
-    author: "operations-team"
-    version: "1.0.0"
+    name: Checkout Process Duration
+    parameter_type: duration
+    file: parameters/checkout-duration.yaml
+    
+  # Registry entry without file (valid case - data may live only on graph)
+  - id: abandoned-cart-recovery
+    name: Abandoned Cart Recovery Rate
+    parameter_type: probability
+    file: parameters/abandoned-cart-recovery.yaml  # ← File not created yet, data on graph only

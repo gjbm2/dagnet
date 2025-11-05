@@ -1,31 +1,18 @@
+# Node: Homepage
+# Created: 2025-11-05
+# Schema: node-schema.yaml
+
 id: homepage
-name: "Homepage / Landing Page"
-description: |
-  The main entry point for users arriving via SEO, paid traffic, or direct navigation.
-  This is the primary landing page for new user acquisition.
+name: Homepage
+description: User lands on the website homepage
+event_id: page-view
 
+# Additional metadata
 tags:
-  - landing
-  - seo
   - entry-point
-  - acquisition
+  - navigation
 
-resources:
-  - type: notion
-    url: "https://notion.so/team/homepage-specs"
-    title: "Homepage Specifications"
-    description: "Detailed specs and design documentation"
-  
-  - type: figma
-    url: "https://figma.com/file/abc123"
-    title: "Homepage Designs"
-    description: "Current and proposed homepage designs"
-
-metadata:
-  created_at: "2025-01-28T10:00:00Z"
-  updated_at: "2025-01-28T10:00:00Z"
-  author: "growth-team"
-  version: "1.0.0"
-  status: active
-
+notes: |
+  This is the primary entry point for most users.
+  Traffic sources include direct, organic search, and paid ads.
 

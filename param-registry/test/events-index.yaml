@@ -1,0 +1,30 @@
+# Events Index
+# Created: 2025-11-05
+# Schema: events-index-schema.yaml
+
+# Event registry for tracking user actions and behaviors
+# Each event can be connected to nodes in the conversion graph
+
+events:
+  - id: page-view
+    name: Page View
+    category: navigation
+    file: events/page-view.yaml
+    
+  - id: add-to-cart
+    name: Add to Cart
+    category: commerce
+    file: events/add-to-cart.yaml
+    
+  - id: checkout-complete
+    name: Checkout Complete
+    category: commerce
+    file: events/checkout-complete.yaml
+
+# Categories for organizing events
+categories:
+  - navigation
+  - commerce
+  - engagement
+  - error
+

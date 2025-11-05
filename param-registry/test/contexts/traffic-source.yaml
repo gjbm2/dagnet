@@ -1,0 +1,48 @@
+# Context: Traffic Source
+# Created: 2025-11-05
+# Schema: context-schema.yaml
+
+id: traffic-source
+name: Traffic Source
+description: Channel through which user arrived at the website
+dimension: acquisition
+
+# Possible values for this context
+values:
+  - id: organic
+    name: Organic Search
+    description: Unpaid search engine traffic (Google, Bing, etc.)
+    
+  - id: paid
+    name: Paid Advertising
+    description: Paid search, display ads, social media ads
+    
+  - id: direct
+    name: Direct Traffic
+    description: Direct URL entry, bookmarks, or unknown referrer
+    
+  - id: social
+    name: Social Media
+    description: Organic social media traffic (Facebook, Twitter, LinkedIn)
+    
+  - id: email
+    name: Email Marketing
+    description: Traffic from email campaigns
+    
+  - id: referral
+    name: Referral
+    description: Traffic from other websites
+
+# Rules for determining context
+detection_rules:
+  source: utm_parameters
+  logic: |
+    Uses UTM parameters (utm_source, utm_medium) to classify traffic.
+    Falls back to referrer header if UTM not present.
+    
+# Usage notes
+notes: |
+  Traffic source is a critical segmentation dimension.
+  Paid traffic typically has higher intent but lower lifetime value.
+  Email subscribers often show highest conversion rates.
+

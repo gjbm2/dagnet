@@ -1,0 +1,40 @@
+# Event: Page View
+# Created: 2025-11-05
+# Schema: event-schema.yaml
+
+id: page-view
+name: Page View
+description: User views a page on the website
+category: navigation
+
+# Amplitude connector configuration
+connectors:
+  amplitude:
+    event_name: "[Amplitude] Page Viewed"
+    property_mappings:
+      page_url: "Page URL"
+      page_title: "Page Title"
+      referrer: "Referrer"
+    
+# Properties tracked for this event
+properties:
+  - name: page_url
+    type: string
+    required: true
+    description: "Full URL of the viewed page"
+  
+  - name: page_title
+    type: string
+    required: false
+    description: "Title of the page"
+  
+  - name: referrer
+    type: string
+    required: false
+    description: "Referring URL"
+  
+  - name: page_category
+    type: string
+    required: false
+    description: "Category of page (e.g., product, checkout, support)"
+

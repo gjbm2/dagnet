@@ -26,7 +26,25 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
 - Dashboarding views
 - Bayesian modelling (...is expected?)
 
+### Analytics / Model Fitting (Future)
+- **Standard Deviation Calculation Strategy**
+  - Currently: `stdev` defaults to 0 or simple estimates
+  - Need proper calculation based on:
+    - Distribution type (beta for probabilities, lognormal for costs, etc.)
+    - Sample size (n) and confidence
+    - Historical variance if available
+    - Bayesian priors vs. frequentist estimates
+  - Decision: Defer to model fitting analytics phase
+  - Context: Different data sources provide different levels of detail:
+    - Amplitude funnels: Can calculate from n/k using beta distribution
+    - Google Sheets: No statistical context, might need historical variance
+    - Manual entry: User may provide or leave as 0
+  - Should be smart about deriving when possible, but not too opinionated
+  - See: Phase 0.3 discussion on flexible data handling
+
 ### Medium Priority
+- Edit > Undo broken; add Undo to right click context menus on graph (standardise context menu implmenetations)
+- generalise props panel implementation
 - Date windows in viewer
 - Selected objects show query/selector string
 - copy / paste param packs
