@@ -29,6 +29,11 @@ properties:
   description:
     type: string
     description: Optional description of the case
+  
+  description_overridden:
+    type: boolean
+    default: false
+    description: If true, description was manually edited and should not be auto-updated
     
   case:
     type: object
@@ -39,11 +44,7 @@ properties:
     properties:
       id:
         type: string
-        description: Unique case identifier (graph-local)
-        
-      id:
-        type: string
-        description: URL-friendly identifier
+        description: Unique case identifier
         
       status:
         type: string
@@ -95,25 +96,36 @@ properties:
               
       schedules:
         type: array
-        description: Time-based variant configurations
+        description: |
+          Time-windowed variant configurations (historical record like parameter values).
+          Most recent entry first. Each entry represents variant weights for a time period.
         items:
           type: object
+          required: [window_from, variants]
           properties:
-            start_date:
+            window_from:
               type: string
               format: date-time
-              description: Schedule start date
-            end_date:
+              description: Time window start (renamed from start_date for consistency)
+            window_to:
               type: string
               format: date-time
-              description: Schedule end date
+              description: Time window end (optional, renamed from end_date for consistency)
             variants:
               type: object
-              description: Variant weights for this schedule
+              description: Variant name → weight mapping for this time period
               additionalProperties:
                 type: number
                 minimum: 0
                 maximum: 1
+            retrieved_at:
+              type: string
+              format: date-time
+              description: When this schedule data was retrieved (if from external source)
+            source:
+              type: string
+              enum: [statsig, optimizely, launchdarkly, manual]
+              description: Where this schedule data came from
             note:
               type: string
               description: Optional note about this schedule
@@ -146,12 +158,9 @@ properties:
         graph:
           type: string
           description: Graph name
-        node_id:
+        node_uuid:
           type: string
-          description: Node ID in the graph
-        node_id:
-          type: string
-          description: Node id in the graph
+          description: Node UUID in the graph
           
   tags:
     type: array
