@@ -110,7 +110,8 @@ export default function ConversionEdge({
       if (data.case_id) {
         lines.push(`Case ID: ${data.case_id}`);
         // Find the case node and get variant weight
-        const sourceNode = graph?.nodes.find((n: any) => n.id === source);
+        // source could be uuid OR human-readable id, check both
+        const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
         if (sourceNode?.type === 'case' && sourceNode?.case?.id === data.case_id) {
           const variant = sourceNode.case.variants?.find((v: any) => v.name === data.case_variant);
           if (variant) {
@@ -125,7 +126,7 @@ export default function ConversionEdge({
       lines.push(`\nConditional Probabilities:`);
       for (const cond of fullEdge.conditional_p) {
         const nodeNames = cond.condition.visited.map((nodeId: string) => {
-          const node = graph?.nodes.find((n: any) => n.id === nodeId);
+          const node = graph?.nodes.find((n: any) => n.uuid === nodeId || n.id === nodeId);
           return node?.id || node?.label || nodeId;
         }).join(', ');
         const condProb = ((cond.p.mean ?? 0) * 100).toFixed(1);
@@ -173,13 +174,18 @@ export default function ConversionEdge({
   const conditionalOverrides = data?.conditionalOverrides || {};
   
   // Get the full edge object from graph (needed for tooltips and colors)
-  const fullEdge = graph?.edges.find((e: any) => e.id === id);
+  // Find edge in graph (check both uuid and human-readable id after Phase 0.0 migration)
+  const fullEdge = graph?.edges.find((e: any) => 
+    e.uuid === id ||           // ReactFlow uses UUID as edge ID
+    e.id === id ||             // Human-readable ID
+    `${e.from}->${e.to}` === id  // Fallback format
+  );
   
   // UNIFIED: Compute effective probability using shared logic
   const effectiveProbability = useMemo(() => {
     const whatIfOverrides = { caseOverrides, conditionalOverrides };
     return computeEffectiveEdgeProbability(graph, id, whatIfOverrides, null);
-  }, [id, caseOverrides, conditionalOverrides, graph?.edges?.find(e => e.id === id)?.p?.mean, graph?.metadata?.updated_at]);
+  }, [id, caseOverrides, conditionalOverrides, graph?.edges?.find(e => e.uuid === id || e.id === id)?.p?.mean, graph?.metadata?.updated_at]);
 
   // For dashed lines, we need the actual effective weight (flow-based), not just What-If overrides
   const effectiveWeight = useMemo(() => {
@@ -193,8 +199,9 @@ export default function ConversionEdge({
       
       if (startNode) {
         // Calculate residual probability at the source node
-        const calculateResidualProbability = (nodeId: string, edges: any[], startNodeId: string): number => {
-          if (nodeId === startNodeId) return 1.0;
+        const calculateResidualProbability = (nodeId: string, edges: any[], startNodeUuid: string, startNodeId: string): number => {
+          // Check if we're at the start node (nodeId could be uuid OR id)
+          if (nodeId === startNodeUuid || nodeId === startNodeId) return 1.0;
           
           // Find all edges leading to this node
           const incomingEdges = edges.filter(e => e.to === nodeId);
@@ -203,15 +210,17 @@ export default function ConversionEdge({
           // Sum up the mass from all incoming edges
           let totalMass = 0;
           for (const incomingEdge of incomingEdges) {
-            const sourceResidual = calculateResidualProbability(incomingEdge.from, edges, startNodeId);
+            const sourceResidual = calculateResidualProbability(incomingEdge.from, edges, startNodeUuid, startNodeId);
             const whatIfOverrides = { caseOverrides, conditionalOverrides };
-            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.id, whatIfOverrides, null);
+            // Edge lookup by uuid or id (Phase 0.0 migration)
+            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.uuid || incomingEdge.id, whatIfOverrides, null);
             totalMass += sourceResidual * edgeProb;
           }
           return totalMass;
         };
         
-        const residualAtSource = fullEdge?.from ? calculateResidualProbability(fullEdge.from, graph.edges, startNode.id) : 0;
+        // Pass both uuid and id so the function can match either format
+        const residualAtSource = fullEdge?.from ? calculateResidualProbability(fullEdge.from, graph.edges, startNode.uuid, startNode.id) : 0;
         const actualMassFlowing = residualAtSource * effectiveProbability;
         
         return actualMassFlowing;
@@ -220,7 +229,7 @@ export default function ConversionEdge({
     
     // Fallback to effective probability if no flow calculation available
     return effectiveProbability;
-  }, [graph, fullEdge?.from, effectiveProbability, caseOverrides, conditionalOverrides, graph?.edges?.map(e => `${e.id}-${e.p?.mean}`).join(',')]);
+  }, [graph, fullEdge?.from, effectiveProbability, caseOverrides, conditionalOverrides, graph?.edges?.map(e => `${e.uuid}-${e.p?.mean}`).join(',')]);
   
   // UNIFIED: Get what-if display info using shared logic
   const whatIfDisplay = useMemo(() => {
@@ -848,7 +857,8 @@ export default function ConversionEdge({
       } else {
         // Check if source node is a case node and inherit its color
         // This applies to both case variant edges AND normal edges downstream
-        const sourceNode = graph?.nodes.find((n: any) => n.id === source);
+        // source could be uuid OR human-readable id, check both
+        const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
         if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
           baseColor = sourceNode.layout.color;
         }
@@ -874,7 +884,8 @@ export default function ConversionEdge({
     
     // Check if source node is a case node and inherit its color
     // This applies to both case variant edges AND normal edges downstream
-    const sourceNode = graph?.nodes.find((n: any) => n.id === source);
+    // source could be uuid OR human-readable id, check both
+    const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
     if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
       return sourceNode.layout.color;
     }

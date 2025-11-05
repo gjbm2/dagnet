@@ -419,7 +419,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Calculate scale factors for each source face
       Object.keys(edgesBySource).forEach(sourceId => {
         const sourceEdges = edgesBySource[sourceId];
-        const sourceNode = allNodes.find(n => n.id === sourceId);
+        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
+        const sourceNode = allNodes.find(n => n.id === sourceId || n.data?.id === sourceId);
         if (!sourceNode) return;
         
         // Group by face
@@ -448,7 +449,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Calculate scale factors for each target face
       Object.keys(edgesByTarget).forEach(targetId => {
         const targetEdges = edgesByTarget[targetId];
-        const targetNode = allNodes.find(n => n.id === targetId);
+        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
+        const targetNode = allNodes.find(n => n.id === targetId || n.data?.id === targetId);
         if (!targetNode) return;
         
         // Group by face
@@ -510,8 +512,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const targetEdges = edgesByTarget[edge.target] || [];
 
       // Find the source and target nodes to determine edge direction
-      const sourceNode = allNodes.find(n => n.id === edge.source);
-      const targetNode = allNodes.find(n => n.id === edge.target);
+      // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
+      const sourceNode = allNodes.find(n => n.id === edge.source || n.data?.id === edge.source);
+      const targetNode = allNodes.find(n => n.id === edge.target || n.data?.id === edge.target);
       
       if (!sourceNode || !targetNode) {
         return { 
@@ -542,8 +545,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
       // Sort by departure angle from this face (accounts for curve trajectory)
       const sortedSourceEdges = [...sameFaceSourceEdges].sort((a, b) => {
-        const aTarget = allNodes.find(n => n.id === a.target);
-        const bTarget = allNodes.find(n => n.id === b.target);
+        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
+        const aTarget = allNodes.find(n => n.id === a.target || n.data?.id === a.target);
+        const bTarget = allNodes.find(n => n.id === b.target || n.data?.id === b.target);
         if (!aTarget || !bTarget) return 0;
         
         const aKey = getEdgeSortKey(sourceNode, aTarget, sourceFace, true, a.id);
@@ -564,7 +568,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       let sourceOffsetY = 0;
 
       if (sortedSourceEdges.length > 0) {
-        const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id);
+        const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id); // ReactFlow edge IDs match
         if (sourceEdgeIndex !== -1) {
           // Calculate cumulative width using per-edge scale = min(source-face, incident target-face)
           const sourceCumulativeWidth = sortedSourceEdges.slice(0, sourceEdgeIndex).reduce((sum, e) => {
@@ -628,8 +632,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
       // Sort by arrival angle at this face (accounts for curve trajectory)
       const sortedTargetEdges = [...sameFaceTargetEdges].sort((a, b) => {
-        const aSource = allNodes.find(n => n.id === a.source);
-        const bSource = allNodes.find(n => n.id === b.source);
+        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
+        const aSource = allNodes.find(n => n.id === a.source || n.data?.id === a.source);
+        const bSource = allNodes.find(n => n.id === b.source || n.data?.id === b.source);
         if (!aSource || !bSource) return 0;
         
         const aKey = getEdgeSortKey(aSource, targetNode, targetFace, false, a.id);
@@ -649,7 +654,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       let targetOffsetY = 0;
 
       if (sortedTargetEdges.length > 0) {
-        const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id);
+        const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id); // ReactFlow edge IDs match
         if (targetEdgeIndex !== -1) {
           // Calculate cumulative width using per-edge scale = min(source-face, incident target-face)
           const targetCumulativeWidth = sortedTargetEdges.slice(0, targetEdgeIndex).reduce((sum, e) => {
@@ -786,8 +791,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Re-route ALL edges
     nextGraph.edges.forEach((graphEdge: any) => {
-      const sourceNode = nodes.find(n => n.id === graphEdge.from);
-      const targetNode = nodes.find(n => n.id === graphEdge.to);
+      // For ReactFlow nodes, n.id IS the uuid, but graphEdge.from/to could be either uuid or human-readable id
+      const sourceNode = nodes.find(n => n.id === graphEdge.from || n.data?.id === graphEdge.from);
+      const targetNode = nodes.find(n => n.id === graphEdge.to || n.data?.id === graphEdge.to);
       
       if (sourceNode && targetNode) {
         const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
@@ -910,8 +916,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Apply assignments and track changes
       Object.entries(assignments).forEach(([edgeId, face]) => {
-        const originalEdge = edges.find(e => e.id === edgeId);
-        const graphEdge = nextGraph.edges.find(e => e.id === edgeId);
+        const originalEdge = edges.find(e => e.id === edgeId); // ReactFlow edge IDs match
+        const graphEdge = nextGraph.edges.find(e => e.uuid === edgeId || e.id === edgeId);
         if (!originalEdge || !graphEdge) return;
         
         const newFromHandle = graphEdge.from === nodeId ? face + '-out' : graphEdge.fromHandle;
@@ -1173,10 +1179,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const nextGraph = structuredClone(graph);
     
     // Delete selected nodes and their connected edges
-    const selectedNodeIds = new Set(selectedNodes.map(n => n.id));
-    nextGraph.nodes = nextGraph.nodes.filter(n => !selectedNodeIds.has(n.uuid));
+    // Build set of both UUIDs and human-readable IDs for checking edge.from/to
+    const selectedNodeUUIDs = new Set(selectedNodes.map(n => n.id)); // ReactFlow IDs are UUIDs
+    const selectedNodeHumanIds = new Set(selectedNodes.map(n => n.data?.id).filter(Boolean));
+    const allSelectedIds = new Set([...selectedNodeUUIDs, ...selectedNodeHumanIds]);
+    
+    nextGraph.nodes = nextGraph.nodes.filter(n => !selectedNodeUUIDs.has(n.uuid));
     nextGraph.edges = nextGraph.edges.filter(e => 
-      !selectedNodeIds.has(e.from) && !selectedNodeIds.has(e.to)
+      // edge.from/to can be EITHER uuid OR human-readable ID
+      !allSelectedIds.has(e.from) && !allSelectedIds.has(e.to)
     );
     
     // Delete selected edges (that weren't already deleted with nodes)
@@ -1243,7 +1254,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Check if any node positions changed
     const nodePositionsChanged = nodes.some(node => {
-      const graphNode = graph.nodes.find((n: any) => n.id === node.id);
+      const graphNode = graph.nodes.find((n: any) => n.uuid === node.id || n.id === node.id);
       return graphNode && (
         Math.abs((graphNode.layout?.x || 0) - node.position.x) > 0.1 ||
         Math.abs((graphNode.layout?.y || 0) - node.position.y) > 0.1
@@ -1264,7 +1275,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Check if any edge handles changed
     const edgeHandlesChanged = edges.some(edge => {
-      let graphEdge = graph.edges.find((e: any) => e.id === edge.id);
+      // Find edge by UUID or human-readable ID (Phase 0.0 migration)
+      let graphEdge = graph.edges.find((e: any) => e.uuid === edge.id || e.id === edge.id);
       if (!graphEdge) {
         graphEdge = graph.edges.find((e: any) => `${e.from}->${e.to}` === edge.id);
       }
@@ -1278,7 +1290,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Check if only node properties changed (not structure or positions)
     const nodePropertiesChanged = nodes.some(node => {
-      const graphNode = graph.nodes.find((n: any) => n.id === node.id);
+      // Find node by UUID or human-readable ID (Phase 0.0 migration)
+      const graphNode = graph.nodes.find((n: any) => n.uuid === node.id || n.id === node.id);
       if (!graphNode) return false;
       
       // Check if any non-position properties changed
@@ -1335,8 +1348,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       setEdges(prevEdges => {
         // First pass: update edge data without calculateWidth functions
         const result = prevEdges.map(prevEdge => {
-          // Try multiple ways to match edges
-          let graphEdge = graph.edges.find((e: any) => e.id === prevEdge.id);
+          // Try multiple ways to match edges (Phase 0.0 migration: check uuid and id)
+          let graphEdge = graph.edges.find((e: any) => e.uuid === prevEdge.id || e.id === prevEdge.id);
           if (!graphEdge) {
             graphEdge = graph.edges.find((e: any) => `${e.from}->${e.to}` === prevEdge.id);
           }
@@ -1404,7 +1417,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (nodePropertiesChanged) {
         setNodes(prevNodes => {
           return prevNodes.map(prevNode => {
-            const graphNode = graph.nodes.find((n: any) => n.id === prevNode.id);
+            const graphNode = graph.nodes.find((n: any) => n.uuid === prevNode.id || n.id === prevNode.id);
             if (!graphNode) return prevNode;
             
             return {
@@ -1889,18 +1902,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const nextGraph = structuredClone(graph);
       
       // Try multiple ways to find the edge
-      let edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === oldEdge.id);
+      let edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === oldEdge.id || e.id === oldEdge.id);
       
       if (edgeIndex === -1) {
         // Try finding by source->target format
         const sourceTargetId = `${oldEdge.source}->${oldEdge.target}`;
-        edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === sourceTargetId);
+        edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === sourceTargetId || e.id === sourceTargetId);
       }
       
       if (edgeIndex === -1) {
-        // Try finding by from->to format
+        // Try finding by from->to format (from/to could be uuid or id)
         edgeIndex = nextGraph.edges.findIndex((e: any) => 
-          e.from === oldEdge.source && e.to === oldEdge.target
+          (e.from === oldEdge.source || e.from === oldEdge.source) && 
+          (e.to === oldEdge.target || e.to === oldEdge.target)
         );
       }
       
@@ -1975,8 +1989,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (!graph?.nodes) return `${sourceId}-to-${targetId}`;
     
     // Find source and target nodes to get their ids
-    const sourceNode = graph.nodes.find((n: any) => n.uuid === sourceId);
-    const targetNode = graph.nodes.find((n: any) => n.uuid === targetId);
+    const sourceNode = graph.nodes.find((n: any) => n.uuid === sourceId || n.id === sourceId);
+    const targetNode = graph.nodes.find((n: any) => n.uuid === targetId || n.id === targetId);
     
     const sourceId_ = sourceNode?.id || sourceNode?.uuid || sourceId;
     const targetId_ = targetNode?.id || targetNode?.uuid || targetId;
@@ -2008,7 +2022,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
 
     // Check if source is a case node (do this check early)
-    const sourceNode = graph.nodes.find(n => n.id === connection.source);
+    // connection.source is ReactFlow ID (uuid)
+    const sourceNode = graph.nodes.find(n => n.uuid === connection.source || n.id === connection.source);
     const isCaseNode = sourceNode && sourceNode.type === 'case' && sourceNode.case;
     
     // Prevent duplicate edges (but allow multiple edges from case nodes with different variants)
@@ -2115,7 +2130,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const handleVariantSelection = useCallback((variant: any) => {
     if (!pendingConnection || !graph) return;
     
-    const sourceNode = graph.nodes.find(n => n.id === pendingConnection.source);
+    // pendingConnection.source is ReactFlow ID (uuid)
+    const sourceNode = graph.nodes.find(n => n.uuid === pendingConnection.source || n.id === pendingConnection.source);
     if (!sourceNode || !sourceNode.case) return;
     
     // Check if an edge with this variant already exists between these nodes
@@ -2886,8 +2902,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (selectedNodesForAnalysis.length === 2) {
       // ALWAYS sort topologically first
       const sortedNodeIds = topologicalSort(selectedNodeIds, edges);
-      const nodeA = selectedNodesForAnalysis.find(n => n.id === sortedNodeIds[0])!;
-      const nodeB = selectedNodesForAnalysis.find(n => n.id === sortedNodeIds[1])!;
+      const nodeA = selectedNodesForAnalysis.find(n => n.uuid === sortedNodeIds[0] || n.id === sortedNodeIds[0])!;
+      const nodeB = selectedNodesForAnalysis.find(n => n.uuid === sortedNodeIds[1] || n.id === sortedNodeIds[1])!;
       
       // Find direct edge between the two nodes (A → B)
       const directEdge = edges.find(edge => 
@@ -3128,8 +3144,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const lastNodeId = sortedNodeIds[sortedNodeIds.length - 1];
         const intermediateIds = sortedNodeIds.slice(1, -1);
         
-        const firstNode = selectedNodesForAnalysis.find(n => n.id === firstNodeId);
-        const lastNode = selectedNodesForAnalysis.find(n => n.id === lastNodeId);
+        const firstNode = selectedNodesForAnalysis.find(n => n.uuid === firstNodeId || n.id === firstNodeId);
+        const lastNode = selectedNodesForAnalysis.find(n => n.uuid === lastNodeId || n.id === lastNodeId);
         
         // COMPUTE PRUNING ONCE for the entire path
         const { excludedEdges, renormFactors } = computeGlobalPruning(firstNodeId, lastNodeId, sortedNodeIds);
@@ -3160,7 +3176,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           type: 'path_sequential',
           nodeA: firstNode,
           nodeB: lastNode,
-          intermediateNodes: intermediateIds.map(id => selectedNodesForAnalysis.find(n => n.id === id)),
+          intermediateNodes: intermediateIds.map(id => selectedNodesForAnalysis.find(n => n.uuid === id || n.id === id)),
           pathProbability: totalProbability,
           pathCosts: expectedCostsGivenPath,
           sortedNodeIds: sortedNodeIds
@@ -3395,7 +3411,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const nextGraph = structuredClone(graph);
     dagreGraph.nodes().forEach((nodeId) => {
       const dagreNode = dagreGraph.node(nodeId);
-      const graphNode = nextGraph.nodes.find((n: any) => n.id === nodeId);
+      const graphNode = nextGraph.nodes.find((n: any) => n.uuid === nodeId || n.id === nodeId);
       
       if (graphNode) {
         if (!graphNode.layout) graphNode.layout = { x: 0, y: 0 };
@@ -3456,7 +3472,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (!activeTabId) return;
     
     const selectedNodes = nodes.filter(n => n.selected);
-    const selectedNodeIds = selectedNodes.map(n => n.id);
+    // Tab operations use human-readable IDs, not UUIDs
+    const selectedNodeIds = selectedNodes.map(n => n.data?.id || n.id);
     
     await tabOperations.hideUnselectedNodes(activeTabId, selectedNodeIds);
   }, [activeTabId, nodes, tabOperations]);
@@ -3570,7 +3587,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     event.preventDefault();
     event.stopPropagation();
     
-    const edgeData = graph?.edges?.find((e: any) => e.id === edge.id);
+    // edge.id is ReactFlow ID (uuid), check both uuid and human-readable id
+    const edgeData = graph?.edges?.find((e: any) => e.uuid === edge.id || e.id === edge.id);
     
     // Select the edge so properties panel shows the correct data
     onSelectedEdgeChange(edge.id);
@@ -4079,8 +4097,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           {/* Hide/Unhide option */}
           {(() => {
             // Get all selected nodes (including the context menu target)
-            const selectedNodes = nodes.filter(n => n.selected || n.id === nodeContextMenu.nodeId);
-            const selectedNodeIds = selectedNodes.map(n => n.id);
+            // For ReactFlow nodes, n.id IS the uuid
+            const selectedNodes = nodes.filter(n => n.selected || n.id === nodeContextMenu.nodeId || n.data?.id === nodeContextMenu.nodeId);
+            // hiddenNodes are stored by human-readable ID, not UUID
+            const selectedNodeIds = selectedNodes.map(n => n.data?.id || n.id);
             const allHidden = selectedNodeIds.every(id => activeTabId && tabOperations.isNodeHidden(activeTabId, id));
             const someHidden = selectedNodeIds.some(id => activeTabId && tabOperations.isNodeHidden(activeTabId, id));
             const isMultiSelect = selectedNodeIds.length > 1;
@@ -4190,7 +4210,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               onCommit={(value) => {
                     if (graph) {
                       const nextGraph = structuredClone(graph);
-                      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
                       if (edgeIndex >= 0) {
                         nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
                         if (nextGraph.metadata) {
@@ -4203,22 +4223,25 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               }}
               onRebalance={(value) => {
                 if (graph) {
-                  const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                  const currentEdge = graph.edges.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
                   if (!currentEdge) return;
                   
                   const siblings = graph.edges.filter((e: any) => {
+                    // Check if this is NOT the current edge (compare both uuid and id)
+                    const isCurrentEdge = (e.uuid === currentEdge.uuid && e.uuid) || (e.id === currentEdge.id && e.id);
+                    if (isCurrentEdge) return false;
+                    
                     if (currentEdge.case_id && currentEdge.case_variant) {
-                      return e.id !== currentEdge.id && 
-                             e.from === currentEdge.from && 
+                      return e.from === currentEdge.from && 
                              e.case_id === currentEdge.case_id && 
                              e.case_variant === currentEdge.case_variant;
                     }
-                    return e.id !== currentEdge.id && e.from === currentEdge.from;
+                    return e.from === currentEdge.from;
                   });
                   
                   if (siblings.length > 0) {
                     const nextGraph = structuredClone(graph);
-                    const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                    const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
                     if (edgeIndex >= 0) {
                       nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
                     
@@ -4227,7 +4250,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                     
                     if (siblingsTotal > 0) {
                       siblings.forEach(sibling => {
-                        const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                        const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
                         if (siblingIndex >= 0) {
                           const siblingCurrentValue = sibling.p?.mean || 0;
                           const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
@@ -4237,7 +4260,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                     } else {
                       const equalShare = remainingProbability / siblings.length;
                       siblings.forEach(sibling => {
-                        const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                        const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
                         if (siblingIndex >= 0) {
                           nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
                         }
@@ -4286,7 +4309,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                       onChange={(value) => {
                           if (graph) {
                             const nextGraph = structuredClone(graph);
-                            const edgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                            const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
                             if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
                             nextGraph.edges[edgeIndex].conditional_p[cpIndex].p.mean = value;
                               if (nextGraph.metadata) {
@@ -4299,9 +4322,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                       onCommit={(value) => {
                         // Already committed via onChange above
                       }}
-                      onRebalance={(value) => {
-                            if (graph) {
-                          const currentEdge = graph.edges.find((e: any) => e.id === edgeContextMenu.edgeId);
+                        onRebalance={(value) => {
+                              if (graph) {
+                          const currentEdge = graph.edges.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
                           if (!currentEdge || !currentEdge.conditional_p) return;
                           
                           const siblings = graph.edges.filter((e: any) => {
@@ -4319,7 +4342,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                             const currentValue = value;
                             const remainingProbability = roundTo4DP(1 - currentValue);
                             
-                            const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.id === edgeContextMenu.edgeId);
+                            const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
                             if (currentEdgeIndex >= 0 && nextGraph.edges[currentEdgeIndex].conditional_p) {
                               nextGraph.edges[currentEdgeIndex].conditional_p[cpIndex].p.mean = currentValue;
                               
@@ -4348,7 +4371,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                               if (siblingsTotal > 0) {
                                 // Rebalance siblings proportionally for this condition
                                 siblingsWithSameCondition.forEach(sibling => {
-                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
                                   if (siblingIndex >= 0) {
                                     const matchingCondition = sibling.conditional_p?.find((cp: any) => 
                                       JSON.stringify(cp.condition.visited.sort()) === conditionKey
@@ -4371,7 +4394,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                                 // If siblings have no probability for this condition, distribute equally
                                 const equalShare = remainingProbability / siblingsWithSameCondition.length;
                                 siblingsWithSameCondition.forEach(sibling => {
-                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
                                   if (siblingIndex >= 0) {
                                     const matchingCondition = sibling.conditional_p?.find((cp: any) => 
                                       JSON.stringify(cp.condition.visited.sort()) === conditionKey
@@ -4586,7 +4609,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             <div style={{ marginBottom: '16px' }}>
               {caseNodeVariants.map((variant, index) => {
                 // Check if this variant already has an edge to the target
-                const sourceNode = graph?.nodes.find(n => n.id === pendingConnection?.source);
+                const sourceNode = graph?.nodes.find(n => n.uuid === pendingConnection?.source || n.id === pendingConnection?.source);
                 const hasExistingEdge = graph?.edges.some(edge => 
                   edge.from === pendingConnection?.source && 
                   edge.to === pendingConnection?.target &&

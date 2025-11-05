@@ -75,7 +75,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const getProbabilityMass = useCallback(() => {
     const edges = getEdges();
     const nodes = getNodes();
-    const outgoingEdges = edges.filter(edge => edge.source === data.id);
+    // edge.source could be uuid or human-readable id, check both
+    const outgoingEdges = edges.filter(edge => edge.source === data.uuid || edge.source === data.id);
     
     if (outgoingEdges.length === 0) return null;
     

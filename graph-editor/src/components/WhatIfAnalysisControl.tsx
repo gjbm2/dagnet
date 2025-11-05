@@ -163,7 +163,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
 
   // Get conditional edge display name
   const getConditionalEdgeName = useCallback((edgeId: string) => {
-    const edge = graph?.edges.find(e => e.id === edgeId);
+    const edge = graph?.edges.find(e => e.uuid === edgeId || e.id === edgeId);
     return edge?.id || edge?.id || edgeId;
   }, [graph]);
 
@@ -242,7 +242,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
             const groupedOverrides = new Map<string, { visitedNodes: Set<string>, edgeIds: string[], color: string }>();
             
             Object.entries(conditionalOverrides).forEach(([edgeId, visitedNodes]) => {
-              const edge = graph?.edges.find(e => e.id === edgeId);
+              const edge = graph?.edges.find(e => e.uuid === edgeId || e.id === edgeId);
               const signature = Array.from(visitedNodes).sort().join(',');
               
               if (!groupedOverrides.has(signature)) {
@@ -539,7 +539,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                       <option value="">Base probabilities</option>
                       {group.edges[0]?.conditional_p?.map((cond, idx) => {
                         const nodeNames = cond.condition.visited.map(nid => {
-                          const n = graph?.nodes.find(node => node.id === nid);
+                          const n = graph?.nodes.find(node => node.uuid === nid || node.id === nid);
                           return n?.label || n?.id || nid;
                         }).join(', ');
                         return (

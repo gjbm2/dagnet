@@ -144,9 +144,15 @@ function parseVisitedSet(serialized: string): Set<string> {
 
 /**
  * Get outgoing edges from a node.
+ * Handles both UUID and human-readable ID references.
  */
 function getOutgoingEdges(nodeId: string, graph: Graph): GraphEdge[] {
-  return graph.edges.filter(e => e.from === nodeId);
+  // Find the actual node to get both uuid and id
+  const node = graph.nodes.find(n => n.uuid === nodeId || n.id === nodeId);
+  if (!node) return [];
+  
+  // Match edges where from matches EITHER uuid or id
+  return graph.edges.filter(e => e.from === node.uuid || e.from === node.id);
 }
 
 /**
@@ -156,11 +162,18 @@ function buildReachableFrom(graph: Graph): Map<string, Set<string>> {
   const adj = new Map<string, string[]>();
   const memo = new Map<string, Set<string>>();
 
+  // Initialize with human-readable IDs as canonical keys
   for (const node of graph.nodes) {
     adj.set(node.id, []);
   }
+  
+  // Resolve edge.from/to to human-readable IDs
   for (const edge of graph.edges) {
-    adj.get(edge.from)!.push(edge.to);
+    const fromNode = graph.nodes.find(n => n.uuid === edge.from || n.id === edge.from);
+    const toNode = graph.nodes.find(n => n.uuid === edge.to || n.id === edge.to);
+    if (fromNode && toNode) {
+      adj.get(fromNode.id)!.push(toNode.id);
+    }
   }
 
   const dfs = (nodeId: string): Set<string> => {
@@ -189,16 +202,20 @@ function topologicalSort(graph: Graph): string[] {
   const inDegree = new Map<string, number>();
   const adjList = new Map<string, string[]>();
   
-  // Initialize
+  // Initialize with human-readable IDs as canonical keys
   for (const node of graph.nodes) {
     inDegree.set(node.id, 0);
     adjList.set(node.id, []);
   }
   
-  // Build adjacency list and in-degrees
+  // Build adjacency list and in-degrees, resolving edge.from/to
   for (const edge of graph.edges) {
-    adjList.get(edge.from)!.push(edge.to);
-    inDegree.set(edge.to, (inDegree.get(edge.to) || 0) + 1);
+    const fromNode = graph.nodes.find(n => n.uuid === edge.from || n.id === edge.from);
+    const toNode = graph.nodes.find(n => n.uuid === edge.to || n.id === edge.to);
+    if (fromNode && toNode) {
+      adjList.get(fromNode.id)!.push(toNode.id);
+      inDegree.set(toNode.id, (inDegree.get(toNode.id) || 0) + 1);
+    }
   }
   
   // Queue of nodes with no incoming edges
@@ -330,9 +347,13 @@ export function calculateProbabilities(
           nextVisitedSet.add(nodeId);
         }
         
-        // Create next state key
+        // Resolve edge.to to human-readable ID for state key
+        const toNode = graph.nodes.find(n => n.uuid === edge.to || n.id === edge.to);
+        if (!toNode) continue;
+        
+        // Create next state key using human-readable ID
         const nextVisitedStr = serializeVisitedSet(nextVisitedSet, trackedNodes);
-        const nextStateKey = `${edge.to}|${nextVisitedStr}`;
+        const nextStateKey = `${toNode.id}|${nextVisitedStr}`;
         
         // Accumulate probability
         const w = prob * edgeProb;
@@ -401,8 +422,12 @@ export function calculateProbabilities(
     let expectedAttemptCostTime = 0;
 
     for (const e of graph.edges) {
-      const edgeReach = reachableFrom.get(e.to) || new Set<string>();
-      if (e.to === node.uuid || edgeReach.has(node.uuid)) {
+      // Resolve edge.to to human-readable ID
+      const toNode = graph.nodes.find(n => n.uuid === e.to || n.id === e.to);
+      if (!toNode) continue;
+      
+      const edgeReach = reachableFrom.get(toNode.id) || new Set<string>();
+      if (toNode.id === node.id || edgeReach.has(node.id)) {
         const traverseP = edgeTraverseProb.get(e.uuid) || 0;
         const cost = edgeCostMap.get(e.uuid)!;
         expectedAttemptCostMonetary += traverseP * cost.monetary;

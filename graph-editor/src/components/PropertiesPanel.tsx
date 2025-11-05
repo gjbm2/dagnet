@@ -126,7 +126,8 @@ export default function PropertiesPanel({
       
       // Only reload if we're switching to a different node (not reselecting the same one)
       if (lastLoadedNodeRef.current !== selectedNodeId && !isReselectingSameNode) {
-        const node = graph.nodes.find((n: any) => n.id === selectedNodeId);
+        // Find node by UUID or human-readable ID (Phase 0.0 migration)
+        const node = graph.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
         if (node) {
           console.log('PropertiesPanel: Reloading node data from graph, id:', node.id);
           setLocalNodeData({
@@ -189,7 +190,7 @@ export default function PropertiesPanel({
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP1b: Graph changed, reloading selected node`);
     if (selectedNodeId && graph && lastLoadedNodeRef.current === selectedNodeId) {
-      const node = graph.nodes.find((n: any) => n.id === selectedNodeId);
+      const node = graph.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
       if (node) {
         console.log('PropertiesPanel: Reloading node data after graph change, id:', node.id);
         setLocalNodeData({
@@ -282,7 +283,7 @@ export default function PropertiesPanel({
     console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP3: Auto-generate id`);
     if (selectedNodeId && graph && localNodeData.label && !idManuallyEdited) {
       // Check if the node actually exists in the graph to prevent race conditions
-      const nodeExists = graph.nodes.some((n: any) => n.id === selectedNodeId);
+      const nodeExists = graph.nodes.some((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
       if (!nodeExists) {
         return;
       }
@@ -449,7 +450,8 @@ export default function PropertiesPanel({
   const updateNode = useCallback((field: string, value: any) => {
     if (!graph || !selectedNodeId) return;
     const next = structuredClone(graph);
-    const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+    // Find node by UUID or human-readable ID (Phase 0.0 migration)
+    const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
     if (nodeIndex >= 0) {
       next.nodes[nodeIndex][field] = value;
       if (next.metadata) {
@@ -497,9 +499,9 @@ export default function PropertiesPanel({
   if (!graph) return null;
 
   // Add null checks to prevent crashes when nodes/edges are deleted
-  const selectedNode = selectedNodeId && graph.nodes ? graph.nodes.find((n: any) => n.id === selectedNodeId) : null;
+  const selectedNode = selectedNodeId && graph.nodes ? graph.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId) : null;
   const selectedEdge = selectedEdgeId && graph.edges ? graph.edges.find((e: any) => 
-    e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+    e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
   ) : null;
 
   // Determine header text based on selection
@@ -588,7 +590,7 @@ export default function PropertiesPanel({
                       
                       if (nodeData) {
                         const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                         
                         if (nodeIndex >= 0) {
                           const node = next.nodes[nodeIndex];
@@ -646,7 +648,7 @@ export default function PropertiesPanel({
                       onBlur={() => {
                         if (!graph || !selectedNodeId) return;
                         const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                         if (nodeIndex >= 0) {
                           next.nodes[nodeIndex].label = localNodeData.label;
                           if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
@@ -664,7 +666,7 @@ export default function PropertiesPanel({
                         if (e.key === 'Enter') {
                           if (!graph || !selectedNodeId) return;
                           const next = structuredClone(graph);
-                          const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                          const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                           if (nodeIndex >= 0) {
                             next.nodes[nodeIndex].label = localNodeData.label;
                             if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
@@ -720,7 +722,7 @@ export default function PropertiesPanel({
                       checked={Boolean(selectedNode.entry?.is_start)}
                       onChange={(e) => {
                         const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                         if (nodeIndex >= 0) {
                           next.nodes[nodeIndex].entry = {
                             ...(next.nodes[nodeIndex].entry || {}),
@@ -780,7 +782,7 @@ export default function PropertiesPanel({
                       onChange={(e) => {
                         const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
                         const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                         if (nodeIndex >= 0) {
                           next.nodes[nodeIndex].entry = {
                             ...(next.nodes[nodeIndex].entry || {}),
@@ -820,7 +822,7 @@ export default function PropertiesPanel({
                       
                       if (graph && selectedNodeId) {
                         const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                         if (nodeIndex >= 0) {
                           next.nodes[nodeIndex].type = 'case';
                           next.nodes[nodeIndex].case = {
@@ -851,7 +853,7 @@ export default function PropertiesPanel({
                       });
                       if (graph && selectedNodeId) {
                         const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                         if (nodeIndex >= 0) {
                           delete next.nodes[nodeIndex].type;
                           delete next.nodes[nodeIndex].case;
@@ -874,7 +876,7 @@ export default function PropertiesPanel({
                         setCaseData({...caseData, id: newCaseId});
                         if (graph && selectedNodeId) {
                           const next = structuredClone(graph);
-                          const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                          const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                           if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
                             next.nodes[nodeIndex].case.id = newCaseId;
                             if (next.metadata) {
@@ -921,7 +923,7 @@ export default function PropertiesPanel({
                             
                             if (graph && selectedNodeId) {
                               const next = structuredClone(graph);
-                              const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                              const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                               if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
                                 next.nodes[nodeIndex].case = newCaseData;
                                 if (next.metadata) {
@@ -954,7 +956,7 @@ export default function PropertiesPanel({
                           setCaseData({...caseData, status: newStatus});
                           if (graph && selectedNodeId) {
                             const next = structuredClone(graph);
-                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                             if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
                               next.nodes[nodeIndex].case.status = newStatus;
                               if (next.metadata) {
@@ -982,13 +984,13 @@ export default function PropertiesPanel({
                     <ColorSelector
                       label="Node Color"
                         value={(() => {
-                          const node = graph?.nodes.find((n: any) => n.id === selectedNodeId);
+                          const node = graph?.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                         return node?.layout?.color || '#10B981'; // Default to green (first preset) if none assigned
                         })()}
                       onChange={(color) => {
                           if (graph && selectedNodeId) {
                             const next = structuredClone(graph);
-                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                             if (nodeIndex >= 0) {
                               if (!next.nodes[nodeIndex].layout) {
                                 next.nodes[nodeIndex].layout = { x: 0, y: 0 };
@@ -1053,7 +1055,7 @@ export default function PropertiesPanel({
                                       setEditingVariantIndex(null);
                           if (graph && selectedNodeId) {
                             const next = structuredClone(graph);
-                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                                         if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
                                           next.nodes[nodeIndex].case.variants = caseData.variants;
                               if (next.metadata) {
@@ -1130,7 +1132,7 @@ export default function PropertiesPanel({
                                     
                                 if (graph && selectedNodeId) {
                                   const next = structuredClone(graph);
-                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                                   if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
                                     next.nodes[nodeIndex].case.variants = newVariants;
                                     if (next.metadata) {
@@ -1161,7 +1163,7 @@ export default function PropertiesPanel({
                               onCommit={(value) => {
                                 if (graph && selectedNodeId) {
                                   const next = structuredClone(graph);
-                                  const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                                   if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
                                     next.nodes[nodeIndex].case.variants = caseData.variants;
                                     if (next.metadata) {
@@ -1175,7 +1177,7 @@ export default function PropertiesPanel({
                               onRebalance={(value, currentIndex, variants) => {
                                 if (graph && selectedNodeId) {
                                   const rebalanceGraph = structuredClone(graph);
-                                  const nodeIndex = rebalanceGraph.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                                  const nodeIndex = rebalanceGraph.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                                   if (nodeIndex >= 0 && rebalanceGraph.nodes[nodeIndex].case?.variants) {
                                     rebalanceGraph.nodes[nodeIndex].case.variants[currentIndex].weight = value;
                                     const remainingWeight = 1 - value;
@@ -1232,7 +1234,7 @@ export default function PropertiesPanel({
                           setCaseData({...caseData, variants: newVariants});
                           if (graph && selectedNodeId) {
                             const next = structuredClone(graph);
-                            const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                             if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
                               next.nodes[nodeIndex].case.variants = newVariants;
                               if (next.metadata) {
@@ -1496,7 +1498,7 @@ export default function PropertiesPanel({
                     })()}
                     onRebalance={(value) => {
                       if (graph && selectedEdgeId) {
-                        const currentEdge = graph.edges.find((e: any) => e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
+                        const currentEdge = graph.edges.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
                         if (!currentEdge) return;
                         
                         const siblings = graph.edges.filter((e: any) => {
@@ -1514,7 +1516,7 @@ export default function PropertiesPanel({
                           const currentValue = value;
                           const remainingProbability = roundTo4DP(1 - currentValue);
                           
-                          const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
+                          const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
                           if (currentEdgeIndex >= 0) {
                             nextGraph.edges[currentEdgeIndex].p = { ...nextGraph.edges[currentEdgeIndex].p, mean: currentValue };
                           }
@@ -1523,7 +1525,7 @@ export default function PropertiesPanel({
                           
                           if (siblingsTotal > 0) {
                             siblings.forEach(sibling => {
-                              const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                              const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
                               if (siblingIndex >= 0) {
                                 const siblingCurrentValue = sibling.p?.mean || 0;
                                 const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
@@ -1533,7 +1535,7 @@ export default function PropertiesPanel({
                           } else {
                             const equalShare = remainingProbability / siblings.length;
                             siblings.forEach(sibling => {
-                              const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                              const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
                               if (siblingIndex >= 0) {
                                 nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
                               }
@@ -2564,7 +2566,7 @@ export default function PropertiesPanel({
                                         
                                         // Rebalance siblings proportionally
                                         siblings.forEach((sibling) => {
-                                          const siblingIndex = nextGraph.edges.findIndex((e: any) => e.id === sibling.id);
+                                          const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
                                           if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p && nextGraph.edges[siblingIndex].conditional_p![index]) {
                                             const siblingCurrentValue = sibling.conditional_p![index]?.p?.mean || 0;
                                             const newSiblingValue = siblingsTotal > 0
@@ -2818,7 +2820,7 @@ export default function PropertiesPanel({
                               
                               // Update the case node's variant weight
                               const nextGraph = structuredClone(graph);
-                              const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.id === caseNode.id);
+                              const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === caseNode.uuid || n.id === caseNode.id);
                               if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case) {
                                 nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = newWeight;
                                 if (nextGraph.metadata) {
@@ -2843,7 +2845,7 @@ export default function PropertiesPanel({
                               
                               // Update all variant weights proportionally
                               const nextGraph = structuredClone(graph);
-                              const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.id === caseNode.id);
+                              const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === caseNode.uuid || n.id === caseNode.id);
                               if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case) {
                                 nextGraph.nodes[nodeIndex].case.variants.forEach((variant: any, idx: number) => {
                                   if (idx === currentIdx) {
