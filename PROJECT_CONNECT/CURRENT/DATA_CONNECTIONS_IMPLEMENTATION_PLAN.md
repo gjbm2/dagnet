@@ -1,8 +1,8 @@
 # Data Connections: Consolidated Implementation Plan
 
 **Status:** Active Development  
-**Last Updated:** 2025-11-05 (Schema review finalized)  
-**Current Phase:** Phase 0 (design complete, ready to implement)
+**Last Updated:** 2025-11-05 (Phase 0.0 complete)  
+**Current Phase:** Phase 0.1 - Schema Updates (Phase 0.0 ID/Slug Standardization ✅ COMPLETE)
 
 **Related Documents:**
 - [DATA_CONNECTIONS.md](./DATA_CONNECTIONS.md) — Main specification
@@ -37,6 +37,19 @@ This document provides a consolidated, actionable implementation plan for the Da
 
 ### ✅ Completed
 
+**Phase 0.0: ID/Slug Standardization Refactor (Nov 5, 2025):**
+- [x] Renamed all `id` → `uuid` (system-generated)
+- [x] Renamed all `slug` → `id` (human-readable)
+- [x] Updated type definitions: `Slug` → `HumanId`
+- [x] Refactored 17+ files across codebase
+- [x] Fixed all UUID/ID lookup bugs (check both `n.uuid === ref || n.id === ref`)
+- [x] Created migration script: `scripts/migrate-id-slug.ts`
+- [x] Renamed `slugUtils.ts` → `idUtils.ts`
+- [x] Purged ALL "slug" references from codebase (zero instances)
+- [x] TypeScript compilation: 0 errors
+- [x] Gate 0: ✅ **PASSED** - All code compiles, consistent naming throughout
+- [x] Documentation: `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md`
+
 **Query Expression System:**
 - [x] Query DSL syntax defined (`from().to().exclude().visited().case()`)
 - [x] Query parser implemented (regex-based, basic)
@@ -55,6 +68,7 @@ This document provides a consolidated, actionable implementation plan for the Da
 - [x] QUERY_SELECTOR_DESIGN.md (UI component generalization)
 - [x] DATA_CONNECTIONS_SCHEMA_VALIDATION.md (schema design, 20+ questions resolved)
 - [x] DATA_CONNECTION_SCHEMA_DATA_DISCUSSION.md (design rationale)
+- [x] PHASE_0.0_COMPLETE.md (ID/Slug refactor completion report)
 
 ### 🚧 In Progress (Phase 0)
 
