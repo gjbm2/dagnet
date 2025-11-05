@@ -146,7 +146,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           // Fetch branches for the selected repository
           console.log(`🔑 NavigatorContext: Fetching branches for ${gitCreds.name}...`);
           const branches = await fetchBranches(gitCreds.name);
-          const selectedBranch = branches.includes('main') ? 'main' : branches[0] || gitCreds.branch || 'main';
+          // Prefer configured branch from credentials, then fall back to 'main' or first available
+          const selectedBranch = gitCreds.branch || (branches.includes('main') ? 'main' : branches[0]) || 'main';
           
           // Use saved branch if valid, otherwise use default
           const savedBranchName = savedState?.selectedBranch;
@@ -321,7 +322,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     if (repo) {
       // Fetch branches for the selected repository
       const branches = await fetchBranches(repo);
-      const selectedBranch = branches.includes('main') ? 'main' : branches[0] || '';
+      
+      // Get credentials for this repo to find the configured branch
+      const credentialsResult = await credentialsManager.loadCredentials();
+      const gitCreds = credentialsResult.credentials?.git?.find((r: any) => r.name === repo);
+      // Prefer configured branch from credentials, then fall back to 'main' or first available
+      const selectedBranch = gitCreds?.branch || (branches.includes('main') ? 'main' : branches[0]) || '';
       
       setState(prev => ({
         ...prev,
