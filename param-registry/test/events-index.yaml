@@ -8,18 +8,18 @@
 events:
   - id: page_view
     name: Page View
-    category: page_view
-    file: events/page_view.yaml
+    event_type: page_view
+    file_path: events/page_view.yaml
     
   - id: add_to_cart
     name: Add to Cart
-    category: user_action
-    file: events/add_to_cart.yaml
+    event_type: user_action
+    file_path: events/add_to_cart.yaml
     
   - id: checkout_complete
     name: Checkout Complete
-    category: conversion
-    file: events/checkout_complete.yaml
+    event_type: conversion
+    file_path: events/checkout_complete.yaml
 
 # Categories for organizing events
 categories:
