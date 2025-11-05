@@ -113,7 +113,8 @@ class WorkspaceService {
         { fileName: 'parameters-index.yaml', type: 'parameter' as ObjectType },
         { fileName: 'contexts-index.yaml', type: 'context' as ObjectType },
         { fileName: 'cases-index.yaml', type: 'case' as ObjectType },
-        { fileName: 'nodes-index.yaml', type: 'node' as ObjectType }
+        { fileName: 'nodes-index.yaml', type: 'node' as ObjectType },
+        { fileName: 'events-index.yaml', type: 'event' as ObjectType }
       ];
 
       for (const indexFile of indexFiles) {
@@ -380,7 +381,8 @@ class WorkspaceService {
         { fileName: 'parameters-index.yaml', type: 'parameter' as ObjectType },
         { fileName: 'contexts-index.yaml', type: 'context' as ObjectType },
         { fileName: 'cases-index.yaml', type: 'case' as ObjectType },
-        { fileName: 'nodes-index.yaml', type: 'node' as ObjectType }
+        { fileName: 'nodes-index.yaml', type: 'node' as ObjectType },
+        { fileName: 'events-index.yaml', type: 'event' as ObjectType }
       ];
 
       for (const indexFile of indexFiles) {
