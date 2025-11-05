@@ -3665,8 +3665,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         nodesDraggable={true}
         nodesConnectable
         elementsSelectable
-        reconnectRadius={35}
-        edgeUpdaterRadius={35}
+        reconnectRadius={40}
+        edgeUpdaterRadius={40}
         onlyRenderVisibleElements={false}
         panOnDrag={!isLassoSelecting}
         connectionRadius={50}
