@@ -7,8 +7,11 @@
 - Context support
 - Scenario viewer (snapshotting)
 - Latency/lag management
+- Dashboarding views
+- Bayesian modelling (...is expected?)
 
 ### Medium Priority
+- Date windows in viewer
 - Selected objects show query/selector string
 - copy / paste param packs
 - 'view param packs)

@@ -86,6 +86,14 @@
 - User decides when to commit changes to Git
 - No automated commits without explicit user action
 
+### 8. **Flexible Data Location (Graph ↔ Param Files)**
+- Data can be managed in graph OR param files (user's choice)
+- Both schemas support same fields (symmetry principle)
+- Frontend gently manages synchronization during CRUD operations
+- No forced location - system adapts to where user works
+- Query expressions, overrides, and metadata maintained in both locations
+- Pull/push operations keep them in sync when needed
+
 ---
 
 ## Use Case 1: Analyst Maintains Values in Google Sheets

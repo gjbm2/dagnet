@@ -1,8 +1,30 @@
 # Data Connections Schema Decisions
 
+**⚠️ STATUS: SUPERSEDED - Use for historical context only**
+
 **Companion to:** DATA_CONNECTIONS_SCHEMA_VALIDATION.md  
 **Purpose:** Document key decisions and discussion points  
-**Date:** 2025-11-04
+**Date:** 2025-11-04  
+**Superseded By:** OVERRIDE_PATTERN_DESIGN.md, SCHEMA_MAPPING_COMPATIBILITY_REVIEW.md (2025-11-05)
+
+---
+
+## ⚠️ IMPORTANT: Conflicts with Current Design
+
+**This document contains decisions from Nov 4 that were refined on Nov 5. Key conflicts:**
+
+1. **p/n/k Storage:** This doc says `k` is derived from `p × n`. **CURRENT DESIGN:** `p.mean` is primary (user-editable), `n` and `k` are stored in `evidence` blob (observations, not derived).
+
+2. **Override Pattern:** This doc doesn't mention override flags. **CURRENT DESIGN:** Comprehensive override pattern with `field_overridden` flags throughout all schemas.
+
+3. **Evidence Structure:** Not mentioned here. **CURRENT DESIGN:** Evidence blob contains `{n, k, window_from, window_to, retrieved_at, source, query}`.
+
+**For current design, see:**
+- `PROJECT_CONNECT/CURRENT/OVERRIDE_PATTERN_DESIGN.md`
+- `PROJECT_CONNECT/CURRENT/SCHEMA_MAPPING_COMPATIBILITY_REVIEW.md`
+- `PROJECT_CONNECT/CURRENT/DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md`
+
+---
 
 **Related Documents:**
 - [DATA_CONNECTIONS.md](./DATA_CONNECTIONS.md) — Main data connections specification
