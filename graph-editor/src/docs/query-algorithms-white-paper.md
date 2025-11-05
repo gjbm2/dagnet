@@ -2,11 +2,21 @@
 
 **A White Paper on MSMDC and Query Factorization**
 
-**Authors:** DagNet Team  
+**Authors:** Greg Marsh, Ezra Thompson
 **Date:** November 2025  
 **Status:** Technical Specification
 
 ---
+
+## Executive Summary
+
+- MSMDC generates minimal, uniquely discriminating constraints for a target path using a Set Cover formulation over path literals; greedy achieves a (1 + ln M) approximation and runs in milliseconds on typical graphs.
+- Query Factorization reduces N requests to M optimized API calls (M ≪ N) by exploiting subsumption; greedy (weighted) Set Cover provides a (1 + ln N) approximation and typically cuts calls by 70–85%.
+- Both algorithms operate on the DagNet query DSL (from/to, exclude, visited, case) over graph `node_id`s and assume simple paths; time windows and contexts are handled orthogonally via parameter files.
+- Correctness: MSMDC covers all alternates (each ruled out by a literal); Factorization covers all requests (each subsumed by a selected query) with sound post‑filtering.
+- Stability: Minimal constraints reduce brittleness; auto‑regen on graph changes unless manually overridden, with validation warnings for ambiguity or redundancy.
+- Performance: MSMDC < 5–10ms per edge (typical); Factorization < 50ms for ~100 params; savings strongest under shared (from,to) and overlapping constraints.
+- Implementation: Integrated into editor (auto‑generation, validation) and services (single‑param retrieval, batched updates, rate‑limited execution, logs).
 
 ## Abstract
 
@@ -94,14 +104,18 @@ This is a **Set Cover Problem** instance:
 
 #### Complexity Analysis
 
+Let M be the maximum number of alternate simple paths enumerated (a configurable cap), and L the average path length (nodes).
+
 **Time Complexity:**
-- Path enumeration: O(k·n) where n = nodes per path (DFS with cycle detection)
-- Literal generation: O(k·n)
-- Greedy Set Cover: O(k·m·log k) where m = number of literals
-- **Total:** O(k·n·m) = O(k²·n²) worst case
+- Path enumeration (simple paths, capped): O(M·L)
+- Literal generation and coverage computation: O(M·L)
+- Greedy Set Cover: O(M·m·log M), where m is the number of candidate literals
+- **Total (with cap):** O(M·(L + m·log M))
+
+Without a cap, the number of simple s→t paths can be exponential in |V|; in practice we cap M (default 20) and warn on overflow.
 
 **Space Complexity:**
-- O(k·n) to store paths and coverage matrix
+- O(M·L) to store paths and the coverage matrix
 
 **Practical Performance:**
 - For conversion graphs: k ≤ 20, n ≤ 10
@@ -200,6 +214,8 @@ FindAllPaths(s, t, G, maxPaths):
   Return paths
 ```
 
+Note: Only simple paths are considered (no node repeats), enforced by the `visited` set.
+
 ### 1.5 Computational Approach
 
 #### Optimizations
@@ -296,6 +312,14 @@ useEffect(() => {
 - No alternate paths: Return empty constraint set (O(1))
 - Over-constrained queries: Warn about redundant constraints
 
+### 1.7 Correctness and Guarantees
+
+**Correctness (coverage):** The greedy MSMDC returns a constraint set C such that every alternate path Pᵢ is ruled out by at least one literal in C (by construction of coverage sets \{S_ℓ\}).
+
+**Approximation:** Greedy Set Cover achieves a (1 + ln M) approximation factor to the minimum number of literals, where M is the number of alternates. This bound is tight up to lower‑order terms for polynomial‑time algorithms.
+
+**Stability:** Minimality reduces brittleness under graph edits; validation re‑runs MSMDC on structure changes unless the query is manually overridden.
+
 ---
 
 ## 2. Query Factorization for Batch Optimization
@@ -329,6 +353,10 @@ Query qⱼ **subsumes** request rᵢ (written qⱼ ⊒ rᵢ) iff:
 - qⱼ.to = rᵢ.to
 - qⱼ.exclude ⊆ rᵢ.exclude (fewer exclusions → broader query)
 - qⱼ.visited ⊆ rᵢ.visited (fewer requirements → broader query)
+ 
+Notes:
+- Case filters are conjunctive; qⱼ.cases ⊆ rᵢ.cases means qⱼ applies to a superset when it filters fewer cases.
+- Time windows and contexts are carried as orthogonal dimensions in parameter files; factorization only groups compatible requests.
 
 **Intuition:** qⱼ fetches a superset of data needed by rᵢ
 
@@ -447,6 +475,8 @@ Algorithm:
 3. Return Q
 ```
 
+Tie‑breaking: When scores are equal, prefer candidates with fewer constraints (broader queries) and lexicographically smaller signatures for determinism.
+
 #### Candidate Generation
 
 ```
@@ -505,6 +535,38 @@ PostFilter(q, r):
   Return filter
 ```
 
+#### Worked Example
+
+Requests:
+
+```
+r₁: from(a).to(b).exclude(c)
+r₂: from(a).to(b).exclude(c, d)
+r₃: from(a).to(b)
+```
+
+Candidates (deduped):
+
+```
+q₁ = from(a).to(b).exclude(c)
+q₂ = from(a).to(b)
+```
+
+Coverage:
+
+```
+q₁ ⊒ {r₁}
+q₂ ⊒ {r₁, r₂, r₃}
+```
+
+Greedy picks q₂ first, covering all three. Post‑filters:
+
+```
+for r₁: add exclude(c)
+for r₂: add exclude(c, d)
+for r₃: no filter
+```
+
 ### 2.5 Computational Approach
 
 #### Optimizations
@@ -540,6 +602,14 @@ Formulate as Weighted Set Cover ILP:
     For each rᵢ: Σⱼ:qⱼ⊒rᵢ yⱼ ≥ 1  (cover each request)
     yⱼ ∈ {0,1}
 ```
+
+### 2.7 Correctness and Guarantees
+
+**Correctness (covering):** The selected query set Q covers all requests because each iteration adds a candidate that subsumes at least one previously uncovered request until none remain.
+
+**Approximation:** Greedy (Weighted) Set Cover achieves a (1 + ln N) approximation to the optimal number (or cost) of queries, where N is the number of requests.
+
+**Sound post‑filtering:** For each rᵢ mapped to qⱼ, post‑filters compute rᵢ’s extra constraints as set differences; since qⱼ ⊒ rᵢ, post‑filtering cannot remove needed records.
 
 ### 2.6 Implementation in DagNet
 
@@ -682,12 +752,37 @@ Together, these algorithms form a robust foundation for the DagNet data connecti
 
 ---
 
+## 0. Scope & Assumptions
+
+This paper specifies algorithmic foundations used across DagNet (graph editor, services, and Python tooling). Unless stated otherwise:
+
+- Queries use graph `node_id` identifiers (slugs), not third‑party event names
+- Constraints are conjunctive; clause order is irrelevant
+- Exactly one `.from()` and one `.to()` per query; no OR in v1
+- Only simple paths are considered (no node repeats)
+- Case filters denote intersection across cases (multi‑case AND)
+- Time windows, contexts, and connection metadata live in parameter files and are orthogonal to the DSL
+
+These match the v1 DSL and schemas referenced by the Data Connections specifications.
+
+## Appendix A: Glossary & Notation
+
+- **Alternate paths (P):** All simple s→t paths excluding the target path P*
+- **Literal:** A constraint of the form `visited(v)` or `exclude(v)`
+- **Coverage set (Sℓ):** The set of alternates ruled out by literal ℓ
+- **Subsumption (⊒):** qⱼ subsumes rᵢ if qⱼ’s constraints are a subset of rᵢ’s (same endpoints)
+- **Set operators:** `⊆` subset, `∖` set difference, `⋃` union
+- **M:** Number of enumerated alternate paths (after capping)
+- **L:** Average path length (nodes)
+- **m:** Number of candidate literals (MSMDC) or candidate queries (factorization)
+
 ## References
 
 **Set Cover & Hitting Set:**
 - Karp, R. (1972). "Reducibility Among Combinatorial Problems." *Complexity of Computer Computations*.
 - Johnson, D. S. (1974). "Approximation Algorithms for Combinatorial Problems." *Journal of Computer and System Sciences*, 9(3), 256-278.
 - Chvátal, V. (1979). "A Greedy Heuristic for the Set-Covering Problem." *Mathematics of Operations Research*, 4(3), 233-235.
+- Feige, U. (1998). "A Threshold of ln n for Approximating Set Cover." *Journal of the ACM*, 45(4), 634–652.
 
 **Graph Algorithms:**
 - Lipton, R. J., & Tarjan, R. E. (1979). "A Separator Theorem for Planar Graphs." *SIAM Journal on Applied Mathematics*, 36(2), 177-189.
