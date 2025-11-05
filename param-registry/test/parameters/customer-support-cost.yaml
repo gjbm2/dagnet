@@ -6,7 +6,7 @@
 id: customer-support-cost
 name: Customer Support Cost per Contact
 description: Average cost incurred per customer support interaction
-parameter_type: cost
+type: cost_gbp
 
 # Query expression
 query: "cost(customer-support)"

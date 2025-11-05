@@ -1,8 +1,8 @@
 # Data Connections: Consolidated Implementation Plan
 
 **Status:** Active Development  
-**Last Updated:** 2025-11-05 (Phase 0.0 & 0.1 complete)  
-**Current Phase:** Phase 0.3 - UpdateManager Implementation (Phase 0.0 & 0.1 ✅ COMPLETE)
+**Last Updated:** 2025-11-05 (Phase 0 complete, Phase 1A in progress)  
+**Current Phase:** Phase 1A - Events Implementation ✅ COMPLETE
 
 **Related Documents:**
 - [DATA_CONNECTIONS.md](./DATA_CONNECTIONS.md) — Main specification
@@ -116,7 +116,16 @@ This document provides a consolidated, actionable implementation plan for the Da
 - [x] Created comprehensive `TESTING.md` guide + `TEST_QUICK_START.md` + `TESTING_INFRASTRUCTURE_COMPLETE.md`
 - [x] **Gate 3: ✅ PASSED** - 20/20 core tests passing (2 event timing tests skipped for Phase 1)
 
-**Note:** Events UI (Navigator section, registry service) deferred to Phase 1 (follows pattern of Cases/Contexts)
+**Phase 1A: Events Implementation (Nov 5, 2025):**
+- [x] Added `'event'` to `ObjectType` union in types and theme
+- [x] Added yellow Calendar icon theme for events (`#FEF3C7`, `#EAB308`)
+- [x] Extended `registryService` with `getEvents()` method
+- [x] Added Events section to Navigator with expand/collapse support
+- [x] Updated `fileOperationsService` with event default data
+- [x] Fixed index file naming (`'events-index'` not `'event-index'`)
+- [x] Verified EnhancedSelector auto-supports events
+- [x] Created `PHASE_1_EVENTS_COMPLETE.md`
+- [x] 0 linter errors, all TypeScript checks pass
 
 ---
 

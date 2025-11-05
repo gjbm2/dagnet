@@ -106,6 +106,21 @@ class FileOperationsService {
             ...metadata
           }
         };
+      } else if (type === 'event') {
+        defaultData = {
+          id: name,
+          name,
+          description: '',
+          event_type: 'conversion',
+          properties: [],
+          metadata: {
+            created_at: new Date().toISOString(),
+            author: 'user',
+            version: '1.0.0',
+            status: 'active',
+            ...metadata
+          }
+        };
       } else {
         defaultData = {
           id: name,
@@ -506,7 +521,7 @@ class FileOperationsService {
     }
 
     try {
-      const indexFileId = `${file.type}-index`;
+      const indexFileId = file.type === 'event' ? 'events-index' : `${file.type}-index`;
       const pluralKey = `${file.type}s`;
       
       // Load or create index file
@@ -594,7 +609,7 @@ class FileOperationsService {
     if (!file.data?.id) return;
 
     try {
-      const indexFileId = `${file.type}-index`;
+      const indexFileId = file.type === 'event' ? 'events-index' : `${file.type}-index`;
       const pluralKey = `${file.type}s`;
       
       const indexFile = fileRegistry.getFile(indexFileId);

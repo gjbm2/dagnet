@@ -39,6 +39,7 @@ export interface RegistryItem {
   parameter_type?: 'probability' | 'cost_gbp' | 'cost_time' | 'standard_deviation';
   node_type?: string;
   case_type?: string;
+  event_type?: string;
   
   // Timestamps
   lastModified?: number;
@@ -67,20 +68,20 @@ class RegistryService {
   }
 
   /**
-   * Get all items of a specific type (parameter, context, case, or node)
+   * Get all items of a specific type (parameter, context, case, node, or event)
    * Returns the superset of index entries + actual files
    */
-  async getItems(type: 'parameter' | 'context' | 'case' | 'node', tabs: any[] = []): Promise<RegistryItem[]> {
+  async getItems(type: 'parameter' | 'context' | 'case' | 'node' | 'event', tabs: any[] = []): Promise<RegistryItem[]> {
     const itemsMap = new Map<string, RegistryItem>();
     
     // 1. Load index file from FileRegistry only (don't load stale data from IDB)
     // The workspace loading process should have already loaded the correct index file into FileRegistry
-    const indexFileId = `${type}-index`;
+    const indexFileId = `${type === 'event' ? 'events' : type}-index`;
     const indexFile = fileRegistry.getFile(indexFileId);
     
     // 2. Process index entries
     if (indexFile?.data) {
-      const arrayKey = `${type}s` as 'parameters' | 'contexts' | 'cases' | 'nodes';
+      const arrayKey = `${type}s` as 'parameters' | 'contexts' | 'cases' | 'nodes' | 'events';
       const entries = (indexFile.data as any)[arrayKey] || [];
       
       for (const entry of entries) {
@@ -100,9 +101,10 @@ class RegistryService {
           file_path: entry.file_path,
           status: entry.status,
           tags: entry.tags,
-          parameter_type: entry.type,  // For parameters
-          node_type: entry.type,       // For nodes
-          case_type: entry.type        // For cases
+          parameter_type: entry.parameter_type || entry.type,  // For parameters
+          node_type: entry.node_type || entry.type,            // For nodes
+          case_type: entry.case_type || entry.type,            // For cases
+          event_type: entry.event_type || entry.type           // For events
         });
       }
     }
@@ -133,6 +135,9 @@ class RegistryService {
           else if (type === 'node') existing.node_type = file.data.type;
           else if (type === 'case') existing.case_type = file.data.type;
         }
+        if (file.data?.event_type && type === 'event') {
+          existing.event_type = file.data.event_type;
+        }
         
         console.log(`RegistryService: Updated ${file.fileId} - isDirty: ${existing.isDirty}, isOpen: ${existing.isOpen}`);
       } else {
@@ -152,7 +157,8 @@ class RegistryService {
           // Extract type from file data
           parameter_type: type === 'parameter' && file.data?.type ? file.data.type : undefined,
           node_type: type === 'node' && file.data?.type ? file.data.type : undefined,
-          case_type: type === 'case' && file.data?.type ? file.data.type : undefined
+          case_type: type === 'case' && file.data?.type ? file.data.type : undefined,
+          event_type: type === 'event' && file.data?.event_type ? file.data.event_type : undefined
         });
       }
     }
@@ -207,9 +213,16 @@ class RegistryService {
   }
 
   /**
+   * Get all events
+   */
+  async getEvents(tabs: any[] = []): Promise<RegistryItem[]> {
+    return this.getItems('event', tabs);
+  }
+
+  /**
    * Get a specific item by ID and type
    */
-  async getItem(type: 'parameter' | 'context' | 'case' | 'node', id: string): Promise<RegistryItem | null> {
+  async getItem(type: 'parameter' | 'context' | 'case' | 'node' | 'event', id: string): Promise<RegistryItem | null> {
     const items = await this.getItems(type);
     const normalizedId = this.normalizeId(id, type);
     return items.find(item => item.id === normalizedId) || null;

@@ -12,12 +12,12 @@ parameters:
     
   - id: customer-support-cost
     name: Customer Support Cost per Contact
-    parameter_type: cost
+    parameter_type: cost_gbp
     file: parameters/customer-support-cost.yaml
     
   - id: checkout-duration
     name: Checkout Process Duration
-    parameter_type: duration
+    parameter_type: cost_time
     file: parameters/checkout-duration.yaml
     
   # Registry entry without file (valid case - data may live only on graph)

@@ -19,6 +19,7 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
 ## In Progress
 
 ### High Priority
+- fix tools panel view options (Again)
 - Amplitude, Google sheets pull through params
 - Context support
 - Scenario viewer (snapshotting)

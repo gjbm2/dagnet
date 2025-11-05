@@ -52,11 +52,13 @@ export function NavigatorContent() {
     contexts: RegistryItem[];
     cases: RegistryItem[];
     nodes: RegistryItem[];
+    events: RegistryItem[];
   }>({
     parameters: [],
     contexts: [],
     cases: [],
-    nodes: []
+    nodes: [],
+    events: []
   });
 
   // Load registry items from central service
@@ -64,15 +66,16 @@ export function NavigatorContent() {
     const loadAllItems = async () => {
       try {
         console.log('📦 NavigatorContent: Loading registry items...');
-        const [parameters, contexts, cases, nodes] = await Promise.all([
+        const [parameters, contexts, cases, nodes, events] = await Promise.all([
           registryService.getParameters(tabs),
           registryService.getContexts(tabs),
           registryService.getCases(tabs),
-          registryService.getNodes(tabs)
+          registryService.getNodes(tabs),
+          registryService.getEvents(tabs)
         ]);
         
-        console.log(`📦 NavigatorContent: Loaded ${parameters.length} parameters, ${contexts.length} contexts, ${cases.length} cases, ${nodes.length} nodes`);
-        setRegistryItems({ parameters, contexts, cases, nodes });
+        console.log(`📦 NavigatorContent: Loaded ${parameters.length} parameters, ${contexts.length} contexts, ${cases.length} cases, ${nodes.length} nodes, ${events.length} events`);
+        setRegistryItems({ parameters, contexts, cases, nodes, events });
       } catch (error) {
         console.error('Failed to load registry items:', error);
       }
@@ -92,14 +95,15 @@ export function NavigatorContent() {
       // Trigger a refresh of registry items
       const loadAllItems = async () => {
         try {
-          const [parameters, contexts, cases, nodes] = await Promise.all([
+          const [parameters, contexts, cases, nodes, events] = await Promise.all([
             registryService.getParameters(tabs),
             registryService.getContexts(tabs),
             registryService.getCases(tabs),
-            registryService.getNodes(tabs)
+            registryService.getNodes(tabs),
+            registryService.getEvents(tabs)
           ]);
           
-          setRegistryItems({ parameters, contexts, cases, nodes });
+          setRegistryItems({ parameters, contexts, cases, nodes, events });
         } catch (error) {
           console.error('Failed to refresh registry items:', error);
         }
@@ -147,6 +151,7 @@ export function NavigatorContent() {
     addRegistryItems(registryItems.contexts);
     addRegistryItems(registryItems.cases);
     addRegistryItems(registryItems.nodes);
+    addRegistryItems(registryItems.events);
     
     // 2. Add graph files from NavigatorContext (graphs don't have indexes)
     for (const item of items) {
@@ -247,6 +252,7 @@ export function NavigatorContent() {
       context: [],
       case: [],
       node: [],
+      event: [],
       credentials: [],
       settings: [],
       about: [],
@@ -499,6 +505,26 @@ export function NavigatorContent() {
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('node')}
               indexIsDirty={getIndexIsDirty('node')}
+            />
+
+            <ObjectTypeSection
+              title="Events"
+              icon={getObjectTypeTheme('event').icon}
+              entries={groupedEntries.event}
+              sectionType="event"
+              isExpanded={state.expandedSections.includes('events')}
+              onToggle={() => {
+                if (state.expandedSections.includes('events')) {
+                  operations.collapseSection('events');
+                } else {
+                  operations.expandSection('events');
+                }
+              }}
+              onEntryClick={handleItemClick}
+              onEntryContextMenu={handleItemContextMenu}
+              onSectionContextMenu={handleSectionContextMenu}
+              onIndexClick={() => handleIndexClick('event')}
+              indexIsDirty={getIndexIsDirty('event')}
             />
           </>
         )}

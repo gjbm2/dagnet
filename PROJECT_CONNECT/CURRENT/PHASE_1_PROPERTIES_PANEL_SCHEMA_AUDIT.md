@@ -84,19 +84,18 @@ interface GraphNode {
   uuid: string;              // System identifier
   id?: string;               // Human-readable ID
   label: string;             // Display label
-  label_overridden?: boolean; // NEW
+  label_overridden?: boolean;
   description?: string;
-  description_overridden?: boolean; // NEW
+  description_overridden?: boolean;
   
-  event_id?: string;         // NEW: link to event registry
+  event_id?: string;         // Link to event registry
+  event_id_overridden?: boolean;
   
-  // Case node fields
-  case?: {
-    uuid: string;
-    id?: string;
-    status: 'active' | 'paused' | 'completed';
-    variants: Array<{ name: string; weight: number }>;
-  };
+  // Case node fields (SIMPLIFIED)
+  case_id?: string;          // If present, this is a case node
+                             // References /param-registry/cases/{case_id}.yaml
+                             // Pull variants, weights, status, colors from file
+                             // Unless specific fields are _overridden
   
   // Visual fields
   color?: string;
@@ -153,7 +152,7 @@ setLocalNodeData({
 // Case node specific:
 setCaseData({
   id: node.case?.id || '',                              // ✅ Correct
-  parameter_id: node.case?.parameter_id || '',          // ⚠️ CHECK: Is this in schema?
+  // parameter_id removed - redundant with id (schema simplified)
   status: node.case?.status || 'active',                // ✅ Correct
   variants: node.case?.variants || []                   // ✅ Correct
 });
@@ -165,79 +164,118 @@ setCaseData({
 
 ### CRITICAL ISSUES
 
-#### 1. **Missing: `edge.label` and `edge.label_overridden`**
-**Location:** Edge properties section  
-**Issue:** No UI for edge label (separate from edge.id)  
-**Impact:** Users cannot set/edit edge labels independently of IDs  
-**Required Action:**
-- Add label input field to edge properties
-- Add override indicator icon
-- Wire to `edge.label` and `edge.label_overridden`
+#### 1. **RESOLVED: `edge.label` - NOT NEEDED**
+**Decision:** Edge labels don't need override flags  
+**Reasoning:** Edges aren't canonical objects (no edge registry). Unlike nodes, edges only obtain meaning from the nodes they connect. They're a logical way of adhering properties to transitions between states.  
+**Action:** 
+- ✅ Remove `edge.label_overridden` from schema if present
+- ✅ Edge parameters (p, cost_gbp, cost_time) CAN be overridden because they link to param files via parameter_id
+- Edge label itself can exist for display purposes, but no override tracking
 
 ---
 
-#### 2. **Missing: `edge.p.evidence` Display**
-**Location:** Edge probability section  
+#### 2. **Evidence Display - Add to Edge Tooltip**
+**Location:** Edge tooltip (not Properties Panel)  
 **Issue:** No UI to show observational evidence (`n`, `k`, `window_from`, `window_to`)  
 **Impact:** Users cannot see source data that informed the probability  
 **Required Action:**
-- Add read-only display section showing evidence (if present)
-- Format: "Based on n=1000, k=350 (Nov 1-5, 2025)"
-- Show source: "Retrieved from Amplitude on Nov 5"
+- **For Phase 1:** Add evidence display to edge tooltip
+  - Format: "Based on n=1000, k=350 (Nov 1-5, 2025)"
+  - Show source: "Retrieved from Amplitude on Nov 5"
+- **Future:** Add dedicated "Data" panel to sidebar (add to `/TODO.md`) 
 
 ---
 
-#### 3. **Missing: `node.event_id` Field**
+#### 3. **Missing: `node.event_id` Selector - CRITICAL**
 **Location:** Node properties section  
 **Issue:** No UI for linking nodes to events  
 **Impact:** Users cannot associate nodes with event definitions  
 **Required Action:**
-- Add `EnhancedSelector` for event_id (see Events implementation doc)
-- Place after description field
-- Include "Open Connected" button to view event file
+- Add `EnhancedSelector` for event_id
+  - Type: `'event'`
+  - **Location:** New card after "Node Behaviour" card
+  - **Note:** "Open Connected" button comes built-in with EnhancedSelector
+  - For now, just the event_id selector (events are simple currently)
+- See `PHASE_1_EVENTS_IMPLEMENTATION.md` for full Events UI spec
 
 ---
 
-#### 4. **Wrong: `locked` → `mean_overridden`**
+#### 4. **Wrong: `locked` → `mean_overridden` - CRITICAL**
 **Location:** Edge probability section  
 **Issue:** Using obsolete `edge.p.locked` instead of `edge.p.mean_overridden`  
 **Impact:** Override tracking doesn't work correctly  
+**Background:** `locked` was never actually implemented and is functionally superseded  
 **Required Action:**
-- Replace all `locked` references with `mean_overridden`
+- ✅ Deprecate `edge.p.locked` in schema (mark as deprecated)
+- Replace all `locked` references in code with `mean_overridden`
 - Update UI to show `<ZapOff>` icon when overridden
+- Remove any `locked` UI elements (checkboxes, etc.)
+
 
 ---
 
-#### 5. **Missing: Override Indicators Throughout**
+#### 5. **Missing: Override Indicators Throughout - CRITICAL**
 **Location:** All editable fields  
 **Issue:** No `<Zap>` / `<ZapOff>` icons to show override status  
 **Impact:** Users cannot tell which fields are auto-synced vs manually overridden  
 **Required Action:**
+- **Create standard `OverrideIndicator` component** (reusable pattern)
+  - Shows `<ZapOff>` when field is overridden
+  - Clickable to remove override flag
+  - Tooltip: "Manual override (click to allow auto-sync)"
 - Add override indicator icons next to:
-  - `edge.label`
-  - `edge.p.mean`
-  - `edge.p.stdev`
-  - `edge.p.distribution`
-  - `edge.cost_gbp.mean`
-  - `edge.cost_time.mean`
-  - `edge.description`
-  - `edge.query`
-  - `node.label`
-  - `node.description`
+  - **Edge parameters:**
+    - `edge.p.mean_overridden`
+    - `edge.p.stdev_overridden`
+    - `edge.p.distribution_overridden`
+    - `edge.cost_gbp.mean_overridden`
+    - `edge.cost_time.mean_overridden`
+    - `edge.query_overridden`
+  - **Node fields:**
+    - `node.label_overridden`
+    - `node.description_overridden`
+    - `node.event_id_overridden`
 - Follow pattern from `OVERRIDE_PATTERN_DESIGN.md`
+- **Note:** NOT on `edge.description` or `edge.label` (no external source to override from)
+
+---
+
+#### 6. **NEW: Query Builder for Conditional Probabilities - CRITICAL**
+**Location:** Conditional Probabilities cards  
+**Issue:** Need interactive query/selector class for constructing condition expressions  
+**Background:** Monaco test prototype exists, needs proper implementation and generalization  
+**Required Action:**
+- Build proper `QueryStringBuilder` component
+  - Based on Monaco test prototype (under parameter_id field example)
+  - Generates Query DSL syntax: `visited(A,B)`, `exclude(C)`, `context(device:mobile)`, `case(test:treatment)`
+  - Interactive selector/builder pattern
+- Update Conditional Probabilities cards
+  - Use QueryStringBuilder for condition field (top part of card)
+  - Allows users to specify precise conditions interactively
+- Wire up to edge.conditional_p array
+- See Query DSL documentation for full syntax
+
+**Components needed:**
+1. `QueryStringBuilder` - Main interactive builder component
+2. Query syntax validator
+3. Integration with Conditional Probabilities UI
+
+**Priority:** CRITICAL - needed for conditional probabilities to be fully usable
 
 ---
 
 ### MEDIUM ISSUES
 
-#### 6. **Unclear: `cost_gbp` and `cost_time` Structure**
+#### 6. **Cost Structure - Verify Current Implementation**
 **Location:** Edge cost sections  
-**Issue:** Code suggests these might be stored as primitives, but schema says they're objects  
-**Impact:** May be loading/saving cost data incorrectly  
+**Issue:** Structure was migrated some time ago, need to verify consistency  
+**Background:** Cost structure was flattened previously; stale code may remain  
 **Required Action:**
-- Audit how costs are currently stored in graph
-- Update to use `edge.cost_gbp.mean` and `edge.cost_time.mean`
-- Add `mean_overridden` and `stdev` support for costs
+- Audit current implementation: ensure using `edge.cost_gbp.mean` and `edge.cost_time.mean` (object structure)
+- Remove any stale code that treats costs as primitives
+- Ensure consistency: schema ↔ types ↔ UI classes
+- Add `mean_overridden` and `stdev_overridden` support for costs
+- Add override indicators for cost fields
 
 ---
 
@@ -252,24 +290,32 @@ setCaseData({
 
 ---
 
-#### 8. **Missing: `description_overridden` Support**
-**Location:** Edge and node description fields  
-**Issue:** No tracking of override status for descriptions  
-**Impact:** File-to-graph pulls might overwrite user descriptions  
+#### 8. **RESOLVED: `description_overridden` - Only on Nodes**
+**Decision:** Override tracking only makes sense for canonical objects  
+**Reasoning:** 
+- **Edges:** No edge registry, not canonical. Description/label overrides don't make sense - no external source to override FROM
+- **Nodes:** CAN have `description_overridden` because nodes link to node registry
+- **Edge Parameters:** CAN be overridden because they link to param files via parameter_id
 **Required Action:**
-- Add `description_overridden` flag management
-- Show override indicator next to description fields
+- ✅ Remove `edge.description_overridden` and `edge.label_overridden` from schema if present
+- Add `node.description_overridden` support in UI (with override indicator)
+- Keep parameter override support on edges (already planned)
 
 ---
 
-#### 9. **Unclear: Case Node `parameter_id`**
+#### 9. **Case Node Structure - Simplify to `case_id` Only**
 **Location:** Case node properties  
-**Issue:** Code references `node.case.parameter_id` but this may not be in schema  
-**Impact:** Potential data structure mismatch  
+**Issue:** Redundant structure - should just be `node.case_id`  
+**Correct Design:**
+- `node.case_id` (optional) - if present, this is a case node
+- References case file: `/param-registry/cases/{case_id}.yaml`
+- Pull data from case file: variants, weights, status, colors, etc.
+- Override pattern applies: fields can be `_overridden` to prevent auto-sync from file
 **Required Action:**
-- Verify if `case.parameter_id` is in schema
-- If not, remove from UI
-- If yes, ensure it's documented in schema
+- ✅ Remove nested `node.case` object structure if present
+- Use flat `node.case_id` field
+- Check Props Panel uses `node.case_id` (not `node.case.id` or `node.case.parameter_id`)
+- Update schema/types to match this simpler structure 
 
 ---
 
@@ -324,6 +370,8 @@ setCaseData({
 **Needs Verification:**
 - ⚠️ Is cost stored as `edge.cost_gbp` (number) or `edge.cost_gbp.mean` (object)?
 
+**CONFIRMED:** Schema uses flattened structure `edge.cost_gbp.mean` (CostParam object). Implementation needs audit to ensure consistency.
+
 ---
 
 ### Section: Edge Properties - Duration
@@ -340,6 +388,8 @@ setCaseData({
 
 **Needs Verification:**
 - ⚠️ Is duration stored as `edge.cost_time` (number) or `edge.cost_time.mean` (object)?
+
+**CONFIRMED:** Schema uses flattened structure `edge.cost_time.mean` (CostParam object). Implementation needs audit to ensure consistency.
 
 ---
 

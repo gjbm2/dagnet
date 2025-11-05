@@ -14,7 +14,7 @@ import './EnhancedSelector.css';
 
 interface EnhancedSelectorProps {
   /** The type of item being selected */
-  type: 'parameter' | 'context' | 'case' | 'node';
+  type: 'parameter' | 'context' | 'case' | 'node' | 'event';
   /** Current value (ID of selected item) */
   value: string;
   /** Callback when value changes */
