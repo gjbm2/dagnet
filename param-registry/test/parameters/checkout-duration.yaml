@@ -6,7 +6,7 @@
 id: checkout-duration
 name: Checkout Process Duration
 description: Average time (in seconds) users spend in the checkout process
-parameter_type: duration
+type: cost_time
 
 # Query expression
 query: "duration(checkout-start, purchase-complete)"

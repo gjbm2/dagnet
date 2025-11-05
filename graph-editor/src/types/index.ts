@@ -9,6 +9,7 @@ export type ObjectType =
   | 'context' 
   | 'case'
   | 'node'
+  | 'event'
   | 'credentials'
   | 'settings'
   | 'about'

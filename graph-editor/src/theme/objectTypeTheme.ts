@@ -14,6 +14,7 @@ import {
   Layers,        // Case
   FileText,      // Context
   Sliders,       // Parameter
+  Calendar,      // Event
   ArrowRight,    // Edge
   Settings,      // Settings & Special
   Key,           // Credentials
@@ -21,7 +22,7 @@ import {
   FileType       // Markdown
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'edge' | 'special' | 'credentials' | 'settings' | 'about' | 'markdown';
+export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'settings' | 'about' | 'markdown';
 
 export interface ObjectTypeTheme {
   /** Light pastel background color */
@@ -71,6 +72,13 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     icon: Sliders,
     label: 'Parameter',
     emoji: '📋'
+  },
+  event: {
+    lightColor: '#FEF3C7',  // light yellow
+    accentColor: '#EAB308', // yellow-500
+    icon: Calendar,
+    label: 'Event',
+    emoji: '📅'
   },
   edge: {
     lightColor: '#E0E7FF',  // light indigo
