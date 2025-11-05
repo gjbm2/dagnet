@@ -19,6 +19,7 @@ export interface GitRepositoryCredential {
   contextsPath?: string;
   casesPath?: string;
   nodesPath?: string;
+  eventsPath?: string;
 }
 
 export interface StatsigCredential {

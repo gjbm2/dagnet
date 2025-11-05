@@ -77,6 +77,35 @@ Successfully implemented Events throughout the application, following the Cases 
 - Updated `updateIndexFile()` to handle `'events-index'` file ID
 - Updated `removeFromIndexFile()` to handle `'events-index'` file ID
 
+### 7. Git Clone/Workspace Service ✅
+**Files:** 
+- `graph-editor/src/services/workspaceService.ts`
+- `graph-editor/src/types/credentials.ts`
+- `graph-editor/src/lib/urlSettings.ts`
+- `graph-editor/public/schemas/schema/credentials-schema.json`
+
+- Added `eventsPath` to credentials schema (default: `"events"`)
+- Added `nodesPath` to credentials schema (default: `"nodes"`)
+- Updated `GitRepositoryCredential` interface to include `eventsPath` and `nodesPath`
+- Updated `URLRepositoryConfig` interface to include `eventsPath` and `nodesPath`
+- Updated `workspaceService` directory fetch logic to include events and nodes (2 locations)
+
+### 8. Registry Service Bug Fixes ✅
+**File:** `graph-editor/src/services/registryService.ts`
+- Fixed parameter type categorization: now checks `entry.parameter_type` before `entry.type`
+- Added `event_type` support for events
+- Fixed all index entry parsing to use correct field names
+- Fixed orphan file type extraction for events
+
+### 9. Sample Files Alignment ✅
+**Files:** 
+- `param-registry/test/parameters/customer-support-cost.yaml`
+- `param-registry/test/parameters/checkout-duration.yaml`
+- `param-registry/test/parameters-index.yaml`
+
+- Fixed parameter types to match schema: `cost_gbp` and `cost_time` (not `cost` and `duration`)
+- Fixed field names: `type` in files (not `parameter_type`)
+
 ---
 
 ## Features Now Available
