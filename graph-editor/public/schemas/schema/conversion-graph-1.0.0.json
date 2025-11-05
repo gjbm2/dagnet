@@ -22,15 +22,15 @@
   },
   "$defs": {
     "UUID": { "type": "string", "format": "uuid" },
-    "Slug": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "Id": { "type": "string", "minLength": 1, "maxLength": 128 },
 
     "Node": {
       "type": "object",
-      "required": ["id", "slug"],
+      "required": ["id", "id"],
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/UUID" },
-        "slug": { "$ref": "#/$defs/Slug" },
+        "id": { "$ref": "#/$defs/Id" },
         "label": { "type": "string", "maxLength": 256 },
         "description": { "type": "string" },
         "tags": {
@@ -82,16 +82,16 @@
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/UUID" },
-        "slug": { "$ref": "#/$defs/Slug" },
+        "id": { "$ref": "#/$defs/Id" },
         "from": { 
           "type": "string", 
           "minLength": 1, 
-          "$comment": "Node id or slug; runner canonicalizes to id and checks existence." 
+          "$comment": "Node id or id; runner canonicalizes to id and checks existence." 
         },
         "to": { 
           "type": "string", 
           "minLength": 1, 
-          "$comment": "Node id or slug; runner canonicalizes to id and checks existence." 
+          "$comment": "Node id or id; runner canonicalizes to id and checks existence." 
         },
         "fromHandle": {
           "type": "string",

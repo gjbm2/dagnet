@@ -4,13 +4,13 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
   if (!graph) return { nodes: [], edges: [] };
   
   const nodes: Node[] = (graph.nodes || []).map((n: any) => ({
-    id: n.id,
+    id: n.uuid,  // ReactFlow node ID uses the UUID
     type: 'conversion',
     position: { x: n.layout?.x ?? 0, y: n.layout?.y ?? 0 },
     data: { 
-      id: n.id,
-      label: n.label || n.slug,
-      slug: n.slug,
+      uuid: n.uuid,
+      id: n.id,  // Human-readable ID (formerly "id")
+      label: n.label || n.id,
       absorbing: n.absorbing,
       outcome_type: n.outcome_type,
       description: n.description,
@@ -25,7 +25,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
   }));
 
   const edges: Edge[] = (graph.edges || []).map((e: any) => ({
-    id: e.id || `${e.from}->${e.to}`,
+    id: e.uuid || `${e.from}->${e.to}`,  // ReactFlow edge ID uses the UUID
     type: 'conversion',
     source: e.from,
     target: e.to,
@@ -33,8 +33,8 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     targetHandle: e.toHandle,
     reconnectable: true, // CSS and callback will enforce selection requirement
     data: {
-      id: e.id || `${e.from}->${e.to}`,
-      slug: e.slug,
+      uuid: e.uuid || `${e.from}->${e.to}`,
+      id: e.id,  // Human-readable ID (formerly "id")
       parameter_id: e.parameter_id, // Probability parameter ID
       cost_gbp_parameter_id: e.cost_gbp_parameter_id, // GBP cost parameter ID
       cost_time_parameter_id: e.cost_time_parameter_id, // Time cost parameter ID
@@ -65,8 +65,8 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
   return {
     ...original,
     nodes: nodes.map((n) => ({
-      id: n.id,
-      slug: n.data.slug ?? '', // Use nullish coalescing to preserve empty strings
+      uuid: n.id,  // ReactFlow node ID is the UUID
+      id: n.data.id ?? '', // Human-readable ID (use nullish coalescing to preserve empty strings)
       label: n.data.label,
       absorbing: n.data.absorbing ?? false,
       outcome_type: n.data.outcome_type,
@@ -83,13 +83,13 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
     edges: edges.map((e) => {
       // Find the original edge to preserve all its properties
       const originalEdge = original.edges?.find((oe: any) => 
-        oe.id === e.id || `${oe.from}->${oe.to}` === e.id
+        oe.uuid === e.id || `${oe.from}->${oe.to}` === e.id
       );
       
       return {
         ...originalEdge, // Preserve ALL original properties (including conditional_p, display)
-        id: e.id,
-        slug: e.data?.slug,
+        uuid: e.id,  // ReactFlow edge ID is the UUID
+        id: e.data?.id,  // Human-readable ID
         parameter_id: e.data?.parameter_id, // Probability parameter ID
         cost_gbp_parameter_id: e.data?.cost_gbp_parameter_id, // GBP cost parameter ID
         cost_time_parameter_id: e.data?.cost_time_parameter_id, // Time cost parameter ID

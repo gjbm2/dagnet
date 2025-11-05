@@ -138,8 +138,8 @@ export interface Case {
   name: string;
   description?: string;
   case: {
-    id: string;
-    slug?: string;
+    uuid: string;
+    id?: string;
     status: string;
     platform?: any;
     variants: any[];

@@ -45,8 +45,8 @@ const JsonSection = forwardRef<JsonSectionRef>((props, ref) => {
       // Validate nodes have required fields
       for (let i = 0; i < parsed.nodes.length; i++) {
         const node = parsed.nodes[i];
-        if (!node.id || !node.slug) {
-          throw new Error(`Node ${i} missing required "id" or "slug" field`);
+        if (!node.id || !node.id) {
+          throw new Error(`Node ${i} missing required "id" or "id" field`);
         }
       }
       

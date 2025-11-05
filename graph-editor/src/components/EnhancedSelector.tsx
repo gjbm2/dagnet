@@ -152,8 +152,8 @@ export function EnhancedSelector({
   // Get current graph nodes (for showCurrentGraphGroup)
   const currentGraphItems = showCurrentGraphGroup && graph && type === 'node' ? 
     graph.nodes.map((n: any) => ({
-      id: n.slug || n.id,
-      name: n.label || n.slug || n.id,
+      id: n.id || n.id,
+      name: n.label || n.id || n.id,
       description: '',
       type: 'node',
       isLocal: true
@@ -161,7 +161,7 @@ export function EnhancedSelector({
 
   // Get used IDs in graph (for dimming)
   const usedIdsInGraph = type === 'node' && graph ? 
-    new Set(graph.nodes.map((n: any) => n.slug).filter(Boolean)) : 
+    new Set(graph.nodes.map((n: any) => n.id).filter(Boolean)) : 
     new Set();
 
   // Filter items by input

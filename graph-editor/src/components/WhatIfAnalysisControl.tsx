@@ -118,11 +118,11 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
       signature,
       edges,
       color: edges[0]?.display?.conditional_color,
-      // Create display name from first edge's conditions using node slugs
+      // Create display name from first edge's conditions using node ids
       displayName: edges[0]?.conditional_p?.[0]?.condition?.visited?.length > 0
-        ? `visited(${edges[0].conditional_p[0].condition.visited.map((nodeId: string) => {
-            const node = graph?.nodes.find((n: any) => n.id === nodeId);
-            return node?.slug || node?.label || nodeId;
+        ? `visited(${edges[0].conditional_p[0].condition.visited.map((nodeRef: string) => {
+            const node = graph?.nodes.find((n: any) => n.uuid === nodeRef || n.id === nodeRef);
+            return node?.label || node?.id || nodeRef;
           }).join(', ')})`
         : 'Empty condition'
     }));
@@ -134,7 +134,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
     const term = searchTerm.toLowerCase();
     return caseNodes.filter(n => 
       (n.label?.toLowerCase().includes(term)) ||
-      (n.slug?.toLowerCase().includes(term))
+      (n.id?.toLowerCase().includes(term))
     );
   }, [caseNodes, searchTerm]);
 
@@ -144,7 +144,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
     return conditionGroups.filter(group => 
       group.displayName.toLowerCase().includes(term) ||
       group.edges.some(e => 
-        (e.slug?.toLowerCase().includes(term)) ||
+        (e.id?.toLowerCase().includes(term)) ||
         (e.id?.toLowerCase().includes(term))
       )
     );
@@ -156,15 +156,15 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                      Object.keys(conditionalOverrides).length;
 
   // Get case node display name
-  const getCaseNodeName = useCallback((nodeId: string) => {
-    const node = graph?.nodes.find(n => n.id === nodeId);
-    return node?.label || node?.slug || nodeId;
+  const getCaseNodeName = useCallback((nodeRef: string) => {
+    const node = graph?.nodes.find(n => n.uuid === nodeRef || n.id === nodeRef);
+    return node?.label || node?.id || nodeRef;
   }, [graph]);
 
   // Get conditional edge display name
   const getConditionalEdgeName = useCallback((edgeId: string) => {
     const edge = graph?.edges.find(e => e.id === edgeId);
-    return edge?.slug || edge?.id || edgeId;
+    return edge?.id || edge?.id || edgeId;
   }, [graph]);
 
   return (
@@ -202,12 +202,12 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
               </button>
             </div>
           )}
-          {Object.entries(caseOverrides).map(([nodeId, variant]) => {
-            const node = graph?.nodes.find(n => n.id === nodeId);
+          {Object.entries(caseOverrides).map(([nodeRef, variant]) => {
+            const node = graph?.nodes.find(n => n.uuid === nodeRef || n.id === nodeRef);
             const nodeColor = node?.layout?.color || '#8B5CF6';
             return (
               <div
-                key={nodeId}
+                key={nodeRef}
                 style={{
                   background: nodeColor,
                   color: 'white',
@@ -219,9 +219,9 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                   gap: '6px'
                 }}
               >
-                <span>🎭 {getCaseNodeName(nodeId)}: {variant}</span>
+                <span>🎭 {getCaseNodeName(nodeRef)}: {variant}</span>
                 <button
-                  onClick={() => setCaseOverride(nodeId, null)}
+                  onClick={() => setCaseOverride(nodeRef, null)}
                   style={{
                     background: 'rgba(255,255,255,0.3)',
                     border: 'none',
@@ -258,9 +258,9 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
             
             return Array.from(groupedOverrides.entries()).map(([signature, group]) => {
               // Display which nodes are forced as visited
-              const nodeNames = Array.from(group.visitedNodes).map(nodeId => {
-                const node = graph?.nodes.find(n => n.id === nodeId);
-                return node?.label || node?.slug || nodeId;
+              const nodeNames = Array.from(group.visitedNodes).map(nodeRef => {
+                const node = graph?.nodes.find(n => n.uuid === nodeRef || n.id === nodeRef);
+                return node?.label || node?.id || nodeRef;
               }).join(', ');
               
               return (
@@ -363,7 +363,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                         border: '1px solid rgba(0,0,0,0.2)',
                         flexShrink: 0
                       }} />
-                      {node.label || node.slug}
+                      {node.label || node.id}
                     </div>
                   <select
                       value={caseOverrides[node.id] || ''}
@@ -472,10 +472,8 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                         // Find matching conditional_p option
                         const matchingCond = activeEdge.conditional_p?.find(cond => {
                           const condIds = cond.condition.visited.map(ref => {
-                            const nodeById = graph?.nodes.find(n => n.id === ref);
-                            if (nodeById) return nodeById.id;
-                            const nodeBySlug = graph?.nodes.find(n => n.slug === ref);
-                            if (nodeBySlug) return nodeBySlug.id;
+                            const node = graph?.nodes.find(n => n.uuid === ref || n.id === ref);
+                            if (node) return node.uuid;
                             return ref;
                           }).sort().join(',');
                           return condIds === overrideIds;
@@ -510,14 +508,11 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                         } else {
                           // Set override for all edges in group
                           const nodeRefs = value.split(',');
-                          // Resolve all references (could be slugs or IDs) to actual IDs
+                          // Resolve all references (could be UUIDs or IDs) to actual UUIDs
                           const resolvedIds = nodeRefs.map(ref => {
-                            // Try to find by ID first
-                            const nodeById = graph?.nodes.find(n => n.id === ref);
-                            if (nodeById) return nodeById.id;
-                            // Try by slug
-                            const nodeBySlug = graph?.nodes.find(n => n.slug === ref);
-                            if (nodeBySlug) return nodeBySlug.id;
+                            // Try to find by UUID or ID
+                            const node = graph?.nodes.find(n => n.uuid === ref || n.id === ref);
+                            if (node) return node.uuid;
                             // Return as-is if not found
                             return ref;
                           });
@@ -545,7 +540,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                       {group.edges[0]?.conditional_p?.map((cond, idx) => {
                         const nodeNames = cond.condition.visited.map(nid => {
                           const n = graph?.nodes.find(node => node.id === nid);
-                          return n?.label || n?.slug || nid;
+                          return n?.label || n?.id || nid;
                         }).join(', ');
                         return (
                           <option key={idx} value={cond.condition.visited.join(',')}>

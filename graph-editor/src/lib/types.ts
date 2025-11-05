@@ -2,7 +2,7 @@
 
 export type UUID = string;
 
-export type Slug = string;
+export type HumanId = string; // Human-readable identifier (formerly "Id")
 
 export type OutcomeType = 'success' | 'failure' | 'error' | 'neutral' | 'other';
 
@@ -57,7 +57,7 @@ export interface Costs {
 }
 
 export interface ResidualBehavior {
-  default_outcome?: string; // node slug or id
+  default_outcome?: string; // node id or id
   overflow_policy?: OverflowPolicy; // default error
 }
 
@@ -88,8 +88,8 @@ export interface CaseData {
 }
 
 export interface GraphNode {
-  id: UUID;
-  slug: Slug;
+  uuid: UUID;       // System-generated UUID (formerly "id")
+  id: HumanId;      // Human-readable identifier (formerly "id")
   label?: string;
   description?: string;
   tags?: string[];
@@ -109,12 +109,12 @@ export interface EdgeDisplay {
 }
 
 export interface GraphEdge {
-  id: UUID;
-  slug?: Slug;
-  from: string; // node id or slug
-  to: string;   // node id or slug
-  fromHandle?: string; // handle id (e.g., "right", "bottom", "left", "top")
-  toHandle?: string;   // handle id (e.g., "left", "top", "right", "bottom")
+  uuid: UUID;           // System-generated UUID (formerly "id")
+  id?: HumanId;         // Human-readable identifier (formerly "id")
+  from: string;         // node uuid
+  to: string;           // node uuid
+  fromHandle?: string;  // handle id (e.g., "right", "bottom", "left", "top")
+  toHandle?: string;    // handle id (e.g., "left", "top", "right", "bottom")
   description?: string;
   p?: ProbabilityParam; // Base probability (fallback when no conditions match)
   conditional_p?: ConditionalProbability[]; // Optional array of conditional probabilities

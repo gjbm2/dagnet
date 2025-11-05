@@ -80,8 +80,8 @@ function getEffectiveEdgeProbability(
   }
   
   // Check for conditional probability what-if override
-  if (options?.conditionalOverrides?.has(edge.id)) {
-    const overrideVisitedSet = options.conditionalOverrides.get(edge.id)!;
+  if (options?.conditionalOverrides?.has(edge.uuid)) {
+    const overrideVisitedSet = options.conditionalOverrides.get(edge.uuid)!;
     
     // Find matching conditional probability for this override
     if (edge.conditional_p) {
@@ -246,9 +246,9 @@ export function calculateProbabilities(
   const trackedNodes = findTrackedNodes(graph);
   
   console.log('🧮 Runner: Starting calculation');
-  console.log('  ↳ Tracked nodes:', Array.from(trackedNodes).map(id => {
-    const node = graph.nodes.find(n => n.id === id);
-    return node?.slug || node?.label || id;
+  console.log('  ↳ Tracked nodes:', Array.from(trackedNodes).map(uuid => {
+    const node = graph.nodes.find(n => n.uuid === uuid);
+    return node?.id || node?.label || uuid;
   }));
   
   // Log what-if overrides
@@ -274,7 +274,7 @@ export function calculateProbabilities(
       const stateKey = `${node.id}|`; // Empty visited set
       states.set(stateKey, 1.0);
       stateCosts.set(stateKey, { monetary: 0, time: 0 });
-      console.log(`  ↳ Start node: ${node.slug || node.label} (${stateKey})`);
+      console.log(`  ↳ Start node: ${node.id || node.label} (${stateKey})`);
     }
   }
   
@@ -341,7 +341,7 @@ export function calculateProbabilities(
         states.set(nextStateKey, newStateProb);
 
         // Accumulate edge traverse probability
-        edgeTraverseProb.set(edge.id, (edgeTraverseProb.get(edge.id) || 0) + w);
+        edgeTraverseProb.set(edge.uuid, (edgeTraverseProb.get(edge.uuid) || 0) + w);
         
         // Cumulative cost to next state = current cumulative + edge cost
         const nextCumulativeCost = {
@@ -386,7 +386,7 @@ export function calculateProbabilities(
       monetary: (e as any).cost_gbp?.mean || 0,
       time: (e as any).cost_time?.mean || 0
     };
-    edgeCostMap.set(e.id, edgeCost);
+    edgeCostMap.set(e.uuid, edgeCost);
   }
 
   for (const node of graph.nodes) {
@@ -402,9 +402,9 @@ export function calculateProbabilities(
 
     for (const e of graph.edges) {
       const edgeReach = reachableFrom.get(e.to) || new Set<string>();
-      if (e.to === node.id || edgeReach.has(node.id)) {
-        const traverseP = edgeTraverseProb.get(e.id) || 0;
-        const cost = edgeCostMap.get(e.id)!;
+      if (e.to === node.uuid || edgeReach.has(node.uuid)) {
+        const traverseP = edgeTraverseProb.get(e.uuid) || 0;
+        const cost = edgeCostMap.get(e.uuid)!;
         expectedAttemptCostMonetary += traverseP * cost.monetary;
         expectedAttemptCostTime += traverseP * cost.time;
       }
@@ -428,9 +428,9 @@ export function calculateProbabilities(
     const node = graph.nodes.find(n => n.id === nodeId);
     const cost = nodeCosts.get(nodeId);
     if (cost && cost.monetary > 0) {
-      console.log(`    • ${node?.slug || node?.label || nodeId}: ${(prob * 100).toFixed(1)}% (£${cost.monetary.toFixed(2)} per arrival)`);
+      console.log(`    • ${node?.label || node?.id || nodeId}: ${(prob * 100).toFixed(1)}% (£${cost.monetary.toFixed(2)} per arrival)`);
     } else {
-      console.log(`    • ${node?.slug || node?.label || nodeId}: ${(prob * 100).toFixed(1)}%`);
+      console.log(`    • ${node?.label || node?.id || nodeId}: ${(prob * 100).toFixed(1)}%`);
     }
   }
   

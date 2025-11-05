@@ -48,17 +48,17 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
             type: 'probability_sum',
             nodeId: node.id,
             condition: `variant_${variantName}`,
-            message: `Probability sum for variant "${variantName}" from case node "${node.slug || node.id}" is ${variantProbSum.toFixed(3)}, expected 1.0`,
+            message: `Probability sum for variant "${variantName}" from case node "${node.id || node.id}" is ${variantProbSum.toFixed(3)}, expected 1.0`,
             sum: variantProbSum,
           });
         }
         
         // Also validate conditional probabilities for this variant
         const conditions = collectUniqueConditions(variantEdges, graph.nodes);
-        for (const conditionNodeIdOrSlug of conditions) {
-          let conditionNode = graph.nodes.find(n => n.id === conditionNodeIdOrSlug);
+        for (const conditionNodeId of conditions) {
+          let conditionNode = graph.nodes.find(n => n.id === conditionNodeId);
           if (!conditionNode) {
-            conditionNode = graph.nodes.find(n => n.slug === conditionNodeIdOrSlug);
+            conditionNode = graph.nodes.find(n => n.id === conditionNodeId);
           }
           if (!conditionNode) continue;
           
@@ -84,7 +84,7 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
               type: 'probability_sum',
               nodeId: node.id,
               condition: conditionNodeId,
-              message: `Probability sum for variant "${variantName}" from case node "${node.slug || node.id}" when "${conditionNode.slug || conditionNodeId}" visited is ${condProbSum.toFixed(3)}, expected 1.0`,
+              message: `Probability sum for variant "${variantName}" from case node "${node.id || node.id}" when "${conditionNode.id || conditionNodeId}" visited is ${condProbSum.toFixed(3)}, expected 1.0`,
               sum: condProbSum,
             });
           }
@@ -105,30 +105,27 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
         type: 'probability_sum',
         nodeId: node.id,
         condition: 'base',
-        message: `Base probability sum from node "${node.slug || node.id}" is ${baseProbSum.toFixed(3)}, expected 1.0`,
+        message: `Base probability sum from node "${node.id || node.id}" is ${baseProbSum.toFixed(3)}, expected 1.0`,
         sum: baseProbSum,
       });
     }
 
     // Validate each condition
-    for (const conditionNodeIdOrSlug of conditions) {
-      // Validate that condition node exists (try ID first, then slug)
-      let conditionNode = graph.nodes.find(n => n.id === conditionNodeIdOrSlug);
-      if (!conditionNode) {
-        conditionNode = graph.nodes.find(n => n.slug === conditionNodeIdOrSlug);
-      }
+    for (const conditionNodeRef of conditions) {
+      // Validate that condition node exists
+      const conditionNode = graph.nodes.find(n => n.uuid === conditionNodeRef || n.id === conditionNodeRef);
       if (!conditionNode) {
         errors.push({
           type: 'missing_node',
-          nodeId: node.id,
-          condition: conditionNodeIdOrSlug,
-          message: `Condition references non-existent node: ${conditionNodeIdOrSlug}`,
+          nodeId: node.uuid,
+          condition: conditionNodeRef,
+          message: `Condition references non-existent node: ${conditionNodeRef}`,
         });
         continue;
       }
       
-      // Use the actual node ID for further validation
-      const conditionNodeId = conditionNode.id;
+      // Use the actual node UUID for further validation
+      const conditionNodeId = conditionNode.uuid;
 
       // Validate that condition node is upstream
       if (!isUpstream(conditionNodeId, node.id, graph)) {
@@ -136,7 +133,7 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
           type: 'invalid_reference',
           nodeId: node.id,
           condition: conditionNodeId,
-          message: `Condition references node "${conditionNode.slug || conditionNodeId}" which is not upstream`,
+          message: `Condition references node "${conditionNode.id || conditionNodeId}" which is not upstream`,
         });
         continue;
       }
@@ -153,7 +150,7 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
           type: 'probability_sum',
           nodeId: node.id,
           condition: conditionNodeId,
-          message: `Probability sum from node "${node.slug || node.id}" when "${conditionNode.slug || conditionNodeId}" visited is ${condProbSum.toFixed(3)}, expected 1.0`,
+          message: `Probability sum from node "${node.id || node.id}" when "${conditionNode.id || conditionNodeId}" visited is ${condProbSum.toFixed(3)}, expected 1.0`,
           sum: condProbSum,
         });
       }
@@ -165,7 +162,7 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
       warnings.push({
         type: 'incomplete_conditions',
         nodeId: node.id,
-        message: `Some sibling edges from node "${node.slug || node.id}" have conditions, others do not. Consider adding conditional_p to all siblings for consistency.`,
+        message: `Some sibling edges from node "${node.id || node.id}" have conditions, others do not. Consider adding conditional_p to all siblings for consistency.`,
       });
     }
   }
@@ -182,15 +179,15 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
 }
 
 /**
- * Resolve a node reference (ID or slug) to a node ID
+ * Resolve a node reference (ID or id) to a node ID
  */
-function resolveNodeReference(nodeIdOrSlug: string, nodes: GraphNode[]): string | null {
+function resolveNodeReference(nodeId: string, nodes: GraphNode[]): string | null {
   // Try ID first
-  let node = nodes.find(n => n.id === nodeIdOrSlug);
+  let node = nodes.find(n => n.id === nodeId);
   if (node) return node.id;
   
-  // Try slug
-  node = nodes.find(n => n.slug === nodeIdOrSlug);
+  // Try id
+  node = nodes.find(n => n.id === nodeId);
   if (node) return node.id;
   
   return null;
@@ -198,7 +195,7 @@ function resolveNodeReference(nodeIdOrSlug: string, nodes: GraphNode[]): string 
 
 /**
  * Collect all unique node IDs referenced in conditions across edges
- * Resolves slugs to IDs for consistency
+ * Resolves IDs for consistency
  */
 function collectUniqueConditions(edges: GraphEdge[], nodes: GraphNode[]): Set<string> {
   const conditions = new Set<string>();
@@ -206,8 +203,8 @@ function collectUniqueConditions(edges: GraphEdge[], nodes: GraphNode[]): Set<st
   for (const edge of edges) {
     if (edge.conditional_p) {
       for (const cp of edge.conditional_p) {
-        for (const nodeIdOrSlug of cp.condition.visited) {
-          const resolvedId = resolveNodeReference(nodeIdOrSlug, nodes);
+        for (const nodeId of cp.condition.visited) {
+          const resolvedId = resolveNodeReference(nodeId, nodes);
           if (resolvedId) {
             conditions.add(resolvedId);
           }
@@ -250,7 +247,7 @@ function calculateConditionalProbabilitySum(
     // Find matching conditional probability
     if (edge.conditional_p) {
       for (const cp of edge.conditional_p) {
-        // Check if all nodes in condition are in visitedNodes (resolve slugs to IDs)
+        // Check if all nodes in condition are in visitedNodes (resolve ids to IDs)
         const resolvedConditionNodes = cp.condition.visited.map(ref => 
           resolveNodeReference(ref, nodes) || ref
         );

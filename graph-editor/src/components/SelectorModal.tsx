@@ -15,7 +15,7 @@ interface SelectorModalProps {
   onOpenItem?: (itemId: string) => void;
 }
 
-type ColumnSortKey = 'slug' | 'label' | 'type' | 'description';
+type ColumnSortKey = 'id' | 'label' | 'type' | 'description';
 
 export function SelectorModal({
   isOpen,
@@ -33,7 +33,7 @@ export function SelectorModal({
   
   // Column sorting state
   const [columnSort, setColumnSort] = useState<{ key: ColumnSortKey; direction: 'asc' | 'desc' }>({
-    key: 'slug',
+    key: 'id',
     direction: 'asc'
   });
   
@@ -65,7 +65,7 @@ export function SelectorModal({
       let bVal: string | number | undefined;
 
       switch (columnSort.key) {
-        case 'slug':
+        case 'id':
           aVal = a.id;
           bVal = b.id;
           break;
@@ -178,8 +178,8 @@ export function SelectorModal({
             <table className="selector-modal-table">
               <thead>
                 <tr>
-                  <th onClick={() => handleColumnSort('slug')} className="sortable">
-                    Slug <SortIcon columnKey="slug" />
+                  <th onClick={() => handleColumnSort('id')} className="sortable">
+                    ID <SortIcon columnKey="id" />
                   </th>
                   <th onClick={() => handleColumnSort('label')} className="sortable">
                     Label <SortIcon columnKey="label" />
@@ -213,7 +213,7 @@ export function SelectorModal({
                       className={`selector-modal-table-row ${isSelected ? 'selected' : ''}`}
                       onClick={() => handleRowClick(item.id)}
                     >
-                      <td className="slug-column">
+                      <td className="id-column">
                         {item.id}
                         {isCurrent && (
                           <span className="current-badge">current</span>

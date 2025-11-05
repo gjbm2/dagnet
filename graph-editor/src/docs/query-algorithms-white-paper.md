@@ -756,7 +756,7 @@ Together, these algorithms form a robust foundation for the DagNet data connecti
 
 This paper specifies algorithmic foundations used across DagNet (graph editor, services, and Python tooling). Unless stated otherwise:
 
-- Queries use graph `node_id` identifiers (slugs), not third‑party event names
+- Queries use graph `node_id` identifiers (ids), not third‑party event names
 - Constraints are conjunctive; clause order is irrelevant
 - Exactly one `.from()` and one `.to()` per query; no OR in v1
 - Only simple paths are considered (no node repeats)

@@ -6,9 +6,9 @@ import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import Tooltip from '@/components/Tooltip';
 
 interface ConversionNodeData {
-  id: string;
+  uuid: string;
   label: string;
-  slug: string;
+  id: string;
   absorbing: boolean;
   outcome_type?: string;
   description?: string;
@@ -199,8 +199,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     lines.push(`Type: ${data.type || 'normal'}`);
     lines.push(`Absorbing: ${data.absorbing ? 'Yes' : 'No'}`);
     
-    if (data.slug) {
-      lines.push(`Slug: ${data.slug}`);
+    if (data.id) {
+      lines.push(`ID: ${data.id}`);
     }
     
     if (data.outcome_type) {
@@ -423,8 +423,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           onDoubleClick={handleDoubleClick}
           title="Double-click to edit in properties panel"
         >
-          {data.slug && (
-            <span style={{ fontSize: '10px', opacity: 0.7 }} title={`Connected to node: ${data.slug}`}>
+          {data.id && (
+            <span style={{ fontSize: '10px', opacity: 0.7 }} title={`Connected to node: ${data.id}`}>
               ⛓️
             </span>
           )}

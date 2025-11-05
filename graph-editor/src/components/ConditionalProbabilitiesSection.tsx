@@ -172,7 +172,7 @@ export default function ConditionalProbabilitiesSection({
                       <input
                         type="checkbox"
                         checked={
-                          condition.condition.visited.includes(node.slug) || 
+                          condition.condition.visited.includes(node.id) || 
                           condition.condition.visited.includes(node.id)
                         }
                         onChange={(e) => {
@@ -183,13 +183,13 @@ export default function ConditionalProbabilitiesSection({
                           const wasEmpty = visited.length === 0;
                           
                           if (e.target.checked) {
-                            // ALWAYS use slug for new entries (immutable references)
-                            if (!visited.includes(node.slug) && !visited.includes(node.id)) {
-                              visited.push(node.slug);
+                            // ALWAYS use id for new entries (immutable references)
+                            if (!visited.includes(node.id) && !visited.includes(node.id)) {
+                              visited.push(node.id);
                             }
                           } else {
-                            // Remove both slug and ID (for backward compatibility)
-                            visited = visited.filter(ref => ref !== node.slug && ref !== node.id);
+                            // Remove both id and ID (for backward compatibility)
+                            visited = visited.filter(ref => ref !== node.id && ref !== node.id);
                           }
                           
                           newConditions[index] = {
@@ -295,7 +295,7 @@ export default function ConditionalProbabilitiesSection({
                         }}
                         style={{ marginRight: '6px' }}
                       />
-                      {node.label || node.slug}
+                      {node.label || node.id}
                     </label>
                   ))}
                 </div>

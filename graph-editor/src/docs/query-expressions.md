@@ -49,8 +49,8 @@ from(product-page).to(checkout)
 
 **What they are:**
 - `node_id` in the graph (e.g., `homepage`, `product-page`)
-- Uses **slugs** from graph nodes (not UUIDs)
-- Falls back to registry IDs if node has no slug
+- Uses **ids** from graph nodes (not UUIDs)
+- Falls back to registry IDs if node has no id
 
 **Conventions:**
 - Lowercase with hyphens: `checkout-page`

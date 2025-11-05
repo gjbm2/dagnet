@@ -31,7 +31,7 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { toFlow, fromFlow } from '@/lib/transform';
-import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
+import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
 
@@ -999,21 +999,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [shouldReroute, autoReroute, forceReroute, performAutoReroute]);
   
-  // Get all existing slugs (nodes and edges) for uniqueness checking
-  const getAllExistingSlugs = useCallback((excludeId?: string) => {
+  // Get all existing ids (nodes and edges) for uniqueness checking
+  const getAllExistingIds = useCallback((excludeId?: string) => {
     if (!graph) return [];
     
-    const nodeSlugs = graph.nodes
-      .filter((node: any) => node.id !== excludeId)
-      .map((node: any) => node.slug)
+    const nodeIds = graph.nodes
+      .filter((node: any) => node.uuid !== excludeId)
+      .map((node: any) => node.id)
       .filter(Boolean);
     
-    const edgeSlugs = graph.edges
-      .filter((edge: any) => edge.id !== excludeId)
-      .map((edge: any) => edge.slug)
+    const edgeIds = graph.edges
+      .filter((edge: any) => edge.uuid !== excludeId)
+      .map((edge: any) => edge.id)
       .filter(Boolean);
     
-    return [...nodeSlugs, ...edgeSlugs];
+    return [...nodeIds, ...edgeIds];
   }, [graph]);
   
   // Callback functions for node/edge updates
@@ -1023,17 +1023,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     const prevGraph = graph;
       
-    // Check for slug uniqueness if slug is being updated
-    if (data.slug) {
-      const existingSlugs = getAllExistingSlugs(id);
-      if (existingSlugs.includes(data.slug)) {
-        alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
+    // Check for id uniqueness if id is being updated
+    if (data.id) {
+      const existingIds = getAllExistingIds(id);
+      if (existingIds.includes(data.id)) {
+        alert(`ID "${data.id}" is already in use. Please choose a different ID.`);
         return;
       }
     }
     
     const nextGraph = structuredClone(prevGraph);
-    const nodeIndex = nextGraph.nodes.findIndex(n => n.id === id);
+    const nodeIndex = nextGraph.nodes.findIndex(n => n.uuid === id);
     if (nodeIndex >= 0) {
       nextGraph.nodes[nodeIndex] = { ...nextGraph.nodes[nodeIndex], ...data };
       if (nextGraph.metadata) {
@@ -1042,7 +1042,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('Updated node in graph:', nextGraph.nodes[nodeIndex]);
     }
     setGraph(nextGraph);
-  }, [graph, setGraph, getAllExistingSlugs]);
+  }, [graph, setGraph, getAllExistingIds]);
 
   const handleDeleteNode = useCallback((id: string) => {
     console.log('=== DELETING NODE ===', id);
@@ -1097,17 +1097,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     const prevGraph = graph;
     
-    // Check for slug uniqueness if slug is being updated
-    if (data.slug) {
-      const existingSlugs = getAllExistingSlugs(id);
-      if (existingSlugs.includes(data.slug)) {
-        alert(`Slug "${data.slug}" is already in use. Please choose a different slug.`);
+    // Check for id uniqueness if id is being updated
+    if (data.id) {
+      const existingIds = getAllExistingIds(id);
+      if (existingIds.includes(data.id)) {
+        alert(`ID "${data.id}" is already in use. Please choose a different ID.`);
         return;
       }
     }
     
     const nextGraph = structuredClone(prevGraph);
-    const edgeIndex = nextGraph.edges.findIndex(e => e.id === id);
+    const edgeIndex = nextGraph.edges.findIndex(e => e.uuid === id);
     if (edgeIndex >= 0) {
       nextGraph.edges[edgeIndex] = { ...nextGraph.edges[edgeIndex], ...data };
       if (nextGraph.metadata) {
@@ -1115,7 +1115,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
     }
     setGraph(nextGraph);
-  }, [graph, setGraph, getAllExistingSlugs]);
+  }, [graph, setGraph, getAllExistingIds]);
 
   const handleDeleteEdge = useCallback((id: string) => {
     console.log('=== DELETING EDGE ===', id);
@@ -1174,14 +1174,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Delete selected nodes and their connected edges
     const selectedNodeIds = new Set(selectedNodes.map(n => n.id));
-    nextGraph.nodes = nextGraph.nodes.filter(n => !selectedNodeIds.has(n.id));
+    nextGraph.nodes = nextGraph.nodes.filter(n => !selectedNodeIds.has(n.uuid));
     nextGraph.edges = nextGraph.edges.filter(e => 
       !selectedNodeIds.has(e.from) && !selectedNodeIds.has(e.to)
     );
     
     // Delete selected edges (that weren't already deleted with nodes)
     const selectedEdgeIds = new Set(selectedEdges.map(e => e.id));
-    nextGraph.edges = nextGraph.edges.filter(e => !selectedEdgeIds.has(e.id));
+    nextGraph.edges = nextGraph.edges.filter(e => !selectedEdgeIds.has(e.uuid));
     
     // Update metadata
     if (nextGraph.metadata) {
@@ -1284,7 +1284,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Check if any non-position properties changed
       const tagsChanged = JSON.stringify(node.data?.tags || []) !== JSON.stringify(graphNode.tags || []);
       const labelChanged = node.data?.label !== graphNode.label;
-      const slugChanged = node.data?.slug !== graphNode.slug;
+      const idChanged = node.data?.id !== graphNode.id;
       const descriptionChanged = node.data?.description !== graphNode.description;
       const absorbingChanged = node.data?.absorbing !== graphNode.absorbing;
       const outcomeTypeChanged = node.data?.outcome_type !== graphNode.outcome_type;
@@ -1294,7 +1294,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const caseTypeChanged = node.data?.type !== graphNode.type;
       const caseDataChanged = JSON.stringify(node.data?.case || {}) !== JSON.stringify(graphNode.case || {});
       
-      const hasChanges = labelChanged || slugChanged || descriptionChanged || absorbingChanged || 
+      const hasChanges = labelChanged || idChanged || descriptionChanged || absorbingChanged || 
                         outcomeTypeChanged || tagsChanged || entryStartChanged || entryWeightChanged ||
                         caseColorChanged || caseTypeChanged || caseDataChanged;
       
@@ -1302,7 +1302,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         console.log('Node property changes detected:', {
           nodeId: node.id,
           labelChanged,
-          slugChanged,
+          idChanged,
           descriptionChanged,
           absorbingChanged,
           outcomeTypeChanged,
@@ -1353,7 +1353,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             targetHandle: graphEdge.toHandle || prevEdge.targetHandle,
             data: {
               ...prevEdge.data,
-              slug: graphEdge.slug,
+              id: graphEdge.id,
               parameter_id: (graphEdge as any).parameter_id, // Probability parameter ID
               cost_gbp_parameter_id: (graphEdge as any).cost_gbp_parameter_id, // GBP cost parameter ID
               cost_time_parameter_id: (graphEdge as any).cost_time_parameter_id, // Time cost parameter ID
@@ -1412,7 +1412,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               data: {
                 ...prevNode.data,
                 label: graphNode.label,
-                slug: graphNode.slug,
+                id: graphNode.id,
                 description: graphNode.description,
                 absorbing: graphNode.absorbing,
                 outcome_type: graphNode.outcome_type,
@@ -1970,27 +1970,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 50); // 50ms debounce
   }, [graph, setGraph, wouldCreateCycle, saveHistoryState]);
 
-  // Generate a unique slug for an edge based on node slugs
-  const generateEdgeSlug = useCallback((sourceId: string, targetId: string) => {
+  // Generate a unique id for an edge based on node ids
+  const generateEdgeId = useCallback((sourceId: string, targetId: string) => {
     if (!graph?.nodes) return `${sourceId}-to-${targetId}`;
     
-    // Find source and target nodes to get their slugs
-    const sourceNode = graph.nodes.find((n: any) => n.id === sourceId);
-    const targetNode = graph.nodes.find((n: any) => n.id === targetId);
+    // Find source and target nodes to get their ids
+    const sourceNode = graph.nodes.find((n: any) => n.uuid === sourceId);
+    const targetNode = graph.nodes.find((n: any) => n.uuid === targetId);
     
-    const sourceSlug = sourceNode?.slug || sourceNode?.id || sourceId;
-    const targetSlug = targetNode?.slug || targetNode?.id || targetId;
+    const sourceId_ = sourceNode?.id || sourceNode?.uuid || sourceId;
+    const targetId_ = targetNode?.id || targetNode?.uuid || targetId;
     
-    let baseSlug = `${sourceSlug}-to-${targetSlug}`;
-    let slug = baseSlug;
+    let baseId = `${sourceId_}-to-${targetId_}`;
+    let edgeId = baseId;
     let counter = 1;
     
     // Ensure uniqueness by appending a number if needed
-    const existingSlugs = getAllExistingSlugs();
-    const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
+    const existingIds = getAllExistingIds();
+    const uniqueId = generateUniqueId(baseId, existingIds);
     
-    return uniqueSlug;
-  }, [graph, getAllExistingSlugs]);
+    return uniqueId;
+  }, [graph, getAllExistingIds]);
 
   // Handle new connections
   const onConnect = useCallback((connection: Connection) => {
@@ -2031,9 +2031,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
 
-    // Generate a sensible slug for the edge
-    const edgeSlug = generateEdgeSlug(connection.source, connection.target);
-    const edgeId = `${connection.source}->${connection.target}`;
+    // Generate a sensible id for the edge
+    const edgeId = generateEdgeId(connection.source, connection.target) || `${connection.source}->${connection.target}`;
     
     // If source is a case node with multiple variants, show variant selection modal
     if (isCaseNode && sourceNode.case && sourceNode.case.variants.length > 1) {
@@ -2070,8 +2069,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     const newEdge: any = {
+      uuid: edgeId,
       id: edgeId,
-      slug: edgeSlug,
       from: connection.source,
       to: connection.target,
       fromHandle: sourceHandle,
@@ -2105,7 +2104,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setTimeout(() => {
       onSelectedEdgeChange(edgeId);
     }, 50);
-  }, [graph, setGraph, generateEdgeSlug, wouldCreateCycle, onSelectedEdgeChange, saveHistoryState]);
+  }, [graph, setGraph, generateEdgeId, wouldCreateCycle, onSelectedEdgeChange, saveHistoryState]);
 
   // Variant selection modal state
   const [showVariantModal, setShowVariantModal] = useState(false);
@@ -2135,15 +2134,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
     
-    // Generate edge properties
-    const edgeSlug = generateEdgeSlug(pendingConnection.source!, pendingConnection.target!);
+    // Generate edge properties (for case variant edges, use variant-specific ID)
     const edgeId = `${pendingConnection.source}-${variant.name}->${pendingConnection.target}`;
     
     // Create the edge with variant properties
     const nextGraph = structuredClone(graph);
     nextGraph.edges.push({
+      uuid: edgeId,
       id: edgeId,
-      slug: edgeSlug,
       from: pendingConnection.source!,
       to: pendingConnection.target!,
       fromHandle: pendingConnection.sourceHandle || undefined,
@@ -2166,7 +2164,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setShowVariantModal(false);
     setPendingConnection(null);
     setCaseNodeVariants([]);
-  }, [pendingConnection, graph, setGraph, generateEdgeSlug, saveHistoryState]);
+  }, [pendingConnection, graph, setGraph, generateEdgeId, saveHistoryState]);
   
   // Handle Shift+Drag lasso selection
   const [isLassoSelecting, setIsLassoSelecting] = useState(false);
@@ -3281,7 +3279,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     const newId = crypto.randomUUID();
     
-    // Generate initial label (but no slug - user should pick from registry)
+    // Generate initial label (but no id - user should pick from registry)
     const label = `Node ${graph.nodes.length + 1}`;
     
     // Place node at center of current viewport
@@ -3293,8 +3291,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Add node directly to graph state (not ReactFlow state)
     const nextGraph = structuredClone(graph);
     nextGraph.nodes.push({
-      id: newId,
-      slug: '', // Empty slug - user should assign a node_id from registry
+      uuid: newId,
+      id: '', // Empty ID - user should assign a node_id from registry
       label: label,
       absorbing: false,
       layout: {
@@ -3515,8 +3513,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const label = `Node ${graph.nodes.length + 1}`;
     
     const newNode = {
-      id: newId,
-      slug: '', // Empty slug - user should assign a node_id from registry
+      uuid: newId,
+      id: '', // Empty ID - user should assign a node_id from registry
       label: label,
       absorbing: false,
       layout: {

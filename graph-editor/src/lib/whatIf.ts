@@ -16,18 +16,14 @@ export type WhatIfOverrides = {
 };
 
 /**
- * Resolve a node reference (could be ID or slug) to its actual ID
+ * Resolve a node reference (could be ID or id) to its actual ID
  */
 export function resolveNodeRefToId(graph: any, ref: string): string {
   if (!graph?.nodes) return ref;
   
-  // Try to find by ID first
-  const byId = graph.nodes.find((n: any) => n.id === ref);
-  if (byId) return byId.id;
-  
-  // Try to find by slug
-  const bySlug = graph.nodes.find((n: any) => n.slug === ref);
-  if (bySlug) return bySlug.id;
+  // Try to find by UUID or ID
+  const foundNode = graph.nodes.find((n: any) => n.uuid === ref || n.id === ref);
+  if (foundNode) return foundNode.uuid;
   
   // Return as-is if not found
   return ref;
@@ -47,12 +43,12 @@ function getImplicitlyVisitedNodes(
   
   // Check new what-if system (caseOverrides)
   if (whatIfOverrides?.caseOverrides) {
-    Object.entries(whatIfOverrides.caseOverrides).forEach(([caseNodeId, selectedVariant]) => {
+    Object.entries(whatIfOverrides.caseOverrides).forEach(([caseNodeRef, selectedVariant]) => {
       // Find all edges from this case node with the selected variant
       graph.edges.forEach((edge: any) => {
         if (edge.case_id && edge.from) {
-          const caseNode = graph.nodes.find((n: any) => n.id === edge.from && n.case?.id === edge.case_id);
-          if (caseNode?.id === caseNodeId && edge.case_variant === selectedVariant) {
+          const caseNode = graph.nodes.find((n: any) => n.uuid === edge.from && n.case?.id === edge.case_id);
+          if (caseNode && (caseNode.uuid === caseNodeRef || caseNode.id === caseNodeRef) && edge.case_variant === selectedVariant) {
             visitedNodes.add(edge.to);
           }
         }
@@ -63,7 +59,7 @@ function getImplicitlyVisitedNodes(
   // Check legacy what-if system (backward compatibility)
   if (legacyWhatIfAnalysis?.caseNodeId && legacyWhatIfAnalysis?.selectedVariant) {
     // Find the case node to get its case.id
-    const legacyCaseNode = graph.nodes.find((n: any) => n.id === legacyWhatIfAnalysis.caseNodeId);
+    const legacyCaseNode = graph.nodes.find((n: any) => n.uuid === legacyWhatIfAnalysis.caseNodeId || n.id === legacyWhatIfAnalysis.caseNodeId);
     const legacyCaseId = legacyCaseNode?.case?.id;
     
     if (legacyCaseId) {
