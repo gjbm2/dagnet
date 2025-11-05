@@ -29,7 +29,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     searchQuery: '',
     selectedRepo: '',
     selectedBranch: '',
-    expandedSections: ['graphs', 'parameters', 'contexts', 'cases', 'nodes'],
+    expandedSections: ['graphs', 'parameters', 'contexts', 'cases', 'nodes', 'events'],
     availableRepos: [],
     availableBranches: [],
     

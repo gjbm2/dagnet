@@ -324,7 +324,7 @@ export function NavigatorContent() {
   };
 
   const handleIndexClick = (type: ObjectType) => {
-    const indexFileId = `${type}-index`;
+    const indexFileId = `${type}-index`; // FileIds use singular form
     
     // Check if already open
     const existingTab = tabs.find(t => t.fileId === indexFileId);
@@ -354,7 +354,7 @@ export function NavigatorContent() {
   };
 
   const getIndexIsDirty = (type: ObjectType): boolean => {
-    const indexFileId = `${type}-index`;
+    const indexFileId = `${type}-index`; // FileIds use singular form
     const indexFile = fileRegistry.getFile(indexFileId);
     return indexFile?.isDirty || false;
   };

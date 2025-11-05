@@ -76,7 +76,7 @@ class RegistryService {
     
     // 1. Load index file from FileRegistry only (don't load stale data from IDB)
     // The workspace loading process should have already loaded the correct index file into FileRegistry
-    const indexFileId = `${type === 'event' ? 'events' : type}-index`;
+    const indexFileId = `${type}-index`; // FileIds use singular form (e.g., parameter-index)
     const indexFile = fileRegistry.getFile(indexFileId);
     
     // 2. Process index entries
