@@ -126,16 +126,16 @@ class FileOperationsService {
       ? `${fileId}.yaml` 
       : `${type}s/${name}.yaml`;
     
-    const file = fileRegistry.getOrCreateFile(
+    const file = await fileRegistry.getOrCreateFile(
       fileId,
       type,
       { repository: 'local', path: filePath, branch: 'main' },
       defaultData
     );
 
-    // 3. Update index (if applicable)
-    if (['parameter', 'context', 'case', 'node'].includes(type)) {
-      await fileRegistry.updateIndexOnCreate(type as any, fileId, metadata);
+    // 3. AUTO-UPDATE index file (for new file)
+    if (['parameter', 'context', 'case', 'node', 'event'].includes(type)) {
+      await this.updateIndexFile(file);
     }
 
     // 4. Create RepositoryItem
@@ -375,7 +375,10 @@ class FileOperationsService {
       }
     }
 
-    // 6. Delete from FileRegistry (also updates index)
+    // 6. AUTO-REMOVE from index file (before deleting file itself)
+    await this.removeFromIndexFile(file);
+
+    // 7. Delete from FileRegistry
     try {
       await fileRegistry.deleteFile(fileId);
     } catch (error) {
@@ -383,7 +386,7 @@ class FileOperationsService {
       return false;
     }
 
-    // 7. Remove from Navigator
+    // 8. Remove from Navigator
     if (this.navigatorOps) {
       await this.navigatorOps.refreshItems();
     }
@@ -473,7 +476,160 @@ class FileOperationsService {
   }
 
   /**
+   * Create empty index structure for a given file type
+   */
+  private createEmptyIndex(fileType: ObjectType): any {
+    const pluralKey = `${fileType}s`;
+    return {
+      version: '1.0.0',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      [pluralKey]: []
+    };
+  }
+
+  /**
+   * Auto-update index file when a data file changes
+   * Ensures index stays in sync with file CRUD operations
+   */
+  private async updateIndexFile(file: FileState): Promise<void> {
+    // Skip if this IS an index file
+    if (file.fileId.endsWith('-index')) return;
+    
+    // Skip if file type doesn't have indices (graphs don't)
+    if (file.type === 'graph') return;
+    
+    // Skip if file doesn't have an id (can't index it)
+    if (!file.data?.id) {
+      console.warn(`FileOperationsService: Cannot update index for file without id: ${file.fileId}`);
+      return;
+    }
+
+    try {
+      const indexFileId = `${file.type}-index`;
+      const pluralKey = `${file.type}s`;
+      
+      // Load or create index file
+      let indexFile = fileRegistry.getFile(indexFileId);
+      if (!indexFile) {
+        console.log(`FileOperationsService: Creating index file ${indexFileId}`);
+        const indexData = this.createEmptyIndex(file.type);
+        indexFile = await fileRegistry.getOrCreateFile(
+          indexFileId,
+          file.type,
+          { 
+            repository: file.source.repository, 
+            path: `${pluralKey}-index.yaml`, 
+            branch: file.source.branch || 'main' 
+          },
+          indexData
+        );
+      }
+      
+      // Update index entry
+      const index = indexFile.data;
+      const entries = index[pluralKey] || [];
+      
+      const existingIdx = entries.findIndex((e: any) => e.id === file.data.id);
+      const entry: any = {
+        id: file.data.id,
+        file_path: file.source.path || `${pluralKey}/${file.data.id}.yaml`,
+        status: file.data.metadata?.status || file.data.status || 'active'
+      };
+      
+      // Add optional fields if present
+      if (file.data.type) entry.type = file.data.type;
+      if (file.data.metadata?.tags || file.data.tags) {
+        entry.tags = file.data.metadata?.tags || file.data.tags;
+      }
+      if (file.data.metadata?.created_at) entry.created_at = file.data.metadata.created_at;
+      entry.updated_at = new Date().toISOString();
+      if (file.data.metadata?.author) entry.author = file.data.metadata.author;
+      if (file.data.metadata?.version) entry.version = file.data.metadata.version;
+      
+      // Type-specific fields
+      if (file.type === 'context' && file.data.category) {
+        entry.category = file.data.category;
+      }
+      if (file.type === 'node') {
+        if (file.data.category) entry.category = file.data.category;
+        if (file.data.event_id) entry.event_id = file.data.event_id;
+      }
+      
+      // Update or add entry
+      if (existingIdx >= 0) {
+        entries[existingIdx] = entry;
+      } else {
+        entries.push(entry);
+      }
+      
+      // Sort by id for consistency
+      entries.sort((a: any, b: any) => a.id.localeCompare(b.id));
+      
+      // Update index
+      index[pluralKey] = entries;
+      index.updated_at = new Date().toISOString();
+      
+      // Save index back to fileRegistry (this will mark it dirty automatically!)
+      await fileRegistry.updateFile(indexFileId, index);
+      
+      console.log(`FileOperationsService: Updated index ${indexFileId} for ${file.data.id}`);
+    } catch (error) {
+      console.error(`FileOperationsService: Failed to update index for ${file.fileId}:`, error);
+      // Don't throw - index update failure shouldn't block the main operation
+    }
+  }
+
+  /**
+   * Remove entry from index file when a data file is deleted
+   */
+  private async removeFromIndexFile(file: FileState): Promise<void> {
+    // Skip if this IS an index file
+    if (file.fileId.endsWith('-index')) return;
+    
+    // Skip if file type doesn't have indices
+    if (file.type === 'graph') return;
+    
+    // Skip if file doesn't have an id
+    if (!file.data?.id) return;
+
+    try {
+      const indexFileId = `${file.type}-index`;
+      const pluralKey = `${file.type}s`;
+      
+      const indexFile = fileRegistry.getFile(indexFileId);
+      if (!indexFile) {
+        console.warn(`FileOperationsService: Index file ${indexFileId} not found, cannot remove entry`);
+        return;
+      }
+      
+      const index = indexFile.data;
+      const entries = index[pluralKey] || [];
+      
+      // Remove entry
+      const filtered = entries.filter((e: any) => e.id !== file.data.id);
+      
+      if (filtered.length === entries.length) {
+        console.log(`FileOperationsService: Entry ${file.data.id} not found in index, nothing to remove`);
+        return;
+      }
+      
+      index[pluralKey] = filtered;
+      index.updated_at = new Date().toISOString();
+      
+      // Save index back (marks dirty automatically!)
+      await fileRegistry.updateFile(indexFileId, index);
+      
+      console.log(`FileOperationsService: Removed ${file.data.id} from index ${indexFileId}`);
+    } catch (error) {
+      console.error(`FileOperationsService: Failed to remove from index for ${file.fileId}:`, error);
+      // Don't throw - index update failure shouldn't block deletion
+    }
+  }
+
+  /**
    * Save file (mark as not dirty, update in IDB)
+   * Also auto-updates index file if applicable
    */
   async saveFile(fileId: string): Promise<boolean> {
     const file = fileRegistry.getFile(fileId);
@@ -493,6 +649,12 @@ class FileOperationsService {
     (fileRegistry as any).notifyListeners(fileId, file);
     
     console.log(`FileOperationsService: Saved ${fileId}`);
+    
+    // AUTO-UPDATE INDEX FILE (if this is not an index file itself)
+    if (!fileId.endsWith('-index')) {
+      await this.updateIndexFile(file);
+    }
+    
     return true;
   }
 
