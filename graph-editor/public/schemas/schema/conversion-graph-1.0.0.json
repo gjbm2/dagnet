@@ -175,18 +175,18 @@
         "distribution_overridden": { "type": "boolean", "default": false, "description": "If true, distribution was manually edited and should not be auto-updated" },
         "evidence": {
           "type": "object",
-          "description": "Observations from data sources (context for n/k, NOT overridable)",
+          "description": "Observations from data sources (context for n/k, NOT overridable). Optional fields depend on source type.",
           "additionalProperties": false,
           "properties": {
-            "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials)" },
-            "k": { "type": "integer", "minimum": 0, "description": "Number of successes" },
-            "window_from": { "type": "string", "format": "date-time", "description": "Time window start (gives context to n/k)" },
-            "window_to": { "type": "string", "format": "date-time", "description": "Time window end (optional)" },
-            "retrieved_at": { "type": "string", "format": "date-time", "description": "When this data was retrieved" },
-            "source": { "type": "string", "enum": ["amplitude", "sheets", "manual", "computed"], "description": "Where this data came from" },
-            "query": { "type": "object", "description": "Query that produced this data (source-specific structure)" }
+            "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials) - required for probability data with observations" },
+            "k": { "type": "integer", "minimum": 0, "description": "Number of successes - optional, can be derived from n × mean" },
+            "window_from": { "type": "string", "format": "date-time", "description": "Time window start - required when source provides observation period" },
+            "window_to": { "type": "string", "format": "date-time", "description": "Time window end - optional, defines explicit period boundary" },
+            "retrieved_at": { "type": "string", "format": "date-time", "description": "When this data was retrieved from source" },
+            "source": { "type": "string", "enum": ["amplitude", "sheets", "manual", "computed", "api"], "description": "Where this data came from" },
+            "query": { "type": "object", "description": "Query that produced this data (source-specific structure)", "additionalProperties": true }
           },
-          "required": ["n", "window_from", "retrieved_at", "source"]
+          "required": ["retrieved_at", "source"]
         },
         "parameter_id": { "type": "string", "description": "Reference to parameter file" },
         "locked": { "type": "boolean", "default": false, "description": "If true, no edits allowed" },

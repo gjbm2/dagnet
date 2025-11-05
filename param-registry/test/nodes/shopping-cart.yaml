@@ -1,31 +1,18 @@
+# Node: Shopping Cart
+# Created: 2025-11-05
+# Schema: node-schema.yaml
+
 id: shopping-cart
-name: "Shopping Cart"
-description: |
-  The shopping cart page where users review items, update quantities, 
-  apply promo codes, and proceed to checkout.
+name: Shopping Cart
+description: User adds item to cart and views cart page
+event_id: add-to-cart
 
+# Additional metadata
 tags:
+  - commerce
   - cart
-  - checkout
-  - conversion
-  - intermediate
 
-resources:
-  - type: notion
-    url: "https://notion.so/team/cart-abandonment-analysis"
-    title: "Cart Abandonment Analysis"
-    description: "Data and insights on cart abandonment rates and causes"
-  
-  - type: miro
-    url: "https://miro.com/board/cart-user-journey"
-    title: "Cart User Journey Map"
-    description: "User journey mapping for cart experience"
-
-metadata:
-  created_at: "2025-01-28T11:30:00Z"
-  updated_at: "2025-01-28T11:30:00Z"
-  author: "ecommerce-team"
-  version: "1.0.0"
-  status: active
-
+notes: |
+  Cart abandonment is a key metric to track.
+  Users may abandon at this stage due to price, shipping costs, or distractions.
 

@@ -1,0 +1,47 @@
+# Event: Checkout Complete
+# Created: 2025-11-05
+# Schema: event-schema.yaml
+
+id: checkout-complete
+name: Checkout Complete
+description: User successfully completes checkout and places an order
+category: commerce
+
+# Amplitude connector configuration
+connectors:
+  amplitude:
+    event_name: "[Amplitude] Order Completed"
+    property_mappings:
+      order_id: "Order ID"
+      order_value: "Revenue"
+      payment_method: "Payment Method"
+      shipping_method: "Shipping Method"
+      num_items: "Number of Items"
+    
+# Properties tracked for this event
+properties:
+  - name: order_id
+    type: string
+    required: true
+    description: "Unique order identifier"
+  
+  - name: order_value
+    type: number
+    required: true
+    description: "Total order value (revenue)"
+  
+  - name: payment_method
+    type: string
+    required: true
+    description: "Payment method used (credit_card, paypal, etc.)"
+  
+  - name: shipping_method
+    type: string
+    required: false
+    description: "Shipping method selected"
+  
+  - name: num_items
+    type: integer
+    required: false
+    description: "Number of items in the order"
+

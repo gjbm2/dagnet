@@ -1,15 +1,18 @@
-# Cases Index - Test Data
-# Lists all available cases in the test registry
+# Cases Index
+# Created: 2025-11-05
 
-version: "1.0.0"
-created_at: "2025-10-25T16:00:00Z"
-updated_at: "2025-10-25T16:00:00Z"
+# Case registry for A/B tests and experiments
+# Each case represents a branching point in the conversion graph
 
 cases:
-  - id: case-checkout-redesign
-    file_path: "cases/checkout-redesign.yaml"
+  - id: checkout-redesign
+    name: Checkout Redesign A/B Test
     status: active
-    created_at: "2025-10-25T00:00:00Z"
-    updated_at: "2025-10-25T00:00:00Z"
-    version: "1.0.0"
-
+    variants: [control, single-page]
+    file: cases/checkout-redesign.yaml
+    
+  - id: pricing-test
+    name: Pricing Display Variants
+    status: active
+    variants: [control, annual-emphasis, daily-breakdown]
+    file: cases/pricing-test.yaml

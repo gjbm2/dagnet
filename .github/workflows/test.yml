@@ -1,0 +1,75 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [main, develop, project-data]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: graph-editor/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: ./graph-editor
+        run: npm ci
+      
+      - name: Run TypeScript type checking
+        working-directory: ./graph-editor
+        run: npm run build -- --noEmit
+      
+      - name: Run tests
+        working-directory: ./graph-editor
+        run: npm run test:run
+      
+      - name: Generate coverage report
+        working-directory: ./graph-editor
+        run: npm run test:coverage
+      
+      - name: Upload coverage to Codecov (optional)
+        uses: codecov/codecov-action@v4
+        if: matrix.node-version == '20.x'
+        with:
+          files: ./graph-editor/coverage/lcov.info
+          flags: unittests
+          fail_ci_if_error: false
+  
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+          cache-dependency-path: graph-editor/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: ./graph-editor
+        run: npm ci
+      
+      - name: TypeScript check
+        working-directory: ./graph-editor
+        run: npx tsc --noEmit
+

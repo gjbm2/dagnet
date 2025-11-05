@@ -1,26 +1,25 @@
-# Contexts Index - Test Data
-# Lists all available contexts in the test registry
+# Contexts Index
+# Created: 2025-11-05
 
-version: "1.0.0"
-created_at: "2025-10-25T15:00:00Z"
-updated_at: "2025-10-25T15:00:00Z"
+# Context registry for segmentation and filtering
+# Contexts allow parameterization by user attributes or conditions
 
 contexts:
-  - id: channel
-    file_path: "contexts/channel.yaml"
-    type: categorical
-    status: active
-    category: marketing
-    created_at: "2025-10-21T00:00:00Z"
-    updated_at: "2025-10-21T00:00:00Z"
-    version: "1.0.0"
+  - id: device-type
+    name: Device Type
+    dimension: device
+    values: [desktop, mobile, tablet]
+    file: contexts/device-type.yaml
+    
+  - id: traffic-source
+    name: Traffic Source
+    dimension: acquisition
+    values: [organic, paid, direct, social, email, referral]
+    file: contexts/traffic-source.yaml
 
-  - id: device
-    file_path: "contexts/device.yaml"
-    type: categorical
-    status: active
-    category: technical
-    created_at: "2025-10-21T00:00:00Z"
-    updated_at: "2025-10-21T00:00:00Z"
-    version: "1.0.0"
-
+# Dimensions for organizing contexts
+dimensions:
+  - device
+  - acquisition
+  - geography
+  - user_segment

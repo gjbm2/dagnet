@@ -1,73 +1,38 @@
-# Nodes Index - Test Data
-# Lists all available nodes in the test registry
+# Nodes Index
+# Created: 2025-11-05
+# Schema: node-schema.yaml (array)
 
-version: "1.0.0"
-created_at: "2025-01-28T10:00:00Z"
-updated_at: "2025-01-28T15:30:00Z"
+# Node registry for conversion graph
+# Each node represents a state or action in the user journey
 
 nodes:
   - id: homepage
-    file_path: "nodes/homepage.yaml"
-    status: active
-    type: entry
-    category: acquisition
-    tags: ["landing", "seo", "entry-point"]
-    graphs_using: ["conversion-funnel"]
-    usage_count: 1
-    created_at: "2025-01-28T10:00:00Z"
-    updated_at: "2025-01-28T10:00:00Z"
-    author: "growth-team"
-    version: "1.0.0"
-
-  - id: checkout-complete
-    file_path: "nodes/checkout-complete.yaml"
-    status: active
-    type: success
-    category: conversion
-    tags: ["checkout", "purchase", "success"]
-    graphs_using: ["conversion-funnel"]
-    usage_count: 1
-    created_at: "2025-01-28T10:00:00Z"
-    updated_at: "2025-01-28T10:00:00Z"
-    author: "ecommerce-team"
-    version: "1.0.0"
-
+    name: Homepage
+    event_id: page-view
+    file: nodes/homepage.yaml
+    
   - id: product-page
-    file_path: "nodes/product-page.yaml"
-    status: active
-    type: conversion
-    category: browsing
-    tags: ["product", "browsing", "pdp"]
-    graphs_using: []
-    usage_count: 0
-    created_at: "2025-01-28T11:00:00Z"
-    updated_at: "2025-01-28T11:00:00Z"
-    author: "product-team"
-    version: "1.0.0"
-
+    name: Product Page
+    event_id: page-view
+    file: nodes/product-page.yaml
+    
   - id: shopping-cart
-    file_path: "nodes/shopping-cart.yaml"
-    status: active
-    type: intermediate
-    category: checkout
-    tags: ["cart", "checkout", "conversion"]
-    graphs_using: []
-    usage_count: 0
-    created_at: "2025-01-28T11:30:00Z"
-    updated_at: "2025-01-28T11:30:00Z"
-    author: "ecommerce-team"
-    version: "1.0.0"
-
-  - id: abandoned-cart
-    file_path: null
-    status: planned
-    type: exit
-    category: abandonment
-    tags: ["cart", "abandonment", "exit"]
-    graphs_using: []
-    usage_count: 0
-    created_at: "2025-01-28T10:00:00Z"
-    author: "analytics-team"
-    version: "1.0.0"
-
-
+    name: Shopping Cart
+    event_id: add-to-cart
+    file: nodes/shopping-cart.yaml
+    
+  - id: checkout-start
+    name: Checkout Start
+    event_id: page-view
+    file: nodes/checkout-start.yaml
+    
+  - id: purchase-complete
+    name: Purchase Complete
+    event_id: checkout-complete
+    file: nodes/purchase-complete.yaml
+    
+  # Registry entry without file (valid case - node exists only in graph)
+  - id: payment-failed
+    name: Payment Failed
+    event_id: page-view
+    file: nodes/payment-failed.yaml  # ← File not created, node added directly to graph

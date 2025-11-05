@@ -1,0 +1,52 @@
+# Case: Pricing Display Test
+# Created: 2025-11-05
+# Schema: case-parameter-schema.yaml
+
+id: pricing-test
+name: Pricing Display Variants
+description: Testing different ways of displaying product pricing
+
+# Variant definitions
+variants:
+  - name: control
+    description: Standard pricing display (monthly cost only)
+    
+  - name: annual-emphasis
+    description: Emphasize annual savings with comparison
+    
+  - name: daily-breakdown
+    description: Show daily cost breakdown to reduce sticker shock
+
+# Historical variant weights (timestamped schedules)
+schedules:
+  - variants:
+      - name: control
+        weight: 0.34
+      - name: annual-emphasis
+        weight: 0.33
+      - name: daily-breakdown
+        weight: 0.33
+    window_from: "2025-02-01T00:00:00Z"
+    window_to: "2025-03-01T23:59:59Z"
+    notes: "Initial 3-way split for exploratory testing"
+    
+  - variants:
+      - name: control
+        weight: 0.2
+      - name: annual-emphasis
+        weight: 0.5
+      - name: daily-breakdown
+        weight: 0.3
+    window_from: "2025-03-02T00:00:00Z"
+    window_to: null
+    notes: "Annual emphasis showing best results, increasing allocation"
+
+# External configuration
+source:
+  type: optimizely
+  last_synced: "2025-03-02T10:00:00Z"
+
+connection:
+  optimizely_experiment_key: "pricing_display_2025_q1"
+  traffic_allocation: 1.0
+

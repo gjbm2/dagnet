@@ -1,23 +1,44 @@
-id: customer-support-cost
-name: "Customer Support Cost per Interaction"
-type: cost_gbp
-values:
-  - mean: 3.50
-    stdev: 0.80
-    distribution: "lognormal"
-    data_source:
-      type: "calculated"
-      notes: "Average cost per support ticket/chat based on staff time and overhead"
+# Parameter: Customer Support Cost
+# Created: 2025-11-05
+# Schema: parameter-schema.yaml
+# Type: Cost
 
-metadata:
-  description: "Average cost per customer support interaction (email, chat, or phone). Includes staff salaries, tools, and overhead allocated per ticket."
-  data_source:
-    type: "calculated"
-    notes: "Monthly staff costs divided by ticket volume"
-  tags: ["support", "cost", "customer-service", "operational"]
-  created_at: "2025-01-14T10:00:00Z"
-  author: "finance-team"
-  version: "1.0.0"
-  status: "active"
-  aliases: ["support-cost", "ticket-cost"]
+id: customer-support-cost
+name: Customer Support Cost per Contact
+description: Average cost incurred per customer support interaction
+parameter_type: cost
+
+# Query expression
+query: "cost(customer-support)"
+
+# Historical values (timestamped)
+values:
+  - mean: 15.50
+    stdev: 3.20
+    n: 450
+    distribution: lognormal
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-01-31T23:59:59Z"
+    retrieved_at: "2025-02-01T09:00:00Z"
+    notes: "Includes agent time, tools, and overhead"
+    
+  - mean: 14.80
+    stdev: 2.90
+    n: 520
+    distribution: lognormal
+    window_from: "2025-02-01T00:00:00Z"
+    window_to: "2025-02-28T23:59:59Z"
+    retrieved_at: "2025-03-01T09:00:00Z"
+    notes: "Cost reduction from new chat automation"
+
+# Data source configuration
+source:
+  type: google_sheets
+  last_synced: "2025-03-01T09:00:00Z"
+
+connection:
+  sheet_id: "1a2b3c4d5e6f7g8h9i0j"
+  range: "Support Costs!A2:D100"
+  value_column: "C"
+  date_column: "A"
 
