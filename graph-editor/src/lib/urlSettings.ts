@@ -14,6 +14,8 @@ export interface URLRepositoryConfig {
   paramsPath?: string;
   contextsPath?: string;
   casesPath?: string;
+  nodesPath?: string;
+  eventsPath?: string;
   isDefault?: boolean;
   // Note: auth and permissions are NOT allowed in URL for security
 }

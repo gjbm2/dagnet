@@ -6,20 +6,20 @@
 # Each event can be connected to nodes in the conversion graph
 
 events:
-  - id: page-view
+  - id: page_view
     name: Page View
-    category: navigation
-    file: events/page-view.yaml
+    category: page_view
+    file: events/page_view.yaml
     
-  - id: add-to-cart
+  - id: add_to_cart
     name: Add to Cart
-    category: commerce
-    file: events/add-to-cart.yaml
+    category: user_action
+    file: events/add_to_cart.yaml
     
-  - id: checkout-complete
+  - id: checkout_complete
     name: Checkout Complete
-    category: commerce
-    file: events/checkout-complete.yaml
+    category: conversion
+    file: events/checkout_complete.yaml
 
 # Categories for organizing events
 categories:

@@ -7,7 +7,7 @@
 
 export interface FileTypeConfig {
   /** The type identifier (matches ObjectType) */
-  type: 'graph' | 'parameter' | 'context' | 'case' | 'node' | 'credentials' | 'settings' | 'markdown';
+  type: 'graph' | 'parameter' | 'context' | 'case' | 'node' | 'event' | 'credentials' | 'settings' | 'markdown';
   
   /** Display name (singular) */
   displayName: string;
@@ -117,6 +117,20 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     supportsRawEdit: true
   },
   
+  event: {
+    type: 'event',
+    displayName: 'Event',
+    displayNamePlural: 'Events',
+    schemaFile: '/param-schemas/event-schema.yaml',
+    directory: 'events',
+    indexFile: 'events-index.yaml',
+    extensions: ['.yaml', '.yml', '.json'],
+    icon: '📅',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
   credentials: {
     type: 'credentials',
     displayName: 'Credentials',
@@ -191,6 +205,19 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     directory: '',
     extensions: ['.yaml', '.yml'],
     icon: '🔵',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+  
+  'events-index': {
+    type: 'event' as any,
+    displayName: 'Events Index',
+    displayNamePlural: 'Events Index',
+    schemaFile: '/param-schemas/events-index-schema.yaml',
+    directory: '',
+    extensions: ['.yaml', '.yml'],
+    icon: '📅',
     interactiveEditor: 'form',
     supportsInteractiveEdit: true,
     supportsRawEdit: true

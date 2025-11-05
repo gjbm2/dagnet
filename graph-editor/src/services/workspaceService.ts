@@ -80,7 +80,8 @@ class WorkspaceService {
         { path: gitCreds.paramsPath || 'parameters', type: 'parameter' as ObjectType, extension: 'yaml' },
         { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
         { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
-        { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' }
+        { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' }
       ];
 
       // Build list of files to fetch
@@ -352,7 +353,8 @@ class WorkspaceService {
         { path: gitCreds.paramsPath || 'parameters', type: 'parameter' as ObjectType, extension: 'yaml' },
         { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
         { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
-        { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' }
+        { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' }
       ];
 
       const remoteFileMap = new Map<string, any>(); // path -> treeItem
