@@ -31,7 +31,7 @@ export async function getValidator() {
       $defs: {
         ...schema.$defs,
         UUID: { type: 'string' },
-        Slug: { type: 'string', minLength: 1, maxLength: 128 }
+        HumanId: { type: 'string', minLength: 1, maxLength: 128 }
       }
     };
     

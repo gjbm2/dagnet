@@ -12,7 +12,7 @@ properties:
     pattern: '^[a-z0-9-]+$'
     minLength: 3
     maxLength: 64
-    description: "Unique parameter identifier (slug) - lowercase, alphanumeric, hyphens only"
+    description: "Unique parameter identifier (id) - lowercase, alphanumeric, hyphens only"
     examples: ["conversion-rate-baseline", "email-campaign-cost", "checkout-duration"]
   
   name:

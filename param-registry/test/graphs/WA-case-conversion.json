@@ -1,0 +1,1033 @@
+{
+  "nodes": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001",
+      "slug": "start",
+      "label": "Start",
+      "absorbing": false,
+      "entry": {
+        "is_start": true,
+        "entry_weight": 1
+      },
+      "type": "case",
+      "case": {
+        "id": "case_traffic",
+        "parameter_id": "",
+        "status": "active",
+        "variants": [
+          {
+            "name": "influencer",
+            "weight": 0.9,
+            "description": "Control variant"
+          },
+          {
+            "name": "meta",
+            "weight": 0.05,
+            "description": "Treatment variant"
+          },
+          {
+            "name": "google",
+            "weight": 0.05,
+            "description": ""
+          }
+        ]
+      },
+      "layout": {
+        "x": -1611,
+        "y": 264,
+        "color": "#fbbf24"
+      }
+    },
+    {
+      "id": "3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "slug": "landing-page",
+      "label": "Landing page",
+      "absorbing": false,
+      "layout": {
+        "x": -947,
+        "y": 280
+      }
+    },
+    {
+      "id": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "slug": "create-account",
+      "label": "Create account",
+      "absorbing": false,
+      "layout": {
+        "x": -656,
+        "y": 232
+      }
+    },
+    {
+      "id": "89b73fb4-6f08-412d-a5f8-e456b8c847a1",
+      "slug": "bounce",
+      "label": "Bounce",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": {
+        "x": -633,
+        "y": 434
+      }
+    },
+    {
+      "id": "9189af7b-aae3-4611-a546-c845c6b8bc37",
+      "slug": "delegate",
+      "label": "Delegate",
+      "absorbing": false,
+      "layout": {
+        "x": -354,
+        "y": 138
+      }
+    },
+    {
+      "id": "83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e",
+      "slug": "manual-mode",
+      "label": "Manual mode",
+      "absorbing": false,
+      "layout": {
+        "x": -333,
+        "y": 312
+      }
+    },
+    {
+      "id": "31c35c2c-c058-4616-96d8-7fa1d6b27d0d",
+      "slug": "abandon",
+      "label": "Abandon",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": {
+        "x": -318,
+        "y": 457
+      }
+    },
+    {
+      "id": "a79caf1a-6525-4ab2-a572-152465b6c35a",
+      "slug": "connects-a-number",
+      "label": "Connects a number",
+      "absorbing": false,
+      "layout": {
+        "x": 402,
+        "y": -18
+      }
+    },
+    {
+      "id": "4e3fde4d-b95b-41e1-ae16-eb37a6095dc2",
+      "slug": "drop-off-post-delegation",
+      "label": "drop-off-post-delegation",
+      "absorbing": false,
+      "layout": {
+        "x": 777,
+        "y": 459
+      }
+    },
+    {
+      "id": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
+      "slug": "gives-bd",
+      "label": "Gives BD",
+      "absorbing": false,
+      "layout": {
+        "x": 1393,
+        "y": -272
+      }
+    },
+    {
+      "id": "b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "slug": "failed-to-give-bds",
+      "label": "Failed to give BDs",
+      "absorbing": false,
+      "layout": {
+        "x": 1419,
+        "y": 316
+      }
+    },
+    {
+      "id": "e19d376a-2814-4922-99a6-0b29aad60af9",
+      "slug": "is-immediately-registrable",
+      "label": "Is immediately registrable",
+      "absorbing": false,
+      "description": "e.g. Eon-Eon\n",
+      "layout": {
+        "x": 775,
+        "y": -358
+      }
+    },
+    {
+      "id": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "slug": "switch-registration",
+      "label": "Switch registration",
+      "absorbing": false,
+      "layout": {
+        "x": 1724,
+        "y": -440
+      }
+    },
+    {
+      "id": "d19febcd-ae68-47e6-830b-767a304006b8",
+      "slug": "switch-success",
+      "label": "Switch success",
+      "absorbing": true,
+      "outcome_type": "success",
+      "layout": {
+        "x": 1985,
+        "y": -441
+      }
+    },
+    {
+      "id": "30e75301-190f-4a58-bd9f-f5202a750266",
+      "slug": "post-registration-failure",
+      "label": "Post-registration failure",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": {
+        "x": 1981,
+        "y": -604
+      }
+    },
+    {
+      "id": "280d28de-5384-4ced-9f80-8c0f4f470dee",
+      "slug": "stops-switch",
+      "label": "Stops switch",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": {
+        "x": 1983,
+        "y": -297
+      }
+    },
+    {
+      "id": "7fd98b0e-7710-48d0-a110-ad11d3069588",
+      "slug": "does-not-give-bd",
+      "label": "Does not give BD",
+      "absorbing": false,
+      "layout": {
+        "x": 1409,
+        "y": -60
+      }
+    },
+    {
+      "id": "0b29a099-9a13-4a32-98e9-0ad4bb496492",
+      "slug": "proceed-after-chasing",
+      "label": "Proceed after chasing",
+      "absorbing": false,
+      "layout": {
+        "x": 1831,
+        "y": 204
+      }
+    },
+    {
+      "id": "3f733361-e711-443a-8530-521d5aeae907",
+      "slug": "disengages",
+      "label": "Disengages",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": {
+        "x": 1408,
+        "y": 597
+      }
+    },
+    {
+      "id": "0da63279-aacc-44eb-89ad-ab1e93a55191",
+      "slug": "coffee-promotion",
+      "label": "Coffee Promotion",
+      "absorbing": false,
+      "layout": {
+        "x": 1139,
+        "y": -87,
+        "color": "#fb923c"
+      }
+    },
+    {
+      "id": "8245f8ed-a207-45bc-9b15-9f8e5d67e05c",
+      "slug": "node-23",
+      "label": "Influencer",
+      "absorbing": false,
+      "layout": {
+        "x": -1280,
+        "y": 25
+      }
+    },
+    {
+      "id": "17d1353b-01ef-4639-9730-f0f809885d94",
+      "slug": "node-24",
+      "label": "Google",
+      "absorbing": false,
+      "layout": {
+        "x": -1267,
+        "y": 254
+      }
+    },
+    {
+      "id": "99348799-2430-4cd6-ae6f-4b186a042c87",
+      "slug": "node-25",
+      "label": "Meta",
+      "absorbing": false,
+      "layout": {
+        "x": -1289,
+        "y": 478
+      }
+    },
+    {
+      "id": "a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "slug": "not-shown-bds-in-onboarding",
+      "label": "Not shown BDs in onboarding (ex. retention) ",
+      "absorbing": false,
+      "layout": {
+        "x": 1135,
+        "y": 132
+      }
+    },
+    {
+      "id": "f7735fab-a23d-4024-91db-7a302458a9a0",
+      "slug": "proceed-after-followup",
+      "label": "Proceed after followup",
+      "absorbing": false,
+      "layout": {
+        "x": 1582,
+        "y": 63
+      }
+    },
+    {
+      "id": "3d402542-e439-48e0-b38a-31712e869171",
+      "slug": "",
+      "label": "New WA Activation Journey",
+      "absorbing": false,
+      "type": "case",
+      "case": {
+        "id": "case_1761746484026",
+        "parameter_id": "",
+        "status": "active",
+        "variants": [
+          {
+            "name": "control",
+            "weight": 0.5,
+            "description": "Control variant"
+          },
+          {
+            "name": "treatment",
+            "weight": 0.5,
+            "description": "Treatment variant"
+          }
+        ]
+      },
+      "layout": {
+        "x": -86,
+        "y": -55,
+        "color": "#4ade80"
+      }
+    },
+    {
+      "id": "ce6841c8-9a60-4449-8a46-e68d43e462c6",
+      "slug": "new-wa-journey",
+      "label": "New WA Journey",
+      "absorbing": false,
+      "description": "Node definition not found",
+      "layout": {
+        "x": 149,
+        "y": 99
+      }
+    },
+    {
+      "id": "0e09f18c-3394-4a2b-8bac-4ee49013999e",
+      "slug": "old-wa-journey",
+      "label": "WhatsApp 'START' journey",
+      "absorbing": false,
+      "description": "Node definition not found",
+      "layout": {
+        "x": 160,
+        "y": -200
+      }
+    },
+    {
+      "id": "6c001769-cf4d-4d41-be8f-ca87ae5c4a34",
+      "slug": "coffee-case-xp",
+      "label": "coffee-",
+      "absorbing": false,
+      "description": "Node definition not found",
+      "type": "case",
+      "case": {
+        "id": "case_1761753108256",
+        "parameter_id": "",
+        "status": "active",
+        "variants": [
+          {
+            "name": "control",
+            "weight": 0.25,
+            "description": "Control variant"
+          },
+          {
+            "name": "treatment",
+            "weight": 0.5,
+            "description": "Treatment variant"
+          }
+        ]
+      },
+      "layout": {
+        "x": 918,
+        "y": -167,
+        "color": "#fb923c"
+      }
+    },
+    {
+      "id": "9100b31b-caa9-4853-8f97-c92cc9273ea9",
+      "slug": "ask-for-bd",
+      "label": "Request BDs",
+      "absorbing": false,
+      "description": "Node definition not found",
+      "layout": {
+        "x": 1140,
+        "y": -286
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa->beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "slug": "landing-page-to-create-account",
+      "from": "3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "to": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.33
+      },
+      "description": "",
+      "conditional_p": [
+        {
+          "condition": {
+            "visited": [
+              "node-24"
+            ]
+          },
+          "p": {
+            "mean": 0.13
+          }
+        },
+        {
+          "condition": {
+            "visited": [
+              "node-25"
+            ]
+          },
+          "p": {
+            "mean": 0.13
+          }
+        }
+      ],
+      "display": {
+        "conditional_color": "#34d399"
+      }
+    },
+    {
+      "id": "3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa->89b73fb4-6f08-412d-a5f8-e456b8c847a1",
+      "slug": "landing-page-to-bounce",
+      "from": "3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "to": "89b73fb4-6f08-412d-a5f8-e456b8c847a1",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.67
+      },
+      "description": "",
+      "conditional_p": [
+        {
+          "condition": {
+            "visited": [
+              "node-24"
+            ]
+          },
+          "p": {
+            "mean": 0.87
+          }
+        },
+        {
+          "condition": {
+            "visited": [
+              "node-25"
+            ]
+          },
+          "p": {
+            "mean": 0.87
+          }
+        }
+      ],
+      "display": {
+        "conditional_color": "#34d399"
+      }
+    },
+    {
+      "id": "beb38757-1c04-40b7-be32-1c9b02a4f71b->9189af7b-aae3-4611-a546-c845c6b8bc37",
+      "slug": "create-account-to-delegate",
+      "from": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "to": "9189af7b-aae3-4611-a546-c845c6b8bc37",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.55
+      },
+      "description": ""
+    },
+    {
+      "id": "beb38757-1c04-40b7-be32-1c9b02a4f71b->83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e",
+      "slug": "create-account-to-manual-mode",
+      "from": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "to": "83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.15
+      },
+      "description": ""
+    },
+    {
+      "id": "beb38757-1c04-40b7-be32-1c9b02a4f71b->31c35c2c-c058-4616-96d8-7fa1d6b27d0d",
+      "slug": "create-account-to-abandon",
+      "from": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "to": "31c35c2c-c058-4616-96d8-7fa1d6b27d0d",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.3
+      },
+      "description": ""
+    },
+    {
+      "id": "9189af7b-aae3-4611-a546-c845c6b8bc37->e19d376a-2814-4922-99a6-0b29aad60af9",
+      "slug": "connects-a-number-to-is-immediately-registrable",
+      "from": "9189af7b-aae3-4611-a546-c845c6b8bc37",
+      "to": "e19d376a-2814-4922-99a6-0b29aad60af9",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.08
+      },
+      "description": ""
+    },
+    {
+      "id": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b->d19febcd-ae68-47e6-830b-767a304006b8",
+      "slug": "switch-registration-to-switch-success",
+      "from": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "to": "d19febcd-ae68-47e6-830b-767a304006b8",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.85
+      },
+      "description": ""
+    },
+    {
+      "id": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b->30e75301-190f-4a58-bd9f-f5202a750266",
+      "slug": "switch-registration-to-post-registration-failure",
+      "from": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "to": "30e75301-190f-4a58-bd9f-f5202a750266",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.15
+      },
+      "description": ""
+    },
+    {
+      "id": "e19d376a-2814-4922-99a6-0b29aad60af9->280d28de-5384-4ced-9f80-8c0f4f470dee",
+      "slug": "is-immediately-registrable-to-stops-switch",
+      "from": "e19d376a-2814-4922-99a6-0b29aad60af9",
+      "to": "280d28de-5384-4ced-9f80-8c0f4f470dee",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.35
+      },
+      "description": ""
+    },
+    {
+      "id": "e19d376a-2814-4922-99a6-0b29aad60af9->587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "slug": "is-immediately-registrable-to-switch-registration",
+      "from": "e19d376a-2814-4922-99a6-0b29aad60af9",
+      "to": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.65
+      },
+      "description": ""
+    },
+    {
+      "id": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc->587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "slug": "gives-bd-to-switch-registration",
+      "from": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
+      "to": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.6
+      },
+      "description": "",
+      "conditional_p": [
+        {
+          "condition": {
+            "visited": [
+              "coffee-promotion"
+            ]
+          },
+          "p": {
+            "mean": 0.6
+          }
+        }
+      ],
+      "display": {
+        "conditional_color": "#f87171"
+      }
+    },
+    {
+      "id": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc->280d28de-5384-4ced-9f80-8c0f4f470dee",
+      "slug": "gives-bd-to-stops-switch",
+      "from": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
+      "to": "280d28de-5384-4ced-9f80-8c0f4f470dee",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.4
+      },
+      "description": "",
+      "conditional_p": [
+        {
+          "condition": {
+            "visited": [
+              "coffee-promotion"
+            ]
+          },
+          "p": {
+            "mean": 0.4
+          }
+        }
+      ],
+      "display": {
+        "conditional_color": "#f87171"
+      }
+    },
+    {
+      "id": "7fd98b0e-7710-48d0-a110-ad11d3069588->b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "slug": "does-not-give-bd-to-failed-to-give-BDs",
+      "from": "7fd98b0e-7710-48d0-a110-ad11d3069588",
+      "to": "b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "fromHandle": "bottom-out",
+      "toHandle": "top",
+      "p": {
+        "mean": 1
+      },
+      "description": ""
+    },
+    {
+      "id": "0b29a099-9a13-4a32-98e9-0ad4bb496492->587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "slug": "proceed-after-chasing-to-switch-registration",
+      "from": "0b29a099-9a13-4a32-98e9-0ad4bb496492",
+      "to": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "fromHandle": "top-out",
+      "toHandle": "bottom",
+      "p": {
+        "mean": 1
+      },
+      "description": ""
+    },
+    {
+      "id": "b0cd97db-1eb4-4874-8904-e04b0d81b145->3f733361-e711-443a-8530-521d5aeae907",
+      "slug": "failed-to-give-bds-to-disengages",
+      "from": "b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "to": "3f733361-e711-443a-8530-521d5aeae907",
+      "fromHandle": "bottom-out",
+      "toHandle": "top",
+      "p": {
+        "mean": 0.98
+      },
+      "description": ""
+    },
+    {
+      "id": "b0cd97db-1eb4-4874-8904-e04b0d81b145->0b29a099-9a13-4a32-98e9-0ad4bb496492",
+      "slug": "failed-to-give-bds-to-proceed-after-chasing",
+      "from": "b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "to": "0b29a099-9a13-4a32-98e9-0ad4bb496492",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.02
+      },
+      "description": ""
+    },
+    {
+      "id": "4e3fde4d-b95b-41e1-ae16-eb37a6095dc2->e19d376a-2814-4922-99a6-0b29aad60af9",
+      "slug": "drop-off-post-delegation-to-is-immediately-registrable",
+      "from": "4e3fde4d-b95b-41e1-ae16-eb37a6095dc2",
+      "to": "e19d376a-2814-4922-99a6-0b29aad60af9",
+      "fromHandle": "top-out",
+      "toHandle": "bottom",
+      "p": {
+        "mean": 0.08
+      },
+      "description": ""
+    },
+    {
+      "id": "4e3fde4d-b95b-41e1-ae16-eb37a6095dc2->b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "slug": "drop-off-post-delegation-to-failed-to-give-bds",
+      "from": "4e3fde4d-b95b-41e1-ae16-eb37a6095dc2",
+      "to": "b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.92
+      },
+      "description": ""
+    },
+    {
+      "id": "0da63279-aacc-44eb-89ad-ab1e93a55191->0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
+      "slug": "coffee-promotion-to-gives-bd",
+      "from": "0da63279-aacc-44eb-89ad-ab1e93a55191",
+      "to": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.45
+      },
+      "description": "",
+      "costs": {
+        "monetary": {
+          "value": 5,
+          "currency": "GBP"
+        }
+      },
+      "cost_gbp": {
+        "mean": 5
+      }
+    },
+    {
+      "id": "0da63279-aacc-44eb-89ad-ab1e93a55191->7fd98b0e-7710-48d0-a110-ad11d3069588",
+      "slug": "coffee-promotion-to-does-not-give-bd",
+      "from": "0da63279-aacc-44eb-89ad-ab1e93a55191",
+      "to": "7fd98b0e-7710-48d0-a110-ad11d3069588",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.55
+      },
+      "description": ""
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001-influencer->8245f8ed-a207-45bc-9b15-9f8e5d67e05c",
+      "slug": "start-to-node-23",
+      "from": "550e8400-e29b-41d4-a716-446655440001",
+      "to": "8245f8ed-a207-45bc-9b15-9f8e5d67e05c",
+      "fromHandle": "right-out",
+      "toHandle": "left-out",
+      "case_id": "case_traffic",
+      "case_variant": "influencer",
+      "p": {
+        "mean": 1
+      },
+      "description": "",
+      "cost_gbp": {
+        "mean": 1.3
+      }
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001-meta->99348799-2430-4cd6-ae6f-4b186a042c87",
+      "slug": "start-to-node-25",
+      "from": "550e8400-e29b-41d4-a716-446655440001",
+      "to": "99348799-2430-4cd6-ae6f-4b186a042c87",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "case_id": "case_traffic",
+      "case_variant": "meta",
+      "p": {
+        "mean": 1
+      },
+      "description": "",
+      "cost_gbp": {
+        "mean": 0.7
+      }
+    },
+    {
+      "id": "8245f8ed-a207-45bc-9b15-9f8e5d67e05c->3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "slug": "node-23-to-landing-page",
+      "from": "8245f8ed-a207-45bc-9b15-9f8e5d67e05c",
+      "to": "3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 1
+      },
+      "description": "",
+      "costs": {
+        "monetary": {
+          "value": 1.3,
+          "currency": "GBP"
+        }
+      }
+    },
+    {
+      "id": "99348799-2430-4cd6-ae6f-4b186a042c87->3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "slug": "node-25-to-landing-page",
+      "from": "99348799-2430-4cd6-ae6f-4b186a042c87",
+      "to": "3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 1
+      },
+      "description": "",
+      "costs": {
+        "monetary": {
+          "value": 0.7,
+          "currency": "GBP"
+        }
+      }
+    },
+    {
+      "id": "a5545f54-46f8-4aec-a5af-7082d41a7dc9->f7735fab-a23d-4024-91db-7a302458a9a0",
+      "slug": "proceed-after-followup-after-not-shown-bds",
+      "from": "a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "to": "f7735fab-a23d-4024-91db-7a302458a9a0",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.07
+      },
+      "description": ""
+    },
+    {
+      "id": "f7735fab-a23d-4024-91db-7a302458a9a0->587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "slug": "followup-to-switch-registration",
+      "from": "f7735fab-a23d-4024-91db-7a302458a9a0",
+      "to": "587fd98a-db65-4e86-bb8a-bec0e8f33d1b",
+      "fromHandle": "top-out",
+      "toHandle": "bottom",
+      "p": {
+        "mean": 1
+      },
+      "description": ""
+    },
+    {
+      "id": "a5545f54-46f8-4aec-a5af-7082d41a7dc9->b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "slug": "not-shown-bds-in-onboarding-to-failed-to-give-bds",
+      "from": "a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "to": "b0cd97db-1eb4-4874-8904-e04b0d81b145",
+      "fromHandle": "bottom-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.93
+      },
+      "description": ""
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001-google->17d1353b-01ef-4639-9730-f0f809885d94",
+      "slug": "start-to-node-24",
+      "from": "550e8400-e29b-41d4-a716-446655440001",
+      "to": "17d1353b-01ef-4639-9730-f0f809885d94",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "case_id": "case_traffic",
+      "case_variant": "google",
+      "p": {
+        "mean": 1
+      },
+      "description": "",
+      "cost_gbp": {
+        "mean": 0.7
+      }
+    },
+    {
+      "id": "17d1353b-01ef-4639-9730-f0f809885d94->3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "slug": "node-24-to-landing-page",
+      "from": "17d1353b-01ef-4639-9730-f0f809885d94",
+      "to": "3c2ec6d8-8cf9-4cf4-ba3c-a9b1417cf7fa",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 1
+      },
+      "description": "",
+      "costs": {
+        "monetary": {
+          "value": 0.7,
+          "currency": "GBP"
+        }
+      }
+    },
+    {
+      "id": "a79caf1a-6525-4ab2-a572-152465b6c35a->6c001769-cf4d-4d41-be8f-ca87ae5c4a34",
+      "slug": "connects-a-number-to-coffee-promotion",
+      "from": "a79caf1a-6525-4ab2-a572-152465b6c35a",
+      "to": "6c001769-cf4d-4d41-be8f-ca87ae5c4a34",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.65
+      },
+      "description": ""
+    },
+    {
+      "id": "9189af7b-aae3-4611-a546-c845c6b8bc37->3d402542-e439-48e0-b38a-31712e869171",
+      "slug": "delegate-to-3d402542-e439-48e0-b38a-31712e869171",
+      "from": "9189af7b-aae3-4611-a546-c845c6b8bc37",
+      "to": "3d402542-e439-48e0-b38a-31712e869171",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.92
+      },
+      "description": ""
+    },
+    {
+      "id": "3d402542-e439-48e0-b38a-31712e869171-treatment->ce6841c8-9a60-4449-8a46-e68d43e462c6",
+      "slug": "3d402542-e439-48e0-b38a-31712e869171-to-connects-in-new-wa-journey",
+      "from": "3d402542-e439-48e0-b38a-31712e869171",
+      "to": "ce6841c8-9a60-4449-8a46-e68d43e462c6",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "case_id": "case_1761746484026",
+      "case_variant": "treatment",
+      "p": {
+        "mean": 1
+      },
+      "description": ""
+    },
+    {
+      "id": "3d402542-e439-48e0-b38a-31712e869171-control->0e09f18c-3394-4a2b-8bac-4ee49013999e",
+      "slug": "3d402542-e439-48e0-b38a-31712e869171-to-connects-old-journey",
+      "from": "3d402542-e439-48e0-b38a-31712e869171",
+      "to": "0e09f18c-3394-4a2b-8bac-4ee49013999e",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "case_id": "case_1761746484026",
+      "case_variant": "control",
+      "p": {
+        "mean": 1
+      },
+      "description": ""
+    },
+    {
+      "id": "0e09f18c-3394-4a2b-8bac-4ee49013999e->a79caf1a-6525-4ab2-a572-152465b6c35a",
+      "slug": "connects-old-journey-to-connects-a-number",
+      "from": "0e09f18c-3394-4a2b-8bac-4ee49013999e",
+      "to": "a79caf1a-6525-4ab2-a572-152465b6c35a",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.75
+      },
+      "description": ""
+    },
+    {
+      "id": "ce6841c8-9a60-4449-8a46-e68d43e462c6->a79caf1a-6525-4ab2-a572-152465b6c35a",
+      "slug": "connects-in-new-wa-journey-to-connects-a-number",
+      "from": "ce6841c8-9a60-4449-8a46-e68d43e462c6",
+      "to": "a79caf1a-6525-4ab2-a572-152465b6c35a",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.75
+      },
+      "description": ""
+    },
+    {
+      "id": "ce6841c8-9a60-4449-8a46-e68d43e462c6->a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "slug": "new-wa-journey-to-not-shown-bds-in-onboarding",
+      "from": "ce6841c8-9a60-4449-8a46-e68d43e462c6",
+      "to": "a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.25
+      },
+      "description": ""
+    },
+    {
+      "id": "0e09f18c-3394-4a2b-8bac-4ee49013999e->a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "slug": "old-wa-journey-to-not-shown-bds-in-onboarding",
+      "from": "0e09f18c-3394-4a2b-8bac-4ee49013999e",
+      "to": "a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.25
+      },
+      "description": ""
+    },
+    {
+      "id": "a79caf1a-6525-4ab2-a572-152465b6c35a->a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "slug": "connects-a-number-to-not-shown-bds-in-onboarding",
+      "from": "a79caf1a-6525-4ab2-a572-152465b6c35a",
+      "to": "a5545f54-46f8-4aec-a5af-7082d41a7dc9",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.35
+      },
+      "description": ""
+    },
+    {
+      "id": "6c001769-cf4d-4d41-be8f-ca87ae5c4a34-treatment->0da63279-aacc-44eb-89ad-ab1e93a55191",
+      "slug": "coffee-case-xp-to-coffee-promotion",
+      "from": "6c001769-cf4d-4d41-be8f-ca87ae5c4a34",
+      "to": "0da63279-aacc-44eb-89ad-ab1e93a55191",
+      "fromHandle": "right-out",
+      "toHandle": "left-out",
+      "case_id": "case_1761753108256",
+      "case_variant": "treatment",
+      "p": {
+        "mean": 1
+      },
+      "description": ""
+    },
+    {
+      "id": "6c001769-cf4d-4d41-be8f-ca87ae5c4a34-control->9100b31b-caa9-4853-8f97-c92cc9273ea9",
+      "slug": "coffee-case-xp-to-ask-for-bd",
+      "from": "6c001769-cf4d-4d41-be8f-ca87ae5c4a34",
+      "to": "9100b31b-caa9-4853-8f97-c92cc9273ea9",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "case_id": "case_1761753108256",
+      "case_variant": "control",
+      "p": {
+        "mean": 1
+      },
+      "description": ""
+    },
+    {
+      "id": "9100b31b-caa9-4853-8f97-c92cc9273ea9->0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
+      "slug": "ask-for-bd-to-gives-bd",
+      "from": "9100b31b-caa9-4853-8f97-c92cc9273ea9",
+      "to": "0f1e140f-cd58-445b-be6f-44cf2fc9a8cc",
+      "fromHandle": "right-out",
+      "toHandle": "left-out",
+      "p": {
+        "mean": 0.28
+      },
+      "description": ""
+    },
+    {
+      "id": "9100b31b-caa9-4853-8f97-c92cc9273ea9->7fd98b0e-7710-48d0-a110-ad11d3069588",
+      "slug": "ask-for-bd-to-does-not-give-bd",
+      "from": "9100b31b-caa9-4853-8f97-c92cc9273ea9",
+      "to": "7fd98b0e-7710-48d0-a110-ad11d3069588",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.72
+      },
+      "description": ""
+    }
+  ],
+  "policies": {
+    "default_outcome": "abandon",
+    "overflow_policy": "error",
+    "free_edge_policy": "complement"
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created_at": "2025-10-16T22:14:49.473Z",
+    "author": "Graph Editor",
+    "description": "Default empty graph",
+    "updated_at": "2025-10-31T00:08:39.576Z",
+    "name": "bsse-conversion-4.json",
+    "source": "git",
+    "branch": "main"
+  }
+}

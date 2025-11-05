@@ -176,10 +176,10 @@ export function QueryExpressionEditor({
     ? graph.edges.find((e: any) => e.id === edgeId || `${e.from}->${e.to}` === edgeId)
     : null;
   
-  // Merge nodes from graph and registry (using slugs from graph, IDs from registry)
+  // Merge nodes from graph and registry (using ids from graph, IDs from registry)
   const graphNodes = (graph?.nodes || []).map((n: any) => ({
-    id: n.slug || n.id,  // Prefer slug over ID
-    label: n.label || n.slug || n.id,
+    id: n.id || n.id,  // Prefer id over ID
+    label: n.label || n.id || n.id,
     description: n.description,
     source: 'graph'
   }));
@@ -191,7 +191,7 @@ export function QueryExpressionEditor({
     source: 'registry'
   }));
   
-  // Union: prefer graph nodes (by ID/slug), add registry nodes not in graph
+  // Union: prefer graph nodes (by ID/id), add registry nodes not in graph
   const graphNodeIds = new Set(graphNodes.map((n: any) => n.id));
   const allNodes = [
     ...graphNodes,

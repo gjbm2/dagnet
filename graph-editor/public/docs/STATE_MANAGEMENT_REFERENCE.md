@@ -242,7 +242,7 @@ Graphs have **two representations** that must stay synchronized:
 GraphData {
   nodes: Array<{
     id: string;
-    slug: string;
+    id: string;
     label?: string;
     description?: string;
     tags?: string[];
@@ -257,7 +257,7 @@ GraphData {
   
   edges: Array<{
     id: string;
-    slug?: string;
+    id?: string;
     from: string;              // ← Source node ID
     to: string;                // ← Target node ID
     fromHandle?: string;       // ← Handle on source node
@@ -285,7 +285,7 @@ Node[] = [{
   type: 'conversion';
   position: { x: number; y: number };  // ← Extracted from raw node.layout
   data: {                              // ← Most raw properties copied here
-    id, label, slug, absorbing, outcome_type, description,
+    id, label, id, absorbing, outcome_type, description,
     entry, type, case, layout,
     onUpdate, onDelete, onDoubleClick  // ← Callbacks attached
   }
@@ -299,7 +299,7 @@ Edge[] = [{
   sourceHandle?: string;               // ← from raw edge.fromHandle
   targetHandle?: string;               // ← from raw edge.toHandle
   data: {                              // ← Transformed from raw edge.p, etc.
-    id, slug, probability, stdev, locked,
+    id, id, probability, stdev, locked,
     description, costs, weight_default,
     case_variant, case_id,
     onUpdate, onDelete, onDoubleClick, onReconnect  // ← Callbacks
@@ -326,7 +326,7 @@ Edge[] = [{
 ### What Lives Where
 
 #### On Raw Graph (FileState, GraphStore)
-- Node structural properties (slug, label, absorbing, type, case data)
+- Node structural properties (id, label, absorbing, type, case data)
 - Node positions (`layout.x`, `layout.y`)
 - Node colors (`layout.color`)
 - Edge structural properties (from, to, handles, probability, costs)

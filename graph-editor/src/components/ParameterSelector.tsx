@@ -105,7 +105,7 @@ export function ParameterSelector({
 
   // Get list of used IDs in the current graph (for nodes only)
   const usedIdsInGraph = type === 'node' && graph ? 
-    new Set(graph.nodes.map((n: any) => n.slug).filter(Boolean)) : 
+    new Set(graph.nodes.map((n: any) => n.id).filter(Boolean)) : 
     new Set();
 
   // Filter all items (registry + local) by input value
@@ -139,7 +139,7 @@ export function ParameterSelector({
   const showWarning = validationMode === 'warning' && inputValue && !isInRegistry;
   const showError = validationMode === 'strict' && inputValue && !isInRegistry;
 
-  // Auto-focus and show dropdown when autoFocus is true (e.g., no slug yet)
+  // Auto-focus and show dropdown when autoFocus is true (e.g., no id yet)
   useEffect(() => {
     if (autoFocus && inputRef.current && !value) {
       // Small delay to ensure component is fully rendered

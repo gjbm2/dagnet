@@ -41,7 +41,7 @@ properties:
         type: string
         description: Unique case identifier (graph-local)
         
-      slug:
+      id:
         type: string
         description: URL-friendly identifier
         
@@ -149,9 +149,9 @@ properties:
         node_id:
           type: string
           description: Node ID in the graph
-        node_slug:
+        node_id:
           type: string
-          description: Node slug in the graph
+          description: Node id in the graph
           
   tags:
     type: array

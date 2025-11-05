@@ -315,8 +315,8 @@ export interface EditorProps<T = any> {
  */
 export interface GraphData {
   nodes: Array<{
-    id: string;
-    slug: string;
+    uuid: string;            // System-generated UUID
+    id: string;              // Human-readable identifier (formerly "id")
     label?: string;
     description?: string;
     tags?: string[];
@@ -334,8 +334,8 @@ export interface GraphData {
     case?: any;
   }>;
   edges: Array<{
-    id: string;
-    slug?: string;
+    uuid: string;            // System-generated UUID
+    id?: string;             // Human-readable identifier (formerly "id")
     from: string;
     to: string;
     fromHandle?: string;

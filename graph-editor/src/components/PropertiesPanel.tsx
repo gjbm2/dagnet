@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
-import { generateSlugFromLabel, generateUniqueSlug } from '@/lib/slugUtils';
+import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
@@ -67,10 +67,10 @@ export default function PropertiesPanel({
   // Track which variant is being edited (name)
   const [editingVariantIndex, setEditingVariantIndex] = useState<number | null>(null);
   
-  // Track if user has manually edited the slug to prevent auto-generation
-  const [slugManuallyEdited, setSlugManuallyEdited] = useState<boolean>(false);
+  // Track if user has manually edited the id to prevent auto-generation
+  const [idManuallyEdited, setIdManuallyEdited] = useState<boolean>(false);
   
-  // Track if this node has ever had its label committed (to prevent slug regeneration)
+  // Track if this node has ever had its label committed (to prevent id regeneration)
   const hasLabelBeenCommittedRef = useRef<{ [nodeId: string]: boolean }>({});
   
   // Local state for conditional probabilities (like variants)
@@ -128,10 +128,10 @@ export default function PropertiesPanel({
       if (lastLoadedNodeRef.current !== selectedNodeId && !isReselectingSameNode) {
         const node = graph.nodes.find((n: any) => n.id === selectedNodeId);
         if (node) {
-          console.log('PropertiesPanel: Reloading node data from graph, slug:', node.slug);
+          console.log('PropertiesPanel: Reloading node data from graph, id:', node.id);
           setLocalNodeData({
             label: node.label || '',
-            slug: node.slug || '',
+            id: node.id || '',
             description: node.description || '',
             absorbing: node.absorbing || false,
             outcome_type: node.outcome_type,
@@ -162,10 +162,10 @@ export default function PropertiesPanel({
           }
           
           // Reset manual edit flag when switching to a different node
-          setSlugManuallyEdited(false);
+          setIdManuallyEdited(false);
           
           // Mark node as having committed label if it already has a label
-          // This prevents slug from auto-updating on subsequent label edits
+          // This prevents id from auto-updating on subsequent label edits
           if (node.label && node.label.trim() !== '') {
             hasLabelBeenCommittedRef.current[selectedNodeId] = true;
           }
@@ -191,10 +191,10 @@ export default function PropertiesPanel({
     if (selectedNodeId && graph && lastLoadedNodeRef.current === selectedNodeId) {
       const node = graph.nodes.find((n: any) => n.id === selectedNodeId);
       if (node) {
-        console.log('PropertiesPanel: Reloading node data after graph change, slug:', node.slug);
+        console.log('PropertiesPanel: Reloading node data after graph change, id:', node.id);
         setLocalNodeData({
           label: node.label || '',
-          slug: node.slug || '',
+          id: node.id || '',
           description: node.description || '',
           absorbing: node.absorbing || false,
           outcome_type: node.outcome_type,
@@ -252,7 +252,7 @@ export default function PropertiesPanel({
           });
           
           setLocalEdgeData({
-            slug: edge.slug || '',
+            id: edge.id || '',
             parameter_id: (edge as any).parameter_id || '',
             cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
             cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
@@ -276,43 +276,43 @@ export default function PropertiesPanel({
     }
   }, [selectedEdgeId, graph]);
 
-  // Auto-generate slug from label when label changes (only on FIRST commit)
+  // Auto-generate id from label when label changes (only on FIRST commit)
   // This updates the LOCAL state only, not the graph state
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP3: Auto-generate slug`);
-    if (selectedNodeId && graph && localNodeData.label && !slugManuallyEdited) {
+    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP3: Auto-generate id`);
+    if (selectedNodeId && graph && localNodeData.label && !idManuallyEdited) {
       // Check if the node actually exists in the graph to prevent race conditions
       const nodeExists = graph.nodes.some((n: any) => n.id === selectedNodeId);
       if (!nodeExists) {
         return;
       }
       
-      // For new nodes (no committed label yet), always regenerate slug
+      // For new nodes (no committed label yet), always regenerate id
       // For existing nodes, only regenerate if label hasn't been committed yet
-      const shouldRegenerateSlug = !hasLabelBeenCommittedRef.current[selectedNodeId];
+      const shouldRegenerateId = !hasLabelBeenCommittedRef.current[selectedNodeId];
       
-      if (shouldRegenerateSlug) {
-        const baseSlug = generateSlugFromLabel(localNodeData.label);
-        if (baseSlug && baseSlug !== localNodeData.slug) {
-          // Get all existing slugs (excluding current node)
-          const existingSlugs = graph.nodes
+      if (shouldRegenerateId) {
+        const baseId = generateIdFromLabel(localNodeData.label);
+        if (baseId && baseId !== localNodeData.id) {
+          // Get all existing ids (excluding current node)
+          const existingIds = graph.nodes
             .filter((n: any) => n.id !== selectedNodeId)
-            .map((n: any) => n.slug)
+            .map((n: any) => n.id)
             .filter(Boolean);
           
-          const uniqueSlug = generateUniqueSlug(baseSlug, existingSlugs);
+          const uniqueId = generateUniqueId(baseId, existingIds);
           
-          // Only update LOCAL state if the slug is actually different
-          if (uniqueSlug !== localNodeData.slug) {
+          // Only update LOCAL state if the id is actually different
+          if (uniqueId !== localNodeData.id) {
             setLocalNodeData(prev => ({
               ...prev,
-              slug: uniqueSlug
+              id: uniqueId
             }));
           }
         }
       }
     }
-  }, [localNodeData.label, selectedNodeId, graph, slugManuallyEdited]);
+  }, [localNodeData.label, selectedNodeId, graph, idManuallyEdited]);
   
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP4: Reload edge on graph change`);
@@ -330,7 +330,7 @@ export default function PropertiesPanel({
           });
           
           setLocalEdgeData({
-            slug: edge.slug || '',
+            id: edge.id || '',
             parameter_id: (edge as any).parameter_id || '',
             cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
             cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
@@ -359,7 +359,7 @@ export default function PropertiesPanel({
           });
           
           setLocalEdgeData({
-            slug: edge.slug || '',
+            id: edge.id || '',
             parameter_id: (edge as any).parameter_id || '',
             cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
             cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
@@ -561,30 +561,30 @@ export default function PropertiesPanel({
               <div>
                 {/* Basic Properties Section */}
                 <CollapsibleSection title="Basic Properties" defaultOpen={true} icon={Box}>
-                  {/* Slug (Connection Field) - FIRST per spec */}
+                  {/* ID (Connection Field) - FIRST per spec */}
                   <EnhancedSelector
                   type="node"
-                  value={localNodeData.slug || ''}
-                  autoFocus={!localNodeData.slug}
-                  onChange={(newSlug) => {
-                    console.log('PropertiesPanel: EnhancedSelector onChange:', { newSlug, currentSlug: localNodeData.slug });
+                  value={localNodeData.id || ''}
+                  autoFocus={!localNodeData.id}
+                  onChange={(newId) => {
+                    console.log('PropertiesPanel: EnhancedSelector onChange:', { newId: newId, currentId: localNodeData.id });
                     
                     // Update local state immediately
-                    setLocalNodeData({...localNodeData, slug: newSlug});
-                    setSlugManuallyEdited(true);
+                    setLocalNodeData({...localNodeData, id: newId});
+                    setIdManuallyEdited(true);
                     
-                    // Update the graph with new slug
-                    updateNode('slug', newSlug);
+                    // Update the graph with new id
+                    updateNode('id', newId);
                   }}
                   onClear={() => {
                     // No need to save history - onChange already does it via updateNode
                   }}
                   onPullFromRegistry={async () => {
-                    if (!localNodeData.slug || !graph || !selectedNodeId) return;
+                    if (!localNodeData.id || !graph || !selectedNodeId) return;
                     
                     try {
                       const { paramRegistryService } = await import('../services/paramRegistryService');
-                      const nodeData = await paramRegistryService.loadNode(localNodeData.slug);
+                      const nodeData = await paramRegistryService.loadNode(localNodeData.id);
                       
                       if (nodeData) {
                         const next = structuredClone(graph);
@@ -624,14 +624,14 @@ export default function PropertiesPanel({
                     console.log('Push to registry not yet implemented');
                   }}
                   onOpenConnected={() => {
-                    if (localNodeData.slug) {
-                      openFileById('node', localNodeData.slug);
+                    if (localNodeData.id) {
+                      openFileById('node', localNodeData.id);
                     }
                   }}
                   onOpenItem={(itemId) => {
                     openFileById('node', itemId);
                   }}
-                  label="Node ID (Slug)"
+                  label="Node ID"
                   placeholder="Select or enter node ID..."
                 />
 
@@ -649,8 +649,8 @@ export default function PropertiesPanel({
                         const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
                         if (nodeIndex >= 0) {
                           next.nodes[nodeIndex].label = localNodeData.label;
-                          if (!slugManuallyEdited && localNodeData.slug && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
-                            next.nodes[nodeIndex].slug = localNodeData.slug;
+                          if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
+                            next.nodes[nodeIndex].id = localNodeData.id;
                           }
                           hasLabelBeenCommittedRef.current[selectedNodeId] = true;
                           if (next.metadata) {
@@ -667,8 +667,8 @@ export default function PropertiesPanel({
                           const nodeIndex = next.nodes.findIndex((n: any) => n.id === selectedNodeId);
                           if (nodeIndex >= 0) {
                             next.nodes[nodeIndex].label = localNodeData.label;
-                            if (!slugManuallyEdited && localNodeData.slug && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
-                              next.nodes[nodeIndex].slug = localNodeData.slug;
+                            if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
+                              next.nodes[nodeIndex].id = localNodeData.id;
                             }
                             hasLabelBeenCommittedRef.current[selectedNodeId] = true;
                             if (next.metadata) {
@@ -1267,16 +1267,16 @@ export default function PropertiesPanel({
               <div>
                 {/* SECTION 1: Basic Properties */}
                 <CollapsibleSection title="Basic Properties" icon={Settings} defaultOpen={true}>
-                  {/* Slug */}
+                  {/* ID */}
                   <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Slug</label>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>ID</label>
                   <input
-                    data-field="slug"
-                    value={localEdgeData.slug || ''}
-                    onChange={(e) => setLocalEdgeData({...localEdgeData, slug: e.target.value})}
-                    onBlur={() => updateEdge('slug', localEdgeData.slug)}
-                    onKeyDown={(e) => e.key === 'Enter' && updateEdge('slug', localEdgeData.slug)}
-                    placeholder="edge-slug"
+                    data-field="id"
+                    value={localEdgeData.id || ''}
+                    onChange={(e) => setLocalEdgeData({...localEdgeData, id: e.target.value})}
+                    onBlur={() => updateEdge('id', localEdgeData.id)}
+                    onKeyDown={(e) => e.key === 'Enter' && updateEdge('id', localEdgeData.id)}
+                    placeholder="edge-id"
                     style={{ 
                       width: '100%', 
                       padding: '8px', 

@@ -7,8 +7,8 @@ import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors'
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 
 interface ConversionEdgeData {
-  id: string;
-  slug?: string;
+  uuid: string;
+  id?: string;
   parameter_id?: string; // Connected parameter from registry (probability)
   cost_gbp_parameter_id?: string; // Connected parameter from registry (GBP cost)
   cost_time_parameter_id?: string; // Connected parameter from registry (time cost)
@@ -93,9 +93,9 @@ export default function ConversionEdge({
     
     const lines: string[] = [];
     
-    // Edge slug (more useful than UUID)
-    if (data.slug) {
-      lines.push(`Edge: ${data.slug}`);
+    // Edge id (more useful than UUID)
+    if (data.id) {
+      lines.push(`Edge: ${data.id}`);
     }
     
     // Probability info
@@ -126,7 +126,7 @@ export default function ConversionEdge({
       for (const cond of fullEdge.conditional_p) {
         const nodeNames = cond.condition.visited.map((nodeId: string) => {
           const node = graph?.nodes.find((n: any) => n.id === nodeId);
-          return node?.slug || node?.label || nodeId;
+          return node?.id || node?.label || nodeId;
         }).join(', ');
         const condProb = ((cond.p.mean ?? 0) * 100).toFixed(1);
         lines.push(`  • p | visited(${nodeNames}): ${condProb}%`);

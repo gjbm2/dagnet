@@ -21,7 +21,7 @@ This repository provides a JSON Schema (Draft 2020‑12) for versioned conversio
 - **Absorbing nodes**: `absorbing: true` (or zero outgoing edges) means terminal. Absorbing nodes must have **zero** outgoing edges; the runner rejects violations.
 - **Merge semantics**: Node entry probability is the sum of inbound flows (disjoint path assumption).
 - **Costs/time**: Optional, deterministic in v1; can live on node entry or edge traversal.
-- **IDs & names**: Each node/edge has immutable `id` (UUID) and editable `slug`. References may use either; the runner canonicalizes to `id`.
+- **IDs & names**: Each node/edge has immutable `id` (UUID) and editable `id`. References may use either; the runner canonicalizes to `id`.
 
 
 ## Files
