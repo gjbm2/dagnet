@@ -1582,7 +1582,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onDoubleClickNode: onDoubleClickNode,
       onDoubleClickEdge: onDoubleClickEdge,
       onSelectEdge: onSelectEdge,
-    });
+    }, useSankeyView);
     
     // Restore selection state
     let nodesWithSelection = newNodes.map(node => ({
@@ -4260,14 +4260,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }
         
         // d3-sankey gives us x0,y0 (top-left) coordinates
-        // Convert to center coordinates for our graph
-        const centerX = sankeyNode.x0 + (sankeyNode.x1 - sankeyNode.x0) / 2;
-        const centerY = sankeyNode.y0 + (sankeyNode.y1 - sankeyNode.y0) / 2;
+        // Store these as TOP-LEFT in graph.layout for Sankey mode
+        // toFlow will convert them to ReactFlow positions appropriately
+        const topLeftX = sankeyNode.x0;
+        const topLeftY = sankeyNode.y0;
         
-        console.log(`[Sankey Layout] Node ${graphNode.label}: OLD x=${graphNode.layout.x}, y=${graphNode.layout.y} → NEW x=${centerX.toFixed(0)}, y=${centerY.toFixed(0)}, sankeyNode.x0=${sankeyNode.x0}, sankeyNode.y0=${sankeyNode.y0}`);
+        // Also store the height so toFlow can compute center-to-topleft conversion
+        const sankeyHeight = sankeyNode.y1 - sankeyNode.y0;
+        if (!graphNode.data) graphNode.data = {};
+        graphNode.data.sankeyHeight = sankeyHeight;
         
-        graphNode.layout.x = centerX;
-        graphNode.layout.y = centerY;
+        console.log(`[Sankey Layout] Node ${graphNode.label}: OLD x=${graphNode.layout.x}, y=${graphNode.layout.y} → NEW x=${topLeftX.toFixed(0)}, y=${topLeftY.toFixed(0)} (top-left), height=${sankeyHeight.toFixed(0)}`);
+        
+        graphNode.layout.x = topLeftX;
+        graphNode.layout.y = topLeftY;
       }
     });
     

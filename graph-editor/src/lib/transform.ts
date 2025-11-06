@@ -1,12 +1,23 @@
 import type { Edge, Node } from 'reactflow';
 
-export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onEdgeUpdate?: (oldEdge: any, newConnection: any) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void }): { nodes: Node[]; edges: Edge[] } {
+export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onEdgeUpdate?: (oldEdge: any, newConnection: any) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void }, useSankeyView?: boolean): { nodes: Node[]; edges: Edge[] } {
   if (!graph) return { nodes: [], edges: [] };
   
-  const nodes: Node[] = (graph.nodes || []).map((n: any) => ({
+  const nodes: Node[] = (graph.nodes || []).map((n: any) => {
+    // In Sankey view, layout.x/y are already top-left coordinates from d3-sankey
+    // In normal view, layout.x/y are center coordinates
+    // ReactFlow expects top-left, so in Sankey mode we use them directly
+    let positionX = n.layout?.x ?? 0;
+    let positionY = n.layout?.y ?? 0;
+    
+    // No conversion needed for Sankey view - d3-sankey already gives us top-left
+    // (Note: in normal mode, we should ideally convert center to top-left too, but
+    // historically we've been passing center coords and it works because nodes center themselves)
+    
+    return {
     id: n.uuid,  // ReactFlow node ID uses the UUID
     type: 'conversion',
-    position: { x: n.layout?.x ?? 0, y: n.layout?.y ?? 0 },
+    position: { x: positionX, y: positionY },
     data: { 
       uuid: n.uuid,
       id: n.id,  // Human-readable ID (formerly "id")
@@ -22,7 +33,8 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       onDelete: callbacks?.onDeleteNode,
       onDoubleClick: callbacks?.onDoubleClickNode,
     },
-  }));
+  };
+  });
 
   const edges: Edge[] = (graph.edges || []).map((e: any) => {
     // Resolve e.from and e.to to UUIDs (they can be either UUID or human-readable ID)
