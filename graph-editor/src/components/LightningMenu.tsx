@@ -28,13 +28,17 @@ interface LightningMenuProps {
   objectId: string;
   hasFile: boolean;
   targetId?: string; // graph element ID (edge, node)
+  graph: any; // Tab-specific graph
+  setGraph: (graph: any) => void; // Tab-specific graph setter
 }
 
 export const LightningMenu: React.FC<LightningMenuProps> = ({
   objectType,
   objectId,
   hasFile,
-  targetId
+  targetId,
+  graph,
+  setGraph
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
@@ -73,22 +77,50 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   const handleGetFromFile = () => {
     setIsOpen(false);
     if (objectType === 'parameter') {
-      dataOperationsService.getParameterFromFile({ paramId: objectId, edgeId: targetId });
+      dataOperationsService.getParameterFromFile({ 
+        paramId: objectId, 
+        edgeId: targetId,
+        graph,
+        setGraph
+      });
     } else if (objectType === 'case') {
-      dataOperationsService.getCaseFromFile({ caseId: objectId, nodeId: targetId });
+      dataOperationsService.getCaseFromFile({ 
+        caseId: objectId, 
+        nodeId: targetId,
+        graph,
+        setGraph
+      });
     } else if (objectType === 'node') {
-      dataOperationsService.getNodeFromFile({ nodeId: objectId });
+      dataOperationsService.getNodeFromFile({ 
+        nodeId: objectId,
+        graph,
+        setGraph
+      });
     }
   };
   
   const handlePutToFile = () => {
     setIsOpen(false);
     if (objectType === 'parameter') {
-      dataOperationsService.putParameterToFile({ paramId: objectId, edgeId: targetId });
+      dataOperationsService.putParameterToFile({ 
+        paramId: objectId, 
+        edgeId: targetId,
+        graph,
+        setGraph
+      });
     } else if (objectType === 'case') {
-      dataOperationsService.putCaseToFile({ caseId: objectId, nodeId: targetId });
+      dataOperationsService.putCaseToFile({ 
+        caseId: objectId, 
+        nodeId: targetId,
+        graph,
+        setGraph
+      });
     } else if (objectType === 'node') {
-      dataOperationsService.putNodeToFile({ nodeId: objectId });
+      dataOperationsService.putNodeToFile({ 
+        nodeId: objectId,
+        graph,
+        setGraph
+      });
     }
   };
   

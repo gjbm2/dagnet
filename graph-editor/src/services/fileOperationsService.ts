@@ -732,6 +732,11 @@ class FileOperationsService {
     // Persist to IndexedDB
     await db.files.put(file);
     
+    // Fire custom event so Navigator and tab indicators can update
+    window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
+      detail: { fileId, isDirty: false } 
+    }));
+    
     // Notify listeners
     (fileRegistry as any).notifyListeners(fileId, file);
     

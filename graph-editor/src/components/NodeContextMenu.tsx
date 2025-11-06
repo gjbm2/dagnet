@@ -16,6 +16,8 @@ interface NodeContextMenuProps {
   nodes: any[];
   activeTabId: string | null;
   tabOperations: any;
+  graph: any; // Tab-specific graph
+  setGraph: (graph: any) => void; // Tab-specific graph setter
   onClose: () => void;
   onSelectNode: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
@@ -29,6 +31,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   nodes,
   activeTabId,
   tabOperations,
+  graph,
+  setGraph,
   onClose,
   onSelectNode,
   onDeleteNode,
@@ -53,28 +57,46 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
 
   const handleGetNodeFromFile = () => {
     if (nodeData?.id) {
-      dataOperationsService.getNodeFromFile({ nodeId: nodeData.id });
+      dataOperationsService.getNodeFromFile({ 
+        nodeId: nodeData.id,
+        graph,
+        setGraph
+      });
     }
     onClose();
   };
 
   const handlePutNodeToFile = () => {
     if (nodeData?.id) {
-      dataOperationsService.putNodeToFile({ nodeId: nodeData.id });
+      dataOperationsService.putNodeToFile({ 
+        nodeId: nodeData.id,
+        graph,
+        setGraph
+      });
     }
     onClose();
   };
 
   const handleGetCaseFromFile = () => {
     if (nodeData?.case?.id) {
-      dataOperationsService.getCaseFromFile({ caseId: nodeData.case.id, nodeId });
+      dataOperationsService.getCaseFromFile({ 
+        caseId: nodeData.case.id, 
+        nodeId,
+        graph,
+        setGraph
+      });
     }
     onClose();
   };
 
   const handlePutCaseToFile = () => {
     if (nodeData?.case?.id) {
-      dataOperationsService.putCaseToFile({ caseId: nodeData.case.id, nodeId });
+      dataOperationsService.putCaseToFile({ 
+        caseId: nodeData.case.id, 
+        nodeId,
+        graph,
+        setGraph
+      });
     }
     onClose();
   };

@@ -1,8 +1,9 @@
-# Phase 1: Properties Panel Schema Alignment Audit
+# Phase 1D: Properties Panel Schema Alignment & Data Model Display
 
 **Date:** 2025-11-05  
-**Purpose:** Audit current edge and node properties panels to ensure full alignment with Phase 0 schema changes  
-**Status:** Pre-implementation audit
+**Updated:** 2025-11-06  
+**Purpose:** Update properties panel to reflect Phase 0 schema changes AND properly display data model hierarchy  
+**Status:** Implementation required
 
 ---
 
@@ -14,6 +15,14 @@ The graph schema was updated in Phase 0 with several breaking changes:
 - `edge.label` and `edge.label_overridden` addition
 - `node.event_id` addition
 - Various `_overridden` flags throughout
+
+**CRITICAL ADDITION (2025-11-06):**
+The properties panel must clearly distinguish between different layers of metadata:
+- **Graph object metadata** (node.label, edge.label, etc.) - editable, owned by graph
+- **Connected file metadata** (parameter.name, case.name, etc.) - read-only display for context
+- **Synced data values** (edge.p.mean, node.case.variants, etc.) - editable, with override flags
+
+**See:** [DATA_MODEL_HIERARCHY.md](./DATA_MODEL_HIERARCHY.md) for complete data model documentation.
 
 This audit identifies all locations in PropertiesPanel that need to be updated to reflect these changes.
 

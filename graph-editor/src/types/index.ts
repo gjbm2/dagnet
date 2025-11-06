@@ -312,76 +312,180 @@ export interface EditorProps<T = any> {
   viewMode: ViewMode;
 }
 
-/**
- * Graph data structure (matches schema/conversion-graph-1.0.0.json)
- */
-export interface GraphData {
-  nodes: Array<{
-    uuid: string;            // System-generated UUID
-    id: string;              // Human-readable identifier (formerly "id")
-    label?: string;
-    description?: string;
-    tags?: string[];
-    type?: 'normal' | 'case';
-    absorbing?: boolean;
-    outcome_type?: 'success' | 'failure' | 'error' | 'neutral' | 'other';
-    entry?: any;
-    costs?: any;
-    residual_behavior?: any;
-    layout?: {
-      x: number;
-      y: number;
-      color?: string;
-    };
-    case?: any;
-  }>;
-  edges: Array<{
-    uuid: string;            // System-generated UUID
-    id?: string;             // Human-readable identifier (formerly "id")
-    from: string;
-    to: string;
-    fromHandle?: string;
-    toHandle?: string;
-    description?: string;
-    p?: {
-      mean?: number;
-      stdev?: number;
-      locked?: boolean;
-      parameter_id?: string;
-      distribution?: 'normal' | 'beta' | 'uniform';
-    };
-    conditional_p?: Array<{
-      condition: {
-        visited: string[];
-      };
-      p: {
-        mean?: number;
-        stdev?: number;
-        locked?: boolean;
-        parameter_id?: string;
-        distribution?: 'normal' | 'beta' | 'uniform';
-      };
-    }>;
-    weight_default?: number;
-    costs?: any;
-    case_variant?: string;
-    case_id?: string;
-    display?: {
-      conditional_color?: string;
-      conditional_group?: string;
-    };
-  }>;
-  policies?: {
-    default_outcome: string;
-    overflow_policy?: 'error' | 'normalize' | 'cap';
-    free_edge_policy?: 'complement' | 'uniform' | 'weighted';
+// ============================================================================
+// GRAPH SCHEMA TYPES (aligned with schema/conversion-graph-1.0.0.json)
+// ============================================================================
+
+export type UUID = string;
+export type HumanId = string; // Human-readable identifier
+export type OutcomeType = 'success' | 'failure' | 'error' | 'neutral' | 'other';
+export type NodeType = 'normal' | 'case';
+export type CaseStatus = 'active' | 'paused' | 'completed';
+export type OverflowPolicy = 'error' | 'normalize' | 'cap';
+export type FreeEdgePolicy = 'complement' | 'uniform' | 'weighted';
+
+export interface ProbabilityParam {
+  mean?: number; // [0,1]
+  stdev?: number; // >= 0
+  locked?: boolean; // DEPRECATED: use mean_overridden instead
+  id?: string; // Reference to parameter file (FK to parameter-{id}.yaml)
+  distribution?: 'normal' | 'beta' | 'uniform';
+}
+
+export interface CostParam {
+  mean?: number; // >= 0
+  stdev?: number; // >= 0
+  id?: string; // Reference to cost parameter file (FK to parameter-{id}.yaml)
+  distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform' | 'beta';
+}
+
+export interface Condition {
+  visited: string[]; // Array of node IDs that must be visited
+}
+
+export interface ConditionalProbability {
+  condition: Condition;
+  p: ProbabilityParam; // Probability when condition is satisfied
+}
+
+export interface MonetaryCost {
+  value: number; // >= 0
+  stdev?: number; // >= 0
+  distribution?: string;
+  currency?: string; // e.g., "USD", "GBP", "EUR"
+}
+
+export interface TimeCost {
+  value: number; // >= 0
+  stdev?: number; // >= 0
+  distribution?: string;
+  units?: string; // e.g., "days", "hours", "weeks"
+}
+
+export interface Costs {
+  monetary?: MonetaryCost | number;
+  time?: TimeCost | number;
+  units?: string; // Deprecated: for backward compatibility
+}
+
+export interface ResidualBehavior {
+  default_outcome?: string;
+  overflow_policy?: OverflowPolicy;
+}
+
+export interface NodeLayout {
+  x?: number;
+  y?: number;
+  rank?: number; // >= 0
+  group?: string; // <= 128 chars
+  color?: string; // hex color
+}
+
+export interface NodeEntry {
+  is_start?: boolean;
+  entry_weight?: number; // >= 0
+}
+
+export interface CaseVariant {
+  name: string;
+  weight: number; // [0,1], must sum to 1.0 for all variants in case
+  description?: string;
+}
+
+export interface GraphNode {
+  uuid: UUID;       // System-generated UUID
+  id: HumanId;      // Human-readable identifier
+  label?: string;
+  description?: string;
+  tags?: string[];
+  type?: NodeType; // default 'normal'
+  absorbing?: boolean; // default false
+  outcome_type?: OutcomeType;
+  entry?: NodeEntry;
+  costs?: Costs;
+  residual_behavior?: ResidualBehavior;
+  layout?: NodeLayout;
+  case?: {
+    id: string; // Reference to case file (FK to case-{id}.yaml)
+    status: CaseStatus;
+    variants: CaseVariant[];
   };
-  metadata?: {
-    version: string;
-    created_at: string;
-    updated_at?: string;
-    [key: string]: any;
-  };
+}
+
+export interface EdgeDisplay {
+  conditional_color?: string;
+  conditional_group?: string;
+}
+
+export interface GraphEdge {
+  uuid: UUID;           // System-generated UUID
+  id?: HumanId;         // Human-readable identifier
+  from: string;         // node uuid
+  to: string;           // node uuid
+  fromHandle?: string;
+  toHandle?: string;
+  description?: string;
+  p?: ProbabilityParam; // Base probability (fallback when no conditions match)
+  conditional_p?: ConditionalProbability[];
+  weight_default?: number; // >= 0
+  cost_gbp?: CostParam; // Cost in GBP
+  cost_time?: CostParam; // Cost in time (e.g., days)
+  costs?: Costs; // DEPRECATED: old format, use cost_gbp/cost_time instead
+  case_variant?: string;
+  case_id?: string;
+  display?: EdgeDisplay;
+}
+
+export interface Policies {
+  default_outcome: string;
+  overflow_policy?: OverflowPolicy;
+  free_edge_policy?: FreeEdgePolicy;
+}
+
+export interface Metadata {
+  version: string; // semver
+  created_at: string; // ISO datetime
+  updated_at?: string;
+  author?: string;
+  description?: string;
+  tags?: string[];
+}
+
+export interface ConversionGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  policies: Policies;
+  metadata: Metadata;
+}
+
+export type Graph = ConversionGraph;
+export type GraphData = ConversionGraph; // Alias for backward compatibility
+
+export interface WhatIfState {
+  caseOverrides: Map<string, string>;
+  conditionalOverrides: Map<string, Set<string>>;
+}
+
+export interface ValidationError {
+  type: 'probability_sum' | 'invalid_reference' | 'circular_dependency' | 'missing_node';
+  nodeId?: string;
+  edgeId?: string;
+  condition?: string;
+  message: string;
+  sum?: number;
+}
+
+export interface ValidationWarning {
+  type: 'incomplete_conditions' | 'inconsistent_siblings';
+  nodeId?: string;
+  edgeId?: string;
+  message: string;
+}
+
+export interface ValidationResult {
+  errors: ValidationError[];
+  warnings: ValidationWarning[];
+  isValid: boolean;
 }
 
 /**
@@ -408,9 +512,11 @@ export interface ContextData {
 }
 
 /**
- * Case data structure (existing)
+ * Case data structure (registry file format)
+ * NOTE: This is the REGISTRY file format (case-{id}.yaml), NOT the inline graph case data!
+ * For inline graph case data, see GraphNode.case property above.
  */
-export interface CaseData {
+export interface CaseRegistryData {
   id: string;
   name: string;
   description?: string;

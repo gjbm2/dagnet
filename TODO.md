@@ -21,6 +21,10 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
 - Need to think about conditional probability groups -- whether we need to nudge user to update param files together...? How to have *depedent* probabilities? maybe just dust off notion of policy again -- i.e. discard any unanchored probability, OR "collect residual" edge param?? Point being we won't always get failure states from Amplitude (there WAS no event that corresponded with abandonment a lot of the time, so we need to infer failure states from absence of success state within X mins/days)
 
 ### High Priority
+- move edge labels onto edge [left aligned] (cleaner) and out of a bubble; deprecate bubbles!
+- handling 'dead limb' probabiltiies e.g. no data available, can we infer 1-sibling.p
+- node moves not always persisting properly post-Sankey
+- Sankey auto-layout glitching
 - fix tools panel view options (Again)
 - Amplitude, Google sheets pull through params
 - Context support
@@ -46,6 +50,7 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
   - See: Phase 0.3 discussion on flexible data handling
 
 ### Medium Priority
+- edge descriptions should be on "outside" of sankey sequence
 - Edit > Undo broken; add Undo to right click context menus on graph (standardise context menu implmenetations)
 - generalise props panel implementation
 - Date windows in viewer
@@ -74,6 +79,9 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
   - Drag to move
   - We should extend graph schema to accommodate.
   - These are not data objects -- only displayed not used for calculation, of course
+- 1. Stale tabs get stuck in 'Loading...' state; cannot remove them 
+ 
+
 ### Low Priority
 - main app tabs are showing maximise button even when they're maximised, it seems
 - maxmised tabs are appearing on top (zorder) of navigator button (incorrect)

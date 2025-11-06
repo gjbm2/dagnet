@@ -57,9 +57,9 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     data: {
       uuid: e.uuid || `${e.from}->${e.to}`,
       id: e.id,  // Human-readable ID (formerly "id")
-      parameter_id: e.parameter_id, // Probability parameter ID
-      cost_gbp_parameter_id: e.cost_gbp_parameter_id, // GBP cost parameter ID
-      cost_time_parameter_id: e.cost_time_parameter_id, // Time cost parameter ID
+      parameter_id: e.p?.id || e.parameter_id, // Probability parameter ID (prefer nested p.id, fallback to flat for backwards compat)
+      cost_gbp_parameter_id: e.cost_gbp?.id || e.cost_gbp_parameter_id, // GBP cost parameter ID
+      cost_time_parameter_id: e.cost_time?.id || e.cost_time_parameter_id, // Time cost parameter ID
       probability: e.p?.mean ?? 0.5,
       stdev: e.p?.stdev,
       locked: e.p?.locked,
@@ -121,6 +121,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         fromHandle: e.sourceHandle,
         toHandle: e.targetHandle,
         p: { 
+          ...originalEdge?.p,  // Preserve ALL p fields (id, distribution, evidence, etc.)
           mean: e.data?.probability ?? 0.5,
           stdev: e.data?.stdev,
           locked: e.data?.locked,

@@ -56,7 +56,6 @@ export default function PropertiesPanel({
   const [nodeType, setNodeType] = useState<'normal' | 'case'>('normal');
   const [caseData, setCaseData] = useState({
     id: '',
-    parameter_id: '',
     status: 'active' as 'active' | 'paused' | 'completed',
     variants: [] as Array<{ name: string; weight: number }>
   });
@@ -147,7 +146,6 @@ export default function PropertiesPanel({
             setNodeType('case');
             setCaseData({
               id: node.case.id || '',
-              parameter_id: node.case.parameter_id || '',
               status: node.case.status || 'active',
               variants: node.case.variants || []
             });
@@ -156,7 +154,6 @@ export default function PropertiesPanel({
             setNodeType('normal');
             setCaseData({
               id: '',
-              parameter_id: '',
               status: 'active',
               variants: []
             });
@@ -209,7 +206,6 @@ export default function PropertiesPanel({
           setNodeType('case');
           setCaseData({
             id: node.case.id || '',
-            parameter_id: node.case.parameter_id || '',
             status: node.case.status || 'active',
             variants: node.case.variants || []
           });
@@ -217,7 +213,6 @@ export default function PropertiesPanel({
           setNodeType('normal');
           setCaseData({
             id: '',
-            parameter_id: '',
             status: 'active',
             variants: []
           });
@@ -233,15 +228,13 @@ export default function PropertiesPanel({
       // Only reload if we're switching to a different edge
       if (lastLoadedEdgeRef.current !== selectedEdgeId) {
         const edge = graph.edges.find((e: any) => 
-          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+          e.uuid === selectedEdgeId || e.id === selectedEdgeId
         );
         if (edge) {
           console.log('PropertiesPanel: Loading edge data:', {
             edgeId: selectedEdgeId,
-            cost_gbp: (edge as any).cost_gbp,
-            cost_time: (edge as any).cost_time,
-            cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id,
-            cost_time_parameter_id: (edge as any).cost_time_parameter_id
+            cost_gbp: edge.cost_gbp,
+            cost_time: edge.cost_time
           });
           
           const edgeCostGbp = (edge as any).cost_gbp;
@@ -254,9 +247,6 @@ export default function PropertiesPanel({
           
           setLocalEdgeData({
             id: edge.id || '',
-            parameter_id: (edge as any).parameter_id || '',
-            cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
-            cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
             probability: edge.p?.mean || 0,
             stdev: edge.p?.stdev || undefined,
             description: edge.description || '',
@@ -315,75 +305,6 @@ export default function PropertiesPanel({
     }
   }, [localNodeData.label, selectedNodeId, graph, idManuallyEdited]);
   
-  useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP4: Reload edge on graph change`);
-    if (selectedEdgeId && graph) {
-      // Reload if we're switching to a different edge OR if the graph has changed
-      if (lastLoadedEdgeRef.current !== selectedEdgeId) {
-        const edge = graph.edges.find((e: any) => 
-          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-        );
-        if (edge) {
-          console.log('PropertiesPanel: Loading case edge data:', {
-            edgeId: selectedEdgeId,
-            cost_gbp: (edge as any).cost_gbp,
-            cost_time: (edge as any).cost_time
-          });
-          
-          setLocalEdgeData({
-            id: edge.id || '',
-            parameter_id: (edge as any).parameter_id || '',
-            cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
-            cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
-            probability: edge.p?.mean || 0,
-            stdev: edge.p?.stdev,
-            locked: edge.p?.locked || false,
-            description: edge.description || '',
-            cost_gbp: (edge as any).cost_gbp,
-            cost_time: (edge as any).cost_time,
-            costs: edge.costs || {},
-            weight_default: edge.weight_default || 0,
-            display: edge.display || {}
-          });
-          lastLoadedEdgeRef.current = selectedEdgeId;
-        }
-      } else {
-        // Same edge selected but graph changed - reload the data
-        const edge = graph.edges.find((e: any) => 
-          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-        );
-        if (edge) {
-          console.log('PropertiesPanel: Reloading edge data (graph changed):', {
-            edgeId: selectedEdgeId,
-            cost_gbp: (edge as any).cost_gbp,
-            cost_time: (edge as any).cost_time
-          });
-          
-          setLocalEdgeData({
-            id: edge.id || '',
-            parameter_id: (edge as any).parameter_id || '',
-            cost_gbp_parameter_id: (edge as any).cost_gbp_parameter_id || '',
-            cost_time_parameter_id: (edge as any).cost_time_parameter_id || '',
-            probability: edge.p?.mean || 0,
-            stdev: edge.p?.stdev,
-            locked: edge.p?.locked || false,
-            description: edge.description || '',
-            cost_gbp: (edge as any).cost_gbp,
-            cost_time: (edge as any).cost_time,
-            costs: edge.costs || {},
-            weight_default: edge.weight_default || 0,
-            display: edge.display || {}
-          });
-          // Also update conditional probabilities when graph changes (e.g., from auto-rebalance)
-          setLocalConditionalP(edge.conditional_p || []);
-        }
-      }
-    } else if (!selectedEdgeId) {
-      // Clear the ref when no edge is selected
-      lastLoadedEdgeRef.current = null;
-    }
-  }, [selectedEdgeId, graph]);
-
   // Handle keyboard shortcuts
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP5: Setup keyboard shortcuts`);
@@ -568,6 +489,7 @@ export default function PropertiesPanel({
                   type="node"
                   value={localNodeData.id || ''}
                   autoFocus={!localNodeData.id}
+                  targetInstanceUuid={selectedNodeId}
                   onChange={(newId) => {
                     console.log('PropertiesPanel: EnhancedSelector onChange:', { newId: newId, currentId: localNodeData.id });
                     
@@ -811,7 +733,6 @@ export default function PropertiesPanel({
                       setNodeType('case');
                       const newCaseData = caseData.variants.length === 0 ? {
                         id: `case_${Date.now()}`,
-                        parameter_id: '',
                         status: 'active' as 'active' | 'paused' | 'completed',
                         variants: [
                           { name: 'control', weight: 0.5 },
@@ -827,7 +748,6 @@ export default function PropertiesPanel({
                           next.nodes[nodeIndex].type = 'case';
                           next.nodes[nodeIndex].case = {
                             id: newCaseData.id,
-                            parameter_id: newCaseData.parameter_id,
                             status: newCaseData.status,
                             variants: newCaseData.variants
                           };
@@ -847,7 +767,6 @@ export default function PropertiesPanel({
                       setNodeType('normal');
                       setCaseData({
                         id: '',
-                        parameter_id: '',
                         status: 'active',
                         variants: []
                       });
@@ -872,6 +791,7 @@ export default function PropertiesPanel({
                     <EnhancedSelector
                       type="case"
                       value={caseData.id}
+                      targetInstanceUuid={selectedNodeId}
                       onChange={(newCaseId) => {
                         setCaseData({...caseData, id: newCaseId});
                         if (graph && selectedNodeId) {
@@ -915,7 +835,6 @@ export default function PropertiesPanel({
                             // Pull case configuration from registry
                             const newCaseData = {
                               id: caseData.id,
-                              parameter_id: caseData.parameter_id,
                               status: caseRegistryData.status || caseData.status,
                               variants: caseRegistryData.variants || caseData.variants
                             };
@@ -1350,17 +1269,39 @@ export default function PropertiesPanel({
                 <EnhancedSelector
                   type="parameter"
                   parameterType="probability"
-                  value={(selectedEdge as any)?.parameter_id || ''}
-                  autoFocus={!(selectedEdge as any)?.parameter_id && !selectedEdge?.p?.mean}
+                  value={selectedEdge?.p?.id || ''}
+                  autoFocus={!selectedEdge?.p?.id && !selectedEdge?.p?.mean}
+                  targetInstanceUuid={selectedEdgeId}
                   onChange={(newParamId) => {
-                    console.log('PropertiesPanel: EnhancedSelector onChange:', { newParamId });
-                    updateEdge('parameter_id', newParamId || undefined);
+                    console.log('PropertiesPanel: EnhancedSelector onChange:', { newParamId, selectedEdgeId });
+                    // Set edge.p.id (not flat edge.parameter_id)
+                    if (!graph || !selectedEdgeId) return;
+                    const next = structuredClone(graph);
+                    const edgeIndex = next.edges.findIndex((e: any) => 
+                      e.uuid === selectedEdgeId || e.id === selectedEdgeId
+                    );
+                    console.log('PropertiesPanel: Edge lookup:', { edgeIndex, foundEdge: edgeIndex >= 0 ? next.edges[edgeIndex].uuid : null });
+                    if (edgeIndex >= 0) {
+                      if (!next.edges[edgeIndex].p) next.edges[edgeIndex].p = {};
+                      next.edges[edgeIndex].p.id = newParamId || undefined;
+                      console.log('PropertiesPanel: SET p.id:', { 
+                        'edge.p': JSON.stringify(next.edges[edgeIndex].p),
+                        'newParamId': newParamId
+                      });
+                      if (next.metadata) {
+                        next.metadata.updated_at = new Date().toISOString();
+                      }
+                      setGraph(next);
+                      saveHistoryState('Update edge parameter_id', undefined, selectedEdgeId || undefined);
+                    } else {
+                      console.error('PropertiesPanel: Edge NOT FOUND!', { selectedEdgeId, edgeCount: next.edges.length });
+                    }
                   }}
                       onClear={() => {
                         // No need to save history - onChange already does it via updateEdge
                   }}
                   onPullFromRegistry={async () => {
-                    const currentParamId = (selectedEdge as any)?.parameter_id;
+                    const currentParamId = selectedEdge?.p?.id;
                     if (!currentParamId || !graph || !selectedEdgeId) return;
                     
                     try {
@@ -1409,7 +1350,7 @@ export default function PropertiesPanel({
                     console.log('Push to registry not yet implemented');
                   }}
                   onOpenConnected={() => {
-                    const paramId = (selectedEdge as any)?.parameter_id;
+                    const paramId = selectedEdge?.p?.id;
                     if (paramId) {
                       openFileById('parameter', paramId);
                     }
@@ -1422,7 +1363,7 @@ export default function PropertiesPanel({
                 />
 
                 {/* Query Expression Editor - for data retrieval constraints */}
-                {(selectedEdge as any)?.parameter_id && (
+                {selectedEdge?.p?.id && (
                   <div style={{ marginTop: '16px', marginBottom: '16px' }}>
                     <label style={{ 
                       display: 'flex', 
@@ -1634,19 +1575,34 @@ export default function PropertiesPanel({
                   </CollapsibleSection>
 
                   {/* SUB-SECTION 2.2: Cost (£) */}
-                  <CollapsibleSection title="Cost (£)" icon={Coins} defaultOpen={!!(localEdgeData.cost_gbp?.mean || localEdgeData.cost_gbp_parameter_id)}>
+                  <CollapsibleSection title="Cost (£)" icon={Coins} defaultOpen={!!(selectedEdge?.cost_gbp?.mean || selectedEdge?.cost_gbp?.id)}>
                   <EnhancedSelector
                     type="parameter"
                     parameterType="cost_gbp"
-                    value={(selectedEdge as any)?.cost_gbp_parameter_id || ''}
+                    value={selectedEdge?.cost_gbp?.id || ''}
+                    targetInstanceUuid={selectedEdgeId}
                     onChange={(newParamId) => {
-                      updateEdge('cost_gbp_parameter_id', newParamId || undefined);
+                      // Set edge.cost_gbp.id (not flat edge.cost_gbp_parameter_id)
+                      if (!graph || !selectedEdgeId) return;
+                      const next = structuredClone(graph);
+                      const edgeIndex = next.edges.findIndex((e: any) => 
+                        e.uuid === selectedEdgeId || e.id === selectedEdgeId
+                      );
+                      if (edgeIndex >= 0) {
+                        if (!next.edges[edgeIndex].cost_gbp) next.edges[edgeIndex].cost_gbp = {};
+                        next.edges[edgeIndex].cost_gbp.id = newParamId || undefined;
+                        if (next.metadata) {
+                          next.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(next);
+                        saveHistoryState('Update edge cost_gbp parameter', undefined, selectedEdgeId || undefined);
+                      }
                     }}
                       onClear={() => {
                         // No need to save history - onChange already does it via updateEdge
                     }}
                     onPullFromRegistry={async () => {
-                      const currentParamId = (selectedEdge as any)?.cost_gbp_parameter_id;
+                      const currentParamId = selectedEdge?.cost_gbp?.id;
                       if (!currentParamId || !graph || !selectedEdgeId) return;
                       
                       try {
@@ -1701,7 +1657,7 @@ export default function PropertiesPanel({
                       console.log('Push to registry not yet implemented');
                     }}
                       onOpenConnected={() => {
-                        const paramId = (selectedEdge as any)?.cost_gbp_parameter_id;
+                        const paramId = selectedEdge?.cost_gbp?.id;
                         if (paramId) {
                           openFileById('parameter', paramId);
                         }
@@ -1845,19 +1801,34 @@ export default function PropertiesPanel({
                   </CollapsibleSection>
                   
                   {/* SUB-SECTION 2.3: Cost (Time) */}
-                  <CollapsibleSection title="Cost (Time)" icon={Clock} defaultOpen={!!(localEdgeData.cost_time?.mean || localEdgeData.cost_time_parameter_id)}>
+                  <CollapsibleSection title="Cost (Time)" icon={Clock} defaultOpen={!!(selectedEdge?.cost_time?.mean || selectedEdge?.cost_time?.id)}>
                   <EnhancedSelector
                     type="parameter"
                     parameterType="cost_time"
-                    value={(selectedEdge as any)?.cost_time_parameter_id || ''}
+                    value={selectedEdge?.cost_time?.id || ''}
+                    targetInstanceUuid={selectedEdgeId}
                     onChange={(newParamId) => {
-                      updateEdge('cost_time_parameter_id', newParamId || undefined);
+                      // Set edge.cost_time.id (not flat edge.cost_time_parameter_id)
+                      if (!graph || !selectedEdgeId) return;
+                      const next = structuredClone(graph);
+                      const edgeIndex = next.edges.findIndex((e: any) => 
+                        e.uuid === selectedEdgeId || e.id === selectedEdgeId
+                      );
+                      if (edgeIndex >= 0) {
+                        if (!next.edges[edgeIndex].cost_time) next.edges[edgeIndex].cost_time = {};
+                        next.edges[edgeIndex].cost_time.id = newParamId || undefined;
+                        if (next.metadata) {
+                          next.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(next);
+                        saveHistoryState('Update edge cost_time parameter', undefined, selectedEdgeId || undefined);
+                      }
                     }}
                       onClear={() => {
                         // No need to save history - onChange already does it via updateEdge
                     }}
                     onPullFromRegistry={async () => {
-                      const currentParamId = (selectedEdge as any)?.cost_time_parameter_id;
+                      const currentParamId = selectedEdge?.cost_time?.id;
                       if (!currentParamId || !graph || !selectedEdgeId) return;
                       
                       try {
@@ -1912,7 +1883,7 @@ export default function PropertiesPanel({
                       console.log('Push to registry not yet implemented');
                     }}
                       onOpenConnected={() => {
-                        const paramId = (selectedEdge as any)?.cost_time_parameter_id;
+                        const paramId = selectedEdge?.cost_time?.id;
                         if (paramId) {
                           openFileById('parameter', paramId);
                         }
@@ -2394,12 +2365,12 @@ export default function PropertiesPanel({
                               <EnhancedSelector
                                 type="parameter"
                                 parameterType="probability"
-                                value={cond.p?.parameter_id || ''}
+                                value={cond.p?.id || ''}
                                 onChange={(paramId) => {
                                   const newConditions = [...localConditionalP];
                                   newConditions[index] = {
                                     ...newConditions[index],
-                                    p: { ...newConditions[index].p, parameter_id: paramId || undefined }
+                                    p: { ...newConditions[index].p, id: paramId || undefined }
                                   };
                                   setLocalConditionalP(newConditions);
                                   
@@ -2422,7 +2393,7 @@ export default function PropertiesPanel({
                                   // No need to save history - onChange already does it
                                 }}
                                 onPullFromRegistry={async () => {
-                                  const currentParamId = cond.p?.parameter_id;
+                                  const currentParamId = cond.p?.id;
                                   if (!currentParamId || !graph || !selectedEdgeId) return;
                                   
                                   try {
@@ -2476,7 +2447,7 @@ export default function PropertiesPanel({
                                   console.log('Push to registry not yet implemented');
                                 }}
                                 onOpenConnected={() => {
-                                  const paramId = cond.p?.parameter_id;
+                                  const paramId = cond.p?.id;
                                   if (paramId) {
                                     openFileById('parameter', paramId);
                                   }
