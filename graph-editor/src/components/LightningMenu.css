@@ -1,0 +1,109 @@
+/**
+ * Lightning Menu Styles
+ * 
+ * Compact dropdown menu for data operations.
+ * Uses pathway visualizations for clarity.
+ */
+
+.lightning-menu-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-secondary, #666);
+  transition: all 0.15s ease;
+}
+
+.lightning-menu-button:hover {
+  background: var(--bg-hover, #f5f5f5);
+  color: var(--primary, #0066cc);
+}
+
+.lightning-menu-button:active {
+  transform: scale(0.95);
+}
+
+.lightning-menu-dropdown {
+  min-width: 240px;
+  background: white;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 10000;
+  padding: 4px 0;
+}
+
+.lightning-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #333);
+  transition: background 0.1s ease;
+  white-space: nowrap;
+}
+
+.lightning-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover, #f5f5f5);
+}
+
+.lightning-menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.lightning-menu-item-pathway {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-secondary, #666);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.lightning-menu-pathway {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary, #999);
+  padding: 0 1px;
+}
+
+.lightning-menu-divider {
+  height: 1px;
+  background: var(--border, #ddd);
+  margin: 4px 0;
+}
+
+/* Dark mode support (optional) */
+@media (prefers-color-scheme: dark) {
+  .lightning-menu-dropdown {
+    background: #2a2a2a;
+    border-color: #444;
+  }
+  
+  .lightning-menu-item {
+    color: #ddd;
+  }
+  
+  .lightning-menu-item:hover:not(:disabled) {
+    background: #333;
+  }
+  
+  .lightning-menu-divider {
+    background: #444;
+  }
+}
+

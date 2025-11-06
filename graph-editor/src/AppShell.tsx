@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import DockLayout, { LayoutData } from 'rc-dock';
 import YAML from 'yaml';
+import { Toaster } from 'react-hot-toast';
 import { TabProvider, useTabContext, fileRegistry } from './contexts/TabContext';
 import { NavigatorProvider, useNavigatorContext } from './contexts/NavigatorContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext';
@@ -1264,6 +1265,29 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
+      <Toaster 
+        position="bottom-center"
+        toastOptions={{
+          duration: 3000,
+          style: {
+            background: '#363636',
+            color: '#fff',
+            fontSize: '14px',
+          },
+          success: {
+            iconTheme: {
+              primary: '#10b981',
+              secondary: '#fff',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: '#ef4444',
+              secondary: '#fff',
+            },
+          },
+        }}
+      />
       <DialogProvider>
         <ValidationProvider>
           <TabProvider>

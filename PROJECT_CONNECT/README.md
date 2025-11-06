@@ -1,13 +1,13 @@
 # PROJECT CONNECT: Data Connections System
 
-**Phase:** 0.3 (Phase 0.0 & 0.1 Complete, Ready for UpdateManager)  
+**Phase:** 1B (Phase 0 Complete, Phase 1 UI in progress)  
 **Start Date:** 2025-11-05  
-**Status:** 🟢 Phase 0.0 & 0.1 ✅ COMPLETE
+**Status:** 🟡 Phase 1 - 70% Complete (UI done, wiring pending)
 
 This directory contains all design documentation for the Data Connections system implementation.
 
 **📁 Directory Structure:**
-- `/CURRENT/` - Active docs for Phase 0 implementation (use these!)
+- `/CURRENT/` - Active docs for Phase 1 implementation (use these!)
 - `/REFERENCE/` - Background context, superseded but useful
 - `/ARCHIVE/` - October 2025 docs, completely stale
 
@@ -17,71 +17,69 @@ This directory contains all design documentation for the Data Connections system
 
 ## 🎯 Current Status
 
-**Phase 0.0 Complete (Nov 5, 2025):**
-- ✅ ID/Slug standardization refactor complete
-- ✅ All TypeScript errors fixed (0 errors)
-- ✅ Migration script created
-- ✅ Documentation: `PHASE_0.0_COMPLETE.md`
-- ✅ "slug" completely purged from codebase
+**Phase 0 Complete (Nov 5, 2025):** ✅
+- ID/Slug standardization refactor
+- All schemas updated & validated
+- UpdateManager built & tested (960+ lines, 20/20 tests passing)
+- Fresh sample files created (19 files)
+- Events infrastructure added
 
-**Phase 0.1 Complete (Nov 5, 2025):**
-- ✅ Gate 1: All schemas updated (7 schema files)
-- ✅ Gate 2: Field mappings validated (8 critical fixes)
-- ✅ Conditional probability design documented
-- ✅ Test files migrated to new schema
-- ✅ Documentation: `PHASE_0.1_COMPLETE.md` and `GATE_2_VALIDATION_RESULTS.md`
+**Phase 1A Complete (Nov 5, 2025):** ✅
+- Events implementation (Navigator, EnhancedSelector, file operations)
+- Yellow Calendar icon theme
+- 0 linter errors
 
-**Phase 0.3 Complete (Nov 5, 2025):** ✨
-- ✅ UpdateManager implementation (960+ lines, 18 mapping configs)
-- ✅ Testing infrastructure setup (Vitest, CI/CD, coverage)
-- ✅ Test suite: 20/20 core tests passing (2 skipped)
-- ✅ Gate 3: PASSED
-- ✅ Documentation: `PHASE_0.3_COMPLETE.md`
+**Phase 1B In Progress (Nov 6, 2025):** 🟡
+- ✅ Lightning Menu component (React Portal, z-index fixed)
+- ✅ Node & Edge Context Menus extracted (submenu pattern)
+- ✅ DataOperationsService created (centralized orchestration)
+- ✅ Toast notifications integrated (bottom-center)
+- ✅ Fixed hide/show node (UUID mismatch)
+- ✅ Fixed delete node from context menu
+- ⏳ **NEXT:** Wire services to UpdateManager (3-4 hrs)
 
-**Phase 0.4 Complete (Nov 5, 2025):** ✨
-- ✅ 19 fresh sample files in `/param-registry/test/`
-- ✅ 3 events (NEW: page-view, add-to-cart, checkout-complete)
-- ✅ 5 nodes (with event_id references)
-- ✅ 3 parameters (probability, cost, duration examples)
-- ✅ 2 cases (A/B test scenarios)
-- ✅ 2 contexts (device-type, traffic-source)
-- ✅ All index files updated
-- ✅ All samples follow new Phase 0.1 schemas
-
-**🎉 PHASE 0 COMPLETE!** Ready for Phase 1 (Feature Implementation)
+**Remaining Phase 1 Work:** ~12-15 hours
+- 1B: Wire services to UpdateManager
+- 1C: Top Menu "Data" (batch operations)
+- 1D: Properties Panel updates (event_id, override indicators, evidence display)
+- 1E: Connection Settings UI (needs design)
 
 ---
 
-## 📋 Core Documents (READ THESE FIRST)
+## 📋 Core Documents (START HERE)
 
 All paths relative to `/PROJECT_CONNECT/CURRENT/`:
 
-### 1. **DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md** ⭐ START HERE
-The master plan. Complete phase breakdown, timelines, acceptance criteria. **Updated with Phase 0.0 completion.**
+### 1. **DATA_CONNECTIONS_IMPLEMENTATION_PLAN_V2.md** ⭐ **CURRENT PLAN**
+**Updated 2025-11-06.** Clean, forward-looking implementation plan. Focuses on remaining work, correct phase ordering (Phase 2: External Connectors, Phase 3: Batch, Phase 4: API/Async). Time estimates, acceptance criteria.
 
-### 2. **PHASE_0_READINESS_CHECK.md** ⭐ PRE-FLIGHT CHECKLIST
-Complete readiness summary. All design decisions finalized, all gates defined.
+**Old plan:** `DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md` (deprecated, historical reference only)
 
-### 3. **MAPPING_TYPES.md** ⭐ ARCHITECTURE
+### 2. **MAPPING_TYPES.md** ⭐ ARCHITECTURE
 Hierarchical mapping architecture (5 handlers, 18 configs, 13 flows). Critical for UpdateManager implementation.
 
-### 4. **OVERRIDE_PATTERN_DESIGN.md** ⭐ CORE PATTERN
+### 3. **OVERRIDE_PATTERN_DESIGN.md** ⭐ CORE PATTERN
 The override pattern for auto-calculated fields. Includes UpdateManager class design, conflict resolution, UI patterns.
 
-### 5. **PHASE_0.0_COMPLETE.md** ✅ COMPLETION REPORT
-Full report on Phase 0.0 ID/Slug Standardization refactor. Statistics, changes made, technical decisions, files affected.
+### 4. **PHASE_1B_LIGHTNING_MENU.md** ⭐ UI DESIGN
+Complete UI design for Lightning Menu and Context Menus. Iconography, pathway visualizations, submenu patterns.
 
-### 6. **PHASE_0.1_COMPLETE.md** ✅ COMPLETION REPORT
-Full report on Phase 0.1 Schema Updates & Field Mapping Validation. 7 schemas updated, 8 critical field name mismatches fixed.
+### 5. **UUID_PRIMARY_KEY_REFACTOR.md** ⚠️ TECHNICAL DEBT
+Documents UUID vs human-readable ID inconsistency. Fix after Phase 1 complete (~2-3 hrs).
 
-### 7. **GATE_2_VALIDATION_RESULTS.md** ✅ VALIDATION REPORT
-Systematic validation results for all field mappings. Documents all mismatches found and fixed.
+---
 
-### 8. **TESTING_INFRASTRUCTURE_COMPLETE.md** 🆕 TESTING SETUP
-Complete testing infrastructure setup (Vitest, CI/CD, coverage). Developer workflow, test patterns, automation.
+## 📚 Phase Completion Reports
 
-### 9. **PHASE_0.3_COMPLETE.md** ✅ COMPLETION REPORT
-Full report on Phase 0.3 UpdateManager Implementation & Testing Infrastructure. 960+ lines of code, 20/20 tests passing, Gate 3 passed.
+### Phase 0:
+- `PHASE_0.0_COMPLETE.md` - ID/Slug standardization
+- `PHASE_0.1_COMPLETE.md` - Schema updates & validation
+- `PHASE_0.3_COMPLETE.md` - UpdateManager & testing infrastructure
+- `GATE_2_VALIDATION_RESULTS.md` - Field mapping validation
+
+### Phase 1:
+- `PHASE_1_EVENTS_COMPLETE.md` - Events implementation
+- `PHASE_1B_LIGHTNING_MENU.md` - Lightning Menu & Context Menus (UI design)
 
 ---
 

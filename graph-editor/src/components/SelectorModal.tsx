@@ -8,7 +8,7 @@ import './SelectorModal.css';
 interface SelectorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  type: 'parameter' | 'context' | 'case' | 'node';
+  type: 'parameter' | 'context' | 'case' | 'node' | 'event';
   items: ItemBase[];
   currentValue: string;
   onSelect: (value: string) => void;

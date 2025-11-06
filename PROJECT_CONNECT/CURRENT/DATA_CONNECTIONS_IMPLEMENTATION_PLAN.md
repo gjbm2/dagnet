@@ -1,8 +1,27 @@
-# Data Connections: Consolidated Implementation Plan
+# ⚠️ DEPRECATED - See V2
 
-**Status:** Active Development  
-**Last Updated:** 2025-11-05 (Phase 0 complete, Phase 1A in progress)  
-**Current Phase:** Phase 1A - Events Implementation ✅ COMPLETE
+**This document is deprecated as of 2025-11-06.**
+
+**👉 Current implementation plan:** [DATA_CONNECTIONS_IMPLEMENTATION_PLAN_V2.md](./DATA_CONNECTIONS_IMPLEMENTATION_PLAN_V2.md)
+
+This file contains historical detail from Phase 0 and early Phase 1 work. It has been superseded by the V2 plan which focuses on remaining work and correct phase ordering.
+
+**Why V2?**
+- Clearer structure (status at top, focuses on what's next)
+- Correct phase ordering (Phase 2: External Connectors, Phase 3: Batch, Phase 4: API/Async)
+- Removes repetitive historical content
+- Honest about what's wired vs stubbed
+- Clear time estimates
+
+**Keep this file for historical reference only.**
+
+---
+
+# Data Connections: Implementation Plan (DEPRECATED)
+
+**Status:** DEPRECATED - Use V2  
+**Last Updated:** 2025-11-06  
+**Superseded By:** [DATA_CONNECTIONS_IMPLEMENTATION_PLAN_V2.md](./DATA_CONNECTIONS_IMPLEMENTATION_PLAN_V2.md)
 
 **Related Documents:**
 - [DATA_CONNECTIONS.md](./DATA_CONNECTIONS.md) — Main specification
@@ -116,7 +135,7 @@ This document provides a consolidated, actionable implementation plan for the Da
 - [x] Created comprehensive `TESTING.md` guide + `TEST_QUICK_START.md` + `TESTING_INFRASTRUCTURE_COMPLETE.md`
 - [x] **Gate 3: ✅ PASSED** - 20/20 core tests passing (2 event timing tests skipped for Phase 1)
 
-**Phase 1A: Events Implementation (Nov 5, 2025):**
+**Phase 1A: Events Implementation (Nov 5, 2025):** ✅ COMPLETE
 - [x] Added `'event'` to `ObjectType` union in types and theme
 - [x] Added yellow Calendar icon theme for events (`#FEF3C7`, `#EAB308`)
 - [x] Extended `registryService` with `getEvents()` method
@@ -126,6 +145,34 @@ This document provides a consolidated, actionable implementation plan for the Da
 - [x] Verified EnhancedSelector auto-supports events
 - [x] Created `PHASE_1_EVENTS_COMPLETE.md`
 - [x] 0 linter errors, all TypeScript checks pass
+
+**Phase 1B: Lightning Menu + Context Menus (Nov 6, 2025):** ⚡ UI COMPLETE, WIRING PENDING
+- [x] Created `DataOperationsService` - centralized service for all Get/Put operations
+- [x] Implemented `LightningMenu` component with React Portal (z-index fix)
+- [x] Lightning Menu: Get/Put data from file, Get data from source (direct), Connection settings, Sync status
+- [x] Lightning Menu: Pathway visualizations (Folders → TrendingUpDown, DatabaseZap → Folders)
+- [x] Lightning Menu: No left-aligned icons, right-aligned pathway icons only
+- [x] Integrated Lightning Menu into EnhancedSelector (Properties Panel)
+- [x] Extracted Node Context Menu from GraphCanvas into `NodeContextMenu.tsx`
+- [x] Extracted Edge Context Menu from GraphCanvas into `EdgeContextMenu.tsx`
+- [x] Context Menus: Submenu pattern for parameters (hover to expand Get/Put options)
+- [x] Context Menus: Node file + Case file submenus (independent operations)
+- [x] Context Menus: Edge parameter submenus (Probability, Conditional, Cost £, Duration)
+- [x] All menu labels: "Get data from file" / "Put data to file" / "Get data from source"
+- [x] Fixed wrapping issues (min-width: 240px, white-space: nowrap)
+- [x] Fixed z-index issues (Portal for Lightning Menu, z-index: 10000+)
+- [x] Toast notifications with `react-hot-toast` at bottom-center
+- [x] Fixed hide/show node (UUID vs human-readable ID mismatch)
+- [x] Fixed delete node from context menu (UUID lookup)
+- [ ] **CRITICAL:** Wire DataOperationsService to UpdateManager (currently all methods are stubbed!)
+- [ ] **CRITICAL:** Implement actual Get/Put logic (read from FileRegistry, call UpdateManager, update graph)
+- [ ] **NEXT:** Top Menu "Data" (batch operations)
+- [ ] **NEXT:** Properties Panel updates (event_id, override indicators, evidence displa, conditional logic)
+
+**Known Issues to Address (Post-Phase 1):**
+- [ ] UUID vs human-readable ID inconsistency (hiddenNodes, edge refs) - see `UUID_PRIMARY_KEY_REFACTOR.md`
+- [ ] Duplicate human-readable IDs not properly validated/prevented
+- [ ] Need unified delete code path (context menu vs keyboard)
 
 ---
 
