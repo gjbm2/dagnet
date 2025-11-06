@@ -8,6 +8,7 @@ import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext
 interface ToolsPanelProps {
   // Layout tools
   onAutoLayout?: (direction?: 'LR' | 'RL' | 'TB' | 'BT') => void;
+  onSankeyLayout?: () => void;
   onForceReroute?: () => void;
   
   // Visibility
@@ -23,6 +24,7 @@ interface ToolsPanelProps {
  */
 export default function ToolsPanel({
   onAutoLayout,
+  onSankeyLayout,
   onForceReroute,
   onHideUnselected,
   onShowAll
@@ -38,29 +40,53 @@ export default function ToolsPanel({
     useUniformScaling,
     massGenerosity,
     autoReroute,
+    useSankeyView,
     setUseUniformScaling,
     setMassGenerosity,
-    setAutoReroute
+    setAutoReroute,
+    setUseSankeyView
   } = viewPrefs;
   return (
     <div className="tools-panel">
       <div className="panel-body">
         {/* Layout Tools */}
         <CollapsibleSection title="Layout" defaultOpen={true} icon={Layout}>
-          <button 
-            onClick={() => onAutoLayout?.('LR')} 
-            className="tool-button"
-            disabled={!onAutoLayout}
-          >
-            Auto-Layout →
-          </button>
-          <button 
-            onClick={() => onAutoLayout?.('TB')} 
-            className="tool-button"
-            disabled={!onAutoLayout}
-          >
-            Auto-Layout ↓
-          </button>
+          <label className="tool-checkbox">
+            <input
+              type="checkbox"
+              checked={useSankeyView}
+              onChange={(e) => setUseSankeyView(e.target.checked)}
+            />
+            <span>Sankey View</span>
+          </label>
+          
+          {useSankeyView ? (
+            <button 
+              onClick={() => onSankeyLayout?.()} 
+              className="tool-button"
+              disabled={!onSankeyLayout}
+            >
+              Sankey Layout
+            </button>
+          ) : (
+            <>
+              <button 
+                onClick={() => onAutoLayout?.('LR')} 
+                className="tool-button"
+                disabled={!onAutoLayout}
+              >
+                Auto-Layout →
+              </button>
+              <button 
+                onClick={() => onAutoLayout?.('TB')} 
+                className="tool-button"
+                disabled={!onAutoLayout}
+              >
+                Auto-Layout ↓
+              </button>
+            </>
+          )}
+          
           <button 
             onClick={() => onForceReroute?.()} 
             className="tool-button"

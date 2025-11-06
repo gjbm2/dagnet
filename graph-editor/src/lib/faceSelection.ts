@@ -26,6 +26,7 @@ export interface NodePosition {
  * @param dx - horizontal distance to other node (positive = other node is to the right)
  * @param dy - vertical distance to other node (positive = other node is below)
  * @param allEdges - all edges in the graph
+ * @param onlyHorizontal - if true, only allow 'left' and 'right' faces (for Sankey view)
  * @returns face name ('left', 'right', 'top', 'bottom')
  */
 export function getOptimalFace(
@@ -33,7 +34,8 @@ export function getOptimalFace(
   isOutput: boolean,
   dx: number,
   dy: number,
-  allEdges: EdgeInfo[]
+  allEdges: EdgeInfo[],
+  onlyHorizontal?: boolean
 ): string {
   // Get all edges connected to this node
   const nodeEdges = allEdges.filter(e => e.source === nodeId || e.target === nodeId);
@@ -42,7 +44,11 @@ export function getOptimalFace(
   let primaryFace: string;
   let secondaryFace: string;
   
-  if (Math.abs(dx) > Math.abs(dy)) {
+  if (onlyHorizontal) {
+    // Sankey mode: only allow left/right
+    primaryFace = dx > 0 ? 'right' : 'left';
+    secondaryFace = dx > 0 ? 'left' : 'right'; // fallback is opposite horizontal
+  } else if (Math.abs(dx) > Math.abs(dy)) {
     // Horizontal movement dominates
     primaryFace = dx > 0 ? 'right' : 'left';
     secondaryFace = dy > 0 ? 'bottom' : 'top';

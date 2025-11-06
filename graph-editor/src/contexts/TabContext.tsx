@@ -1000,6 +1000,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         useUniformScaling: false,
         massGenerosity: 0.5,
         autoReroute: true,
+        useSankeyView: false,
         sidebarOpen: true,
         whatIfOpen: false,
         propertiesOpen: true,

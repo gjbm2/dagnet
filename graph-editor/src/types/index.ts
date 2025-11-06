@@ -96,6 +96,7 @@ export interface TabState {
     useUniformScaling?: boolean;
     massGenerosity?: number;
     autoReroute?: boolean;
+    useSankeyView?: boolean;
     sidebarOpen?: boolean;
     whatIfOpen?: boolean;
     propertiesOpen?: boolean;

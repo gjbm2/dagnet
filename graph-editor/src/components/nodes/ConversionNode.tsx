@@ -31,6 +31,9 @@ interface ConversionNodeData {
     group?: string;
     color?: string;
   };
+  sankeyWidth?: number;
+  sankeyHeight?: number;
+  useSankeyView?: boolean;
   onUpdate: (id: string, data: Partial<ConversionNodeData>) => void;
   onDelete: (id: string) => void;
   onDoubleClick?: (id: string, field: string) => void;
@@ -261,10 +264,14 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   
   // Determine node shape based on type
   const getNodeShape = () => {
+    // Use Sankey dimensions if provided, otherwise default
+    const width = data.sankeyWidth ? `${data.sankeyWidth}px` : '100px';
+    const height = data.sankeyHeight ? `${data.sankeyHeight}px` : '100px';
+    
     return {
       borderRadius: '0px', // Square corners for all nodes
-      width: '100px',
-      height: '100px'
+      width,
+      height
     };
   };
   
@@ -343,7 +350,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         boxSizing: 'border-box'
       }}
     >
-      {/* Input handles - all sides */}
+      {/* Input handles - all sides (or only left/right in Sankey view) */}
       <Handle 
         type="target" 
         position={Position.Left} 
@@ -356,18 +363,20 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           transition: 'opacity 0.2s ease'
         }} 
       />
-      <Handle 
-        type="target" 
-        position={Position.Top} 
-        id="top" 
-        style={{ 
-          background: '#555', 
-          width: '8px', 
-          height: '8px',
-          opacity: showHandles ? 1 : 0,
-          transition: 'opacity 0.2s ease'
-        }} 
-      />
+      {!data.useSankeyView && (
+        <Handle 
+          type="target" 
+          position={Position.Top} 
+          id="top" 
+          style={{ 
+            background: '#555', 
+            width: '8px', 
+            height: '8px',
+            opacity: showHandles ? 1 : 0,
+            transition: 'opacity 0.2s ease'
+          }} 
+        />
+      )}
       <Handle 
         type="target" 
         position={Position.Right} 
@@ -380,18 +389,20 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           transition: 'opacity 0.2s ease'
         }} 
       />
-      <Handle 
-        type="target" 
-        position={Position.Bottom} 
-        id="bottom" 
-        style={{ 
-          background: '#555', 
-          width: '8px', 
-          height: '8px',
-          opacity: showHandles ? 1 : 0,
-          transition: 'opacity 0.2s ease'
-        }} 
-      />
+      {!data.useSankeyView && (
+        <Handle 
+          type="target" 
+          position={Position.Bottom} 
+          id="bottom" 
+          style={{ 
+            background: '#555', 
+            width: '8px', 
+            height: '8px',
+            opacity: showHandles ? 1 : 0,
+            transition: 'opacity 0.2s ease'
+          }} 
+        />
+      )}
       
       {/* Content wrapper */}
       <div style={{
@@ -560,7 +571,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         </div>
       )}
       
-      {/* Output handles - all sides */}
+      {/* Output handles - all sides (or only left/right in Sankey view) */}
       <Handle 
         type="source" 
         position={Position.Left} 
@@ -573,18 +584,20 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           transition: 'opacity 0.2s ease'
         }} 
       />
-      <Handle 
-        type="source" 
-        position={Position.Top} 
-        id="top-out" 
-        style={{ 
-          background: '#000', 
-          width: '8px', 
-          height: '8px',
-          opacity: showHandles ? 1 : 0,
-          transition: 'opacity 0.2s ease'
-        }} 
-      />
+      {!data.useSankeyView && (
+        <Handle 
+          type="source" 
+          position={Position.Top} 
+          id="top-out" 
+          style={{ 
+            background: '#000', 
+            width: '8px', 
+            height: '8px',
+            opacity: showHandles ? 1 : 0,
+            transition: 'opacity 0.2s ease'
+          }} 
+        />
+      )}
       <Handle 
         type="source" 
         position={Position.Right} 
@@ -597,18 +610,20 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           transition: 'opacity 0.2s ease'
         }} 
       />
-      <Handle 
-        type="source" 
-        position={Position.Bottom} 
-        id="bottom-out" 
-        style={{ 
-          background: '#000', 
-          width: '8px', 
-          height: '8px',
-          opacity: showHandles ? 1 : 0,
-          transition: 'opacity 0.2s ease'
-        }} 
-      />
+      {!data.useSankeyView && (
+        <Handle 
+          type="source" 
+          position={Position.Bottom} 
+          id="bottom-out" 
+          style={{ 
+            background: '#000', 
+            width: '8px', 
+            height: '8px',
+            opacity: showHandles ? 1 : 0,
+            transition: 'opacity 0.2s ease'
+          }} 
+        />
+      )}
       
       {selected && (
         <div 

@@ -5,12 +5,14 @@ export interface ViewPreferencesState {
   useUniformScaling: boolean;
   massGenerosity: number;
   autoReroute: boolean;
+  useSankeyView: boolean;
 }
 
 interface ViewPreferencesContextValue extends ViewPreferencesState {
   setUseUniformScaling: (value: boolean) => void;
   setMassGenerosity: (value: number) => void;
   setAutoReroute: (value: boolean) => void;
+  setUseSankeyView: (value: boolean) => void;
 }
 
 const ViewPreferencesContext = createContext<ViewPreferencesContextValue | null>(null);
@@ -29,6 +31,7 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   const [useUniformScaling, setUseUniformScalingLocal] = useState<boolean>(editorState.useUniformScaling ?? false);
   const [massGenerosity, setMassGenerosityLocal] = useState<number>(editorState.massGenerosity ?? 0.5);
   const [autoReroute, setAutoRerouteLocal] = useState<boolean>(editorState.autoReroute ?? true);
+  const [useSankeyView, setUseSankeyViewLocal] = useState<boolean>(editorState.useSankeyView ?? false);
 
   // Sync FROM tab state when it changes externally (tab switch/restore)
   useEffect(() => {
@@ -40,6 +43,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   useEffect(() => {
     if (editorState.autoReroute !== undefined) setAutoRerouteLocal(editorState.autoReroute);
   }, [editorState.autoReroute]);
+  useEffect(() => {
+    if (editorState.useSankeyView !== undefined) setUseSankeyViewLocal(editorState.useSankeyView);
+  }, [editorState.useSankeyView]);
 
   // Setters: update local immediately, persist to tab state asynchronously
   const setUseUniformScaling = (value: boolean) => {
@@ -54,15 +60,21 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setAutoRerouteLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { autoReroute: value });
   };
+  const setUseSankeyView = (value: boolean) => {
+    setUseSankeyViewLocal(value);
+    if (tabId) tabOps.updateTabState(tabId, { useSankeyView: value });
+  };
 
   const value = useMemo<ViewPreferencesContextValue>(() => ({
     useUniformScaling,
     massGenerosity,
     autoReroute,
+    useSankeyView,
     setUseUniformScaling,
     setMassGenerosity,
-    setAutoReroute
-  }), [useUniformScaling, massGenerosity, autoReroute]);
+    setAutoReroute,
+    setUseSankeyView
+  }), [useUniformScaling, massGenerosity, autoReroute, useSankeyView]);
 
   return (
     <ViewPreferencesContext.Provider value={value}>

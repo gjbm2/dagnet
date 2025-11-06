@@ -28,11 +28,19 @@
   border-color: #333 !important;
 }
 
-/* Override selection styling for edges */
+/* Override selection styling for edges - bring to front */
+.react-flow__edge.selected {
+  z-index: 1000 !important;
+}
+
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke: #333 !important;
   cursor: default !important;
-  pointer-events: none !important;
+}
+
+/* Disable ReactFlow's default selection indicator (the dark segment overlay) */
+.react-flow__edge.selected::before,
+.react-flow__edge.selected::after {
+  display: none !important;
 }
 
 /* Unselected edges can have pointer cursor */
@@ -43,7 +51,6 @@
 /* Selected edge invisible interaction area should not interfere */
 .react-flow__edge.selected path {
   cursor: default !important;
-  pointer-events: none !important;
 }
 
 /* Hide reconnection handles on unselected edges */
