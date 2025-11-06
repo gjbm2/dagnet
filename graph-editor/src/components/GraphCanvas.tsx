@@ -27,6 +27,8 @@ import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
+import { NodeContextMenu } from './NodeContextMenu';
+import { EdgeContextMenu } from './EdgeContextMenu';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
@@ -1527,21 +1529,29 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const hiddenNodes = tab?.editorState?.hiddenNodes || new Set<string>();
     
     // Update node classes
+    // hiddenNodes contains human-readable IDs (node.data.id), not UUIDs (node.id)
     setNodes(prevNodes => 
       prevNodes.map(node => ({
         ...node,
-        className: hiddenNodes.has(node.id) ? 'hidden' : ''
+        className: hiddenNodes.has(node.data?.id) ? 'hidden' : ''
       }))
     );
     
     // Update edge classes
+    // Check if source or target node (by data.id) is hidden
     setEdges(prevEdges => 
-      prevEdges.map(edge => ({
-        ...edge,
-        className: (hiddenNodes.has(edge.source) || hiddenNodes.has(edge.target)) ? 'hidden' : ''
-      }))
+      prevEdges.map(edge => {
+        const sourceNode = nodes.find(n => n.id === edge.source);
+        const targetNode = nodes.find(n => n.id === edge.target);
+        const isHidden = (sourceNode && hiddenNodes.has(sourceNode.data?.id)) || 
+                        (targetNode && hiddenNodes.has(targetNode.data?.id));
+        return {
+          ...edge,
+          className: isHidden ? 'hidden' : ''
+        };
+      })
     );
-  }, [activeTabId, tabs, nodes.length, edges.length, setNodes, setEdges]);
+  }, [activeTabId, tabs, nodes.length, edges.length, nodes, setNodes, setEdges]);
 
   // Separate effect to handle initial fitView AFTER nodes are populated
   useEffect(() => {
@@ -3606,12 +3616,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [graph, onSelectedEdgeChange]);
 
   // Delete specific node
-  const deleteNode = useCallback((nodeId: string) => {
+  // Delete specific node (called from context menu)
+  // Note: This receives a React Flow node ID (UUID), but needs to look up by human-readable ID
+  const deleteNode = useCallback((reactFlowNodeId: string) => {
     if (!graph) return;
     
+    // Find the node by React Flow ID (UUID) to get its human-readable ID
+    const node = nodes.find(n => n.id === reactFlowNodeId);
+    if (!node?.data?.id) {
+      console.error('Could not find node to delete:', reactFlowNodeId);
+      return;
+    }
+    
+    const humanReadableId = node.data.id;
+    
     const nextGraph = structuredClone(graph);
-    nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== nodeId);
-    nextGraph.edges = nextGraph.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
+    nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== humanReadableId);
+    nextGraph.edges = nextGraph.edges.filter(e => e.from !== humanReadableId && e.to !== humanReadableId);
     
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
@@ -3619,7 +3640,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     setGraph(nextGraph);
     setNodeContextMenu(null);
-  }, [graph, setGraph]);
+    
+    // Save history state for context menu deletion
+    saveHistoryState('Delete node', humanReadableId);
+    
+    // Clear selection when node is deleted
+    onSelectedNodeChange(null);
+  }, [graph, nodes, setGraph, saveHistoryState, onSelectedNodeChange]);
 
   // Delete specific edge
   const deleteEdge = useCallback((edgeId: string) => {
@@ -4057,524 +4084,40 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       {/* Node Context Menu */}
       {nodeContextMenu && (
-        <div
-          style={{
-            position: 'fixed',
-            left: nodeContextMenu.x,
-            top: nodeContextMenu.y,
-            background: 'white',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            minWidth: '160px',
-            padding: '4px',
-            zIndex: 10000
-          }}
-        >
-          {/* Properties option */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              // Select the node first, then open Properties panel
-              onSelectedNodeChange(nodeContextMenu.nodeId);
-              // Dispatch event to open Properties panel
-              window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
-              setNodeContextMenu(null);
-            }}
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              borderRadius: '2px',
-              borderBottom: '1px solid #eee'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-          >
-            📝 Properties
-          </div>
-          
-          {/* Hide/Unhide option */}
-          {(() => {
-            // Get all selected nodes (including the context menu target)
-            // For ReactFlow nodes, n.id IS the uuid
-            const selectedNodes = nodes.filter(n => n.selected || n.id === nodeContextMenu.nodeId || n.data?.id === nodeContextMenu.nodeId);
-            // hiddenNodes are stored by human-readable ID, not UUID
-            const selectedNodeIds = selectedNodes.map(n => n.data?.id || n.id);
-            const allHidden = selectedNodeIds.every(id => activeTabId && tabOperations.isNodeHidden(activeTabId, id));
-            const someHidden = selectedNodeIds.some(id => activeTabId && tabOperations.isNodeHidden(activeTabId, id));
-            const isMultiSelect = selectedNodeIds.length > 1;
-            
-            if (allHidden) {
-              // All selected nodes are hidden - show "Show" option
-              return (
-                <div
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (activeTabId) {
-                      selectedNodeIds.forEach(nodeId => {
-                        tabOperations.unhideNode(activeTabId, nodeId);
-                      });
-                    }
-                    setNodeContextMenu(null);
-                  }}
-                  style={{
-                    padding: '8px 12px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    color: '#28a745',
-                    borderRadius: '2px'
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                >
-                  👁️ Show {isMultiSelect ? `${selectedNodeIds.length} nodes` : 'node'}
-                </div>
-              );
-            } else {
-              // At least one node is visible - show "Hide" option
-              return (
-                <div
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (activeTabId) {
-                      selectedNodeIds.forEach(nodeId => {
-                        tabOperations.hideNode(activeTabId, nodeId);
-                      });
-                    }
-                    setNodeContextMenu(null);
-                  }}
-                  style={{
-                    padding: '8px 12px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    color: '#6c757d',
-                    borderRadius: '2px'
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                >
-                  🙈 Hide {isMultiSelect ? `${selectedNodeIds.length} nodes` : 'node'}
-                </div>
-              );
-            }
-          })()}
-          
-          {/* Delete option */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              deleteNode(nodeContextMenu.nodeId);
-            }}
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              color: '#dc3545',
-              borderRadius: '2px'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-          >
-            🗑️ Delete node
-          </div>
-        </div>
+        <NodeContextMenu
+          x={nodeContextMenu.x}
+          y={nodeContextMenu.y}
+          nodeId={nodeContextMenu.nodeId}
+          nodeData={nodes.find(n => n.id === nodeContextMenu.nodeId)?.data}
+          nodes={nodes}
+          activeTabId={activeTabId}
+          tabOperations={tabOperations}
+          onClose={() => setNodeContextMenu(null)}
+          onSelectNode={onSelectedNodeChange}
+          onDeleteNode={deleteNode}
+        />
       )}
       
       {/* Edge Context Menu */}
       {edgeContextMenu && (
-        <div
-          style={{
-            position: 'fixed',
-            left: edgeContextMenu.x,
-            top: edgeContextMenu.y,
-            background: 'white',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            minWidth: '200px',
-            padding: '8px',
-            zIndex: 10000
+        <EdgeContextMenu
+          x={edgeContextMenu.x}
+          y={edgeContextMenu.y}
+          edgeId={edgeContextMenu.edgeId}
+          edgeData={contextMenuLocalData}
+          graph={graph}
+          onClose={() => {
+            setEdgeContextMenu(null);
+            setContextMenuLocalData(null);
           }}
-        >
-          {/* Probability editing section */}
-          <div style={{ marginBottom: '12px' }}>
-            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
-              Probability
-            </label>
-            <ProbabilityInput
-                value={contextMenuLocalData?.probability || 0}
-              onChange={(value) => {
-                  setContextMenuLocalData(prev => prev ? { ...prev, probability: value } : null);
-              }}
-              onCommit={(value) => {
-                    if (graph) {
-                      const nextGraph = structuredClone(graph);
-                      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-                      if (edgeIndex >= 0) {
-                        nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
-                        if (nextGraph.metadata) {
-                          nextGraph.metadata.updated_at = new Date().toISOString();
-                        }
-                        setGraph(nextGraph);
-                    saveHistoryState('Update edge probability', undefined, edgeContextMenu.edgeId);
-                  }
-                }
-              }}
-              onRebalance={(value) => {
-                if (graph) {
-                  const currentEdge = graph.edges.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-                  if (!currentEdge) return;
-                  
-                  const siblings = graph.edges.filter((e: any) => {
-                    // Check if this is NOT the current edge (compare both uuid and id)
-                    const isCurrentEdge = (e.uuid === currentEdge.uuid && e.uuid) || (e.id === currentEdge.id && e.id);
-                    if (isCurrentEdge) return false;
-                    
-                    if (currentEdge.case_id && currentEdge.case_variant) {
-                      return e.from === currentEdge.from && 
-                             e.case_id === currentEdge.case_id && 
-                             e.case_variant === currentEdge.case_variant;
-                    }
-                    return e.from === currentEdge.from;
-                  });
-                  
-                  if (siblings.length > 0) {
-                    const nextGraph = structuredClone(graph);
-                    const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-                    if (edgeIndex >= 0) {
-                      nextGraph.edges[edgeIndex].p = { ...nextGraph.edges[edgeIndex].p, mean: value };
-                    
-                      const remainingProbability = roundTo4DP(1 - value);
-                    const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
-                    
-                    if (siblingsTotal > 0) {
-                      siblings.forEach(sibling => {
-                        const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-                        if (siblingIndex >= 0) {
-                          const siblingCurrentValue = sibling.p?.mean || 0;
-                          const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
-                          nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: newValue };
-                        }
-                      });
-                    } else {
-                      const equalShare = remainingProbability / siblings.length;
-                      siblings.forEach(sibling => {
-                        const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-                        if (siblingIndex >= 0) {
-                          nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
-                        }
-                      });
-                    }
-                    
-                    if (nextGraph.metadata) {
-                      nextGraph.metadata.updated_at = new Date().toISOString();
-                    }
-                    setGraph(nextGraph);
-                      saveHistoryState('Update and balance edge probabilities', undefined, edgeContextMenu.edgeId);
-                    }
-                  }
-                }
-              }}
-              onClose={() => {
-                setEdgeContextMenu(null);
-                setContextMenuLocalData(null);
-              }}
-              autoFocus={true}
-              autoSelect={true}
-              showSlider={true}
-              showBalanceButton={true}
-            />
-          </div>
-
-
-          {/* Conditional Probability editing section */}
-          {(() => {
-            const edge = graph?.edges?.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-            return edge?.conditional_p && edge.conditional_p.length > 0;
-          })() && (
-            <div style={{ marginBottom: '12px' }}>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
-                Conditional Probabilities
-              </label>
-              {(() => {
-                const edge = graph?.edges?.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-                return edge?.conditional_p?.map((condP: any, cpIndex: number) => (
-                  <div key={cpIndex} style={{ marginBottom: '8px', padding: '6px', border: '1px solid #eee', borderRadius: '3px' }}>
-                    <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>
-                      Condition: {condP.condition.visited.join(', ') || 'None'}
-                    </div>
-                    <ProbabilityInput
-                        value={condP.p.mean}
-                      onChange={(value) => {
-                          if (graph) {
-                            const nextGraph = structuredClone(graph);
-                            const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-                            if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
-                            nextGraph.edges[edgeIndex].conditional_p[cpIndex].p.mean = value;
-                              if (nextGraph.metadata) {
-                                nextGraph.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(nextGraph);
-                            }
-                          }
-                        }}
-                      onCommit={(value) => {
-                        // Already committed via onChange above
-                      }}
-                        onRebalance={(value) => {
-                              if (graph) {
-                          const currentEdge = graph.edges.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-                          if (!currentEdge || !currentEdge.conditional_p) return;
-                          
-                          const siblings = graph.edges.filter((e: any) => {
-                            if (currentEdge.case_id && currentEdge.case_variant) {
-                              return e.id !== currentEdge.id && 
-                                     e.from === currentEdge.from && 
-                                     e.case_id === currentEdge.case_id && 
-                                     e.case_variant === currentEdge.case_variant;
-                            }
-                            return e.id !== currentEdge.id && e.from === currentEdge.from;
-                          });
-                          
-                          if (siblings.length > 0) {
-                            const nextGraph = structuredClone(graph);
-                            const currentValue = value;
-                            const remainingProbability = roundTo4DP(1 - currentValue);
-                            
-                            const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-                            if (currentEdgeIndex >= 0 && nextGraph.edges[currentEdgeIndex].conditional_p) {
-                              nextGraph.edges[currentEdgeIndex].conditional_p[cpIndex].p.mean = currentValue;
-                              
-                              
-                              // Get the current condition key to match siblings with the same condition
-                              const currentCondition = currentEdge.conditional_p[cpIndex];
-                              const conditionKey = JSON.stringify(currentCondition.condition.visited.sort());
-                              
-                              // Filter siblings to only those with the same condition
-                            const siblingsWithSameCondition = siblings.filter(sibling => {
-                              if (!sibling.conditional_p) return false;
-                              return sibling.conditional_p.some((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
-                            });
-                            
-                            if (siblingsWithSameCondition.length > 0) {
-                              // Calculate total current probability of siblings for this condition
-                              const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
-                                const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                );
-                                return sum + (matchingCondition?.p?.mean || 0);
-                              }, 0);
-                              
-                              if (siblingsTotal > 0) {
-                                // Rebalance siblings proportionally for this condition
-                                siblingsWithSameCondition.forEach(sibling => {
-                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-                                  if (siblingIndex >= 0) {
-                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                    );
-                                      if (matchingCondition && sibling.conditional_p) {
-                                        const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
-                                        JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                      );
-                                        if (conditionIndex >= 0) {
-                                        const siblingCurrentValue = matchingCondition.p?.mean || 0;
-                                        const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
-                                          if (nextGraph.edges[siblingIndex].conditional_p) {
-                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = newValue;
-                                          }
-                                      }
-                                    }
-                                  }
-                                });
-                              } else {
-                                // If siblings have no probability for this condition, distribute equally
-                                const equalShare = remainingProbability / siblingsWithSameCondition.length;
-                                siblingsWithSameCondition.forEach(sibling => {
-                                  const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-                                  if (siblingIndex >= 0) {
-                                    const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                      JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                    );
-                                      if (matchingCondition && sibling.conditional_p) {
-                                        const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
-                                        JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                      );
-                                        if (conditionIndex >= 0) {
-                                          if (nextGraph.edges[siblingIndex].conditional_p) {
-                                        nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;
-                                          }
-                                      }
-                                    }
-                                  }
-                                });
-                              }
-                            }
-                            
-                            if (nextGraph.metadata) {
-                              nextGraph.metadata.updated_at = new Date().toISOString();
-                            }
-                            setGraph(nextGraph);
-                              saveHistoryState('Auto-rebalance conditional probabilities', undefined, edgeContextMenu.edgeId);
-                            }
-                          }
-                        }
-                      }}
-                      onClose={() => {
-                        setEdgeContextMenu(null);
-                        setContextMenuLocalData(null);
-                      }}
-                      autoFocus={false}
-                      autoSelect={false}
-                      showSlider={true}
-                      showBalanceButton={true}
-                    />
-                  </div>
-                ));
-              })()}
-            </div>
-          )}
-
-          {/* Variant Weight editing for case edges */}
-          {(() => {
-            const edge = graph?.edges?.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-            return edge?.case_id && edge?.case_variant;
-          })() && (() => {
-            const edge = graph?.edges?.find((e: any) => e.uuid === edgeContextMenu.edgeId || e.id === edgeContextMenu.edgeId);
-            const caseNode = graph?.nodes?.find((n: any) => n.case?.id === edge?.case_id);
-            const variant = caseNode?.case?.variants?.find((v: any) => v.name === edge?.case_variant);
-            const variantIndex = caseNode?.case?.variants?.findIndex((v: any) => v.name === edge?.case_variant) ?? -1;
-            const allVariants = caseNode?.case?.variants || [];
-            
-            return variant && (
-              <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
-                  Variant Weight ({edge?.case_variant})
-                </label>
-                <VariantWeightInput
-                    value={variant.weight}
-                  onChange={(value) => {
-                    // Optional: update local state if needed
-                  }}
-                  onCommit={(value) => {
-                    if (graph && edge) {
-                          const nextGraph = structuredClone(graph);
-                        const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
-                        if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
-                        const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
-                        if (vIdx >= 0) {
-                          nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = value;
-                              if (nextGraph.metadata) {
-                                nextGraph.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(nextGraph);
-                          saveHistoryState('Update variant weight', caseNode?.id);
-                        }
-                      }
-                    }
-                  }}
-                  onRebalance={(value, currentIndex, variants) => {
-                    if (graph && edge) {
-                      const nextGraph = structuredClone(graph);
-                      const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
-                      if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
-                        const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
-                        if (vIdx >= 0) {
-                          nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = value;
-                          
-                          const remainingWeight = 1 - value;
-                          const otherVariants = variants.filter((v: any, i: number) => i !== vIdx);
-                          const otherVariantsTotal = otherVariants.reduce((sum, v) => sum + (v.weight || 0), 0);
-                          
-                          if (otherVariantsTotal > 0) {
-                            otherVariants.forEach(v => {
-                              const otherIdx = nextGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
-                              if (otherIdx !== undefined && otherIdx >= 0) {
-                                const currentWeight = v.weight || 0;
-                                const newWeight = (currentWeight / otherVariantsTotal) * remainingWeight;
-                                nextGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = newWeight;
-                              }
-                            });
-                          } else {
-                            const equalShare = remainingWeight / otherVariants.length;
-                            otherVariants.forEach(v => {
-                              const otherIdx = nextGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
-                              if (otherIdx !== undefined && otherIdx >= 0) {
-                                nextGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = equalShare;
-                              }
-                            });
-                          }
-                          
-                          if (nextGraph.metadata) {
-                            nextGraph.metadata.updated_at = new Date().toISOString();
-                          }
-                          setGraph(nextGraph);
-                          saveHistoryState('Update and balance variant weights', caseNode?.id);
-                        }
-                      }
-                    }
-                  }}
-                  onClose={() => {
-                    setEdgeContextMenu(null);
-                    setContextMenuLocalData(null);
-                  }}
-                  currentIndex={variantIndex}
-                  allVariants={allVariants}
-                  autoFocus={false}
-                  autoSelect={false}
-                  showSlider={true}
-                  showBalanceButton={true}
-                />
-              </div>
-            );
-          })()}
-
-
-          
-          {/* Properties option */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              // Dispatch event to open Properties panel
-              window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
-              setEdgeContextMenu(null);
-            }}
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              borderRadius: '2px',
-              borderTop: '1px solid #eee',
-              marginTop: '8px'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-          >
-            📝 Properties
-          </div>
-          
-          {/* Delete option */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              deleteEdge(edgeContextMenu.edgeId);
-            }}
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              color: '#dc3545',
-              borderRadius: '2px'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-          >
-            🗑️ Delete edge
-          </div>
-        </div>
+          onUpdateGraph={(nextGraph, historyLabel, nodeId) => {
+            setGraph(nextGraph);
+            if (historyLabel) {
+              saveHistoryState(historyLabel, nodeId, edgeContextMenu.edgeId);
+            }
+          }}
+          onDeleteEdge={deleteEdge}
+        />
       )}
       
       {/* Variant Selection Modal */}

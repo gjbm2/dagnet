@@ -10,6 +10,7 @@ import { registryService, RegistryItem } from '../services/registryService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { useSelectionContext } from './editors/GraphEditor';
 import { ItemBase } from '../hooks/useItemFiltering';
+import { LightningMenu } from './LightningMenu';
 import './EnhancedSelector.css';
 
 interface EnhancedSelectorProps {
@@ -146,7 +147,8 @@ export function EnhancedSelector({
     description: item.description,
     file_path: item.file_path,
     type: item.parameter_type || item.node_type || item.case_type,
-    isLocal: item.isLocal
+    isLocal: item.isLocal,
+    hasFile: item.hasFile  // Include hasFile for "planned" badge logic
   }));
 
   // Get current graph nodes (for showCurrentGraphGroup)
@@ -156,7 +158,8 @@ export function EnhancedSelector({
       name: n.label || n.id || n.id,
       description: '',
       type: 'node',
-      isLocal: true
+      isLocal: true,
+      hasFile: false  // Graph nodes don't have separate files
     })).filter(item => item.id) : [];
 
   // Get used IDs in graph (for dimming)
@@ -540,60 +543,14 @@ export function EnhancedSelector({
             </button>
           )}
 
-          {/* Sync menu button */}
-          {!disabled && (onPullFromRegistry || onPushToRegistry || onRetrieveLatest) && (
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
-                onClick={() => setShowSyncMenu(!showSyncMenu)}
-                className="enhanced-selector-sync"
-                title="Data sync options"
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  padding: '0 8px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  color: '#6B7280',
-                  transition: 'color 0.2s'
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.color = '#F59E0B'}
-                onMouseLeave={(e) => e.currentTarget.style.color = '#6B7280'}
-              >
-                <Zap size={16} strokeWidth={2} />
-              </button>
-
-              {/* Sync menu dropdown */}
-              {showSyncMenu && (
-                <div ref={syncMenuRef} className="enhanced-selector-sync-menu">
-                  {onPullFromRegistry && (
-                    <div 
-                      className="enhanced-selector-sync-menu-item"
-                      onClick={() => handleSyncAction('pull')}
-                    >
-                      ⬇ Pull from Registry
-                    </div>
-                  )}
-                  {onPushToRegistry && (
-                    <div 
-                      className="enhanced-selector-sync-menu-item"
-                      onClick={() => handleSyncAction('push')}
-                    >
-                      ⬆ Push to Registry
-                    </div>
-                  )}
-                  {onRetrieveLatest && (
-                    <div 
-                      className="enhanced-selector-sync-menu-item"
-                      onClick={() => handleSyncAction('retrieve')}
-                    >
-                      🔄 Retrieve Latest
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+          {/* Lightning Menu - data operations */}
+          {!disabled && inputValue && isConnected && (type === 'parameter' || type === 'case' || type === 'node') && (
+            <LightningMenu
+              objectType={type}
+              objectId={inputValue}
+              hasFile={!!currentItem?.hasFile}
+              targetId={undefined} // TODO: Pass edge/node ID from parent context
+            />
           )}
         </div>
       </div>
@@ -785,7 +742,7 @@ export function EnhancedSelector({
                           <span className="enhanced-selector-item-badge local">local</span>
                         )}
                         
-                        {!item.file_path && !item.isLocal && (
+                        {!item.hasFile && (
                           <span className="enhanced-selector-item-badge planned">planned</span>
                         )}
                         

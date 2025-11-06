@@ -18,6 +18,8 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
 
 ## In Progress
 
+- Need to think about conditional probability groups -- whether we need to nudge user to update param files together...? How to have *depedent* probabilities? maybe just dust off notion of policy again -- i.e. discard any unanchored probability, OR "collect residual" edge param?? Point being we won't always get failure states from Amplitude (there WAS no event that corresponded with abandonment a lot of the time, so we need to infer failure states from absence of success state within X mins/days)
+
 ### High Priority
 - fix tools panel view options (Again)
 - Amplitude, Google sheets pull through params
@@ -76,3 +78,4 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
 - main app tabs are showing maximise button even when they're maximised, it seems
 - maxmised tabs are appearing on top (zorder) of navigator button (incorrect)
 - maximised tabs in main app are not reflecting padding
+- somewhere along the line we lose animations on edge width changes, which is sad

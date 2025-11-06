@@ -33,7 +33,7 @@ interface SelectionContextType {
 }
 
 interface SelectorModalConfig {
-  type: 'parameter' | 'context' | 'case' | 'node';
+  type: 'parameter' | 'context' | 'case' | 'node' | 'event';
   items: ItemBase[];
   currentValue: string;
   onSelect: (value: string) => void;
