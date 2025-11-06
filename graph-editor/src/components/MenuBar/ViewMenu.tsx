@@ -29,6 +29,7 @@ export function ViewMenu() {
   const useUniformScaling = viewPrefsCtx?.useUniformScaling ?? (activeTab?.editorState?.useUniformScaling ?? false);
   const massGenerosity = viewPrefsCtx?.massGenerosity ?? (activeTab?.editorState?.massGenerosity ?? 0.5);
   const autoReroute = viewPrefsCtx?.autoReroute ?? (activeTab?.editorState?.autoReroute ?? true);
+  const useSankeyView = viewPrefsCtx?.useSankeyView ?? (activeTab?.editorState?.useSankeyView ?? false);
   
   // Debug: Log when menu is checked
   React.useEffect(() => {
@@ -77,8 +78,21 @@ export function ViewMenu() {
     }
   };
 
+  const handleToggleSankeyView = () => {
+    const newValue = !useSankeyView;
+    if (viewPrefsCtx) {
+      viewPrefsCtx.setUseSankeyView(newValue);
+    } else if (activeTabId) {
+      operations.updateTabState(activeTabId, { useSankeyView: newValue });
+    }
+  };
+
   const handleAutoLayout = (direction: 'LR' | 'RL' | 'TB' | 'BT') => {
     window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction } }));
+  };
+
+  const handleSankeyLayout = () => {
+    window.dispatchEvent(new CustomEvent('dagnet:sankeyLayout'));
   };
 
   const handleTogglePropertiesPanel = () => {
@@ -177,6 +191,15 @@ export function ViewMenu() {
 
               <Menubar.Separator className="menubar-separator" />
 
+              <Menubar.Item 
+                className="menubar-item" 
+                onSelect={handleToggleSankeyView}
+              >
+                {useSankeyView ? '✓ ' : ''}Sankey View
+              </Menubar.Item>
+
+              <Menubar.Separator className="menubar-separator" />
+
               <Menubar.Sub>
                 <Menubar.SubTrigger className="menubar-item">
                   Auto Layout
@@ -211,6 +234,16 @@ export function ViewMenu() {
                   </Menubar.SubContent>
                 </Menubar.Portal>
               </Menubar.Sub>
+
+              {/* Sankey Layout option - only show when Sankey view is active */}
+              {useSankeyView && (
+                <Menubar.Item 
+                  className="menubar-item" 
+                  onSelect={handleSankeyLayout}
+                >
+                  Sankey Layout
+                </Menubar.Item>
+              )}
 
               <Menubar.Separator className="menubar-separator" />
 

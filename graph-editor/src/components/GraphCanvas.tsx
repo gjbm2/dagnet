@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { roundTo4DP } from '@/utils/rounding';
 import ReactFlow, {
@@ -22,6 +22,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import '../custom-reactflow.css';
 import dagre from 'dagre';
+import { sankey, sankeyLinkHorizontal, sankeyCenter, sankeyJustify } from 'd3-sankey';
 
 import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
@@ -36,6 +37,8 @@ import { toFlow, fromFlow } from '@/lib/transform';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
+import { groupEdgesIntoBundles, EdgeBundle, MIN_CHEVRON_THRESHOLD } from '@/lib/chevronClipping';
+import { ChevronClipPaths } from './ChevronClipPaths';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -54,6 +57,7 @@ interface GraphCanvasProps {
   onAddNodeRef?: React.MutableRefObject<(() => void) | null>;
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
   onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
+  onSankeyLayoutRef?: React.MutableRefObject<(() => void) | null>;
   onForceRerouteRef?: React.MutableRefObject<(() => void) | null>;
   onHideUnselectedRef?: React.MutableRefObject<(() => void) | null>;
   // What-if analysis state (from tab state, not GraphStore)
@@ -65,7 +69,7 @@ interface GraphCanvasProps {
   activeTabId?: string | null;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides, conditionalOverrides, tabId, activeTabId }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides, conditionalOverrides, tabId, activeTabId }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -79,6 +83,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onAddNodeRef={onAddNodeRef}
         onDeleteSelectedRef={onDeleteSelectedRef}
         onAutoLayoutRef={onAutoLayoutRef}
+        onSankeyLayoutRef={onSankeyLayoutRef}
         onForceRerouteRef={onForceRerouteRef}
         onHideUnselectedRef={onHideUnselectedRef}
         whatIfAnalysis={whatIfAnalysis}
@@ -89,7 +94,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {}, tabId, activeTabId: activeTabIdProp }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {}, tabId, activeTabId }: GraphCanvasProps) {
   const store = useGraphStore();
   const { graph, setGraph } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
@@ -99,6 +104,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const useUniformScaling = viewPrefs?.useUniformScaling ?? false;
   const massGenerosity = viewPrefs?.massGenerosity ?? 0.5;
   const autoReroute = viewPrefs?.autoReroute ?? true;
+  const useSankeyView = viewPrefs?.useSankeyView ?? false;
   const ts = () => new Date().toISOString();
   const whatIfStartRef = useRef<number | null>(null);
   
@@ -123,7 +129,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, []);
   
   // Use prop if provided, otherwise fall back to context
-  const activeTabId = activeTabIdProp ?? activeTabIdContext;
+  const effectiveActiveTabId = activeTabId ?? activeTabIdContext;
   const saveHistoryState = store.saveHistoryState;
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
   
@@ -138,17 +144,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
+  const [edgeBundles, setEdgeBundles] = useState<EdgeBundle[]>([]);
+  // Monotonic render frame id for correlating logs across components
+  const renderFrameRef = useRef(0);
+  renderFrameRef.current += 1;
+  console.log(`[${ts()}] [GraphCanvas] Render frame #${renderFrameRef.current} start`);
   
   // Track array reference changes to detect loops
   const prevNodesRef = useRef(nodes);
   const prevEdgesRef = useRef(edges);
   const nodesChangeCountRef = useRef(0);
   const edgesChangeCountRef = useRef(0);
+  // Keep a stable reference to nodes map for use in effects that shouldn't depend on nodes array reference
+  const nodesMapRef = useRef(new Map<string, any>());
   useEffect(() => {
     if (prevNodesRef.current !== nodes) {
       nodesChangeCountRef.current++;
       console.log(`[${new Date().toISOString()}] [GraphCanvas] NODES ARRAY NEW REFERENCE (count: ${nodesChangeCountRef.current}, length: ${nodes.length})`);
       prevNodesRef.current = nodes;
+      // Update nodes map ref
+      nodesMapRef.current = new Map(nodes.map(n => [n.id, n]));
     }
     if (prevEdgesRef.current !== edges) {
       edgesChangeCountRef.current++;
@@ -199,15 +214,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Trigger auto-reroute on ANY position change (during or after drag)
     // But not when syncing from graph to ReactFlow
     if (autoReroute && !isSyncingRef.current) {
+      if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
+        console.log(`[${ts()}] [GraphCanvas] Reroute suppressed (layout/cooldown active)`);
+        return;
+      }
       const positionChanges = changes.filter(change => change.type === 'position');
       if (positionChanges.length > 0) {
         console.log(`[${new Date().toISOString()}] [GraphCanvas] Position changes detected, triggering reroute`);
         // Trigger re-routing by incrementing the flag
         // This will run during drag (for visual feedback) and won't save history
-        setShouldReroute(prev => prev + 1);
+        setShouldReroute((v) => v + 1);
       }
     }
-  }, [onNodesChangeBase, autoReroute]);
+  }, [autoReroute, onNodesChangeBase]);
 
 
   // Edge width calculation based on scaling mode
@@ -240,6 +259,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return 10;
     }
     
+    // In Sankey view, use larger max width; otherwise use default
+    const effectiveMaxWidth = useSankeyView ? 384 : MAX_WIDTH;
+    
+    // In Sankey view, force global mass scaling (massGenerosity = 0)
+    const effectiveMassGenerosity = useSankeyView ? 0 : massGenerosity;
+    
     // Find the start node for flow calculations
       const startNode = allNodes.find(n => 
         n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
@@ -253,8 +278,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
         if (totalProbability === 0) return MIN_WIDTH;
         const proportion = edgeProbability / totalProbability;
-        const scaledWidth = MIN_WIDTH + (proportion * (MAX_WIDTH - MIN_WIDTH));
-        return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
+        const scaledWidth = MIN_WIDTH + (proportion * (effectiveMaxWidth - MIN_WIDTH));
+        return Math.max(MIN_WIDTH, Math.min(effectiveMaxWidth, scaledWidth));
       }
       
     // Helper function to calculate residual probability at a node
@@ -319,10 +344,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     let displayMass: number;
     
-    if (massGenerosity === 0) {
+    if (effectiveMassGenerosity === 0) {
       // Pure global (Sankey): use actual mass directly
       displayMass = actualMassFlowing;
-    } else if (massGenerosity === 1) {
+    } else if (effectiveMassGenerosity === 1) {
       // Pure local: ignore upstream, just use local proportions
       const sourceEdges = allEdges.filter(e => e.source === edge.source);
       const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
@@ -333,15 +358,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Blended: use power function to compress dynamic range
       // At g=0.5, this gives sqrt(actualMassFlowing) which compresses the range
       // while still respecting global flow
-      const power = 1 - massGenerosity;
+      const power = 1 - effectiveMassGenerosity;
       displayMass = Math.pow(actualMassFlowing, power);
     }
     
     // Scale to width
-    const scaledWidth = MIN_WIDTH + (displayMass * (MAX_WIDTH - MIN_WIDTH));
-    const finalWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, scaledWidth));
+    const scaledWidth = MIN_WIDTH + (displayMass * (effectiveMaxWidth - MIN_WIDTH));
+    const finalWidth = Math.max(MIN_WIDTH, Math.min(effectiveMaxWidth, scaledWidth));
     return finalWidth;
-  }, [useUniformScaling, massGenerosity, caseOverrides, conditionalOverrides, whatIfAnalysis, graphStoreHook]);
+  }, [useUniformScaling, massGenerosity, useSankeyView, caseOverrides, conditionalOverrides, whatIfAnalysis, graphStoreHook]);
 
   // Calculate edge sort keys for curved edge stacking
   // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
@@ -716,13 +741,57 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         scaledWidth = scaledWidth * thisEdgeScale;
       }
 
+      // Calculate bundle metadata for chevron rendering
+      const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id);
+      const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id);
+      
+      // Calculate total bundle widths (already calculated above, but extract for clarity)
+      const sourceBundleWidth = sortedSourceEdges.reduce((sum, e) => {
+        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+        const eSourceHandle = e.sourceHandle || 'right-out';
+        const eSourceFace = eSourceHandle.split('-')[0];
+        const eTargetHandle = e.targetHandle || 'left';
+        const eTargetFace = eTargetHandle.split('-')[0];
+        const eSourceKey = `source-${e.source}-${eSourceFace}`;
+        const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
+        const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
+        const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
+        const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+        return sum + (width * eScale);
+      }, 0);
+      
+      const targetBundleWidth = sortedTargetEdges.reduce((sum, e) => {
+        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
+        const eSourceHandle = e.sourceHandle || 'right-out';
+        const eSourceFace = eSourceHandle.split('-')[0];
+        const eTargetHandle = e.targetHandle || 'left';
+        const eTargetFace = eTargetHandle.split('-')[0];
+        const eSourceKey = `source-${e.source}-${eSourceFace}`;
+        const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
+        const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
+        const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
+        const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+        return sum + (width * eScale);
+      }, 0);
+
       return { 
         ...edge, 
         sourceOffsetX: sourceOffsetX,
         sourceOffsetY: sourceOffsetY,
         targetOffsetX: targetOffsetX,
         targetOffsetY: targetOffsetY,
-        scaledWidth: scaledWidth
+        scaledWidth: scaledWidth,
+        // Bundle metadata for chevron rendering
+        sourceBundleWidth: sourceBundleWidth,
+        targetBundleWidth: targetBundleWidth,
+        sourceBundleSize: sortedSourceEdges.length,
+        targetBundleSize: sortedTargetEdges.length,
+        isFirstInSourceBundle: sourceEdgeIndex === 0,
+        isLastInSourceBundle: sourceEdgeIndex === sortedSourceEdges.length - 1,
+        isFirstInTargetBundle: targetEdgeIndex === 0,
+        isLastInTargetBundle: targetEdgeIndex === sortedTargetEdges.length - 1,
+        sourceFace: sourceFace,
+        targetFace: targetFace,
       };
     });
 
@@ -767,17 +836,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const deltaY = targetNode.position.y - sourceNode.position.y;
     
     // For source node: this is an output connection, direction TO target
-    const sourceFace = getOptimalFace(sourceNode.id, true, deltaX, deltaY, edges);
+    const sourceFace = getOptimalFace(sourceNode.id, true, deltaX, deltaY, edges, useSankeyView);
     
     // For target node: this is an input connection, direction FROM source (inverse)
-    const targetFace = getOptimalFace(targetNode.id, false, -deltaX, -deltaY, edges);
+    const targetFace = getOptimalFace(targetNode.id, false, -deltaX, -deltaY, edges, useSankeyView);
     
     // Convert face to handle format
     const sourceHandle = sourceFace + '-out';
     const targetHandle = targetFace;
     
     return { sourceHandle, targetHandle };
-  }, [edges]);
+  }, [edges, useSankeyView]);
   
   // Perform immediate re-route of ALL edges (used when toggling on)
   const performImmediateReroute = useCallback(() => {
@@ -990,6 +1059,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Perform re-routing when shouldReroute flag changes (with small delay after node movement)
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC5: Perform re-routing`);
+    if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
+      console.log(`[${ts()}] [GraphCanvas] Re-route skipped (layout/cooldown active)`);
+      return;
+    }
     if ((shouldReroute > 0 && autoReroute) || forceReroute) {
       console.log('Re-route triggered:', { shouldReroute, autoReroute, forceReroute });
       // Add a small delay to ensure node positions are fully updated
@@ -1381,7 +1454,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               costs: graphEdge.costs, // Legacy field (for backward compat)
               weight_default: graphEdge.weight_default,
               case_variant: graphEdge.case_variant,
-              case_id: graphEdge.case_id
+              case_id: graphEdge.case_id,
+              useSankeyView: useSankeyView
             }
           };
         });
@@ -1408,6 +1482,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             targetOffsetX: edge.targetOffsetX,
             targetOffsetY: edge.targetOffsetY,
             scaledWidth: edge.scaledWidth,
+            // Bundle metadata for chevron rendering
+            sourceBundleWidth: edge.sourceBundleWidth,
+            targetBundleWidth: edge.targetBundleWidth,
+            sourceBundleSize: edge.sourceBundleSize,
+            targetBundleSize: edge.targetBundleSize,
+            isFirstInSourceBundle: edge.isFirstInSourceBundle,
+            isLastInSourceBundle: edge.isLastInSourceBundle,
+            isFirstInTargetBundle: edge.isFirstInTargetBundle,
+            isLastInTargetBundle: edge.isLastInTargetBundle,
+            sourceFace: edge.sourceFace,
+            targetFace: edge.targetFace,
             // Pass what-if overrides to edges
             caseOverrides: caseOverrides,
             conditionalOverrides: conditionalOverrides
@@ -1445,6 +1530,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return; // Skip full toFlow rebuild
     }
     
+    // CRITICAL: Block slow-path rebuilds during drag operations
+    // During drag, the store gets updated with new positions, which triggers this sync,
+    // which would cause a full rebuild and reset node positions back to their store values
+    // This causes the "flickering and reverting" behavior
+    if (isDraggingNodeRef.current) {
+      console.log('  ⚠️ Slow path BLOCKED: drag in progress, deferring rebuild');
+      return;
+    }
+    
     console.log('  🔨 Slow path: Topology changed, doing full rebuild');
     
     // Topology changed - do full rebuild
@@ -1452,7 +1546,35 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const selectedNodeIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
     const selectedEdgeIds = new Set(edges.filter(e => e.selected).map(e => e.id));
     
-    const { nodes: newNodes, edges: newEdges } = toFlow(graph, {
+    // In Sankey mode, force all edges to use left/right handles only
+    let graphForBuild = graph;
+    if (useSankeyView && graph.edges) {
+      graphForBuild = {
+        ...graph,
+        edges: graph.edges.map(edge => {
+          // Calculate optimal handles respecting Sankey constraints
+          const sourceNode = graph.nodes?.find(n => n.uuid === edge.from || n.id === edge.from);
+          const targetNode = graph.nodes?.find(n => n.uuid === edge.to || n.id === edge.to);
+          
+          if (!sourceNode || !targetNode) return edge;
+          
+          const dx = (targetNode.layout?.x ?? 0) - (sourceNode.layout?.x ?? 0);
+          const dy = (targetNode.layout?.y ?? 0) - (sourceNode.layout?.y ?? 0);
+          
+          // Simple horizontal face selection for Sankey
+          const sourceFace = dx >= 0 ? 'right' : 'left';
+          const targetFace = dx >= 0 ? 'left' : 'right';
+          
+          return {
+            ...edge,
+            fromHandle: sourceFace + '-out',
+            toHandle: targetFace
+          };
+        })
+      };
+    }
+    
+    const { nodes: newNodes, edges: newEdges } = toFlow(graphForBuild, {
       onUpdateNode: handleUpdateNode,
       onDeleteNode: handleDeleteNode,
       onUpdateEdge: handleUpdateEdge,
@@ -1463,10 +1585,141 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
     
     // Restore selection state
-    const nodesWithSelection = newNodes.map(node => ({
+    let nodesWithSelection = newNodes.map(node => ({
       ...node,
       selected: selectedNodeIds.has(node.id)
     }));
+    
+    // Apply Sankey view sizing if enabled
+    if (useSankeyView) {
+      const MIN_NODE_HEIGHT = 60;
+      const MAX_NODE_HEIGHT = 400;
+      const NODE_WIDTH = 100; // Fixed width for Sankey view
+      
+      // Calculate flow mass through each node
+      // For Sankey diagrams, we want to show the TOTAL flow passing through each node
+      const flowMass = new Map<string, number>();
+      
+      console.log('[Sankey] Graph nodes:', graph.nodes?.map((n: any) => ({ uuid: n.uuid, id: n.id, label: n.label, isStart: n.entry?.is_start })));
+      console.log('[Sankey] Graph edges:', graph.edges?.map((e: any) => ({ from: e.from, to: e.to, prob: e.p?.mean })));
+      
+      // Initialize start nodes with their entry weights
+      graph.nodes?.forEach((node: any) => {
+        if (node.entry?.is_start) {
+          const entryWeight = node.entry.entry_weight || 1.0;
+          console.log(`[Sankey] Initializing start node ${node.label} (uuid: ${node.uuid}) with mass ${entryWeight}`);
+          flowMass.set(node.uuid, entryWeight);
+        } else {
+          // Initialize all other nodes to 0
+          flowMass.set(node.uuid, 0);
+        }
+      });
+      
+      console.log('[Sankey] Initial flowMass:', Array.from(flowMass.entries()));
+      
+      // Build incoming edges map (we calculate mass from incoming flows)
+      // Store the full edge object so we can access case information
+      const incomingEdges = new Map<string, Array<any>>();
+      graph.edges?.forEach((edge: any) => {
+        const to = edge.to;
+        
+        if (!incomingEdges.has(to)) {
+          incomingEdges.set(to, []);
+        }
+        incomingEdges.get(to)!.push(edge);
+      });
+      
+      // Topological sort: process nodes in dependency order
+      // Simple approach: iterate until all nodes are calculated
+      const processed = new Set<string>();
+      let iterations = 0;
+      const maxIterations = graph.nodes?.length * 3 || 100;
+      
+      while (processed.size < (graph.nodes?.length || 0) && iterations < maxIterations) {
+        iterations++;
+        let madeProgress = false;
+        
+        graph.nodes?.forEach((node: any) => {
+          const nodeId = node.uuid || node.id;
+          
+          // Skip if already processed or if it's a start node (already initialized)
+          if (processed.has(nodeId) || node.entry?.is_start) {
+            if (node.entry?.is_start) processed.add(nodeId);
+            return;
+          }
+          
+          // Check if all incoming nodes have been processed
+          const incoming = incomingEdges.get(nodeId) || [];
+          const allIncomingProcessed = incoming.every((edge: any) => processed.has(edge.from));
+          
+          if (allIncomingProcessed && incoming.length > 0) {
+            // Calculate total incoming mass, accounting for case node variant weights and what-if analysis
+            let totalMass = 0;
+            incoming.forEach((edge: any) => {
+              const from = edge.from;
+              const sourceMass = flowMass.get(from) || 0;
+              
+              // Use unified what-if engine to get effective probability
+              // This handles: case node variant weights, conditional overrides, and what-if analysis
+              const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+              const effectiveProb = computeEffectiveEdgeProbability(
+                graph,
+                edgeId,
+                { caseOverrides, conditionalOverrides },
+                whatIfAnalysis || null,
+                undefined
+              );
+              
+              console.log(`[Sankey] Edge ${edgeId}: sourceMass=${sourceMass.toFixed(3)}, effectiveProb=${effectiveProb.toFixed(3)}, contribution=${(sourceMass * effectiveProb).toFixed(3)}`);
+              
+              totalMass += sourceMass * effectiveProb;
+            });
+            
+            flowMass.set(nodeId, totalMass);
+            processed.add(nodeId);
+            madeProgress = true;
+            console.log(`[Sankey] Calculated node ${node.label}: incoming mass = ${totalMass.toFixed(3)}`);
+          }
+        });
+        
+        if (!madeProgress) {
+          console.warn('[Sankey] No progress made in iteration', iterations, 'processed:', processed.size);
+          break;
+        }
+      }
+      
+      console.log('[Sankey] Flow mass calculated (after propagation):', Array.from(flowMass.entries()));
+      console.log(`[Sankey] Propagation completed in ${iterations} iterations`);
+      
+      // Find max mass to normalize heights
+      const maxMass = Math.max(...Array.from(flowMass.values()), 0.001); // Avoid division by zero
+      console.log('[Sankey] Max mass:', maxMass);
+      
+      // Apply heights to nodes
+      console.log('[Sankey] ReactFlow nodes to size:', nodesWithSelection.map(n => ({ id: n.id, label: n.data?.label })));
+      nodesWithSelection = nodesWithSelection.map(node => {
+        const mass = flowMass.get(node.id) || 0;
+        const normalizedMass = mass / maxMass;
+        const height = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, normalizedMass * MAX_NODE_HEIGHT));
+        
+        console.log(`[Sankey] Node ${node.data?.label} (reactflow id: ${node.id}): mass=${mass.toFixed(3)}, normalized=${normalizedMass.toFixed(3)}, height=${height.toFixed(0)}`);
+        
+        return {
+          ...node,
+          style: {
+            ...node.style,
+            width: NODE_WIDTH,
+            height: height
+          },
+          data: {
+            ...node.data,
+            sankeyHeight: height, // Pass height to node component
+            sankeyWidth: NODE_WIDTH,
+            useSankeyView: true // Flag for node to know it's in Sankey mode
+          }
+        };
+      });
+    }
     
     // Add edge width calculation to each edge
     const edgesWithWidth = newEdges.map(edge => {
@@ -1492,7 +1745,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }));
     
   // Calculate edge offsets for Sankey-style visualization
-  const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodesWithSelection, MAX_WIDTH);
+  // In Sankey view, use a much larger max width (edges can be as wide as tall nodes)
+  const effectiveMaxWidth = useSankeyView 
+    ? 384 // Allow edges to be up to 384px wide (MAX_NODE_HEIGHT 400 - 16px margin)
+    : MAX_WIDTH;
+  const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodesWithSelection, effectiveMaxWidth);
   
   // Attach offsets to edge data for the ConversionEdge component
   const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
@@ -1504,14 +1761,78 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       targetOffsetX: edge.targetOffsetX,
       targetOffsetY: edge.targetOffsetY,
       scaledWidth: edge.scaledWidth,
+      // Bundle metadata for chevron rendering
+      sourceBundleWidth: edge.sourceBundleWidth,
+      targetBundleWidth: edge.targetBundleWidth,
+      sourceBundleSize: edge.sourceBundleSize,
+      targetBundleSize: edge.targetBundleSize,
+      isFirstInSourceBundle: edge.isFirstInSourceBundle,
+      isLastInSourceBundle: edge.isLastInSourceBundle,
+      isFirstInTargetBundle: edge.isFirstInTargetBundle,
+      isLastInTargetBundle: edge.isLastInTargetBundle,
+      sourceFace: edge.sourceFace,
+      targetFace: edge.targetFace,
       // Pass what-if overrides to edges
       caseOverrides: caseOverrides,
-      conditionalOverrides: conditionalOverrides
+      conditionalOverrides: conditionalOverrides,
+      // Pass Sankey view flag to edges
+      useSankeyView: useSankeyView
     }
   }));
+  
+  // Generate edge bundles for chevron clipping (suppress in Sankey view)
+  const bundles = useSankeyView ? [] : groupEdgesIntoBundles(edgesWithOffsetData, nodesWithSelection);
+  
+  // Add anchors and clipPath IDs to edges (suppress chevrons in Sankey view)
+  const edgesWithClipPaths = useSankeyView ? edgesWithOffsetData : edgesWithOffsetData.map(edge => {
+    // Find bundles for this edge
+    const sourceBundle = bundles.find(b => 
+      b.type === 'source' && b.nodeId === edge.source && b.face === edge.data.sourceFace
+    );
+    const targetBundle = bundles.find(b =>
+      b.type === 'target' && b.nodeId === edge.target && b.face === edge.data.targetFace
+    );
+    
+    // Compute anchors from node positions to align chevrons immediately
+    const computeAnchor = (nodeId: string, face: string | undefined, offsetX: number | undefined, offsetY: number | undefined) => {
+      const n: any = nodesWithSelection.find((nn: any) => nn.id === nodeId);
+      const w = n?.width ?? 120;
+      const h = n?.height ?? 120;
+      const x = n?.position?.x ?? 0;
+      const y = n?.position?.y ?? 0;
+      if (face === 'right') return { x: x + w, y: y + h / 2 + (offsetY ?? 0) };
+      if (face === 'left') return { x: x, y: y + h / 2 + (offsetY ?? 0) };
+      if (face === 'bottom') return { x: x + w / 2 + (offsetX ?? 0), y: y + h };
+      // top/default
+      return { x: x + w / 2 + (offsetX ?? 0), y: y };
+    };
+    const srcAnchor = computeAnchor(edge.source, edge.data.sourceFace, edge.sourceOffsetX, edge.sourceOffsetY);
+    const tgtAnchor = computeAnchor(edge.target, edge.data.targetFace, edge.targetOffsetX, edge.targetOffsetY);
+    
+    return {
+      ...edge,
+      data: {
+        ...edge.data,
+        sourceAnchorX: srcAnchor.x,
+        sourceAnchorY: srcAnchor.y,
+        targetAnchorX: tgtAnchor.x,
+        targetAnchorY: tgtAnchor.y,
+        sourceClipPathId: sourceBundle && sourceBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${sourceBundle.id}` : undefined,
+        targetClipPathId: targetBundle && targetBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${targetBundle.id}` : undefined,
+        renderFallbackTargetArrow: !!(targetBundle && targetBundle.bundleWidth < MIN_CHEVRON_THRESHOLD),
+      }
+    };
+  });
     
     setNodes(nodesWithSelection);
-    setEdges(edgesWithOffsetData);
+    // Sort edges so selected edges render last (on top)
+    const sortedEdges = [...edgesWithClipPaths].sort((a, b) => {
+      if (a.selected && !b.selected) return 1;  // selected edge goes after unselected
+      if (!a.selected && b.selected) return -1; // unselected edge goes before selected
+      return 0; // preserve order otherwise
+    });
+    setEdges(sortedEdges);
+    setEdgeBundles(bundles);
     
     // Reset syncing flag after graph->ReactFlow sync is complete
     // Use a longer timeout to ensure all cascading updates complete
@@ -1519,13 +1840,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       isSyncingRef.current = false;
       console.log('Reset isSyncingRef to false');
     }, 100);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, activeTabId, tabs]);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView]);
+
+  // Force re-route when Sankey view is toggled (to re-assign faces for L/R only constraint)
+  useEffect(() => {
+    if (edges.length > 0) {
+      console.log(`[Sankey] View toggled to ${useSankeyView}, forcing re-route`);
+      setForceReroute(true);
+    }
+  }, [useSankeyView, edges.length]);
 
   // Separate effect to handle hidden state changes and trigger redraw
   useEffect(() => {
-    if (!activeTabId || !nodes.length || !edges.length) return;
+    if (!effectiveActiveTabId || !nodes.length || !edges.length) return;
     
-    const tab = tabs.find(t => t.id === activeTabId);
+    const tab = tabs.find(t => t.id === effectiveActiveTabId);
     const hiddenNodes = tab?.editorState?.hiddenNodes || new Set<string>();
     
     // Update node classes
@@ -1539,10 +1868,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Update edge classes
     // Check if source or target node (by data.id) is hidden
+    // Use nodesMapRef to avoid dependency on nodes array reference
     setEdges(prevEdges => 
       prevEdges.map(edge => {
-        const sourceNode = nodes.find(n => n.id === edge.source);
-        const targetNode = nodes.find(n => n.id === edge.target);
+        const sourceNode = nodesMapRef.current.get(edge.source);
+        const targetNode = nodesMapRef.current.get(edge.target);
         const isHidden = (sourceNode && hiddenNodes.has(sourceNode.data?.id)) || 
                         (targetNode && hiddenNodes.has(targetNode.data?.id));
         return {
@@ -1551,7 +1881,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         };
       })
     );
-  }, [activeTabId, tabs, nodes.length, edges.length, nodes, setNodes, setEdges]);
+  }, [effectiveActiveTabId, tabs, nodes.length, edges.length, setNodes, setEdges]);
 
   // Separate effect to handle initial fitView AFTER nodes are populated
   useEffect(() => {
@@ -1579,9 +1909,51 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [graph]);
 
+  // Update bundles whenever edges change (to keep chevrons in sync) AFTER layout settles
+  // Double-RAF coalesces interleaved updates (reroute, store sync) and avoids a transient wrong frame
+  // Skip in Sankey mode (no chevrons needed)
+  const bundleRaf1Ref = useRef<number | null>(null);
+  const bundleRaf2Ref = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (useSankeyView) return; // No chevrons in Sankey view
+    if (edges.length === 0) return;
+    if (isDraggingNodeRef.current) return; // skip during drag; will update on next settled frame
+
+    // Cancel any pending scheduled updates to coalesce within the same tick
+    if (bundleRaf1Ref.current) cancelAnimationFrame(bundleRaf1Ref.current);
+    if (bundleRaf2Ref.current) cancelAnimationFrame(bundleRaf2Ref.current);
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] [frame=${renderFrameRef.current}] schedule bundlesDoubleRAF`, { edges: edges.length, nodes: nodes.length });
+    bundleRaf1Ref.current = requestAnimationFrame(() => {
+      bundleRaf2Ref.current = requestAnimationFrame(() => {
+        // Recalculate bundles from current, settled edge/node data
+        const updatedBundles = groupEdgesIntoBundles(edges, nodes);
+        console.log(`[${new Date().toISOString()}] [GraphCanvas] [frame=${renderFrameRef.current}] run bundlesDoubleRAF`, { bundleCount: updatedBundles.length });
+        setEdgeBundles(updatedBundles);
+      });
+    });
+
+    return () => {
+      if (bundleRaf1Ref.current) cancelAnimationFrame(bundleRaf1Ref.current);
+      if (bundleRaf2Ref.current) cancelAnimationFrame(bundleRaf2Ref.current);
+      bundleRaf1Ref.current = null;
+      bundleRaf2Ref.current = null;
+    };
+  }, [edges, nodes, setEdgeBundles, useSankeyView]);
+  
+  // Track last scaling values to detect actual changes
+  const lastScalingRef = useRef({ uniform: useUniformScaling, generosity: massGenerosity });
+  
   // Update edge widths when scaling mode changes
   useEffect(() => {
-    if (edges.length === 0) return;
+    // Check if scaling actually changed
+    const scalingChanged = 
+      lastScalingRef.current.uniform !== useUniformScaling ||
+      lastScalingRef.current.generosity !== massGenerosity;
+    
+    if (!scalingChanged || edges.length === 0) return;
+    
+    // Update ref
+    lastScalingRef.current = { uniform: useUniformScaling, generosity: massGenerosity };
     
     console.log('Edge scaling changed - uniform:', useUniformScaling, 'generosity:', massGenerosity);
     
@@ -1591,54 +1963,104 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('Reset isSyncingRef after edge scaling');
     }, 50);
     
-    // Force re-render of edges by updating their data and recalculating offsets
-    setEdges(prevEdges => {
-      // First pass: update edge data without calculateWidth functions
-      const edgesWithWidth = prevEdges.map(edge => ({
-        ...edge,
-        data: {
-          ...edge.data
-          // Don't add calculateWidth here - will be added after offsets are calculated
-        }
-      }));
+    // First pass: update edge data without calculateWidth functions
+    const edgesWithWidth = edges.map(edge => ({
+      ...edge,
+      data: {
+        ...edge.data
+      }
+    }));
+    
+    // Second pass: add calculateWidth functions with updated edge data
+    const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
+      ...edge,
+      data: {
+        ...edge.data,
+        calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
+      }
+    }));
+    
+    // Recalculate offsets for mass-based scaling modes
+    const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
+    
+    // Calculate bundles to get clipPath IDs (bundles will be synced by separate effect after edges update)
+    const tempBundles = groupEdgesIntoBundles(edgesWithOffsets, nodes);
+    
+    // Attach offsets and clipPath IDs to edge data for the ConversionEdge component
+    const result = edgesWithOffsets.map(edge => {
+      // Find bundles for this edge
+      const sourceBundle = tempBundles.find(b => 
+        b.type === 'source' && b.nodeId === edge.source && b.face === edge.data?.sourceFace
+      );
+      const targetBundle = tempBundles.find(b =>
+        b.type === 'target' && b.nodeId === edge.target && b.face === edge.data?.targetFace
+      );
       
-      // Second pass: add calculateWidth functions with updated edge data
-      const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
-        ...edge,
-        data: {
-          ...edge.data,
-          calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
-        }
-      }));
+      // Compute edge anchor positions (exact edge endpoints at node face)
+      const computeAnchor = (nodeId: string, face: string | undefined, offsetX: number | undefined, offsetY: number | undefined) => {
+        const n: any = nodes.find((nn: any) => nn.id === nodeId);
+        const w = n?.width ?? 120;
+        const h = n?.height ?? 120;
+        const x = n?.position?.x ?? 0;
+        const y = n?.position?.y ?? 0;
+        if (face === 'right') return { x: x + w, y: y + h / 2 + (offsetY ?? 0) };
+        if (face === 'left') return { x: x, y: y + h / 2 + (offsetY ?? 0) };
+        if (face === 'bottom') return { x: x + w / 2 + (offsetX ?? 0), y: y + h };
+        // top/default
+        return { x: x + w / 2 + (offsetX ?? 0), y: y };
+      };
+      const srcAnchor = computeAnchor(edge.source, edge.data?.sourceFace, edge.sourceOffsetX, edge.sourceOffsetY);
+      const tgtAnchor = computeAnchor(edge.target, edge.data?.targetFace, edge.targetOffsetX, edge.targetOffsetY);
       
-      // Recalculate offsets for mass-based scaling modes
-      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
-      
-      // Attach offsets to edge data for the ConversionEdge component
-      const result = edgesWithOffsets.map(edge => ({
-        ...edge,
-        data: {
-          ...edge.data,
-          sourceOffsetX: edge.sourceOffsetX,
-          sourceOffsetY: edge.sourceOffsetY,
-          targetOffsetX: edge.targetOffsetX,
-          targetOffsetY: edge.targetOffsetY,
-          scaledWidth: edge.scaledWidth,
-          // Pass what-if overrides to edges
-          caseOverrides: caseOverrides,
-          conditionalOverrides: conditionalOverrides
-        }
-      }));
-      
-      return result;
+      return {
+      ...edge,
+      data: {
+        ...edge.data,
+        sourceOffsetX: edge.sourceOffsetX,
+        sourceOffsetY: edge.sourceOffsetY,
+        targetOffsetX: edge.targetOffsetX,
+        targetOffsetY: edge.targetOffsetY,
+        scaledWidth: edge.scaledWidth,
+        // Anchor positions used for chevron centering from edge endpoints
+        sourceAnchorX: srcAnchor.x,
+        sourceAnchorY: srcAnchor.y,
+        targetAnchorX: tgtAnchor.x,
+        targetAnchorY: tgtAnchor.y,
+        // Bundle metadata for chevron rendering
+        sourceBundleWidth: edge.sourceBundleWidth,
+        targetBundleWidth: edge.targetBundleWidth,
+        sourceBundleSize: edge.sourceBundleSize,
+        targetBundleSize: edge.targetBundleSize,
+        isFirstInSourceBundle: edge.isFirstInSourceBundle,
+        isLastInSourceBundle: edge.isLastInSourceBundle,
+        isFirstInTargetBundle: edge.isFirstInTargetBundle,
+        isLastInTargetBundle: edge.isLastInTargetBundle,
+        sourceFace: edge.sourceFace,
+        targetFace: edge.targetFace,
+        // Chevron clipPath IDs
+        sourceClipPathId: sourceBundle && sourceBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${sourceBundle.id}` : undefined,
+        targetClipPathId: targetBundle && targetBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${targetBundle.id}` : undefined,
+        renderFallbackTargetArrow: !!(targetBundle && targetBundle.bundleWidth < MIN_CHEVRON_THRESHOLD),
+        // Pass what-if overrides to edges
+        caseOverrides: caseOverrides,
+        conditionalOverrides: conditionalOverrides
+      }
+    };
     });
-  }, [useUniformScaling, massGenerosity, nodes, setEdges]);
+    
+    // Update edges (bundles will be automatically recalculated by separate effect after this)
+    setEdges(result);
+  }, [useUniformScaling, massGenerosity, edges, nodes, calculateEdgeWidth, calculateEdgeOffsets, caseOverrides, conditionalOverrides, setEdges, setEdgeBundles]);
   
   // Recalculate edge widths when what-if changes (throttled to one per frame)
   const recomputeInProgressRef = useRef(false);
   const visualWhatIfUpdateRef = useRef(false);
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC1: What-If recompute triggered (edges=${edges.length})`);
+    if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
+      console.log(`[${ts()}] [GraphCanvas] what-if recompute skipped (layout/cooldown active)`);
+      return;
+    }
     if (edges.length === 0) return;
     if (recomputeInProgressRef.current) {
       console.log(`[${ts()}] [GraphCanvas] what-if recompute skipped (in progress)`);
@@ -1668,7 +2090,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           }));
           const t2 = performance.now();
           // Recalculate offsets for mass-based scaling modes
-          const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
+          // Use effectiveMaxWidth (384 in Sankey mode, 104 otherwise)
+          const effectiveMaxWidth = useSankeyView ? 384 : MAX_WIDTH;
+          const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, effectiveMaxWidth);
           const t3 = performance.now();
           console.log(`[${ts()}] [GraphCanvas] what-if recompute timings`, { mapMs: Math.round(t2 - t1), offsetsMs: Math.round(t3 - t2) });
           // Attach offsets to edge data for the ConversionEdge component
@@ -1681,6 +2105,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               targetOffsetX: edge.targetOffsetX,
               targetOffsetY: edge.targetOffsetY,
               scaledWidth: edge.scaledWidth,
+              // Bundle metadata for chevron rendering
+              sourceBundleWidth: edge.sourceBundleWidth,
+              targetBundleWidth: edge.targetBundleWidth,
+              sourceBundleSize: edge.sourceBundleSize,
+              targetBundleSize: edge.targetBundleSize,
+              isFirstInSourceBundle: edge.isFirstInSourceBundle,
+              isLastInSourceBundle: edge.isLastInSourceBundle,
+              isFirstInTargetBundle: edge.isFirstInTargetBundle,
+              isLastInTargetBundle: edge.isLastInTargetBundle,
+              sourceFace: edge.sourceFace,
+              targetFace: edge.targetFace,
               // Pass what-if overrides to edges
               caseOverrides: caseOverrides,
               conditionalOverrides: conditionalOverrides
@@ -1708,10 +2143,141 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [overridesVersion]);
   
+  // Update node sizes in Sankey mode when what-if analysis changes
+  // Use a ref to track the last what-if version we processed to avoid infinite loops
+  const lastWhatIfVersionRef = useRef<string>('');
+  const sankeyUpdatingRef = useRef(false);
+  const skipSankeyNodeSizingRef = useRef(false); // Set by Sankey layout to skip sizing after layout
+  const sankeyLayoutInProgressRef = useRef(false); // Gate reroutes/slow-path during Sankey layout
+  const effectsCooldownUntilRef = useRef<number>(0); // Suppress effects until this timestamp (ms)
+  const isEffectsCooldownActive = () => performance.now() < effectsCooldownUntilRef.current;
+  useEffect(() => {
+    if (!useSankeyView || sankeyUpdatingRef.current || skipSankeyNodeSizingRef.current) {
+      if (skipSankeyNodeSizingRef.current) {
+        console.log('[Sankey] Skipping node sizing (just did layout)');
+        skipSankeyNodeSizingRef.current = false;
+      }
+      return;
+    }
+    
+    // Get current graph state without depending on it
+    const currentGraph = graphStoreHook.getState().graph;
+    if (!currentGraph) return;
+    
+    // Create a version string from what-if state to detect actual changes
+    const whatIfVersion = `${overridesVersion}-${JSON.stringify(whatIfAnalysis)}`;
+    if (lastWhatIfVersionRef.current === whatIfVersion) {
+      return; // Skip if we already processed this what-if state
+    }
+    lastWhatIfVersionRef.current = whatIfVersion;
+    sankeyUpdatingRef.current = true;
+    
+    console.log('[Sankey] What-if changed, recalculating node sizes');
+    
+    // Recalculate flow mass with current what-if state
+    const MIN_NODE_HEIGHT = 60;
+    const MAX_NODE_HEIGHT = 400;
+    const flowMass = new Map<string, number>();
+    
+    // Initialize start nodes
+    currentGraph.nodes?.forEach((node: any) => {
+      if (node.entry?.is_start) {
+        flowMass.set(node.uuid, node.entry.entry_weight || 1.0);
+      } else {
+        flowMass.set(node.uuid, 0);
+      }
+    });
+    
+    // Build incoming edges map
+    const incomingEdges = new Map<string, Array<any>>();
+    currentGraph.edges?.forEach((edge: any) => {
+      if (!incomingEdges.has(edge.to)) {
+        incomingEdges.set(edge.to, []);
+      }
+      incomingEdges.get(edge.to)!.push(edge);
+    });
+    
+    // Topological sort
+    const processed = new Set<string>();
+    let iterations = 0;
+    const maxIterations = currentGraph.nodes?.length * 3 || 100;
+    
+    while (processed.size < (currentGraph.nodes?.length || 0) && iterations < maxIterations) {
+      iterations++;
+      let madeProgress = false;
+      
+      currentGraph.nodes?.forEach((node: any) => {
+        const nodeId = node.uuid || node.id;
+        if (processed.has(nodeId) || node.entry?.is_start) {
+          if (node.entry?.is_start) processed.add(nodeId);
+          return;
+        }
+        
+        const incoming = incomingEdges.get(nodeId) || [];
+        const allIncomingProcessed = incoming.every((edge: any) => processed.has(edge.from));
+        
+        if (allIncomingProcessed && incoming.length > 0) {
+          let totalMass = 0;
+          incoming.forEach((edge: any) => {
+            const from = edge.from;
+            const sourceMass = flowMass.get(from) || 0;
+            const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+            const effectiveProb = computeEffectiveEdgeProbability(
+              currentGraph,
+              edgeId,
+              { caseOverrides, conditionalOverrides },
+              whatIfAnalysis || null,
+              undefined
+            );
+            totalMass += sourceMass * effectiveProb;
+          });
+          
+          flowMass.set(nodeId, totalMass);
+          processed.add(nodeId);
+          madeProgress = true;
+        }
+      });
+      
+      if (!madeProgress) break;
+    }
+    
+    // Find max mass and update node sizes
+    const maxMass = Math.max(...Array.from(flowMass.values()), 0.001);
+    
+    setNodes(prevNodes => prevNodes.map(node => {
+      const mass = flowMass.get(node.id) || 0;
+      const normalizedMass = mass / maxMass;
+      const height = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, normalizedMass * MAX_NODE_HEIGHT));
+      
+      console.log(`[Sankey WhatIf] Node ${node.data?.label}: mass=${mass.toFixed(3)}, height=${height.toFixed(0)}`);
+      
+      return {
+        ...node,
+        style: {
+          ...node.style,
+          height: height
+        },
+        data: {
+          ...node.data,
+          sankeyHeight: height
+        }
+      };
+    }));
+    
+    // Reset flag after update
+    setTimeout(() => {
+      sankeyUpdatingRef.current = false;
+    }, 0);
+  }, [useSankeyView, overridesVersion, whatIfAnalysis, setNodes, caseOverrides, conditionalOverrides]);
+  
   // Sync FROM ReactFlow TO graph when user makes changes in the canvas
   // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC2: Sync ReactFlow→Store triggered`);
+    if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
+      console.log(`[${ts()}] [GraphCanvas] ReactFlow→Store sync skipped (layout/cooldown active)`);
+      return;
+    }
     if (!graph) return;
     if (visualWhatIfUpdateRef.current) {
       // Skip syncing visual-only what-if changes back to graph store
@@ -2348,7 +2914,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       window.removeEventListener('mousemove', handleMouseMove, true);
       window.removeEventListener('mouseup', handleMouseUp, true);
     };
-  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected, activeTabId, tabId]);
+  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected, tabId]);
 
 
   // Track selected nodes for probability calculation
@@ -3262,6 +3828,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
     
+    // Re-sort edges so selected edges render on top
+    setEdges(prevEdges => {
+      const sorted = [...prevEdges].sort((a, b) => {
+        if (a.selected && !b.selected) return 1;
+        if (!a.selected && b.selected) return -1;
+        return 0;
+      });
+      return sorted;
+    });
+    
     // For multi-selection, we'll show the first selected item in the properties panel
     // but keep track of all selected items for operations like delete
     if (selectedNodes.length > 0) {
@@ -3274,11 +3850,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onSelectedNodeChange(null);
       onSelectedEdgeChange(null);
     }
-  }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis]);
+  }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis, setEdges]);
 
   // Handle node drag start - just set flag, don't save yet
   const onNodeDragStart = useCallback(() => {
-    console.log('🎯 Node drag started - blocking sync during drag');
+    console.log(`🎯 Node drag started - blocking sync during drag [frame=${renderFrameRef.current}]`);
     
     // Block Graph→ReactFlow sync during drag to prevent interruption
     isDraggingNodeRef.current = true;
@@ -3286,7 +3862,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Handle node drag stop - save final position to history
   const onNodeDragStop = useCallback(() => {
-    console.log('🎯 Node drag stopped - saving final position to history');
+    console.log(`🎯 Node drag stopped - saving final position to history [frame=${renderFrameRef.current}]`);
     
     // Clear the drag flag - this allows ReactFlow→Graph sync to run and update positions
     isDraggingNodeRef.current = false;
@@ -3390,20 +3966,36 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     dagreGraph.setDefaultEdgeLabel(() => ({}));
     
     // Configure layout direction and spacing
+    // In Sankey mode, reduce vertical spacing for tighter packing
+    // nodesep is the minimum gap between node EDGES (not centers) in the same rank
+    const nodeSpacing = useSankeyView ? 20 : 60;  // Vertical spacing between nodes in same rank (tight in Sankey)
+    const rankSpacing = useSankeyView ? 250 : 150; // Horizontal spacing between ranks
+    
     dagreGraph.setGraph({ 
       rankdir: effectiveDirection, // User-selected direction
-      nodesep: 60,   // Spacing between nodes in same rank (midpoint between 80 and 40)
-      ranksep: 150,  // Spacing between ranks (midpoint between 200 and 100)
+      nodesep: nodeSpacing,   // Spacing between nodes in same rank (vertical in LR mode)
+      ranksep: rankSpacing,   // Spacing between ranks (horizontal in LR mode)
       edgesep: 20,   // Minimum separation between edges (encourages straighter edges)
       marginx: 40,   // Midpoint margins
       marginy: 40,
+      // ranker: 'tight-tree' // Try tight-tree ranker for better Sankey layouts
     });
     
     // Add nodes to dagre graph
     nodesToLayout.forEach((node) => {
-      // Node dimensions (approximate)
-      const width = node.data?.type === 'case' ? 96 : 100;
-      const height = node.data?.type === 'case' ? 96 : 100;
+      // Node dimensions - in Sankey mode, height is set via style.height or data.sankeyHeight
+      let width = node.width || (node.data?.type === 'case' ? 96 : 120);
+      let height = node.height || (node.data?.type === 'case' ? 96 : 100);
+      
+      // In Sankey mode, use the calculated Sankey height
+      if (useSankeyView && node.data?.sankeyHeight) {
+        height = node.data.sankeyHeight;
+        width = node.data.sankeyWidth || 100;
+        console.log(`[Dagre] Sankey node ${node.data?.label}: using sankeyHeight=${height}, sankeyWidth=${width}, node.width=${node.width}, node.height=${node.height}, style.height=${(node as any).style?.height}`);
+      } else {
+        console.log(`[Dagre] Normal node ${node.data?.label}: using width=${width}, height=${height}`);
+      }
+      
       dagreGraph.setNode(node.id, { width, height });
     });
     
@@ -3414,8 +4006,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
     });
     
+    // Verify node dimensions before layout
+    if (useSankeyView) {
+      console.log('[Dagre] Node dimensions BEFORE layout:');
+      dagreGraph.nodes().forEach((nodeId) => {
+        const node = dagreGraph.node(nodeId);
+        console.log(`  ${nodeId}: width=${node.width}, height=${node.height}`);
+      });
+    }
+    
     // Run the layout algorithm
     dagre.layout(dagreGraph);
+    
+    // Verify positions after layout
+    if (useSankeyView) {
+      console.log('[Dagre] Node positions AFTER layout:');
+      dagreGraph.nodes().forEach((nodeId) => {
+        const node = dagreGraph.node(nodeId);
+        console.log(`  ${nodeId}: x=${node.x}, y=${node.y}, width=${node.width}, height=${node.height}`);
+      });
+    }
     
     // Apply the layout to the graph
     const nextGraph = structuredClone(graph);
@@ -3460,12 +4070,241 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     performAutoLayout(direction);
   }, [performAutoLayout]);
 
+  // Sankey auto-layout using d3-sankey
+  const performSankeyLayout = useCallback(() => {
+    if (!graph) return;
+    
+    console.log(`[${ts()}] [Sankey Layout] Starting d3-sankey layout (RF#${renderFrameRef.current})`);
+    // Begin layout transaction: block effects and start cooldown window
+    sankeyLayoutInProgressRef.current = true;
+    effectsCooldownUntilRef.current = performance.now() + 800; // 0.8s settle window
+    
+    // Determine which nodes to layout
+    const selectedNodes = nodes.filter(n => n.selected);
+    const nodesToLayout = selectedNodes.length > 0 ? selectedNodes : nodes;
+    const nodeIdsToLayout = new Set(nodesToLayout.map(n => n.id));
+    
+    if (nodesToLayout.length === 0) return;
+    
+    // Build d3-sankey compatible data structure
+    const sankeyNodes: any[] = [];
+    const sankeyLinks: any[] = [];
+    
+    // Add nodes with their current heights
+    nodesToLayout.forEach((node) => {
+      const height = node.data?.sankeyHeight || (node.data?.type === 'case' ? 96 : 100);
+      sankeyNodes.push({
+        id: node.id,
+        name: node.data?.label || node.id,
+        fixedValue: height, // Force node height: d3-sankey will respect fixedValue
+        height: height,     // Keep for our internal extent and spacing calculations
+      });
+    });
+    
+    // Add edges (only between nodes being laid out)
+    // d3-sankey with .nodeId() set expects source/target to be the node IDs (strings)
+    edges.forEach((edge) => {
+      if (nodeIdsToLayout.has(edge.source) && nodeIdsToLayout.has(edge.target)) {
+        // Use edge visual width for link value; ensure non-trivial magnitude
+        const raw = edge.data?.scaledWidth ?? 1;
+        const linkValue = Math.max(1, raw); // clamp min 1 to avoid degenerate links
+        sankeyLinks.push({
+          source: edge.source,  // Use node ID directly, not index
+          target: edge.target,  // Use node ID directly, not index
+          value: linkValue,
+        });
+      }
+    });
+    
+    console.log('[Sankey Layout] Nodes:', sankeyNodes.length, 'Links:', sankeyLinks.length);
+    
+    // ===== ADAPTIVE SANKEY LAYOUT POLICY =====
+    // Constants
+    const nodeWidth = 100;
+    const margin = 40;
+    const viewportWidth = 1800; // Approximate available canvas width
+    
+    // Calculate number of columns (depth) by doing a simple rank assignment
+    const nodeDepths = new Map<string, number>();
+    const visited = new Set<string>();
+    const calculateDepth = (nodeId: string, depth: number = 0) => {
+      if (visited.has(nodeId)) return;
+      visited.add(nodeId);
+      nodeDepths.set(nodeId, Math.max(nodeDepths.get(nodeId) || 0, depth));
+      
+      // Find all outgoing edges
+      sankeyLinks.forEach(link => {
+        if (link.source === nodeId) {
+          calculateDepth(link.target, depth + 1);
+        }
+      });
+    };
+    
+    // Start from nodes with no incoming edges
+    const nodesWithIncoming = new Set(sankeyLinks.map(l => l.target));
+    sankeyNodes.forEach(node => {
+      if (!nodesWithIncoming.has(node.id)) {
+        calculateDepth(node.id, 0);
+      }
+    });
+    
+    const maxDepth = Math.max(...Array.from(nodeDepths.values()), 0);
+    const D = maxDepth + 1; // Number of columns
+    
+    // Calculate nodes per column and heights per column
+    const countsPerColumn = new Array(D).fill(0);
+    const heightsPerColumn = new Array(D).fill(0);
+    sankeyNodes.forEach(node => {
+      const depth = nodeDepths.get(node.id) || 0;
+      countsPerColumn[depth]++;
+      heightsPerColumn[depth] += node.height;
+    });
+    const countsMax = Math.max(...countsPerColumn);
+    const HcolMax = Math.max(...heightsPerColumn);
+    
+    // Calculate node height stats
+    const Havg = sankeyNodes.reduce((sum, n) => sum + n.height, 0) / sankeyNodes.length;
+    const Hmax = Math.max(...sankeyNodes.map(n => n.height));
+    
+    // Calculate max link value
+    const Lmax = sankeyLinks.length > 0 ? Math.max(...sankeyLinks.map(l => l.value)) : 1;
+    const E = sankeyLinks.length;
+    
+    // === Horizontal spacing G (column gap) ===
+    // Use simpler, more generous spacing to give d3-sankey freedom
+    let G: number;
+    if (D <= 3) G = 250;
+    else if (D <= 6) G = 200;
+    else G = 150;
+    
+    // === Vertical node padding P ===
+    // Adaptive padding: balance density vs. graph depth
+    // Deep graphs need more padding even when dense
+    let P: number;
+    if (countsMax >= 6) {
+      // Dense columns: scale padding with depth to avoid cramming in deep graphs
+      P = D >= 8 ? 25 : D >= 6 ? 20 : 15;
+    } else if (countsMax >= 4) {
+      P = 25;
+    } else {
+      P = 35; // Sparse columns get more breathing room
+    }
+    
+    // === Calculate extent ===
+    let W = margin * 2 + D * nodeWidth + (D - 1) * G;
+    // Force extra vertical space to ensure padding is respected
+    // Add 50% more to the calculated padding space to prevent compression
+    let H = margin * 2 + Math.max(...heightsPerColumn.map((h, i) => 
+      h + (countsPerColumn[i] - 1) * P * 1.5
+    ));
+    // Ensure minimum height to prevent vertical cramming
+    H = Math.max(H, 600);
+    
+    // Viewport fit pass (scale G only)
+    if (W > 1.25 * viewportWidth) {
+      const scale = Math.max(0.7, Math.min(1.0, (1.25 * viewportWidth) / W));
+      G = G * scale;
+      W = margin * 2 + D * nodeWidth + (D - 1) * G;
+    } else if (W < 0.8 * viewportWidth) {
+      const scale = Math.max(1.0, Math.min(1.2, (0.8 * viewportWidth) / W));
+      G = G * scale;
+      W = margin * 2 + D * nodeWidth + (D - 1) * G;
+    }
+    
+    // === Alignment ===
+    const alignment = countsMax >= 4 ? sankeyJustify : sankeyCenter;
+    
+    // === Iterations ===
+    let iterations: number;
+    if (E <= 150) iterations = 32;
+    else if (E <= 300) iterations = 48;
+    else iterations = 64;
+    
+    console.log(`[Sankey Layout] Adaptive settings: D=${D}, countsMax=${countsMax}, G=${G.toFixed(0)}, P=${P}, W=${W.toFixed(0)}, H=${H.toFixed(0)}, iterations=${iterations}`);
+    
+    // Create and configure the sankey layout
+    const sankeyGenerator = sankey()
+      .nodeId((d: any) => d.id)
+      .nodeWidth(nodeWidth)
+      .nodePadding(P)
+      .extent([[margin, margin], [W - margin, H - margin]])
+      .nodeAlign(alignment)
+      .iterations(iterations);
+    
+    // Run the layout
+    const sankeyGraph = sankeyGenerator({
+      nodes: sankeyNodes,
+      links: sankeyLinks,
+    });
+    
+    console.log('[Sankey Layout] Layout computed, applying positions');
+    console.log('[Sankey Layout] Sample sankeyNode:', sankeyGraph.nodes[0]);
+
+    // Flag: layout in progress to suppress cascading side-effects
+    sankeyLayoutInProgressRef.current = true;
+
+    // Note: we will not touch ReactFlow node state here; we only update graph layout
+    
+    // Apply the layout to the graph
+    const nextGraph = structuredClone(graph);
+    sankeyGraph.nodes.forEach((sankeyNode: any) => {
+      const graphNode = nextGraph.nodes.find((n: any) => n.uuid === sankeyNode.id || n.id === sankeyNode.id);
+      
+      if (graphNode) {
+        if (!graphNode.layout) graphNode.layout = { x: 0, y: 0 };
+        
+        // Check if d3-sankey actually computed positions
+        if (sankeyNode.x0 === undefined || sankeyNode.y0 === undefined) {
+          console.error(`[Sankey Layout] Node ${graphNode.label} has no x0/y0! Node:`, sankeyNode);
+          return;
+        }
+        
+        // d3-sankey gives us x0,y0 (top-left) coordinates
+        // Convert to center coordinates for our graph
+        const centerX = sankeyNode.x0 + (sankeyNode.x1 - sankeyNode.x0) / 2;
+        const centerY = sankeyNode.y0 + (sankeyNode.y1 - sankeyNode.y0) / 2;
+        
+        console.log(`[Sankey Layout] Node ${graphNode.label}: OLD x=${graphNode.layout.x}, y=${graphNode.layout.y} → NEW x=${centerX.toFixed(0)}, y=${centerY.toFixed(0)}, sankeyNode.x0=${sankeyNode.x0}, sankeyNode.y0=${sankeyNode.y0}`);
+        
+        graphNode.layout.x = centerX;
+        graphNode.layout.y = centerY;
+      }
+    });
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Skip node sizing effect after layout (heights are already set upstream)
+    skipSankeyNodeSizingRef.current = true;
+    
+    // Update graph - this will trigger sync
+    setGraph(nextGraph);
+    
+    // Save history state for auto-layout
+    saveHistoryState('Sankey auto-layout', undefined, undefined);
+    
+    // End layout without forcing reroute; clear flag after a short delay + cooldown
+    setTimeout(() => {
+      sankeyLayoutInProgressRef.current = false;
+      effectsCooldownUntilRef.current = performance.now() + 500; // post-layout cooldown
+      console.log('[Sankey Layout] Completed');
+    }, 150);
+  }, [graph, nodes, edges, setGraph, saveHistoryState, setForceReroute, fitView]);
+
   // Expose auto-layout function to parent component via ref
   useEffect(() => {
     if (onAutoLayoutRef) {
       onAutoLayoutRef.current = triggerAutoLayout;
     }
   }, [triggerAutoLayout, onAutoLayoutRef]);
+
+  // Expose Sankey layout function to parent component via ref
+  useEffect(() => {
+    if (onSankeyLayoutRef) {
+      onSankeyLayoutRef.current = performSankeyLayout;
+    }
+  }, [performSankeyLayout, onSankeyLayoutRef]);
 
   // Expose force re-route function to parent component via ref
   useEffect(() => {
@@ -3479,14 +4318,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Hide unselected nodes function
   const hideUnselected = useCallback(async () => {
-    if (!activeTabId) return;
+    if (!effectiveActiveTabId) return;
     
     const selectedNodes = nodes.filter(n => n.selected);
     // Tab operations use human-readable IDs, not UUIDs
     const selectedNodeIds = selectedNodes.map(n => n.data?.id || n.id);
     
-    await tabOperations.hideUnselectedNodes(activeTabId, selectedNodeIds);
-  }, [activeTabId, nodes, tabOperations]);
+    await tabOperations.hideUnselectedNodes(effectiveActiveTabId, selectedNodeIds);
+  }, [effectiveActiveTabId, nodes, tabOperations]);
 
   // Expose hide unselected function to parent component via ref
   useEffect(() => {
@@ -4044,6 +4883,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             </div>
           </Panel>
         )}
+        
+        {/* Chevron clipPath definitions */}
+        <Panel position="top-left" style={{ pointerEvents: 'none' }}>
+          <ChevronClipPaths bundles={edgeBundles} nodes={nodes} frameId={renderFrameRef.current} />
+        </Panel>
       </ReactFlow>
       
       {/* Context Menu */}
@@ -4090,7 +4934,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           nodeId={nodeContextMenu.nodeId}
           nodeData={nodes.find(n => n.id === nodeContextMenu.nodeId)?.data}
           nodes={nodes}
-          activeTabId={activeTabId}
+          activeTabId={effectiveActiveTabId}
           tabOperations={tabOperations}
           onClose={() => setNodeContextMenu(null)}
           onSelectNode={onSelectedNodeChange}

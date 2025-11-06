@@ -147,6 +147,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const addNodeRef = React.useRef<(() => void) | null>(null);
   const deleteSelectedRef = React.useRef<(() => void) | null>(null);
   const autoLayoutRef = React.useRef<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>(null);
+  const sankeyLayoutRef = React.useRef<(() => void) | null>(null);
   const forceRerouteRef = React.useRef<(() => void) | null>(null);
   const hideUnselectedRef = React.useRef<(() => void) | null>(null);
   
@@ -664,6 +665,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
         onAddNodeRef={addNodeRef}
         onDeleteSelectedRef={deleteSelectedRef}
         onAutoLayoutRef={autoLayoutRef}
+        onSankeyLayoutRef={sankeyLayoutRef}
         onForceRerouteRef={forceRerouteRef}
         onHideUnselectedRef={hideUnselectedRef}
         whatIfAnalysis={whatIf?.whatIfAnalysis}
@@ -684,6 +686,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   const toolsComponent = useMemo(() => (
     <ToolsPanel
       onAutoLayout={(dir) => autoLayoutRef.current?.(dir || 'LR')}
+      onSankeyLayout={() => sankeyLayoutRef.current?.()}
       onForceReroute={() => forceRerouteRef.current?.()}
       onHideUnselected={() => hideUnselectedRef.current?.()}
       onShowAll={() => {
@@ -1180,11 +1183,21 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       }
     };
 
+    const handleSankeyLayout = () => {
+      // Only handle if this is the active tab's editor
+      if (tabId !== activeTabId) return;
+      
+      if (sankeyLayoutRef.current) {
+        sankeyLayoutRef.current();
+      }
+    };
+
     // View preference listeners removed; handled via context
     window.addEventListener('dagnet:addNode' as any, handleAddNode);
     window.addEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
     window.addEventListener('dagnet:forceReroute' as any, handleForceReroute);
     window.addEventListener('dagnet:autoLayout' as any, handleAutoLayout);
+    window.addEventListener('dagnet:sankeyLayout' as any, handleSankeyLayout);
 
     const handleHideUnselected = () => {
       // Only handle if this is the active tab's editor
@@ -1213,6 +1226,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       window.removeEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
       window.removeEventListener('dagnet:forceReroute' as any, handleForceReroute);
       window.removeEventListener('dagnet:autoLayout' as any, handleAutoLayout);
+      window.removeEventListener('dagnet:sankeyLayout' as any, handleSankeyLayout);
       window.removeEventListener('dagnet:hideUnselected' as any, handleHideUnselected);
       window.removeEventListener('dagnet:showAll' as any, handleShowAll);
     };

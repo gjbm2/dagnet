@@ -6,6 +6,20 @@ import Tooltip from '@/components/Tooltip';
 import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 
+// Edge curvature (higher = more aggressive curves, default is 0.25)
+const EDGE_CURVATURE = 0.5;
+
+// Sankey mode curvature (lower = less velocity at faces, more horizontal)
+const SANKEY_EDGE_CURVATURE = 0.3;
+
+// Toggle between bezier (false) or smooth step (true) paths
+const USE_SMOOTH_STEP = false;
+
+// Edge blending configuration
+const EDGE_OPACITY = 0.8; // Adjustable transparency (0-1)
+const EDGE_BLEND_MODE = 'multiply'; // 'normal', 'multiply', 'screen', 'difference'
+const USE_GROUP_BASED_BLENDING = false; // Enable scenario-specific blending
+
 interface ConversionEdgeData {
   uuid: string;
   id?: string;
@@ -62,6 +76,24 @@ interface ConversionEdgeData {
   // What-if analysis overrides (passed from tab state)
   caseOverrides?: Record<string, string>;
   conditionalOverrides?: Record<string, Set<string>>;
+  // Bundle metadata for chevron rendering
+  sourceBundleWidth?: number;
+  targetBundleWidth?: number;
+  sourceBundleSize?: number;
+  targetBundleSize?: number;
+  isFirstInSourceBundle?: boolean;
+  isLastInSourceBundle?: boolean;
+  isFirstInTargetBundle?: boolean;
+  isLastInTargetBundle?: boolean;
+  sourceFace?: string;
+  targetFace?: string;
+  // Chevron clipPath IDs
+  sourceClipPathId?: string;
+  targetClipPathId?: string;
+  // Fallback arrow rendering when target chevron is below threshold
+  renderFallbackTargetArrow?: boolean;
+  // Sankey view flag
+  useSankeyView?: boolean;
 }
 
 export default function ConversionEdge({
@@ -241,9 +273,6 @@ export default function ConversionEdge({
   const strokeWidth = useMemo(() => {
     // Use scaledWidth if available (for mass-based scaling modes), otherwise fall back to calculateWidth
     if (data?.scaledWidth !== undefined) {
-      if (id && id.includes('node-2')) {
-        console.log(`[RENDER] Edge ${id}: using scaledWidth=${data.scaledWidth}, prob=${data?.probability}`);
-      }
       return data.scaledWidth;
     }
     if (data?.calculateWidth) {
@@ -278,16 +307,71 @@ export default function ConversionEdge({
   const adjustedTargetX = targetX + targetOffsetX;
   const adjustedTargetY = targetY + targetOffsetY;
 
+  // Calculate edge path (either smooth step or custom bezier)
+  const [edgePath, labelX, labelY] = React.useMemo(() => {
+    if (USE_SMOOTH_STEP) {
+      // Use smooth step path for more angular routing
+      return getSmoothStepPath({
+        sourceX: adjustedSourceX,
+        sourceY: adjustedSourceY,
+        sourcePosition,
+        targetX: adjustedTargetX,
+        targetY: adjustedTargetY,
+        targetPosition,
+        borderRadius: 20, // Adjust for sharper/smoother corners
+      });
+    } else {
+      // Use custom bezier path with configurable curvature
+      const dx = adjustedTargetX - adjustedSourceX;
+      const dy = adjustedTargetY - adjustedSourceY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      // Use lower curvature in Sankey mode for less velocity at faces
+      const curvature = data?.useSankeyView ? SANKEY_EDGE_CURVATURE : EDGE_CURVATURE;
+      const controlDistance = distance * curvature;
 
+      // Calculate control points based on edge direction
+      let c1x = adjustedSourceX;
+      let c1y = adjustedSourceY;
+      let c2x = adjustedTargetX;
+      let c2y = adjustedTargetY;
 
-  const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX: adjustedSourceX,
-    sourceY: adjustedSourceY,
-    sourcePosition,
-    targetX: adjustedTargetX,
-    targetY: adjustedTargetY,
-    targetPosition,
-  });
+      if (sourcePosition === Position.Right) {
+        c1x = adjustedSourceX + controlDistance;
+      } else if (sourcePosition === Position.Left) {
+        c1x = adjustedSourceX - controlDistance;
+      } else if (sourcePosition === Position.Bottom) {
+        c1y = adjustedSourceY + controlDistance;
+      } else if (sourcePosition === Position.Top) {
+        c1y = adjustedSourceY - controlDistance;
+      }
+
+      if (targetPosition === Position.Right) {
+        c2x = adjustedTargetX + controlDistance;
+      } else if (targetPosition === Position.Left) {
+        c2x = adjustedTargetX - controlDistance;
+      } else if (targetPosition === Position.Bottom) {
+        c2y = adjustedTargetY + controlDistance;
+      } else if (targetPosition === Position.Top) {
+        c2y = adjustedTargetY - controlDistance;
+      }
+
+      const path = `M ${adjustedSourceX},${adjustedSourceY} C ${c1x},${c1y} ${c2x},${c2y} ${adjustedTargetX},${adjustedTargetY}`;
+      
+      // Calculate label position at t=0.5 on the bezier curve (not the straight line!)
+      const t = 0.5;
+      const mt = 1 - t;
+      const labelX = mt * mt * mt * adjustedSourceX + 
+                     3 * mt * mt * t * c1x + 
+                     3 * mt * t * t * c2x + 
+                     t * t * t * adjustedTargetX;
+      const labelY = mt * mt * mt * adjustedSourceY + 
+                     3 * mt * mt * t * c1y + 
+                     3 * mt * t * t * c2y + 
+                     t * t * t * adjustedTargetY;
+      
+      return [path, labelX, labelY];
+    }
+  }, [adjustedSourceX, adjustedSourceY, adjustedTargetX, adjustedTargetY, sourcePosition, targetPosition]);
 
   // Create an offset path for text to follow (parallel to edge, offset by strokeWidth/2)
   const [offsetPath, labelOffsetDirection] = React.useMemo(() => {
@@ -817,7 +901,7 @@ export default function ConversionEdge({
       } else {
         setAdjustedLabelPosition(null);
       }
-    }, 100); // 100ms debounce
+    }, 30); // 30ms debounce (reduced from 100ms for faster settling)
 
     return () => clearTimeout(timeoutId);
   }, [edgePath, labelX, labelY, id, getEdges, getNodes, selected]);
@@ -828,9 +912,9 @@ export default function ConversionEdge({
 
   // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
   const getEdgeColor = () => {
+    // Selected edges: darker gray to distinguish from highlighted edges
     if (selected) {
-      // Explicitly selected edge: 80% opacity
-      return 'rgba(0, 123, 255, 0.8)'; // blue at 80%
+      return '#222'; // very dark gray for selection
     }
     if (data?.isHighlighted) {
       // Different opacity for different selection types:
@@ -1118,20 +1202,95 @@ export default function ConversionEdge({
     }
   }, [isDraggingSource, isDraggingTarget, handleMouseMove, handleMouseUp]);
 
+  // Generate ribbon-style path for Sankey mode (filled area instead of stroked path)
+  const ribbonPath = React.useMemo(() => {
+    console.log('[Edge] Ribbon check:', { useSankeyView: data?.useSankeyView, strokeWidth, edgeId: id });
+    if (!data?.useSankeyView || !strokeWidth) return null;
+    
+    // Parse the bezier path to get control points
+    const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+    if (!nums || nums.length < 8) {
+      console.log('[Edge] Failed to parse bezier path');
+      return null;
+    }
+    console.log('[Edge] Generating ribbon path for edge:', id);
+    
+    const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
+    
+    // Calculate perpendicular offset vectors at start and end
+    // At start: perpendicular to (c1 - s)
+    const dx1 = c1x - sx;
+    const dy1 = c1y - sy;
+    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
+    const perpX1 = -dy1 / len1;
+    const perpY1 = dx1 / len1;
+    
+    // At end: perpendicular to (e - c2)
+    const dx2 = ex - c2x;
+    const dy2 = ey - c2y;
+    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
+    const perpX2 = -dy2 / len2;
+    const perpY2 = dx2 / len2;
+    
+    const halfWidth = strokeWidth / 2;
+    
+    // Top edge: offset upward
+    const topSx = sx + perpX1 * halfWidth;
+    const topSy = sy + perpY1 * halfWidth;
+    const topC1x = c1x + perpX1 * halfWidth;
+    const topC1y = c1y + perpY1 * halfWidth;
+    const topC2x = c2x + perpX2 * halfWidth;
+    const topC2y = c2y + perpY2 * halfWidth;
+    const topEx = ex + perpX2 * halfWidth;
+    const topEy = ey + perpY2 * halfWidth;
+    
+    // Bottom edge: offset downward (reverse direction for closed path)
+    const botEx = ex - perpX2 * halfWidth;
+    const botEy = ey - perpY2 * halfWidth;
+    const botC2x = c2x - perpX2 * halfWidth;
+    const botC2y = c2y - perpY2 * halfWidth;
+    const botC1x = c1x - perpX1 * halfWidth;
+    const botC1y = c1y - perpY1 * halfWidth;
+    const botSx = sx - perpX1 * halfWidth;
+    const botSy = sy - perpY1 * halfWidth;
+    
+    // Create closed path: top curve forward, then bottom curve backward
+    return `M ${topSx},${topSy} C ${topC1x},${topC1y} ${topC2x},${topC2y} ${topEx},${topEy} L ${botEx},${botEy} C ${botC2x},${botC2y} ${botC1x},${botC1y} ${botSx},${botSy} Z`;
+  }, [edgePath, data?.useSankeyView, strokeWidth]);
+
+  // Build clipPath style from source and target clipPaths
+  const sourceClipStyle = data?.sourceClipPathId ? { clipPath: `url(#${data.sourceClipPathId})` } : {};
+  const targetClipStyle = data?.targetClipPathId ? { clipPath: `url(#${data.targetClipPathId})` } : {};
+
   return (
     <>
       <defs>
         <marker
           id={`arrow-${id}`}
-          markerWidth="10"
-          markerHeight="10"
-          refX="9"
-          refY="3"
-          orient={arrowPosition.angle}
+          markerWidth="15"
+          markerHeight="15"
+          refX="13.5"
+          refY="4.5"
+          orient="auto"
           markerUnits="strokeWidth"
         >
           <path
-            d="M0,0 L0,6 L9,3 z"
+            d="M0,0 L0,9 L13.5,4.5 z"
+            fill={getEdgeColor()}
+          />
+        </marker>
+        {/* Fallback marker: fixed size, independent of stroke width */}
+        <marker
+          id={`arrow-fallback-${id}`}
+          markerWidth="15"
+          markerHeight="15"
+          refX="13.5"
+          refY="4.5"
+          orient="auto"
+          markerUnits="userSpaceOnUse"
+        >
+          <path
+            d="M0,0 L0,9 L13.5,4.5 z"
             fill={getEdgeColor()}
           />
         </marker>
@@ -1147,70 +1306,72 @@ export default function ConversionEdge({
         )}
       </defs>
       
-      <path
-        ref={pathRef}
-        id={id}
-        style={{
-          stroke: getEdgeColor(),
-          fill: 'none',
-          zIndex: selected ? 1000 : 1,
-          strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
-          markerEnd: data?.calculateWidth ? 'none' : `url(#arrow-${id})`,
-          transition: 'stroke-width 0.3s ease-in-out',
-        }}
-        className="react-flow__edge-path"
-        d={edgePath}
-        onContextMenu={handleContextMenu}
-        onDoubleClick={handleDoubleClick}
-      />
-      
-      {/* Invisible wider path for easier selection */}
-      <path
-        id={`${id}-selection`}
-        style={{
-          stroke: 'transparent',
-          strokeWidth: 8,
-          fill: 'none',
-          zIndex: selected ? 1000 : 1,
-          transition: 'stroke-width 0.3s ease-in-out',
-        }}
-        className="react-flow__edge-path"
-        d={edgePath}
-        onDoubleClick={handleDoubleClick}
-      />
-      
-      {/* Repeating arrows along the path - only show when using custom scaling */}
-      {data?.calculateWidth && arrowPositions.map((pos, index) => (
-        <g key={index}>
-          {/* Arrow background (canvas color) */}
-          <polygon
-            points={`${pos.x - 6},${pos.y - 4} ${pos.x - 6},${pos.y + 4} ${pos.x + 6},${pos.y}`}
-            fill="#f8f9fa"
-            stroke={getEdgeColor()}
-            strokeWidth="1"
-            transform={`rotate(${pos.angle} ${pos.x} ${pos.y})`}
-            style={{ zIndex: selected ? 1000 : 1001 }}
+      {/* Nested groups for source and target clipPaths */}
+      <g style={sourceClipStyle}>
+        <g style={targetClipStyle}>
+          {data?.useSankeyView && ribbonPath ? (
+            // Sankey mode: render as filled ribbon
+            <path
+              ref={pathRef}
+              id={id}
+              style={{
+                fill: getEdgeColor(),
+                fillOpacity: EDGE_OPACITY,
+                mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                stroke: 'none',
+                zIndex: selected ? 1000 : 1,
+                transition: 'opacity 0.3s ease-in-out',
+              }}
+              className="react-flow__edge-path"
+              d={ribbonPath}
+              onContextMenu={handleContextMenu}
+              onDoubleClick={handleDoubleClick}
+            />
+          ) : (
+            // Normal mode: render as stroked path
+            <path
+              ref={pathRef}
+              id={id}
+              style={{
+                stroke: getEdgeColor(),
+                strokeOpacity: EDGE_OPACITY,
+                mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                fill: 'none',
+                zIndex: selected ? 1000 : 1,
+                strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
+                transition: 'stroke-width 0.3s ease-in-out',
+              }}
+              className="react-flow__edge-path"
+              d={edgePath}
+              onContextMenu={handleContextMenu}
+              onDoubleClick={handleDoubleClick}
+            />
+          )}
+          
+          {/* Invisible wider path for easier selection */}
+          <path
+            id={`${id}-selection`}
+            style={{
+              stroke: 'transparent',
+              strokeWidth: 8,
+              fill: 'none',
+              zIndex: selected ? 1000 : 1,
+              transition: 'stroke-width 0.3s ease-in-out',
+            }}
+            className="react-flow__edge-path"
+            d={edgePath}
+            onDoubleClick={handleDoubleClick}
           />
         </g>
-      ))}
-      
-      {/* Single arrow at 75% position - only show when NOT using custom scaling */}
-      {!data?.calculateWidth && (
-        <polygon
-          points={`${arrowPosition.x - 4},${arrowPosition.y - 3} ${arrowPosition.x - 4},${arrowPosition.y + 3} ${arrowPosition.x + 4},${arrowPosition.y}`}
-          fill={getEdgeColor()}
-          transform={`rotate(${arrowPosition.angle} ${arrowPosition.x} ${arrowPosition.y})`}
-          style={{ zIndex: selected ? 1000 : 1 }}
-        />
-      )}
-      
+      </g>
       
       <EdgeLabelRenderer>
         <div
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY}px)`,
-            background: selected ? '#007bff' : 'rgba(255, 255, 255, 0.85)',
+            background: selected ? '#000' : 'rgba(255, 255, 255, 0.85)',
             color: selected ? '#fff' : '#333',
             padding: '4px 8px',
             borderRadius: '4px',
@@ -1481,7 +1642,7 @@ export default function ConversionEdge({
               className="edge-description-text-element"
               style={{
                 fontSize: '9px',
-                fill: selected ? '#007bff' : '#666',
+                fill: selected ? '#000' : '#666',
                 fontStyle: 'italic',
                 fontWeight: selected ? '600' : 'normal',
                 pointerEvents: 'auto',
