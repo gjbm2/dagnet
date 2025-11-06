@@ -40,6 +40,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const [localData, setLocalData] = useState(edgeData);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   
+  // Create a setGraph wrapper that calls onUpdateGraph (which updates the tab-specific graph)
+  const setGraph = (updatedGraph: any) => {
+    onUpdateGraph(updatedGraph);
+  };
+  
   // Find the edge in the graph
   const edge = graph?.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
   
@@ -65,7 +70,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     if (paramType === 'cost_time') paramId = edge?.cost_time_parameter_id;
 
     if (paramId) {
-      dataOperationsService.getParameterFromFile({ paramId, edgeId });
+      dataOperationsService.getParameterFromFile({ 
+        paramId, 
+        edgeId,
+        graph,
+        setGraph
+      });
     }
     onClose();
   };
@@ -78,7 +88,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     if (paramType === 'cost_time') paramId = edge?.cost_time_parameter_id;
 
     if (paramId) {
-      dataOperationsService.putParameterToFile({ paramId, edgeId });
+      dataOperationsService.putParameterToFile({ 
+        paramId, 
+        edgeId,
+        graph,
+        setGraph
+      });
     }
     onClose();
   };

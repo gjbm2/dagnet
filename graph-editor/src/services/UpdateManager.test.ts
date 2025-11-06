@@ -256,8 +256,10 @@ describe('UpdateManager', () => {
         label_overridden: true,
         description: 'Old Description',
         description_overridden: true,
-        event_id: 'old_event',
-        event_id_overridden: false
+        event: {
+          id: 'old_event',
+          id_overridden: false
+        }
       };
       
       const result = await updateManager.handleFileToGraph(
@@ -268,12 +270,12 @@ describe('UpdateManager', () => {
         { interactive: false }
       );
       
-      // 2 conflicts (label, description), 1 change (event_id)
+      // 2 conflicts (label, description), 1 change (event.id)
       expect(result.conflicts).toHaveLength(2);
       expect(result.changes).toHaveLength(1);
       
-      // event_id should update
-      expect(target.event_id).toBe('new_event');
+      // event.id should update
+      expect(target.event?.id).toBe('new_event');
     });
     
     it('should handle no conflicts gracefully', async () => {
@@ -365,63 +367,9 @@ describe('UpdateManager', () => {
   // TEST SUITE 7: Event Emissions
   // ============================================================
   
-  describe('Event Emissions', () => {
-    it('should emit update:start event', async () => {
-      const source = { name: 'Name' };
-      const target = { label: 'Old' };
-      
-      const eventPromise = new Promise((resolve) => {
-        updateManager.once('update:start', (event) => {
-          expect(event.direction).toBe('file_to_graph');
-          expect(event.operation).toBe('UPDATE');
-          expect(event.subDest).toBe('node');
-          resolve(true);
-        });
-      });
-      
-      // Start the operation (which emits the event)
-      const operationPromise = updateManager.handleFileToGraph(source, target, 'UPDATE', 'node');
-      
-      // Wait for event, then for operation to complete
-      await eventPromise;
-      await operationPromise;
-    });
-    
-    it.skip('should emit update:complete event', async () => {
-      // TODO: Fix event timing issue - events are emitted but test timing is tricky
-      // Core functionality works, this is just event infrastructure testing
-      const source = { name: 'Name' };
-      const target = { label: 'Old' };
-      
-      let eventReceived = false;
-      updateManager.once('update:complete', (event) => {
-        expect(event.result).toBeDefined();
-        expect(event.result.success).toBe(true);
-        eventReceived = true;
-      });
-      
-      await updateManager.handleFileToGraph(source, target, 'UPDATE', 'node');
-      expect(eventReceived).toBe(true);
-    });
-    
-    it.skip('should emit update:error event on failure', async () => {
-      // TODO: Fix event timing issue - events are emitted but test timing is tricky
-      // Core functionality works, this is just event infrastructure testing
-      let eventReceived = false;
-      updateManager.once('update:error', (event) => {
-        expect(event.error).toBeDefined();
-        eventReceived = true;
-      });
-      
-      try {
-        await updateManager.handleGraphToFile({}, null, 'CREATE', 'parameter', { validateOnly: false });
-      } catch (error) {
-        // Error expected
-      }
-      
-      expect(eventReceived).toBe(true);
-    });
-  });
+  // NOTE: Event emission tests removed - UpdateManager no longer uses EventEmitter
+  // (Node.js EventEmitter doesn't work in browser)
+  // Events replaced with console.log for debugging
   
   // ============================================================
   // TEST SUITE 8: Error Handling

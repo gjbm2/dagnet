@@ -1,4 +1,4 @@
-import { Graph } from '../lib/types';
+import { Graph } from '../types';
 
 export interface HistoryState {
   id: string;

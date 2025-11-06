@@ -35,8 +35,16 @@
         "label_overridden": { "type": "boolean", "default": false, "description": "If true, label was manually edited and should not be auto-updated" },
         "description": { "type": "string" },
         "description_overridden": { "type": "boolean", "default": false, "description": "If true, description was manually edited and should not be auto-updated" },
-        "event_id": { "type": "string", "pattern": "^[a-z0-9_]+$", "description": "Reference to event in events registry (allows underscore for production event names)" },
-        "event_id_overridden": { "type": "boolean", "default": false, "description": "If true, event_id was manually edited and should not be auto-updated" },
+        "event": {
+          "type": "object",
+          "description": "Event reference for this node (optional)",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z0-9_]+$", "description": "Reference to event in events registry (allows underscore for production event names)" },
+            "id_overridden": { "type": "boolean", "default": false, "description": "If true, event ID was manually edited and should not be auto-updated" }
+          },
+          "required": ["id"]
+        },
         "tags": {
           "type": "array",
           "items": { "type": "string" },
@@ -85,6 +93,7 @@
                 "required": ["name", "weight"],
                 "properties": {
                   "name": { "type": "string" },
+                  "name_overridden": { "type": "boolean", "default": false, "description": "If true, name was manually edited and should not be auto-updated" },
                   "weight": { "type": "number", "minimum": 0, "maximum": 1 },
                   "weight_overridden": { "type": "boolean", "default": false, "description": "If true, weight was manually edited and should not be auto-updated" }
                 }
@@ -170,18 +179,6 @@
           "items": { "$ref": "#/$defs/ConditionalProbability" },
           "description": "Optional array of conditional probabilities. Evaluated in order; first match wins. Falls back to p if no matches."
         },
-        "parameter_id": {
-          "type": "string",
-          "description": "Reference to parameter registry for probability (type='probability')"
-        },
-        "cost_gbp_parameter_id": {
-          "type": "string",
-          "description": "Reference to parameter registry for GBP cost (type='cost_gbp')"
-        },
-        "cost_time_parameter_id": {
-          "type": "string",
-          "description": "Reference to parameter registry for time cost (type='cost_time')"
-        },
         "weight_default": {
           "type": "number",
           "minimum": 0,
@@ -236,11 +233,11 @@
           },
           "required": ["retrieved_at", "source"]
         },
-        "parameter_id": { "type": "string", "description": "Reference to parameter file" },
+        "id": { "type": "string", "description": "Reference to parameter file (FK to parameter-{id}.yaml)" },
         "locked": { "type": "boolean", "default": false, "description": "DEPRECATED: Use mean_overridden instead", "deprecated": true },
         "data_source": {
           "type": "object",
-          "description": "Connection settings for external data retrieval. Can be used standalone (ad-hoc mode) or as override for parameter_id connection.",
+          "description": "Connection settings for external data retrieval. Can be used standalone (ad-hoc mode) or as override for parameter file connection.",
           "additionalProperties": false,
           "properties": {
             "source_type": {
@@ -278,10 +275,10 @@
           "default": "normal"
         },
         "distribution_overridden": { "type": "boolean", "default": false, "description": "If true, distribution was manually edited and should not be auto-updated" },
-        "parameter_id": { "type": "string", "description": "Reference to cost parameter file" },
+        "id": { "type": "string", "description": "Reference to cost parameter file (FK to parameter-{id}.yaml)" },
         "data_source": {
           "type": "object",
-          "description": "Connection settings for external data retrieval. Can be used standalone (ad-hoc mode) or as override for parameter_id connection.",
+          "description": "Connection settings for external data retrieval. Can be used standalone (ad-hoc mode) or as override for parameter file connection.",
           "additionalProperties": false,
           "properties": {
             "source_type": {

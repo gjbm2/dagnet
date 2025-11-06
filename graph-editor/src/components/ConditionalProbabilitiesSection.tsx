@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { ConditionalProbability, GraphNode, GraphEdge } from '@/lib/types';
+import { ConditionalProbability, GraphNode, GraphEdge } from '@/types';
 import { getUpstreamNodes, validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';

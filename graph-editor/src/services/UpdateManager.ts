@@ -11,7 +11,7 @@
  * - Respect override flags (don't update overridden fields)
  * - Resolve conflicts (interactive and non-interactive modes)
  * - Maintain audit trail of all updates
- * - Emit events for UI feedback
+ * - Log events for debugging (TODO: Implement browser-compatible event system)
  * 
  * Phase: 0.3 - UpdateManager Implementation
  * Status: In Progress
@@ -22,7 +22,8 @@
  * - PROJECT_CONNECT/CURRENT/SCHEMA_FIELD_MAPPINGS.md
  */
 
-import { EventEmitter } from 'events';
+// Note: Removed EventEmitter (Node.js only) - browser doesn't support it
+// TODO: Implement browser-compatible event system if needed (e.g., CustomEvent)
 
 // ============================================================
 // TYPES & INTERFACES
@@ -122,12 +123,11 @@ export interface MappingConfiguration {
 // UPDATEMANAGER CLASS
 // ============================================================
 
-export class UpdateManager extends EventEmitter {
+export class UpdateManager {
   private mappingConfigurations: Map<string, MappingConfiguration>;
   private auditLog: any[];
   
   constructor() {
-    super();
     this.mappingConfigurations = new Map();
     this.auditLog = [];
     this.initializeMappings();
@@ -147,7 +147,7 @@ export class UpdateManager extends EventEmitter {
     operation: 'UPDATE',
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
-    this.emit('update:start', { direction: 'graph_internal', operation });
+    console.log('[UpdateManager] update:start', { direction: 'graph_internal', operation });
     
     try {
       const key = this.getMappingKey('graph_internal', operation);
@@ -159,10 +159,10 @@ export class UpdateManager extends EventEmitter {
       
       const result = await this.applyMappings(source, target, config.mappings, options);
       
-      this.emit('update:complete', { direction: 'graph_internal', operation, result });
+      console.log('[UpdateManager] update:complete', { direction: 'graph_internal', operation, result });
       return result;
     } catch (error) {
-      this.emit('update:error', { direction: 'graph_internal', operation, error });
+      console.error('[UpdateManager] update:error', { direction: 'graph_internal', operation, error });
       throw error;
     }
   }
@@ -181,7 +181,7 @@ export class UpdateManager extends EventEmitter {
     subDest: SubDestination,
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
-    this.emit('update:start', { direction: 'graph_to_file', operation, subDest });
+    console.log('[UpdateManager] update:start', { direction: 'graph_to_file', operation, subDest });
     
     try {
       switch (operation) {
@@ -195,7 +195,7 @@ export class UpdateManager extends EventEmitter {
           throw new Error(`Unsupported operation: ${operation}`);
       }
     } catch (error) {
-      this.emit('update:error', { direction: 'graph_to_file', operation, subDest, error });
+      console.error('[UpdateManager] update:error', { direction: 'graph_to_file', operation, subDest, error });
       throw error;
     }
   }
@@ -205,7 +205,7 @@ export class UpdateManager extends EventEmitter {
    * Examples:
    * - Pull from parameter file → update edge
    * - Pull from case file → update case node
-   * - Link node to registry → sync label/description/event_id
+   * - Link node to registry → sync label/description/event.id
    */
   async handleFileToGraph(
     source: any,
@@ -214,12 +214,12 @@ export class UpdateManager extends EventEmitter {
     subDest: 'parameter' | 'case' | 'node',
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
-    this.emit('update:start', { direction: 'file_to_graph', operation, subDest });
+    console.log('[UpdateManager] update:start', { direction: 'file_to_graph', operation, subDest });
     
     try {
       return await this.syncFileToGraph(source, target, subDest, options);
     } catch (error) {
-      this.emit('update:error', { direction: 'file_to_graph', operation, subDest, error });
+      console.error('[UpdateManager] update:error', { direction: 'file_to_graph', operation, subDest, error });
       throw error;
     }
   }
@@ -237,12 +237,12 @@ export class UpdateManager extends EventEmitter {
     subDest: 'parameter' | 'case',
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
-    this.emit('update:start', { direction: 'external_to_graph', operation, subDest });
+    console.log('[UpdateManager] update:start', { direction: 'external_to_graph', operation, subDest });
     
     try {
       return await this.updateGraphFromExternal(source, target, subDest, options);
     } catch (error) {
-      this.emit('update:error', { direction: 'external_to_graph', operation, subDest, error });
+      console.error('[UpdateManager] update:error', { direction: 'external_to_graph', operation, subDest, error });
       throw error;
     }
   }
@@ -260,12 +260,12 @@ export class UpdateManager extends EventEmitter {
     subDest: 'parameter' | 'case',
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
-    this.emit('update:start', { direction: 'external_to_file', operation, subDest });
+    console.log('[UpdateManager] update:start', { direction: 'external_to_file', operation, subDest });
     
     try {
       return await this.appendExternalToFile(source, target, subDest, options);
     } catch (error) {
-      this.emit('update:error', { direction: 'external_to_file', operation, subDest, error });
+      console.error('[UpdateManager] update:error', { direction: 'external_to_file', operation, subDest, error });
       throw error;
     }
   }
@@ -669,17 +669,69 @@ export class UpdateManager extends EventEmitter {
     // ============================================================
     
     // Flow B.CREATE: Graph → File/Parameter (CREATE new file)
+    // Note: When creating a new param file, we initialize its name/description from the edge
+    // as a sensible default. This is different from GET, where we don't overwrite edge metadata.
     this.addMapping('graph_to_file', 'CREATE', 'parameter', [
-      { sourceField: 'id', targetField: 'id' },  // parameter ID from edge
+      { sourceField: 'id', targetField: 'id' },
       { sourceField: 'label', targetField: 'name' },
       { sourceField: 'description', targetField: 'description' },
       { sourceField: 'query', targetField: 'query' },
+      // Type field: determine from which edge param is populated
+      { 
+        sourceField: 'p', 
+        targetField: 'parameter_type',
+        condition: (source) => !!source.p?.id,
+        transform: () => 'probability'
+      },
+      { 
+        sourceField: 'cost_gbp', 
+        targetField: 'parameter_type',
+        condition: (source) => !!source.cost_gbp?.id,
+        transform: () => 'cost_gbp'
+      },
+      { 
+        sourceField: 'cost_time', 
+        targetField: 'parameter_type',
+        condition: (source) => !!source.cost_time?.id,
+        transform: () => 'cost_time'
+      },
+      // Initial values: populate from whichever param type exists
       { 
         sourceField: 'p.mean', 
-        targetField: 'values[0].mean',
+        targetField: 'values[0]',
+        condition: (source) => !!source.p?.id,
         transform: (value, source) => ({
           mean: value,
-          window_from: new Date().toISOString()
+          stdev: source.p.stdev,
+          distribution: source.p.distribution,
+          n: source.p.evidence?.n,
+          k: source.p.evidence?.k,
+          window_from: source.p.evidence?.window_from || new Date().toISOString(),
+          window_to: source.p.evidence?.window_to
+        })
+      },
+      { 
+        sourceField: 'cost_gbp.mean', 
+        targetField: 'values[0]',
+        condition: (source) => !!source.cost_gbp?.id,
+        transform: (value, source) => ({
+          mean: value,
+          stdev: source.cost_gbp.stdev,
+          distribution: source.cost_gbp.distribution,
+          window_from: source.cost_gbp.evidence?.window_from || new Date().toISOString(),
+          window_to: source.cost_gbp.evidence?.window_to
+        })
+      },
+      { 
+        sourceField: 'cost_time.mean', 
+        targetField: 'values[0]',
+        condition: (source) => !!source.cost_time?.id,
+        transform: (value, source) => ({
+          mean: value,
+          stdev: source.cost_time.stdev,
+          distribution: source.cost_time.distribution,
+          window_from: source.cost_time.evidence?.window_from || new Date().toISOString(),
+          window_to: source.cost_time.evidence?.window_to
         })
       }
     ]);
@@ -692,29 +744,82 @@ export class UpdateManager extends EventEmitter {
     
     // Flow B.APPEND: Graph → File/Parameter (APPEND new value)
     this.addMapping('graph_to_file', 'APPEND', 'parameter', [
+      // Probability parameter: edge.p.* → parameter.values[]
       { 
         sourceField: 'p.mean', 
-        targetField: 'values[]',  // Append to array
+        targetField: 'values[]',
+        condition: (source, target) => target.type === 'probability' || target.parameter_type === 'probability',
         transform: (value, source) => ({
           mean: value,
           stdev: source.p.stdev,
           distribution: source.p.distribution,
-          window_from: new Date().toISOString()
+          n: source.p.evidence?.n,
+          k: source.p.evidence?.k,
+          window_from: source.p.evidence?.window_from || new Date().toISOString(),
+          window_to: source.p.evidence?.window_to
+        })
+      },
+      // Cost GBP parameter: edge.cost_gbp.* → parameter.values[]
+      { 
+        sourceField: 'cost_gbp.mean', 
+        targetField: 'values[]',
+        condition: (source, target) => target.type === 'cost_gbp' || target.parameter_type === 'cost_gbp',
+        transform: (value, source) => ({
+          mean: value,
+          stdev: source.cost_gbp.stdev,
+          distribution: source.cost_gbp.distribution,
+          window_from: source.cost_gbp.evidence?.window_from || new Date().toISOString(),
+          window_to: source.cost_gbp.evidence?.window_to
+        })
+      },
+      // Cost Time parameter: edge.cost_time.* → parameter.values[]
+      { 
+        sourceField: 'cost_time.mean', 
+        targetField: 'values[]',
+        condition: (source, target) => target.type === 'cost_time' || target.parameter_type === 'cost_time',
+        transform: (value, source) => ({
+          mean: value,
+          stdev: source.cost_time.stdev,
+          distribution: source.cost_time.distribution,
+          window_from: source.cost_time.evidence?.window_from || new Date().toISOString(),
+          window_to: source.cost_time.evidence?.window_to
         })
       }
+      
+      // NOTE: Conditional probabilities (edge.conditional_p[i].p) reuse the same mappings above
+      // The dataOperationsService must pass conditional_p[i].p (the ProbabilityParam object) as the source
+      // This way, the probability parameter mappings work for both edge.p and edge.conditional_p[i].p
     ]);
     
     // Flow C.CREATE: Graph → File/Case (CREATE new file)
+    // Note: When creating a new case file, we pre-populate it with helpful defaults from the graph
+    // User will then edit the form and save. After that, case file and node metadata are independent.
     this.addMapping('graph_to_file', 'CREATE', 'case', [
-      { sourceField: 'case.id', targetField: 'id' },  // parameter_id in case file
-      { sourceField: 'label', targetField: 'name' },
-      { sourceField: 'description', targetField: 'description' },
+      { sourceField: 'case.id', targetField: 'id' },  // case ID
+      { sourceField: 'label', targetField: 'name' },  // Initialize case name from node label
+      { sourceField: 'description', targetField: 'description' },  // Initialize case description from node
       { sourceField: 'case.variants', targetField: 'variants' }
     ]);
     
-    // Flow C.UPDATE: Graph → File/Case (UPDATE metadata)
+    // Flow C.UPDATE: Graph → File/Case (UPDATE current variant weights)
+    // Note: This updates case.variants array with current weights from graph
+    // This is NOT metadata - it's the current state of variant allocation
     this.addMapping('graph_to_file', 'UPDATE', 'case', [
-      { sourceField: 'description', targetField: 'description' }
+      {
+        sourceField: 'case.variants',
+        targetField: 'case.variants',
+        transform: (graphVariants, source, target) => {
+          // Update weights in case file from graph node
+          // Preserve all other variant properties from file
+          return target.case.variants.map((fileVariant: any) => {
+            const graphVariant = graphVariants.find((gv: any) => gv.name === fileVariant.name);
+            return {
+              ...fileVariant,
+              weight: graphVariant?.weight ?? fileVariant.weight
+            };
+          });
+        }
+      }
     ]);
     
     // Flow C.APPEND: Graph → File/Case (APPEND new schedule)
@@ -737,12 +842,14 @@ export class UpdateManager extends EventEmitter {
       { sourceField: 'id', targetField: 'id' },  // human-readable ID
       { sourceField: 'label', targetField: 'name' },
       { sourceField: 'description', targetField: 'description' },
-      { sourceField: 'event_id', targetField: 'event_id' }
+      { sourceField: 'event.id', targetField: 'event_id' }
     ]);
     
     // Flow D.UPDATE: Graph → File/Node (UPDATE registry entry)
     this.addMapping('graph_to_file', 'UPDATE', 'node', [
-      { sourceField: 'event_id', targetField: 'event_id' }
+      { sourceField: 'label', targetField: 'name' },
+      { sourceField: 'description', targetField: 'description' },
+      { sourceField: 'event.id', targetField: 'event_id' }
     ]);
     
     // Flow E.CREATE: Graph → File/Context (CREATE new registry entry)
@@ -762,83 +869,165 @@ export class UpdateManager extends EventEmitter {
     // ============================================================
     
     // Flow G: File/Parameter → Graph (UPDATE edge)
+    // Note: This updates edge.p.* fields (probability parameter data), NOT edge-level metadata
     this.addMapping('file_to_graph', 'UPDATE', 'parameter', [
-      { 
-        sourceField: 'name', 
-        targetField: 'label',
-        overrideFlag: 'label_overridden'
-      },
-      { 
-        sourceField: 'description', 
-        targetField: 'description',
-        overrideFlag: 'description_overridden'
-      },
+      // Probability parameters → edge.p.*
       { 
         sourceField: 'values[latest].mean', 
         targetField: 'p.mean',
         overrideFlag: 'p.mean_overridden',
-        transform: (value, source) => value
+        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
       },
       { 
         sourceField: 'values[latest].stdev', 
         targetField: 'p.stdev',
-        overrideFlag: 'p.stdev_overridden'
+        overrideFlag: 'p.stdev_overridden',
+        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
       },
       { 
         sourceField: 'values[latest].distribution', 
         targetField: 'p.distribution',
-        overrideFlag: 'p.distribution_overridden'
+        overrideFlag: 'p.distribution_overridden',
+        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
       },
       { 
         sourceField: 'values[latest].n', 
-        targetField: 'p.evidence.n'
-        // No override flag - evidence is always synced
+        targetField: 'p.evidence.n',
+        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
       },
       { 
         sourceField: 'values[latest].k', 
-        targetField: 'p.evidence.k'
+        targetField: 'p.evidence.k',
+        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
       },
       { 
         sourceField: 'values[latest].window_from', 
-        targetField: 'p.evidence.window_from'
+        targetField: 'p.evidence.window_from',
+        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
       },
       { 
         sourceField: 'values[latest].window_to', 
-        targetField: 'p.evidence.window_to'
+        targetField: 'p.evidence.window_to',
+        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
       },
+      
+      // Cost GBP parameters → edge.cost_gbp.*
+      { 
+        sourceField: 'values[latest].mean', 
+        targetField: 'cost_gbp.mean',
+        overrideFlag: 'cost_gbp.mean_overridden',
+        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp'
+      },
+      { 
+        sourceField: 'values[latest].stdev', 
+        targetField: 'cost_gbp.stdev',
+        overrideFlag: 'cost_gbp.stdev_overridden',
+        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp'
+      },
+      { 
+        sourceField: 'values[latest].distribution', 
+        targetField: 'cost_gbp.distribution',
+        overrideFlag: 'cost_gbp.distribution_overridden',
+        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp'
+      },
+      { 
+        sourceField: 'values[latest].window_from', 
+        targetField: 'cost_gbp.evidence.window_from',
+        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp'
+      },
+      { 
+        sourceField: 'values[latest].window_to', 
+        targetField: 'cost_gbp.evidence.window_to',
+        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp'
+      },
+      
+      // Cost Time parameters → edge.cost_time.*
+      { 
+        sourceField: 'values[latest].mean', 
+        targetField: 'cost_time.mean',
+        overrideFlag: 'cost_time.mean_overridden',
+        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+      },
+      { 
+        sourceField: 'values[latest].stdev', 
+        targetField: 'cost_time.stdev',
+        overrideFlag: 'cost_time.stdev_overridden',
+        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+      },
+      { 
+        sourceField: 'values[latest].distribution', 
+        targetField: 'cost_time.distribution',
+        overrideFlag: 'cost_time.distribution_overridden',
+        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+      },
+      { 
+        sourceField: 'values[latest].window_from', 
+        targetField: 'cost_time.evidence.window_from',
+        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+      },
+      { 
+        sourceField: 'values[latest].window_to', 
+        targetField: 'cost_time.evidence.window_to',
+        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+      },
+      
+      // Query string (mastered in graph, applies to all parameter types)
       { 
         sourceField: 'query', 
         targetField: 'query',
         overrideFlag: 'query_overridden'
-      }
+      },
+      
+      // NOTE: Conditional probabilities (edge.conditional_p[]) reuse the same mappings as edge.p
+      // The dataOperationsService must:
+      // 1. Find the conditional_p[i] element where p.parameter_id matches the paramId
+      // 2. Pass conditional_p[i].p (the ProbabilityParam object) as the target to UpdateManager
+      // 3. After update, replace conditional_p[i].p with the updated object
+      // This way, the same mappings work for both edge.p and edge.conditional_p[i].p
+      
+      // NOTE: We do NOT map parameter.name or parameter.description to edge.label or edge.description
+      // Those are edge-level metadata and should be independent of the parameter
     ]);
     
     // Flow H: File/Case → Graph (UPDATE case node)
+    // Note: This updates node.case.* fields (case-specific data), NOT node-level metadata
+    // Node label/description come from node files, not case files
     this.addMapping('file_to_graph', 'UPDATE', 'case', [
       { 
-        sourceField: 'name', 
-        targetField: 'label',
-        overrideFlag: 'label_overridden'
-      },
-      { 
-        sourceField: 'description', 
-        targetField: 'description',
-        overrideFlag: 'description_overridden'
-      },
-      { 
-        sourceField: 'schedules[latest].variants', 
+        sourceField: 'case.variants', 
         targetField: 'case.variants',
-        transform: (variants, source, target) => {
-          // Merge latest weights from file with existing structure
-          return target.case.variants.map((v: any) => {
-            const fileVariant = variants.find((fv: any) => fv.name === v.name);
+        transform: (fileVariants, source, target) => {
+          // Sync variant names and weights from case file to graph node
+          // Respect override flags: if graph has overridden a variant, preserve it
+          
+          // If target doesn't have variants yet, create fresh from file
+          if (!target.case || !target.case.variants) {
+            return fileVariants.map((fv: any) => ({
+              name: fv.name,
+              name_overridden: false,
+              weight: fv.weight,
+              weight_overridden: false
+            }));
+          }
+          
+          // Merge: respect overrides, sync non-overridden fields
+          const merged = fileVariants.map((fv: any) => {
+            const graphVariant = target.case.variants.find((gv: any) => gv.name === fv.name);
+            
             return {
-              ...v,
-              weight: fileVariant?.weight ?? v.weight
+              name: graphVariant?.name_overridden ? graphVariant.name : fv.name,
+              name_overridden: graphVariant?.name_overridden ?? false,
+              weight: graphVariant?.weight_overridden ? graphVariant.weight : fv.weight,
+              weight_overridden: graphVariant?.weight_overridden ?? false
             };
           });
+          
+          return merged;
         }
       }
+      // NOTE: We do NOT map case.name or case.description to node.label or node.description
+      // Those are node-level metadata and come from node files, not case files
+      // If needed, we could add node.case.name and node.case.description fields for case metadata
     ]);
     
     // Flow I: File/Node → Graph (UPDATE node from registry)
@@ -855,8 +1044,8 @@ export class UpdateManager extends EventEmitter {
       },
       { 
         sourceField: 'event_id', 
-        targetField: 'event_id',
-        overrideFlag: 'event_id_overridden'
+        targetField: 'event.id',
+        overrideFlag: 'event.id_overridden'
       }
     ]);
     

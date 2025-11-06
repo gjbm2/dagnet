@@ -46,6 +46,8 @@ interface EnhancedSelectorProps {
   onAfterCreate?: (newItem: any) => void;
   /** Callback when field is cleared (for undo/redo history) */
   onClear?: () => void;
+  /** UUID of the graph node/edge instance being edited (for auto-get operations) */
+  targetInstanceUuid?: string;
 }
 
 /**
@@ -77,13 +79,14 @@ export function EnhancedSelector({
   onOpenConnected,
   onOpenItem,
   onAfterCreate,
-  onClear
+  onClear,
+  targetInstanceUuid
 }: EnhancedSelectorProps) {
   console.log(`[${new Date().toISOString()}] [EnhancedSelector] RENDER (type=${type}, value=${value})`);
   const { operations: navOps } = useNavigatorContext();
   const { tabs, operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
-  const { graph } = useGraphStore();
+  const { graph, setGraph } = useGraphStore();
   
   const [inputValue, setInputValue] = useState(value);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -325,6 +328,45 @@ export function EnhancedSelector({
     if (item.data && onAfterCreate) {
       onAfterCreate(item.data);
     }
+    
+    // AUTO-GET: If connecting to an item with a file, automatically pull data from file
+    // This provides immediate feedback and populates the graph with file data on first connect
+    if (item.hasFile && graph && targetInstanceUuid && (type === 'parameter' || type === 'case' || type === 'node')) {
+      console.log(`[EnhancedSelector] Auto-get from file: type=${type}, id=${item.id}, targetInstanceUuid=${targetInstanceUuid}`);
+      
+      // Trigger the get operation asynchronously (don't block the selection)
+      setTimeout(async () => {
+        try {
+          const { dataOperationsService } = await import('../services/dataOperationsService');
+          
+          if (type === 'parameter') {
+            await dataOperationsService.getParameterFromFile({
+              paramId: item.id,           // Semantic ID → finds parameter-{id}.yaml
+              edgeId: targetInstanceUuid, // UUID → finds which edge instance to update
+              graph: graph as any,
+              setGraph: setGraph as any
+            });
+          } else if (type === 'case') {
+            await dataOperationsService.getCaseFromFile({
+              caseId: item.id,            // Semantic ID → finds case-{id}.yaml
+              nodeId: targetInstanceUuid, // UUID → finds which node instance to update
+              graph: graph as any,
+              setGraph: setGraph as any
+            });
+          } else if (type === 'node') {
+            await dataOperationsService.getNodeFromFile({
+              nodeId: item.id,                 // Semantic ID → finds node-{id}.yaml
+              targetNodeUuid: targetInstanceUuid, // UUID → finds which node instance to update
+              graph: graph as any,
+              setGraph: setGraph as any
+            });
+          }
+        } catch (error) {
+          console.error('[EnhancedSelector] Auto-get failed:', error);
+          // Don't show toast - user didn't explicitly request this, so silent failure is OK
+        }
+      }, 100); // Small delay to allow UI to update first
+    }
   };
 
   const handleClear = () => {
@@ -544,12 +586,14 @@ export function EnhancedSelector({
           )}
 
           {/* Lightning Menu - data operations */}
-          {!disabled && inputValue && isConnected && (type === 'parameter' || type === 'case' || type === 'node') && (
+          {!disabled && inputValue && isConnected && (type === 'parameter' || type === 'case' || type === 'node') && graph && (
             <LightningMenu
               objectType={type}
               objectId={inputValue}
               hasFile={!!currentItem?.hasFile}
-              targetId={undefined} // TODO: Pass edge/node ID from parent context
+              targetId={targetInstanceUuid}
+              graph={graph}
+              setGraph={setGraph}
             />
           )}
         </div>

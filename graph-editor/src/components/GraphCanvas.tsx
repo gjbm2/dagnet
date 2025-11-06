@@ -4265,10 +4265,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const topLeftX = sankeyNode.x0;
         const topLeftY = sankeyNode.y0;
         
-        // Also store the height so toFlow can compute center-to-topleft conversion
+        // Store the height as a temporary property for toFlow conversion
         const sankeyHeight = sankeyNode.y1 - sankeyNode.y0;
-        if (!graphNode.data) graphNode.data = {};
-        graphNode.data.sankeyHeight = sankeyHeight;
+        // Use a temporary property on the layout object (not .data which doesn't exist on graph schema)
+        (graphNode.layout as any).sankeyHeight = sankeyHeight;
         
         console.log(`[Sankey Layout] Node ${graphNode.label}: OLD x=${graphNode.layout.x}, y=${graphNode.layout.y} → NEW x=${topLeftX.toFixed(0)}, y=${topLeftY.toFixed(0)} (top-left), height=${sankeyHeight.toFixed(0)}`);
         
@@ -4942,6 +4942,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           nodes={nodes}
           activeTabId={effectiveActiveTabId}
           tabOperations={tabOperations}
+          graph={graph}
+          setGraph={setGraph}
           onClose={() => setNodeContextMenu(null)}
           onSelectNode={onSelectedNodeChange}
           onDeleteNode={deleteNode}
