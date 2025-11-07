@@ -1314,8 +1314,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     lastSyncedGraphRef.current = graphJson;
     
     console.log('🔄 Graph→ReactFlow sync triggered');
-    console.log('  Graph edges:', graph.edges?.map((e: any) => e.id));
-    console.log('  ReactFlow edges:', edges.map(e => e.id));
+    console.log('  Graph edges (UUIDs):', graph.edges?.map((e: any) => e.uuid));
+    console.log('  ReactFlow edges (UUIDs):', edges.map(e => e.id));
     
     // Set syncing flag to prevent re-routing during graph->ReactFlow sync
     isSyncingRef.current = true;
@@ -1337,10 +1337,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
     
     // Check if any edge IDs changed (happens when reconnecting to different nodes)
-    const graphEdgeIds = new Set(graph.edges.map((e: any) => e.id));
-    const reactFlowEdgeIds = new Set(edges.map(e => e.id));
+    // NOTE: In ReactFlow, edge.id IS the UUID. In graph, we need e.uuid.
+    const graphEdgeIds = new Set(graph.edges.map((e: any) => e.uuid));
+    const reactFlowEdgeIds = new Set(edges.map(e => e.id));  // ReactFlow edge.id is the UUID
     const edgeIdsChanged = edges.some(e => !graphEdgeIds.has(e.id)) || 
-                           graph.edges.some((e: any) => !reactFlowEdgeIds.has(e.id));
+                           graph.edges.some((e: any) => !reactFlowEdgeIds.has(e.uuid));
     
     console.log('  Edge IDs changed:', edgeIdsChanged);
     if (edgeIdsChanged) {
@@ -1876,7 +1877,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const isHidden = (sourceNode && hiddenNodes.has(sourceNode.data?.id)) || 
                         (targetNode && hiddenNodes.has(targetNode.data?.id));
         return {
-          ...edge,
+        ...edge,
           className: isHidden ? 'hidden' : ''
         };
       })
@@ -1942,7 +1943,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Track last scaling values to detect actual changes
   const lastScalingRef = useRef({ uniform: useUniformScaling, generosity: massGenerosity });
-  
+
   // Update edge widths when scaling mode changes
   useEffect(() => {
     // Check if scaling actually changed
@@ -1963,26 +1964,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('Reset isSyncingRef after edge scaling');
     }, 50);
     
-    // First pass: update edge data without calculateWidth functions
+      // First pass: update edge data without calculateWidth functions
     const edgesWithWidth = edges.map(edge => ({
-      ...edge,
-      data: {
-        ...edge.data
-      }
-    }));
-    
-    // Second pass: add calculateWidth functions with updated edge data
-    const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
-      ...edge,
-      data: {
-        ...edge.data,
-        calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
-      }
-    }));
-    
-    // Recalculate offsets for mass-based scaling modes
-    const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
-    
+        ...edge,
+        data: {
+          ...edge.data
+        }
+      }));
+      
+      // Second pass: add calculateWidth functions with updated edge data
+      const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
+        ...edge,
+        data: {
+          ...edge.data,
+          calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
+        }
+      }));
+      
+      // Recalculate offsets for mass-based scaling modes
+      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
+      
     // Calculate bundles to get clipPath IDs (bundles will be synced by separate effect after edges update)
     const tempBundles = groupEdgesIntoBundles(edgesWithOffsets, nodes);
     
@@ -2013,14 +2014,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const tgtAnchor = computeAnchor(edge.target, edge.data?.targetFace, edge.targetOffsetX, edge.targetOffsetY);
       
       return {
-      ...edge,
-      data: {
-        ...edge.data,
-        sourceOffsetX: edge.sourceOffsetX,
-        sourceOffsetY: edge.sourceOffsetY,
-        targetOffsetX: edge.targetOffsetX,
-        targetOffsetY: edge.targetOffsetY,
-        scaledWidth: edge.scaledWidth,
+        ...edge,
+        data: {
+          ...edge.data,
+          sourceOffsetX: edge.sourceOffsetX,
+          sourceOffsetY: edge.sourceOffsetY,
+          targetOffsetX: edge.targetOffsetX,
+          targetOffsetY: edge.targetOffsetY,
+          scaledWidth: edge.scaledWidth,
         // Anchor positions used for chevron centering from edge endpoints
         sourceAnchorX: srcAnchor.x,
         sourceAnchorY: srcAnchor.y,
@@ -2041,10 +2042,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         sourceClipPathId: sourceBundle && sourceBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${sourceBundle.id}` : undefined,
         targetClipPathId: targetBundle && targetBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${targetBundle.id}` : undefined,
         renderFallbackTargetArrow: !!(targetBundle && targetBundle.bundleWidth < MIN_CHEVRON_THRESHOLD),
-        // Pass what-if overrides to edges
-        caseOverrides: caseOverrides,
-        conditionalOverrides: conditionalOverrides
-      }
+          // Pass what-if overrides to edges
+          caseOverrides: caseOverrides,
+          conditionalOverrides: conditionalOverrides
+        }
     };
     });
     
@@ -2300,6 +2301,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Skipped (nodes empty)`);
       return;
     }
+    
+    // DIAGNOSTIC: Log when syncing (specifically for diagnosing fromFlow data loss)
+    console.log(`[GraphCanvas] ReactFlow→Store: About to call fromFlow with ${edges.length} edges`);
     
     const updatedGraph = fromFlow(nodes, edges, graph);
     if (updatedGraph) {
@@ -4958,12 +4962,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           edgeId={edgeContextMenu.edgeId}
           edgeData={contextMenuLocalData}
           graph={graph}
-          onClose={() => {
-            setEdgeContextMenu(null);
-            setContextMenuLocalData(null);
-          }}
+              onClose={() => {
+                setEdgeContextMenu(null);
+                setContextMenuLocalData(null);
+              }}
           onUpdateGraph={(nextGraph, historyLabel, nodeId) => {
-            setGraph(nextGraph);
+                              setGraph(nextGraph);
             if (historyLabel) {
               saveHistoryState(historyLabel, nodeId, edgeContextMenu.edgeId);
             }

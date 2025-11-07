@@ -21,7 +21,7 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
 - Need to think about conditional probability groups -- whether we need to nudge user to update param files together...? How to have *depedent* probabilities? maybe just dust off notion of policy again -- i.e. discard any unanchored probability, OR "collect residual" edge param?? Point being we won't always get failure states from Amplitude (there WAS no event that corresponded with abandonment a lot of the time, so we need to infer failure states from absence of success state within X mins/days)
 
 ### High Priority
-- move edge labels onto edge [left aligned] (cleaner) and out of a bubble; deprecate bubbles!
+- we need window on graph (and later contexts) for data getting purposes
 - handling 'dead limb' probabiltiies e.g. no data available, can we infer 1-sibling.p
 - node moves not always persisting properly post-Sankey
 - Sankey auto-layout glitching
@@ -50,10 +50,13 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
   - See: Phase 0.3 discussion on flexible data handling
 
 ### Medium Priority
+- need to test window operations 
+- why can't I create p mass from multiple starting nodes?
+- if user makes a node a case node AFTER drawing edges; need to assign edges to variants after (no way to do)
 - edge descriptions should be on "outside" of sankey sequence
 - Edit > Undo broken; add Undo to right click context menus on graph (standardise context menu implmenetations)
+- move edge labels onto edge [left aligned] (cleaner) and out of a bubble; deprecate bubbles!
 - generalise props panel implementation
-- Date windows in viewer
 - Selected objects show query/selector string
 - copy / paste param packs
 - 'view param packs)

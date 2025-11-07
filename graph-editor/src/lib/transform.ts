@@ -109,7 +109,12 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         oe.uuid === e.id || `${oe.from}->${oe.to}` === e.id
       );
       
-      return {
+      // DIAGNOSTIC: Log p.id transformation for the edge being edited
+      if (e.id === '550e8400-e29b-41d4-a716-446655440001->52207d6c-d3e3-4fda-a727-484eb1706041') {
+        console.log(`[fromFlow] BEFORE: edge.uuid=${e.id}, originalEdge.p=${JSON.stringify(originalEdge?.p)}`);
+      }
+      
+      const result = {
         ...originalEdge, // Preserve ALL original properties (including conditional_p, display)
         uuid: e.id,  // ReactFlow edge ID is the UUID
         id: e.data?.id,  // Human-readable ID
@@ -133,6 +138,13 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         case_variant: e.data?.case_variant, // Add case variant for case edges
         case_id: e.data?.case_id, // Add case ID for case edges
       };
+      
+      // DIAGNOSTIC: Log p.id transformation for the edge being edited
+      if (e.id === '550e8400-e29b-41d4-a716-446655440001->52207d6c-d3e3-4fda-a727-484eb1706041') {
+        console.log(`[fromFlow] AFTER: edge.uuid=${e.id}, result.p=${JSON.stringify(result.p)}`);
+      }
+      
+      return result;
     }),
   };
 }

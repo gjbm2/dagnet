@@ -406,10 +406,28 @@ export class UpdateManager {
         try {
           const sourceValue = this.getNestedValue(graphEntity, mapping.sourceField);
           
+          console.log('[UpdateManager] APPEND mapping check:', {
+            sourceField: mapping.sourceField,
+            sourceValue,
+            hasCondition: !!mapping.condition,
+            conditionPassed: mapping.condition ? mapping.condition(graphEntity, existingFile) : true
+          });
+          
+          // Check condition
+          if (mapping.condition && !mapping.condition(graphEntity, existingFile)) {
+            console.log('[UpdateManager] APPEND mapping SKIPPED (condition false)');
+            continue;
+          }
+          
           if (sourceValue !== undefined) {
             const transformedValue = mapping.transform
               ? mapping.transform(sourceValue, graphEntity, existingFile)
               : sourceValue;
+            
+            console.log('[UpdateManager] APPEND mapping APPLYING:', {
+              sourceField: mapping.sourceField,
+              transformedValue
+            });
             
             // Set value (will append due to [] syntax in targetField)
             if (!options.validateOnly) {
@@ -745,45 +763,65 @@ export class UpdateManager {
     // Flow B.APPEND: Graph → File/Parameter (APPEND new value)
     this.addMapping('graph_to_file', 'APPEND', 'parameter', [
       // Probability parameter: edge.p.* → parameter.values[]
+      // Only include fields that are actually set (non-undefined)
+      // Don't copy stale evidence data (n, k) from previous file pulls
       { 
         sourceField: 'p.mean', 
         targetField: 'values[]',
         condition: (source, target) => target.type === 'probability' || target.parameter_type === 'probability',
-        transform: (value, source) => ({
-          mean: value,
-          stdev: source.p.stdev,
-          distribution: source.p.distribution,
-          n: source.p.evidence?.n,
-          k: source.p.evidence?.k,
-          window_from: source.p.evidence?.window_from || new Date().toISOString(),
-          window_to: source.p.evidence?.window_to
-        })
+        transform: (value, source) => {
+          const entry: any = { mean: value };
+          if (source.p.stdev !== undefined) entry.stdev = source.p.stdev;
+          if (source.p.distribution) entry.distribution = source.p.distribution;
+          // Add timestamp so this entry is recognized as "latest"
+          entry.window_from = new Date().toISOString();
+          // Add provenance for manual edits
+          entry.data_source = {
+            type: 'manual',
+            edited_at: new Date().toISOString()
+            // TODO: Add author from credentials when available
+          };
+          // Don't include n/k/window_to - these are evidence from data pulls, not user edits
+          return entry;
+        }
       },
       // Cost GBP parameter: edge.cost_gbp.* → parameter.values[]
       { 
         sourceField: 'cost_gbp.mean', 
         targetField: 'values[]',
         condition: (source, target) => target.type === 'cost_gbp' || target.parameter_type === 'cost_gbp',
-        transform: (value, source) => ({
-          mean: value,
-          stdev: source.cost_gbp.stdev,
-          distribution: source.cost_gbp.distribution,
-          window_from: source.cost_gbp.evidence?.window_from || new Date().toISOString(),
-          window_to: source.cost_gbp.evidence?.window_to
-        })
+        transform: (value, source) => {
+          const entry: any = { mean: value };
+          if (source.cost_gbp.stdev !== undefined) entry.stdev = source.cost_gbp.stdev;
+          if (source.cost_gbp.distribution) entry.distribution = source.cost_gbp.distribution;
+          // Add timestamp so this entry is recognized as "latest"
+          entry.window_from = new Date().toISOString();
+          // Add provenance for manual edits
+          entry.data_source = {
+            type: 'manual',
+            edited_at: new Date().toISOString()
+          };
+          return entry;
+        }
       },
       // Cost Time parameter: edge.cost_time.* → parameter.values[]
       { 
         sourceField: 'cost_time.mean', 
         targetField: 'values[]',
         condition: (source, target) => target.type === 'cost_time' || target.parameter_type === 'cost_time',
-        transform: (value, source) => ({
-          mean: value,
-          stdev: source.cost_time.stdev,
-          distribution: source.cost_time.distribution,
-          window_from: source.cost_time.evidence?.window_from || new Date().toISOString(),
-          window_to: source.cost_time.evidence?.window_to
-        })
+        transform: (value, source) => {
+          const entry: any = { mean: value };
+          if (source.cost_time.stdev !== undefined) entry.stdev = source.cost_time.stdev;
+          if (source.cost_time.distribution) entry.distribution = source.cost_time.distribution;
+          // Add timestamp so this entry is recognized as "latest"
+          entry.window_from = new Date().toISOString();
+          // Add provenance for manual edits
+          entry.data_source = {
+            type: 'manual',
+            edited_at: new Date().toISOString()
+          };
+          return entry;
+        }
       }
       
       // NOTE: Conditional probabilities (edge.conditional_p[i].p) reuse the same mappings above
@@ -826,13 +864,16 @@ export class UpdateManager {
     this.addMapping('graph_to_file', 'APPEND', 'case', [
       { 
         sourceField: 'case.variants', 
-        targetField: 'schedules[]',
+        targetField: 'case.schedules[]',  // Case files have schedules under case.schedules, not at root
         transform: (variants) => ({
           variants: variants.map((v: any) => ({
             name: v.name,
             weight: v.weight
           })),
-          window_from: new Date().toISOString()
+          window_from: new Date().toISOString(),
+          source: 'manual',
+          edited_at: new Date().toISOString()
+          // TODO: Add author from credentials when available
         })
       }
     ]);
@@ -993,16 +1034,35 @@ export class UpdateManager {
     // Note: This updates node.case.* fields (case-specific data), NOT node-level metadata
     // Node label/description come from node files, not case files
     this.addMapping('file_to_graph', 'UPDATE', 'case', [
+      // Case status
+      {
+        sourceField: 'case.status',
+        targetField: 'case.status',
+        overrideFlag: 'case.status_overridden'
+      },
+      // Case variants - prefer schedules[latest].variants if schedules exist
       { 
-        sourceField: 'case.variants', 
+        sourceField: 'case.variants',  // Fallback field
         targetField: 'case.variants',
         transform: (fileVariants, source, target) => {
           // Sync variant names and weights from case file to graph node
           // Respect override flags: if graph has overridden a variant, preserve it
           
+          // If case file has schedules, use the latest schedule's variants
+          let variantsToUse = fileVariants;
+          if (source.case?.schedules && source.case.schedules.length > 0) {
+            // Get schedules[latest] by timestamp
+            const sortedSchedules = source.case.schedules.slice().sort((a: any, b: any) => {
+              const timeA = a.window_from ? new Date(a.window_from).getTime() : 0;
+              const timeB = b.window_from ? new Date(b.window_from).getTime() : 0;
+              return timeB - timeA; // Most recent first
+            });
+            variantsToUse = sortedSchedules[0].variants;
+          }
+          
           // If target doesn't have variants yet, create fresh from file
           if (!target.case || !target.case.variants) {
-            return fileVariants.map((fv: any) => ({
+            return variantsToUse.map((fv: any) => ({
               name: fv.name,
               name_overridden: false,
               weight: fv.weight,
@@ -1011,7 +1071,7 @@ export class UpdateManager {
           }
           
           // Merge: respect overrides, sync non-overridden fields
-          const merged = fileVariants.map((fv: any) => {
+          const merged = variantsToUse.map((fv: any) => {
             const graphVariant = target.case.variants.find((gv: any) => gv.name === fv.name);
             
             return {
@@ -1205,7 +1265,14 @@ export class UpdateManager {
         }
         
         if (index === 'latest') {
-          return array[array.length - 1];
+          // Get the entry with the most recent window_from timestamp
+          // This is critical for parameter files where entries can be added out of order
+          const sortedByTime = array.slice().sort((a, b) => {
+            const timeA = a.window_from ? new Date(a.window_from).getTime() : 0;
+            const timeB = b.window_from ? new Date(b.window_from).getTime() : 0;
+            return timeB - timeA; // Most recent first
+          });
+          return sortedByTime[0];
         } else {
           const numIndex = parseInt(index, 10);
           return isNaN(numIndex) ? undefined : array[numIndex];
