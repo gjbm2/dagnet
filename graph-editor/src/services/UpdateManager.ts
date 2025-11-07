@@ -1031,12 +1031,10 @@ export class UpdateManager {
         condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
       },
       
-      // Query string (mastered in graph, applies to all parameter types)
-      { 
-        sourceField: 'query', 
-        targetField: 'query',
-        overrideFlag: 'query_overridden'
-      },
+      // NOTE: Query string is NOT synced from file→graph
+      // Query is mastered in the graph (derived from topology via MSMDC or manually edited)
+      // It flows graph→file during PUT operations to enable self-contained data retrieval
+      // but does NOT flow file→graph during GET operations (would be context-invalid)
       
       // NOTE: Conditional probabilities (edge.conditional_p[]) reuse the same mappings as edge.p
       // The dataOperationsService must:

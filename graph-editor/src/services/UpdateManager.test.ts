@@ -870,5 +870,231 @@ describe('UpdateManager', () => {
       expect(graphEdge.p.evidence.k).toBe(440);
     });
   });
+  
+  // ============================================================
+  // TEST SUITE: Query Flow Architecture
+  // ============================================================
+  
+  describe('Query Flow: Unidirectional (Graph → File Only)', () => {
+    it('should NOT sync query from file to graph during GET', async () => {
+      // Setup: Parameter file has a query, graph edge has different query
+      const paramFile = {
+        id: 'checkout-conversion',
+        name: 'Checkout Conversion Rate',
+        type: 'probability',
+        query: 'from(cart).to(checkout).exclude(abandoned)',  // ← File query
+        values: [{
+          mean: 0.45,
+          stdev: 0.05,
+          n: 1000,
+          k: 450,
+          window_from: '2025-01-01',
+          window_to: '2025-01-31'
+        }]
+      };
+      
+      const graphEdge = {
+        uuid: 'edge-uuid-123',
+        id: 'cart-to-checkout',
+        p: {
+          mean: 0.40,
+          stdev: 0.06,
+          mean_overridden: false,
+          stdev_overridden: false
+        },
+        query: 'from(homepage).to(checkout)',  // ← Graph query (different!)
+        query_overridden: false
+      };
+      
+      // Act: GET operation (file → graph)
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        graphEdge,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      // Assert: Query should NOT change
+      expect(result.success).toBe(true);
+      expect(graphEdge.query).toBe('from(homepage).to(checkout)');  // ← Still graph query!
+      
+      // Values should update (this is expected)
+      expect(graphEdge.p.mean).toBe(0.45);
+      expect(graphEdge.p.stdev).toBe(0.05);
+      
+      // Verify NO change was reported for query field
+      const queryChange = result.changes?.find(c => c.field === 'query');
+      expect(queryChange).toBeUndefined();
+    });
+    
+    it('should sync query from graph to file during CREATE', async () => {
+      // Setup: Creating new parameter file from edge
+      const graphEdge = {
+        uuid: 'edge-uuid-123',
+        id: 'cart-to-checkout',
+        label: 'Cart to Checkout',
+        description: 'User proceeds from cart to checkout',
+        query: 'from(cart).to(checkout).exclude(abandoned)',  // ← Graph query
+        query_overridden: false,
+        p: {
+          id: 'new-param-id',
+          mean: 0.45,
+          stdev: 0.05,
+          distribution: 'beta'
+        }
+      };
+      
+      const newParamFile = {
+        id: 'new-param-id',
+        name: '',
+        description: '',
+        type: 'probability',
+        values: []
+      };
+      
+      // Act: CREATE operation (graph → file)
+      const result = await updateManager.handleGraphToFile(
+        graphEdge,
+        newParamFile,
+        'CREATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      // Assert: Query should be copied to file
+      expect(result.success).toBe(true);
+      const queryChange = result.changes?.find(c => c.field === 'query');
+      expect(queryChange).toBeDefined();
+      expect(queryChange?.newValue).toBe('from(cart).to(checkout).exclude(abandoned)');
+    });
+    
+    it('should sync query from graph to file during UPDATE', async () => {
+      // Setup: Updating parameter file metadata from edge
+      const graphEdge = {
+        uuid: 'edge-uuid-123',
+        description: 'Updated description',
+        query: 'from(cart).to(checkout).visited(promo)',  // ← Updated graph query
+        query_overridden: true
+      };
+      
+      const paramFile = {
+        id: 'checkout-conversion',
+        name: 'Checkout Conversion Rate',
+        description: 'Old description',
+        type: 'probability',
+        query: 'from(cart).to(checkout)',  // ← Old query
+        values: []
+      };
+      
+      // Act: UPDATE operation (graph → file)
+      const result = await updateManager.handleGraphToFile(
+        graphEdge,
+        paramFile,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      // Assert: Query should be updated
+      expect(result.success).toBe(true);
+      const queryChange = result.changes?.find(c => c.field === 'query');
+      expect(queryChange).toBeDefined();
+      expect(queryChange?.newValue).toBe('from(cart).to(checkout).visited(promo)');
+    });
+    
+    it('should handle conditional_p query during PUT operation', async () => {
+      // Setup: Edge with conditional probability
+      const graphEdge = {
+        uuid: 'edge-uuid-123',
+        query: 'from(checkout).to(purchase)',  // ← Base edge query
+        conditional_p: [{
+          condition: 'visited(promo)',
+          query: 'from(checkout).to(purchase).visited(promo)',  // ← Conditional query
+          query_overridden: false,
+          p: {
+            id: 'checkout-promo-conversion',
+            mean: 0.75,
+            stdev: 0.04,
+            distribution: 'beta'
+          }
+        }]
+      };
+      
+      // When we PUT a conditional parameter, we pass just that conditional's data
+      const conditionalData = {
+        query: 'from(checkout).to(purchase).visited(promo)',
+        p: graphEdge.conditional_p[0].p
+      };
+      
+      const paramFile = {
+        id: 'checkout-promo-conversion',
+        name: 'Checkout Conversion (with promo)',
+        type: 'probability',
+        query: '',  // ← Empty or old query
+        values: []
+      };
+      
+      // Act: CREATE operation for conditional parameter
+      const result = await updateManager.handleGraphToFile(
+        conditionalData,
+        paramFile,
+        'CREATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      // Assert: Conditional query should be copied to file
+      expect(result.success).toBe(true);
+      const queryChange = result.changes?.find(c => c.field === 'query');
+      expect(queryChange).toBeDefined();
+      expect(queryChange?.newValue).toBe('from(checkout).to(purchase).visited(promo)');
+    });
+    
+    it('should respect query_overridden flag when present in file', async () => {
+      // Setup: File has query with overridden flag (though we don't sync it)
+      const paramFile = {
+        id: 'checkout-conversion',
+        name: 'Checkout Conversion Rate',
+        type: 'probability',
+        query: 'from(cart).to(checkout).exclude(abandoned)',
+        query_overridden: true,  // ← Marked as overridden in file
+        values: [{
+          mean: 0.45,
+          stdev: 0.05,
+          n: 1000,
+          k: 450,
+          window_from: '2025-01-01'
+        }]
+      };
+      
+      const graphEdge = {
+        uuid: 'edge-uuid-123',
+        p: {
+          mean: 0.40,
+          mean_overridden: false
+        },
+        query: 'from(homepage).to(checkout)',
+        query_overridden: false
+      };
+      
+      // Act: GET operation
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        graphEdge,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      // Assert: Query should still NOT sync (never syncs file → graph)
+      expect(result.success).toBe(true);
+      expect(graphEdge.query).toBe('from(homepage).to(checkout)');
+      
+      // Note: The query_overridden flag in the file is informational only
+      // It doesn't control sync (because sync is always one-way)
+      // It's stored so external services know if it was manually edited
+    });
+  });
 });
 

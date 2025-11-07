@@ -367,7 +367,14 @@ export interface Condition {
 }
 
 export interface ConditionalProbability {
-  condition: Condition;
+  // Semantic constraint: determines WHEN this conditional applies (runtime evaluation)
+  condition: Condition | string; // String format: "visited(promo)" or "context(device:mobile)"
+  
+  // Full data retrieval query: determines HOW to fetch data from external sources
+  // Auto-derived from condition + edge topology, but can be manually overridden
+  query?: string; // Full query: "from(checkout).to(purchase).visited(promo)"
+  query_overridden?: boolean; // If true, query was manually edited (don't regenerate)
+  
   p: ProbabilityParam; // Probability when condition is satisfied
 }
 

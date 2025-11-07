@@ -1,15 +1,28 @@
 import React, { useState } from 'react';
+import { Info } from 'lucide-react';
 import { EnhancedSelector } from './EnhancedSelector';
+import { QueryExpressionEditor } from './QueryExpressionEditor';
+import { AutomatableField } from './AutomatableField';
+import { ParameterSection } from './ParameterSection';
 import './ConditionalProbabilityEditor.css';
 
-// Match the graph schema structure
+// Match the updated graph schema structure
 interface ConditionalCondition {
-  condition: {
-    visited: string[];
-  };
+  // Semantic constraint: WHEN this conditional applies (runtime evaluation)
+  condition: string;  // "visited(promo)" or "context(device:mobile)"
+  
+  // Full data retrieval query: HOW to fetch data from external sources
+  query?: string;  // "from(checkout).to(purchase).visited(promo)"
+  query_overridden?: boolean;  // If true, don't regenerate via MSMDC
+  
+  // Probability data
   p: {
     mean?: number;
     stdev?: number;
+    distribution?: string;
+    mean_overridden?: boolean;
+    stdev_overridden?: boolean;
+    distribution_overridden?: boolean;
     locked?: boolean;
     parameter_id?: string;
   };
@@ -22,30 +35,46 @@ interface ConditionalProbabilityEditorProps {
   onChange: (conditions: ConditionalCondition[]) => void;
   /** Current graph for node selection */
   graph?: any;
+  /** Edge ID for query auto-generation context */
+  edgeId?: string;
+  /** Callback when parameter updates (for individual conditional param) */
+  onUpdateParam?: (index: number, changes: any) => void;
+  /** Callback for rebalancing conditional probabilities */
+  onRebalanceParam?: (index: number, newValue: number) => void;
 }
 
 /**
  * Conditional Probability Editor Component
  * 
- * Manages conditional probabilities for edges.
+ * Manages conditional probabilities for edges using QueryExpressionEditor.
+ * 
  * Features:
  * - Add/remove condition cards
- * - Chip-based node selection (AND logic within condition)
+ * - Monaco-based condition editor (semantic constraints)
+ * - Monaco-based query editor (full retrieval path)
  * - Parameter connection per condition
  * - OR logic between conditions (top-to-bottom evaluation)
  */
 export function ConditionalProbabilityEditor({
   conditions,
   onChange,
-  graph
+  graph,
+  edgeId,
+  onUpdateParam,
+  onRebalanceParam
 }: ConditionalProbabilityEditorProps) {
   const [expandedConditionIndex, setExpandedConditionIndex] = useState<number | null>(null);
+  
+  // Local state for condition/query editing (prevent eager updates)
+  const [localConditions, setLocalConditions] = useState<{[index: number]: {condition: string; query: string}}>({});
 
   const addCondition = () => {
     onChange([
       ...conditions,
       {
-        condition: { visited: [] },
+        condition: '',  // Empty condition (user will fill in)
+        query: '',      // Empty query (will be auto-generated or manually set)
+        query_overridden: false,
         p: {}
       }
     ]);
@@ -59,56 +88,30 @@ export function ConditionalProbabilityEditor({
     }
   };
 
-  const updateCondition = (index: number, updates: { condition?: { visited: string[] }; p?: Partial<ConditionalCondition['p']> }) => {
+  const updateCondition = (index: number, updates: Partial<ConditionalCondition>) => {
     const newConditions = [...conditions];
-    if (updates.condition) {
-      newConditions[index].condition = updates.condition;
-    }
-    if (updates.p) {
-      newConditions[index].p = { ...newConditions[index].p, ...updates.p };
-    }
+    newConditions[index] = { ...newConditions[index], ...updates };
     onChange(newConditions);
-  };
-
-  const addNodeToCondition = (conditionIndex: number, nodeId: string) => {
-    const cond = conditions[conditionIndex];
-    if (!cond.condition.visited.includes(nodeId)) {
-      updateCondition(conditionIndex, {
-        condition: { visited: [...cond.condition.visited, nodeId] }
-      });
-    }
-  };
-
-  const removeNodeFromCondition = (conditionIndex: number, nodeId: string) => {
-    const cond = conditions[conditionIndex];
-    updateCondition(conditionIndex, {
-      condition: { visited: cond.condition.visited.filter(id => id !== nodeId) }
-    });
   };
 
   return (
     <div className="conditional-probability-editor">
-      {/* Header */}
-      <div className="conditional-probability-header">
-        <span className="conditional-probability-title">Conditional Probabilities</span>
-        <button
-          type="button"
-          className="conditional-probability-add-btn"
-          onClick={addCondition}
-        >
-          + Add Condition
-        </button>
-      </div>
-
       {/* Conditions List */}
       {conditions.length === 0 && (
         <div className="conditional-probability-empty">
-          No conditional probabilities defined. Click "Add Condition" to create one.
+          No conditional probabilities defined.
         </div>
       )}
 
       {conditions.map((condition, index) => {
         const isExpanded = expandedConditionIndex === index;
+        
+        // Handle both old format {visited: [...]} and new format (string)
+        const conditionDisplay = typeof condition.condition === 'string' 
+          ? condition.condition 
+          : (condition.condition as any)?.visited?.length > 0
+            ? `visited(${(condition.condition as any).visited.join(', ')})`
+            : '';
         
         return (
           <div key={index} className="conditional-probability-condition">
@@ -122,9 +125,9 @@ export function ConditionalProbabilityEditor({
               </span>
               <span className="conditional-probability-condition-label">
                 Condition {index + 1}
-                {condition.condition.visited.length > 0 && (
+                {conditionDisplay && (
                   <span className="conditional-probability-condition-summary">
-                    {' '}— If visited: {condition.condition.visited.join(' AND ')}
+                    {' '}— {conditionDisplay}
                   </span>
                 )}
               </span>
@@ -144,107 +147,127 @@ export function ConditionalProbabilityEditor({
             {/* Condition Content (expanded) */}
             {isExpanded && (
               <div className="conditional-probability-condition-content">
-                {/* Node Selection */}
-                <div className="conditional-probability-field">
-                  <label>If Visited (AND logic):</label>
-                  
-                  {/* Chips for selected nodes */}
-                  <div className="conditional-probability-chips">
-                    {condition.condition.visited.map(nodeId => (
-                      <div key={nodeId} className="conditional-probability-chip">
-                        <span>visited({nodeId})</span>
-                        <button
-                          type="button"
-                          onClick={() => removeNodeFromCondition(index, nodeId)}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Node Selector */}
-                  <EnhancedSelector
-                    type="node"
-                    value=""
-                    onChange={(nodeId) => {
-                      if (nodeId) {
-                        addNodeToCondition(index, nodeId);
-                      }
-                    }}
-                    placeholder="Select node to add..."
-                    showCurrentGraphGroup={true}
-                  />
+                {/* Condition Editor (Semantic: WHEN this applies) */}
+                <div className="conditional-probability-field" style={{ marginBottom: '20px' }}>
+                  <AutomatableField
+                    label="Condition (when this applies)"
+                    labelExtra={
+                      <span title="Semantic constraint that determines when this conditional probability applies. Examples: visited(promo), context(device:mobile), case(test:treatment)">
+                        <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
+                      </span>
+                    }
+                    layout="label-above"
+                    value={localConditions[index]?.condition !== undefined ? localConditions[index].condition : (typeof condition.condition === 'string' ? condition.condition : '')}
+                    overridden={false}  // Conditions are always user-defined
+                    onClearOverride={() => {}}
+                  >
+                    <QueryExpressionEditor
+                      value={localConditions[index]?.condition !== undefined ? localConditions[index].condition : (typeof condition.condition === 'string' ? condition.condition : '')}
+                      onChange={(newCondition) => {
+                        // Store in local state during editing
+                        setLocalConditions(prev => ({
+                          ...prev,
+                          [index]: { ...prev[index], condition: newCondition }
+                        }));
+                      }}
+                      onBlur={() => {
+                        const localCond = localConditions[index]?.condition;
+                        if (localCond !== undefined && localCond !== condition.condition) {
+                          updateCondition(index, { condition: localCond });
+                        }
+                      }}
+                      graph={graph}
+                      edgeId={edgeId}
+                      placeholder="visited(node) or context(key:value)"
+                      height="50px"
+                    />
+                  </AutomatableField>
                 </div>
 
-                {/* Parameter Connection */}
-                <div className="conditional-probability-field">
-                  <EnhancedSelector
-                    type="parameter"
-                    parameterType="probability"
-                    value={condition.p.parameter_id || ''}
-                    onChange={(paramId) => {
-                      updateCondition(index, { p: { parameter_id: paramId || undefined } });
+                {/* Parameter Section - Same as edge parameters */}
+                <ParameterSection
+                  graph={graph}
+                  objectType="edge"
+                  objectId={edgeId || ''}
+                  paramSlot="p"
+                  param={condition.p}
+                  onUpdate={(changes) => {
+                    if (onUpdateParam) {
+                      onUpdateParam(index, changes);
+                    } else {
+                      updateCondition(index, { p: { ...condition.p, ...changes } });
+                    }
+                  }}
+                  onRebalance={(newValue) => {
+                    if (onRebalanceParam) {
+                      onRebalanceParam(index, newValue);
+                    }
+                  }}
+                  label="Conditional Probability"
+                  showBalanceButton={true}
+                  showQueryEditor={false}
+                />
+                
+                {/* Query Editor (Full: HOW to retrieve data) */}
+                <div className="conditional-probability-field" style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #E5E7EB' }}>
+                  <AutomatableField
+                    label="Data Retrieval Query (full path)"
+                    labelExtra={
+                      <span title="Full query expression for retrieving data from external sources. Usually auto-generated from condition + edge topology via MSMDC algorithm.">
+                        <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
+                      </span>
+                    }
+                    layout="label-above"
+                    value={localConditions[index]?.query !== undefined ? localConditions[index].query : (condition.query || '')}
+                    overridden={condition.query_overridden || false}
+                    onClearOverride={() => {
+                      updateCondition(index, { 
+                        query: '', 
+                        query_overridden: false 
+                      });
                     }}
-                    onPullFromRegistry={async () => {
-                      // TODO: Load parameter values
-                      console.log('Pull probability from registry');
-                    }}
-                    label="Probability Parameter"
-                    placeholder="Select or enter parameter ID..."
-                  />
+                  >
+                    <QueryExpressionEditor
+                      value={localConditions[index]?.query !== undefined ? localConditions[index].query : (condition.query || '')}
+                      onChange={(newQuery) => {
+                        // Store in local state during editing
+                        setLocalConditions(prev => ({
+                          ...prev,
+                          [index]: { ...prev[index], query: newQuery }
+                        }));
+                      }}
+                      onBlur={() => {
+                        const localQuery = localConditions[index]?.query;
+                        if (localQuery !== undefined && localQuery !== condition.query) {
+                          updateCondition(index, { 
+                            query: localQuery,
+                            query_overridden: true 
+                          });
+                        }
+                      }}
+                      graph={graph}
+                      edgeId={edgeId}
+                      placeholder="from(node).to(node).visited(...)"
+                      height="50px"
+                    />
+                  </AutomatableField>
                 </div>
-
-                {/* Manual Probability Input (if no parameter) */}
-                {!condition.p.parameter_id && (
-                  <div className="conditional-probability-field">
-                    <label>Or enter probability manually:</label>
-                    <div className="conditional-probability-manual-inputs">
-                      <div>
-                        <label className="conditional-probability-field-label">Mean</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          max="1"
-                          value={condition.p.mean ?? ''}
-                          onChange={(e) => {
-                            const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                            updateCondition(index, { p: { mean: value } });
-                          }}
-                          placeholder="0.0 - 1.0"
-                        />
-                      </div>
-                      <div>
-                        <label className="conditional-probability-field-label">Stdev</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={condition.p.stdev ?? ''}
-                          onChange={(e) => {
-                            const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                            updateCondition(index, { p: { stdev: value } });
-                          }}
-                          placeholder="Optional"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
         );
       })}
 
-      {/* Help Text */}
-      {conditions.length > 0 && (
-        <div className="conditional-probability-help">
-          💡 Conditions are evaluated top-to-bottom (OR logic between conditions).
-          Within each condition, all nodes must be visited (AND logic).
-        </div>
-      )}
+      {/* Add Condition Button */}
+      <button
+        type="button"
+        className="property-add-btn"
+        style={{ width: '100%', marginTop: '12px' }}
+        onClick={addCondition}
+        title="Add a new conditional probability"
+      >
+        + Conditional Probability
+      </button>
     </div>
   );
 }
