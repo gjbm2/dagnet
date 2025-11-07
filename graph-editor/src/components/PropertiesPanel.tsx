@@ -115,6 +115,9 @@ export default function PropertiesPanel({
   
   // Track which conditional probabilities are collapsed (by index) - true = collapsed, false/undefined = expanded
   const [collapsedConditionals, setCollapsedConditionals] = useState<{ [key: number]: boolean }>({});
+  
+  // Local state for edge query (to prevent eager updates during editing)
+  const [localEdgeQuery, setLocalEdgeQuery] = useState<string>('');
 
   // Helper to open a file by type and ID
   const openFileById = useCallback((type: 'case' | 'node' | 'parameter' | 'context' | 'event', id: string) => {
@@ -293,6 +296,7 @@ export default function PropertiesPanel({
             display: edge.display || {},
             query: (edge as any).query || ''
           });
+          setLocalEdgeQuery((edge as any).query || '');
           setLocalConditionalP(edge.conditional_p || []);
           lastLoadedEdgeRef.current = selectedEdgeId;
         }
@@ -606,6 +610,62 @@ export default function PropertiesPanel({
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
+  // Helper: Rebalance regular edge probability across sibling edges
+  const handleRebalanceEdgeProbability = useCallback((newValue: number) => {
+    if (!selectedEdgeId || !graph) return;
+    
+    const nextGraph = structuredClone(graph);
+    const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
+      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+    );
+    
+    if (currentEdgeIndex >= 0) {
+      const currentEdge = nextGraph.edges[currentEdgeIndex];
+      const sourceNode = currentEdge.from;
+      
+      // Update current edge's probability
+      if (!nextGraph.edges[currentEdgeIndex].p) {
+        nextGraph.edges[currentEdgeIndex].p = {};
+      }
+      nextGraph.edges[currentEdgeIndex].p!.mean = newValue;
+      
+      // Find sibling edges (same source)
+      const siblings = nextGraph.edges.filter((edge: any, idx: number) => 
+        idx !== currentEdgeIndex && 
+        edge.from === sourceNode &&
+        !edge.conditional_p  // Only regular edges, not conditional
+      );
+      
+      if (siblings.length > 0) {
+        const remainingProbability = roundTo4DP(1 - newValue);
+        const siblingsTotal = siblings.reduce((sum, sibling) => {
+          return sum + (sibling.p?.mean || 0);
+        }, 0);
+        
+        siblings.forEach((sibling) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
+          if (siblingIndex >= 0) {
+            const siblingCurrentValue = sibling.p?.mean || 0;
+            const newSiblingValue = siblingsTotal > 0
+              ? roundTo4DP((siblingCurrentValue / siblingsTotal) * remainingProbability)
+              : roundTo4DP(remainingProbability / siblings.length);
+            
+            if (!nextGraph.edges[siblingIndex].p) {
+              nextGraph.edges[siblingIndex].p = {};
+            }
+            nextGraph.edges[siblingIndex].p!.mean = newSiblingValue;
+          }
+        });
+      }
+      
+      if (nextGraph.metadata) {
+        nextGraph.metadata.updated_at = new Date().toISOString();
+      }
+      setGraph(nextGraph);
+      saveHistoryState('Rebalance edge probabilities', undefined, selectedEdgeId);
+    }
+  }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
+
   // Helper: Rebalance conditional probability across sibling edges
   const rebalanceConditionalP = useCallback((condIndex: number, newValue: number) => {
     if (!selectedEdgeId || !graph) return;
@@ -639,8 +699,8 @@ export default function PropertiesPanel({
         currentEdge.conditional_p &&
         currentEdge.conditional_p[condIndex] &&
         currentEdge.conditional_p[condIndex].condition &&
-        JSON.stringify(edge.conditional_p[condIndex].condition.visited.sort()) === 
-        JSON.stringify(currentEdge.conditional_p[condIndex].condition.visited.sort())
+        JSON.stringify(edge.conditional_p[condIndex].condition) === 
+        JSON.stringify(currentEdge.conditional_p[condIndex].condition)
       );
       
       if (siblings.length > 0) {
@@ -1743,9 +1803,12 @@ export default function PropertiesPanel({
                       paramSlot="p"
                       param={selectedEdge?.p}
                       onUpdate={(changes) => updateEdgeParam('p', changes)}
+                      onRebalance={handleRebalanceEdgeProbability}
                       label={selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) 
                       ? 'Sub-Route Probability (within variant)' 
                       : 'Probability'}
+                      showBalanceButton={true}
+                      showQueryEditor={false}
                     />
                   </CollapsibleSection>
 
@@ -1759,6 +1822,7 @@ export default function PropertiesPanel({
                       param={selectedEdge?.cost_gbp}
                       onUpdate={(changes) => updateEdgeParam('cost_gbp', changes)}
                       label="Cost (£)"
+                      showQueryEditor={false}
                     />
                   </CollapsibleSection>
                   
@@ -1772,405 +1836,76 @@ export default function PropertiesPanel({
                       param={selectedEdge?.cost_time}
                       onUpdate={(changes) => updateEdgeParam('cost_time', changes)}
                       label="Cost (Time)"
+                      showQueryEditor={false}
                     />
                   </CollapsibleSection>
+                  
+                  {/* Edge-Level Query (applies to all parameters above) */}
+                  <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #E5E7EB' }}>
+                    <AutomatableField
+                      label="Data Retrieval Query (for all parameters)"
+                      labelExtra={
+                        <span title="Query expression used when retrieving data for any parameter on this edge. Usually auto-generated by MSMDC algorithm from graph topology.">
+                          <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
+                        </span>
+                      }
+                      layout="label-above"
+                      value={localEdgeQuery}
+                      overridden={selectedEdge?.query_overridden || false}
+                      onClearOverride={() => {
+                        setLocalEdgeQuery('');
+                        updateEdge('query', '');
+                        updateEdge('query_overridden', false);
+                      }}
+                    >
+                      <QueryExpressionEditor
+                        value={localEdgeQuery}
+                        onChange={(newQuery) => {
+                          setLocalEdgeQuery(newQuery);
+                        }}
+                        onBlur={() => {
+                          // Update the edge query when user finishes editing
+                          if (localEdgeQuery !== (selectedEdge?.query || '')) {
+                            updateEdge('query', localEdgeQuery);
+                            updateEdge('query_overridden', true);
+                          }
+                        }}
+                        graph={graph}
+                        edgeId={selectedEdgeId || undefined}
+                        placeholder="from(node).to(node)"
+                        height="60px"
+                      />
+                    </AutomatableField>
+                  </div>
                 </CollapsibleSection>
 
                 {/* Conditional Probabilities */}
                 <CollapsibleSection title="Conditional Probabilities" icon={TrendingUp} defaultOpen={localConditionalP.length > 0}>
-
-                  {localConditionalP.length === 0 && (
-                    <div style={{ 
-                      fontSize: '12px',
-                      color: '#9CA3AF',
-                      marginBottom: '12px',
-                      fontStyle: 'italic'
-                    }}>
-                      No conditional probabilities defined.
-                    </div>
-                  )}
-
-                  {localConditionalP.map((cond, index) => {
-                    // Generate name from condition
-                    const conditionName = cond.condition?.visited?.length > 0
-                      ? `When: ${cond.condition.visited.join(' AND ')}`
-                      : 'New condition';
-                    
-                    const probValue = cond.p?.mean !== undefined 
-                      ? `${(cond.p.mean * 100).toFixed(1)}%`
-                      : '—';
-                    
-                    const isExpanded = collapsedConditionals[index] === false;
-                    
-                    // Get current edge's conditional color
-                    const currentColor = localEdgeData.display?.conditional_color;
-                    
-                    return (
-                      <div key={index} className="variant-card" style={{ marginBottom: '8px' }}>
-                        <div 
-                          className="variant-card-header"
-                          style={{ cursor: 'pointer' }}
-                          onClick={(e) => {
-                            // Don't toggle if clicking on color selector
-                            if ((e.target as HTMLElement).closest('.color-selector')) {
-                              return;
-                            }
-                            setCollapsedConditionals(prev => ({
-                              ...prev,
-                              [index]: !prev[index]
-                            }));
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-                            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                            
-                            {/* Color Picker */}
-                            <div onClick={(e) => e.stopPropagation()}>
-                              <ColorSelector
-                                compact={true}
-                                value={currentColor || '#3B82F6'}
-                                onChange={(newColor) => {
-                                  // Generate a group name from the condition
-                                  const groupName = cond.condition?.visited?.length > 0
-                                    ? cond.condition.visited.sort().join('_')
-                                    : `condition_${index}`;
-                                  
-                                  // Update this edge's display color and group
-                                  const newEdgeData = {
-                                    ...localEdgeData,
-                                    display: {
-                                      ...localEdgeData.display,
-                                      conditional_color: newColor,
-                                      conditional_group: groupName
-                                    }
-                                  };
-                                  setLocalEdgeData(newEdgeData);
-                                  
-                                  if (selectedEdgeId && graph) {
-                                    const nextGraph = structuredClone(graph);
-                                    const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                    );
-                                    if (edgeIndex >= 0) {
-                                      nextGraph.edges[edgeIndex].display = newEdgeData.display;
-                                      
-                                      // Also update all other edges with the same condition group
-                                      nextGraph.edges.forEach((edge: any, idx: number) => {
-                                        if (idx !== edgeIndex && edge.display?.conditional_group === groupName) {
-                                          if (!edge.display) edge.display = {};
-                                          edge.display.conditional_color = newColor;
-                                        }
-                                      });
-                                      
-                                      if (nextGraph.metadata) {
-                                        nextGraph.metadata.updated_at = new Date().toISOString();
-                                      }
-                                      setGraph(nextGraph);
-                                      saveHistoryState('Update conditional probability color', undefined, selectedEdgeId);
-                                    }
-                                  }
-                                }}
-                              />
-                            </div>
-                            
-                            <span style={{ fontSize: '13px', fontWeight: '500' }}>{conditionName}</span>
-                            <span style={{ fontSize: '12px', color: '#666', marginLeft: 'auto' }}>{probValue}</span>
-                          </div>
-                          <button
-                            type="button"
-                            className="variant-remove-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const newConditions = localConditionalP.filter((_, i) => i !== index);
-                              setLocalConditionalP(newConditions);
-                              
-                              if (selectedEdgeId && graph) {
-                                const nextGraph = structuredClone(graph);
-                                const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                  edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                );
-                                if (edgeIndex >= 0) {
-                                  nextGraph.edges[edgeIndex].conditional_p = newConditions.length > 0 ? newConditions as any : undefined;
-                                  if (nextGraph.metadata) {
-                                    nextGraph.metadata.updated_at = new Date().toISOString();
-                                  }
-                                  setGraph(nextGraph);
-                                  saveHistoryState('Remove conditional probability', undefined, selectedEdgeId);
-                                }
-                              }
-                            }}
-                            title="Remove conditional probability"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-
-                        {isExpanded && (
-                          <div style={{ padding: '12px', borderTop: '1px solid #e9ecef' }}>
-                            {/* Node Condition */}
-                            <div style={{ marginBottom: '16px' }}>
-                              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
-                                If visited (AND logic):
-                              </label>
-                              
-                              {/* Chips for selected nodes */}
-                              <div style={{ 
-                                display: 'flex', 
-                                flexWrap: 'wrap', 
-                                gap: '6px', 
-                                marginBottom: '8px' 
-                              }}>
-                                {cond.condition?.visited?.map(nodeId => (
-                                  <div key={nodeId} style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '4px',
-                                    padding: '4px 8px',
-                                    background: '#DBEAFE',
-                                    borderRadius: '12px',
-                                    fontSize: '12px',
-                                    color: '#1E40AF',
-                                    border: '1px solid #93C5FD',
-                                    animation: 'chipAppear 0.3s ease-out'
-                                  }}>
-                                    <span>visited({nodeId})</span>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const newConditions = [...localConditionalP];
-                                        newConditions[index] = {
-                                          ...newConditions[index],
-                                          condition: {
-                                            visited: (newConditions[index].condition?.visited || []).filter(id => id !== nodeId)
-                                          }
-                                        };
-                                        setLocalConditionalP(newConditions);
-                                        
-                                        if (selectedEdgeId && graph) {
-                                          const nextGraph = structuredClone(graph);
-                                          const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                            edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                          );
-                                          
-                                          if (currentEdgeIndex >= 0) {
-                                            const currentEdge = nextGraph.edges[currentEdgeIndex];
-                                            const sourceNode = currentEdge.from;
-                                            
-                                            // Update current edge
-                                            nextGraph.edges[currentEdgeIndex].conditional_p = newConditions as any;
-                                            
-                                            // Also update siblings to keep group in sync
-                                            const newGroupName = newConditions[index].condition.visited.sort().join('_');
-                                            nextGraph.edges.forEach((edge: any, idx: number) => {
-                                              if (idx !== currentEdgeIndex && edge.from === sourceNode && edge.conditional_p && edge.conditional_p[index]) {
-                                                edge.conditional_p[index].condition.visited = [...newConditions[index].condition.visited];
-                                                // Update group name
-                                                if (edge.display) {
-                                                  edge.display.conditional_group = newGroupName;
-                                                }
-                                              }
-                                            });
-                                            
-                                            if (nextGraph.metadata) {
-                                              nextGraph.metadata.updated_at = new Date().toISOString();
-                                            }
-                                            setGraph(nextGraph);
-                                            saveHistoryState('Update conditional probability node', undefined, selectedEdgeId);
-                                          }
-                                        }
-                                      }}
-                    style={{ 
-                                        border: 'none',
-                                        background: 'transparent',
-                                        cursor: 'pointer',
-                                        padding: '0',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        color: '#666'
-                                      }}
-                                    >
-                                      <X size={12} />
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-
-                              {/* Node Selector */}
-                              <EnhancedSelector
-                                type="node"
-                                value=""
-                                onChange={(nodeId) => {
-                                  if (nodeId) {
-                                    const newConditions = [...localConditionalP];
-                                    const existingVisited = newConditions[index].condition?.visited || [];
-                                    
-                                    // Track if this is the first node being added (group creation trigger)
-                                    const wasEmpty = existingVisited.length === 0;
-                                    
-                                    if (!existingVisited.includes(nodeId)) {
-                                      newConditions[index] = {
-                                        ...newConditions[index],
-                                        condition: {
-                                          visited: [...existingVisited, nodeId]
-                                        }
-                                      };
-                                      setLocalConditionalP(newConditions);
-                                      
-                                      if (selectedEdgeId && graph) {
-                                        const nextGraph = structuredClone(graph);
-                                        const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                          edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                        );
-                                        
-                                        if (currentEdgeIndex >= 0) {
-                                          const currentEdge = nextGraph.edges[currentEdgeIndex];
-                                          const sourceNode = currentEdge.from;
-                                          
-                                          // **GROUP CREATION**: If this is the FIRST node added (was empty, now has content)
-                                          // create matching conditions on all sibling edges
-                                          if (wasEmpty) {
-                                            console.log(`[ConditionalP] First node selected - creating group for condition ${index}`);
-                                            
-                                            // Assign a color for this group
-                                            const color = getNextAvailableColor(nextGraph as any);
-                                            const groupName = newConditions[index].condition.visited.sort().join('_');
-                                            
-                                            // Update current edge
-                                            nextGraph.edges[currentEdgeIndex].conditional_p = newConditions as any;
-                                            if (!nextGraph.edges[currentEdgeIndex].display) {
-                                              nextGraph.edges[currentEdgeIndex].display = {};
-                                            }
-                                            nextGraph.edges[currentEdgeIndex].display.conditional_color = color;
-                                            nextGraph.edges[currentEdgeIndex].display.conditional_group = groupName;
-                                            
-                                            // Create matching condition on all sibling edges
-                                            nextGraph.edges.forEach((edge: any, idx: number) => {
-                                              if (idx !== currentEdgeIndex && edge.from === sourceNode) {
-                                                // Ensure conditional_p array exists
-                                                if (!edge.conditional_p) {
-                                                  edge.conditional_p = [];
-                                                }
-                                                
-                                                // Update existing condition at this index OR create new one
-                                                if (edge.conditional_p[index]) {
-                                                  // Update existing empty condition with the visited nodes
-                                                  edge.conditional_p[index].condition.visited = [...newConditions[index].condition.visited];
-                                                } else {
-                                                  // Create new condition for sibling (in case sibling doesn't have this condition yet)
-                                                  edge.conditional_p.push({
-                                                    condition: { visited: [...newConditions[index].condition.visited] },
-                                                    p: {}
-                                                  });
-                                                }
-                                                
-                                                // Set the same color and group
-                                                if (!edge.display) {
-                                                  edge.display = {};
-                                                }
-                                                edge.display.conditional_color = color;
-                                                edge.display.conditional_group = groupName;
-                                              }
-                                            });
-                                            
-                                            console.log(`[ConditionalP] Group created with color ${color}, group name: ${groupName}`);
-                                          } else {
-                                            // Group already exists - just update the visited nodes across all siblings
-                                            nextGraph.edges[currentEdgeIndex].conditional_p = newConditions as any;
-                                            
-                                            // Update siblings too
-                                            const groupName = newConditions[index].condition.visited.sort().join('_');
-                                            nextGraph.edges.forEach((edge: any, idx: number) => {
-                                              if (idx !== currentEdgeIndex && edge.from === sourceNode && edge.conditional_p && edge.conditional_p[index]) {
-                                                edge.conditional_p[index].condition.visited = [...newConditions[index].condition.visited];
-                                                // Update group name
-                                                if (edge.display) {
-                                                  edge.display.conditional_group = groupName;
-                                                }
-                                              }
-                                            });
-                                          }
-                                          
-                                          if (nextGraph.metadata) {
-                                            nextGraph.metadata.updated_at = new Date().toISOString();
-                                          }
-                                          setGraph(nextGraph);
-                                          saveHistoryState(
-                                            wasEmpty ? 'Create conditional probability group' : 'Add node to conditional probability',
-                                            undefined,
-                                            selectedEdgeId
-                                          );
-                                        }
-                                      }
-                                    }
-                                  }
-                                }}
-                                placeholder="Select node to add..."
-                                showCurrentGraphGroup={true}
-                              />
-                            </div>
-
-
-                            {/* Parameter Section */}
-                            <ParameterSection
-                              graph={graph}
-                              objectType="edge"
-                              objectId={selectedEdgeId || ''}
-                              paramSlot="p"
-                              param={cond.p}
-                              onUpdate={(changes) => updateConditionalPParam(index, changes)}
-                              onRebalance={(newValue) => rebalanceConditionalP(index, newValue)}
-                              label="Conditional Probability"
-                              showBalanceButton={true}
-                              isUnbalanced={false}
-                            />
-                </div>
-                )}
-                      </div>
-                    );
-                  })}
-
-                  {/* Add Conditional Probability Button */}
-                <button
-                    type="button"
-                    className="property-add-btn"
-                    style={{ width: '100%' }}
-                  onClick={() => {
-                      const newCondition = {
-                        condition: { visited: [] },
-                        p: {}
-                      };
-                      const newConditions = [...localConditionalP, newCondition];
+                  
+                  <ConditionalProbabilityEditor
+                    conditions={localConditionalP}
+                    onChange={(newConditions) => {
                       setLocalConditionalP(newConditions);
-                      
-                      // Expand the new condition
-                      setCollapsedConditionals(prev => ({
-                        ...prev,
-                        [newConditions.length - 1]: false
-                      }));
-                      
-                      // Add ONLY to current edge (not siblings yet - group will be created when first node is selected)
                       if (selectedEdgeId && graph) {
                         const nextGraph = structuredClone(graph);
-                        const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
+                        const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
                           edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
                         );
-                        
-                        if (currentEdgeIndex >= 0) {
-                          // Apply the new conditional probability to this edge only
-                          nextGraph.edges[currentEdgeIndex].conditional_p = newConditions as any;
-                          
+                        if (edgeIndex >= 0) {
+                          nextGraph.edges[edgeIndex].conditional_p = newConditions.length > 0 ? newConditions as any : undefined;
                           if (nextGraph.metadata) {
                             nextGraph.metadata.updated_at = new Date().toISOString();
                           }
                           setGraph(nextGraph);
-                          saveHistoryState('Add conditional probability', undefined, selectedEdgeId);
+                          saveHistoryState('Update conditional probabilities', undefined, selectedEdgeId);
                         }
                       }
                     }}
-                    title="Add a new conditional probability"
-                  >
-                    + Conditional Probability
-                  </button>
+                    graph={graph}
+                    edgeId={selectedEdgeId || undefined}
+                    onUpdateParam={updateConditionalPParam}
+                    onRebalanceParam={rebalanceConditionalP}
+                  />
 
                 </CollapsibleSection>
 

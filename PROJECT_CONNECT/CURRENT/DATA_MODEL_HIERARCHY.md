@@ -370,16 +370,48 @@ SYNC RULES:
 **Conditional probability parameters:**
 ```typescript
 {
-  conditional_params?: Array<{
-    id: string;           // Foreign key to parameter file
-    condition: string;    // Query string
-    // Same structure as p above
-    mean: number;
-    mean_overridden: boolean;
-    // ... etc
+  conditional_p?: Array<{
+    // Semantic constraint: WHEN this conditional applies (runtime evaluation)
+    condition: string;    // "visited(promo)" or "context(device:mobile)"
+    
+    // Full data retrieval query: HOW to fetch data from external sources
+    query?: string;       // "from(checkout).to(purchase).visited(promo)"
+    query_overridden?: boolean;  // If true, don't regenerate query via MSMDC
+    
+    // Probability data (same structure as edge.p)
+    p: {
+      id?: string;        // Foreign key to parameter file
+      mean: number;
+      mean_overridden: boolean;
+      // ... etc
+    };
   }>;
 }
 ```
+
+**Query Architecture (IMPORTANT):**
+
+The `query` field represents data retrieval expressions and follows a **unidirectional flow**:
+
+1. **Query is mastered in the GRAPH**, not in files
+   - Derived from graph topology via MSMDC algorithm
+   - Can be manually edited by user (sets `query_overridden: true`)
+   - Updated automatically when topology changes (unless overridden)
+
+2. **Query flows graph → file (one-way only)**
+   - CREATE/PUT operations write `edge.query` → `parameter.query`
+   - Stored in parameter file for self-contained data retrieval
+   - Used by external data services (Amplitude, Statsig, etc.)
+
+3. **Query does NOT flow file → graph**
+   - GET operations do NOT sync `parameter.query` back to `edge.query`
+   - Reason: Query is context-dependent (tied to specific graph topology)
+   - Different graphs using same parameter would have invalid/conflicting queries
+
+4. **Condition vs Query distinction:**
+   - **`condition`**: Semantic constraint for runtime evaluation ("when does this apply?")
+   - **`query`**: Full topological path for data retrieval ("how do we fetch data?")
+   - `query` is auto-derived from `condition` + edge endpoints + MSMDC discriminators
 
 **Key points:**
 - `edge.label` and `edge.description` describe the **edge in the graph** (e.g., "Checkout conversion")
