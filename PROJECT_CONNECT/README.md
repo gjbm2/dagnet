@@ -48,6 +48,38 @@ This directory contains all design documentation for the Data Connections system
 - 1D: Query String Builder (MSMDC algorithm) (6-8 hrs)
 - 1E: Top Menu "Data" (batch operations) (2-3 hrs)
 - 1F: Connection Settings UI (needs design) (4-5 hrs)
+- 1G: Get connection actually working for Amplitude, Sheets
+
+## PHASE 2 work: *** NEEDS DETAILING ***
+
+### History Transaction Batching
+
+**Problem**: When GET operation updates 10 fields, we currently get 10 history entries instead of 1.
+
+**Solution** (deferred):
+- Add transaction/batch mode to history system
+- `beginHistoryTransaction()` / `commitHistoryTransaction(message)`
+- During transaction, changes are buffered
+- On commit, create single unified history entry
+- GET operations use this pattern
+
+**Example**:
+```typescript
+beginHistoryTransaction();
+try {
+  updateField('mean', 0.5);
+  updateField('stdev', 0.1);
+  updateField('distribution', 'beta');
+  // ... more updates
+  commitHistoryTransaction('Get parameter from file');
+} catch (e) {
+  rollbackHistoryTransaction();
+}
+```
+
+### BATCH UPDATES
+
+### ASYNC / API UPDATES
 
 ---
 
@@ -238,7 +270,12 @@ All design decisions finalized 2025-11-05:
 
 ---
 
-**Last Updated:** 2025-11-05  
+
+
+---
+
+**Last Updated:** 2025-11-07  
 **Phase 0.0 & 0.1:** ✅ COMPLETE  
-**Next Milestone:** Phase 0.3 Implementation (UpdateManager)
+**Phase 1B:** 🟡 70% COMPLETE  
+**Next Milestone:** Parameter Section Refactoring
 

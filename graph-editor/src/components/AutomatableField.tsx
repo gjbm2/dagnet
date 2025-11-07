@@ -20,6 +20,10 @@ interface AutomatableFieldProps {
   children: React.ReactNode;  // The actual input component
   tooltip?: string;  // Optional tooltip to display on hover
   
+  // New: Layout options
+  labelExtra?: React.ReactNode;  // Additional content in label row (e.g., Info icon)
+  layout?: 'default' | 'label-above';  // default = inline label+icon, label-above = row above input
+  
   // Optional
   disabled?: boolean;
   className?: string;
@@ -54,6 +58,8 @@ export function AutomatableField({
   label,
   children,
   tooltip,
+  labelExtra,
+  layout = 'default',
   disabled = false,
   className = ''
 }: AutomatableFieldProps) {
@@ -180,6 +186,57 @@ export function AutomatableField({
   
   const showAsEnabled = overridden || isDirty;
   
+  // Render ZapOff button
+  const renderZapOffButton = () => (
+    <button
+      className={`override-toggle ${!showAsEnabled ? 'disabled' : ''}`}
+      onClick={() => {
+        onClearOverride();
+        setIsDirty(false);
+      }}
+      disabled={!showAsEnabled || disabled}
+      aria-label={showAsEnabled ? "Clear manual override" : "Auto-sync enabled"}
+      title={showAsEnabled ? "Click to clear override" : "Auto-sync enabled"}
+      type="button"
+    >
+      <ZapOff size={12} />
+    </button>
+  );
+  
+  if (layout === 'label-above') {
+    return (
+      <div className={`automatable-field-container ${className}`}>
+        {/* Label row: label + labelExtra + ZapOff */}
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '6px', 
+          marginBottom: '8px'
+        }}>
+          <label style={{ 
+            fontSize: '12px', 
+            fontWeight: '600', 
+            color: '#333',
+            margin: 0
+          }}>
+            {label}
+          </label>
+          {labelExtra}
+          {renderZapOffButton()}
+        </div>
+        
+        {/* Input row: just the input field (with animation) */}
+        <div 
+          ref={wrapperRef}
+          className={`automatable-field-input ${shouldAnimate ? 'animate-update' : ''}`}
+        >
+          {enhancedChildren}
+        </div>
+      </div>
+    );
+  }
+  
+  // Default layout: inline (existing behavior)
   return (
     <div 
       ref={wrapperRef}
@@ -189,19 +246,7 @@ export function AutomatableField({
       {enhancedChildren}
       
       {/* ZapOff icon button - always present, right side */}
-      <button
-        className={`override-toggle ${!showAsEnabled ? 'disabled' : ''}`}
-        onClick={() => {
-          onClearOverride();
-          setIsDirty(false);
-        }}
-        disabled={!showAsEnabled || disabled}
-        aria-label={showAsEnabled ? "Clear manual override" : "Auto-sync enabled"}
-        title={showAsEnabled ? "Click to clear override" : "Auto-sync enabled"}
-        type="button"
-      >
-        <ZapOff size={12} />
-      </button>
+      {renderZapOffButton()}
     </div>
   );
 }

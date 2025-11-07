@@ -1,0 +1,52 @@
+/* ParameterSection Component Styles */
+
+/* Input placeholder styling - ensure it's grey */
+.parameter-input::placeholder {
+  color: #9CA3AF;
+  opacity: 1;
+}
+
+.parameter-input::-webkit-input-placeholder {
+  color: #9CA3AF;
+}
+
+.parameter-input::-moz-placeholder {
+  color: #9CA3AF;
+  opacity: 1;
+}
+
+.parameter-input:-ms-input-placeholder {
+  color: #9CA3AF;
+}
+
+/* Ensure consistent right-edge alignment for all fields */
+.parameter-input,
+.parameter-input:focus {
+  outline-offset: -1px;  /* Keep focus outline inside */
+}
+
+/* Ensure select dropdowns have consistent width */
+select.parameter-input {
+  cursor: pointer;
+}
+
+/* Fixed label width for consistent right-edge alignment */
+.parameter-section-label {
+  width: 85px;
+  min-width: 85px;
+  font-size: 12px;
+  color: #6B7280;
+  white-space: nowrap;
+}
+
+/* All inputs fill available width for consistent right-edge alignment */
+.parameter-input {
+  flex: 1;
+  min-width: 0;  /* Allow inputs/selects to shrink below default min-width */
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+

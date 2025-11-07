@@ -13,6 +13,13 @@ interface QueryExpressionEditorProps {
   placeholder?: string;
   height?: string;
   readonly?: boolean;
+  
+  // Self-contained mode: handle override state internally
+  overridden?: boolean;
+  onClearOverride?: () => void;
+  label?: string;
+  showLabel?: boolean;
+  infoTooltip?: string;
 }
 
 interface ParsedQueryChip {
@@ -149,8 +156,13 @@ export function QueryExpressionEditor({
   
   // Parse value into chips when it changes
   useEffect(() => {
+    console.log('[QueryExpressionEditor] Value changed, parsing to chips:', { 
+      value, 
+      isEditing,
+      chipsCount: parseQueryToChips(value).length 
+    });
     setChips(parseQueryToChips(value));
-  }, [value]);
+  }, [value, isEditing]);
   
   // Calculate editor height based on content
   useEffect(() => {
@@ -548,11 +560,19 @@ export function QueryExpressionEditor({
     });
     
     editor.onDidBlurEditorText(() => {
+      const model = editor.getModel();
+      const currentText = model ? model.getValue() : '';
+      
+      console.log('[QueryExpressionEditor] Editor blur, switching to chip view:', { 
+        currentText,
+        injectedDot,
+        willCallOnBlur: !!onBlur
+      });
+      
       setIsEditing(false);
       
       // Clean up trailing '.' if it was injected and user didn't type anything else
       if (injectedDot) {
-        const model = editor.getModel();
         if (model) {
           const text = model.getValue();
           if (text.endsWith('.')) {
@@ -560,6 +580,7 @@ export function QueryExpressionEditor({
             const beforeDot = text.slice(0, -1);
             // If the dot is truly trailing (not part of a chain like .visited.), remove it
             if (!beforeDot.match(/\([^)]*$/)) {  // Not in the middle of a term
+              console.log('[QueryExpressionEditor] Removing injected trailing dot:', { from: text, to: beforeDot });
               onChange(beforeDot);
             }
           }
@@ -625,6 +646,12 @@ export function QueryExpressionEditor({
   
   // Focus Monaco when entering edit mode, clear hover state when leaving
   useEffect(() => {
+    console.log('[QueryExpressionEditor] isEditing changed:', { 
+      isEditing, 
+      currentValue: value,
+      hasEditor: !!editorRef.current
+    });
+    
     if (isEditing) {
       if (editorRef.current) {
         setTimeout(() => {
@@ -635,16 +662,90 @@ export function QueryExpressionEditor({
       // Clear hover state when returning to chip view
       setHoveredChipIndex(null);
     }
-  }, [isEditing]);
+  }, [isEditing, value]);
+  
+  // Delete an inner chip value
+  const handleDeleteInnerChip = (chip: ParsedQueryChip, valueToDelete: string, vIndex: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    const newValues = chip.values.filter((_, i) => i !== vIndex);
+    
+    if (newValues.length === 0) {
+      // If no values left, remove the entire chip
+      handleDeleteChip(chip, e);
+      return;
+    }
+    
+    // Find the position of this specific value within the chip
+    const chipStartIndex = value.indexOf(chip.rawText);
+    const valueStartInChip = chip.rawText.indexOf(valueToDelete);
+    const cursorPosition = chipStartIndex + valueStartInChip;
+    
+    // Replace with updated values
+    const newValuesStr = newValues.join(', ');
+    const newTerm = `${chip.type}(${newValuesStr})`;
+    const newQuery = value.replace(chip.rawText, newTerm);
+    onChange(newQuery);
+    
+    // Enter edit mode and position cursor at the deletion point
+    setIsEditing(true);
+    
+    setTimeout(() => {
+      if (editorRef.current && monacoRef.current) {
+        const model = editorRef.current.getModel();
+        if (!model) return;
+        
+        // Position cursor at the deletion point
+        const cursorPos = model.getPositionAt(Math.min(cursorPosition, newQuery.length));
+        editorRef.current.setPosition(cursorPos);
+        editorRef.current.focus();
+        
+        // Trigger autocomplete
+        setTimeout(() => {
+          editorRef.current?.trigger('keyboard', 'editor.action.triggerSuggest', {});
+        }, 50);
+      }
+    }, 100);
+  };
   
   // Delete a chip (entire term)
   const handleDeleteChip = (chipToDelete: ParsedQueryChip, e: React.MouseEvent) => {
     e.stopPropagation(); // Don't trigger edit mode
     e.preventDefault(); // Prevent any default action
     
+    // Calculate cursor position before deletion
+    const startIndex = value.indexOf(chipToDelete.rawText);
+    
     // Remove this chip from the query string
-    const newQuery = value.replace(chipToDelete.rawText, '').replace(/\.+/g, '.').replace(/^\.|\.$/g, '').trim();
+    let newQuery = value.replace(chipToDelete.rawText, '').replace(/\.+/g, '.').replace(/^\.|\.$/g, '').trim();
+    
+    // If the query now ends with a dot and there's content, add a dot for autocomplete
+    if (newQuery && !newQuery.endsWith('.') && startIndex === value.length - chipToDelete.rawText.length) {
+      newQuery += '.';
+    }
+    
     onChange(newQuery);
+    
+    // Enter edit mode and position cursor
+    setIsEditing(true);
+    
+    setTimeout(() => {
+      if (editorRef.current && monacoRef.current) {
+        const model = editorRef.current.getModel();
+        if (!model) return;
+        
+        // Position cursor at the deletion point
+        const cursorPos = model.getPositionAt(Math.min(startIndex, newQuery.length));
+        editorRef.current.setPosition(cursorPos);
+        editorRef.current.focus();
+        
+        // Trigger autocomplete
+        setTimeout(() => {
+          editorRef.current?.trigger('keyboard', 'editor.action.triggerSuggest', {});
+        }, 50);
+      }
+    }, 100);
   };
   
   // Click outer chip to select the whole term in Monaco
@@ -652,6 +753,10 @@ export function QueryExpressionEditor({
     e.stopPropagation();
     if (readonly) return;
     
+    console.log('[QueryExpressionEditor] Outer chip clicked:', { 
+      chip: chip.rawText,
+      currentValue: value 
+    });
     setIsEditing(true);
     
     // Wait for editor to mount, then select the entire term
@@ -688,6 +793,11 @@ export function QueryExpressionEditor({
     e.stopPropagation();
     if (readonly) return;
     
+    console.log('[QueryExpressionEditor] Inner chip clicked:', { 
+      chip: chip.rawText,
+      valueText,
+      currentValue: value 
+    });
     setIsEditing(true);
     
     // Wait for editor to mount, then select just the value
@@ -727,7 +837,12 @@ export function QueryExpressionEditor({
     if (chips.length === 0) {
       return (
         <div
-          onClick={() => !readonly && setIsEditing(true)}
+          onClick={() => {
+            if (!readonly) {
+              console.log('[QueryExpressionEditor] Empty placeholder clicked, entering edit mode');
+              setIsEditing(true);
+            }
+          }}
           style={{
             padding: '10px 12px',
             color: '#9CA3AF',
@@ -746,6 +861,7 @@ export function QueryExpressionEditor({
         onClick={(e) => {
           // Only enter edit mode if clicking empty space (not a chip)
           if (e.target === e.currentTarget && !readonly) {
+            console.log('[QueryExpressionEditor] Empty space clicked, entering edit mode');
             setIsEditing(true);
           }
         }}
@@ -824,22 +940,7 @@ export function QueryExpressionEditor({
                     {isHovered && !readonly && (
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          // Remove this specific value from the chip
-                          const newValues = chip.values.filter((_, i) => i !== vIndex);
-                          if (newValues.length === 0) {
-                            // If no values left, remove the entire chip
-                            handleDeleteChip(chip, e);
-                          } else {
-                            // Replace with updated values
-                            const newValuesStr = newValues.join(', ');
-                            const newTerm = `${chip.type}(${newValuesStr})`;
-                            const newQuery = value.replace(chip.rawText, newTerm);
-                            onChange(newQuery);
-                          }
-                        }}
+                        onClick={(e) => handleDeleteInnerChip(chip, val, vIndex, e)}
                         style={{
                           marginLeft: '4px',
                           padding: '0',
@@ -914,7 +1015,14 @@ export function QueryExpressionEditor({
           height={editorHeight}
           language="dagnet-query"
           value={value}
-          onChange={(newValue) => onChange(newValue || '')}
+          onChange={(newValue) => {
+            console.log('[QueryExpressionEditor] Monaco onChange:', { 
+              newValue, 
+              oldValue: value,
+              isEditing 
+            });
+            onChange(newValue || '');
+          }}
           onMount={handleEditorDidMount}
           options={{
             readOnly: readonly,

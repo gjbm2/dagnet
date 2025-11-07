@@ -83,6 +83,22 @@
   outline-offset: 2px;
 }
 
+/* Label-above layout: container */
+.automatable-field-container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Label-above layout: input with animation */
+.automatable-field-input {
+  position: relative;
+  transition: transform 0.3s ease-out;
+}
+
+.automatable-field-input.animate-update {
+  animation: pulse-expand 300ms ease-out;
+}
+
 /* Dark mode support */
 @media (prefers-color-scheme: dark) {
   .automatable-field-label {
