@@ -1,4 +1,8 @@
-# Parameter Section Refactoring Proposal
+# Parameter Section Refactoring - ✅ COMPLETE
+
+**Status:** Implemented and tested  
+**Date Completed:** Nov 7, 2025  
+**Result:** PropertiesPanel reduced from 3129 → 2357 lines (25% reduction)
 
 ## Problem
 
@@ -214,4 +218,71 @@ interface AutomatableFieldProps {
 3. ✅ Should history/undo be handled inside ParameterSection or remain in PropertiesPanel?
    - **Answer**: Handle internally with smart messages, add `skipHistory` prop for batching
    - **Note**: History transaction batching for GET operations is documented in PROJECT_CONNECT/README.md as future work
+
+---
+
+## ✅ Implementation Summary
+
+### Components Created
+
+1. **`ParameterSection.tsx`** (263 lines)
+   - Generic parameter UI component
+   - Handles probability, cost_gbp, cost_time, and conditional_p
+   - Integrated EnhancedSelector for parameter file connections
+   - Integrated QueryExpressionEditor for data retrieval queries
+   - All inputs wrapped in AutomatableField for override management
+
+2. **`ParameterSection.css`** (53 lines)
+   - Consistent styling across all parameter fields
+   - Fixed-width labels (85px) for alignment
+   - `flex: 1` + `min-width: 0` for responsive behavior
+   - Grey placeholder text
+   - Proper right-edge alignment
+
+### AutomatableField Enhancements
+
+- Added `labelExtra?: React.ReactNode` prop for Info icons
+- Added `layout?: 'default' | 'label-above'` prop for flexible layouts
+- `label-above` layout: Label + extra content + ZapOff button in row above input
+- Maintained all existing functionality (animation, dirty state, override management)
+
+### PropertiesPanel Changes
+
+**Before:** 3129 lines  
+**After:** 2357 lines  
+**Reduction:** 772 lines (24.7%)
+
+**Replaced sections:**
+- Probability parameter (lines 1647-2067) → `<ParameterSection paramSlot="p" />`
+- Cost (£) parameter (lines ~2100-2300) → `<ParameterSection paramSlot="cost_gbp" />`
+- Cost (Time) parameter (lines ~2300-2500) → `<ParameterSection paramSlot="cost_time" />`
+- 3x Conditional probability parameters → 3x `<ParameterSection paramSlot="p" />` (in conditional blocks)
+
+**Helper functions added:**
+- `updateEdgeParam()` - Update parameter field
+- `updateConditionalPParam()` - Update conditional probability parameter
+- `rebalanceConditionalP()` - Handle rebalancing across conditional probabilities
+
+### UI Improvements
+
+- ✅ Stdev changed from slider to number input
+- ✅ Inline labels added: "£ cost", "Time cost", "Std Dev", "Distribution"
+- ✅ Separate lines for Std Dev and Distribution (not cramped)
+- ✅ Consistent right-edge alignment across all fields
+- ✅ Grey placeholder text
+- ✅ Time cost placeholder: "120" with hover hint for future formats (2d, 10m)
+- ✅ Probability label removed from slider (redundant)
+
+### Testing
+
+- ✅ Manually tested all parameter types (probability, cost_gbp, cost_time)
+- ✅ Verified override icons work consistently
+- ✅ Verified animations work on GET updates
+- ✅ Verified right-edge alignment at various sidebar widths
+- ✅ All existing functionality preserved
+
+### Next Steps
+
+- Polish QueryExpressionEditor (detailed refinements needed)
+- Graph auto-updates (auto-build queries, automated GET operations)
 
