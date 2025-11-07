@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
+import { dataOperationsService } from '../services/dataOperationsService';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
@@ -15,8 +16,9 @@ import { ColorSelector } from './ColorSelector';
 import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
+import { ParameterSection } from './ParameterSection';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
-import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson } from 'lucide-react';
+import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff } from 'lucide-react';
 import './PropertiesPanel.css';
 import type { Evidence } from '../types';
 
@@ -286,11 +288,11 @@ export default function PropertiesPanel({
             stdev: edge.p?.stdev || undefined,
             description: edge.description || '',
             cost_gbp: edgeCostGbp,
-          cost_time: edgeCostTime,
-          weight_default: edge.weight_default || 0,
-          display: edge.display || {},
-          query: (edge as any).query || ''
-        });
+            cost_time: edgeCostTime,
+            weight_default: edge.weight_default || 0,
+            display: edge.display || {},
+            query: (edge as any).query || ''
+          });
           setLocalConditionalP(edge.conditional_p || []);
           lastLoadedEdgeRef.current = selectedEdgeId;
         }
@@ -313,10 +315,10 @@ export default function PropertiesPanel({
           
           // Only update probability fields if there's a connected parameter
           // (if p.id exists, UpdateManager might have loaded new data)
-        if (edge.p?.id && edge.p?.mean !== undefined) {
-          updates.probability = edge.p.mean;
-          updates.stdev = edge.p.stdev;
-        }
+          if (edge.p?.id && edge.p?.mean !== undefined) {
+            updates.probability = edge.p.mean;
+            updates.stdev = edge.p.stdev;
+          }
           
           // Always update cost objects (these are always from files)
           if (edge.cost_gbp) updates.cost_gbp = edge.cost_gbp;
@@ -458,10 +460,10 @@ export default function PropertiesPanel({
           // Remove stdev property if undefined
           const { stdev, ...pWithoutStdev } = next.edges[edgeIndex].p || {};
           next.edges[edgeIndex].p = pWithoutStdev;
-      } else {
-        next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, stdev: value };
-      }
-    } else if (field.startsWith('costs.')) {
+        } else {
+          next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, stdev: value };
+        }
+      } else if (field.startsWith('costs.')) {
         const costField = field.split('.')[1];
         if (!next.edges[edgeIndex].costs) next.edges[edgeIndex].costs = {};
         next.edges[edgeIndex].costs[costField] = value;
@@ -476,6 +478,66 @@ export default function PropertiesPanel({
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
+  // Helper: Update edge parameter fields
+  const updateEdgeParam = useCallback((paramSlot: 'p' | 'cost_gbp' | 'cost_time', changes: Record<string, any>) => {
+    if (!graph || !selectedEdgeId) return;
+    const next = structuredClone(graph);
+    const edgeIndex = next.edges.findIndex((e: any) => 
+      e.uuid === selectedEdgeId || e.id === selectedEdgeId
+    );
+    if (edgeIndex >= 0) {
+      if (!next.edges[edgeIndex][paramSlot]) {
+        next.edges[edgeIndex][paramSlot] = {};
+      }
+      Object.assign(next.edges[edgeIndex][paramSlot], changes);
+      if (next.metadata) {
+        next.metadata.updated_at = new Date().toISOString();
+      }
+      setGraph(next);
+      const changedKeys = Object.keys(changes).join(', ');
+      saveHistoryState(`Update ${paramSlot}: ${changedKeys}`, undefined, selectedEdgeId || undefined);
+    }
+  }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
+
+  // Helper: Connect edge parameter
+  const connectEdgeParam = useCallback((paramSlot: 'p' | 'cost_gbp' | 'cost_time', paramId: string) => {
+    if (!graph || !selectedEdgeId) return;
+    const next = structuredClone(graph);
+    const edgeIndex = next.edges.findIndex((e: any) => 
+      e.uuid === selectedEdgeId || e.id === selectedEdgeId
+    );
+    if (edgeIndex >= 0) {
+      if (!next.edges[edgeIndex][paramSlot]) {
+        next.edges[edgeIndex][paramSlot] = {};
+      }
+      next.edges[edgeIndex][paramSlot].id = paramId;
+      if (next.metadata) {
+        next.metadata.updated_at = new Date().toISOString();
+      }
+      setGraph(next);
+      saveHistoryState(`Connect ${paramSlot} parameter`, undefined, selectedEdgeId || undefined);
+    }
+  }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
+
+  // Helper: Disconnect edge parameter
+  const disconnectEdgeParam = useCallback((paramSlot: 'p' | 'cost_gbp' | 'cost_time') => {
+    if (!graph || !selectedEdgeId) return;
+    const next = structuredClone(graph);
+    const edgeIndex = next.edges.findIndex((e: any) => 
+      e.uuid === selectedEdgeId || e.id === selectedEdgeId
+    );
+    if (edgeIndex >= 0) {
+      if (next.edges[edgeIndex][paramSlot]) {
+        delete next.edges[edgeIndex][paramSlot].id;
+      }
+      if (next.metadata) {
+        next.metadata.updated_at = new Date().toISOString();
+      }
+      setGraph(next);
+      saveHistoryState(`Disconnect ${paramSlot} parameter`, undefined, selectedEdgeId || undefined);
+    }
+  }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
+
   if (!graph) return null;
 
   // Add null checks to prevent crashes when nodes/edges are deleted
@@ -483,6 +545,133 @@ export default function PropertiesPanel({
   const selectedEdge = selectedEdgeId && graph.edges ? graph.edges.find((e: any) => 
     e.uuid === selectedEdgeId
   ) : null;
+
+  // Helper: GET edge parameter from file
+  const getEdgeParam = useCallback(async (paramSlot: 'p' | 'cost_gbp' | 'cost_time') => {
+    const edge = selectedEdge;
+    const paramId = edge?.[paramSlot]?.id;
+    if (!paramId || !selectedEdgeId) return;
+    
+    await dataOperationsService.getParameterFromFile({
+      paramId,
+      edgeId: selectedEdgeId,
+      graph,
+      setGraph: setGraph as (graph: any) => void
+    });
+  }, [selectedEdge, selectedEdgeId, graph, setGraph]);
+
+  // Helper: PUSH edge parameter to file  
+  const pushEdgeParam = useCallback(async (paramSlot: 'p' | 'cost_gbp' | 'cost_time') => {
+    const edge = selectedEdge;
+    const paramId = edge?.[paramSlot]?.id;
+    if (!paramId || !selectedEdgeId) return;
+    
+    await dataOperationsService.putParameterToFile({
+      paramId,
+      edgeId: selectedEdgeId,
+      graph,
+      setGraph: setGraph as (graph: any) => void
+    });
+  }, [selectedEdge, selectedEdgeId, graph, setGraph]);
+
+  // Helper: OPEN edge parameter file
+  const openEdgeParamFile = useCallback((paramSlot: 'p' | 'cost_gbp' | 'cost_time') => {
+    const edge = selectedEdge;
+    const paramId = edge?.[paramSlot]?.id;
+    if (paramId) {
+      openFileById('parameter', paramId);
+    }
+  }, [selectedEdge, openFileById]);
+
+  // Helper: Update conditional probability parameter
+  const updateConditionalPParam = useCallback((condIndex: number, changes: Record<string, any>) => {
+    if (!selectedEdgeId || !graph) return;
+    
+    const next = structuredClone(graph);
+    const edgeIndex = next.edges.findIndex((e: any) => 
+      e.uuid === selectedEdgeId || e.id === selectedEdgeId
+    );
+    
+    if (edgeIndex >= 0 && next.edges[edgeIndex].conditional_p && next.edges[edgeIndex].conditional_p![condIndex]) {
+      if (!next.edges[edgeIndex].conditional_p![condIndex].p) {
+        next.edges[edgeIndex].conditional_p![condIndex].p = {};
+      }
+      Object.assign(next.edges[edgeIndex].conditional_p![condIndex].p!, changes);
+      
+      if (next.metadata) {
+        next.metadata.updated_at = new Date().toISOString();
+      }
+      setGraph(next);
+      saveHistoryState(`Update conditional probability parameter`, undefined, selectedEdgeId || undefined);
+    }
+  }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
+
+  // Helper: Rebalance conditional probability across sibling edges
+  const rebalanceConditionalP = useCallback((condIndex: number, newValue: number) => {
+    if (!selectedEdgeId || !graph) return;
+    
+    const nextGraph = structuredClone(graph);
+    const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
+      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+    );
+    
+    if (currentEdgeIndex >= 0) {
+      const currentEdge = nextGraph.edges[currentEdgeIndex];
+      const sourceNode = currentEdge.from;
+      
+      if (!currentEdge.conditional_p || !currentEdge.conditional_p[condIndex]) {
+        return;
+      }
+      
+      // Update current edge's probability
+      if (!nextGraph.edges[currentEdgeIndex].conditional_p![condIndex].p) {
+        nextGraph.edges[currentEdgeIndex].conditional_p![condIndex].p = {};
+      }
+      nextGraph.edges[currentEdgeIndex].conditional_p![condIndex].p!.mean = newValue;
+      
+      // Find sibling edges with same condition
+      const siblings = nextGraph.edges.filter((edge: any, idx: number) => 
+        idx !== currentEdgeIndex && 
+        edge.from === sourceNode &&
+        edge.conditional_p &&
+        edge.conditional_p[condIndex] &&
+        edge.conditional_p[condIndex].condition &&
+        currentEdge.conditional_p &&
+        currentEdge.conditional_p[condIndex] &&
+        currentEdge.conditional_p[condIndex].condition &&
+        JSON.stringify(edge.conditional_p[condIndex].condition.visited.sort()) === 
+        JSON.stringify(currentEdge.conditional_p[condIndex].condition.visited.sort())
+      );
+      
+      if (siblings.length > 0) {
+        const remainingProbability = roundTo4DP(1 - newValue);
+        const siblingsTotal = siblings.reduce((sum, sibling) => {
+          return sum + (sibling.conditional_p![condIndex]?.p?.mean || 0);
+        }, 0);
+        
+        siblings.forEach((sibling) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
+          if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p && nextGraph.edges[siblingIndex].conditional_p![condIndex]) {
+            const siblingCurrentValue = sibling.conditional_p![condIndex]?.p?.mean || 0;
+            const newSiblingValue = siblingsTotal > 0
+              ? roundTo4DP((siblingCurrentValue / siblingsTotal) * remainingProbability)
+              : roundTo4DP(remainingProbability / siblings.length);
+            
+            if (!nextGraph.edges[siblingIndex].conditional_p![condIndex].p) {
+              nextGraph.edges[siblingIndex].conditional_p![condIndex].p = {};
+            }
+            nextGraph.edges[siblingIndex].conditional_p![condIndex].p!.mean = newSiblingValue;
+          }
+        });
+      }
+      
+      if (nextGraph.metadata) {
+        nextGraph.metadata.updated_at = new Date().toISOString();
+      }
+      setGraph(nextGraph);
+      saveHistoryState('Rebalance conditional probabilities', undefined, selectedEdgeId);
+    }
+  }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
   
   // DIAGNOSTIC: Log selectedEdge lookup result
   if (selectedEdgeId && !selectedEdge) {
@@ -646,22 +835,42 @@ export default function PropertiesPanel({
                         updateNode('label_overridden', false);
                       }}
                     >
-                      <input
-                        className="property-input"
-                        data-field="label"
-                        value={localNodeData.label || ''}
+                    <input
+                      className="property-input"
+                      data-field="label"
+                      value={localNodeData.label || ''}
                         onChange={(e) => {
                           const newLabel = e.target.value;
                           setLocalNodeData({...localNodeData, label: newLabel});
                         }}
-                        onBlur={() => {
+                      onBlur={() => {
+                        if (!graph || !selectedNodeId) return;
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                        if (nodeIndex >= 0) {
+                          next.nodes[nodeIndex].label = localNodeData.label;
+                            // Mark as overridden when user commits edit
+                            next.nodes[nodeIndex].label_overridden = true;
+                          if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
+                            next.nodes[nodeIndex].id = localNodeData.id;
+                          }
+                          hasLabelBeenCommittedRef.current[selectedNodeId] = true;
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                          saveHistoryState('Update node label', selectedNodeId);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
                           if (!graph || !selectedNodeId) return;
                           const next = structuredClone(graph);
                           const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                           if (nodeIndex >= 0) {
                             next.nodes[nodeIndex].label = localNodeData.label;
-                            // Mark as overridden when user commits edit
-                            next.nodes[nodeIndex].label_overridden = true;
+                              // Mark as overridden when user commits edit
+                              next.nodes[nodeIndex].label_overridden = true;
                             if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
                               next.nodes[nodeIndex].id = localNodeData.id;
                             }
@@ -672,35 +881,15 @@ export default function PropertiesPanel({
                             setGraph(next);
                             saveHistoryState('Update node label', selectedNodeId);
                           }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            if (!graph || !selectedNodeId) return;
-                            const next = structuredClone(graph);
-                            const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                            if (nodeIndex >= 0) {
-                              next.nodes[nodeIndex].label = localNodeData.label;
-                              // Mark as overridden when user commits edit
-                              next.nodes[nodeIndex].label_overridden = true;
-                              if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
-                                next.nodes[nodeIndex].id = localNodeData.id;
-                              }
-                              hasLabelBeenCommittedRef.current[selectedNodeId] = true;
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                              saveHistoryState('Update node label', selectedNodeId);
-                            }
-                          }
-                        }}
-                        placeholder="Enter node label..."
-                      />
+                        }
+                      }}
+                      placeholder="Enter node label..."
+                    />
                     </AutomatableField>
                   </div>
 
-                {/* Description */}
-                <div className="property-section">
+                  {/* Description */}
+                  <div className="property-section">
                   <AutomatableField
                     label="Description"
                     value={localNodeData.description || ''}
@@ -733,23 +922,23 @@ export default function PropertiesPanel({
                       placeholder="Enter description..."
                     />
                   </AutomatableField>
-                </div>
+                  </div>
 
-                {/* Tags */}
-                <div className="property-section">
-                  <label className="property-label">Tags</label>
-                  <input
-                    className="property-input"
-                    value={localNodeData.tags?.join(', ') || ''}
-                    onChange={(e) => {
-                      const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t);
-                      setLocalNodeData({...localNodeData, tags});
-                    }}
-                    onBlur={() => updateNode('tags', localNodeData.tags)}
-                    placeholder="tag1, tag2, tag3"
-                  />
-                  <div className="property-helper-text">Comma-separated tags</div>
-                </div>
+                  {/* Tags */}
+                  <div className="property-section">
+                    <label className="property-label">Tags</label>
+                    <input
+                      className="property-input"
+                      value={localNodeData.tags?.join(', ') || ''}
+                      onChange={(e) => {
+                        const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t);
+                        setLocalNodeData({...localNodeData, tags});
+                      }}
+                      onBlur={() => updateNode('tags', localNodeData.tags)}
+                      placeholder="tag1, tag2, tag3"
+                    />
+                    <div className="property-helper-text">Comma-separated tags</div>
+                  </div>
 
               </CollapsibleSection>
 
@@ -809,7 +998,7 @@ export default function PropertiesPanel({
                     placeholder="Select or enter event ID..."
                   />
                 </AutomatableField>
-              </CollapsibleSection>
+                </CollapsibleSection>
 
                 {/* Node Behavior Section */}
                 <CollapsibleSection title="Node Behavior" defaultOpen={true} icon={Settings}>
@@ -848,7 +1037,7 @@ export default function PropertiesPanel({
                     <span>Terminal Node</span>
                   </label>
 
-                <div className="property-section">
+                  <div className="property-section">
                   <AutomatableField
                     label="Outcome Type"
                     value={localNodeData.outcome_type || ''}
@@ -887,7 +1076,7 @@ export default function PropertiesPanel({
                       <option value="other">Other</option>
                     </select>
                   </AutomatableField>
-                </div>
+                  </div>
 
                   <div className="property-section">
                     <label className="property-label">Entry Weight</label>
@@ -924,29 +1113,29 @@ export default function PropertiesPanel({
                   icon={Layers}
                   withCheckbox={true}
                   checkboxChecked={nodeType === 'case'}
-                onCheckboxChange={(checked) => {
-                  if (checked) {
-                    setNodeType('case');
-                    const newCaseData = caseData.variants.length === 0 ? {
+                  onCheckboxChange={(checked) => {
+                    if (checked) {
+                      setNodeType('case');
+                      const newCaseData = caseData.variants.length === 0 ? {
                       id: '',  // Don't auto-generate - let user fill in
-                      status: 'active' as 'active' | 'paused' | 'completed',
-                      variants: [
-                        { name: 'control', weight: 0.5 },
-                        { name: 'treatment', weight: 0.5 }
-                      ]
-                    } : caseData;
-                    setCaseData(newCaseData);
-                    
-                    if (graph && selectedNodeId) {
-                      const next = structuredClone(graph);
-                      const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                      if (nodeIndex >= 0) {
-                        next.nodes[nodeIndex].type = 'case';
-                        next.nodes[nodeIndex].case = {
-                          id: newCaseData.id,
-                          status: newCaseData.status,
-                          variants: newCaseData.variants
-                        };
+                        status: 'active' as 'active' | 'paused' | 'completed',
+                        variants: [
+                          { name: 'control', weight: 0.5 },
+                          { name: 'treatment', weight: 0.5 }
+                        ]
+                      } : caseData;
+                      setCaseData(newCaseData);
+                      
+                      if (graph && selectedNodeId) {
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                        if (nodeIndex >= 0) {
+                          next.nodes[nodeIndex].type = 'case';
+                          next.nodes[nodeIndex].case = {
+                            id: newCaseData.id,
+                            status: newCaseData.status,
+                            variants: newCaseData.variants
+                          };
                           if (!next.nodes[nodeIndex].layout) {
                             next.nodes[nodeIndex].layout = { x: 0, y: 0 };
                           }
@@ -988,11 +1177,11 @@ export default function PropertiesPanel({
                       type="case"
                       value={caseData.id}
                       targetInstanceUuid={selectedNodeId}
-                  onChange={(newCaseId) => {
-                    setCaseData({...caseData, id: newCaseId});
-                    if (graph && selectedNodeId) {
-                      const next = structuredClone(graph);
-                      const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                      onChange={(newCaseId) => {
+                        setCaseData({...caseData, id: newCaseId});
+                        if (graph && selectedNodeId) {
+                          const next = structuredClone(graph);
+                          const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                       if (nodeIndex >= 0) {
                         // Always preserve case structure when type='case'
                         // Just update the id field (can be empty string)
@@ -1003,16 +1192,16 @@ export default function PropertiesPanel({
                             variants: caseData.variants || []
                           };
                         } else {
-                          next.nodes[nodeIndex].case.id = newCaseId;
+                            next.nodes[nodeIndex].case.id = newCaseId;
                         }
-                        if (next.metadata) {
-                          next.metadata.updated_at = new Date().toISOString();
+                            if (next.metadata) {
+                              next.metadata.updated_at = new Date().toISOString();
+                            }
+                            setGraph(next);
+                            saveHistoryState(newCaseId ? 'Update case ID' : 'Clear case ID', selectedNodeId || undefined);
+                          }
                         }
-                        setGraph(next);
-                        saveHistoryState(newCaseId ? 'Update case ID' : 'Clear case ID', selectedNodeId || undefined);
-                      }
-                    }
-                  }}
+                      }}
                       onClear={() => {
                         // onClear is redundant since onChange handles it, but keep for consistency
                       }}
@@ -1071,8 +1260,8 @@ export default function PropertiesPanel({
                       placeholder="Select or enter case ID..."
                     />
 
-                  {/* Case Status */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
+                    {/* Case Status */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
                     <AutomatableField
                       label=""
                       value={caseData.status}
@@ -1089,41 +1278,41 @@ export default function PropertiesPanel({
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>Status</label>
-                        <select
-                          value={caseData.status}
-                          onChange={(e) => {
-                            const newStatus = e.target.value as 'active' | 'paused' | 'completed';
-                            setCaseData({...caseData, status: newStatus});
-                            if (graph && selectedNodeId) {
-                              const next = structuredClone(graph);
-                              const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                              if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                next.nodes[nodeIndex].case.status = newStatus;
+                      <label style={{ fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>Status</label>
+                      <select
+                        value={caseData.status}
+                        onChange={(e) => {
+                          const newStatus = e.target.value as 'active' | 'paused' | 'completed';
+                          setCaseData({...caseData, status: newStatus});
+                          if (graph && selectedNodeId) {
+                            const next = structuredClone(graph);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                            if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                              next.nodes[nodeIndex].case.status = newStatus;
                                 next.nodes[nodeIndex].case.status_overridden = true;
-                                if (next.metadata) {
-                                  next.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(next);
-                                saveHistoryState('Update case status', selectedNodeId);
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
                               }
+                              setGraph(next);
+                                saveHistoryState('Update case status', selectedNodeId);
                             }
-                          }}
-                          style={{ 
-                            width: '150px', 
-                            padding: '6px 8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            boxSizing: 'border-box'
-                          }}
-                        >
-                          <option value="active">Active</option>
-                          <option value="paused">Paused</option>
-                          <option value="completed">Completed</option>
-                        </select>
+                          }
+                        }}
+                        style={{ 
+                          width: '150px', 
+                          padding: '6px 8px', 
+                          border: '1px solid #ddd', 
+                          borderRadius: '4px',
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        <option value="active">Active</option>
+                        <option value="paused">Paused</option>
+                        <option value="completed">Completed</option>
+                      </select>
                       </div>
                     </AutomatableField>
-                  </div>
+                    </div>
 
                     {/* Case Node Color */}
                     <ColorSelector
@@ -1320,28 +1509,28 @@ export default function PropertiesPanel({
                                     }
                                   }}
                                 >
-                                  <VariantWeightInput
-                                    value={variant.weight}
-                                    onChange={(value) => {
-                                      const newVariants = [...caseData.variants];
-                                      newVariants[index].weight = value;
-                                      setCaseData({...caseData, variants: newVariants});
-                                    }}
-                                    onCommit={(value) => {
-                                      if (graph && selectedNodeId) {
-                                        const next = structuredClone(graph);
-                                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                                        if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                            <VariantWeightInput
+                              value={variant.weight}
+                              onChange={(value) => {
+                                const newVariants = [...caseData.variants];
+                                newVariants[index].weight = value;
+                                setCaseData({...caseData, variants: newVariants});
+                              }}
+                              onCommit={(value) => {
+                                if (graph && selectedNodeId) {
+                                  const next = structuredClone(graph);
+                                  const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
                                           next.nodes[nodeIndex].case.variants[index].weight = value;
                                           next.nodes[nodeIndex].case.variants[index].weight_overridden = true;
-                                          if (next.metadata) {
-                                            next.metadata.updated_at = new Date().toISOString();
-                                          }
-                                          setGraph(next);
-                                          saveHistoryState('Update variant weight', selectedNodeId || undefined);
-                                        }
-                                      }
-                                    }}
+                                    if (next.metadata) {
+                                      next.metadata.updated_at = new Date().toISOString();
+                                    }
+                                    setGraph(next);
+                                        saveHistoryState('Update variant weight', selectedNodeId || undefined);
+                                  }
+                                }
+                              }}
                               onRebalance={(value, currentIndex, variants) => {
                                 if (graph && selectedNodeId) {
                                   const rebalanceGraph = structuredClone(graph);
@@ -1382,15 +1571,15 @@ export default function PropertiesPanel({
                                   }
                                 }
                               }}
-                                    currentIndex={index}
-                                    allVariants={caseData.variants}
-                                    autoFocus={false}
-                                    autoSelect={false}
-                                    showSlider={true}
-                                    showBalanceButton={true}
-                                  />
+                              currentIndex={index}
+                              allVariants={caseData.variants}
+                              autoFocus={false}
+                              autoSelect={false}
+                              showSlider={true}
+                              showBalanceButton={true}
+                            />
                                 </AutomatableField>
-                              </div>
+                          </div>
                             )}
                           </div>
                         );
@@ -1458,8 +1647,8 @@ export default function PropertiesPanel({
                   />
                 </div>
 
-                {/* Description */}
-                <div style={{ marginBottom: '16px' }}>
+                  {/* Description */}
+                  <div style={{ marginBottom: '16px' }}>
                   <AutomatableField
                     label="Description"
                     value={localEdgeData.description || ''}
@@ -1510,7 +1699,7 @@ export default function PropertiesPanel({
                       }}
                     />
                   </AutomatableField>
-                </div>
+                  </div>
 
                   {/* Weight Default - now shown for ALL edges */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
@@ -1547,1024 +1736,43 @@ export default function PropertiesPanel({
                 <CollapsibleSection title="Parameters" icon={Layers} defaultOpen={true}>
                   {/* SUB-SECTION 2.1: Probability */}
                   <CollapsibleSection title="Probability" icon={TrendingUp} defaultOpen={true}>
-                {/* Parameter ID for probability - connect to parameter registry */}
-                <EnhancedSelector
-                  type="parameter"
-                  parameterType="probability"
-                  value={selectedEdge?.p?.id || ''}
-                  autoFocus={!selectedEdge?.p?.id && !selectedEdge?.p?.mean}
-                  targetInstanceUuid={selectedEdgeId}
-                  onChange={(newParamId) => {
-                    console.log('PropertiesPanel: EnhancedSelector onChange:', { newParamId, selectedEdgeId });
-                    // Set edge.p.id (not flat edge.parameter_id)
-                    if (!graph || !selectedEdgeId) return;
-                    const next = structuredClone(graph);
-                    const edgeIndex = next.edges.findIndex((e: any) => 
-                      e.uuid === selectedEdgeId
-                    );
-                    console.log('PropertiesPanel: Edge lookup:', { edgeIndex, foundEdge: edgeIndex >= 0 ? next.edges[edgeIndex].uuid : null });
-                    if (edgeIndex >= 0) {
-                      if (!next.edges[edgeIndex].p) next.edges[edgeIndex].p = {};
-                      // Only update if newParamId is truthy (not empty string)
-                      // This prevents clearing the ID when onChange is called with ""
-                      if (newParamId) {
-                        next.edges[edgeIndex].p.id = newParamId;
-                      } else {
-                        // Explicitly clearing - remove the id property
-                        delete next.edges[edgeIndex].p.id;
-                      }
-                      console.log('PropertiesPanel: SET p.id:', { 
-                        'edge.p': JSON.stringify(next.edges[edgeIndex].p),
-                        'newParamId': newParamId
-                      });
-                      if (next.metadata) {
-                        next.metadata.updated_at = new Date().toISOString();
-                      }
-                      setGraph(next);
-                      saveHistoryState('Update edge parameter_id', undefined, selectedEdgeId || undefined);
-                    } else {
-                      console.error('PropertiesPanel: Edge NOT FOUND!', { selectedEdgeId, edgeCount: next.edges.length });
-                    }
-                  }}
-                      onClear={() => {
-                        // No need to save history - onChange already does it via updateEdge
-                  }}
-                  onPullFromRegistry={async () => {
-                    const currentParamId = selectedEdge?.p?.id;
-                    if (!currentParamId || !graph || !selectedEdgeId) return;
-                    
-                    try {
-                      let paramData: any = null;
-                      const localFile = fileRegistry.getFile(`parameter-${currentParamId}.yaml`);
-                      if (localFile) {
-                        paramData = localFile.data;
-                      } else {
-                        const { paramRegistryService } = await import('../services/paramRegistryService');
-                        paramData = await paramRegistryService.loadParameter(currentParamId);
-                      }
-                      
-                      if (paramData && paramData.values && paramData.values.length > 0) {
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) => 
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        
-                        if (edgeIndex >= 0) {
-                          const edge = next.edges[edgeIndex] as any;
-                          const primaryValue = paramData.values[paramData.values.length - 1];
-                          
-                          if (primaryValue.mean !== undefined && primaryValue.mean !== null) {
-                            edge.p = { ...edge.p, mean: primaryValue.mean };
-                            setLocalEdgeData((prev: any) => ({...prev, probability: primaryValue.mean}));
-                          }
-                          if (primaryValue.stdev !== undefined && primaryValue.stdev !== null) {
-                            edge.p = { ...edge.p, stdev: primaryValue.stdev };
-                            setLocalEdgeData((prev: any) => ({...prev, stdev: primaryValue.stdev}));
-                          }
-                          
-                          if (next.metadata) {
-                            next.metadata.updated_at = new Date().toISOString();
-                          }
-                          
-                          setGraph(next);
-                          saveHistoryState(`Pull probability from registry`, undefined, selectedEdgeId);
-                        }
-                      }
-                    } catch (error) {
-                      console.error('Failed to pull from registry:', error);
-                    }
-                  }}
-                  onPushToRegistry={async () => {
-                    // TODO: Implement push to registry
-                    console.log('Push to registry not yet implemented');
-                  }}
-                  onOpenConnected={() => {
-                    const paramId = selectedEdge?.p?.id;
-                    if (paramId) {
-                      openFileById('parameter', paramId);
-                    }
-                  }}
-                  onOpenItem={(itemId) => {
-                    openFileById('parameter', itemId);
-                  }}
-                  label=""
-                  placeholder="Select or enter parameter ID..."
-                />
-
-                {/* Query Expression Editor - for data retrieval constraints */}
-                <div style={{ marginTop: '16px', marginBottom: '16px' }}>
-                  <AutomatableField
-                    label="Data Retrieval Query"
-                    value={selectedEdge?.p?.query || ''}
-                    overridden={selectedEdge?.p?.query_overridden || false}
-                    onClearOverride={() => {
-                      if (!graph || !selectedEdgeId) return;
-                      const next = structuredClone(graph);
-                      const edgeIndex = next.edges.findIndex((e: any) => 
-                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                      );
-                      if (edgeIndex >= 0) {
-                        if (next.edges[edgeIndex].p) {
-                          next.edges[edgeIndex].p.query = '';
-                          delete next.edges[edgeIndex].p.query_overridden;
-                        }
-                        setGraph(next);
-                        saveHistoryState('Clear query override', undefined, selectedEdgeId || undefined);
-                      }
-                    }}
-                  >
-                    <QueryExpressionEditor
-                      value={selectedEdge?.p?.query || ''}
-                      onChange={(newQuery) => {
-                        // Update immediately in local state
-                        setLocalEdgeData({...localEdgeData, query: newQuery});
-                      }}
-                      onBlur={() => {
-                        // Save to edge.p.query on blur
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) => 
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          if (!next.edges[edgeIndex].p) {
-                            next.edges[edgeIndex].p = {};
-                          }
-                          next.edges[edgeIndex].p.query = localEdgeData.query || selectedEdge?.p?.query || '';
-                          next.edges[edgeIndex].p.query_overridden = true;
-                          if (next.metadata) {
-                            next.metadata.updated_at = new Date().toISOString();
-                          }
-                          setGraph(next);
-                          saveHistoryState('Update probability query', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
+                    <ParameterSection
                       graph={graph}
-                      edgeId={selectedEdgeId || undefined}
-                      placeholder="from(node).to(node).exclude(...)"
-                      height="60px"
-                    />
-                  </AutomatableField>
-                  <div style={{ 
-                    fontSize: '11px', 
-                    color: '#6B7280', 
-                    marginTop: '4px',
-                    fontStyle: 'italic'
-                  }}>
-                    Example: from(checkout).to(purchase).exclude(abandoned-cart)
-                  </div>
-                </div>
-
-                {/* Probability field - shown for all edges, but with different meaning for case edges */}
-                <div style={{ marginBottom: '20px' }}>
-                  <AutomatableField
-                    label={selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) 
+                      objectType="edge"
+                      objectId={selectedEdgeId || ''}
+                      paramSlot="p"
+                      param={selectedEdge?.p}
+                      onUpdate={(changes) => updateEdgeParam('p', changes)}
+                      label={selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) 
                       ? 'Sub-Route Probability (within variant)' 
                       : 'Probability'}
-                    value={localEdgeData.probability || 0}
-                    overridden={selectedEdge?.p?.mean_overridden || false}
-                    tooltip={formatEvidenceTooltip(selectedEdge?.p?.evidence)}
-                    onClearOverride={() => {
-                      if (!graph || !selectedEdgeId) return;
-                      const next = structuredClone(graph);
-                      const edgeIndex = next.edges.findIndex((e: any) => 
-                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                      );
-                      if (edgeIndex >= 0) {
-                        next.edges[edgeIndex].p = { 
-                          ...next.edges[edgeIndex].p, 
-                          mean_overridden: false 
-                        };
-                        setGraph(next);
-                        saveHistoryState('Clear probability override', undefined, selectedEdgeId || undefined);
-                      }
-                    }}
-                  >
-                    <ProbabilityInput
-                      value={localEdgeData.probability || 0}
-                      onChange={(value) => {
-                        setLocalEdgeData({...localEdgeData, probability: value});
-                      }}
-                      onCommit={(value) => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) => 
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].p = { 
-                            ...next.edges[edgeIndex].p, 
-                            mean: value,
-                            mean_overridden: true 
-                          };
-                          setGraph(next);
-                          saveHistoryState('Update edge probability', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                      isUnbalanced={(() => {
-                        if (!graph || !selectedEdge) return false;
-                        const currentEdge = selectedEdge;
-                        const siblings = graph.edges.filter((e: any) => {
-                          if (currentEdge.case_id && currentEdge.case_variant) {
-                            return e.from === currentEdge.from && 
-                                   e.case_id === currentEdge.case_id && 
-                                   e.case_variant === currentEdge.case_variant;
-                          }
-                          return e.from === currentEdge.from;
-                        });
-                        const total = siblings.reduce((sum, e: any) => sum + (e.p?.mean || 0), 0);
-                        return Math.abs(total - 1.0) > 0.001; // Allow small floating point errors
-                      })()}
-                      onRebalance={(value) => {
-                      if (graph && selectedEdgeId) {
-                        const currentEdge = graph.edges.find((e: any) => e.uuid === selectedEdgeId);
-                        if (!currentEdge) return;
-                        
-                        const siblings = graph.edges.filter((e: any) => {
-                          if (currentEdge.case_id && currentEdge.case_variant) {
-                            return e.id !== currentEdge.id && 
-                                   e.from === currentEdge.from && 
-                                   e.case_id === currentEdge.case_id && 
-                                   e.case_variant === currentEdge.case_variant;
-                          }
-                          return e.id !== currentEdge.id && e.from === currentEdge.from;
-                        });
-                        
-                        if (siblings.length > 0) {
-                          const nextGraph = structuredClone(graph);
-                          const currentValue = value;
-                          const remainingProbability = roundTo4DP(1 - currentValue);
-                          
-                          const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
-                          if (currentEdgeIndex >= 0) {
-                            nextGraph.edges[currentEdgeIndex].p = { ...nextGraph.edges[currentEdgeIndex].p, mean: currentValue };
-                          }
-                          
-                          const siblingsTotal = siblings.reduce((sum, sibling) => sum + (sibling.p?.mean || 0), 0);
-                          
-                          if (siblingsTotal > 0) {
-                            siblings.forEach(sibling => {
-                              const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-                              if (siblingIndex >= 0) {
-                                const siblingCurrentValue = sibling.p?.mean || 0;
-                                const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
-                                nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: newValue };
-                              }
-                            });
-                          } else {
-                            const equalShare = remainingProbability / siblings.length;
-                            siblings.forEach(sibling => {
-                              const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-                              if (siblingIndex >= 0) {
-                                nextGraph.edges[siblingIndex].p = { ...nextGraph.edges[siblingIndex].p, mean: equalShare };
-                              }
-                            });
-                          }
-                          
-                          if (nextGraph.metadata) {
-                            nextGraph.metadata.updated_at = new Date().toISOString();
-                          }
-                          setGraph(nextGraph);
-                          saveHistoryState('Auto-rebalance edge probabilities', undefined, selectedEdgeId);
-                        }
-                      }
-                    }}
-                    autoFocus={false}
-                    autoSelect={false}
-                    showSlider={true}
-                    showBalanceButton={true}
-                  />
-                  </AutomatableField>
-
-                  {/* Std Dev - now shown for ALL edges */}
-                  {/* Std Dev and Distribution - inline layout */}
-                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', marginTop: '16px' }}>
-                    {/* Std Dev */}
-                    <AutomatableField
-                      label=""
-                      value={localEdgeData.stdev || ''}
-                      overridden={selectedEdge?.p?.stdev_overridden || false}
-                      onClearOverride={() => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].p = {
-                            ...next.edges[edgeIndex].p,
-                            stdev_overridden: false
-                          };
-                          setGraph(next);
-                          saveHistoryState('Clear p.stdev override', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
-                        <input
-                          data-field="stdev"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={localEdgeData.stdev !== undefined ? localEdgeData.stdev : ''}
-                          onChange={(e) => {
-                            const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                            setLocalEdgeData({...localEdgeData, stdev: value});
-                          }}
-                          onBlur={() => {
-                            if (!graph || !selectedEdgeId) return;
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((e: any) =>
-                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                            );
-                            if (edgeIndex >= 0) {
-                              next.edges[edgeIndex].p = {
-                                ...next.edges[edgeIndex].p,
-                                stdev: localEdgeData.stdev,
-                                stdev_overridden: true
-                              };
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                              saveHistoryState('Update p.stdev', undefined, selectedEdgeId || undefined);
-                            }
-                          }}
-                          placeholder="Optional"
-                          style={{ 
-                            width: '70px', 
-                            padding: '6px 8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            boxSizing: 'border-box'
-                          }}
-                        />
-                      </div>
-                    </AutomatableField>
-
-                    {/* Distribution */}
-                    <AutomatableField
-                      label=""
-                      value={selectedEdge?.p?.distribution || 'beta'}
-                      overridden={selectedEdge?.p?.distribution_overridden || false}
-                      onClearOverride={() => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].p = {
-                            ...next.edges[edgeIndex].p,
-                            distribution_overridden: false
-                          };
-                          setGraph(next);
-                          saveHistoryState('Clear p.distribution override', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
-                        <select
-                          value={selectedEdge?.p?.distribution || 'beta'}
-                          onChange={(e) => {
-                            if (!graph || !selectedEdgeId) return;
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((e: any) =>
-                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                            );
-                          if (edgeIndex >= 0) {
-                            next.edges[edgeIndex].p = {
-                              ...next.edges[edgeIndex].p,
-                              distribution: e.target.value as 'beta' | 'normal' | 'uniform',
-                              distribution_overridden: true
-                            };
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                              saveHistoryState('Update p.distribution', undefined, selectedEdgeId || undefined);
-                            }
-                          }}
-                          style={{ 
-                            width: '90px', 
-                            padding: '6px 8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            boxSizing: 'border-box'
-                          }}
-                        >
-                          <option value="beta">Beta</option>
-                          <option value="normal">Normal</option>
-                          <option value="uniform">Uniform</option>
-                        </select>
-                      </div>
-                    </AutomatableField>
-                </div>
-                </div>
+                    />
                   </CollapsibleSection>
 
                   {/* SUB-SECTION 2.2: Cost (£) */}
                   <CollapsibleSection title="Cost (£)" icon={Coins} defaultOpen={!!(selectedEdge?.cost_gbp?.mean || selectedEdge?.cost_gbp?.id)}>
-                  <EnhancedSelector
-                    type="parameter"
-                    parameterType="cost_gbp"
-                    value={selectedEdge?.cost_gbp?.id || ''}
-                    targetInstanceUuid={selectedEdgeId}
-                    onChange={(newParamId) => {
-                      // Set edge.cost_gbp.id (not flat edge.cost_gbp_parameter_id)
-                      if (!graph || !selectedEdgeId) return;
-                      const next = structuredClone(graph);
-                      const edgeIndex = next.edges.findIndex((e: any) => 
-                        e.uuid === selectedEdgeId || e.id === selectedEdgeId
-                      );
-                      if (edgeIndex >= 0) {
-                        if (!next.edges[edgeIndex].cost_gbp) next.edges[edgeIndex].cost_gbp = {};
-                        if (newParamId) {
-                          next.edges[edgeIndex].cost_gbp.id = newParamId;
-                        } else {
-                          delete next.edges[edgeIndex].cost_gbp.id;
-                        }
-                        if (next.metadata) {
-                          next.metadata.updated_at = new Date().toISOString();
-                        }
-                        setGraph(next);
-                        saveHistoryState('Update edge cost_gbp parameter', undefined, selectedEdgeId || undefined);
-                      }
-                    }}
-                      onClear={() => {
-                        // No need to save history - onChange already does it via updateEdge
-                    }}
-                    onPullFromRegistry={async () => {
-                      const currentParamId = selectedEdge?.cost_gbp?.id;
-                      if (!currentParamId || !graph || !selectedEdgeId) return;
-                      
-                      try {
-                        let paramData: any = null;
-                        const localFile = fileRegistry.getFile(`parameter-${currentParamId}.yaml`);
-                        if (localFile) {
-                          paramData = localFile.data;
-                        } else {
-                          const { paramRegistryService } = await import('../services/paramRegistryService');
-                          paramData = await paramRegistryService.loadParameter(currentParamId);
-                        }
-                        
-                        if (paramData && paramData.values && paramData.values.length > 0) {
-                          const next = structuredClone(graph);
-                          const edgeIndex = next.edges.findIndex((e: any) => 
-                            e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                          );
-                          
-                          if (edgeIndex >= 0) {
-                            const edge = next.edges[edgeIndex] as any;
-                            const sortedValues = [...paramData.values].sort((a, b) => {
-                              if (!a.window_from) return -1;
-                              if (!b.window_from) return 1;
-                              return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
-                            });
-                            const latestValue = sortedValues[0];
-                            
-                            edge.cost_gbp = {
-                              mean: latestValue.mean,
-                              stdev: latestValue.stdev,
-                              distribution: latestValue.distribution
-                            };
-                            
-                            setLocalEdgeData((prev: any) => ({
-                              ...prev,
-                              cost_gbp: edge.cost_gbp
-                            }));
-                            
-                            if (next.metadata) {
-                              next.metadata.updated_at = new Date().toISOString();
-                            }
-                            
-                            setGraph(next);
-                            saveHistoryState(`Pull cost GBP from registry`, undefined, selectedEdgeId);
-                          }
-                        }
-                      } catch (error) {
-                        console.error('Failed to pull cost_gbp from registry:', error);
-                      }
-                    }}
-                    onPushToRegistry={async () => {
-                      console.log('Push to registry not yet implemented');
-                    }}
-                      onOpenConnected={() => {
-                        const paramId = selectedEdge?.cost_gbp?.id;
-                        if (paramId) {
-                          openFileById('parameter', paramId);
-                        }
-                      }}
-                      onOpenItem={(itemId) => {
-                        openFileById('parameter', itemId);
-                      }}
-                    label=""
-                      placeholder="Select or enter parameter ID..."
+                    <ParameterSection
+                      graph={graph}
+                      objectType="edge"
+                      objectId={selectedEdgeId || ''}
+                      paramSlot="cost_gbp"
+                      param={selectedEdge?.cost_gbp}
+                      onUpdate={(changes) => updateEdgeParam('cost_gbp', changes)}
+                      label="Cost (£)"
                     />
-
-                  <div style={{ marginBottom: '16px', marginTop: '16px' }}>
-                    <AutomatableField
-                      label="Mean £"
-                      value={localEdgeData.cost_gbp?.mean || ''}
-                      overridden={selectedEdge?.cost_gbp?.mean_overridden || false}
-                      onClearOverride={() => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].cost_gbp = {
-                            ...next.edges[edgeIndex].cost_gbp,
-                            mean_overridden: false
-                          };
-                          setGraph(next);
-                          saveHistoryState('Clear cost GBP mean override', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                    >
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={localEdgeData.cost_gbp?.mean || ''}
-                        onChange={(e) => {
-                          const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                          setLocalEdgeData((prev: any) => ({
-                            ...prev,
-                            cost_gbp: { ...(prev.cost_gbp || {}), mean: newValue }
-                          }));
-                        }}
-                        onBlur={() => {
-                          if (graph && selectedEdgeId) {
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((e: any) => 
-                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                            );
-                            if (edgeIndex >= 0) {
-                              (next.edges[edgeIndex] as any).cost_gbp = {
-                                ...(next.edges[edgeIndex] as any).cost_gbp,
-                                mean: localEdgeData.cost_gbp?.mean,
-                                mean_overridden: true
-                              };
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                              saveHistoryState('Update cost GBP', undefined, selectedEdgeId);
-                            }
-                          }
-                        }}
-                        placeholder="0.00"
-                        style={{ 
-                          width: '100%',
-                          padding: '8px', 
-                          border: '1px solid #ddd', 
-                          borderRadius: '4px',
-                          boxSizing: 'border-box'
-                        }}
-                    />
-                  </AutomatableField>
-                  </div>
-
-                  {/* Std Dev and Distribution - inline layout */}
-                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-                    {/* Std Dev */}
-                    <AutomatableField
-                      label=""
-                      value={localEdgeData.cost_gbp?.stdev || ''}
-                      overridden={selectedEdge?.cost_gbp?.stdev_overridden || false}
-                      onClearOverride={() => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].cost_gbp = {
-                            ...next.edges[edgeIndex].cost_gbp,
-                            stdev_overridden: false
-                          };
-                          setGraph(next);
-                          saveHistoryState('Clear cost_gbp.stdev override', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={localEdgeData.cost_gbp?.stdev || ''}
-                          onChange={(e) => {
-                            const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                            setLocalEdgeData((prev: any) => ({
-                              ...prev,
-                              cost_gbp: { ...prev.cost_gbp, stdev: newValue }
-                            }));
-                          }}
-                          onBlur={() => {
-                            if (graph && selectedEdgeId) {
-                              const next = structuredClone(graph);
-                              const edgeIndex = next.edges.findIndex((e: any) => 
-                                e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                              );
-                              if (edgeIndex >= 0) {
-                                (next.edges[edgeIndex] as any).cost_gbp = {
-                                  ...(next.edges[edgeIndex] as any).cost_gbp,
-                                  stdev: localEdgeData.cost_gbp?.stdev,
-                                  stdev_overridden: true
-                                };
-                                if (next.metadata) {
-                                  next.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(next);
-                                saveHistoryState('Update cost GBP std dev', undefined, selectedEdgeId);
-                              }
-                            }
-                          }}
-                          placeholder="Optional"
-                          style={{ 
-                            width: '70px',
-                            padding: '6px 8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            boxSizing: 'border-box'
-                          }}
-                        />
-                      </div>
-                    </AutomatableField>
-
-                    {/* Distribution */}
-                    <AutomatableField
-                      label=""
-                      value={localEdgeData.cost_gbp?.distribution || 'normal'}
-                      overridden={selectedEdge?.cost_gbp?.distribution_overridden || false}
-                      onClearOverride={() => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].cost_gbp = {
-                            ...next.edges[edgeIndex].cost_gbp,
-                            distribution_overridden: false
-                          };
-                          setGraph(next);
-                          saveHistoryState('Clear cost_gbp.distribution override', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
-                        <select
-                          value={localEdgeData.cost_gbp?.distribution || 'normal'}
-                          onChange={(e) => {
-                            setLocalEdgeData((prev: any) => ({
-                              ...prev,
-                              cost_gbp: { ...prev.cost_gbp, distribution: e.target.value }
-                            }));
-                            if (graph && selectedEdgeId) {
-                              const next = structuredClone(graph);
-                              const edgeIndex = next.edges.findIndex((edge: any) => 
-                                edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                              );
-                              if (edgeIndex >= 0) {
-                                (next.edges[edgeIndex] as any).cost_gbp = {
-                                  ...(next.edges[edgeIndex] as any).cost_gbp,
-                                  distribution: e.target.value,
-                                  distribution_overridden: true
-                                };
-                                if (next.metadata) {
-                                  next.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(next);
-                                saveHistoryState('Update cost GBP distribution', undefined, selectedEdgeId);
-                              }
-                            }
-                          }}
-                          style={{ 
-                            width: '100px', 
-                            padding: '6px 8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            boxSizing: 'border-box'
-                          }}
-                        >
-                          <option value="normal">Normal</option>
-                          <option value="lognormal">Lognormal</option>
-                          <option value="gamma">Gamma</option>
-                          <option value="uniform">Uniform</option>
-                          <option value="beta">Beta</option>
-                        </select>
-                      </div>
-                    </AutomatableField>
-                  </div>
                   </CollapsibleSection>
                   
                   {/* SUB-SECTION 2.3: Cost (Time) */}
                   <CollapsibleSection title="Cost (Time)" icon={Clock} defaultOpen={!!(selectedEdge?.cost_time?.mean || selectedEdge?.cost_time?.id)}>
-                  <EnhancedSelector
-                    type="parameter"
-                    parameterType="cost_time"
-                    value={selectedEdge?.cost_time?.id || ''}
-                    targetInstanceUuid={selectedEdgeId}
-                    onChange={(newParamId) => {
-                      // Set edge.cost_time.id (not flat edge.cost_time_parameter_id)
-                      if (!graph || !selectedEdgeId) return;
-                      const next = structuredClone(graph);
-                      const edgeIndex = next.edges.findIndex((e: any) => 
-                        e.uuid === selectedEdgeId || e.id === selectedEdgeId
-                      );
-                      if (edgeIndex >= 0) {
-                        if (!next.edges[edgeIndex].cost_time) next.edges[edgeIndex].cost_time = {};
-                        if (newParamId) {
-                          next.edges[edgeIndex].cost_time.id = newParamId;
-                        } else {
-                          delete next.edges[edgeIndex].cost_time.id;
-                        }
-                        if (next.metadata) {
-                          next.metadata.updated_at = new Date().toISOString();
-                        }
-                        setGraph(next);
-                        saveHistoryState('Update edge cost_time parameter', undefined, selectedEdgeId || undefined);
-                      }
-                    }}
-                      onClear={() => {
-                        // No need to save history - onChange already does it via updateEdge
-                    }}
-                    onPullFromRegistry={async () => {
-                      const currentParamId = selectedEdge?.cost_time?.id;
-                      if (!currentParamId || !graph || !selectedEdgeId) return;
-                      
-                      try {
-                        let paramData: any = null;
-                        const localFile = fileRegistry.getFile(`parameter-${currentParamId}.yaml`);
-                        if (localFile) {
-                          paramData = localFile.data;
-                        } else {
-                          const { paramRegistryService } = await import('../services/paramRegistryService');
-                          paramData = await paramRegistryService.loadParameter(currentParamId);
-                        }
-                        
-                        if (paramData && paramData.values && paramData.values.length > 0) {
-                          const next = structuredClone(graph);
-                          const edgeIndex = next.edges.findIndex((e: any) => 
-                            e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                          );
-                          
-                          if (edgeIndex >= 0) {
-                            const edge = next.edges[edgeIndex] as any;
-                            const sortedValues = [...paramData.values].sort((a, b) => {
-                              if (!a.window_from) return -1;
-                              if (!b.window_from) return 1;
-                              return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
-                            });
-                            const latestValue = sortedValues[0];
-                            
-                            edge.cost_time = {
-                              mean: latestValue.mean,
-                              stdev: latestValue.stdev,
-                              distribution: latestValue.distribution
-                            };
-                            
-                            setLocalEdgeData((prev: any) => ({
-                              ...prev,
-                              cost_time: edge.cost_time
-                            }));
-                            
-                            if (next.metadata) {
-                              next.metadata.updated_at = new Date().toISOString();
-                            }
-                            
-                            setGraph(next);
-                            saveHistoryState(`Pull cost time from registry`, undefined, selectedEdgeId);
-                          }
-                        }
-                      } catch (error) {
-                        console.error('Failed to pull cost_time from registry:', error);
-                      }
-                    }}
-                    onPushToRegistry={async () => {
-                      console.log('Push to registry not yet implemented');
-                    }}
-                      onOpenConnected={() => {
-                        const paramId = selectedEdge?.cost_time?.id;
-                        if (paramId) {
-                          openFileById('parameter', paramId);
-                        }
-                      }}
-                      onOpenItem={(itemId) => {
-                        openFileById('parameter', itemId);
-                    }}
-                    label=""
-                      placeholder="Select or enter parameter ID..."
+                    <ParameterSection
+                      graph={graph}
+                      objectType="edge"
+                      objectId={selectedEdgeId || ''}
+                      paramSlot="cost_time"
+                      param={selectedEdge?.cost_time}
+                      onUpdate={(changes) => updateEdgeParam('cost_time', changes)}
+                      label="Cost (Time)"
                     />
-
-                  <div style={{ marginBottom: '16px', marginTop: '16px' }}>
-                    <AutomatableField
-                      label="Mean days"
-                      value={localEdgeData.cost_time?.mean || ''}
-                      overridden={selectedEdge?.cost_time?.mean_overridden || false}
-                      onClearOverride={() => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].cost_time = {
-                            ...next.edges[edgeIndex].cost_time,
-                            mean_overridden: false
-                          };
-                          setGraph(next);
-                          saveHistoryState('Clear cost time mean override', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                    >
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={localEdgeData.cost_time?.mean || ''}
-                        onChange={(e) => {
-                          const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                          setLocalEdgeData((prev: any) => ({
-                            ...prev,
-                            cost_time: { ...prev.cost_time, mean: newValue }
-                          }));
-                        }}
-                        onBlur={() => {
-                          if (graph && selectedEdgeId) {
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((e: any) => 
-                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                            );
-                            if (edgeIndex >= 0) {
-                              (next.edges[edgeIndex] as any).cost_time = {
-                                ...(next.edges[edgeIndex] as any).cost_time,
-                                mean: localEdgeData.cost_time?.mean,
-                                mean_overridden: true
-                              };
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
-                              }
-                              setGraph(next);
-                              saveHistoryState('Update cost time', undefined, selectedEdgeId);
-                            }
-                          }
-                        }}
-                        placeholder="0.00"
-                        style={{ 
-                          width: '100%',
-                          padding: '8px', 
-                          border: '1px solid #ddd', 
-                          borderRadius: '4px',
-                          boxSizing: 'border-box'
-                        }}
-                    />
-                  </AutomatableField>
-                      </div>
-
-                  {/* Std Dev and Distribution - inline layout */}
-                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-                    {/* Std Dev */}
-                    <AutomatableField
-                      label=""
-                      value={localEdgeData.cost_time?.stdev || ''}
-                      overridden={selectedEdge?.cost_time?.stdev_overridden || false}
-                      onClearOverride={() => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].cost_time = {
-                            ...next.edges[edgeIndex].cost_time,
-                            stdev_overridden: false
-                          };
-                          setGraph(next);
-                          saveHistoryState('Clear cost_time.stdev override', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={localEdgeData.cost_time?.stdev || ''}
-                          onChange={(e) => {
-                            const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                            setLocalEdgeData((prev: any) => ({
-                              ...prev,
-                              cost_time: { ...prev.cost_time, stdev: newValue }
-                            }));
-                          }}
-                          onBlur={() => {
-                            if (graph && selectedEdgeId) {
-                              const next = structuredClone(graph);
-                              const edgeIndex = next.edges.findIndex((e: any) => 
-                                e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                              );
-                              if (edgeIndex >= 0) {
-                                (next.edges[edgeIndex] as any).cost_time = {
-                                  ...(next.edges[edgeIndex] as any).cost_time,
-                                  stdev: localEdgeData.cost_time?.stdev,
-                                  stdev_overridden: true
-                                };
-                                if (next.metadata) {
-                                  next.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(next);
-                                saveHistoryState('Update cost time std dev', undefined, selectedEdgeId);
-                              }
-                            }
-                          }}
-                          placeholder="Optional"
-                          style={{
-                            width: '70px',
-                            padding: '6px 8px', 
-                            border: '1px solid #ddd',
-                            borderRadius: '4px',
-                            boxSizing: 'border-box'
-                          }}
-                        />
-                      </div>
-                    </AutomatableField>
-
-                    {/* Distribution */}
-                    <AutomatableField
-                      label=""
-                      value={localEdgeData.cost_time?.distribution || 'lognormal'}
-                      overridden={selectedEdge?.cost_time?.distribution_overridden || false}
-                      onClearOverride={() => {
-                        if (!graph || !selectedEdgeId) return;
-                        const next = structuredClone(graph);
-                        const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].cost_time = {
-                            ...next.edges[edgeIndex].cost_time,
-                            distribution_overridden: false
-                          };
-                          setGraph(next);
-                          saveHistoryState('Clear cost_time.distribution override', undefined, selectedEdgeId || undefined);
-                        }
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
-                        <select
-                          value={localEdgeData.cost_time?.distribution || 'lognormal'}
-                          onChange={(e) => {
-                            setLocalEdgeData((prev: any) => ({
-                              ...prev,
-                              cost_time: { ...prev.cost_time, distribution: e.target.value }
-                            }));
-                          if (graph && selectedEdgeId) {
-                            const next = structuredClone(graph);
-                            const edgeIndex = next.edges.findIndex((edge: any) => 
-                              edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                            );
-                              if (edgeIndex >= 0) {
-                                (next.edges[edgeIndex] as any).cost_time = {
-                                  ...(next.edges[edgeIndex] as any).cost_time,
-                                  distribution: e.target.value,
-                                  distribution_overridden: true
-                                };
-                                if (next.metadata) {
-                                  next.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(next);
-                                saveHistoryState('Update cost time distribution', undefined, selectedEdgeId);
-                              }
-                            }
-                          }}
-                          style={{ 
-                            width: '100px', 
-                            padding: '6px 8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            boxSizing: 'border-box'
-                          }}
-                        >
-                          <option value="normal">Normal</option>
-                          <option value="lognormal">Lognormal</option>
-                          <option value="gamma">Gamma</option>
-                          <option value="uniform">Uniform</option>
-                          <option value="beta">Beta</option>
-                        </select>
-                      </div>
-                    </AutomatableField>
-                  </div>
                   </CollapsibleSection>
                 </CollapsibleSection>
 
@@ -2901,306 +2109,20 @@ export default function PropertiesPanel({
                               />
                             </div>
 
-                            {/* Parameter Connection */}
-                            <div style={{ marginBottom: '16px' }}>
-                              <EnhancedSelector
-                                type="parameter"
-                                parameterType="probability"
-                                value={cond.p?.id || ''}
-                                onChange={(paramId) => {
-                                  const newConditions = [...localConditionalP];
-                                  newConditions[index] = {
-                                    ...newConditions[index],
-                                    p: { ...newConditions[index].p, id: paramId || undefined }
-                                  };
-                                  setLocalConditionalP(newConditions);
-                                  
-                                  if (selectedEdgeId && graph) {
-                                    const nextGraph = structuredClone(graph);
-                                    const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                    );
-                                    if (edgeIndex >= 0) {
-                                      nextGraph.edges[edgeIndex].conditional_p = newConditions as any;
-                                      if (nextGraph.metadata) {
-                                        nextGraph.metadata.updated_at = new Date().toISOString();
-                                      }
-                                      setGraph(nextGraph);
-                                      saveHistoryState('Update conditional probability parameter', undefined, selectedEdgeId);
-                                    }
-                                  }
-                                }}
-                                onClear={() => {
-                                  // No need to save history - onChange already does it
-                                }}
-                                onPullFromRegistry={async () => {
-                                  const currentParamId = cond.p?.id;
-                                  if (!currentParamId || !graph || !selectedEdgeId) return;
-                                  
-                                  try {
-                                    let paramData: any = null;
-                                    const localFile = fileRegistry.getFile(`parameter-${currentParamId}.yaml`);
-                                    if (localFile) {
-                                      paramData = localFile.data;
-                                    } else {
-                                      const { paramRegistryService } = await import('../services/paramRegistryService');
-                                      paramData = await paramRegistryService.loadParameter(currentParamId);
-                                    }
-                                    
-                                    if (paramData && paramData.values && paramData.values.length > 0) {
-                                      const sortedValues = [...paramData.values].sort((a, b) => {
-                                        if (!a.window_from) return -1;
-                                        if (!b.window_from) return 1;
-                                        return new Date(b.window_from).getTime() - new Date(a.window_from).getTime();
-                                      });
-                                      const latestValue = sortedValues[0];
-                                      
-                                      const newConditions = [...localConditionalP];
-                                      newConditions[index] = {
-                                        ...newConditions[index],
-                                        p: {
-                                          ...newConditions[index].p,
-                                          mean: latestValue.mean,
-                                          stdev: latestValue.stdev,
-                                          distribution: latestValue.distribution
-                                        }
-                                      };
-                                      setLocalConditionalP(newConditions);
-                                      
-                                      const nextGraph = structuredClone(graph);
-                                      const edgeIndex = nextGraph.edges.findIndex((e: any) => 
-                                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                                      );
-                                      if (edgeIndex >= 0) {
-                                        nextGraph.edges[edgeIndex].conditional_p = newConditions as any;
-                                        if (nextGraph.metadata) {
-                                          nextGraph.metadata.updated_at = new Date().toISOString();
-                                        }
-                                        setGraph(nextGraph);
-                                        saveHistoryState('Pull conditional probability from registry', undefined, selectedEdgeId);
-                                      }
-                                    }
-                                  } catch (error) {
-                                    console.error('Failed to pull conditional probability from registry:', error);
-                                  }
-                                }}
-                                onPushToRegistry={async () => {
-                                  console.log('Push to registry not yet implemented');
-                                }}
-                                onOpenConnected={() => {
-                                  const paramId = cond.p?.id;
-                                  if (paramId) {
-                                    openFileById('parameter', paramId);
-                                  }
-                                }}
-                                onOpenItem={(itemId) => {
-                                  openFileById('parameter', itemId);
-                                }}
-                                label=""
-                                placeholder="Select or enter parameter ID..."
-                              />
-                            </div>
 
-                            {/* Probability Value with Slider */}
-                            <div style={{ marginBottom: '16px' }}>
-                              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Probability</label>
-                              <ProbabilityInput
-                                value={cond.p?.mean || 0}
-                                onChange={(newValue) => {
-                                  const newConditions = [...localConditionalP];
-                                  newConditions[index] = {
-                                    ...newConditions[index],
-                                    p: { ...newConditions[index].p, mean: newValue }
-                                  };
-                                  setLocalConditionalP(newConditions);
-                                }}
-                                onCommit={(newValue) => {
-                                  if (selectedEdgeId && graph) {
-                                    const nextGraph = structuredClone(graph);
-                                    const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                    );
-                                    if (edgeIndex >= 0) {
-                                      nextGraph.edges[edgeIndex].conditional_p = localConditionalP as any;
-                                      if (nextGraph.metadata) {
-                                        nextGraph.metadata.updated_at = new Date().toISOString();
-                                      }
-                                      setGraph(nextGraph);
-                                      saveHistoryState('Update conditional probability value', undefined, selectedEdgeId);
-                                    }
-                                  }
-                                }}
-                                onRebalance={(newValue) => {
-                                  // Rebalance across sibling edges with the same condition
-                                  if (selectedEdgeId && graph) {
-                                    const nextGraph = structuredClone(graph);
-                                    const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                    );
-                                    
-                                    if (currentEdgeIndex >= 0) {
-                                      const currentEdge = nextGraph.edges[currentEdgeIndex];
-                                      const sourceNode = currentEdge.from;
-                                      
-                                      // Ensure conditional_p array and condition exist
-                                      if (!currentEdge.conditional_p || !currentEdge.conditional_p[index]) {
-                                        return; // Can't rebalance if condition doesn't exist
-                                      }
-                                      
-                                      // Update current edge's probability
-                                      if (!nextGraph.edges[currentEdgeIndex].conditional_p![index].p) {
-                                        nextGraph.edges[currentEdgeIndex].conditional_p![index].p = {};
-                                      }
-                                      nextGraph.edges[currentEdgeIndex].conditional_p![index].p!.mean = newValue;
-                                      
-                                      // Find all sibling edges with the same condition at the same index
-                                      const siblings = nextGraph.edges.filter((edge: any, idx: number) => 
-                                        idx !== currentEdgeIndex && 
-                                        edge.from === sourceNode &&
-                                        edge.conditional_p &&
-                                        edge.conditional_p[index] &&
-                                        edge.conditional_p[index].condition &&
-                                        currentEdge.conditional_p &&
-                                        currentEdge.conditional_p[index] &&
-                                        currentEdge.conditional_p[index].condition &&
-                                        JSON.stringify(edge.conditional_p[index].condition.visited.sort()) === 
-                                        JSON.stringify(currentEdge.conditional_p[index].condition.visited.sort())
-                                      );
-                                      
-                                      if (siblings.length > 0) {
-                                        // Calculate remaining probability
-                                        const remainingProbability = roundTo4DP(1 - newValue);
-                                        
-                                        // Calculate current total of siblings
-                                        const siblingsTotal = siblings.reduce((sum, sibling) => {
-                                          return sum + (sibling.conditional_p![index]?.p?.mean || 0);
-                                        }, 0);
-                                        
-                                        // Rebalance siblings proportionally
-                                        siblings.forEach((sibling) => {
-                                          const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-                                          if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p && nextGraph.edges[siblingIndex].conditional_p![index]) {
-                                            const siblingCurrentValue = sibling.conditional_p![index]?.p?.mean || 0;
-                                            const newSiblingValue = siblingsTotal > 0
-                                              ? roundTo4DP((siblingCurrentValue / siblingsTotal) * remainingProbability)
-                                              : roundTo4DP(remainingProbability / siblings.length);
-                                            
-                                            if (!nextGraph.edges[siblingIndex].conditional_p![index].p) {
-                                              nextGraph.edges[siblingIndex].conditional_p![index].p = {};
-                                            }
-                                            nextGraph.edges[siblingIndex].conditional_p![index].p!.mean = newSiblingValue;
-                                          }
-                                        });
-                                      }
-                                      
-                                      if (nextGraph.metadata) {
-                                        nextGraph.metadata.updated_at = new Date().toISOString();
-                                      }
-                                      setGraph(nextGraph);
-                                      saveHistoryState('Rebalance conditional probabilities', undefined, selectedEdgeId);
-                                      
-                                      // Update local state to reflect the changes
-                                      const newConditions = [...localConditionalP];
-                                      newConditions[index] = {
-                                        ...newConditions[index],
-                                        p: { ...newConditions[index].p, mean: newValue }
-                                      };
-                                      setLocalConditionalP(newConditions);
-                                    }
-                                  }
-                                }}
-                              />
-                            </div>
-
-                            {/* Std Dev and Distribution - stacked layout for space */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
-                              {/* Std Dev */}
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="1"
-                                  step="0.01"
-                                  value={cond.p?.stdev || ''}
-                                  onChange={(e) => {
-                                    const newValue = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                                    const newConditions = [...localConditionalP];
-                                    newConditions[index] = {
-                                      ...newConditions[index],
-                                      p: { ...newConditions[index].p, stdev: newValue }
-                                    };
-                                    setLocalConditionalP(newConditions);
-                                  }}
-                                  onBlur={() => {
-                                    if (selectedEdgeId && graph) {
-                                      const nextGraph = structuredClone(graph);
-                                      const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                        edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                      );
-                                      if (edgeIndex >= 0) {
-                                        nextGraph.edges[edgeIndex].conditional_p = localConditionalP as any;
-                                        if (nextGraph.metadata) {
-                                          nextGraph.metadata.updated_at = new Date().toISOString();
-                                        }
-                                        setGraph(nextGraph);
-                                        saveHistoryState('Update conditional probability std dev', undefined, selectedEdgeId);
-                                      }
-                                    }
-                                  }}
-                                  placeholder="Optional"
-                                  style={{ 
-                                    width: '70px', 
-                                    padding: '6px 8px', 
-                                    border: '1px solid #ddd', 
-                                    borderRadius: '4px', 
-                                    boxSizing: 'border-box'
-                                  }}
-                                />
-                              </div>
-
-                              {/* Distribution */}
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
-                                <select
-                                  value={cond.p?.distribution || 'beta'}
-                                  onChange={(e) => {
-                                    const newConditions = [...localConditionalP];
-                                    newConditions[index] = {
-                                      ...newConditions[index],
-                                      p: { ...newConditions[index].p, distribution: e.target.value as any }
-                                    };
-                                    setLocalConditionalP(newConditions);
-                                    
-                                    if (selectedEdgeId && graph) {
-                                      const nextGraph = structuredClone(graph);
-                                      const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                        edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                      );
-                                      if (edgeIndex >= 0) {
-                                        nextGraph.edges[edgeIndex].conditional_p = newConditions as any;
-                                        if (nextGraph.metadata) {
-                                          nextGraph.metadata.updated_at = new Date().toISOString();
-                                        }
-                                        setGraph(nextGraph);
-                                        saveHistoryState('Update conditional probability distribution', undefined, selectedEdgeId);
-                                      }
-                                    }
-                                  }}
-                                  style={{ 
-                                    width: '90px', 
-                                    padding: '6px 8px', 
-                                    border: '1px solid #ddd', 
-                                    borderRadius: '4px',
-                                    boxSizing: 'border-box'
-                                  }}
-                                >
-                                  <option value="normal">Normal</option>
-                                  <option value="beta">Beta</option>
-                                  <option value="uniform">Uniform</option>
-                                </select>
-                              </div>
-                            </div>
+                            {/* Parameter Section */}
+                            <ParameterSection
+                              graph={graph}
+                              objectType="edge"
+                              objectId={selectedEdgeId || ''}
+                              paramSlot="p"
+                              param={cond.p}
+                              onUpdate={(changes) => updateConditionalPParam(index, changes)}
+                              onRebalance={(newValue) => rebalanceConditionalP(index, newValue)}
+                              label="Conditional Probability"
+                              showBalanceButton={true}
+                              isUnbalanced={false}
+                            />
                 </div>
                 )}
                       </div>
@@ -3253,7 +2175,7 @@ export default function PropertiesPanel({
                 </CollapsibleSection>
 
                 {/* Case Edge Info */}
-                {selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) && (() => {
+                {selectedEdge && graph && (selectedEdge.case_id || selectedEdge.case_variant) && (() => {
                   // Find the case node and get the variant
                   const caseNode = graph.nodes.find((n: any) => n.case && n.case.id === selectedEdge.case_id);
                   const variantIndex = caseNode?.case?.variants?.findIndex((v: any) => v.name === selectedEdge.case_variant) ?? -1;

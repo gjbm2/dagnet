@@ -1,18 +1,18 @@
-/* Ensure Monaco suggestion widget appears above sidebar content but below other popups */
+/* Ensure Monaco suggestion widget appears above sidebar content and nav dropdowns */
 .monaco-editor .suggest-widget {
-  z-index: 200 !important;
+  z-index: 2000 !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
   max-width: 400px !important; /* Constrain width */
 }
 
 .monaco-editor .parameter-hints-widget {
-  z-index: 200 !important;
+  z-index: 2000 !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
 }
 
 /* Ensure Monaco editor's overflow widgets (autocomplete, parameter hints) are properly layered */
 .monaco-editor .monaco-editor-overlaymessage {
-  z-index: 200 !important;
+  z-index: 2000 !important;
 }
 
 /* Override Monaco's default monospace font in suggestion items */
