@@ -38,22 +38,60 @@ const updateManager = new UpdateManager();
 /**
  * Helper function to apply field changes to a target object
  * Handles nested field paths (e.g., "p.mean")
+ * Handles array append syntax (e.g., "values[]")
  */
 function applyChanges(target: any, changes: Array<{ field: string; newValue: any }>): void {
   for (const change of changes) {
+    console.log('[applyChanges] Applying change:', {
+      field: change.field,
+      newValue: change.newValue,
+      'target.p BEFORE': JSON.stringify(target.p)
+    });
+    
     const parts = change.field.split('.');
     let obj: any = target;
     
     // Navigate to the nested object
     for (let i = 0; i < parts.length - 1; i++) {
-      if (!obj[parts[i]]) {
-        obj[parts[i]] = {};
+      const part = parts[i];
+      
+      // Handle array append syntax: "field[]"
+      if (part.endsWith('[]')) {
+        const arrayName = part.slice(0, -2); // Remove "[]"
+        if (!obj[arrayName]) {
+          console.log(`[applyChanges] Creating new array at ${arrayName}`);
+          obj[arrayName] = [];
+        }
+        // Don't navigate into the array; we'll append to it at the end
+        obj = obj[arrayName];
+      } else {
+        if (!obj[part]) {
+          console.log(`[applyChanges] Creating new object at ${part}`);
+          obj[part] = {};
+        }
+        obj = obj[part];
       }
-      obj = obj[parts[i]];
     }
     
     // Set the final value
-    obj[parts[parts.length - 1]] = change.newValue;
+    const finalPart = parts[parts.length - 1];
+    if (finalPart.endsWith('[]')) {
+      // Array append: push the new value
+      const arrayName = finalPart.slice(0, -2);
+      if (!obj[arrayName]) {
+        console.log(`[applyChanges] Creating new array at ${arrayName}`);
+        obj[arrayName] = [];
+      }
+      console.log(`[applyChanges] Appending to array ${arrayName}`);
+      obj[arrayName].push(change.newValue);
+    } else {
+      // Regular field set
+      obj[finalPart] = change.newValue;
+    }
+    
+    console.log('[applyChanges] After change:', {
+      'target.p AFTER': JSON.stringify(target.p)
+    });
   }
 }
 
@@ -98,6 +136,11 @@ class DataOperationsService {
         return;
       }
       
+      console.log('[DataOperationsService] TARGET EDGE AT START:', {
+        'edge.uuid': targetEdge.uuid,
+        'edge.p': JSON.stringify(targetEdge.p)
+      });
+      
       // Call UpdateManager to transform data
       const result = await updateManager.handleFileToGraph(
         paramFile.data,    // source (parameter file data)
@@ -136,6 +179,34 @@ class DataOperationsService {
           'edge.p': JSON.stringify(nextGraph.edges[edgeIndex]?.p)
         });
         
+        // Ensure we do NOT lose the correct parameter connection id after file update.
+        // Detect which slot was updated from result.changes and set that slot's id.
+        if (paramId) {
+          const fields = (result.changes || []).map((c: any) => c.field || '');
+          let slot: 'p' | 'cost_gbp' | 'cost_time' | null = null;
+          if (fields.some(f => f.startsWith('cost_gbp'))) slot = 'cost_gbp';
+          else if (fields.some(f => f.startsWith('cost_time'))) slot = 'cost_time';
+          else if (fields.some(f => f === 'p' || f.startsWith('p.'))) slot = 'p';
+          else slot = null; // could be conditional_p or unrelated
+          
+          if (slot) {
+            if (!nextGraph.edges[edgeIndex][slot]) {
+              // initialize object for the slot
+              (nextGraph.edges[edgeIndex] as any)[slot] = {};
+            }
+            if (!(nextGraph.edges[edgeIndex] as any)[slot].id) {
+              (nextGraph.edges[edgeIndex] as any)[slot].id = paramId;
+              console.log('[DataOperationsService] PRESERVE param id after update:', {
+                slot,
+                paramId,
+                'edge.slot.id': (nextGraph.edges[edgeIndex] as any)[slot].id
+              });
+            }
+          } else {
+            console.warn('[DataOperationsService] Could not determine parameter slot to preserve id for. Changes:', fields);
+          }
+        }
+        
         // Update metadata
         if (nextGraph.metadata) {
           nextGraph.metadata.updated_at = new Date().toISOString();
@@ -167,6 +238,12 @@ class DataOperationsService {
   }): Promise<void> {
     const { paramId, edgeId, graph } = options;
     
+    console.log('[DataOperationsService] putParameterToFile CALLED:', {
+      paramId,
+      edgeId,
+      timestamp: new Date().toISOString()
+    });
+    
     try {
       // Validate inputs
       if (!graph) {
@@ -193,13 +270,30 @@ class DataOperationsService {
         return;
       }
       
-      // Call UpdateManager to transform data
+      // Determine which parameter slot this file corresponds to
+      // (an edge can have p, cost_gbp, AND cost_time - we only want to write ONE)
+      let filteredEdge: any = { ...sourceEdge };
+      if (sourceEdge.p?.id === paramId) {
+        // Writing probability parameter - keep only p field
+        filteredEdge = { p: sourceEdge.p };
+      } else if (sourceEdge.cost_gbp?.id === paramId) {
+        // Writing cost_gbp parameter - keep only cost_gbp field
+        filteredEdge = { cost_gbp: sourceEdge.cost_gbp };
+      } else if (sourceEdge.cost_time?.id === paramId) {
+        // Writing cost_time parameter - keep only cost_time field
+        filteredEdge = { cost_time: sourceEdge.cost_time };
+      } else {
+        toast.error(`Edge is not connected to parameter ${paramId}`);
+        return;
+      }
+      
+      // Call UpdateManager to transform data (validateOnly mode - don't apply yet)
       const result = await updateManager.handleGraphToFile(
-        sourceEdge,        // source (graph edge)
+        filteredEdge,      // source (filtered to only relevant parameter)
         paramFile.data,    // target (parameter file)
         'APPEND',          // operation (append to values[])
         'parameter',       // sub-destination
-        { interactive: true }
+        { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
       );
       
       if (!result.success || !result.changes) {
@@ -209,7 +303,14 @@ class DataOperationsService {
       
       // Apply changes to file data
       const updatedFileData = structuredClone(paramFile.data);
+      console.log('[DataOperationsService] putParameterToFile - changes to apply:', {
+        paramId,
+        changes: JSON.stringify(result.changes, null, 2)
+      });
       applyChanges(updatedFileData, result.changes);
+      console.log('[DataOperationsService] putParameterToFile - after applyChanges:', {
+        'updatedFileData.values': JSON.stringify(updatedFileData.values, null, 2)
+      });
       
       console.log('[DataOperationsService] Before updateFile:', {
         fileId: `parameter-${paramId}`,
@@ -283,6 +384,26 @@ class DataOperationsService {
       
       if (nodeIndex >= 0) {
         applyChanges(nextGraph.nodes[nodeIndex], result.changes);
+        // Ensure we do NOT lose the human-readable node id after file update
+        if (nodeId && !nextGraph.nodes[nodeIndex].id) {
+          nextGraph.nodes[nodeIndex].id = nodeId;
+          console.log('[DataOperationsService] PRESERVE node.id after update:', {
+            nodeId,
+            'node.id': nextGraph.nodes[nodeIndex].id
+          });
+        }
+        // Ensure we do NOT lose the case connection id after file update
+        if (caseId) {
+          if (!nextGraph.nodes[nodeIndex].case) {
+            nextGraph.nodes[nodeIndex].case = { id: caseId, status: 'active', variants: [] };
+          } else if (!nextGraph.nodes[nodeIndex].case.id) {
+            nextGraph.nodes[nodeIndex].case.id = caseId;
+          }
+          console.log('[DataOperationsService] PRESERVE node.case.id after update:', {
+            caseId,
+            'node.case.id': nextGraph.nodes[nodeIndex].case?.id
+          });
+        }
         if (nextGraph.metadata) {
           nextGraph.metadata.updated_at = new Date().toISOString();
         }
@@ -324,12 +445,15 @@ class DataOperationsService {
         return;
       }
       
+      // Filter node to only include the relevant case data
+      const filteredNode: any = { case: sourceNode.case };
+      
       const result = await updateManager.handleGraphToFile(
-        sourceNode,
+        filteredNode,
         caseFile.data,
-        'UPDATE',
+        'APPEND', // Use APPEND for case schedules
         'case',
-        { interactive: true }
+        { interactive: true, validateOnly: true } // Don't apply in UpdateManager, we'll use applyChanges
       );
       
       if (!result.success || !result.changes) {
@@ -401,6 +525,14 @@ class DataOperationsService {
       
       if (nodeIndex >= 0) {
         applyChanges(nextGraph.nodes[nodeIndex], result.changes);
+        // Ensure we do NOT lose the human-readable node id after file update
+        if (nodeId && !nextGraph.nodes[nodeIndex].id) {
+          nextGraph.nodes[nodeIndex].id = nodeId;
+          console.log('[DataOperationsService] PRESERVE node.id after update:', {
+            nodeId,
+            'node.id': nextGraph.nodes[nodeIndex].id
+          });
+        }
         if (nextGraph.metadata) {
           nextGraph.metadata.updated_at = new Date().toISOString();
         }

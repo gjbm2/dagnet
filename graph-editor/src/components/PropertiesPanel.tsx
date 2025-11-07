@@ -266,6 +266,34 @@ export default function PropertiesPanel({
       lastLoadedEdgeRef.current = null;
     }
   }, [selectedEdgeId, graph]);
+  
+  // ALSO reload edge data when graph changes for the SAME selected edge
+  // (e.g., after UpdateManager pulls data from a connected parameter file)
+  useEffect(() => {
+    if (selectedEdgeId && graph && lastLoadedEdgeRef.current === selectedEdgeId) {
+      const edge = graph.edges.find((e: any) => e.uuid === selectedEdgeId);
+      if (edge) {
+        // Update fields that might change from external updates (parameter auto-get)
+        setLocalEdgeData((prev: any) => {
+          const updates: any = { ...prev };
+          
+          // Only update probability fields if there's a connected parameter
+          // (if p.id exists, UpdateManager might have loaded new data)
+          if (edge.p?.id && edge.p?.mean !== undefined) {
+            updates.probability = edge.p.mean;
+            updates.stdev = edge.p.stdev;
+            updates.locked = edge.p.locked;
+          }
+          
+          // Always update cost objects (these are always from files)
+          if (edge.cost_gbp) updates.cost_gbp = edge.cost_gbp;
+          if (edge.cost_time) updates.cost_time = edge.cost_time;
+          
+          return updates;
+        });
+      }
+    }
+  }, [graph, selectedEdgeId]);
 
   // Auto-generate id from label when label changes (only on FIRST commit)
   // This updates the LOCAL state only, not the graph state
@@ -422,8 +450,24 @@ export default function PropertiesPanel({
   // Add null checks to prevent crashes when nodes/edges are deleted
   const selectedNode = selectedNodeId && graph.nodes ? graph.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId) : null;
   const selectedEdge = selectedEdgeId && graph.edges ? graph.edges.find((e: any) => 
-    e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+    e.uuid === selectedEdgeId
   ) : null;
+  
+  // DIAGNOSTIC: Log selectedEdge lookup result
+  if (selectedEdgeId && !selectedEdge) {
+    console.error('[PropertiesPanel] FAILED to find edge:', {
+      selectedEdgeId,
+      graphEdgeUUIDs: graph.edges?.map((e: any) => e.uuid)
+    });
+  }
+  
+  // DIAGNOSTIC: Log what p.id we're about to render
+  if (selectedEdge) {
+    console.log('[PropertiesPanel] RENDER with selectedEdge.p.id:', selectedEdge.p?.id, {
+      'selectedEdge.uuid': selectedEdge.uuid,
+      'full edge.p': JSON.stringify(selectedEdge.p)
+    });
+  }
 
   // Determine header text based on selection
   const getHeaderText = () => {
@@ -1278,7 +1322,7 @@ export default function PropertiesPanel({
                     if (!graph || !selectedEdgeId) return;
                     const next = structuredClone(graph);
                     const edgeIndex = next.edges.findIndex((e: any) => 
-                      e.uuid === selectedEdgeId || e.id === selectedEdgeId
+                      e.uuid === selectedEdgeId
                     );
                     console.log('PropertiesPanel: Edge lookup:', { edgeIndex, foundEdge: edgeIndex >= 0 ? next.edges[edgeIndex].uuid : null });
                     if (edgeIndex >= 0) {
@@ -1439,7 +1483,7 @@ export default function PropertiesPanel({
                     })()}
                     onRebalance={(value) => {
                       if (graph && selectedEdgeId) {
-                        const currentEdge = graph.edges.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId);
+                        const currentEdge = graph.edges.find((e: any) => e.uuid === selectedEdgeId);
                         if (!currentEdge) return;
                         
                         const siblings = graph.edges.filter((e: any) => {

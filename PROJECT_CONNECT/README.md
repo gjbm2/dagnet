@@ -29,20 +29,25 @@ This directory contains all design documentation for the Data Connections system
 - Yellow Calendar icon theme
 - 0 linter errors
 
-**Phase 1B In Progress (Nov 6, 2025):** 🟡
+**Phase 1B Partial (Nov 7, 2025):** 🟡 **70% Complete**
 - ✅ Lightning Menu component (React Portal, z-index fixed)
 - ✅ Node & Edge Context Menus extracted (submenu pattern)
 - ✅ DataOperationsService created (centralized orchestration)
 - ✅ Toast notifications integrated (bottom-center)
-- ✅ Fixed hide/show node (UUID mismatch)
-- ✅ Fixed delete node from context menu
-- ⏳ **NEXT:** Wire services to UpdateManager (3-4 hrs)
+- ✅ Core operations wired (get/put for parameters, nodes, cases)
+- ✅ Fixed 5 critical bugs (selector bouncing, duplicate writes, data loss)
+- ✅ Provenance tracking (manual edits timestamped with source)
+- ✅ Schemas updated (edited_at, author fields)
+- ⏳ **BLOCKED:** Conditional p & events (need Properties Panel updates)
 
-**Remaining Phase 1 Work:** ~12-15 hours
-- 1B: Wire services to UpdateManager
-- 1C: Top Menu "Data" (batch operations)
-- 1D: Properties Panel updates (event_id, override indicators, evidence display)
-- 1E: Connection Settings UI (needs design)
+**Remaining Phase 1 Work:** ~18-22 hours
+- 1C: Properties Panel updates (conditional p, events, evidence, overrides) - **PRIORITY** (6-8 hrs)
+        - want a standard class to wrap fields which shows override icons, etc.
+        - animate when we get auto-updated
+        - query/connector class (chips in chips, and pre-load Monaco)
+- 1D: Query String Builder (MSMDC algorithm) (6-8 hrs)
+- 1E: Top Menu "Data" (batch operations) (2-3 hrs)
+- 1F: Connection Settings UI (needs design) (4-5 hrs)
 
 ---
 
@@ -80,6 +85,7 @@ Documents UUID vs human-readable ID inconsistency. Fix after Phase 1 complete (~
 ### Phase 1:
 - `PHASE_1_EVENTS_COMPLETE.md` - Events implementation
 - `PHASE_1B_LIGHTNING_MENU.md` - Lightning Menu & Context Menus (UI design)
+- `PHASE_1B_DATA_OPS_WIRING_COMPLETE.md` - DataOps partial (core working, conditional p/events pending)
 
 ---
 

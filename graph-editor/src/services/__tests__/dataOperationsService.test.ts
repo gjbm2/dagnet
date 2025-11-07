@@ -6,9 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { dataOperationsService } from './dataOperationsService';
-import { fileRegistry } from '../contexts/TabContext';
-import type { Graph } from '../types';
+import { dataOperationsService } from '../dataOperationsService';
+import type { Graph } from '../../types';
 
 // Mock toast to avoid React dependencies in tests
 vi.mock('react-hot-toast', () => ({
@@ -18,6 +17,37 @@ vi.mock('react-hot-toast', () => ({
   },
 }));
 
+// Mock fileRegistry with in-memory storage
+vi.mock('../../contexts/TabContext', () => {
+  const mockFiles = new Map<string, any>();
+  
+  return {
+    fileRegistry: {
+      registerFile: vi.fn((id: string, data: any) => {
+        mockFiles.set(id, { data: structuredClone(data), isDirty: false, isInitializing: false });
+        return Promise.resolve();
+      }),
+      getFile: vi.fn((id: string) => {
+        return mockFiles.get(id);
+      }),
+      updateFile: vi.fn((id: string, data: any) => {
+        if (mockFiles.has(id)) {
+          mockFiles.set(id, { data: structuredClone(data), isDirty: true, isInitializing: false });
+        }
+        return Promise.resolve();
+      }),
+      deleteFile: vi.fn((id: string) => {
+        mockFiles.delete(id);
+        return Promise.resolve();
+      }),
+      _mockFiles: mockFiles // For testing/clearing
+    }
+  };
+});
+
+// Import after mocking
+const { fileRegistry } = await import('../../contexts/TabContext');
+
 describe('DataOperationsService', () => {
   let mockGraph: Graph;
   let mockSetGraph: (graph: Graph | null) => void;
@@ -25,6 +55,8 @@ describe('DataOperationsService', () => {
   beforeEach(() => {
     // Reset mocks
     mockSetGraph = vi.fn() as any;
+    vi.clearAllMocks();
+    (fileRegistry as any)._mockFiles.clear();
     
     // Create a minimal test graph
     mockGraph = {
@@ -55,8 +87,8 @@ describe('DataOperationsService', () => {
           id: 'homepage-to-product',
           from: 'homepage',
           to: 'product-page',
-          parameter_id: 'homepage-to-product-param',
           p: {
+            id: 'homepage-to-product-param',  // Connection ID
             mean: 0.5,
             stdev: 0.1,
             distribution: 'beta',
@@ -108,14 +140,20 @@ describe('DataOperationsService', () => {
         return {
           fileId,
           data: {
-            id: 'product-variants',
-            name: 'Product Variants',
-            description: 'Different product page variants',
-            variants: [
-              { name: 'control', weight: 0.5 },
-              { name: 'variant-a', weight: 0.3 },
-              { name: 'variant-b', weight: 0.2 },
-            ],
+            parameter_id: 'product-variants',
+            case: {
+              id: 'product-variants',
+              status: 'active',
+              variants: [
+                { name: 'control', weight: 0.5 },
+                { name: 'variant-a', weight: 0.3 },
+                { name: 'variant-b', weight: 0.2 },
+              ],
+            },
+            metadata: {
+              description: 'Different product page variants',
+              status: 'active',
+            }
           },
           originalData: {},
           isDirty: false,

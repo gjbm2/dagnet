@@ -163,7 +163,14 @@ properties:
             retrieved_at:
               type: string
               format: date-time
-              description: "Timestamp when this data was retrieved from source"
+              description: "Timestamp when this data was retrieved from external source (for automated pulls)"
+            edited_at:
+              type: string
+              format: date-time
+              description: "Timestamp when this data was manually edited in the graph editor"
+            author:
+              type: string
+              description: "User who manually edited this value (for manual edits)"
             query:
               type: object
               description: "Query configuration that produced this data (source-specific structure)"
