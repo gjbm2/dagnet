@@ -231,7 +231,7 @@ export default function ProbabilityInput({
     style: {
       ...style,
       flex: 1,
-      minWidth: '80px', // Reduced from 168px to allow narrower sidebars
+      minWidth: '60px', // Reduced to allow space for AutomatableField icon
       height: '4px'
     }
   };

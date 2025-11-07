@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { Circle, X, Check, GitBranch } from 'lucide-react';
+import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch } from 'lucide-react';
+import './QueryExpressionEditor.css';
 
 interface QueryExpressionEditorProps {
   value: string;
@@ -29,42 +30,41 @@ interface ParsedQueryChip {
  * - .visited(node-id, node-id, ...)
  * - .case(case-id:variant-name)
  */
-// Chip styling configuration
-const chipConfig = {
+// Chip styling configuration for outer chips (neutral)
+const outerChipConfig = {
   from: { 
-    color: '#3B82F6', 
-    bgColor: '#EFF6FF', 
     label: 'from', 
-    icon: Circle,
-    textColor: '#1E40AF'
+    icon: ArrowRightFromLine
   },
   to: { 
-    color: '#3B82F6', 
-    bgColor: '#EFF6FF', 
     label: 'to', 
-    icon: Circle,
-    textColor: '#1E40AF'
+    icon: ArrowLeftFromLine
   },
   exclude: { 
-    color: '#EF4444', 
-    bgColor: '#FEF2F2', 
     label: 'exclude', 
-    icon: X,
-    textColor: '#991B1B'
+    icon: MapPinXInside
   },
   visited: { 
-    color: '#10B981', 
-    bgColor: '#F0FDF4', 
     label: 'visited', 
-    icon: Check,
-    textColor: '#065F46'
+    icon: MapPinCheckInside
   },
   case: { 
-    color: '#F59E0B', 
-    bgColor: '#FFFBEB', 
     label: 'case', 
-    icon: GitBranch,
-    textColor: '#92400E'
+    icon: GitBranch
+  }
+};
+
+// Inner chip styling by type
+const innerChipConfig = {
+  node: {
+    bgColor: '#DBEAFE',  // Light blue
+    textColor: '#1E40AF',
+    borderColor: '#93C5FD'
+  },
+  case: {
+    bgColor: '#E9D5FF',  // Light purple
+    textColor: '#6B21A8',
+    borderColor: '#C084FC'
   }
 };
 
@@ -144,11 +144,31 @@ export function QueryExpressionEditor({
   const [isEditing, setIsEditing] = useState(false);
   const [chips, setChips] = useState<ParsedQueryChip[]>([]);
   const [hoveredChipIndex, setHoveredChipIndex] = useState<number | null>(null);
+  const [hoveredInnerChip, setHoveredInnerChip] = useState(false);
+  const [editorHeight, setEditorHeight] = useState(height);
   
   // Parse value into chips when it changes
   useEffect(() => {
     setChips(parseQueryToChips(value));
   }, [value]);
+  
+  // Calculate editor height based on content
+  useEffect(() => {
+    if (!value || !isEditing) {
+      setEditorHeight(height);
+      return;
+    }
+    
+    // Estimate lines based on content length and wrapping
+    // Rough calculation: ~50 chars per line at default width
+    const estimatedLines = Math.ceil(value.length / 50);
+    const lineCount = Math.max(1, Math.min(estimatedLines, 5)); // Min 1, max 5 lines
+    const lineHeight = 20; // Approximate line height
+    const padding = 16; // Top and bottom padding
+    const calculatedHeight = (lineCount * lineHeight) + padding;
+    
+    setEditorHeight(`${calculatedHeight}px`);
+  }, [value, isEditing, height]);
   
   // Load registries
   useEffect(() => {
@@ -273,13 +293,27 @@ export function QueryExpressionEditor({
           endColumn: position.column
         });
         
-        const word = model.getWordUntilPosition(position);
-        const range = {
-          startLineNumber: position.lineNumber,
-          endLineNumber: position.lineNumber,
-          startColumn: word.startColumn,
-          endColumn: word.endColumn
-        };
+        // Check if there's a selection - if so, use that as the range to replace
+        const selection = editor.getSelection();
+        let range;
+        if (selection && !selection.isEmpty()) {
+          // Use the selection range for replacement
+          range = {
+            startLineNumber: selection.startLineNumber,
+            startColumn: selection.startColumn,
+            endLineNumber: selection.endLineNumber,
+            endColumn: selection.endColumn
+          };
+        } else {
+          // Otherwise use word range
+          const word = model.getWordUntilPosition(position);
+          range = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: word.startColumn,
+            endColumn: word.endColumn
+          };
+        }
         
         // After from( → suggest node IDs (graph + registry)
         if (/from\([^)]*$/.test(textUntilPosition)) {
@@ -463,14 +497,112 @@ export function QueryExpressionEditor({
     } // End of language registration check
     
     // Add focus/blur handlers
+    let injectedDot = false;
+    
     editor.onDidFocusEditorText(() => {
       setIsEditing(true);
+      // Trigger autocomplete immediately on focus
+      setTimeout(() => {
+        editor.trigger('keyboard', 'editor.action.triggerSuggest', {});
+      }, 50);
+    });
+    
+    // Handle clicks in the editor
+    editor.onMouseDown((e) => {
+      const model = editor.getModel();
+      if (!model) return;
+      
+      const clickedPosition = e.target.position;
+      const text = model.getValue();
+      const endPosition = model.getPositionAt(text.length);
+      
+      // If user clicked on empty space or at the end of text, move cursor to end and inject '.'
+      if (!clickedPosition || 
+          (clickedPosition.lineNumber === endPosition.lineNumber && 
+           clickedPosition.column >= endPosition.column)) {
+        
+        setTimeout(() => {
+          // Move cursor to end
+          editor.setPosition(endPosition);
+          
+          // Inject '.' if text doesn't already end with one
+          if (text.length > 0 && !text.endsWith('.') && !text.endsWith('(') && !text.endsWith(',')) {
+            editor.executeEdits('click-inject', [{
+              range: {
+                startLineNumber: endPosition.lineNumber,
+                startColumn: endPosition.column,
+                endLineNumber: endPosition.lineNumber,
+                endColumn: endPosition.column
+              },
+              text: '.'
+            }]);
+            injectedDot = true;
+            
+            // Trigger autocomplete
+            setTimeout(() => {
+              editor.trigger('keyboard', 'editor.action.triggerSuggest', {});
+            }, 50);
+          }
+        }, 0);
+      }
     });
     
     editor.onDidBlurEditorText(() => {
       setIsEditing(false);
+      
+      // Clean up trailing '.' if it was injected and user didn't type anything else
+      if (injectedDot) {
+        const model = editor.getModel();
+        if (model) {
+          const text = model.getValue();
+          if (text.endsWith('.')) {
+            // Check if there's a valid term before the dot, or if it's just a trailing dot
+            const beforeDot = text.slice(0, -1);
+            // If the dot is truly trailing (not part of a chain like .visited.), remove it
+            if (!beforeDot.match(/\([^)]*$/)) {  // Not in the middle of a term
+              onChange(beforeDot);
+            }
+          }
+        }
+        injectedDot = false;
+      }
+      
       if (onBlur) {
         onBlur();
+      }
+    });
+    
+    // Handle Tab key to move to next field
+    editor.addCommand(monaco.KeyCode.Tab, () => {
+      // Blur the editor, which will trigger focus on next field
+      editor.getContainerDomNode()?.blur();
+      // Move focus to next focusable element
+      const nextElement = document.activeElement?.nextElementSibling as HTMLElement;
+      if (nextElement?.focus) {
+        nextElement.focus();
+      }
+    });
+    
+    // Trigger autocomplete after typing "("
+    editor.onDidChangeModelContent((e) => {
+      const model = editor.getModel();
+      if (!model) return;
+      
+      const position = editor.getPosition();
+      if (!position) return;
+      
+      const textBeforeCursor = model.getValueInRange({
+        startLineNumber: position.lineNumber,
+        startColumn: Math.max(1, position.column - 1),
+        endLineNumber: position.lineNumber,
+        endColumn: position.column
+      });
+      
+      // If user just typed "(", trigger suggestions
+      if (textBeforeCursor === '(') {
+        setTimeout(() => {
+          editor.trigger('keyboard', 'editor.action.triggerSuggest', {});
+        }, 50);
       }
     });
     
@@ -505,13 +637,89 @@ export function QueryExpressionEditor({
     }
   }, [isEditing]);
   
-  // Delete a chip
+  // Delete a chip (entire term)
   const handleDeleteChip = (chipToDelete: ParsedQueryChip, e: React.MouseEvent) => {
     e.stopPropagation(); // Don't trigger edit mode
+    e.preventDefault(); // Prevent any default action
     
     // Remove this chip from the query string
-    const newQuery = value.replace(chipToDelete.rawText, '').replace(/\.+/g, '.').replace(/^\.|\.$/g, '');
+    const newQuery = value.replace(chipToDelete.rawText, '').replace(/\.+/g, '.').replace(/^\.|\.$/g, '').trim();
     onChange(newQuery);
+  };
+  
+  // Click outer chip to select the whole term in Monaco
+  const handleOuterChipClick = (chip: ParsedQueryChip, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (readonly) return;
+    
+    setIsEditing(true);
+    
+    // Wait for editor to mount, then select the entire term
+    setTimeout(() => {
+      if (editorRef.current && monacoRef.current) {
+        const model = editorRef.current.getModel();
+        if (!model) return;
+        
+        const fullText = model.getValue();
+        const startIndex = fullText.indexOf(chip.rawText);
+        if (startIndex >= 0) {
+          const startPos = model.getPositionAt(startIndex);
+          const endPos = model.getPositionAt(startIndex + chip.rawText.length);
+          
+          editorRef.current.setSelection({
+            startLineNumber: startPos.lineNumber,
+            startColumn: startPos.column,
+            endLineNumber: endPos.lineNumber,
+            endColumn: endPos.column
+          });
+          editorRef.current.focus();
+          
+          // Trigger autocomplete
+          setTimeout(() => {
+            editorRef.current?.trigger('keyboard', 'editor.action.triggerSuggest', {});
+          }, 50);
+        }
+      }
+    }, 100);
+  };
+  
+  // Click inner chip to select just the ID/value in Monaco
+  const handleInnerChipClick = (chip: ParsedQueryChip, valueText: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (readonly) return;
+    
+    setIsEditing(true);
+    
+    // Wait for editor to mount, then select just the value
+    setTimeout(() => {
+      if (editorRef.current && monacoRef.current) {
+        const model = editorRef.current.getModel();
+        if (!model) return;
+        
+        const fullText = model.getValue();
+        const chipIndex = fullText.indexOf(chip.rawText);
+        if (chipIndex >= 0) {
+          const valueIndex = fullText.indexOf(valueText, chipIndex);
+          if (valueIndex >= 0) {
+            const startPos = model.getPositionAt(valueIndex);
+            const endPos = model.getPositionAt(valueIndex + valueText.length);
+            
+            editorRef.current.setSelection({
+              startLineNumber: startPos.lineNumber,
+              startColumn: startPos.column,
+              endLineNumber: endPos.lineNumber,
+              endColumn: endPos.column
+            });
+            editorRef.current.focus();
+            
+            // Trigger autocomplete
+            setTimeout(() => {
+              editorRef.current?.trigger('keyboard', 'editor.action.triggerSuggest', {});
+            }, 50);
+          }
+        }
+      }
+    }, 100);
   };
   
   // Chip view component
@@ -553,40 +761,116 @@ export function QueryExpressionEditor({
         }}
       >
         {chips.map((chip, index) => {
-          const config = chipConfig[chip.type];
+          const config = outerChipConfig[chip.type];
           const Icon = config.icon;
           const isHovered = hoveredChipIndex === index;
+          
+          // Determine inner chip type (node or case)
+          const innerType = chip.type === 'case' ? 'case' : 'node';
+          const innerConfig = innerChipConfig[innerType];
           
           return (
             <div
               key={index}
               onMouseEnter={() => setHoveredChipIndex(index)}
               onMouseLeave={() => setHoveredChipIndex(null)}
+              onClick={(e) => handleOuterChipClick(chip, e)}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '4px',
-                padding: '4px 10px',
-                backgroundColor: config.bgColor,
+                padding: '5px 8px',
+                backgroundColor: '#F9FAFB',  // Neutral light grey
                 borderRadius: '6px',
-                border: `1px solid ${config.color}20`,
+                border: '1px solid #D1D5DB',
                 fontSize: '12px',
                 fontWeight: '500',
                 position: 'relative',
-                transition: 'all 0.15s ease'
+                transition: 'all 0.15s ease',
+                cursor: readonly ? 'default' : 'pointer'
               }}
             >
-              <Icon size={12} style={{ color: config.color }} />
-              <span style={{ color: config.textColor, fontWeight: '600' }}>
-                {config.label}:
+              <Icon size={13} style={{ color: '#6B7280' }} />
+              <span style={{ color: '#374151', fontWeight: '600' }}>
+                {config.label}
               </span>
-              <span style={{ color: config.textColor }}>
-                {chip.values.join(', ')}
-              </span>
+              <span style={{ color: '#6B7280' }}>(</span>
               
-              {/* Delete button on hover */}
-              {isHovered && !readonly && (
+              {/* Inner chips for values */}
+              {chip.values.map((val, vIndex) => (
+                <React.Fragment key={vIndex}>
+                  <div
+                    onClick={(e) => handleInnerChipClick(chip, val, e)}
+                    onMouseEnter={() => setHoveredInnerChip(true)}
+                    onMouseLeave={() => setHoveredInnerChip(false)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '2px 6px',
+                      backgroundColor: innerConfig.bgColor,
+                      borderRadius: '4px',
+                      border: `1px solid ${innerConfig.borderColor}`,
+                      fontSize: '11px',
+                      fontWeight: '500',
+                      cursor: readonly ? 'default' : 'pointer',
+                      position: 'relative'
+                    }}
+                  >
+                    <span style={{ color: innerConfig.textColor }}>
+                      {val}
+                    </span>
+                    
+                    {/* Delete button on inner chip hover */}
+                    {isHovered && !readonly && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          // Remove this specific value from the chip
+                          const newValues = chip.values.filter((_, i) => i !== vIndex);
+                          if (newValues.length === 0) {
+                            // If no values left, remove the entire chip
+                            handleDeleteChip(chip, e);
+                          } else {
+                            // Replace with updated values
+                            const newValuesStr = newValues.join(', ');
+                            const newTerm = `${chip.type}(${newValuesStr})`;
+                            const newQuery = value.replace(chip.rawText, newTerm);
+                            onChange(newQuery);
+                          }
+                        }}
+                        style={{
+                          marginLeft: '4px',
+                          padding: '0',
+                          border: 'none',
+                          background: 'transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          color: innerConfig.textColor,
+                          opacity: 0.5
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
+                        onMouseLeave={(e) => e.currentTarget.style.opacity = '0.5'}
+                        title="Remove"
+                      >
+                        <X size={10} />
+                      </button>
+                    )}
+                  </div>
+                  {vIndex < chip.values.length - 1 && (
+                    <span style={{ color: '#6B7280', margin: '0 2px' }}>,</span>
+                  )}
+                </React.Fragment>
+              ))}
+              
+              <span style={{ color: '#6B7280' }}>)</span>
+              
+              {/* Delete button for entire outer chip on hover (only when not hovering inner chip) */}
+              {isHovered && !hoveredInnerChip && !readonly && (
                 <button
+                  type="button"
                   onClick={(e) => handleDeleteChip(chip, e)}
                   style={{
                     marginLeft: '4px',
@@ -596,12 +880,12 @@ export function QueryExpressionEditor({
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    color: config.color,
-                    opacity: 0.6
+                    color: '#6B7280',
+                    opacity: 0.5
                   }}
                   onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
-                  onMouseLeave={(e) => e.currentTarget.style.opacity = '0.6'}
-                  title="Remove"
+                  onMouseLeave={(e) => e.currentTarget.style.opacity = '0.5'}
+                  title="Remove entire term"
                 >
                   <X size={12} />
                 </button>
@@ -619,14 +903,15 @@ export function QueryExpressionEditor({
       borderRadius: '4px',
       overflow: 'visible',  // Allow autocomplete to overflow
       backgroundColor: '#ffffff',
-      position: 'relative'
+      position: 'relative',
+      zIndex: 1  // Just above normal content, but below popups/selectors
     }}>
       {/* Show chip view when not editing, Monaco when editing */}
       {!isEditing && !readonly ? (
         renderChipView()
       ) : (
         <Editor
-          height={height}
+          height={editorHeight}
           language="dagnet-query"
           value={value}
           onChange={(newValue) => onChange(newValue || '')}
@@ -643,7 +928,8 @@ export function QueryExpressionEditor({
             wordWrap: 'on',
             wrappingStrategy: 'advanced',
             fontSize: 13,
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',  // Sans-serif!
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+            fontLigatures: false,  // Disable ligatures for clearer text
             padding: { top: 8, bottom: 8 },
             scrollbar: {
               vertical: 'auto',

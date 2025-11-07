@@ -86,7 +86,7 @@ export function EnhancedSelector({
   const { operations: navOps } = useNavigatorContext();
   const { tabs, operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
-  const { graph, setGraph } = useGraphStore();
+  const { graph, setGraph, setAutoUpdating } = useGraphStore();
   
   const [inputValue, setInputValue] = useState(value);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -344,21 +344,24 @@ export function EnhancedSelector({
               paramId: item.id,           // Semantic ID → finds parameter-{id}.yaml
               edgeId: targetInstanceUuid, // UUID → finds which edge instance to update
               graph: graph as any,
-              setGraph: setGraph as any
+              setGraph: setGraph as any,
+              setAutoUpdating: setAutoUpdating
             });
           } else if (type === 'case') {
             await dataOperationsService.getCaseFromFile({
               caseId: item.id,            // Semantic ID → finds case-{id}.yaml
               nodeId: targetInstanceUuid, // UUID → finds which node instance to update
               graph: graph as any,
-              setGraph: setGraph as any
+              setGraph: setGraph as any,
+              setAutoUpdating: setAutoUpdating
             });
           } else if (type === 'node') {
             await dataOperationsService.getNodeFromFile({
               nodeId: item.id,                 // Semantic ID → finds node-{id}.yaml
               targetNodeUuid: targetInstanceUuid, // UUID → finds which node instance to update
               graph: graph as any,
-              setGraph: setGraph as any
+              setGraph: setGraph as any,
+              setAutoUpdating: setAutoUpdating
             });
           }
         } catch (error) {

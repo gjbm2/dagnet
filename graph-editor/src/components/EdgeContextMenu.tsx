@@ -13,6 +13,7 @@ import React, { useState } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
+import { AutomatableField } from './AutomatableField';
 import { roundTo4DP } from '../utils/rounding';
 import { Folders, TrendingUpDown, ChevronRight } from 'lucide-react';
 
@@ -61,6 +62,23 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const variant = caseNode?.case?.variants?.find((v: any) => v.name === edge?.case_variant);
   const variantIndex = caseNode?.case?.variants?.findIndex((v: any) => v.name === edge?.case_variant) ?? -1;
   const allVariants = caseNode?.case?.variants || [];
+  
+  // Calculate if probabilities are unbalanced (for balance button highlighting)
+  const probabilitySiblings = graph?.edges?.filter((e: any) => {
+    if (!edge) return false;
+    if (edge.case_id && edge.case_variant) {
+      return e.from === edge.from && 
+             e.case_id === edge.case_id && 
+             e.case_variant === edge.case_variant;
+    }
+    return e.from === edge.from;
+  }) || [];
+  const totalProbability = probabilitySiblings.reduce((sum, e) => sum + (e.p?.mean || 0), 0);
+  const isProbabilityUnbalanced = Math.abs(totalProbability - 1.0) > 0.01; // More than 1% off
+  
+  // Calculate if variant weights are unbalanced
+  const totalVariantWeight = allVariants.reduce((sum: number, v: any) => sum + (v.weight || 0), 0);
+  const isVariantWeightUnbalanced = Math.abs(totalVariantWeight - 1.0) > 0.01;
 
   const handleGetFromFile = (paramType: 'probability' | 'conditional' | 'cost_gbp' | 'cost_time') => {
     let paramId: string | undefined;
@@ -119,25 +137,50 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
           Probability
         </label>
-        <ProbabilityInput
-          value={localData?.probability || localData?.p?.mean || 0}
-          onChange={(value) => {
-            setLocalData((prev: any) => ({ ...prev, probability: value }));
-          }}
-          onCommit={(value) => {
+        <AutomatableField
+          label="Probability"
+          value={edge?.p?.mean || 0}
+          overridden={edge?.p?.mean_overridden || false}
+          onClearOverride={() => {
             if (graph) {
               const nextGraph = structuredClone(graph);
               const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
-              if (edgeIndex >= 0) {
-                nextGraph.edges[edgeIndex].p = { mean: value };
+              if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].p) {
+                delete nextGraph.edges[edgeIndex].p.mean_overridden;
                 if (nextGraph.metadata) {
                   nextGraph.metadata.updated_at = new Date().toISOString();
                 }
-                onUpdateGraph(nextGraph, 'Update edge probability', edgeId);
+                onUpdateGraph(nextGraph, 'Clear probability override', edgeId);
               }
             }
           }}
-          onRebalance={(value) => {
+        >
+          <ProbabilityInput
+            value={localData?.probability || localData?.p?.mean || 0}
+            isUnbalanced={isProbabilityUnbalanced}
+            showBalanceButton={true}
+            onChange={(value) => {
+              setLocalData((prev: any) => ({ ...prev, probability: value }));
+            }}
+            onCommit={(value) => {
+              if (graph) {
+                const nextGraph = structuredClone(graph);
+                const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
+                if (edgeIndex >= 0) {
+                  // Preserve existing p object properties (id, stdev, distribution, evidence, etc.)
+                  nextGraph.edges[edgeIndex].p = {
+                    ...nextGraph.edges[edgeIndex].p,
+                    mean: value,
+                    mean_overridden: true
+                  };
+                  if (nextGraph.metadata) {
+                    nextGraph.metadata.updated_at = new Date().toISOString();
+                  }
+                  onUpdateGraph(nextGraph, 'Update edge probability', edgeId);
+                }
+              }
+            }}
+            onRebalance={(value) => {
             if (!graph || !edge) return;
             
             const siblings = graph.edges.filter((e: any) => {
@@ -157,7 +200,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               
               const currentEdgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
               if (currentEdgeIndex >= 0) {
-                nextGraph.edges[currentEdgeIndex].p = { mean: currentValue };
+                // Preserve existing p object properties
+                nextGraph.edges[currentEdgeIndex].p = { 
+                  ...nextGraph.edges[currentEdgeIndex].p,
+                  mean: currentValue 
+                };
                 
                 const siblingsTotal = siblings.reduce((sum, sib) => sum + (sib.p?.mean || 0), 0);
                 
@@ -169,7 +216,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     if (siblingIndex >= 0) {
                       const siblingCurrentValue = sibling.p?.mean || 0;
                       const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
-                      nextGraph.edges[siblingIndex].p = { mean: newValue };
+                      // Preserve existing p object properties
+                      nextGraph.edges[siblingIndex].p = { 
+                        ...nextGraph.edges[siblingIndex].p,
+                        mean: newValue 
+                      };
                     }
                   });
                 } else {
@@ -179,7 +230,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id)
                     );
                     if (siblingIndex >= 0) {
-                      nextGraph.edges[siblingIndex].p = { mean: equalShare };
+                      // Preserve existing p object properties
+                      nextGraph.edges[siblingIndex].p = { 
+                        ...nextGraph.edges[siblingIndex].p,
+                        mean: equalShare 
+                      };
                     }
                   });
                 }
@@ -194,9 +249,10 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           onClose={onClose}
           autoFocus={false}
           autoSelect={false}
-          showSlider={true}
-          showBalanceButton={true}
-        />
+            showSlider={true}
+            showBalanceButton={true}
+          />
+        </AutomatableField>
       </div>
 
       {/* Conditional Probabilities editing */}
@@ -340,27 +396,49 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
             Variant Weight ({edge?.case_variant})
           </label>
-          <VariantWeightInput
+          <AutomatableField
+            label={`Variant Weight (${edge?.case_variant})`}
             value={variant.weight}
-            onChange={(value) => {
-              // Optional: update local state if needed
-            }}
-            onCommit={(value) => {
+            overridden={variant.weight_overridden || false}
+            onClearOverride={() => {
               if (graph && edge) {
                 const nextGraph = structuredClone(graph);
                 const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
                 if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
                   const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
                   if (vIdx >= 0) {
-                    nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = value;
+                    delete nextGraph.nodes[nodeIndex].case.variants[vIdx].weight_overridden;
                     if (nextGraph.metadata) {
                       nextGraph.metadata.updated_at = new Date().toISOString();
                     }
-                    onUpdateGraph(nextGraph, 'Update variant weight', caseNode?.id);
+                    onUpdateGraph(nextGraph, 'Clear variant weight override', caseNode?.id);
                   }
                 }
               }
             }}
+          >
+            <VariantWeightInput
+              value={variant.weight}
+              onChange={(value) => {
+                // Optional: update local state if needed
+              }}
+              onCommit={(value) => {
+                if (graph && edge) {
+                  const nextGraph = structuredClone(graph);
+                  const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.case?.id === edge?.case_id);
+                  if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                    const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => v.name === edge?.case_variant);
+                    if (vIdx >= 0) {
+                      nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = value;
+                      nextGraph.nodes[nodeIndex].case.variants[vIdx].weight_overridden = true;
+                      if (nextGraph.metadata) {
+                        nextGraph.metadata.updated_at = new Date().toISOString();
+                      }
+                      onUpdateGraph(nextGraph, 'Update variant weight', caseNode?.id);
+                    }
+                  }
+                }
+              }}
             onRebalance={(value, currentIndex, variants) => {
               if (graph && edge) {
                 const nextGraph = structuredClone(graph);
@@ -404,11 +482,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
             onClose={onClose}
             currentIndex={variantIndex}
             allVariants={allVariants}
-            autoFocus={false}
-            autoSelect={false}
-            showSlider={true}
-            showBalanceButton={true}
-          />
+              autoFocus={false}
+              autoSelect={false}
+              showSlider={true}
+              showBalanceButton={true}
+            />
+          </AutomatableField>
         </div>
       )}
 

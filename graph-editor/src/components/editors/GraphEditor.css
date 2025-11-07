@@ -114,6 +114,11 @@
   transition: background 0.2s ease, color 0.2s ease !important; /* Don't transition position */
 }
 
+/* Override inline z-index on minimize button */
+.graph-minimize-button[style*="z-index"] {
+  z-index: 10 !important; /* Below Monaco suggestions (200) but above normal content */
+}
+
 .graph-minimize-button:hover {
   background: #d0d5d8 !important;
   color: #212529 !important;

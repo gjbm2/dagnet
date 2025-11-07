@@ -5,6 +5,7 @@
  * not by array order.
  * 
  * @group unit
+ * @vitest-environment node
  */
 
 import { describe, it, expect } from 'vitest';
@@ -472,8 +473,8 @@ describe('values[latest] Timestamp Resolution', () => {
       const variantsChange = result.changes!.find((c: any) => c.field === 'case.variants');
       expect(variantsChange).toBeDefined();
       expect(variantsChange!.newValue).toEqual([
-        { name: 'a', name_overridden: false, weight: 0.5, weight_overridden: false },
-        { name: 'b', name_overridden: false, weight: 0.5, weight_overridden: false }
+        { name: 'a', name_overridden: false, weight: 0.5, weight_overridden: false, description: undefined, description_overridden: false },
+        { name: 'b', name_overridden: false, weight: 0.5, weight_overridden: false, description: undefined, description_overridden: false }
       ]);
     });
   });

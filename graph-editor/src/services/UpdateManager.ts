@@ -849,13 +849,32 @@ export class UpdateManager {
         transform: (graphVariants, source, target) => {
           // Update weights in case file from graph node
           // Preserve all other variant properties from file
-          return target.case.variants.map((fileVariant: any) => {
+          
+          // 1. Update existing file variants with graph data
+          const updated = target.case.variants.map((fileVariant: any) => {
             const graphVariant = graphVariants.find((gv: any) => gv.name === fileVariant.name);
-            return {
-              ...fileVariant,
-              weight: graphVariant?.weight ?? fileVariant.weight
-            };
+            if (graphVariant) {
+              return {
+                ...fileVariant,
+                name: graphVariant.name_overridden ? graphVariant.name : fileVariant.name,
+                weight: graphVariant.weight_overridden ? graphVariant.weight : fileVariant.weight,
+                description: graphVariant.description_overridden ? graphVariant.description : fileVariant.description
+              };
+            }
+            return fileVariant;
           });
+          
+          // 2. Add any new variants from graph that don't exist in file
+          const fileVariantNames = new Set(target.case.variants.map((fv: any) => fv.name));
+          const newVariants = graphVariants
+            .filter((gv: any) => !fileVariantNames.has(gv.name))
+            .map((gv: any) => ({
+              name: gv.name,
+              weight: gv.weight,
+              description: gv.description
+            }));
+          
+          return [...updated, ...newVariants];
         }
       }
     ]);
@@ -883,14 +902,14 @@ export class UpdateManager {
       { sourceField: 'id', targetField: 'id' },  // human-readable ID
       { sourceField: 'label', targetField: 'name' },
       { sourceField: 'description', targetField: 'description' },
-      { sourceField: 'event.id', targetField: 'event_id' }
+      { sourceField: 'event_id', targetField: 'event_id' }
     ]);
     
     // Flow D.UPDATE: Graph → File/Node (UPDATE registry entry)
     this.addMapping('graph_to_file', 'UPDATE', 'node', [
       { sourceField: 'label', targetField: 'name' },
       { sourceField: 'description', targetField: 'description' },
-      { sourceField: 'event.id', targetField: 'event_id' }
+      { sourceField: 'event_id', targetField: 'event_id' }
     ]);
     
     // Flow E.CREATE: Graph → File/Context (CREATE new registry entry)
@@ -1048,8 +1067,17 @@ export class UpdateManager {
           // Sync variant names and weights from case file to graph node
           // Respect override flags: if graph has overridden a variant, preserve it
           
+          // Normalize fileVariants to array format
+          let normalizedFileVariants = fileVariants;
+          if (fileVariants && !Array.isArray(fileVariants) && typeof fileVariants === 'object') {
+            normalizedFileVariants = Object.entries(fileVariants).map(([name, weight]) => ({
+              name,
+              weight: typeof weight === 'number' ? weight : parseFloat(String(weight))
+            }));
+          }
+          
           // If case file has schedules, use the latest schedule's variants
-          let variantsToUse = fileVariants;
+          let variantsToUse = normalizedFileVariants;
           if (source.case?.schedules && source.case.schedules.length > 0) {
             // Get schedules[latest] by timestamp
             const sortedSchedules = source.case.schedules.slice().sort((a: any, b: any) => {
@@ -1057,32 +1085,66 @@ export class UpdateManager {
               const timeB = b.window_from ? new Date(b.window_from).getTime() : 0;
               return timeB - timeA; // Most recent first
             });
-            variantsToUse = sortedSchedules[0].variants;
+            const scheduleVariants = sortedSchedules[0].variants;
+            
+            // Convert variants from object/map to array if necessary
+            // Schema has two formats:
+            // - Array: [{ name: 'control', weight: 0.5 }, ...]
+            // - Object/Map: { control: 0.5, 'single-page': 0.5 }
+            if (Array.isArray(scheduleVariants)) {
+              variantsToUse = scheduleVariants;
+            } else if (scheduleVariants && typeof scheduleVariants === 'object') {
+              // Convert object to array
+              variantsToUse = Object.entries(scheduleVariants).map(([name, weight]) => ({
+                name,
+                weight: typeof weight === 'number' ? weight : parseFloat(String(weight))
+              }));
+            }
           }
           
           // If target doesn't have variants yet, create fresh from file
-          if (!target.case || !target.case.variants) {
+          if (!target.case || !target.case.variants || target.case.variants.length === 0) {
             return variantsToUse.map((fv: any) => ({
               name: fv.name,
               name_overridden: false,
               weight: fv.weight,
-              weight_overridden: false
+              weight_overridden: false,
+              description: fv.description,
+              description_overridden: false
             }));
           }
           
-          // Merge: respect overrides, sync non-overridden fields
-          const merged = variantsToUse.map((fv: any) => {
-            const graphVariant = target.case.variants.find((gv: any) => gv.name === fv.name);
-            
-            return {
-              name: graphVariant?.name_overridden ? graphVariant.name : fv.name,
-              name_overridden: graphVariant?.name_overridden ?? false,
-              weight: graphVariant?.weight_overridden ? graphVariant.weight : fv.weight,
-              weight_overridden: graphVariant?.weight_overridden ?? false
-            };
-          });
+        // Merge: respect overrides, sync non-overridden fields
+        // 1. Start with all variants from file (these are authoritative)
+        const merged = variantsToUse.map((fv: any) => {
+          const graphVariant = target.case.variants.find((gv: any) => gv.name === fv.name);
           
-          return merged;
+          return {
+            name: graphVariant?.name_overridden ? graphVariant.name : fv.name,
+            name_overridden: graphVariant?.name_overridden ?? false,
+            weight: graphVariant?.weight_overridden ? graphVariant.weight : fv.weight,
+            weight_overridden: graphVariant?.weight_overridden ?? false,
+            description: graphVariant?.description_overridden ? graphVariant.description : fv.description,
+            description_overridden: graphVariant?.description_overridden ?? false,
+            // Preserve graph-only fields (e.g. edges array)
+            ...(graphVariant && graphVariant.edges ? { edges: graphVariant.edges } : {})
+          };
+        });
+        
+        // 2. Preserve graph-only variants ONLY if they have edges or overrides
+        // Non-overridden variants without edges are "disposable" and should be removed on GET
+        const fileVariantNames = new Set(variantsToUse.map((fv: any) => fv.name));
+        const graphOnlyVariants = target.case.variants.filter((gv: any) => {
+          if (fileVariantNames.has(gv.name)) return false; // Already in file
+          
+          // Keep if it has edges or any override flags
+          return gv.edges?.length > 0 || 
+                 gv.name_overridden || 
+                 gv.weight_overridden || 
+                 gv.description_overridden;
+        });
+        
+        return [...merged, ...graphOnlyVariants];
         }
       }
       // NOTE: We do NOT map case.name or case.description to node.label or node.description
@@ -1104,8 +1166,8 @@ export class UpdateManager {
       },
       { 
         sourceField: 'event_id', 
-        targetField: 'event.id',
-        overrideFlag: 'event.id_overridden'
+        targetField: 'event_id',
+        overrideFlag: 'event_id_overridden'
       }
     ]);
     

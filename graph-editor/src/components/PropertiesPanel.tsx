@@ -14,9 +14,37 @@ import { EnhancedSelector } from './EnhancedSelector';
 import { ColorSelector } from './ColorSelector';
 import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
+import { AutomatableField } from './AutomatableField';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson } from 'lucide-react';
 import './PropertiesPanel.css';
+import type { Evidence } from '../types';
+
+/**
+ * Format evidence data for tooltip display
+ */
+function formatEvidenceTooltip(evidence?: Evidence): string | undefined {
+  if (!evidence) return undefined;
+  
+  const parts: string[] = [];
+  
+  if (evidence.n !== undefined) {
+    parts.push(`n=${evidence.n}`);
+  }
+  if (evidence.k !== undefined) {
+    parts.push(`k=${evidence.k}`);
+  }
+  if (evidence.window_from && evidence.window_to) {
+    const from = new Date(evidence.window_from).toLocaleDateString();
+    const to = new Date(evidence.window_to).toLocaleDateString();
+    parts.push(`Window: ${from} - ${to}`);
+  }
+  if (evidence.source) {
+    parts.push(`Source: ${evidence.source}`);
+  }
+  
+  return parts.length > 0 ? `Evidence: ${parts.join(', ')}` : undefined;
+}
 
 interface PropertiesPanelProps {
   selectedNodeId: string | null;
@@ -57,7 +85,14 @@ export default function PropertiesPanel({
   const [caseData, setCaseData] = useState({
     id: '',
     status: 'active' as 'active' | 'paused' | 'completed',
-    variants: [] as Array<{ name: string; weight: number }>
+    variants: [] as Array<{ 
+      name: string; 
+      name_overridden?: boolean;
+      weight: number;
+      weight_overridden?: boolean;
+      description?: string;
+      description_overridden?: boolean;
+    }>
   });
   
   // Track which variants are collapsed (by index)
@@ -80,7 +115,7 @@ export default function PropertiesPanel({
   const [collapsedConditionals, setCollapsedConditionals] = useState<{ [key: number]: boolean }>({});
 
   // Helper to open a file by type and ID
-  const openFileById = useCallback((type: 'case' | 'node' | 'parameter' | 'context', id: string) => {
+  const openFileById = useCallback((type: 'case' | 'node' | 'parameter' | 'context' | 'event', id: string) => {
     const fileId = `${type}-${id}`;
     
     // Check if file is already open in a tab
@@ -251,12 +286,11 @@ export default function PropertiesPanel({
             stdev: edge.p?.stdev || undefined,
             description: edge.description || '',
             cost_gbp: edgeCostGbp,
-            cost_time: edgeCostTime,
-            weight_default: edge.weight_default || 0,
-            display: edge.display || {},
-            locked: edge.p?.locked || false,
-            query: (edge as any).query || ''
-          });
+          cost_time: edgeCostTime,
+          weight_default: edge.weight_default || 0,
+          display: edge.display || {},
+          query: (edge as any).query || ''
+        });
           setLocalConditionalP(edge.conditional_p || []);
           lastLoadedEdgeRef.current = selectedEdgeId;
         }
@@ -279,11 +313,10 @@ export default function PropertiesPanel({
           
           // Only update probability fields if there's a connected parameter
           // (if p.id exists, UpdateManager might have loaded new data)
-          if (edge.p?.id && edge.p?.mean !== undefined) {
-            updates.probability = edge.p.mean;
-            updates.stdev = edge.p.stdev;
-            updates.locked = edge.p.locked;
-          }
+        if (edge.p?.id && edge.p?.mean !== undefined) {
+          updates.probability = edge.p.mean;
+          updates.stdev = edge.p.stdev;
+        }
           
           // Always update cost objects (these are always from files)
           if (edge.cost_gbp) updates.cost_gbp = edge.cost_gbp;
@@ -425,12 +458,10 @@ export default function PropertiesPanel({
           // Remove stdev property if undefined
           const { stdev, ...pWithoutStdev } = next.edges[edgeIndex].p || {};
           next.edges[edgeIndex].p = pWithoutStdev;
-        } else {
-          next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, stdev: value };
-        }
-      } else if (field === 'locked') {
-        next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, locked: value };
-      } else if (field.startsWith('costs.')) {
+      } else {
+        next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, stdev: value };
+      }
+    } else if (field.startsWith('costs.')) {
         const costField = field.split('.')[1];
         if (!next.edges[edgeIndex].costs) next.edges[edgeIndex].costs = {};
         next.edges[edgeIndex].costs[costField] = value;
@@ -606,35 +637,31 @@ export default function PropertiesPanel({
                   {/* Label */}
                   <div className="property-section">
                     <label className="property-label">Label</label>
-                    <input
-                      className="property-input"
-                      data-field="label"
+                    <AutomatableField
+                      label="Label"
                       value={localNodeData.label || ''}
-                      onChange={(e) => setLocalNodeData({...localNodeData, label: e.target.value})}
-                      onBlur={() => {
-                        if (!graph || !selectedNodeId) return;
-                        const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                        if (nodeIndex >= 0) {
-                          next.nodes[nodeIndex].label = localNodeData.label;
-                          if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
-                            next.nodes[nodeIndex].id = localNodeData.id;
-                          }
-                          hasLabelBeenCommittedRef.current[selectedNodeId] = true;
-                          if (next.metadata) {
-                            next.metadata.updated_at = new Date().toISOString();
-                          }
-                          setGraph(next);
-                          saveHistoryState('Update node label', selectedNodeId);
-                        }
+                      overridden={selectedNode?.label_overridden || false}
+                      onClearOverride={() => {
+                        // Clear the override flag only
+                        updateNode('label_overridden', false);
                       }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                    >
+                      <input
+                        className="property-input"
+                        data-field="label"
+                        value={localNodeData.label || ''}
+                        onChange={(e) => {
+                          const newLabel = e.target.value;
+                          setLocalNodeData({...localNodeData, label: newLabel});
+                        }}
+                        onBlur={() => {
                           if (!graph || !selectedNodeId) return;
                           const next = structuredClone(graph);
                           const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                           if (nodeIndex >= 0) {
                             next.nodes[nodeIndex].label = localNodeData.label;
+                            // Mark as overridden when user commits edit
+                            next.nodes[nodeIndex].label_overridden = true;
                             if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
                               next.nodes[nodeIndex].id = localNodeData.id;
                             }
@@ -645,40 +672,144 @@ export default function PropertiesPanel({
                             setGraph(next);
                             saveHistoryState('Update node label', selectedNodeId);
                           }
-                        }
-                      }}
-                      placeholder="Enter node label..."
-                    />
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            if (!graph || !selectedNodeId) return;
+                            const next = structuredClone(graph);
+                            const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                            if (nodeIndex >= 0) {
+                              next.nodes[nodeIndex].label = localNodeData.label;
+                              // Mark as overridden when user commits edit
+                              next.nodes[nodeIndex].label_overridden = true;
+                              if (!idManuallyEdited && localNodeData.id && !hasLabelBeenCommittedRef.current[selectedNodeId]) {
+                                next.nodes[nodeIndex].id = localNodeData.id;
+                              }
+                              hasLabelBeenCommittedRef.current[selectedNodeId] = true;
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                              saveHistoryState('Update node label', selectedNodeId);
+                            }
+                          }
+                        }}
+                        placeholder="Enter node label..."
+                      />
+                    </AutomatableField>
                   </div>
 
-                  {/* Description */}
-                  <div className="property-section">
-                    <label className="property-label">Description</label>
+                {/* Description */}
+                <div className="property-section">
+                  <AutomatableField
+                    label="Description"
+                    value={localNodeData.description || ''}
+                    overridden={selectedNode?.description_overridden || false}
+                    onClearOverride={() => {
+                      updateNode('description_overridden', false);
+                    }}
+                  >
                     <textarea
                       className="property-input"
                       value={localNodeData.description || ''}
-                      onChange={(e) => setLocalNodeData({...localNodeData, description: e.target.value})}
-                      onBlur={() => updateNode('description', localNodeData.description)}
+                      onChange={(e) => {
+                        const newDesc = e.target.value;
+                        setLocalNodeData({...localNodeData, description: newDesc});
+                      }}
+                      onBlur={() => {
+                        if (!graph || !selectedNodeId) return;
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                        if (nodeIndex >= 0) {
+                          next.nodes[nodeIndex].description = localNodeData.description;
+                          next.nodes[nodeIndex].description_overridden = true;
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                          saveHistoryState('Update node description', selectedNodeId);
+                        }
+                      }}
                       placeholder="Enter description..."
                     />
-                  </div>
+                  </AutomatableField>
+                </div>
 
-                  {/* Tags */}
-                  <div className="property-section">
-                    <label className="property-label">Tags</label>
-                    <input
-                      className="property-input"
-                      value={localNodeData.tags?.join(', ') || ''}
-                      onChange={(e) => {
-                        const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t);
-                        setLocalNodeData({...localNodeData, tags});
-                      }}
-                      onBlur={() => updateNode('tags', localNodeData.tags)}
-                      placeholder="tag1, tag2, tag3"
-                    />
-                    <div className="property-helper-text">Comma-separated tags</div>
-                  </div>
-                </CollapsibleSection>
+                {/* Tags */}
+                <div className="property-section">
+                  <label className="property-label">Tags</label>
+                  <input
+                    className="property-input"
+                    value={localNodeData.tags?.join(', ') || ''}
+                    onChange={(e) => {
+                      const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t);
+                      setLocalNodeData({...localNodeData, tags});
+                    }}
+                    onBlur={() => updateNode('tags', localNodeData.tags)}
+                    placeholder="tag1, tag2, tag3"
+                  />
+                  <div className="property-helper-text">Comma-separated tags</div>
+                </div>
+
+              </CollapsibleSection>
+
+              {/* Event Connection Section */}
+              <CollapsibleSection title="Event Connection" defaultOpen={!!selectedNode?.event_id} icon={FileJson}>
+                <AutomatableField
+                  label="Event"
+                  value={selectedNode?.event_id || ''}
+                  overridden={selectedNode?.event_id_overridden || false}
+                  onClearOverride={() => {
+                    if (!graph || !selectedNodeId) return;
+                    const next = structuredClone(graph);
+                    const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                    if (nodeIndex >= 0) {
+                      next.nodes[nodeIndex].event_id_overridden = false;
+                      if (next.metadata) {
+                        next.metadata.updated_at = new Date().toISOString();
+                      }
+                      setGraph(next);
+                      saveHistoryState('Clear event_id override', selectedNodeId);
+                    }
+                  }}
+                >
+                  <EnhancedSelector
+                    type="event"
+                    value={selectedNode?.event_id || ''}
+                    targetInstanceUuid={selectedNodeId}
+                    onChange={(newEventId) => {
+                      if (!graph || !selectedNodeId) return;
+                      const next = structuredClone(graph);
+                      const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                      if (nodeIndex >= 0) {
+                        if (!newEventId) {
+                          delete next.nodes[nodeIndex].event_id;
+                          delete next.nodes[nodeIndex].event_id_overridden;
+                        } else {
+                          next.nodes[nodeIndex].event_id = newEventId;
+                          next.nodes[nodeIndex].event_id_overridden = true;
+                        }
+                        if (next.metadata) {
+                          next.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(next);
+                        saveHistoryState('Update node event', selectedNodeId);
+                      }
+                    }}
+                    onOpenConnected={() => {
+                      const eventId = selectedNode?.event_id;
+                      if (eventId) {
+                        openFileById('event', eventId);
+                      }
+                    }}
+                    onOpenItem={(itemId) => {
+                      openFileById('event', itemId);
+                    }}
+                    label=""
+                    placeholder="Select or enter event ID..."
+                  />
+                </AutomatableField>
+              </CollapsibleSection>
 
                 {/* Node Behavior Section */}
                 <CollapsibleSection title="Node Behavior" defaultOpen={true} icon={Settings}>
@@ -717,15 +848,35 @@ export default function PropertiesPanel({
                     <span>Terminal Node</span>
                   </label>
 
-                  <div className="property-section">
-                    <label className="property-label">Outcome Type</label>
+                <div className="property-section">
+                  <AutomatableField
+                    label="Outcome Type"
+                    value={localNodeData.outcome_type || ''}
+                    overridden={selectedNode?.outcome_type_overridden || false}
+                    onClearOverride={() => {
+                      updateNode('outcome_type_overridden', false);
+                    }}
+                  >
                     <select
                       className="property-input"
                       value={localNodeData.outcome_type || ''}
                       onChange={(e) => {
                         const newValue = e.target.value === '' ? undefined : e.target.value;
                         setLocalNodeData({...localNodeData, outcome_type: newValue});
-                        updateNode('outcome_type', newValue);
+                      }}
+                      onBlur={() => {
+                        if (!graph || !selectedNodeId) return;
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                        if (nodeIndex >= 0) {
+                          next.nodes[nodeIndex].outcome_type = localNodeData.outcome_type;
+                          next.nodes[nodeIndex].outcome_type_overridden = true;
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                          saveHistoryState('Update outcome type', selectedNodeId);
+                        }
                       }}
                     >
                       <option value="">None</option>
@@ -735,7 +886,8 @@ export default function PropertiesPanel({
                       <option value="neutral">Neutral</option>
                       <option value="other">Other</option>
                     </select>
-                  </div>
+                  </AutomatableField>
+                </div>
 
                   <div className="property-section">
                     <label className="property-label">Entry Weight</label>
@@ -772,29 +924,29 @@ export default function PropertiesPanel({
                   icon={Layers}
                   withCheckbox={true}
                   checkboxChecked={nodeType === 'case'}
-                  onCheckboxChange={(checked) => {
-                    if (checked) {
-                      setNodeType('case');
-                      const newCaseData = caseData.variants.length === 0 ? {
-                        id: `case_${Date.now()}`,
-                        status: 'active' as 'active' | 'paused' | 'completed',
-                        variants: [
-                          { name: 'control', weight: 0.5 },
-                          { name: 'treatment', weight: 0.5 }
-                        ]
-                      } : caseData;
-                      setCaseData(newCaseData);
-                      
-                      if (graph && selectedNodeId) {
-                        const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                        if (nodeIndex >= 0) {
-                          next.nodes[nodeIndex].type = 'case';
-                          next.nodes[nodeIndex].case = {
-                            id: newCaseData.id,
-                            status: newCaseData.status,
-                            variants: newCaseData.variants
-                          };
+                onCheckboxChange={(checked) => {
+                  if (checked) {
+                    setNodeType('case');
+                    const newCaseData = caseData.variants.length === 0 ? {
+                      id: '',  // Don't auto-generate - let user fill in
+                      status: 'active' as 'active' | 'paused' | 'completed',
+                      variants: [
+                        { name: 'control', weight: 0.5 },
+                        { name: 'treatment', weight: 0.5 }
+                      ]
+                    } : caseData;
+                    setCaseData(newCaseData);
+                    
+                    if (graph && selectedNodeId) {
+                      const next = structuredClone(graph);
+                      const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                      if (nodeIndex >= 0) {
+                        next.nodes[nodeIndex].type = 'case';
+                        next.nodes[nodeIndex].case = {
+                          id: newCaseData.id,
+                          status: newCaseData.status,
+                          variants: newCaseData.variants
+                        };
                           if (!next.nodes[nodeIndex].layout) {
                             next.nodes[nodeIndex].layout = { x: 0, y: 0 };
                           }
@@ -836,21 +988,31 @@ export default function PropertiesPanel({
                       type="case"
                       value={caseData.id}
                       targetInstanceUuid={selectedNodeId}
-                      onChange={(newCaseId) => {
-                        setCaseData({...caseData, id: newCaseId});
-                        if (graph && selectedNodeId) {
-                          const next = structuredClone(graph);
-                          const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                          if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                            next.nodes[nodeIndex].case.id = newCaseId;
-                            if (next.metadata) {
-                              next.metadata.updated_at = new Date().toISOString();
-                            }
-                            setGraph(next);
-                            saveHistoryState(newCaseId ? 'Update case ID' : 'Clear case ID', selectedNodeId || undefined);
-                          }
+                  onChange={(newCaseId) => {
+                    setCaseData({...caseData, id: newCaseId});
+                    if (graph && selectedNodeId) {
+                      const next = structuredClone(graph);
+                      const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                      if (nodeIndex >= 0) {
+                        // Always preserve case structure when type='case'
+                        // Just update the id field (can be empty string)
+                        if (!next.nodes[nodeIndex].case) {
+                          next.nodes[nodeIndex].case = {
+                            id: newCaseId,
+                            status: caseData.status || 'active',
+                            variants: caseData.variants || []
+                          };
+                        } else {
+                          next.nodes[nodeIndex].case.id = newCaseId;
                         }
-                      }}
+                        if (next.metadata) {
+                          next.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(next);
+                        saveHistoryState(newCaseId ? 'Update case ID' : 'Clear case ID', selectedNodeId || undefined);
+                      }
+                    }
+                  }}
                       onClear={() => {
                         // onClear is redundant since onChange handles it, but keep for consistency
                       }}
@@ -909,39 +1071,59 @@ export default function PropertiesPanel({
                       placeholder="Select or enter case ID..."
                     />
 
-                    {/* Case Status */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
-                      <label style={{ fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>Status</label>
-                      <select
-                        value={caseData.status}
-                        onChange={(e) => {
-                          const newStatus = e.target.value as 'active' | 'paused' | 'completed';
-                          setCaseData({...caseData, status: newStatus});
-                          if (graph && selectedNodeId) {
-                            const next = structuredClone(graph);
-                            const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                            if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                              next.nodes[nodeIndex].case.status = newStatus;
-                              if (next.metadata) {
-                                next.metadata.updated_at = new Date().toISOString();
+                  {/* Case Status */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
+                    <AutomatableField
+                      label=""
+                      value={caseData.status}
+                      overridden={selectedNode?.case?.status_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedNodeId) return;
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                        if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                          next.nodes[nodeIndex].case.status_overridden = false;
+                          setGraph(next);
+                          saveHistoryState('Clear case.status override', selectedNodeId);
+                        }
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <label style={{ fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>Status</label>
+                        <select
+                          value={caseData.status}
+                          onChange={(e) => {
+                            const newStatus = e.target.value as 'active' | 'paused' | 'completed';
+                            setCaseData({...caseData, status: newStatus});
+                            if (graph && selectedNodeId) {
+                              const next = structuredClone(graph);
+                              const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                              if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                next.nodes[nodeIndex].case.status = newStatus;
+                                next.nodes[nodeIndex].case.status_overridden = true;
+                                if (next.metadata) {
+                                  next.metadata.updated_at = new Date().toISOString();
+                                }
+                                setGraph(next);
+                                saveHistoryState('Update case status', selectedNodeId);
                               }
-                              setGraph(next);
                             }
-                          }
-                        }}
-                        style={{ 
-                          width: '150px', 
-                          padding: '6px 8px', 
-                          border: '1px solid #ddd', 
-                          borderRadius: '4px',
-                          boxSizing: 'border-box'
-                        }}
-                      >
-                        <option value="active">Active</option>
-                        <option value="paused">Paused</option>
-                        <option value="completed">Completed</option>
-                      </select>
-                    </div>
+                          }}
+                          style={{ 
+                            width: '150px', 
+                            padding: '6px 8px', 
+                            border: '1px solid #ddd', 
+                            borderRadius: '4px',
+                            boxSizing: 'border-box'
+                          }}
+                        >
+                          <option value="active">Active</option>
+                          <option value="paused">Paused</option>
+                          <option value="completed">Completed</option>
+                        </select>
+                      </div>
+                    </AutomatableField>
+                  </div>
 
                     {/* Case Node Color */}
                     <ColorSelector
@@ -1116,27 +1298,50 @@ export default function PropertiesPanel({
                             {/* Collapsible Content */}
                             {!isCollapsed && (
                               <div style={{ paddingTop: '8px' }}>
-                            <VariantWeightInput
-                              value={variant.weight}
-                              onChange={(value) => {
-                                const newVariants = [...caseData.variants];
-                                newVariants[index].weight = value;
-                                setCaseData({...caseData, variants: newVariants});
-                              }}
-                              onCommit={(value) => {
-                                if (graph && selectedNodeId) {
-                                  const next = structuredClone(graph);
-                                  const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                                  if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                    next.nodes[nodeIndex].case.variants = caseData.variants;
-                                    if (next.metadata) {
-                                      next.metadata.updated_at = new Date().toISOString();
+                                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
+                                  Weight
+                                </label>
+                                <AutomatableField
+                                  label="Weight"
+                                  value={variant.weight}
+                                  overridden={variant.weight_overridden || false}
+                                  onClearOverride={() => {
+                                    if (graph && selectedNodeId) {
+                                      const next = structuredClone(graph);
+                                      const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                                      if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                        delete next.nodes[nodeIndex].case.variants[index].weight_overridden;
+                                        if (next.metadata) {
+                                          next.metadata.updated_at = new Date().toISOString();
+                                        }
+                                        setGraph(next);
+                                        saveHistoryState('Clear variant weight override', selectedNodeId);
+                                      }
                                     }
-                                    setGraph(next);
-                                        saveHistoryState('Update variant weight', selectedNodeId || undefined);
-                                  }
-                                }
-                              }}
+                                  }}
+                                >
+                                  <VariantWeightInput
+                                    value={variant.weight}
+                                    onChange={(value) => {
+                                      const newVariants = [...caseData.variants];
+                                      newVariants[index].weight = value;
+                                      setCaseData({...caseData, variants: newVariants});
+                                    }}
+                                    onCommit={(value) => {
+                                      if (graph && selectedNodeId) {
+                                        const next = structuredClone(graph);
+                                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                                        if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
+                                          next.nodes[nodeIndex].case.variants[index].weight = value;
+                                          next.nodes[nodeIndex].case.variants[index].weight_overridden = true;
+                                          if (next.metadata) {
+                                            next.metadata.updated_at = new Date().toISOString();
+                                          }
+                                          setGraph(next);
+                                          saveHistoryState('Update variant weight', selectedNodeId || undefined);
+                                        }
+                                      }
+                                    }}
                               onRebalance={(value, currentIndex, variants) => {
                                 if (graph && selectedNodeId) {
                                   const rebalanceGraph = structuredClone(graph);
@@ -1177,14 +1382,15 @@ export default function PropertiesPanel({
                                   }
                                 }
                               }}
-                              currentIndex={index}
-                              allVariants={caseData.variants}
-                              autoFocus={false}
-                              autoSelect={false}
-                              showSlider={true}
-                              showBalanceButton={true}
-                            />
-                          </div>
+                                    currentIndex={index}
+                                    allVariants={caseData.variants}
+                                    autoFocus={false}
+                                    autoSelect={false}
+                                    showSlider={true}
+                                    showBalanceButton={true}
+                                  />
+                                </AutomatableField>
+                              </div>
                             )}
                           </div>
                         );
@@ -1252,14 +1458,45 @@ export default function PropertiesPanel({
                   />
                 </div>
 
-                  {/* Description */}
-                  <div style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Description</label>
+                {/* Description */}
+                <div style={{ marginBottom: '16px' }}>
+                  <AutomatableField
+                    label="Description"
+                    value={localEdgeData.description || ''}
+                    overridden={selectedEdge?.description_overridden || false}
+                    onClearOverride={() => {
+                      if (!graph || !selectedEdgeId) return;
+                      const next = structuredClone(graph);
+                      const edgeIndex = next.edges.findIndex((e: any) =>
+                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                      );
+                      if (edgeIndex >= 0) {
+                        next.edges[edgeIndex].description_overridden = false;
+                        setGraph(next);
+                        saveHistoryState('Clear description override', undefined, selectedEdgeId || undefined);
+                      }
+                    }}
+                  >
                     <textarea
                       data-field="description"
                       value={localEdgeData.description || ''}
                       onChange={(e) => setLocalEdgeData({...localEdgeData, description: e.target.value})}
-                      onBlur={() => updateEdge('description', localEdgeData.description)}
+                      onBlur={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].description = localEdgeData.description;
+                          next.edges[edgeIndex].description_overridden = true;
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                          saveHistoryState('Update edge description', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
                       placeholder="Edge description..."
                       style={{ 
                         width: '100%', 
@@ -1272,7 +1509,8 @@ export default function PropertiesPanel({
                         fontFamily: 'inherit'
                       }}
                     />
-                  </div>
+                  </AutomatableField>
+                </div>
 
                   {/* Weight Default - now shown for ALL edges */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
@@ -1327,7 +1565,14 @@ export default function PropertiesPanel({
                     console.log('PropertiesPanel: Edge lookup:', { edgeIndex, foundEdge: edgeIndex >= 0 ? next.edges[edgeIndex].uuid : null });
                     if (edgeIndex >= 0) {
                       if (!next.edges[edgeIndex].p) next.edges[edgeIndex].p = {};
-                      next.edges[edgeIndex].p.id = newParamId || undefined;
+                      // Only update if newParamId is truthy (not empty string)
+                      // This prevents clearing the ID when onChange is called with ""
+                      if (newParamId) {
+                        next.edges[edgeIndex].p.id = newParamId;
+                      } else {
+                        // Explicitly clearing - remove the id property
+                        delete next.edges[edgeIndex].p.id;
+                      }
                       console.log('PropertiesPanel: SET p.id:', { 
                         'edge.p': JSON.stringify(next.edges[edgeIndex].p),
                         'newParamId': newParamId
@@ -1407,33 +1652,51 @@ export default function PropertiesPanel({
                 />
 
                 {/* Query Expression Editor - for data retrieval constraints */}
-                {selectedEdge?.p?.id && (
-                  <div style={{ marginTop: '16px', marginBottom: '16px' }}>
-                    <label style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '4px', 
-                      marginBottom: '8px', 
-                      fontSize: '12px', 
-                      color: '#6B7280',
-                      fontWeight: '500'
-                    }}>
-                      Data Retrieval Query
-                      <span title="Define constraints for retrieving data from external sources (e.g., Amplitude). Uses node IDs to specify path constraints.">
-                        <Info 
-                          size={14} 
-                          style={{ color: '#9CA3AF', cursor: 'help' }}
-                        />
-                      </span>
-                    </label>
+                <div style={{ marginTop: '16px', marginBottom: '16px' }}>
+                  <AutomatableField
+                    label="Data Retrieval Query"
+                    value={selectedEdge?.p?.query || ''}
+                    overridden={selectedEdge?.p?.query_overridden || false}
+                    onClearOverride={() => {
+                      if (!graph || !selectedEdgeId) return;
+                      const next = structuredClone(graph);
+                      const edgeIndex = next.edges.findIndex((e: any) => 
+                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                      );
+                      if (edgeIndex >= 0) {
+                        if (next.edges[edgeIndex].p) {
+                          next.edges[edgeIndex].p.query = '';
+                          delete next.edges[edgeIndex].p.query_overridden;
+                        }
+                        setGraph(next);
+                        saveHistoryState('Clear query override', undefined, selectedEdgeId || undefined);
+                      }
+                    }}
+                  >
                     <QueryExpressionEditor
-                      value={localEdgeData.query || ''}
+                      value={selectedEdge?.p?.query || ''}
                       onChange={(newQuery) => {
+                        // Update immediately in local state
                         setLocalEdgeData({...localEdgeData, query: newQuery});
                       }}
                       onBlur={() => {
-                        if (localEdgeData.query !== (selectedEdge as any)?.query) {
-                          updateEdge('query', localEdgeData.query);
+                        // Save to edge.p.query on blur
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) => 
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          if (!next.edges[edgeIndex].p) {
+                            next.edges[edgeIndex].p = {};
+                          }
+                          next.edges[edgeIndex].p.query = localEdgeData.query || selectedEdge?.p?.query || '';
+                          next.edges[edgeIndex].p.query_overridden = true;
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                          saveHistoryState('Update probability query', undefined, selectedEdgeId || undefined);
                         }
                       }}
                       graph={graph}
@@ -1441,47 +1704,78 @@ export default function PropertiesPanel({
                       placeholder="from(node).to(node).exclude(...)"
                       height="60px"
                     />
-                    <div style={{ 
-                      fontSize: '11px', 
-                      color: '#6B7280', 
-                      marginTop: '4px',
-                      fontStyle: 'italic'
-                    }}>
-                      Example: from(checkout).to(purchase).exclude(abandoned-cart)
-                    </div>
+                  </AutomatableField>
+                  <div style={{ 
+                    fontSize: '11px', 
+                    color: '#6B7280', 
+                    marginTop: '4px',
+                    fontStyle: 'italic'
+                  }}>
+                    Example: from(checkout).to(purchase).exclude(abandoned-cart)
                   </div>
-                )}
+                </div>
 
                 {/* Probability field - shown for all edges, but with different meaning for case edges */}
                 <div style={{ marginBottom: '20px' }}>
-                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
-                    {selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) 
+                  <AutomatableField
+                    label={selectedEdge && (selectedEdge.case_id || selectedEdge.case_variant) 
                       ? 'Sub-Route Probability (within variant)' 
                       : 'Probability'}
-                  </label>
-                  <ProbabilityInput
                     value={localEdgeData.probability || 0}
-                    onChange={(value) => {
-                      setLocalEdgeData({...localEdgeData, probability: value});
+                    overridden={selectedEdge?.p?.mean_overridden || false}
+                    tooltip={formatEvidenceTooltip(selectedEdge?.p?.evidence)}
+                    onClearOverride={() => {
+                      if (!graph || !selectedEdgeId) return;
+                      const next = structuredClone(graph);
+                      const edgeIndex = next.edges.findIndex((e: any) => 
+                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                      );
+                      if (edgeIndex >= 0) {
+                        next.edges[edgeIndex].p = { 
+                          ...next.edges[edgeIndex].p, 
+                          mean_overridden: false 
+                        };
+                        setGraph(next);
+                        saveHistoryState('Clear probability override', undefined, selectedEdgeId || undefined);
+                      }
                     }}
-                    onCommit={(value) => {
-                          updateEdge('probability', value);
-                    }}
-                    isUnbalanced={(() => {
-                      if (!graph || !selectedEdge) return false;
-                      const currentEdge = selectedEdge;
-                      const siblings = graph.edges.filter((e: any) => {
-                        if (currentEdge.case_id && currentEdge.case_variant) {
-                          return e.from === currentEdge.from && 
-                                 e.case_id === currentEdge.case_id && 
-                                 e.case_variant === currentEdge.case_variant;
+                  >
+                    <ProbabilityInput
+                      value={localEdgeData.probability || 0}
+                      onChange={(value) => {
+                        setLocalEdgeData({...localEdgeData, probability: value});
+                      }}
+                      onCommit={(value) => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) => 
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].p = { 
+                            ...next.edges[edgeIndex].p, 
+                            mean: value,
+                            mean_overridden: true 
+                          };
+                          setGraph(next);
+                          saveHistoryState('Update edge probability', undefined, selectedEdgeId || undefined);
                         }
-                        return e.from === currentEdge.from;
-                      });
-                      const total = siblings.reduce((sum, e: any) => sum + (e.p?.mean || 0), 0);
-                      return Math.abs(total - 1.0) > 0.001; // Allow small floating point errors
-                    })()}
-                    onRebalance={(value) => {
+                      }}
+                      isUnbalanced={(() => {
+                        if (!graph || !selectedEdge) return false;
+                        const currentEdge = selectedEdge;
+                        const siblings = graph.edges.filter((e: any) => {
+                          if (currentEdge.case_id && currentEdge.case_variant) {
+                            return e.from === currentEdge.from && 
+                                   e.case_id === currentEdge.case_id && 
+                                   e.case_variant === currentEdge.case_variant;
+                          }
+                          return e.from === currentEdge.from;
+                        });
+                        const total = siblings.reduce((sum, e: any) => sum + (e.p?.mean || 0), 0);
+                        return Math.abs(total - 1.0) > 0.001; // Allow small floating point errors
+                      })()}
+                      onRebalance={(value) => {
                       if (graph && selectedEdgeId) {
                         const currentEdge = graph.edges.find((e: any) => e.uuid === selectedEdgeId);
                         if (!currentEdge) return;
@@ -1540,11 +1834,32 @@ export default function PropertiesPanel({
                     showSlider={true}
                     showBalanceButton={true}
                   />
+                  </AutomatableField>
 
-                    {/* Std Dev - now shown for ALL edges */}
-                    {/* Std Dev and Distribution - inline layout */}
-                    <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', marginTop: '16px' }}>
-                      {/* Std Dev */}
+                  {/* Std Dev - now shown for ALL edges */}
+                  {/* Std Dev and Distribution - inline layout */}
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', marginTop: '16px' }}>
+                    {/* Std Dev */}
+                    <AutomatableField
+                      label=""
+                      value={localEdgeData.stdev || ''}
+                      overridden={selectedEdge?.p?.stdev_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].p = {
+                            ...next.edges[edgeIndex].p,
+                            stdev_overridden: false
+                          };
+                          setGraph(next);
+                          saveHistoryState('Clear p.stdev override', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
                         <input
@@ -1558,12 +1873,22 @@ export default function PropertiesPanel({
                             setLocalEdgeData({...localEdgeData, stdev: value});
                           }}
                           onBlur={() => {
-                            updateEdge('stdev', localEdgeData.stdev);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              updateEdge('stdev', localEdgeData.stdev);
-                              e.currentTarget.blur();
+                            if (!graph || !selectedEdgeId) return;
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((e: any) =>
+                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                            );
+                            if (edgeIndex >= 0) {
+                              next.edges[edgeIndex].p = {
+                                ...next.edges[edgeIndex].p,
+                                stdev: localEdgeData.stdev,
+                                stdev_overridden: true
+                              };
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                              saveHistoryState('Update p.stdev', undefined, selectedEdgeId || undefined);
                             }
                           }}
                           placeholder="Optional"
@@ -1576,14 +1901,51 @@ export default function PropertiesPanel({
                           }}
                         />
                       </div>
+                    </AutomatableField>
 
-                      {/* Distribution */}
+                    {/* Distribution */}
+                    <AutomatableField
+                      label=""
+                      value={selectedEdge?.p?.distribution || 'beta'}
+                      overridden={selectedEdge?.p?.distribution_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].p = {
+                            ...next.edges[edgeIndex].p,
+                            distribution_overridden: false
+                          };
+                          setGraph(next);
+                          saveHistoryState('Clear p.distribution override', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
                         <select
                           value={selectedEdge?.p?.distribution || 'beta'}
                           onChange={(e) => {
-                            updateEdge('distribution', e.target.value);
+                            if (!graph || !selectedEdgeId) return;
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((e: any) =>
+                              e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                            );
+                          if (edgeIndex >= 0) {
+                            next.edges[edgeIndex].p = {
+                              ...next.edges[edgeIndex].p,
+                              distribution: e.target.value as 'beta' | 'normal' | 'uniform',
+                              distribution_overridden: true
+                            };
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                              saveHistoryState('Update p.distribution', undefined, selectedEdgeId || undefined);
+                            }
                           }}
                           style={{ 
                             width: '90px', 
@@ -1598,24 +1960,9 @@ export default function PropertiesPanel({
                           <option value="uniform">Uniform</option>
                         </select>
                       </div>
-                    </div>
-
-                    {/* Locked Probability - moved here from below */}
-                    <div style={{ marginBottom: '16px' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={localEdgeData.locked || false}
-                          onChange={(e) => {
-                            const newValue = e.target.checked;
-                            setLocalEdgeData({...localEdgeData, locked: newValue});
-                            updateEdge('locked', newValue);
-                          }}
-                        />
-                        <span>Locked Probability</span>
-                        </label>
-                        </div>
-                      </div>
+                    </AutomatableField>
+                </div>
+                </div>
                   </CollapsibleSection>
 
                   {/* SUB-SECTION 2.2: Cost (£) */}
@@ -1634,7 +1981,11 @@ export default function PropertiesPanel({
                       );
                       if (edgeIndex >= 0) {
                         if (!next.edges[edgeIndex].cost_gbp) next.edges[edgeIndex].cost_gbp = {};
-                        next.edges[edgeIndex].cost_gbp.id = newParamId || undefined;
+                        if (newParamId) {
+                          next.edges[edgeIndex].cost_gbp.id = newParamId;
+                        } else {
+                          delete next.edges[edgeIndex].cost_gbp.id;
+                        }
                         if (next.metadata) {
                           next.metadata.updated_at = new Date().toISOString();
                         }
@@ -1713,8 +2064,27 @@ export default function PropertiesPanel({
                       placeholder="Select or enter parameter ID..."
                     />
 
-                    <div style={{ marginBottom: '16px', marginTop: '16px' }}>
-                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Mean £</label>
+                  <div style={{ marginBottom: '16px', marginTop: '16px' }}>
+                    <AutomatableField
+                      label="Mean £"
+                      value={localEdgeData.cost_gbp?.mean || ''}
+                      overridden={selectedEdge?.cost_gbp?.mean_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].cost_gbp = {
+                            ...next.edges[edgeIndex].cost_gbp,
+                            mean_overridden: false
+                          };
+                          setGraph(next);
+                          saveHistoryState('Clear cost GBP mean override', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
                       <input
                         type="number"
                         min="0"
@@ -1734,7 +2104,11 @@ export default function PropertiesPanel({
                               e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
                             );
                             if (edgeIndex >= 0) {
-                              (next.edges[edgeIndex] as any).cost_gbp = localEdgeData.cost_gbp;
+                              (next.edges[edgeIndex] as any).cost_gbp = {
+                                ...(next.edges[edgeIndex] as any).cost_gbp,
+                                mean: localEdgeData.cost_gbp?.mean,
+                                mean_overridden: true
+                              };
                               if (next.metadata) {
                                 next.metadata.updated_at = new Date().toISOString();
                               }
@@ -1744,19 +2118,40 @@ export default function PropertiesPanel({
                           }
                         }}
                         placeholder="0.00"
-                            style={{ 
+                        style={{ 
                           width: '100%',
                           padding: '8px', 
-                              border: '1px solid #ddd', 
+                          border: '1px solid #ddd', 
                           borderRadius: '4px',
                           boxSizing: 'border-box'
                         }}
-                      />
-                    </div>
+                    />
+                  </AutomatableField>
+                  </div>
 
-                    {/* Std Dev and Distribution - inline layout */}
-                    <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-                      {/* Std Dev */}
+                  {/* Std Dev and Distribution - inline layout */}
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+                    {/* Std Dev */}
+                    <AutomatableField
+                      label=""
+                      value={localEdgeData.cost_gbp?.stdev || ''}
+                      overridden={selectedEdge?.cost_gbp?.stdev_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].cost_gbp = {
+                            ...next.edges[edgeIndex].cost_gbp,
+                            stdev_overridden: false
+                          };
+                          setGraph(next);
+                          saveHistoryState('Clear cost_gbp.stdev override', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
                         <input
@@ -1778,7 +2173,11 @@ export default function PropertiesPanel({
                                 e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
                               );
                               if (edgeIndex >= 0) {
-                                (next.edges[edgeIndex] as any).cost_gbp = localEdgeData.cost_gbp;
+                                (next.edges[edgeIndex] as any).cost_gbp = {
+                                  ...(next.edges[edgeIndex] as any).cost_gbp,
+                                  stdev: localEdgeData.cost_gbp?.stdev,
+                                  stdev_overridden: true
+                                };
                                 if (next.metadata) {
                                   next.metadata.updated_at = new Date().toISOString();
                                 }
@@ -1797,8 +2196,29 @@ export default function PropertiesPanel({
                           }}
                         />
                       </div>
+                    </AutomatableField>
 
-                      {/* Distribution */}
+                    {/* Distribution */}
+                    <AutomatableField
+                      label=""
+                      value={localEdgeData.cost_gbp?.distribution || 'normal'}
+                      overridden={selectedEdge?.cost_gbp?.distribution_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].cost_gbp = {
+                            ...next.edges[edgeIndex].cost_gbp,
+                            distribution_overridden: false
+                          };
+                          setGraph(next);
+                          saveHistoryState('Clear cost_gbp.distribution override', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
                         <select
@@ -1814,10 +2234,11 @@ export default function PropertiesPanel({
                                 edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
                               );
                               if (edgeIndex >= 0) {
-                                if (!(next.edges[edgeIndex] as any).cost_gbp) {
-                                  (next.edges[edgeIndex] as any).cost_gbp = {};
-                                }
-                                (next.edges[edgeIndex] as any).cost_gbp.distribution = e.target.value;
+                                (next.edges[edgeIndex] as any).cost_gbp = {
+                                  ...(next.edges[edgeIndex] as any).cost_gbp,
+                                  distribution: e.target.value,
+                                  distribution_overridden: true
+                                };
                                 if (next.metadata) {
                                   next.metadata.updated_at = new Date().toISOString();
                                 }
@@ -1841,7 +2262,8 @@ export default function PropertiesPanel({
                           <option value="beta">Beta</option>
                         </select>
                       </div>
-                    </div>
+                    </AutomatableField>
+                  </div>
                   </CollapsibleSection>
                   
                   {/* SUB-SECTION 2.3: Cost (Time) */}
@@ -1860,7 +2282,11 @@ export default function PropertiesPanel({
                       );
                       if (edgeIndex >= 0) {
                         if (!next.edges[edgeIndex].cost_time) next.edges[edgeIndex].cost_time = {};
-                        next.edges[edgeIndex].cost_time.id = newParamId || undefined;
+                        if (newParamId) {
+                          next.edges[edgeIndex].cost_time.id = newParamId;
+                        } else {
+                          delete next.edges[edgeIndex].cost_time.id;
+                        }
                         if (next.metadata) {
                           next.metadata.updated_at = new Date().toISOString();
                         }
@@ -1939,10 +2365,29 @@ export default function PropertiesPanel({
                       placeholder="Select or enter parameter ID..."
                     />
 
-                    <div style={{ marginBottom: '16px', marginTop: '16px' }}>
-                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Mean days</label>
-                          <input
-                            type="number"
+                  <div style={{ marginBottom: '16px', marginTop: '16px' }}>
+                    <AutomatableField
+                      label="Mean days"
+                      value={localEdgeData.cost_time?.mean || ''}
+                      overridden={selectedEdge?.cost_time?.mean_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].cost_time = {
+                            ...next.edges[edgeIndex].cost_time,
+                            mean_overridden: false
+                          };
+                          setGraph(next);
+                          saveHistoryState('Clear cost time mean override', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
+                      <input
+                        type="number"
                         min="0"
                         step="0.01"
                         value={localEdgeData.cost_time?.mean || ''}
@@ -1960,7 +2405,11 @@ export default function PropertiesPanel({
                               e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
                             );
                             if (edgeIndex >= 0) {
-                              (next.edges[edgeIndex] as any).cost_time = localEdgeData.cost_time;
+                              (next.edges[edgeIndex] as any).cost_time = {
+                                ...(next.edges[edgeIndex] as any).cost_time,
+                                mean: localEdgeData.cost_time?.mean,
+                                mean_overridden: true
+                              };
                               if (next.metadata) {
                                 next.metadata.updated_at = new Date().toISOString();
                               }
@@ -1970,19 +2419,40 @@ export default function PropertiesPanel({
                           }
                         }}
                         placeholder="0.00"
-                            style={{ 
+                        style={{ 
                           width: '100%',
                           padding: '8px', 
-                              border: '1px solid #ddd', 
+                          border: '1px solid #ddd', 
                           borderRadius: '4px',
                           boxSizing: 'border-box'
                         }}
-                      />
-                        </div>
+                    />
+                  </AutomatableField>
+                      </div>
 
-                    {/* Std Dev and Distribution - inline layout */}
-                    <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-                      {/* Std Dev */}
+                  {/* Std Dev and Distribution - inline layout */}
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+                    {/* Std Dev */}
+                    <AutomatableField
+                      label=""
+                      value={localEdgeData.cost_time?.stdev || ''}
+                      overridden={selectedEdge?.cost_time?.stdev_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].cost_time = {
+                            ...next.edges[edgeIndex].cost_time,
+                            stdev_overridden: false
+                          };
+                          setGraph(next);
+                          saveHistoryState('Clear cost_time.stdev override', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Std Dev</label>
                         <input
@@ -2004,7 +2474,11 @@ export default function PropertiesPanel({
                                 e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
                               );
                               if (edgeIndex >= 0) {
-                                (next.edges[edgeIndex] as any).cost_time = localEdgeData.cost_time;
+                                (next.edges[edgeIndex] as any).cost_time = {
+                                  ...(next.edges[edgeIndex] as any).cost_time,
+                                  stdev: localEdgeData.cost_time?.stdev,
+                                  stdev_overridden: true
+                                };
                                 if (next.metadata) {
                                   next.metadata.updated_at = new Date().toISOString();
                                 }
@@ -2023,8 +2497,29 @@ export default function PropertiesPanel({
                           }}
                         />
                       </div>
+                    </AutomatableField>
 
-                      {/* Distribution */}
+                    {/* Distribution */}
+                    <AutomatableField
+                      label=""
+                      value={localEdgeData.cost_time?.distribution || 'lognormal'}
+                      overridden={selectedEdge?.cost_time?.distribution_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) =>
+                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          next.edges[edgeIndex].cost_time = {
+                            ...next.edges[edgeIndex].cost_time,
+                            distribution_overridden: false
+                          };
+                          setGraph(next);
+                          saveHistoryState('Clear cost_time.distribution override', undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <label style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>Dist</label>
                         <select
@@ -2034,16 +2529,17 @@ export default function PropertiesPanel({
                               ...prev,
                               cost_time: { ...prev.cost_time, distribution: e.target.value }
                             }));
-                            if (graph && selectedEdgeId) {
-                              const next = structuredClone(graph);
-                              const edgeIndex = next.edges.findIndex((edge: any) => 
-                                edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                              );
+                          if (graph && selectedEdgeId) {
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((edge: any) => 
+                              edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+                            );
                               if (edgeIndex >= 0) {
-                                if (!(next.edges[edgeIndex] as any).cost_time) {
-                                  (next.edges[edgeIndex] as any).cost_time = {};
-                                }
-                                (next.edges[edgeIndex] as any).cost_time.distribution = e.target.value;
+                                (next.edges[edgeIndex] as any).cost_time = {
+                                  ...(next.edges[edgeIndex] as any).cost_time,
+                                  distribution: e.target.value,
+                                  distribution_overridden: true
+                                };
                                 if (next.metadata) {
                                   next.metadata.updated_at = new Date().toISOString();
                                 }
@@ -2067,7 +2563,8 @@ export default function PropertiesPanel({
                           <option value="beta">Beta</option>
                         </select>
                       </div>
-                    </div>
+                    </AutomatableField>
+                  </div>
                   </CollapsibleSection>
                 </CollapsibleSection>
 

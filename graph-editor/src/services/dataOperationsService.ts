@@ -107,8 +107,16 @@ class DataOperationsService {
     edgeId?: string;
     graph: Graph | null;
     setGraph: (graph: Graph | null) => void;
+    setAutoUpdating?: (updating: boolean) => void;
   }): Promise<void> {
-    const { paramId, edgeId, graph, setGraph } = options;
+    const { paramId, edgeId, graph, setGraph, setAutoUpdating } = options;
+    
+    // Set auto-updating flag to enable animations
+    if (setAutoUpdating) {
+      setAutoUpdating(true);
+      // Clear flag after 500ms
+      setTimeout(() => setAutoUpdating(false), 500);
+    }
     
     try {
       // Validate inputs
@@ -180,30 +188,41 @@ class DataOperationsService {
         });
         
         // Ensure we do NOT lose the correct parameter connection id after file update.
-        // Detect which slot was updated from result.changes and set that slot's id.
+        // Detect which slot to use from parameter file type OR from changes
         if (paramId) {
-          const fields = (result.changes || []).map((c: any) => c.field || '');
           let slot: 'p' | 'cost_gbp' | 'cost_time' | null = null;
-          if (fields.some(f => f.startsWith('cost_gbp'))) slot = 'cost_gbp';
-          else if (fields.some(f => f.startsWith('cost_time'))) slot = 'cost_time';
-          else if (fields.some(f => f === 'p' || f.startsWith('p.'))) slot = 'p';
-          else slot = null; // could be conditional_p or unrelated
+          
+          // First, try to determine slot from parameter file type
+          const paramType = paramFile.data?.type || paramFile.data?.parameter_type;
+          if (paramType === 'probability') {
+            slot = 'p';
+          } else if (paramType === 'cost_gbp') {
+            slot = 'cost_gbp';
+          } else if (paramType === 'cost_time') {
+            slot = 'cost_time';
+          } else {
+            // Fallback: try to infer from changes
+            const fields = (result.changes || []).map((c: any) => c.field || '');
+            if (fields.some(f => f.startsWith('cost_gbp'))) slot = 'cost_gbp';
+            else if (fields.some(f => f.startsWith('cost_time'))) slot = 'cost_time';
+            else if (fields.some(f => f === 'p' || f.startsWith('p.'))) slot = 'p';
+          }
           
           if (slot) {
             if (!nextGraph.edges[edgeIndex][slot]) {
               // initialize object for the slot
               (nextGraph.edges[edgeIndex] as any)[slot] = {};
             }
-            if (!(nextGraph.edges[edgeIndex] as any)[slot].id) {
-              (nextGraph.edges[edgeIndex] as any)[slot].id = paramId;
-              console.log('[DataOperationsService] PRESERVE param id after update:', {
-                slot,
-                paramId,
-                'edge.slot.id': (nextGraph.edges[edgeIndex] as any)[slot].id
-              });
-            }
+            // Always set the ID to ensure it's preserved
+            (nextGraph.edges[edgeIndex] as any)[slot].id = paramId;
+            console.log('[DataOperationsService] PRESERVE param id after update:', {
+              slot,
+              paramId,
+              paramType,
+              'edge.slot.id': (nextGraph.edges[edgeIndex] as any)[slot].id
+            });
           } else {
-            console.warn('[DataOperationsService] Could not determine parameter slot to preserve id for. Changes:', fields);
+            console.warn('[DataOperationsService] Could not determine parameter slot. paramType:', paramType);
           }
         }
         
@@ -345,8 +364,15 @@ class DataOperationsService {
     nodeId?: string;
     graph: Graph | null;
     setGraph: (graph: Graph | null) => void;
+    setAutoUpdating?: (updating: boolean) => void;
   }): Promise<void> {
-    const { caseId, nodeId, graph, setGraph } = options;
+    const { caseId, nodeId, graph, setGraph, setAutoUpdating } = options;
+    
+    // Set auto-updating flag to enable animations
+    if (setAutoUpdating) {
+      setAutoUpdating(true);
+      setTimeout(() => setAutoUpdating(false), 500);
+    }
     
     try {
       if (!graph || !nodeId) {
@@ -374,8 +400,10 @@ class DataOperationsService {
         { interactive: true }
       );
       
-      if (!result.success || !result.changes) {
-        toast.error('Failed to update from case file');
+      if (!result.success) {
+        console.error('[DataOperationsService] getCaseFromFile failed:', result);
+        const errorMsg = result.errors?.length ? result.errors.map(e => typeof e === 'string' ? e : e.message || JSON.stringify(e)).join(', ') : 'Unknown error';
+        toast.error(`Failed to update from case file: ${errorMsg}`);
         return;
       }
       
@@ -383,7 +411,17 @@ class DataOperationsService {
       const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === nodeId || n.id === nodeId);
       
       if (nodeIndex >= 0) {
-        applyChanges(nextGraph.nodes[nodeIndex], result.changes);
+        // Ensure case structure exists BEFORE applying changes
+        if (caseId && !nextGraph.nodes[nodeIndex].case) {
+          nextGraph.nodes[nodeIndex].case = { id: caseId, status: 'active', variants: [] };
+        }
+        
+        // Apply changes if any (might be empty if already up to date)
+        // This will populate/merge variants from the case file
+        if (result.changes) {
+          applyChanges(nextGraph.nodes[nodeIndex], result.changes);
+        }
+        
         // Ensure we do NOT lose the human-readable node id after file update
         if (nodeId && !nextGraph.nodes[nodeIndex].id) {
           nextGraph.nodes[nodeIndex].id = nodeId;
@@ -392,18 +430,18 @@ class DataOperationsService {
             'node.id': nextGraph.nodes[nodeIndex].id
           });
         }
-        // Ensure we do NOT lose the case connection id after file update
-        if (caseId) {
-          if (!nextGraph.nodes[nodeIndex].case) {
-            nextGraph.nodes[nodeIndex].case = { id: caseId, status: 'active', variants: [] };
-          } else if (!nextGraph.nodes[nodeIndex].case.id) {
-            nextGraph.nodes[nodeIndex].case.id = caseId;
-          }
-          console.log('[DataOperationsService] PRESERVE node.case.id after update:', {
-            caseId,
-            'node.case.id': nextGraph.nodes[nodeIndex].case?.id
-          });
+        
+        // Ensure case.id is set (in case applyChanges didn't set it)
+        if (caseId && nextGraph.nodes[nodeIndex].case && !nextGraph.nodes[nodeIndex].case.id) {
+          nextGraph.nodes[nodeIndex].case.id = caseId;
         }
+        
+        console.log('[DataOperationsService] After getCaseFromFile:', {
+          caseId,
+          'node.case.id': nextGraph.nodes[nodeIndex].case?.id,
+          'variants.length': nextGraph.nodes[nodeIndex].case?.variants?.length,
+          'variants': nextGraph.nodes[nodeIndex].case?.variants
+        });
         if (nextGraph.metadata) {
           nextGraph.metadata.updated_at = new Date().toISOString();
         }
@@ -480,8 +518,15 @@ class DataOperationsService {
     graph: Graph | null;
     setGraph: (graph: Graph | null) => void;
     targetNodeUuid?: string; // Optional: if provided, find node by UUID instead of nodeId
+    setAutoUpdating?: (updating: boolean) => void;
   }): Promise<void> {
-    const { nodeId, graph, setGraph, targetNodeUuid } = options;
+    const { nodeId, graph, setGraph, targetNodeUuid, setAutoUpdating } = options;
+    
+    // Set auto-updating flag to enable animations
+    if (setAutoUpdating) {
+      setAutoUpdating(true);
+      setTimeout(() => setAutoUpdating(false), 500);
+    }
     
     try {
       if (!graph) {

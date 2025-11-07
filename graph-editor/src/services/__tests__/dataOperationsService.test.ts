@@ -3,6 +3,8 @@
  * 
  * Tests the full end-to-end flow:
  * UI → DataOperationsService → UpdateManager → Graph/File updates
+ * 
+ * @vitest-environment node
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';

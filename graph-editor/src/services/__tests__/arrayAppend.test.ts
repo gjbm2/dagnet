@@ -5,6 +5,7 @@
  * and doesn't create literal "values[]" keys.
  * 
  * @group unit
+ * @vitest-environment node
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';

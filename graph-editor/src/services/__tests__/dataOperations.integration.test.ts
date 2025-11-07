@@ -5,6 +5,7 @@
  * data survives the complete cycle without corruption.
  * 
  * @group integration
+ * @vitest-environment node
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
