@@ -21,6 +21,29 @@ See `PROJECT_CONNECT/PHASE_0.0_COMPLETE.md` and `PROJECT_CONNECT/PHASE_0.1_COMPL
 - Need to think about conditional probability groups -- whether we need to nudge user to update param files together...? How to have *depedent* probabilities? maybe just dust off notion of policy again -- i.e. discard any unanchored probability, OR "collect residual" edge param?? Point being we won't always get failure states from Amplitude (there WAS no event that corresponded with abandonment a lot of the time, so we need to infer failure states from absence of success state within X mins/days)
 
 ### High Priority
+
+#### 🚨 CRITICAL: File Lifecycle Management Broken
+**See: [FILE_LIFECYCLE_REDESIGN.md](./FILE_LIFECYCLE_REDESIGN.md)**
+
+Current state is a trainwreck:
+- Files exist in 3 places (IndexedDB, FileRegistry memory, Navigator localItems) with no clear source of truth
+- Delete doesn't work (files not in memory can't be deleted)
+- No consistent warnings (users lose work)
+- Local vs committed confusion
+- Closing dirty local files doesn't warn
+
+**Required:**
+1. Single source of truth (IndexedDB as workspace)
+2. Clear file lifecycle state machine (uncommitted-new, committed-dirty, etc.)
+3. Comprehensive warning system (close dirty file, delete uncommitted changes, etc.)
+4. FileRegistry.getOrLoad() pattern (always works, loads from IDB if not in cache)
+5. Test coverage for all file operations
+6. Clear distinction between workspace files and repo files
+
+**Estimated effort:** 2-3 days for core refactor (Phases 1-3), another 1-2 days for warnings + tests
+
+---
+
 - we need window on graph (and later contexts) for data getting purposes
 - handling 'dead limb' probabiltiies e.g. no data available, can we infer 1-sibling.p
 - node moves not always persisting properly post-Sankey

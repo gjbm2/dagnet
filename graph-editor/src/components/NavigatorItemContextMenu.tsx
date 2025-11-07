@@ -266,9 +266,14 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     items.push({
       label: 'Delete',
       onClick: async () => {
-        const success = await fileOperationsService.deleteFile(fileId);
-        if (success) {
-          onClose();
+        try {
+          const success = await fileOperationsService.deleteFile(fileId);
+          if (success) {
+            onClose();
+          }
+        } catch (error) {
+          console.error('Failed to delete file:', error);
+          alert(`Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
       }
     });

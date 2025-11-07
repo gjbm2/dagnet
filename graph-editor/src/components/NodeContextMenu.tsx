@@ -6,7 +6,10 @@
 
 import React, { useState } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
-import { Folders, TrendingUpDown, ChevronRight } from 'lucide-react';
+import { fileOperationsService } from '../services/fileOperationsService';
+import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
+import { Folders, TrendingUpDown, ChevronRight, Share2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 interface NodeContextMenuProps {
   x: number;
@@ -99,6 +102,66 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       });
     }
     onClose();
+  };
+
+  const handleShowInNewGraph = async () => {
+    try {
+      // Get selected node UUIDs (ReactFlow uses 'id' field which contains the UUID)
+      const selectedNodeUuids = selectedNodes.map(n => n.id);
+      
+      if (selectedNodeUuids.length === 0) {
+        toast.error('No nodes selected');
+        onClose();
+        return;
+      }
+
+      // Extract subgraph
+      const subgraph = extractSubgraph({
+        selectedNodeIds: selectedNodeUuids,
+        graph,
+        includeConnectedEdges: true
+      });
+
+      if (subgraph.nodes.length === 0) {
+        toast.error('No nodes to extract');
+        onClose();
+        return;
+      }
+
+      // Generate name and create graph
+      const graphName = generateSubgraphName(subgraph.nodes.length);
+      const newGraph = createGraphFromSubgraph(subgraph, {
+        name: graphName,
+        description: `Extracted ${subgraph.nodes.length} nodes and ${subgraph.edges.length} edges`
+      });
+
+      // Create the graph file (don't open yet, we need to update the data first)
+      const { fileId, item } = await fileOperationsService.createFile(graphName, 'graph', {
+        openInTab: false,
+        viewMode: 'interactive',
+        metadata: {
+          description: `Extracted ${subgraph.nodes.length} nodes and ${subgraph.edges.length} edges`,
+          tags: ['extracted-subgraph']
+        }
+      });
+
+      // Update the file with our custom graph data
+      const { fileRegistry } = await import('../contexts/TabContext');
+      await fileRegistry.updateFile(fileId, newGraph);
+
+      // Now open the file in a tab
+      await fileOperationsService.openFile(item, {
+        viewMode: 'interactive',
+        switchIfExists: false
+      });
+
+      toast.success(`Created new graph with ${subgraph.nodes.length} nodes and ${subgraph.edges.length} edges`);
+      onClose();
+    } catch (error) {
+      console.error('Failed to create subgraph:', error);
+      toast.error('Failed to create new graph');
+      onClose();
+    }
   };
 
   return (
@@ -319,6 +382,34 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
               )}
             </div>
           )}
+        </>
+      )}
+
+      {/* Show in new graph (multi-select only) */}
+      {isMultiSelect && (
+        <>
+          <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              handleShowInNewGraph();
+            }}
+            style={{
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: '#007bff',
+              borderRadius: '2px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          >
+            <Share2 size={14} />
+            <span>Show in new graph ({selectedNodes.length} nodes)</span>
+          </div>
         </>
       )}
 
