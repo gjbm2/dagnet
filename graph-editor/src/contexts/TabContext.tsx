@@ -357,22 +357,17 @@ class FileRegistry {
    * Explicitly delete a file from workspace
    * This is a deliberate user action (File > Delete, context menu delete, etc.)
    * NOT called automatically when tabs close
+   * 
+   * NOTE: Validation and confirmation should be handled by the caller (fileOperationsService)
+   * This function just performs the actual deletion
    */
   async deleteFile(fileId: string): Promise<void> {
     const file = this.files.get(fileId);
     if (!file) return;
     
-    // Check for open tabs
-    if (file.viewTabs.length > 0) {
-      throw new Error('Cannot delete file with open tabs. Close all tabs first.');
-    }
-    
-    // Check if dirty (optional - could allow with confirmation)
-    if (file.isDirty) {
-      throw new Error('Cannot delete dirty file. Commit or revert changes first.');
-    }
-    
-    console.log(`FileRegistry: Explicitly deleting ${fileId} from workspace`);
+    // No validation here - caller (fileOperationsService) handles all confirmations
+    // This just performs the deletion
+    console.log(`FileRegistry: Deleting ${fileId} (${file.viewTabs.length} tabs, dirty: ${file.isDirty})`);
     
     // Notify listeners BEFORE deleting
     const callbacks = this.listeners.get(fileId);

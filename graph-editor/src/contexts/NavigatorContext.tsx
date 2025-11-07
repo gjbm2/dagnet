@@ -841,20 +841,17 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setGroupByTags
   };
   
-  // Listen for last view closed events to clean up local items
+  // Listen for last view closed events
+  // NOTE: We DON'T remove local items when tabs close - they're part of the workspace
+  // Local files persist in the navigator until explicitly deleted by the user
   useEffect(() => {
     const handleLastViewClosed = (event: CustomEvent) => {
       const { fileId } = event.detail;
       
-      // Check if this file exists in localItems (uncommitted)
-      const [type, ...idParts] = fileId.split('-');
-      const id = idParts.join('-');
-      const isLocal = localItems.some(item => item.id === id && item.type === type);
+      console.log(`NavigatorContext: Last view of file ${fileId} closed - file persists in workspace`);
       
-      if (isLocal) {
-        console.log(`NavigatorContext: Last view of local file ${fileId} closed, removing from navigator`);
-        removeLocalItem(fileId);
-      }
+      // Local files stay in the navigator - they're part of the workspace
+      // Only explicit user delete action removes them
     };
     
     window.addEventListener('dagnet:lastViewClosed', handleLastViewClosed as EventListener);

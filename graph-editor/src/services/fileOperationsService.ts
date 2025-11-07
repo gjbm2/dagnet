@@ -248,8 +248,24 @@ class FileOperationsService {
     const { force = false, skipConfirm = false } = options;
 
     console.log(`FileOperationsService: Deleting file ${fileId}`);
+    console.log(`FileOperationsService: All files in registry:`, Array.from((fileRegistry as any).files.keys()));
 
-    const file = fileRegistry.getFile(fileId);
+    let file = fileRegistry.getFile(fileId);
+    console.log(`FileOperationsService: File found in memory:`, !!file, file ? `(tabs: ${file.viewTabs.length}, dirty: ${file.isDirty})` : '');
+    
+    // If not in memory, try loading from IndexedDB
+    if (!file) {
+      console.log(`FileOperationsService: File not in memory, checking IndexedDB...`);
+      const { db } = await import('../db/appDatabase');
+      const fileFromDb = await db.files.get(fileId);
+      if (fileFromDb) {
+        console.log(`FileOperationsService: Found file in IndexedDB, loading into memory`);
+        // Add to in-memory registry
+        (fileRegistry as any).files.set(fileId, fileFromDb);
+        file = fileFromDb;
+      }
+    }
+    
     const [type] = fileId.split('-');
     const isIndexOnlyEntry = !file && ['parameter', 'context', 'case', 'node'].includes(type);
 
