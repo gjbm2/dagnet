@@ -123,10 +123,9 @@ export const createTestGraph = (overrides: Partial<ConversionGraph> = {}): Conve
   ],
   policies: {
     default_outcome: 'success',
-    overflow_policy: 'proportional'
+    overflow_policy: 'normalize'
   },
   metadata: {
-    schema_version: '1.0.0',
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
     version: '1.0.0',
@@ -201,4 +200,5 @@ export const createCaseFileWithSchedules = (
     }
   });
 };
+
 

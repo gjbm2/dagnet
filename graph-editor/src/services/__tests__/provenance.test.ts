@@ -450,7 +450,7 @@ describe('Provenance Tracking', () => {
       
       // File→Graph SHOULD include evidence (it's coming from the file)
       const changes = result.changes;
-      const meanChange = changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = changes!.find((c: any) => c.field === 'p.mean');
       
       expect(meanChange).toBeDefined();
       expect(meanChange!.newValue).toBe(0.42);

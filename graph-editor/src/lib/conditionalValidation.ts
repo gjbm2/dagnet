@@ -7,7 +7,7 @@ import {
   ValidationError,
   ValidationWarning,
   ConditionalProbability,
-} from './types';
+} from '../types';
 
 // Tolerance for probability sum validation
 const PROB_SUM_TOLERANCE = 0.001;

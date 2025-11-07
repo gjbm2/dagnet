@@ -324,17 +324,34 @@ export type CaseStatus = 'active' | 'paused' | 'completed';
 export type OverflowPolicy = 'error' | 'normalize' | 'cap';
 export type FreeEdgePolicy = 'complement' | 'uniform' | 'weighted';
 
+export interface Evidence {
+  n?: number; // Sample size (total trials)
+  k?: number; // Number of successes
+  window_from?: string; // Time window start (ISO date-time)
+  window_to?: string; // Time window end (ISO date-time)
+  retrieved_at?: string; // When data was retrieved (ISO date-time)
+  source?: 'amplitude' | 'sheets' | 'manual' | 'computed' | 'api';
+  query?: any; // Source-specific query structure
+}
+
 export interface ProbabilityParam {
   mean?: number; // [0,1]
   stdev?: number; // >= 0
   locked?: boolean; // DEPRECATED: use mean_overridden instead
+  mean_overridden?: boolean; // If true, mean was manually edited
+  stdev_overridden?: boolean; // If true, stdev was manually edited
+  distribution_overridden?: boolean; // If true, distribution was manually edited
   id?: string; // Reference to parameter file (FK to parameter-{id}.yaml)
   distribution?: 'normal' | 'beta' | 'uniform';
+  evidence?: Evidence; // Observations from data sources
 }
 
 export interface CostParam {
   mean?: number; // >= 0
   stdev?: number; // >= 0
+  mean_overridden?: boolean; // If true, mean was manually edited
+  stdev_overridden?: boolean; // If true, stdev was manually edited
+  distribution_overridden?: boolean; // If true, distribution was manually edited
   id?: string; // Reference to cost parameter file (FK to parameter-{id}.yaml)
   distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform' | 'beta';
 }
@@ -451,11 +468,22 @@ export interface Metadata {
   tags?: string[];
 }
 
+export interface PostIt {
+  id: string;
+  text: string;
+  color: string;
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+}
+
 export interface ConversionGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   policies: Policies;
   metadata: Metadata;
+  postits?: PostIt[];
 }
 
 export type Graph = ConversionGraph;
