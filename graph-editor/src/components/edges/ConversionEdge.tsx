@@ -191,13 +191,32 @@ export default function ConversionEdge({
       }
     }
     
-    // Weight default
-    if (data.weight_default !== undefined) {
-      lines.push(`\nDefault Weight: ${data.weight_default}`);
-    }
+  // Weight default
+  if (data.weight_default !== undefined) {
+    lines.push(`\nDefault Weight: ${data.weight_default}`);
+  }
+  
+  // Evidence
+  if (fullEdge?.p?.evidence) {
+    const evidence = fullEdge.p.evidence;
+    const evidenceParts: string[] = [];
     
-    return lines.join('\n');
-  };
+    if (evidence.n !== undefined) evidenceParts.push(`n=${evidence.n}`);
+    if (evidence.k !== undefined) evidenceParts.push(`k=${evidence.k}`);
+    if (evidence.window_from && evidence.window_to) {
+      const from = new Date(evidence.window_from).toLocaleDateString();
+      const to = new Date(evidence.window_to).toLocaleDateString();
+      evidenceParts.push(`Window: ${from} - ${to}`);
+    }
+    if (evidence.source) evidenceParts.push(`Source: ${evidence.source}`);
+    
+    if (evidenceParts.length > 0) {
+      lines.push(`\nEvidence: ${evidenceParts.join(', ')}`);
+    }
+  }
+  
+  return lines.join('\n');
+};
   const { deleteElements, setEdges, getNodes, screenToFlowPosition } = useReactFlow();
   const { graph } = useGraphStore();
   
@@ -1378,11 +1397,11 @@ export default function ConversionEdge({
             fontSize: '12px',
             fontWeight: 'bold',
             border: selected ? 'none' : '1px solid #ddd',
-            minWidth: '40px',
-            textAlign: 'center',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            pointerEvents: selected ? 'none' : 'auto',
-          }}
+          minWidth: '40px',
+          textAlign: 'center',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          pointerEvents: 'auto',
+        }}
           onDoubleClick={handleDoubleClick}
           onMouseEnter={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();

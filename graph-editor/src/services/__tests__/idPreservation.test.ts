@@ -5,6 +5,7 @@
  * file operations and do not get lost during object replacement.
  * 
  * @group unit
+ * @vitest-environment node
  */
 
 import { describe, it, expect } from 'vitest';

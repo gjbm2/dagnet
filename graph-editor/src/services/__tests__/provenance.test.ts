@@ -5,6 +5,7 @@
  * and that stale evidence data (n, k) is NOT included.
  * 
  * @group unit
+ * @vitest-environment node
  */
 
 import { describe, it, expect } from 'vitest';

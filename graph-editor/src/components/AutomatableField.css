@@ -1,0 +1,104 @@
+/* AutomatableField Component Styles */
+
+/* Field wrapper with icon button - minimal, inline */
+.automatable-field-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: transform 0.3s ease-out;
+}
+
+/* Animation: Expand/Shrink (optical effect only - no layout shift) */
+.automatable-field-wrapper.animate-update {
+  animation: pulse-expand 300ms ease-out;
+}
+
+@keyframes pulse-expand {
+  0% { 
+    transform: scale(1); 
+  }
+  50% { 
+    transform: scale(1.05); 
+  }
+  100% { 
+    transform: scale(1); 
+  }
+}
+
+/* Child element takes remaining space */
+.automatable-field-wrapper > *:not(.override-toggle) {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Override toggle button - inline after the field */
+.override-toggle {
+  flex-shrink: 0;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  border-radius: 3px;
+  z-index: 1;
+}
+
+/* Disabled state (not overridden) - greyed out, not clickable */
+.override-toggle.disabled {
+  opacity: 0.25;
+  cursor: default;
+  pointer-events: none;
+  transition: none;  /* No transition when disabled */
+}
+
+.override-toggle.disabled svg {
+  color: #9ca3af;  /* Light grey */
+}
+
+/* Enabled state (overridden) - dark grey/black */
+.override-toggle:not(.disabled) {
+  transition: transform 0.2s ease, background-color 0.2s ease;  /* Only transition hover effects */
+}
+
+.override-toggle:not(.disabled) svg {
+  color: #374151;  /* Dark grey */
+}
+
+.override-toggle:not(.disabled):hover {
+  transform: scale(1.15);
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.override-toggle:not(.disabled):active {
+  transform: scale(1.05);
+}
+
+/* Focus state for accessibility */
+.override-toggle:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .automatable-field-label {
+    color: #f9fafb;
+  }
+  
+  .override-toggle.disabled svg {
+    color: #6b7280;  /* Medium grey in dark mode */
+  }
+  
+  .override-toggle:not(.disabled) svg {
+    color: #d1d5db;  /* Light grey in dark mode */
+  }
+  
+  .override-toggle:not(.disabled):hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+}
+

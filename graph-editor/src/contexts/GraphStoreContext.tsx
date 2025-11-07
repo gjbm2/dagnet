@@ -10,6 +10,10 @@ export interface GraphStore {
   graph: GraphData | null;
   setGraph: (graph: GraphData) => void;
   
+  // Auto-update flag (for animation suppression)
+  isAutoUpdating: boolean;
+  setAutoUpdating: (updating: boolean) => void;
+  
   // History
   history: GraphData[];
   historyIndex: number;
@@ -34,6 +38,12 @@ export function createGraphStore(): GraphStoreHook {
     graph: null,
     setGraph: (graph: GraphData) => {
       set({ graph });
+    },
+    
+    // Auto-update flag
+    isAutoUpdating: false,
+    setAutoUpdating: (updating: boolean) => {
+      set({ isAutoUpdating: updating });
     },
     
     // History management

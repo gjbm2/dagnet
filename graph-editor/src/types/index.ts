@@ -344,6 +344,8 @@ export interface ProbabilityParam {
   id?: string; // Reference to parameter file (FK to parameter-{id}.yaml)
   distribution?: 'normal' | 'beta' | 'uniform';
   evidence?: Evidence; // Observations from data sources
+  query?: string; // Query expression for data retrieval (e.g., path constraints)
+  query_overridden?: boolean; // If true, query was manually edited
 }
 
 export interface CostParam {
@@ -354,10 +356,14 @@ export interface CostParam {
   distribution_overridden?: boolean; // If true, distribution was manually edited
   id?: string; // Reference to cost parameter file (FK to parameter-{id}.yaml)
   distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform' | 'beta';
+  evidence?: Evidence; // Observations from data sources
+  query?: string; // Query expression for data retrieval (e.g., path constraints)
+  query_overridden?: boolean; // If true, query was manually edited
 }
 
 export interface Condition {
   visited: string[]; // Array of node IDs that must be visited
+  query?: string; // Query expression for conditionality (alternative to visited array)
 }
 
 export interface ConditionalProbability {
@@ -405,19 +411,28 @@ export interface NodeEntry {
 
 export interface CaseVariant {
   name: string;
+  name_overridden?: boolean; // If true, name was manually edited
   weight: number; // [0,1], must sum to 1.0 for all variants in case
+  weight_overridden?: boolean; // If true, weight was manually edited
   description?: string;
+  description_overridden?: boolean; // If true, description was manually edited
+  edges?: string[]; // Graph-only: edges that use this variant
 }
 
 export interface GraphNode {
   uuid: UUID;       // System-generated UUID
   id: HumanId;      // Human-readable identifier
   label?: string;
+  label_overridden?: boolean;  // Override flag for auto-sync
   description?: string;
+  description_overridden?: boolean;  // Override flag for auto-sync
   tags?: string[];
   type?: NodeType; // default 'normal'
   absorbing?: boolean; // default false
   outcome_type?: OutcomeType;
+  outcome_type_overridden?: boolean; // Override flag for auto-sync
+  event_id?: string; // Reference to event file (FK to event-{id}.yaml)
+  event_id_overridden?: boolean; // Override flag for auto-sync
   entry?: NodeEntry;
   costs?: Costs;
   residual_behavior?: ResidualBehavior;
@@ -425,6 +440,7 @@ export interface GraphNode {
   case?: {
     id: string; // Reference to case file (FK to case-{id}.yaml)
     status: CaseStatus;
+    status_overridden?: boolean; // Override flag for auto-sync
     variants: CaseVariant[];
   };
 }
@@ -442,6 +458,7 @@ export interface GraphEdge {
   fromHandle?: string;
   toHandle?: string;
   description?: string;
+  description_overridden?: boolean;  // Override flag for auto-sync
   p?: ProbabilityParam; // Base probability (fallback when no conditions match)
   conditional_p?: ConditionalProbability[];
   weight_default?: number; // >= 0
@@ -451,6 +468,8 @@ export interface GraphEdge {
   case_variant?: string;
   case_id?: string;
   display?: EdgeDisplay;
+  query?: string; // Query expression for data retrieval (e.g., path constraints)
+  query_overridden?: boolean; // If true, query was manually edited
 }
 
 export interface Policies {
