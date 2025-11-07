@@ -2,7 +2,7 @@
 
 **Phase:** 1B (Phase 0 Complete, Phase 1 UI in progress)  
 **Start Date:** 2025-11-05  
-**Status:** 🟡 Phase 1 - 70% Complete (UI done, wiring pending)
+**Status:** 🟡 Phase 1 - 85% Complete (Properties Panel refactored, QueryEditor needs polish)
 
 This directory contains all design documentation for the Data Connections system implementation.
 
@@ -29,7 +29,7 @@ This directory contains all design documentation for the Data Connections system
 - Yellow Calendar icon theme
 - 0 linter errors
 
-**Phase 1B Partial (Nov 7, 2025):** 🟡 **70% Complete**
+**Phase 1B Partial (Nov 7, 2025):** 🟡 **85% Complete**
 - ✅ Lightning Menu component (React Portal, z-index fixed)
 - ✅ Node & Edge Context Menus extracted (submenu pattern)
 - ✅ DataOperationsService created (centralized orchestration)
@@ -38,17 +38,20 @@ This directory contains all design documentation for the Data Connections system
 - ✅ Fixed 5 critical bugs (selector bouncing, duplicate writes, data loss)
 - ✅ Provenance tracking (manual edits timestamped with source)
 - ✅ Schemas updated (edited_at, author fields)
-- ⏳ **BLOCKED:** Conditional p & events (need Properties Panel updates)
+- ✅ **Properties Panel Refactoring Complete:**
+  - AutomatableField component (override icons, animations, dirty state)
+  - ParameterSection component (generalized parameter UI)
+  - PropertiesPanel reduced 3129 → 2357 lines (25% reduction)
+  - QueryExpressionEditor prototype (Monaco + chips, needs polish)
+  - Consistent styling and right-edge alignment
+- ⏳ **IN PROGRESS:** QueryExpressionEditor polish and refinement
 
-**Remaining Phase 1 Work:** ~18-22 hours
-- 1C: Properties Panel updates (conditional p, events, evidence, overrides) - **PRIORITY** (6-8 hrs)
-        - want a standard class to wrap fields which shows override icons, etc.
-        - animate when we get auto-updated
-        - query/connector class (chips in chips, and pre-load Monaco)
-- 1D: Query String Builder (MSMDC algorithm) (6-8 hrs)
-- 1E: Top Menu "Data" (batch operations) (2-3 hrs)
-- 1F: Connection Settings UI (needs design) (4-5 hrs)
-- 1G: Get connection actually working for Amplitude, Sheets
+**Remaining Phase 1 Work:** ~12-16 hours
+- 1C: QueryExpressionEditor polish (refinements, generalization) (2-3 hrs)
+- 1E: Graph auto-updates & Query String Builder (MSMDC algorithm) (6-8 hrs)
+- 1G: Connection Settings UI (needs design) (4-5 hrs)
+- 1H: Get connection actually working for Amplitude, Sheets
+- 1F: Top Menu "Data" (batch operations) (2-3 hrs)
 
 ## PHASE 2 work: *** NEEDS DETAILING ***
 
