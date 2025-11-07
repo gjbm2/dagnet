@@ -6,7 +6,7 @@
  * that are referenced in conditional probability conditions.
  */
 
-import type { Graph, GraphEdge, GraphNode } from './types';
+import type { Graph, GraphEdge, GraphNode } from '../types';
 
 export interface RunnerResult {
   nodeProbabilities: Map<string, number>;

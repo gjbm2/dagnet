@@ -1,5 +1,5 @@
 // Color palette and utilities for conditional edges
-import { Graph, GraphEdge } from './types';
+import { Graph, GraphEdge } from '../types';
 
 // Color palette for conditional edges
 // Avoids blue (#007bff - reserved for selections) and purple (#C4B5FD, #8b5cf6 - reserved for cases)

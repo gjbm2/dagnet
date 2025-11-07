@@ -130,7 +130,7 @@ describe('DataOperationsService Integration Tests', () => {
       expect(latestValue).not.toHaveProperty('k');
 
       // Step 2: Connect and get back from file
-      edge.p.id = 'test-prob-param';
+      edge.p!.id = 'test-prob-param';
       const graphWithConnection = createTestGraph({ edges: [edge] });
 
       await dataOperationsService.getParameterFromFile({
@@ -184,7 +184,7 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       // Get back
-      edge.p.id = 'locked-param';
+      edge.p!.id = 'locked-param';
       await dataOperationsService.getParameterFromFile({
         paramId: 'locked-param',
         edgeId: 'edge-1',
@@ -234,7 +234,7 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       const fileAfterPut = fileRegistry.getFile('parameter-no-stale-data');
-      const latestValue = fileAfterPut.data.values[fileAfterPut.data.values.length - 1];
+      const latestValue = fileAfterPut!.data.values[fileAfterPut!.data.values.length - 1];
 
       expect(latestValue.mean).toBe(0.45);
       expect(latestValue).not.toHaveProperty('n');
@@ -278,7 +278,7 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       const fileAfterPut = fileRegistry.getFile('parameter-cost-gbp-param');
-      const latestValue = fileAfterPut.data.values[fileAfterPut.data.values.length - 1];
+      const latestValue = fileAfterPut!.data.values[fileAfterPut!.data.values.length - 1];
 
       expect(latestValue).toMatchObject({
         mean: 14.8,
@@ -288,7 +288,7 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       // Get back
-      edge.cost_gbp.id = 'cost-gbp-param';
+      edge.cost_gbp!.id = 'cost-gbp-param';
       await dataOperationsService.getParameterFromFile({
         paramId: 'cost-gbp-param',
         edgeId: 'edge-1',
@@ -336,7 +336,7 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       // Get back
-      edge.cost_time.id = 'checkout-duration';
+      edge.cost_time!.id = 'checkout-duration';
       await dataOperationsService.getParameterFromFile({
         paramId: 'checkout-duration',
         edgeId: 'edge-1',
@@ -400,7 +400,7 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       const fileP = fileRegistry.getFile('parameter-param-p');
-      const latestP = fileP.data.values[fileP.data.values.length - 1];
+      const latestP = fileP!.data.values[fileP!.data.values.length - 1];
       expect(latestP.mean).toBe(0.45);
       expect(latestP.distribution).toBe('beta');
 
@@ -413,16 +413,16 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       const fileTime = fileRegistry.getFile('parameter-param-time');
-      const latestTime = fileTime.data.values[fileTime.data.values.length - 1];
+      const latestTime = fileTime!.data.values[fileTime!.data.values.length - 1];
       expect(latestTime.mean).toBe(310);
       expect(latestTime.distribution).toBe('lognormal');
 
       // Verify no cross-contamination
-      const allPValues = fileP.data.values.map((v: any) => v.mean);
+      const allPValues = fileP!.data.values.map((v: any) => v.mean);
       expect(allPValues).not.toContain(310);
       expect(allPValues).not.toContain(14.8);
 
-      const allTimeValues = fileTime.data.values.map((v: any) => v.mean);
+      const allTimeValues = fileTime!.data.values.map((v: any) => v.mean);
       expect(allTimeValues).not.toContain(0.45);
       expect(allTimeValues).not.toContain(14.8);
     });
@@ -453,7 +453,7 @@ describe('DataOperationsService Integration Tests', () => {
       
       // File should not be updated
       const file = fileRegistry.getFile('parameter-param-c');
-      expect(file.data.values).toHaveLength(0);
+      expect(file!.data.values).toHaveLength(0);
     });
   });
 
@@ -640,7 +640,7 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       const fileAfterPut = fileRegistry.getFile('case-my-test');
-      const latestSchedule = fileAfterPut.data.case.schedules[fileAfterPut.data.case.schedules.length - 1];
+      const latestSchedule = fileAfterPut!.data.case.schedules[fileAfterPut!.data.case.schedules.length - 1];
 
       expect(latestSchedule).toMatchObject({
         variants: [

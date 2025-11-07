@@ -79,12 +79,12 @@ describe('Connection ID Preservation', () => {
       
       // Apply changes
       const updatedEdge = structuredClone(edge);
-      applyChanges(updatedEdge, result.changes);
+      applyChanges(updatedEdge, result.changes || []);
       
       // After data update, ID should still be there
-      expect(updatedEdge.p.id).toBe('homepage-to-product');
-      expect(updatedEdge.p.mean).toBe(0.45);  // Data updated
-      expect(updatedEdge.p.stdev).toBe(0.03);
+      expect(updatedEdge.p!.id).toBe('homepage-to-product');
+      expect(updatedEdge.p!.mean).toBe(0.45);  // Data updated
+      expect(updatedEdge.p!.stdev).toBe(0.03);
     });
     
     it('p.id preserved after manual preservation step', async () => {
@@ -109,7 +109,7 @@ describe('Connection ID Preservation', () => {
       );
       
       const updatedEdge = structuredClone(edge);
-      applyChanges(updatedEdge, result.changes);
+      applyChanges(updatedEdge, result.changes || []);
       
       // Simulate preservation step (as done in dataOperationsService)
       const paramId = 'test-param';
@@ -125,8 +125,8 @@ describe('Connection ID Preservation', () => {
         }
       }
       
-      expect(updatedEdge.p.id).toBe('test-param');
-      expect(updatedEdge.p.mean).toBe(0.45);
+      expect(updatedEdge.p!.id).toBe('test-param');
+      expect(updatedEdge.p!.mean).toBe(0.45);
     });
     
     it('cost_gbp.id preserved separately from p.id', async () => {
@@ -150,20 +150,20 @@ describe('Connection ID Preservation', () => {
       );
       
       const updatedEdge = structuredClone(edge);
-      applyChanges(updatedEdge, result.changes);
+      applyChanges(updatedEdge, result.changes || []);
       
       // Preserve cost_gbp.id
       if (result.changes && result.changes.length > 0) {
         const updatedSlot = result.changes[0]?.field.split('.')[0];
-        if (updatedSlot === 'cost_gbp' && !updatedEdge.cost_gbp.id) {
-          updatedEdge.cost_gbp.id = 'param-gbp';
+        if (updatedSlot === 'cost_gbp' && !updatedEdge.cost_gbp!.id) {
+          updatedEdge.cost_gbp!.id = 'param-gbp';
         }
       }
       
       // Both IDs should be preserved
-      expect(updatedEdge.p.id).toBe('param-p');
-      expect(updatedEdge.cost_gbp.id).toBe('param-gbp');
-      expect(updatedEdge.cost_gbp.mean).toBe(15.0);
+      expect(updatedEdge.p!.id).toBe('param-p');
+      expect(updatedEdge.cost_gbp!.id).toBe('param-gbp');
+      expect(updatedEdge.cost_gbp!.mean).toBe(15.0);
     });
     
     it('cost_time.id preserved', async () => {
@@ -186,18 +186,18 @@ describe('Connection ID Preservation', () => {
       );
       
       const updatedEdge = structuredClone(edge);
-      applyChanges(updatedEdge, result.changes);
+      applyChanges(updatedEdge, result.changes || []);
       
       // Preserve
       if (result.changes && result.changes.length > 0) {
         const updatedSlot = result.changes[0]?.field.split('.')[0];
-        if (updatedSlot === 'cost_time' && !updatedEdge.cost_time.id) {
-          updatedEdge.cost_time.id = 'checkout-duration';
+        if (updatedSlot === 'cost_time' && !updatedEdge.cost_time!.id) {
+          updatedEdge.cost_time!.id = 'checkout-duration';
         }
       }
       
-      expect(updatedEdge.cost_time.id).toBe('checkout-duration');
-      expect(updatedEdge.cost_time.mean).toBe(310);
+      expect(updatedEdge.cost_time!.id).toBe('checkout-duration');
+      expect(updatedEdge.cost_time!.mean).toBe(310);
     });
     
     it('p.id survives multiple sequential updates', async () => {
@@ -219,20 +219,20 @@ describe('Connection ID Preservation', () => {
       // First update
       let result = await updateManager.handleFileToGraph(paramFile1, edge, 'UPDATE', 'parameter');
       let updatedEdge = structuredClone(edge);
-      applyChanges(updatedEdge, result.changes);
-      if (!updatedEdge.p.id) updatedEdge.p.id = 'test-param';
+      applyChanges(updatedEdge, result.changes || []);
+      if (!updatedEdge.p!.id) updatedEdge.p!.id = 'test-param';
       
-      expect(updatedEdge.p.id).toBe('test-param');
-      expect(updatedEdge.p.mean).toBe(0.45);
+      expect(updatedEdge.p!.id).toBe('test-param');
+      expect(updatedEdge.p!.mean).toBe(0.45);
       
       // Second update
       result = await updateManager.handleFileToGraph(paramFile2, updatedEdge, 'UPDATE', 'parameter');
       const updatedEdge2 = structuredClone(updatedEdge);
-      applyChanges(updatedEdge2, result.changes);
-      if (!updatedEdge2.p.id) updatedEdge2.p.id = 'test-param';
+      applyChanges(updatedEdge2, result.changes || []);
+      if (!updatedEdge2.p!.id) updatedEdge2.p!.id = 'test-param';
       
-      expect(updatedEdge2.p.id).toBe('test-param');
-      expect(updatedEdge2.p.mean).toBe(0.50);
+      expect(updatedEdge2.p!.id).toBe('test-param');
+      expect(updatedEdge2.p!.mean).toBe(0.50);
     });
   });
   
@@ -262,7 +262,7 @@ describe('Connection ID Preservation', () => {
       );
       
       const updatedNode = structuredClone(node);
-      applyChanges(updatedNode, result.changes);
+      applyChanges(updatedNode, result.changes || []);
       
       // Preserve node.id
       if (!updatedNode.id) {
@@ -286,7 +286,7 @@ describe('Connection ID Preservation', () => {
       // First update
       let result = await updateManager.handleFileToGraph(nodeFile1, node, 'UPDATE', 'node');
       let updatedNode = structuredClone(node);
-      applyChanges(updatedNode, result.changes);
+      applyChanges(updatedNode, result.changes || []);
       if (!updatedNode.id) updatedNode.id = 'my-node';
       
       expect(updatedNode.id).toBe('my-node');
@@ -295,7 +295,7 @@ describe('Connection ID Preservation', () => {
       // Second update
       result = await updateManager.handleFileToGraph(nodeFile2, updatedNode, 'UPDATE', 'node');
       const updatedNode2 = structuredClone(updatedNode);
-      applyChanges(updatedNode2, result.changes);
+      applyChanges(updatedNode2, result.changes || []);
       if (!updatedNode2.id) updatedNode2.id = 'my-node';
       
       expect(updatedNode2.id).toBe('my-node');
@@ -342,16 +342,16 @@ describe('Connection ID Preservation', () => {
       );
       
       const updatedNode = structuredClone(node);
-      applyChanges(updatedNode, result.changes);
+      applyChanges(updatedNode, result.changes || []);
       
       // Preserve node.id and node.case.id
       if (!updatedNode.id) updatedNode.id = 'checkout';
-      if (!updatedNode.case) updatedNode.case = {};
+      if (!updatedNode.case) updatedNode.case = { id: '', status: 'active', variants: [] };
       if (!updatedNode.case.id) updatedNode.case.id = 'checkout-test-2025';
       
-      expect(updatedNode.case.id).toBe('checkout-test-2025');
-      expect(updatedNode.case.status).toBe('paused');
-      expect(updatedNode.case.variants).toHaveLength(2);
+      expect(updatedNode.case!.id).toBe('checkout-test-2025');
+      expect(updatedNode.case!.status).toBe('paused');
+      expect(updatedNode.case!.variants).toHaveLength(2);
     });
     
     it('both node.id and case.id preserved together', async () => {
@@ -387,16 +387,16 @@ describe('Connection ID Preservation', () => {
       );
       
       const updatedNode = structuredClone(node);
-      applyChanges(updatedNode, result.changes);
+      applyChanges(updatedNode, result.changes || []);
       
       // Preserve both
       if (!updatedNode.id) updatedNode.id = 'checkout-node';
-      if (!updatedNode.case) updatedNode.case = {};
+      if (!updatedNode.case) updatedNode.case = { id: '', status: 'active', variants: [] };
       if (!updatedNode.case.id) updatedNode.case.id = 'my-case';
       
       expect(updatedNode.id).toBe('checkout-node');
-      expect(updatedNode.case.id).toBe('my-case');
-      expect(updatedNode.case.variants).toHaveLength(2);
+      expect(updatedNode.case!.id).toBe('my-case');
+      expect(updatedNode.case!.variants).toHaveLength(2);
     });
     
     it('case.id survives multiple updates', async () => {
@@ -429,22 +429,22 @@ describe('Connection ID Preservation', () => {
       // First update
       let result = await updateManager.handleFileToGraph(caseFile1, node, 'UPDATE', 'case');
       let updatedNode = structuredClone(node);
-      applyChanges(updatedNode, result.changes);
-      if (!updatedNode.case) updatedNode.case = {};
+      applyChanges(updatedNode, result.changes || []);
+      if (!updatedNode.case) updatedNode.case = { id: '', status: 'active', variants: [] };
       if (!updatedNode.case.id) updatedNode.case.id = 'test-case';
       
-      expect(updatedNode.case.id).toBe('test-case');
-      expect(updatedNode.case.variants[0].weight).toBe(0.5);
+      expect(updatedNode.case!.id).toBe('test-case');
+      expect(updatedNode.case!.variants[0].weight).toBe(0.5);
       
       // Second update
       result = await updateManager.handleFileToGraph(caseFile2, updatedNode, 'UPDATE', 'case');
       const updatedNode2 = structuredClone(updatedNode);
-      applyChanges(updatedNode2, result.changes);
-      if (!updatedNode2.case) updatedNode2.case = {};
+      applyChanges(updatedNode2, result.changes || []);
+      if (!updatedNode2.case) updatedNode2.case = { id: '', status: 'active', variants: [] };
       if (!updatedNode2.case.id) updatedNode2.case.id = 'test-case';
       
-      expect(updatedNode2.case.id).toBe('test-case');
-      expect(updatedNode2.case.variants[0].weight).toBe(0.3);
+      expect(updatedNode2.case!.id).toBe('test-case');
+      expect(updatedNode2.case!.variants[0].weight).toBe(0.3);
     });
   });
   
@@ -474,7 +474,7 @@ describe('Connection ID Preservation', () => {
       // Simulate object replacement (worst case)
       const updatedEdge = structuredClone(edge);
       updatedEdge.p = {};  // Complete replacement
-      applyChanges(updatedEdge, result.changes);
+      applyChanges(updatedEdge, result.changes || []);
       
       // Preservation step
       if (!updatedEdge.p.id) {
@@ -508,7 +508,7 @@ describe('Connection ID Preservation', () => {
       );
       
       const updatedEdge = structuredClone(edge);
-      applyChanges(updatedEdge, result.changes);
+      applyChanges(updatedEdge, result.changes || []);
       
       // Preservation
       if (!updatedEdge.p) updatedEdge.p = {};

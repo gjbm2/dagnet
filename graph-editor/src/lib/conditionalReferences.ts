@@ -13,7 +13,7 @@
  * Note: Uses human-readable IDs (edge.id, node.id), not system UUIDs
  */
 
-import type { GraphEdge, ConditionalProbability, Graph } from './types';
+import type { GraphEdge, ConditionalProbability, Graph } from '../types';
 
 /**
  * Generate a stable reference for a conditional probability parameter.

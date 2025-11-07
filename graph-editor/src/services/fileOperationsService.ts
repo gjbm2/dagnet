@@ -507,7 +507,7 @@ class FileOperationsService {
    * Auto-update index file when a data file changes
    * Ensures index stays in sync with file CRUD operations
    */
-  private async updateIndexFile(file: FileState): Promise<void> {
+  private async updateIndexFile(file: import('@/types').FileState): Promise<void> {
     // Skip if this IS an index file
     if (file.fileId.endsWith('-index')) return;
     
@@ -533,9 +533,9 @@ class FileOperationsService {
           indexFileId,
           file.type,
           { 
-            repository: file.source.repository, 
+            repository: file.source?.repository || 'local', 
             path: `${pluralKey}-index.yaml`, 
-            branch: file.source.branch || 'main' 
+            branch: file.source?.branch || 'main' 
           },
           indexData
         );
@@ -548,7 +548,7 @@ class FileOperationsService {
       const existingIdx = entries.findIndex((e: any) => e.id === file.data.id);
       const entry: any = {
         id: file.data.id,
-        file_path: file.source.path || `${pluralKey}/${file.data.id}.yaml`,
+        file_path: file.source?.path || `${pluralKey}/${file.data.id}.yaml`,
         status: file.data.metadata?.status || file.data.status || 'active'
       };
       
@@ -598,7 +598,7 @@ class FileOperationsService {
   /**
    * Remove entry from index file when a data file is deleted
    */
-  private async removeFromIndexFile(file: FileState): Promise<void> {
+  private async removeFromIndexFile(file: import('@/types').FileState): Promise<void> {
     // Skip if this IS an index file
     if (file.fileId.endsWith('-index')) return;
     

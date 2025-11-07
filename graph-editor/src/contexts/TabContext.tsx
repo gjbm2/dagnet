@@ -150,6 +150,15 @@ class FileRegistry {
   }
 
   /**
+   * Register a file directly (for testing)
+   */
+  async registerFile(fileId: string, file: FileState): Promise<void> {
+    this.files.set(fileId, file);
+    await db.files.put(file);
+    this.notifyListeners(fileId, file);
+  }
+
+  /**
    * Update file data
    */
   async updateFile(fileId: string, newData: any): Promise<void> {

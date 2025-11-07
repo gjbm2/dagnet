@@ -44,7 +44,7 @@ describe('values[latest] Timestamp Resolution', () => {
       expect(result.success).toBe(true);
       
       // Should get March entry (mean: 0.30), not last in array
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange).toBeDefined();
       expect(meanChange!.newValue).toBe(0.30);
     });
@@ -69,7 +69,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange!.newValue).toBe(0.50);  // May entry
     });
     
@@ -93,7 +93,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange!.newValue).toBe(0.50);  // First in array is also most recent
     });
   });
@@ -121,7 +121,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange!.newValue).toBe(0.42);  // Entry with timestamp wins
     });
     
@@ -144,7 +144,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       // When all are epoch (0), the first one in the sorted array (which is last after sort) wins
       expect(meanChange!.newValue).toBe(0.42);  // First after descending sort
     });
@@ -170,7 +170,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange!.newValue).toBe(0.50);  // May (most recent timestamp)
     });
   });
@@ -210,7 +210,7 @@ describe('values[latest] Timestamp Resolution', () => {
       }
       
       // Change edge value so that getting from file creates a change
-      edge.p.mean = 0.42; // Different from file's latest (0.50)
+      edge.p!.mean = 0.42; // Different from file's latest (0.50)
       
       const getResult = await updateManager.handleFileToGraph(
         paramFile,
@@ -220,7 +220,7 @@ describe('values[latest] Timestamp Resolution', () => {
       );
       
       // Should retrieve the newly added value (most recent timestamp)
-      const meanChange = getResult.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = getResult.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange!.newValue).toBe(0.50);  // Our new value from file
     });
     
@@ -235,8 +235,8 @@ describe('values[latest] Timestamp Resolution', () => {
       // Put v1
       edge.p = { id: 'multi-put', mean: 0.40, distribution: 'beta' };
       let result = await updateManager.handleGraphToFile(edge, paramFile, 'APPEND', 'parameter', { validateOnly: true });
-      if (result.changes && result.changes.length > 0) {
-        paramFile.values.push(result.changes[0].newValue);
+      if (result.changes && result.changes!.length > 0) {
+        paramFile.values.push(result.changes![0].newValue);
       }
       
       // Small delay to ensure timestamp is different
@@ -245,8 +245,8 @@ describe('values[latest] Timestamp Resolution', () => {
       // Put v2
       edge.p = { id: 'multi-put', mean: 0.45, distribution: 'beta' };
       result = await updateManager.handleGraphToFile(edge, paramFile, 'APPEND', 'parameter', { validateOnly: true });
-      if (result.changes && result.changes.length > 0) {
-        paramFile.values.push(result.changes[0].newValue);
+      if (result.changes && result.changes!.length > 0) {
+        paramFile.values.push(result.changes![0].newValue);
       }
       
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -254,8 +254,8 @@ describe('values[latest] Timestamp Resolution', () => {
       // Put v3
       edge.p = { id: 'multi-put', mean: 0.50, distribution: 'beta' };
       result = await updateManager.handleGraphToFile(edge, paramFile, 'APPEND', 'parameter', { validateOnly: true });
-      if (result.changes && result.changes.length > 0) {
-        paramFile.values.push(result.changes[0].newValue);
+      if (result.changes && result.changes!.length > 0) {
+        paramFile.values.push(result.changes![0].newValue);
       }
       
       // Change edge value so that getting from file creates a change
@@ -268,7 +268,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = getResult.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = getResult.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange!.newValue).toBe(0.50);  // Most recent (v3) from file
     });
   });
@@ -295,7 +295,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange!.newValue).toBe(0.42);
     });
     
@@ -315,7 +315,7 @@ describe('values[latest] Timestamp Resolution', () => {
       );
       
       // Should not error, but no mean change expected
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange).toBeUndefined();
     });
     
@@ -339,7 +339,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       // After descending sort, first with this timestamp wins
       expect(meanChange!.newValue).toBe(0.42);
     });
@@ -363,7 +363,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'p.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'p.mean');
       expect(meanChange!.newValue).toBe(0.50);  // Far future date
     });
   });
@@ -393,7 +393,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'cost_gbp.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'cost_gbp.mean');
       expect(meanChange!.newValue).toBe(12.5);
     });
     
@@ -417,7 +417,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes.find((c: any) => c.field === 'cost_time.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'cost_time.mean');
       expect(meanChange!.newValue).toBe(320);
     });
   });
@@ -469,7 +469,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'case'
       );
       
-      const variantsChange = result.changes.find((c: any) => c.field === 'case.variants');
+      const variantsChange = result.changes!.find((c: any) => c.field === 'case.variants');
       expect(variantsChange).toBeDefined();
       expect(variantsChange!.newValue).toEqual([
         { name: 'a', name_overridden: false, weight: 0.5, weight_overridden: false },
