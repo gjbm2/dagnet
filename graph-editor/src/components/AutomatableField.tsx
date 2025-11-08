@@ -142,7 +142,7 @@ export function AutomatableField({
       animationTimeoutRef.current = setTimeout(() => {
         setShouldAnimate(false);
         animationTimeoutRef.current = undefined;
-      }, 300);
+      }, 600);
     }
     
     // Update value ref to track changes

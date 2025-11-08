@@ -11,14 +11,14 @@
 
 /* Animation: Expand/Shrink (optical effect only - no layout shift) */
 .automatable-field-wrapper.animate-update {
-  animation: pulse-expand 300ms ease-out;
+  animation: pulse-expand 600ms ease-out;
 }
 
 @keyframes pulse-expand {
   0% { 
     transform: scale(1); 
   }
-  50% { 
+  40% { 
     transform: scale(1.05); 
   }
   100% { 
@@ -96,7 +96,7 @@
 }
 
 .automatable-field-input.animate-update {
-  animation: pulse-expand 300ms ease-out;
+  animation: pulse-expand 600ms ease-out;
 }
 
 /* Dark mode support */
