@@ -1,8 +1,8 @@
 # PROJECT CONNECT: Data Connections System
 
-**Phase:** 1D-E (Phase 0 Complete, Phase 1 UI in progress)  
+**Phase:** 1F (Phase 0 Complete, Phase 1E Complete, MSMDC Integration Done)  
 **Start Date:** 2025-11-05  
-**Status:** 🟢 Phase 1 - 90% Complete (Python infrastructure ready, MSMDC next)
+**Status:** 🟢 Phase 1 - 95% Complete (MSMDC live and integrated)
 
 This directory contains all design documentation for the Data Connections system implementation.
 
@@ -52,24 +52,33 @@ This directory contains all design documentation for the Data Connections system
   - Test infrastructure (199 TS tests + 116 Python tests passing)
   - Mock mode for frontend-only development
   - Documentation complete with multi-machine setup guide
-- ✅ **MSMDC Algorithm Complete** (1E done - Nov 8, 2025):
+- ✅ **MSMDC Algorithm Complete & Integrated** (1E done - Nov 8, 2025):
   - Witness-guided algorithm (no exponential path enumeration)
   - Cost-weighted literal selection for optimal query generation
   - Full parameter coverage (base p, conditional p, costs, case variants)
   - OR semantics via `visitedAny` term for complex funnel construction
   - Condition rewriting for cost-effectiveness
-  - 18 MSMDC tests passing, covering complex graph topologies
+  - Multi-parent edge detection (unconditional edges with alternate paths)
+  - 20 MSMDC tests passing, covering complex graph topologies
   - API endpoints: `/api/generate-query`, `/api/generate-all-queries`, `/api/generate-all-parameters`
   - Monaco editor integration with autocomplete for `visitedAny`
+  - **Live Integration Complete**:
+    - Automatic query regeneration on topology changes (edge/node add/delete)
+    - UUID → human-readable ID resolution in generated queries
+    - Stale closure fix for graph updates (explicit oldGraph passing)
+    - Real-time animation (600ms pulse) when queries auto-update
+    - AutomatableField triggers animation via `isAutoUpdating` flag
+    - Query updates visible in PropertiesPanel without manual refresh
+    - Toast notifications for query regeneration status
 - ⚠️ **TECHNICAL DEBT**: See `CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for:
   - Conditional probability migration issues (backward compatibility hacks)
   - Graph-to-graph update architecture requirements (UpdateManager patterns)
   - Lost features: complementary conditional creation, color picker
   - Estimated cleanup: 12-16 hours
 
-**Remaining Phase 1 Work:** ~14-19 hours
-- 1F: Graph auto-updates & Query String Builder integration (2-3 hrs) **← NEXT**
-- 1G: Connection Settings UI (needs design) (4-5 hrs)
+**Remaining Phase 1 Work:** ~10-13 hours
+- ~~1F: Graph auto-updates & Query String Builder integration~~ ✅ **COMPLETE**
+- 1G: Connection Settings UI (needs design) (4-5 hrs) **← NEXT**
 - 1H: Get connection actually working for Amplitude, Sheets (6-8 hrs)
 - 1I: Top Menu "Data" (batch operations) (2-3 hrs)
 
