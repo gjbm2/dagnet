@@ -22,9 +22,12 @@ let pythonServerAvailable = false;
 
 beforeAll(async () => {
   try {
+    console.log('🔍 Checking for Python server on http://localhost:9000/...');
     const response = await fetch('http://localhost:9000/');
     pythonServerAvailable = response.ok;
+    console.log(`✅ Python server ${pythonServerAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'}`);
   } catch (e) {
+    console.log(`❌ Python server connection failed: ${e}`);
     pythonServerAvailable = false;
   }
 }, 5000);
@@ -79,14 +82,21 @@ describe('GraphComputeClient - Mock Mode', () => {
 describe('GraphComputeClient - Real Python Backend', () => {
   const realClient = new GraphComputeClient('http://localhost:9000', false);
 
-  it.skipIf(!pythonServerAvailable)('should connect to Python server', async () => {
+  it('should connect to Python server', async () => {
+    if (!pythonServerAvailable) {
+      console.log('⏭️  Skipping: Python server not available');
+      return;
+    }
+    
     const result = await realClient.health();
     
     expect(result.status).toBe('ok');
     expect(result.service).toBe('dagnet-graph-compute');
   });
 
-  it.skipIf(!pythonServerAvailable)('should parse simple query', async () => {
+  it('should parse simple query', async () => {
+    if (!pythonServerAvailable) return;
+    
     const result = await realClient.parseQuery('from(a).to(b)');
     
     expect(result.from_node).toBe('a');
@@ -95,7 +105,9 @@ describe('GraphComputeClient - Real Python Backend', () => {
     expect(result.visited).toEqual([]);
   });
 
-  it.skipIf(!pythonServerAvailable)('should parse complex query', async () => {
+  it('should parse complex query', async () => {
+    if (!pythonServerAvailable) return;
+    
     const queryString = 'from(start).to(end).visited(checkpoint).exclude(detour)';
     const result = await realClient.parseQuery(queryString);
     
@@ -105,7 +117,9 @@ describe('GraphComputeClient - Real Python Backend', () => {
     expect(result.exclude).toContain('detour');
   });
 
-  it.skipIf(!pythonServerAvailable)('should parse query with context', async () => {
+  it('should parse query with context', async () => {
+    if (!pythonServerAvailable) return;
+    
     const queryString = 'from(a).to(b).context(device:mobile)';
     const result = await realClient.parseQuery(queryString);
     
@@ -114,7 +128,9 @@ describe('GraphComputeClient - Real Python Backend', () => {
     expect(result.context[0].value).toBe('mobile');
   });
 
-  it.skipIf(!pythonServerAvailable)('should parse query with case', async () => {
+  it('should parse query with case', async () => {
+    if (!pythonServerAvailable) return;
+    
     const queryString = 'from(a).to(b).case(test-1:treatment)';
     const result = await realClient.parseQuery(queryString);
     
@@ -123,19 +139,25 @@ describe('GraphComputeClient - Real Python Backend', () => {
     expect(result.cases[0].value).toBe('treatment');
   });
 
-  it.skipIf(!pythonServerAvailable)('should handle invalid query syntax', async () => {
+  it('should handle invalid query syntax', async () => {
+    if (!pythonServerAvailable) return;
+    
     await expect(
       realClient.parseQuery('invalid query')
     ).rejects.toThrow();
   });
 
-  it.skipIf(!pythonServerAvailable)('should handle missing from clause', async () => {
+  it('should handle missing from clause', async () => {
+    if (!pythonServerAvailable) return;
+    
     await expect(
       realClient.parseQuery('to(b)')
     ).rejects.toThrow();
   });
 
-  it.skipIf(!pythonServerAvailable)('should handle missing to clause', async () => {
+  it('should handle missing to clause', async () => {
+    if (!pythonServerAvailable) return;
+    
     await expect(
       realClient.parseQuery('from(a)')
     ).rejects.toThrow();
@@ -153,7 +175,9 @@ describe('GraphComputeClient - Error Handling', () => {
     ).rejects.toThrow();
   });
 
-  it.skipIf(!pythonServerAvailable)('should provide meaningful error messages', async () => {
+  it('should provide meaningful error messages', async () => {
+    if (!pythonServerAvailable) return;
+    
     try {
       await client.parseQuery('invalid');
       expect.fail('Should have thrown');
@@ -187,7 +211,9 @@ describe('GraphComputeClient - Schema Compliance', () => {
     expect(Array.isArray(result.cases)).toBe(true);
   });
 
-  it.skipIf(!pythonServerAvailable)('should handle all 6 schema-defined functions', async () => {
+  it('should handle all 6 schema-defined functions', async () => {
+    if (!pythonServerAvailable) return;
+    
     const queries = [
       'from(a).to(b)',
       'from(a).to(b).visited(c)',
@@ -241,7 +267,9 @@ describe('GraphComputeClient - Performance', () => {
     expect(duration).toBeLessThan(10);
   });
 
-  it.skipIf(!pythonServerAvailable)('should respond within reasonable time', async () => {
+  it('should respond within reasonable time', async () => {
+    if (!pythonServerAvailable) return;
+    
     const realClient = new GraphComputeClient('http://localhost:9000', false);
     
     const start = Date.now();

@@ -15,9 +15,11 @@ A web-based visual editor for creating and analyzing directed acyclic graphs (DA
 2. **Configure environment variables**
    ```bash
    cd graph-editor
-   cp .env.example .env
-   # Edit .env with your GitHub token and other settings
+   cp .env.example .env.local  # or .env
+   # Edit .env.local with your GitHub token and other settings
    ```
+   
+   Note: Use `.env.local` for local development with secrets (not committed to git), or `.env` for shared defaults.
 
    **Required variables:**
    - `VITE_GITHUB_TOKEN` - GitHub personal access token (for file operations)
@@ -206,9 +208,9 @@ find . -type d -name "__pycache__" -exec rm -rf {} +
 
 If you get "port already in use" errors:
 
-1. **Change ports in `.env`:**
+1. **Change ports in your env file:**
    ```bash
-   # Edit graph-editor/.env
+   # Edit graph-editor/.env.local (or .env)
    VITE_PORT=5174              # or any free port
    VITE_PYTHON_API_PORT=9001   # or any free port
    VITE_PYTHON_API_URL=http://localhost:9001  # match Python port
@@ -247,7 +249,7 @@ Some tests require Python backend running:
 If you don't want to run the Python backend:
 
 ```bash
-# Set in graph-editor/.env
+# Set in graph-editor/.env.local (or .env)
 VITE_USE_MOCK_COMPUTE=true
 ```
 
