@@ -13,6 +13,35 @@ import {
 const PROB_SUM_TOLERANCE = 0.001;
 
 /**
+ * Helper function to extract visited node IDs from a condition
+ * Handles both old format {visited: [...]} and new string format "visited(node1, node2)"
+ */
+function getVisitedNodeIds(condition: any): string[] {
+  if (!condition) return [];
+  
+  // Old format: {visited: [...]}
+  if (typeof condition === 'object' && condition.visited && Array.isArray(condition.visited)) {
+    return condition.visited;
+  }
+  
+  // New format: string like "visited(node1, node2)" or "case(x).visited(y)"
+  if (typeof condition === 'string') {
+    const visited: string[] = [];
+    // Match all visited(...) patterns
+    const visitedRegex = /visited\(([^)]+)\)/g;
+    let match;
+    while ((match = visitedRegex.exec(condition)) !== null) {
+      // Split by comma and trim
+      const nodes = match[1].split(',').map(s => s.trim()).filter(s => s);
+      visited.push(...nodes);
+    }
+    return visited;
+  }
+  
+  return [];
+}
+
+/**
  * Validate conditional probabilities in the graph
  * Checks that probabilities sum to 1.0 for each possible condition state
  */
@@ -68,7 +97,7 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
           const condProbSum = variantEdges.reduce((sum, edge) => {
             if (edge.conditional_p) {
               for (const cp of edge.conditional_p) {
-                const resolvedConditionNodes = cp.condition.visited.map(ref => 
+                const resolvedConditionNodes = getVisitedNodeIds(cp.condition).map(ref => 
                   resolveNodeReference(ref, graph.nodes) || ref
                 );
                 if (resolvedConditionNodes.every(nodeId => nodeId === conditionNodeId)) {
@@ -203,7 +232,7 @@ function collectUniqueConditions(edges: GraphEdge[], nodes: GraphNode[]): Set<st
   for (const edge of edges) {
     if (edge.conditional_p) {
       for (const cp of edge.conditional_p) {
-        for (const nodeId of cp.condition.visited) {
+        for (const nodeId of getVisitedNodeIds(cp.condition)) {
           const resolvedId = resolveNodeReference(nodeId, nodes);
           if (resolvedId) {
             conditions.add(resolvedId);
@@ -248,7 +277,7 @@ function calculateConditionalProbabilitySum(
     if (edge.conditional_p) {
       for (const cp of edge.conditional_p) {
         // Check if all nodes in condition are in visitedNodes (resolve ids to IDs)
-        const resolvedConditionNodes = cp.condition.visited.map(ref => 
+        const resolvedConditionNodes = getVisitedNodeIds(cp.condition).map(ref => 
           resolveNodeReference(ref, nodes) || ref
         );
         const conditionMet = resolvedConditionNodes.every(nodeId => visitedNodes.includes(nodeId));
@@ -320,7 +349,7 @@ function checkCircularDependencies(graph: Graph): ValidationError[] {
     if (!edge.conditional_p) continue;
     
     for (const cp of edge.conditional_p) {
-      for (const condNodeId of cp.condition.visited) {
+      for (const condNodeId of getVisitedNodeIds(cp.condition)) {
         // Check if there's a path from target node back to condition node
         // that uses edges with conditions dependent on the target node
         if (hasCircularDependency(edge.to, condNodeId, edge.from, graph, new Set())) {
@@ -358,7 +387,7 @@ function hasCircularDependency(
     // If edge has condition depending on original node, this is a problem
     if (edge.conditional_p) {
       for (const cp of edge.conditional_p) {
-        if (cp.condition.visited.includes(originalNode)) {
+        if (getVisitedNodeIds(cp.condition).includes(originalNode)) {
           return true;
         }
       }
@@ -425,7 +454,7 @@ export function getEffectiveProbability(
     // Check for conditional probability
     if (edge.conditional_p) {
       for (const cp of edge.conditional_p) {
-        const conditionMet = cp.condition.visited.every(nodeId => visitedNodes.has(nodeId));
+        const conditionMet = getVisitedNodeIds(cp.condition).every(nodeId => visitedNodes.has(nodeId));
         if (conditionMet) {
           return variantWeight * (cp.p.mean ?? 1.0);
         }
@@ -439,7 +468,7 @@ export function getEffectiveProbability(
   // For normal edges, check conditional probabilities
   if (edge.conditional_p) {
     for (const cp of edge.conditional_p) {
-      const conditionMet = cp.condition.visited.every(nodeId => visitedNodes.has(nodeId));
+      const conditionMet = getVisitedNodeIds(cp.condition).every(nodeId => visitedNodes.has(nodeId));
       if (conditionMet) {
         return cp.p.mean ?? 0;
       }

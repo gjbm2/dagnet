@@ -115,7 +115,7 @@ export default function PropertiesPanel({
   
   // Track which conditional probabilities are collapsed (by index) - true = collapsed, false/undefined = expanded
   const [collapsedConditionals, setCollapsedConditionals] = useState<{ [key: number]: boolean }>({});
-  
+
   // Local state for edge query (to prevent eager updates during editing)
   const [localEdgeQuery, setLocalEdgeQuery] = useState<string>('');
 
@@ -263,7 +263,11 @@ export default function PropertiesPanel({
 
   // Load edge data when selection changes (but not on every graph update)
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP2: Edge selection changed`);
+    console.log(`[${new Date().toISOString()}] [PropertiesPanel] useEffect#PP2: Edge selection changed`, {
+      selectedEdgeId,
+      lastLoaded: lastLoadedEdgeRef.current,
+      willReload: lastLoadedEdgeRef.current !== selectedEdgeId
+    });
     if (selectedEdgeId && graph) {
       // Only reload if we're switching to a different edge
       if (lastLoadedEdgeRef.current !== selectedEdgeId) {
@@ -274,7 +278,9 @@ export default function PropertiesPanel({
           console.log('PropertiesPanel: Loading edge data:', {
             edgeId: selectedEdgeId,
             cost_gbp: edge.cost_gbp,
-            cost_time: edge.cost_time
+            cost_time: edge.cost_time,
+            query: (edge as any).query,
+            query_overridden: (edge as any).query_overridden
           });
           
           const edgeCostGbp = (edge as any).cost_gbp;
@@ -296,7 +302,9 @@ export default function PropertiesPanel({
             display: edge.display || {},
             query: (edge as any).query || ''
           });
-          setLocalEdgeQuery((edge as any).query || '');
+          const edgeQuery = (edge as any).query || '';
+          console.log('PropertiesPanel: Setting localEdgeQuery to:', edgeQuery);
+          setLocalEdgeQuery(edgeQuery);
           setLocalConditionalP(edge.conditional_p || []);
           lastLoadedEdgeRef.current = selectedEdgeId;
         }
@@ -451,12 +459,17 @@ export default function PropertiesPanel({
   }, [selectedNodeId, graph, setGraph, saveHistoryState]);
 
   const updateEdge = useCallback((field: string, value: any) => {
+    console.log('[PropertiesPanel] updateEdge called:', { field, value, selectedEdgeId });
     if (!graph || !selectedEdgeId) return;
     const next = structuredClone(graph);
     const edgeIndex = next.edges.findIndex((e: any) => 
       e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
     );
+    console.log('[PropertiesPanel] updateEdge found edge at index:', edgeIndex);
     if (edgeIndex >= 0) {
+      const oldValue = next.edges[edgeIndex][field];
+      console.log('[PropertiesPanel] updateEdge old value:', oldValue);
+      
       if (field === 'probability') {
         next.edges[edgeIndex].p = { ...next.edges[edgeIndex].p, mean: value };
       } else if (field === 'stdev') {
@@ -474,6 +487,11 @@ export default function PropertiesPanel({
       } else {
         next.edges[edgeIndex][field] = value;
       }
+      
+      const newValue = next.edges[edgeIndex][field];
+      console.log('[PropertiesPanel] updateEdge new value:', newValue);
+      console.log('[PropertiesPanel] updateEdge calling setGraph');
+      
       if (next.metadata) {
         next.metadata.updated_at = new Date().toISOString();
       }
@@ -1838,8 +1856,8 @@ export default function PropertiesPanel({
                       label="Cost (Time)"
                       showQueryEditor={false}
                     />
-                  </CollapsibleSection>
-                  
+                </CollapsibleSection>
+
                   {/* Edge-Level Query (applies to all parameters above) */}
                   <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #E5E7EB' }}>
                     <AutomatableField
@@ -1861,22 +1879,43 @@ export default function PropertiesPanel({
                       <QueryExpressionEditor
                         value={localEdgeQuery}
                         onChange={(newQuery) => {
+                          console.log('[PropertiesPanel] Edge query onChange:', { newQuery, currentLocal: localEdgeQuery });
                           setLocalEdgeQuery(newQuery);
                         }}
-                        onBlur={() => {
-                          // Update the edge query when user finishes editing
-                          if (localEdgeQuery !== (selectedEdge?.query || '')) {
-                            updateEdge('query', localEdgeQuery);
-                            updateEdge('query_overridden', true);
-                          }
-                        }}
+            onBlur={(currentValue) => {
+              // Update the edge query when user finishes editing
+              const currentEdgeQuery = selectedEdge?.query || '';
+              console.log('[PropertiesPanel] Edge query onBlur:', { 
+                currentValue,
+                currentEdgeQuery,
+                selectedEdgeId,
+                willUpdate: currentValue !== currentEdgeQuery
+              });
+              if (currentValue !== currentEdgeQuery) {
+                // Update both fields in a single call to avoid race condition
+                if (!graph || !selectedEdgeId) return;
+                const next = structuredClone(graph);
+                const edgeIndex = next.edges.findIndex((e: any) => 
+                  e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                );
+                if (edgeIndex >= 0) {
+                  next.edges[edgeIndex].query = currentValue;
+                  next.edges[edgeIndex].query_overridden = true;
+                  if (next.metadata) {
+                    next.metadata.updated_at = new Date().toISOString();
+                  }
+                  setGraph(next);
+                  saveHistoryState(`Update edge query`, undefined, selectedEdgeId || undefined);
+                }
+              }
+            }}
                         graph={graph}
                         edgeId={selectedEdgeId || undefined}
                         placeholder="from(node).to(node)"
                         height="60px"
                       />
                     </AutomatableField>
-                  </div>
+                            </div>
                 </CollapsibleSection>
 
                 {/* Conditional Probabilities */}
@@ -1886,22 +1925,22 @@ export default function PropertiesPanel({
                     conditions={localConditionalP}
                     onChange={(newConditions) => {
                       setLocalConditionalP(newConditions);
-                      if (selectedEdgeId && graph) {
-                        const nextGraph = structuredClone(graph);
-                        const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                          edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                        );
-                        if (edgeIndex >= 0) {
-                          nextGraph.edges[edgeIndex].conditional_p = newConditions.length > 0 ? newConditions as any : undefined;
-                          if (nextGraph.metadata) {
-                            nextGraph.metadata.updated_at = new Date().toISOString();
-                          }
-                          setGraph(nextGraph);
+                              if (selectedEdgeId && graph) {
+                                const nextGraph = structuredClone(graph);
+                                const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
+                                  edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+                                );
+                                if (edgeIndex >= 0) {
+                                  nextGraph.edges[edgeIndex].conditional_p = newConditions.length > 0 ? newConditions as any : undefined;
+                                  if (nextGraph.metadata) {
+                                    nextGraph.metadata.updated_at = new Date().toISOString();
+                                  }
+                                  setGraph(nextGraph);
                           saveHistoryState('Update conditional probabilities', undefined, selectedEdgeId);
                         }
                       }
                     }}
-                    graph={graph}
+                              graph={graph}
                     edgeId={selectedEdgeId || undefined}
                     onUpdateParam={updateConditionalPParam}
                     onRebalanceParam={rebalanceConditionalP}

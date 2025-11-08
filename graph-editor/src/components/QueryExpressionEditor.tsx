@@ -1,13 +1,13 @@
 import React, { useRef, useEffect, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch } from 'lucide-react';
+import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle } from 'lucide-react';
 import './QueryExpressionEditor.css';
 
 interface QueryExpressionEditorProps {
   value: string;
   onChange: (value: string) => void;
-  onBlur?: () => void;
+  onBlur?: (currentValue: string) => void;
   graph: any;
   edgeId?: string;
   placeholder?: string;
@@ -81,53 +81,20 @@ function parseQueryToChips(query: string): ParsedQueryChip[] {
   
   const chips: ParsedQueryChip[] = [];
   
-  // Match from(...)
-  const fromMatch = query.match(/from\(([^)]+)\)/);
-  if (fromMatch) {
-    chips.push({
-      type: 'from',
-      values: [fromMatch[1]],
-      rawText: fromMatch[0]
-    });
-  }
+  // Match ALL function calls in order they appear
+  const functionRegex = /(from|to|exclude|visited|case)\(([^)]+)\)/g;
+  let match;
   
-  // Match to(...)
-  const toMatch = query.match(/to\(([^)]+)\)/);
-  if (toMatch) {
+  while ((match = functionRegex.exec(query)) !== null) {
+    const funcType = match[1] as 'from' | 'to' | 'exclude' | 'visited' | 'case';
+    const content = match[2];
+    
     chips.push({
-      type: 'to',
-      values: [toMatch[1]],
-      rawText: toMatch[0]
-    });
-  }
-  
-  // Match exclude(...)
-  const excludeMatch = query.match(/exclude\(([^)]+)\)/);
-  if (excludeMatch) {
-    chips.push({
-      type: 'exclude',
-      values: excludeMatch[1].split(',').map(s => s.trim()),
-      rawText: excludeMatch[0]
-    });
-  }
-  
-  // Match visited(...)
-  const visitedMatch = query.match(/visited\(([^)]+)\)/);
-  if (visitedMatch) {
-    chips.push({
-      type: 'visited',
-      values: visitedMatch[1].split(',').map(s => s.trim()),
-      rawText: visitedMatch[0]
-    });
-  }
-  
-  // Match case(...)
-  const caseMatch = query.match(/case\(([^)]+)\)/);
-  if (caseMatch) {
-    chips.push({
-      type: 'case',
-      values: [caseMatch[1]],
-      rawText: caseMatch[0]
+      type: funcType,
+      values: (funcType === 'exclude' || funcType === 'visited') 
+        ? content.split(',').map(s => s.trim())
+        : [content],
+      rawText: match[0]
     });
   }
   
@@ -153,6 +120,54 @@ export function QueryExpressionEditor({
   const [hoveredChipIndex, setHoveredChipIndex] = useState<number | null>(null);
   const [hoveredInnerChip, setHoveredInnerChip] = useState(false);
   const [editorHeight, setEditorHeight] = useState(height);
+  const [valueBeforeEdit, setValueBeforeEdit] = useState<string>('');
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  
+    // Validate value whenever it changes (for chip mode warning)
+  useEffect(() => {
+    console.log('[QueryExpressionEditor] Validation useEffect:', { value, isEditing });
+    
+    if (!value.trim() || isEditing) {
+      console.log('[QueryExpressionEditor] Skipping validation (empty or editing)');
+      setValidationErrors([]);
+      return;
+    }
+    
+    // Strip leading/trailing dots for validation
+    const cleanValue = value.trim().replace(/^\.+|\.+$/g, '');
+    if (!cleanValue) {
+      console.log('[QueryExpressionEditor] Only dots, no validation needed');
+      setValidationErrors([]);
+      return;
+    }
+    
+    const errors: string[] = [];
+    const validQueryPattern = /^[a-z_-]+\([a-z0-9_:,\s-]*\)(\.([a-z_-]+\([a-z0-9_:,\s-]*\)))*$/;
+    const patternMatches = validQueryPattern.test(cleanValue);
+    console.log('[QueryExpressionEditor] Pattern test:', { cleanValue, patternMatches });
+    
+    if (!patternMatches) {
+      errors.push('Invalid query structure');
+    }
+    
+    // Check for empty function calls
+    if (/\(\s*\)/.test(cleanValue)) {
+      errors.push('Functions must have parameters');
+    }
+    
+    // Check for unknown function names
+    const functionPattern = /\b([a-z_-]+)\s*\(/g;
+    const validFunctions = new Set(['from', 'to', 'exclude', 'visited', 'case', 'context']);
+    let match;
+    while ((match = functionPattern.exec(cleanValue)) !== null) {
+      if (!validFunctions.has(match[1])) {
+        errors.push(`Unknown function '${match[1]}'`);
+      }
+    }
+    
+    console.log('[QueryExpressionEditor] Setting validation errors:', errors);
+    setValidationErrors(errors);
+  }, [value, isEditing]);
   
   // Parse value into chips when it changes
   useEffect(() => {
@@ -506,12 +521,163 @@ export function QueryExpressionEditor({
         return { suggestions: [] };
       }
     });
+    
     } // End of language registration check
+    
+    // Register validation/diagnostics for query syntax (per editor instance)
+    const validateQuery = (model: Monaco.editor.ITextModel): Monaco.editor.IMarkerData[] => {
+      const rawText = model.getValue();
+      const markers: Monaco.editor.IMarkerData[] = [];
+      
+      console.log('[QueryExpressionEditor] Validating text:', rawText);
+      
+      if (!rawText.trim()) {
+        console.log('[QueryExpressionEditor] Empty text, skipping validation');
+        return markers; // Empty is okay
+      }
+      
+      // Strip leading/trailing dots for validation (they'll be removed on commit)
+      const text = rawText.trim().replace(/^\.+|\.+$/g, '');
+      if (!text) {
+        console.log('[QueryExpressionEditor] Only dots, skipping validation');
+        return markers;
+      }
+      
+      // Check for basic syntax errors
+      
+      // 1. Check for unmatched parentheses
+      const openParens = (text.match(/\(/g) || []).length;
+      const closeParens = (text.match(/\)/g) || []).length;
+      if (openParens !== closeParens) {
+        markers.push({
+          severity: monaco.MarkerSeverity.Warning,
+          message: 'Unmatched parentheses',
+          startLineNumber: 1,
+          startColumn: 1,
+          endLineNumber: 1,
+          endColumn: text.length + 1
+        });
+      }
+      
+      // 2. Check for unknown function names
+      const functionPattern = /\b([a-z_-]+)\s*\(/g;
+      const validFunctions = new Set(['from', 'to', 'exclude', 'visited', 'case', 'context']);
+      let match;
+      while ((match = functionPattern.exec(text)) !== null) {
+        const funcName = match[1];
+        if (!validFunctions.has(funcName)) {
+          const startPos = model.getPositionAt(match.index);
+          const endPos = model.getPositionAt(match.index + funcName.length);
+          markers.push({
+            severity: monaco.MarkerSeverity.Warning,
+            message: `Unknown function '${funcName}'. Valid functions: from, to, exclude, visited, case, context`,
+            startLineNumber: startPos.lineNumber,
+            startColumn: startPos.column,
+            endLineNumber: endPos.lineNumber,
+            endColumn: endPos.column
+          });
+        }
+      }
+      
+      // 3. Check for empty function calls
+      const emptyCallPattern = /([a-z_-]+)\s*\(\s*\)/g;
+      while ((match = emptyCallPattern.exec(text)) !== null) {
+        const funcName = match[1];
+        const startPos = model.getPositionAt(match.index);
+        const endPos = model.getPositionAt(match.index + match[0].length);
+        markers.push({
+          severity: monaco.MarkerSeverity.Warning,
+          message: `Function '${funcName}' requires at least one argument`,
+          startLineNumber: startPos.lineNumber,
+          startColumn: startPos.column,
+          endLineNumber: endPos.lineNumber,
+          endColumn: endPos.column
+        });
+      }
+      
+      // 4. Check for 'case' syntax (should be case(id:variant))
+      const casePattern = /\bcase\s*\(\s*([^)]+)\s*\)/g;
+      while ((match = casePattern.exec(text)) !== null) {
+        const caseArg = match[1].trim();
+        if (!caseArg.includes(':')) {
+          const startPos = model.getPositionAt(match.index);
+          const endPos = model.getPositionAt(match.index + match[0].length);
+          markers.push({
+            severity: monaco.MarkerSeverity.Warning,
+            message: 'case() expects format: case(case-id:variant-name)',
+            startLineNumber: startPos.lineNumber,
+            startColumn: startPos.column,
+            endLineNumber: endPos.lineNumber,
+            endColumn: endPos.column
+          });
+        }
+      }
+      
+      // 5. Check for overall query structure and invalid tokens
+      // Valid queries: functionName(args) followed by optional .functionName(args)
+      const validQueryPattern = /^[a-z_-]+\([a-z0-9_:,\s-]*\)(\.([a-z_-]+\([a-z0-9_:,\s-]*\)))*$/;
+      if (!validQueryPattern.test(text.trim())) {
+        markers.push({
+          severity: monaco.MarkerSeverity.Error,
+          message: 'Invalid query structure. Expected: function(args).function(args)...',
+          startLineNumber: 1,
+          startColumn: 1,
+          endLineNumber: 1,
+          endColumn: text.length + 1
+        });
+      }
+      
+      // 6. Check for trailing tokens without parentheses (like "oasdf" in ".visited(a).oasdf")
+      const trailingTokenPattern = /\.([a-z_-]+)\s*$/;
+      const trailingMatch = text.match(trailingTokenPattern);
+      if (trailingMatch && !text.match(new RegExp(`\\.${trailingMatch[1]}\\(`))) {
+        const tokenStart = text.lastIndexOf(trailingMatch[1]);
+        const startPos = model.getPositionAt(tokenStart);
+        const endPos = model.getPositionAt(tokenStart + trailingMatch[1].length);
+        markers.push({
+          severity: monaco.MarkerSeverity.Error,
+          message: `'${trailingMatch[1]}' is incomplete - function calls need parentheses`,
+          startLineNumber: startPos.lineNumber,
+          startColumn: startPos.column,
+          endLineNumber: endPos.lineNumber,
+          endColumn: endPos.column
+        });
+      }
+      
+      console.log('[QueryExpressionEditor] Generated markers:', markers);
+      return markers;
+    };
+    
+    // Validate on model change
+    editor.onDidChangeModelContent(() => {
+      const model = editor.getModel();
+      if (model) {
+        const markers = validateQuery(model);
+        console.log('[QueryExpressionEditor] Setting markers on model:', markers.length, 'markers');
+        monaco.editor.setModelMarkers(model, 'dagnet-query', markers);
+        
+        // Debug: Check if markers were actually set
+        const allMarkers = monaco.editor.getModelMarkers({ resource: model.uri });
+        console.log('[QueryExpressionEditor] All markers on model after setting:', allMarkers);
+      }
+    });
+    
+    // Initial validation
+    const model = editor.getModel();
+    if (model) {
+      const markers = validateQuery(model);
+      console.log('[QueryExpressionEditor] Initial validation, setting markers:', markers.length, 'markers');
+      monaco.editor.setModelMarkers(model, 'dagnet-query', markers);
+    }
     
     // Add focus/blur handlers
     let injectedDot = false;
     
     editor.onDidFocusEditorText(() => {
+      // Store the current value when entering edit mode
+      const currentValue = editor.getValue();
+      console.log('[QueryExpressionEditor] Focus gained, storing value for ESC:', currentValue);
+      setValueBeforeEdit(currentValue);
       setIsEditing(true);
       // Trigger autocomplete immediately on focus
       setTimeout(() => {
@@ -561,7 +727,7 @@ export function QueryExpressionEditor({
     
     editor.onDidBlurEditorText(() => {
       const model = editor.getModel();
-      const currentText = model ? model.getValue() : '';
+      let currentText = model ? model.getValue() : '';
       
       console.log('[QueryExpressionEditor] Editor blur, switching to chip view:', { 
         currentText,
@@ -570,6 +736,16 @@ export function QueryExpressionEditor({
       });
       
       setIsEditing(false);
+      
+      // Strip leading and trailing dots on commit
+      if (currentText) {
+        const cleanedText = currentText.trim().replace(/^\.+|\.+$/g, '');
+        if (cleanedText !== currentText.trim()) {
+          console.log('[QueryExpressionEditor] Stripping leading/trailing dots:', { from: currentText, to: cleanedText });
+          onChange(cleanedText);
+          currentText = cleanedText;
+        }
+      }
       
       // Clean up trailing '.' if it was injected and user didn't type anything else
       if (injectedDot) {
@@ -582,6 +758,7 @@ export function QueryExpressionEditor({
             if (!beforeDot.match(/\([^)]*$/)) {  // Not in the middle of a term
               console.log('[QueryExpressionEditor] Removing injected trailing dot:', { from: text, to: beforeDot });
               onChange(beforeDot);
+              currentText = beforeDot;
             }
           }
         }
@@ -589,18 +766,75 @@ export function QueryExpressionEditor({
       }
       
       if (onBlur) {
-        onBlur();
+        onBlur(currentText);
       }
     });
     
-    // Handle Tab key to move to next field
+    // Handle Tab key: accept suggestion OR move to next field
     editor.addCommand(monaco.KeyCode.Tab, () => {
-      // Blur the editor, which will trigger focus on next field
-      editor.getContainerDomNode()?.blur();
-      // Move focus to next focusable element
-      const nextElement = document.activeElement?.nextElementSibling as HTMLElement;
-      if (nextElement?.focus) {
-        nextElement.focus();
+      const suggestController = editor.getContribution('editor.contrib.suggestController') as any;
+      
+      // State >= 1 = suggestions widget is active (1 = loading/inside params, 2 = visible with suggestions)
+      const isSuggestWidgetVisible = (suggestController?.model?.state ?? 0) >= 1;
+      
+      console.log('[QueryExpressionEditor] Tab pressed:', { 
+        isSuggestWidgetVisible,
+        controllerState: suggestController?.model?.state
+      });
+      
+      if (isSuggestWidgetVisible) {
+        // Manually trigger Monaco's accept suggestion command
+        console.log('[QueryExpressionEditor] Triggering acceptSelectedSuggestion');
+        editor.trigger('keyboard', 'acceptSelectedSuggestion', {});
+      } else {
+        // No suggestions - move to next field
+        console.log('[QueryExpressionEditor] No suggestions, moving to next field');
+        
+        const domNode = editor.getDomNode();
+        if (domNode) {
+          domNode.blur();
+        }
+        
+        // Move focus to next focusable element
+        setTimeout(() => {
+          const focusableElements = document.querySelectorAll(
+            'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          );
+          const currentIndex = Array.from(focusableElements).indexOf(document.activeElement as HTMLElement);
+          const nextElement = focusableElements[currentIndex + 1] as HTMLElement;
+          if (nextElement?.focus) {
+            nextElement.focus();
+          }
+        }, 10);
+      }
+    });
+    
+    // Handle Enter key: accept suggestion OR commit and exit
+    editor.addCommand(monaco.KeyCode.Enter, () => {
+      const suggestController = editor.getContribution('editor.contrib.suggestController') as any;
+      const isSuggestWidgetVisible = (suggestController?.model?.state ?? 0) >= 1;
+      
+      console.log('[QueryExpressionEditor] Enter pressed:', { 
+        isSuggestWidgetVisible,
+        controllerState: suggestController?.model?.state
+      });
+      
+      if (isSuggestWidgetVisible) {
+        // Accept suggestion
+        console.log('[QueryExpressionEditor] Triggering acceptSelectedSuggestion');
+        editor.trigger('keyboard', 'acceptSelectedSuggestion', {});
+      } else {
+        // Commit and exit edit mode
+        console.log('[QueryExpressionEditor] Committing and exiting edit mode');
+        const currentValue = editor.getValue();
+        setIsEditing(false);
+        const domNode = editor.getDomNode();
+        if (domNode) {
+          domNode.blur();
+        }
+        if (onBlur) {
+          onBlur(currentValue);
+        }
       }
     });
     
@@ -624,6 +858,52 @@ export function QueryExpressionEditor({
         setTimeout(() => {
           editor.trigger('keyboard', 'editor.action.triggerSuggest', {});
         }, 50);
+      }
+    });
+    
+    // Force word wrap and sans-serif font (Monaco sometimes ignores initial options)
+    editor.updateOptions({
+      wordWrap: 'on',
+      wrappingStrategy: 'advanced',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      fontLigatures: false,
+      acceptSuggestionOnCommitCharacter: true,
+      suggest: {
+        snippetsPreventQuickSuggestions: false,
+        showKeywords: true,
+        showSnippets: true,
+        showStatusBar: true,  // Show status bar with details in suggest widget
+        insertMode: 'replace'
+      }
+    });
+    
+    // Handle ESC key: close autocomplete OR revert and exit
+    editor.addCommand(monaco.KeyCode.Escape, () => {
+      const suggestController = editor.getContribution('editor.contrib.suggestController') as any;
+      const isSuggestWidgetVisible = (suggestController?.model?.state ?? 0) >= 1;
+      
+      console.log('[QueryExpressionEditor] ESC pressed:', { 
+        isSuggestWidgetVisible,
+        controllerState: suggestController?.model?.state
+      });
+      
+      if (isSuggestWidgetVisible) {
+        // Just close the autocomplete widget, stay in edit mode
+        console.log('[QueryExpressionEditor] Closing autocomplete');
+        editor.trigger('keyboard', 'hideSuggestWidget', {});
+      } else {
+        // Revert to value before edit and exit
+        console.log('[QueryExpressionEditor] Reverting and exiting edit mode');
+        const currentValue = editor.getValue();
+        if (valueBeforeEdit !== currentValue) {
+          onChange(valueBeforeEdit);
+        }
+        setIsEditing(false);
+        // Blur the editor by removing focus
+        const domNode = editor.getDomNode();
+        if (domNode) {
+          domNode.blur();
+        }
       }
     });
     
@@ -709,43 +989,35 @@ export function QueryExpressionEditor({
     }, 100);
   };
   
-  // Delete a chip (entire term)
+  // Delete a chip (entire term) - remove without entering Monaco mode
   const handleDeleteChip = (chipToDelete: ParsedQueryChip, e: React.MouseEvent) => {
     e.stopPropagation(); // Don't trigger edit mode
     e.preventDefault(); // Prevent any default action
     
-    // Calculate cursor position before deletion
-    const startIndex = value.indexOf(chipToDelete.rawText);
+    console.log('[QueryExpressionEditor] handleDeleteChip called:', {
+      chipToDelete: chipToDelete.rawText,
+      currentValue: value
+    });
     
-    // Remove this chip from the query string
-    let newQuery = value.replace(chipToDelete.rawText, '').replace(/\.+/g, '.').replace(/^\.|\.$/g, '').trim();
+    // Remove this chip from the query string and clean up dots
+    let newQuery = value.replace(chipToDelete.rawText, '')
+      .replace(/\.+/g, '.') // Replace multiple dots with single dot
+      .replace(/^\.|\.$/g, '') // Remove leading/trailing dots
+      .trim();
     
-    // If the query now ends with a dot and there's content, add a dot for autocomplete
-    if (newQuery && !newQuery.endsWith('.') && startIndex === value.length - chipToDelete.rawText.length) {
-      newQuery += '.';
-    }
-    
+    console.log('[QueryExpressionEditor] handleDeleteChip computed newQuery:', newQuery);
+    console.log('[QueryExpressionEditor] handleDeleteChip calling onChange');
     onChange(newQuery);
     
-    // Enter edit mode and position cursor
-    setIsEditing(true);
+    // Commit the change immediately
+    console.log('[QueryExpressionEditor] handleDeleteChip calling onBlur with:', newQuery);
+    if (onBlur) {
+      onBlur(newQuery);
+    }
     
-    setTimeout(() => {
-      if (editorRef.current && monacoRef.current) {
-        const model = editorRef.current.getModel();
-        if (!model) return;
-        
-        // Position cursor at the deletion point
-        const cursorPos = model.getPositionAt(Math.min(startIndex, newQuery.length));
-        editorRef.current.setPosition(cursorPos);
-        editorRef.current.focus();
-        
-        // Trigger autocomplete
-        setTimeout(() => {
-          editorRef.current?.trigger('keyboard', 'editor.action.triggerSuggest', {});
-        }, 50);
-      }
-    }, 100);
+    console.log('[QueryExpressionEditor] handleDeleteChip complete');
+    
+    // Don't enter edit mode - just remove the chip
   };
   
   // Click outer chip to select the whole term in Monaco
@@ -757,6 +1029,7 @@ export function QueryExpressionEditor({
       chip: chip.rawText,
       currentValue: value 
     });
+    setValueBeforeEdit(value); // Store original value for ESC revert
     setIsEditing(true);
     
     // Wait for editor to mount, then select the entire term
@@ -798,6 +1071,7 @@ export function QueryExpressionEditor({
       valueText,
       currentValue: value 
     });
+    setValueBeforeEdit(value); // Store original value for ESC revert
     setIsEditing(true);
     
     // Wait for editor to mount, then select just the value
@@ -834,48 +1108,125 @@ export function QueryExpressionEditor({
   
   // Chip view component
   const renderChipView = () => {
-    if (chips.length === 0) {
-      return (
-        <div
-          onClick={() => {
-            if (!readonly) {
-              console.log('[QueryExpressionEditor] Empty placeholder clicked, entering edit mode');
-              setIsEditing(true);
-            }
-          }}
-          style={{
-            padding: '10px 12px',
-            color: '#9CA3AF',
-            fontSize: '13px',
-            cursor: readonly ? 'default' : 'pointer',
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-          }}
-        >
-          {placeholder}
-        </div>
-      );
-    }
-    
     return (
-      <div
-        onClick={(e) => {
-          // Only enter edit mode if clicking empty space (not a chip)
-          if (e.target === e.currentTarget && !readonly) {
-            console.log('[QueryExpressionEditor] Empty space clicked, entering edit mode');
-            setIsEditing(true);
-          }
-        }}
-        style={{
-          padding: '6px',
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: '6px',
-          cursor: readonly ? 'default' : 'text',
-          minHeight: '42px',
-          alignItems: 'center',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-        }}
-      >
+      <div>
+        {/* Validation warning banner - show for any validation errors */}
+        {validationErrors.length > 0 && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 12px',
+            backgroundColor: '#FEF2F2',
+            borderBottom: '1px solid #FCA5A5',
+            fontSize: '12px',
+            color: '#991B1B'
+          }}>
+            <AlertTriangle size={14} />
+            <span>{validationErrors.join('; ')}</span>
+          </div>
+        )}
+        
+        {chips.length === 0 ? (
+          <div
+            onClick={() => {
+              if (!readonly) {
+                console.log('[QueryExpressionEditor] Empty placeholder clicked, entering edit mode');
+                setIsEditing(true);
+                
+                // Inject a '.' and trigger autocomplete to show all functions
+                setTimeout(() => {
+                  if (editorRef.current && monacoRef.current) {
+                    editorRef.current.focus();
+                    const model = editorRef.current.getModel();
+                    if (model) {
+                      // Insert '.' at start
+                      editorRef.current.executeEdits('placeholder-inject', [{
+                        range: {
+                          startLineNumber: 1,
+                          startColumn: 1,
+                          endLineNumber: 1,
+                          endColumn: 1
+                        },
+                        text: '.'
+                      }]);
+                      
+                      // Position cursor after the dot and trigger autocomplete
+                      editorRef.current.setPosition({ lineNumber: 1, column: 2 });
+                      editorRef.current.trigger('keyboard', 'editor.action.triggerSuggest', {});
+                    }
+                  }
+                }, 50);
+              }
+            }}
+            style={{
+              padding: '10px 12px',
+              color: '#9CA3AF',
+              fontSize: '13px',
+              cursor: readonly ? 'default' : 'pointer',
+              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+            }}
+          >
+            {placeholder}
+          </div>
+        ) : (
+          <div
+            onClick={(e) => {
+              // Only enter edit mode if clicking empty space (not a chip)
+              if (e.target === e.currentTarget && !readonly) {
+                console.log('[QueryExpressionEditor] Empty space clicked, entering edit mode');
+                setValueBeforeEdit(value); // Store original value for ESC revert
+                setIsEditing(true);
+              
+                // Position cursor at end of text and insert '.' to trigger autocomplete
+                setTimeout(() => {
+                  if (editorRef.current && monacoRef.current) {
+                    const model = editorRef.current.getModel();
+                    if (model) {
+                      const text = model.getValue();
+                      const endPosition = model.getPositionAt(text.length);
+                      
+                      // If text doesn't end with '.', '(', or ',', add a '.'
+                      if (!text.endsWith('.') && !text.endsWith('(') && !text.endsWith(',')) {
+                        editorRef.current.executeEdits('click-inject', [{
+                          range: {
+                            startLineNumber: endPosition.lineNumber,
+                            startColumn: endPosition.column,
+                            endLineNumber: endPosition.lineNumber,
+                            endColumn: endPosition.column
+                          },
+                          text: '.'
+                        }]);
+                        
+                        // Position cursor after the dot
+                        const newEndPosition = model.getPositionAt(text.length + 1);
+                        editorRef.current.setPosition(newEndPosition);
+                      } else {
+                        editorRef.current.setPosition(endPosition);
+                      }
+                      
+                      editorRef.current.focus();
+                      
+                      // Trigger autocomplete
+                      setTimeout(() => {
+                        editorRef.current?.trigger('keyboard', 'editor.action.triggerSuggest', {});
+                      }, 50);
+                    }
+                  }
+                }, 50);
+              }
+            }}
+            style={{
+              padding: '6px',
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '6px',
+              cursor: readonly ? 'default' : 'text',
+              minHeight: '42px',
+              alignItems: 'center',
+              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+            }}
+          >
         {chips.map((chip, index) => {
           const config = outerChipConfig[chip.type];
           const Icon = config.icon;
@@ -935,30 +1286,6 @@ export function QueryExpressionEditor({
                     <span style={{ color: innerConfig.textColor }}>
                       {val}
                     </span>
-                    
-                    {/* Delete button on inner chip hover */}
-                    {isHovered && !readonly && (
-                      <button
-                        type="button"
-                        onClick={(e) => handleDeleteInnerChip(chip, val, vIndex, e)}
-                        style={{
-                          marginLeft: '4px',
-                          padding: '0',
-                          border: 'none',
-                          background: 'transparent',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          color: innerConfig.textColor,
-                          opacity: 0.5
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
-                        onMouseLeave={(e) => e.currentTarget.style.opacity = '0.5'}
-                        title="Remove"
-                      >
-                        <X size={10} />
-                      </button>
-                    )}
                   </div>
                   {vIndex < chip.values.length - 1 && (
                     <span style={{ color: '#6B7280', margin: '0 2px' }}>,</span>
@@ -968,8 +1295,8 @@ export function QueryExpressionEditor({
               
               <span style={{ color: '#6B7280' }}>)</span>
               
-              {/* Delete button for entire outer chip on hover (only when not hovering inner chip) */}
-              {isHovered && !hoveredInnerChip && !readonly && (
+              {/* Delete button for entire outer chip - always visible */}
+              {!readonly && (
                 <button
                   type="button"
                   onClick={(e) => handleDeleteChip(chip, e)}
@@ -981,12 +1308,12 @@ export function QueryExpressionEditor({
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    color: '#6B7280',
-                    opacity: 0.5
+                    color: '#9CA3AF',
+                    transition: 'color 0.15s ease'
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
-                  onMouseLeave={(e) => e.currentTarget.style.opacity = '0.5'}
-                  title="Remove entire term"
+                  onMouseEnter={(e) => e.currentTarget.style.color = '#374151'}
+                  onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
+                  title="Remove term"
                 >
                   <X size={12} />
                 </button>
@@ -994,6 +1321,8 @@ export function QueryExpressionEditor({
             </div>
           );
         })}
+          </div>
+        )}
       </div>
     );
   };
@@ -1005,7 +1334,7 @@ export function QueryExpressionEditor({
       overflow: 'visible',  // Allow autocomplete to overflow
       backgroundColor: '#ffffff',
       position: 'relative',
-      zIndex: 1  // Just above normal content, but below popups/selectors
+      zIndex: 'auto'  // Don't create a stacking context - let Monaco widgets (appended to body) use global z-index
     }}>
       {/* Show chip view when not editing, Monaco when editing */}
       {!isEditing && !readonly ? (
@@ -1028,9 +1357,9 @@ export function QueryExpressionEditor({
             readOnly: readonly,
             minimap: { enabled: false },
             lineNumbers: 'off',
-            glyphMargin: false,
+            glyphMargin: true,  // Show glyph margin for warning/error icons
             folding: false,
-            lineDecorationsWidth: 0,
+            lineDecorationsWidth: 4,  // Show decorations for warnings/errors
             lineNumbersMinChars: 0,
             scrollBeyondLastLine: false,
             wordWrap: 'on',
@@ -1054,7 +1383,7 @@ export function QueryExpressionEditor({
             hideCursorInOverviewRuler: true,
             overviewRulerBorder: false,
             automaticLayout: true,
-            fixedOverflowWidgets: true,  // Allow suggest widget to overflow container
+            fixedOverflowWidgets: true,  // Append widgets to body so they can render above all panel content
             suggest: {
               snippetsPreventQuickSuggestions: false,
               showKeywords: true,

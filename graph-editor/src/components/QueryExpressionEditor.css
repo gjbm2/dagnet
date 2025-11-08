@@ -1,18 +1,14 @@
-/* Ensure Monaco suggestion widget appears above sidebar content and nav dropdowns */
+/* Monaco suggestion widgets - with no stacking context trap, default z-index works fine */
+/* But we set a modest value to ensure they're above the minimize button (z-index 10) */
 .monaco-editor .suggest-widget {
-  z-index: 2000 !important;
+  z-index: 50 !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
-  max-width: 400px !important; /* Constrain width */
+  max-width: 400px !important;
 }
 
 .monaco-editor .parameter-hints-widget {
-  z-index: 2000 !important;
+  z-index: 50 !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
-}
-
-/* Ensure Monaco editor's overflow widgets (autocomplete, parameter hints) are properly layered */
-.monaco-editor .monaco-editor-overlaymessage {
-  z-index: 2000 !important;
 }
 
 /* Override Monaco's default monospace font in suggestion items */
@@ -25,5 +21,15 @@
 /* Constrain suggestion list width */
 .monaco-editor .suggest-widget .monaco-list {
   max-width: 400px !important;
+}
+
+/* Force sans-serif font in the editor content (not monospace) */
+.monaco-editor,
+.monaco-editor .view-lines,
+.monaco-editor .view-line,
+.monaco-editor .mtk1,
+.monaco-editor .monaco-editor-background,
+.monaco-editor .margin {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
 }
 

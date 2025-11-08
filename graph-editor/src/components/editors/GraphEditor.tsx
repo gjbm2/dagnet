@@ -1692,7 +1692,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
               : '48px', // When minimized, position at icon bar
               top: splitterCenterY > 0 ? `${splitterCenterY}px` : '50%',
             transform: 'translateY(-50%)',
-            zIndex: 100, // Same z-index as sidebar panels
+            zIndex: 10, // Lower than Monaco widgets but above normal content
           }}
           title={sidebarState.mode === 'minimized' ? 'Show Sidebar (Ctrl/Cmd + B)' : 'Hide Sidebar (Ctrl/Cmd + B)'}
         >

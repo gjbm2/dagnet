@@ -20,6 +20,35 @@ const EDGE_OPACITY = 0.8; // Adjustable transparency (0-1)
 const EDGE_BLEND_MODE = 'multiply'; // 'normal', 'multiply', 'screen', 'difference'
 const USE_GROUP_BASED_BLENDING = false; // Enable scenario-specific blending
 
+/**
+ * Helper function to extract visited node IDs from a condition
+ * Handles both old format {visited: [...]} and new string format "visited(node1, node2)"
+ */
+function getVisitedNodeIds(condition: any): string[] {
+  if (!condition) return [];
+  
+  // Old format: {visited: [...]}
+  if (typeof condition === 'object' && condition.visited && Array.isArray(condition.visited)) {
+    return condition.visited;
+  }
+  
+  // New format: string like "visited(node1, node2)" or "case(x).visited(y)"
+  if (typeof condition === 'string') {
+    const visited: string[] = [];
+    // Match all visited(...) patterns
+    const visitedRegex = /visited\(([^)]+)\)/g;
+    let match;
+    while ((match = visitedRegex.exec(condition)) !== null) {
+      // Split by comma and trim
+      const nodes = match[1].split(',').map(s => s.trim()).filter(s => s);
+      visited.push(...nodes);
+    }
+    return visited;
+  }
+  
+  return [];
+}
+
 interface ConversionEdgeData {
   uuid: string;
   id?: string;
@@ -157,7 +186,7 @@ export default function ConversionEdge({
     if (fullEdge?.conditional_p && fullEdge.conditional_p.length > 0) {
       lines.push(`\nConditional Probabilities:`);
       for (const cond of fullEdge.conditional_p) {
-        const nodeNames = cond.condition.visited.map((nodeId: string) => {
+        const nodeNames = getVisitedNodeIds(cond.condition).map((nodeId: string) => {
           const node = graph?.nodes.find((n: any) => n.uuid === nodeId || n.id === nodeId);
           return node?.id || node?.label || nodeId;
         }).join(', ');
