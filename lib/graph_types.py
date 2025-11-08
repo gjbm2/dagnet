@@ -23,8 +23,8 @@ class Evidence(BaseModel):
     k: Optional[int] = Field(None, ge=0, description="Number of successes")
     window_from: Optional[datetime] = Field(None, description="Time window start")
     window_to: Optional[datetime] = Field(None, description="Time window end")
-    retrieved_at: datetime = Field(..., description="When this data was retrieved")
-    source: Literal["amplitude", "sheets", "manual", "computed", "api"]
+    retrieved_at: Optional[datetime] = Field(None, description="When this data was retrieved")
+    source: Optional[Literal["amplitude", "sheets", "manual", "computed", "api"]] = None
     query: Optional[Dict[str, Any]] = Field(None, description="Query that produced this data")
 
 
@@ -73,7 +73,7 @@ class ConditionalProbability(BaseModel):
     - query: full retrieval path (HOW to fetch data) - auto-derived via MSMDC
     """
     condition: str = Field(..., description="Constraint expression using query DSL")
-    query: Optional[str] = Field(None, pattern=r"^from\([a-z0-9_-]+\)\.to\([a-z0-9_-]+\)", description="Full data retrieval query")
+    query: Optional[str] = Field(None, description="Full data retrieval query")
     query_overridden: bool = Field(False, description="If true, query was manually edited")
     p: ProbabilityParam
 
@@ -117,7 +117,7 @@ class CaseVariant(BaseModel):
 
 class Case(BaseModel):
     """Case/experiment node metadata."""
-    uuid: str
+    uuid: Optional[str] = None  # Optional for backwards compatibility
     id: str
     status: Optional[Literal["active", "paused", "completed"]] = Field("active")
     variants: Optional[List[CaseVariant]] = None
@@ -138,7 +138,7 @@ class Node(BaseModel):
     Graph node representing a state in the conversion funnel.
     """
     uuid: str
-    id: str = Field(..., min_length=1, max_length=128)
+    id: str = Field("", max_length=128)  # Allow empty ID (not yet assigned)
     label: Optional[str] = Field(None, max_length=256)
     label_overridden: bool = Field(False, description="If true, label was manually edited")
     description: Optional[str] = None
@@ -178,7 +178,7 @@ class Edge(BaseModel):
     label_overridden: bool = Field(False, description="If true, label was manually edited")
     description: Optional[str] = None
     description_overridden: bool = Field(False, description="If true, description was manually edited")
-    query: Optional[str] = Field(None, pattern=r"^from\([a-z0-9_-]+\)\.to\([a-z0-9_-]+\)", description="Query expression for data retrieval")
+    query: Optional[str] = Field(None, description="Query expression for data retrieval")
     query_overridden: bool = Field(False, description="If true, query was manually edited")
     p: ProbabilityParam = Field(..., description="Base probability (fallback when no conditionals match)")
     conditional_p: Optional[List[ConditionalProbability]] = Field(None, description="Conditional probabilities (first match wins)")

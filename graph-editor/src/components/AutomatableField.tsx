@@ -116,11 +116,22 @@ export function AutomatableField({
   useEffect(() => {
     const valueChanged = value !== prevValueRef.current;
     
+    console.log('[AutomatableField] Animation check:', {
+      valueChanged,
+      hasFocus,
+      isInteracting,
+      isAutoUpdating,
+      oldValue: prevValueRef.current,
+      newValue: value,
+      willAnimate: valueChanged && !hasFocus && !isInteracting && isAutoUpdating
+    });
+    
     // Only animate if:
     // 1. Value actually changed
     // 2. User isn't interacting (no focus, no mouse/touch)  
     // 3. isAutoUpdating flag is set (GET operation is running)
     if (valueChanged && !hasFocus && !isInteracting && isAutoUpdating) {
+      console.log('🎬 [AutomatableField] ANIMATING!');
       // Clear any existing animation timeout
       if (animationTimeoutRef.current) {
         clearTimeout(animationTimeoutRef.current);

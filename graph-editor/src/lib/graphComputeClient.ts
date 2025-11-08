@@ -236,6 +236,51 @@ export class GraphComputeClient {
 
     return response.json();
   }
+  
+  /**
+   * Generate MSMDC queries for all parameters in graph
+   */
+  async generateAllParameters(
+    graph: any,
+    downstreamOf?: string,
+    literalWeights?: { visited: number; exclude: number },
+    preserveCondition?: boolean
+  ): Promise<{ parameters: ParameterQuery[] }> {
+    if (this.useMock) {
+      return { parameters: [] };
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/generate-all-parameters`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graph,
+        downstream_of: downstreamOf,
+        literal_weights: literalWeights,
+        preserve_condition: preserveCondition
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(`Parameter generation failed: ${error.detail || response.statusText}`);
+    }
+
+    return response.json();
+  }
+}
+
+// ============================================================
+// Types
+// ============================================================
+
+export interface ParameterQuery {
+  paramType: string;
+  paramId: string;
+  edgeKey: string;
+  condition?: string;
+  query: string;
+  stats: { checks: number; literals: number };
 }
 
 // ============================================================

@@ -43,7 +43,7 @@ Current state is a trainwreck:
 **Estimated effort:** 2-3 days for core refactor (Phases 1-3), another 1-2 days for warnings + tests
 
 ---
-
+- UpdateManager should report into toast return any overriddens
 - we need window on graph (and later contexts) for data getting purposes
 - handling 'dead limb' probabiltiies e.g. no data available, can we infer 1-sibling.p
 - node moves not always persisting properly post-Sankey
