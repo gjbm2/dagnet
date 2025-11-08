@@ -246,6 +246,59 @@ class TestMSMDCComplexCases:
         result = generate_query_for_edge(graph, direct_edge, condition="exclude(b,c)")
         assert "from(a).to(d)" in result.query_string
     
+    def test_unconditional_direct_edge_requires_excludes(self):
+        """
+        Unconditional direct edge must exclude sibling predecessors of the target
+        when alternates exist from the same source.
+        Graph: A>B>D, A>C>D, A>D (direct)
+        Expect: from(a).to(d).exclude(b,c)
+        """
+        graph = create_minimal_graph(
+            [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}],
+            [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "d"},
+                {"from": "a", "to": "c"},
+                {"from": "c", "to": "d"},
+                {"from": "a", "to": "d"}  # Direct
+            ]
+        )
+        direct_edge = [e for e in graph.edges if e.from_node == "a" and e.to == "d"][0]
+        res = generate_query_for_edge(graph, direct_edge, condition=None)
+        # Order-insensitive check for exclude(b,c)
+        assert res.query_string in {
+            "from(a).to(d).exclude(b,c)",
+            "from(a).to(d).exclude(c,b)"
+        }
+        assert set(res.constraints.exclude) == {"b", "c"}
+    
+    def test_unconditional_direct_edge_ignores_unreachable_parents(self):
+        """
+        If target has an additional parent X that is not reachable from the edge's source A,
+        we should not include X in excludes.
+        Graph: A>B>D, A>C>D, X>D, A>D (direct), and no path from A to X.
+        Expect: from(a).to(d).exclude(b,c) (no 'x' excluded).
+        """
+        graph = create_minimal_graph(
+            [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}, {"id": "x"}],
+            [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "d"},
+                {"from": "a", "to": "c"},
+                {"from": "c", "to": "d"},
+                {"from": "x", "to": "d"},  # Unreachable from A
+                {"from": "a", "to": "d"}   # Direct
+            ]
+        )
+        direct_edge = [e for e in graph.edges if e.from_node == "a" and e.to == "d"][0]
+        res = generate_query_for_edge(graph, direct_edge, condition=None)
+        # Should not include x in excludes
+        assert res.query_string in {
+            "from(a).to(d).exclude(b,c)",
+            "from(a).to(d).exclude(c,b)"
+        }
+        assert set(res.constraints.exclude) == {"b", "c"}
+    
     def test_long_path_vs_shortcuts(self):
         """
         A>B>C>D>E (long path)

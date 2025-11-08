@@ -85,14 +85,15 @@ def generate_query_for_edge(
     Returns:
         MSMDCResult with query string and diagnostics
     """
-    G = _build_networkx_graph(graph)
+    G, id_by_uuid = _build_networkx_graph(graph)
     # Default literal costs (lower is preferred)
     lw = literal_weights or {}
     cost_visited = float(lw.get("visited", 1.0))
     cost_exclude = float(lw.get("exclude", 1.0))
     # case/context are carried through for fidelity; not optimized here
-    from_node = edge.from_node
-    to_node = edge.to
+    # Resolve UUIDs to human-readable IDs for query strings
+    from_node = id_by_uuid.get(edge.from_node, edge.from_node)
+    to_node = id_by_uuid.get(edge.to, edge.to)
     stats_checks = 0
     
     # Edge must exist (anchor)
@@ -139,6 +140,25 @@ def generate_query_for_edge(
             satisfying_found=False,
             coverage_stats={"checks": stats_checks, "literals": 0}
         )
+    
+    # Special case: For unconditional queries (no condition), detect alternate paths
+    # FROM the edge's from_node and add exclusions to discriminate direct from indirect
+    if not condition or (not cond_visited and not cond_exclude and not cond_visited_any):
+        # Check if there are alternate paths FROM from_node TO to_node (not using direct edge)
+        # Get immediate predecessors of to_node (excluding from_node itself)
+        predecessors = set(G.predecessors(to_node)) - {from_node}
+        
+        if predecessors:
+            # Check if any of these predecessors are reachable from from_node
+            for pred in predecessors:
+                # If we can reach this predecessor from from_node, it's an alternate route
+                path_to_pred = _reachable_path(G, from_node, pred, set())
+                stats_checks += 1
+                if path_to_pred:
+                    # This is an alternate path: from_node → ... → pred → to_node
+                    # Add pred to exclusions to discriminate the direct edge
+                    if pred not in L_exc:
+                        L_exc.append(pred)
     
     # Iteratively block violating witnesses
     max_iters = 64
@@ -502,6 +522,23 @@ def _find_path_including(G: nx.DiGraph, from_node: str, to_node: str,
     return None
 
 
+def _find_path_to_dest_avoiding_node(G: nx.DiGraph, dest: str, avoid_node: str) -> Optional[List[str]]:
+    """
+    Find any path from an entry node to dest that avoids a specific node.
+    Used to detect alternate paths for unconditional edge queries.
+    """
+    entries = _entry_nodes(G)
+    removed = {avoid_node}
+    
+    for entry in entries:
+        if entry == avoid_node:
+            continue
+        path = _reachable_path(G, entry, dest, removed)
+        if path:
+            return path
+    return None
+
+
 def _first_divergence(witness: List[str], satisfying: Optional[List[str]], upstream: Set[str]) -> Optional[str]:
     """
     Pick the first node in witness that is not in the satisfying path and is upstream candidate.
@@ -515,8 +552,13 @@ def _first_divergence(witness: List[str], satisfying: Optional[List[str]], upstr
     return None
 
 
-def _build_networkx_graph(graph: Graph) -> nx.DiGraph:
-    """Build NetworkX graph from schema-compliant Graph object."""
+def _build_networkx_graph(graph: Graph) -> Tuple[nx.DiGraph, Dict[str, str]]:
+    """
+    Build NetworkX graph from schema-compliant Graph object.
+    
+    Returns:
+        Tuple of (NetworkX graph, uuid_to_id mapping)
+    """
     G = nx.DiGraph()
     # Map any identifier (uuid or id) to canonical node.id
     id_by_any: Dict[str, str] = {}
@@ -538,7 +580,7 @@ def _build_networkx_graph(graph: Graph) -> nx.DiGraph:
             G.add_node(dst)
         G.add_edge(src, dst)
     # Ensure include/avoid checks can use node.id strings consistently
-    return G
+    return G, id_by_any
 
 
 # ============================================================================
@@ -589,13 +631,18 @@ def generate_all_parameter_queries(
     """
     parameters = []
     
+    # Build UUID->ID mapping for query generation
+    id_by_uuid = {node.uuid: node.id for node in graph.nodes}
+    
     # Build graph for downstream filtering if needed
     if downstream_of:
-        G = _build_networkx_graph(graph)
+        G, _ = _build_networkx_graph(graph)
         try:
+            # Resolve downstream_of to ID if it's a UUID
+            downstream_id = id_by_uuid.get(downstream_of, downstream_of)
             # Get all descendants (downstream nodes) from the edited node
-            downstream_nodes = nx.descendants(G, downstream_of)
-            downstream_nodes.add(downstream_of)  # Include the node itself
+            downstream_nodes = nx.descendants(G, downstream_id)
+            downstream_nodes.add(downstream_id)  # Include the node itself
         except:
             downstream_nodes = set()  # If node doesn't exist, process all
     else:
@@ -603,22 +650,27 @@ def generate_all_parameter_queries(
     
     # Process each edge
     for edge in graph.edges:
+        # Resolve edge nodes to IDs for query generation
+        from_id = id_by_uuid.get(edge.from_node, edge.from_node)
+        to_id = id_by_uuid.get(edge.to, edge.to)
+        edge_key = f"{from_id}->{to_id}"
+        
         # Skip if filtering by downstream and this edge isn't affected
         if downstream_nodes is not None:
             # Edge is affected if source (from_node) is in the downstream set
             # This includes edges starting at edited node + all further downstream
             # Excludes edges ending at edited node from upstream (not affected by downstream changes)
-            if edge.from_node not in downstream_nodes:
+            if from_id not in downstream_nodes:
                 continue
-        
-        edge_key = f"{edge.from_node}->{edge.to}"
         
         # 1. Base probability (edge.p) - unconditional
         if edge.p:
+            # Use real param_id if exists, otherwise generate synthetic ID
+            param_id = getattr(edge.p, 'id', None) or f"synthetic:{edge.uuid}:p"
             result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
             parameters.append(ParameterQuery(
                 param_type="edge_base_p",
-                param_id=f"{edge_key}.p",
+                param_id=param_id,
                 edge_key=edge_key,
                 condition=None,
                 query=result.query_string,
@@ -628,11 +680,13 @@ def generate_all_parameter_queries(
         # 2. Conditional probabilities (edge.conditional_p[])
         if edge.conditional_p:
             for idx, cond_p in enumerate(edge.conditional_p):
+                # Use real param_id if exists, otherwise generate synthetic ID
+                param_id = getattr(cond_p.p, 'id', None) or f"synthetic:{edge.uuid}:conditional_p[{idx}]"
                 condition_str = cond_p.condition
                 result = generate_query_for_edge(graph, edge, condition=condition_str, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
                 parameters.append(ParameterQuery(
                     param_type="edge_conditional_p",
-                    param_id=f"{edge_key}.conditional_p[{idx}]",
+                    param_id=param_id,
                     edge_key=edge_key,
                     condition=condition_str,
                     query=result.query_string,
@@ -642,10 +696,12 @@ def generate_all_parameter_queries(
         # 3. Cost parameters (edge.cost_gbp, edge.cost_time)
         # These use same query as base probability (unconditional)
         if edge.cost_gbp:
+            # Use real param_id if exists, otherwise generate synthetic ID
+            param_id = getattr(edge.cost_gbp, 'id', None) or f"synthetic:{edge.uuid}:cost_gbp"
             result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
             parameters.append(ParameterQuery(
                 param_type="edge_cost_gbp",
-                param_id=f"{edge_key}.cost_gbp",
+                param_id=param_id,
                 edge_key=edge_key,
                 condition=None,
                 query=result.query_string,
@@ -653,10 +709,12 @@ def generate_all_parameter_queries(
             ))
         
         if edge.cost_time:
+            # Use real param_id if exists, otherwise generate synthetic ID
+            param_id = getattr(edge.cost_time, 'id', None) or f"synthetic:{edge.uuid}:cost_time"
             result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
             parameters.append(ParameterQuery(
                 param_type="edge_cost_time",
-                param_id=f"{edge_key}.cost_time",
+                param_id=param_id,
                 edge_key=edge_key,
                 condition=None,
                 query=result.query_string,
@@ -667,7 +725,8 @@ def generate_all_parameter_queries(
     for node in graph.nodes:
         if node.case and node.case.variants:
             # For each variant, generate queries for downstream edges
-            case_id = node.case.id
+            # Use real case_id if exists, otherwise generate synthetic ID
+            case_id = node.case.id or f"synthetic:{node.uuid}:case"
             
             for variant in node.case.variants:
                 variant_name = variant.name
@@ -683,7 +742,7 @@ def generate_all_parameter_queries(
                     
                     parameters.append(ParameterQuery(
                         param_type="case_variant_edge",
-                        param_id=f"{edge_key}.case.{case_id}.{variant_name}",
+                        param_id=case_id,  # Real case file ID or synthetic
                         edge_key=edge_key,
                         condition=condition_str,
                         query=result.query_string,

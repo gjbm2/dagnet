@@ -96,9 +96,24 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
 
 function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {}, tabId, activeTabId }: GraphCanvasProps) {
   const store = useGraphStore();
-  const { graph, setGraph } = store;
+  const { graph, setGraph: setGraphDirect, setAutoUpdating } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
   const viewPrefs = useViewPreferencesContext();
+  
+  // Wrapped setGraph that automatically triggers query regeneration on topology changes
+  const setGraph = useCallback(async (newGraph: any, oldGraph?: any) => {
+    // If oldGraph not provided, use current graph from closure
+    const prevGraph = oldGraph !== undefined ? oldGraph : graph;
+    try {
+      const { graphMutationService } = await import('../services/graphMutationService');
+      await graphMutationService.updateGraph(prevGraph, newGraph, setGraphDirect, {
+        setAutoUpdating
+      });
+    } catch (error) {
+      console.error('[GraphCanvas] setGraph wrapper error:', error);
+      setGraphDirect(newGraph);
+    }
+  }, [graph, setGraphDirect, setAutoUpdating]);
   
   // Fallback to defaults if context not available (shouldn't happen in normal use)
   const useUniformScaling = viewPrefs?.useUniformScaling ?? false;
@@ -1140,6 +1155,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       hasMetadata: !!graph.metadata
     });
     
+    const oldGraph = graph;
     const nextGraph = structuredClone(graph);
     nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== id);
     nextGraph.edges = nextGraph.edges.filter(e => e.from !== id && e.to !== id);
@@ -1163,7 +1179,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Clear the sync flag to allow graph->ReactFlow sync
     isSyncingRef.current = false;
     
-    // Update the graph (this will trigger the graph->ReactFlow sync which will update lastSyncedGraphRef)
     setGraph(nextGraph);
     
     // Save history state for node deletion
@@ -2316,6 +2331,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: SYNCING to store`);
       isSyncingRef.current = true;
       lastSyncedReactFlowRef.current = updatedJson;
+      
       setGraph(updatedGraph);
       
       // Note: History is NOT saved here during drag - it's saved once at drag start
@@ -2590,6 +2606,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const onConnect = useCallback((connection: Connection) => {
     if (!graph) return;
     
+    // Capture the current graph at the start of this callback
+    const currentGraph = graph;
+    
     // Check for valid connection
     if (!connection.source || !connection.target) {
       return;
@@ -2603,13 +2622,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
     // Check if source is a case node (do this check early)
     // connection.source is ReactFlow ID (uuid)
-    const sourceNode = graph.nodes.find(n => n.uuid === connection.source || n.id === connection.source);
+    const sourceNode = currentGraph.nodes.find(n => n.uuid === connection.source || n.id === connection.source);
     const isCaseNode = sourceNode && sourceNode.type === 'case' && sourceNode.case;
     
     // Prevent duplicate edges (but allow multiple edges from case nodes with different variants)
     if (!isCaseNode) {
       // For normal nodes, prevent any duplicate edges
-      const existingEdge = graph.edges.find(edge => 
+      const existingEdge = currentGraph.edges.find(edge => 
         edge.from === connection.source && edge.to === connection.target
       );
       if (existingEdge) {
@@ -2620,7 +2639,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // For case nodes, duplication check will happen after variant selection
 
     // Check for circular dependencies (convert graph edges to ReactFlow format for check)
-    const reactFlowEdges = graph.edges.map(e => ({ source: e.from, target: e.to }));
+    const reactFlowEdges = currentGraph.edges.map(e => ({ source: e.from, target: e.to }));
     if (wouldCreateCycle(connection.source, connection.target, reactFlowEdges)) {
       alert('Cannot create this connection as it would create a circular dependency.');
       return;
@@ -2638,7 +2657,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     // Add edge directly to graph state (not ReactFlow state)
-    const nextGraph = structuredClone(graph);
+    const nextGraph = structuredClone(currentGraph);
     
     // Map handle IDs to match our node component
     // Source handles: "top" -> "top-out", "left" -> "left-out", etc.
@@ -2692,7 +2711,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     // Update graph state - this will trigger graph->ReactFlow sync
-    setGraph(nextGraph);
+    // Pass the old graph explicitly to avoid stale closure
+    setGraph(nextGraph, currentGraph);
     saveHistoryState('Add edge', undefined, edgeId);
     
     // Select the new edge after a brief delay to allow sync to complete
@@ -2710,12 +2730,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const handleVariantSelection = useCallback((variant: any) => {
     if (!pendingConnection || !graph) return;
     
+    // Capture the current graph at the start of this callback
+    const currentGraph = graph;
+    
     // pendingConnection.source is ReactFlow ID (uuid)
-    const sourceNode = graph.nodes.find(n => n.uuid === pendingConnection.source || n.id === pendingConnection.source);
+    const sourceNode = currentGraph.nodes.find(n => n.uuid === pendingConnection.source || n.id === pendingConnection.source);
     if (!sourceNode || !sourceNode.case) return;
     
     // Check if an edge with this variant already exists between these nodes
-    const existingVariantEdge = graph.edges.find(edge => 
+    const existingVariantEdge = currentGraph.edges.find(edge => 
       edge.from === pendingConnection.source && 
       edge.to === pendingConnection.target &&
       edge.case_id === sourceNode.case?.id &&
@@ -2734,7 +2757,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const edgeId = `${pendingConnection.source}-${variant.name}->${pendingConnection.target}`;
     
     // Create the edge with variant properties
-    const nextGraph = structuredClone(graph);
+    const nextGraph = structuredClone(currentGraph);
     nextGraph.edges.push({
       uuid: edgeId,
       id: edgeId,
@@ -2753,7 +2776,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
     
-    setGraph(nextGraph);
+    setGraph(nextGraph, currentGraph);
     saveHistoryState('Add edge', undefined, nextGraph.edges[nextGraph.edges.length - 1].id);
     
     // Close modal and clear state
@@ -3911,8 +3934,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
     
-    // Update graph state - this will trigger graph->ReactFlow sync
     setGraph(nextGraph);
+    
     console.log('saveHistoryState function:', typeof saveHistoryState);
     if (typeof saveHistoryState === 'function') {
       saveHistoryState('Add node', newId);
@@ -4407,6 +4430,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     setGraph(nextGraph);
+    
     console.log('saveHistoryState in addNodeAtPosition:', typeof saveHistoryState, saveHistoryState);
     if (typeof saveHistoryState === 'function') {
       saveHistoryState('Add node', newId);
