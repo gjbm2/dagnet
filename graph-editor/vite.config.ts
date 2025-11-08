@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
     },
     publicDir: 'public',
     server: {
+      port: parseInt(process.env.VITE_PORT || '5173'),
       hmr: true,
       watch: {
         include: ['src/**/*']

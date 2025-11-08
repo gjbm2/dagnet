@@ -1,0 +1,110 @@
+{
+  "$id": "https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/query-dsl-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DagNet Query DSL",
+  "description": "Schema for query expression strings used in data retrieval and graph path discrimination",
+  "$comment": "Query DSL allows compact specification of graph path constraints for parameter files. Format: from(node).to(node).visited(node).exclude(node).case(id:variant)",
+  
+  "type": "object",
+  "required": ["raw"],
+  "additionalProperties": false,
+  "properties": {
+    "raw": {
+      "type": "string",
+      "description": "Raw query string in DSL format",
+      "pattern": "^from\\([a-z0-9-]+\\)\\.to\\([a-z0-9-]+\\)(\\.(visited|exclude|case|context)\\([^)]+\\))*$",
+      "examples": [
+        "from(homepage).to(checkout)",
+        "from(homepage).to(checkout).exclude(back-button)",
+        "from(product-view).to(checkout).visited(add-to-cart)",
+        "from(start).to(end).exclude(detour-a,detour-b).visited(checkpoint)",
+        "from(homepage).to(checkout).case(onboarding-test:treatment)"
+      ]
+    },
+    "ast": {
+      "$ref": "#/$defs/QueryAST",
+      "description": "Parsed abstract syntax tree (optional, for pre-parsed queries)"
+    }
+  },
+  
+  "$defs": {
+    "QueryAST": {
+      "type": "object",
+      "description": "Parsed representation of query DSL",
+      "required": ["functions"],
+      "additionalProperties": false,
+      "properties": {
+        "functions": {
+          "type": "array",
+          "description": "Ordered list of query functions",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/QueryFunction" }
+        }
+      }
+    },
+    
+    "QueryFunction": {
+      "type": "object",
+      "description": "Single function in query expression",
+      "required": ["name", "args"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": ["from", "to", "visited", "exclude", "context", "case"],
+          "description": "Function name"
+        },
+        "args": {
+          "type": "array",
+          "description": "Function arguments (node IDs or key:value pairs)",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+(:[a-z0-9-]+)?$"
+          }
+        }
+      }
+    },
+    
+    "QueryFunctionName": {
+      "type": "string",
+      "enum": ["from", "to", "visited", "exclude", "context", "case"],
+      "description": "Valid query function names",
+      "$comment": "Semantics: from(A)=start at node A, to(B)=end at node B, visited(X)=must visit X, exclude(Y)=must NOT visit Y, case(id:variant)=filter by experiment, context(key:val)=context constraint"
+    }
+  },
+  
+  "examples": [
+    {
+      "raw": "from(homepage).to(checkout)",
+      "ast": {
+        "functions": [
+          { "name": "from", "args": ["homepage"] },
+          { "name": "to", "args": ["checkout"] }
+        ]
+      }
+    },
+    {
+      "raw": "from(product).to(checkout).visited(promo).exclude(abandoned-cart)",
+      "ast": {
+        "functions": [
+          { "name": "from", "args": ["product"] },
+          { "name": "to", "args": ["checkout"] },
+          { "name": "visited", "args": ["promo"] },
+          { "name": "exclude", "args": ["abandoned-cart"] }
+        ]
+      }
+    },
+    {
+      "raw": "from(start).to(end).exclude(detour-a,detour-b)",
+      "ast": {
+        "functions": [
+          { "name": "from", "args": ["start"] },
+          { "name": "to", "args": ["end"] },
+          { "name": "exclude", "args": ["detour-a", "detour-b"] }
+        ]
+      }
+    }
+  ]
+}
+
