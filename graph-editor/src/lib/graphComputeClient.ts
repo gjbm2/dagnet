@@ -38,6 +38,7 @@ export interface QueryParseResponse {
   to_node: string;
   exclude: string[];
   visited: string[];
+  visited_any: string[][];  // Array of OR groups
   context: KeyValuePair[];
   cases: KeyValuePair[];
 }
@@ -122,6 +123,7 @@ export class GraphComputeClient {
         to_node: 'b',
         exclude: [],
         visited: [],
+        visited_any: [],
         context: [],
         cases: [],
       };

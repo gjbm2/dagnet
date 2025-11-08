@@ -2,7 +2,7 @@
 Query DSL Parser and Validator
 
 Schema Authority: /graph-editor/public/schemas/query-dsl-1.0.0.json
-Valid Functions: ["from", "to", "visited", "exclude", "context", "case"]
+Valid Functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case"]
 
 Grammar:
     query          ::= from-clause to-clause constraint*
@@ -10,8 +10,9 @@ Grammar:
     to-clause      ::= "to(" node-id ")"
     constraint     ::= exclude-clause | visited-clause | context-clause | case-clause
     
-    exclude-clause ::= ".exclude(" node-list ")"
-    visited-clause ::= ".visited(" node-list ")"
+    exclude-clause    ::= ".exclude(" node-list ")"
+    visited-clause    ::= ".visited(" node-list ")"
+    visitedAny-clause ::= ".visitedAny(" node-list ")"
     context-clause ::= ".context(" key ":" value ")"
     case-clause    ::= ".case(" key ":" value ")"
     
@@ -26,6 +27,7 @@ Examples:
     "from(product-view).to(checkout).visited(add-to-cart)"
     "from(homepage).to(checkout).context(device:mobile)"
     "from(homepage).to(checkout).case(onboarding-test:treatment)"
+    "from(a).to(b).visitedAny(x,y)"
     "from(start).to(end).visited(checkpoint).exclude(detour-a,detour-b)"
 """
 
@@ -52,12 +54,13 @@ class ParsedQuery:
     - Composable: Constraints are logically ANDed
     
     Schema authority: /graph-editor/public/schemas/query-dsl-1.0.0.json
-    Valid functions: ["from", "to", "visited", "exclude", "context", "case"]
+    Valid functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case"]
     """
     from_node: str              # Source node ID
     to_node: str                # Target node ID
-    exclude: List[str]          # Nodes to exclude from path
-    visited: List[str]          # Nodes that must be visited
+    exclude: List[str]          # Nodes to exclude from path (AND)
+    visited: List[str]          # Nodes that must be visited (AND)
+    visited_any: List[List[str]]# Groups where at least one must be visited (OR per group)
     context: List[KeyValuePair] # Context filters (e.g., device:mobile)
     cases: List[KeyValuePair]   # Case/variant filters (e.g., test-id:variant)
     
@@ -71,6 +74,10 @@ class ParsedQuery:
         
         if self.visited:
             parts.append(f"visited({','.join(self.visited)})")
+        
+        for group in self.visited_any:
+            if group:
+                parts.append(f"visitedAny({','.join(group)})")
         
         for ctx in self.context:
             parts.append(f"context({ctx.key}:{ctx.value})")
@@ -132,6 +139,7 @@ def parse_query(query: str) -> ParsedQuery:
     # Extract constraints
     exclude = _extract_node_list(query, 'exclude')
     visited = _extract_node_list(query, 'visited')
+    visited_any = _extract_node_groups(query, 'visitedAny')
     context = _extract_key_value_pairs(query, 'context')
     cases = _extract_key_value_pairs(query, 'case')
     
@@ -140,6 +148,7 @@ def parse_query(query: str) -> ParsedQuery:
         to_node=to_node,
         exclude=exclude,
         visited=visited,
+        visited_any=visited_any,
         context=context,
         cases=cases
     )
@@ -185,6 +194,25 @@ def _extract_key_value_pairs(query: str, function_type: str) -> List[KeyValuePai
     matches = re.findall(pattern, query)
     
     return [KeyValuePair(key=m[0], value=m[1]) for m in matches]
+
+
+def _extract_node_groups(query: str, function_type: str) -> List[List[str]]:
+    """
+    Extract OR-groups from DSL functions like visitedAny(a,b).
+    Returns list of groups; each group is a list of node ids.
+    """
+    pattern = rf'{function_type}\(([a-z0-9_,-]+)\)'
+    matches = re.findall(pattern, query)
+    groups: List[List[str]] = []
+    for m in matches:
+        nodes = []
+        seen = set()
+        for n in [x.strip() for x in m.split(',') if x.strip()]:
+            if n not in seen:
+                seen.add(n)
+                nodes.append(n)
+        groups.append(nodes)
+    return groups
 
 
 def validate_query(

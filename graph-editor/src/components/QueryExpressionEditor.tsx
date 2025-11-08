@@ -24,7 +24,7 @@ interface QueryExpressionEditorProps {
 }
 
 interface ParsedQueryChip {
-  type: 'from' | 'to' | 'exclude' | 'visited' | 'case' | 'context';
+  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context';
   values: string[];
   rawText: string;
 }
@@ -54,6 +54,10 @@ const outerChipConfig = {
   },
   visited: { 
     label: 'visited', 
+    icon: MapPinCheckInside
+  },
+  visitedAny: { 
+    label: 'visitedAny', 
     icon: MapPinCheckInside
   },
   case: { 
@@ -87,16 +91,16 @@ function parseQueryToChips(query: string): ParsedQueryChip[] {
   const chips: ParsedQueryChip[] = [];
   
   // Match ALL function calls in order they appear
-  const functionRegex = /(from|to|exclude|visited|case|context)\(([^)]+)\)/g;
+  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context)\(([^)]+)\)/g;
   let match;
   
   while ((match = functionRegex.exec(query)) !== null) {
-    const funcType = match[1] as 'from' | 'to' | 'exclude' | 'visited' | 'case' | 'context';
+    const funcType = match[1] as 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context';
     const content = match[2];
     
     chips.push({
       type: funcType,
-      values: (funcType === 'exclude' || funcType === 'visited') 
+      values: (funcType === 'exclude' || funcType === 'visited' || funcType === 'visitedAny') 
         ? content.split(',').map(s => s.trim())
         : [content],
       rawText: match[0]
@@ -375,8 +379,8 @@ export function QueryExpressionEditor({
           };
         }
         
-        // After .exclude( or .visited( → suggest node IDs (graph + registry)
-        if (/\.(exclude|visited)\([^)]*$/.test(textUntilPosition)) {
+        // After .exclude( or .visited( or .visitedAny( → suggest node IDs (graph + registry)
+        if (/\.(exclude|visited|visitedAny)\([^)]*$/.test(textUntilPosition)) {
           return {
             suggestions: allNodes.map((n: any) => ({
               label: n.label,
@@ -462,7 +466,7 @@ export function QueryExpressionEditor({
               kind: monaco.languages.CompletionItemKind.Function,
               insertText: 'exclude($0)',
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              documentation: 'Exclude nodes from path (rules out paths containing these nodes)',
+              documentation: 'Exclude nodes from path (rules out paths containing ANY of these nodes)',
               detail: '.exclude(node-id, ...)',
               range,
               sortText: '2'
@@ -472,10 +476,20 @@ export function QueryExpressionEditor({
               kind: monaco.languages.CompletionItemKind.Function,
               insertText: 'visited($0)',
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              documentation: 'Must visit these nodes (rules out paths NOT containing these nodes)',
+              documentation: 'Must visit ALL of these nodes (rules out paths missing any)',
               detail: '.visited(node-id, ...)',
               range,
               sortText: '3'
+            },
+            {
+              label: 'visitedAny',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'visitedAny($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Must visit at least ONE of these nodes (OR constraint)',
+              detail: '.visitedAny(node-id, ...)',
+              range,
+              sortText: '3.5'
             },
             {
               label: 'case',

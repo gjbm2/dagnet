@@ -1,6 +1,10 @@
-# Data Retrieval Query Construction
+# Data Retrieval Query Construction  
 
-**Status**: NOT YET IMPLEMENTED - This document describes future work
+**Status**: ✅ IMPLEMENTED - MSMDC algorithm complete and tested
+
+**Implementation**: `lib/msmdc.py`  
+**API Endpoints**: `/api/generate-query`, `/api/generate-all-queries` in `dev-server.py`  
+**Tests**: `tests/test_msmdc.py` (11 tests, all passing)
 
 ---
 
@@ -29,7 +33,7 @@ Semantic constraint for when an edge's probability applies.
 }
 ```
 
-### 3. Data Retrieval Query Construction (❌ NOT IMPLEMENTED)
+### 3. Data Retrieval Query Construction (✅ IMPLEMENTED - MSMDC)
 Build queries for external data sources (Amplitude, etc.) to fetch n/k.
 
 ---
@@ -113,7 +117,43 @@ If A is a case node (A/B test), ALL downstream edges have implicit case context.
 
 ---
 
-## Implementation Requirements (Future Work)
+## Query DSL Semantics (AND vs OR)
+
+### Core Principles
+1. **Terms are commutative and homomorphic**: `term(a).term(b) ≡ term(a,b)`
+2. **All current terms use AND semantics**:
+   - `visited(a,b)` = must visit node a AND node b
+   - `exclude(a,b)` = must NOT visit node a AND must NOT visit node b
+   - `visited(a).visited(b)` = must visit a AND must visit b
+   - `exclude(a).exclude(b)` = must NOT visit a AND must NOT visit b
+
+### OR Semantics: `visitedAny`
+To express "at least one of" constraints, use `visitedAny`:
+- `visitedAny(a,b)` = must visit node a OR node b (at least one)
+- `visitedAny(a,b).visitedAny(c,d)` = (a OR b) AND (c OR d)
+
+### Examples
+```typescript
+// AND: User must pass through BOTH marketing and sales pages
+from(landing).to(checkout).visited(marketing,sales)
+
+// OR: User must pass through EITHER marketing OR sales page
+from(landing).to(checkout).visitedAny(marketing,sales)
+
+// Complex: User must pass through (A OR B) AND must pass through C
+from(start).to(end).visitedAny(a,b).visited(c)
+
+// Exclude (already OR in negation): User must NOT pass through A AND must NOT pass through B
+from(start).to(end).exclude(a,b)  // = NOT(a) AND NOT(b)
+```
+
+### MSMDC Cost-Weighted Rewrite
+When generating data retrieval queries with `preserve_condition=false`, MSMDC can rewrite conditions to equivalent but cheaper forms:
+- `exclude(b)` may be rewritten as `visitedAny(c,d)` if c,d are siblings of b and visitedAny is cheaper
+- `visited(b)` may be rewritten as `exclude(c,d)` if exclude is cheaper
+- Cost is controlled via `literal_weights` parameter: `{"visited": 10, "exclude": 1}`
+
+## Implementation Requirements (✅ IMPLEMENTED)
 
 ### Function Signature:
 ```python
