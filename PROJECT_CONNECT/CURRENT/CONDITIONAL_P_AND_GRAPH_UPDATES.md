@@ -581,3 +581,109 @@ If migration fails:
 - **Option A**: Complete proper migration (Phases 1-4)
 - **Option B**: Revert to old format entirely
 
+---
+
+## Query DSL Schema Authority (Added: Nov 2025)
+
+### Problem Identified
+
+The Query DSL was implemented inconsistently across the codebase:
+- Monaco tokenizer had hardcoded: `['from', 'to', 'exclude', 'visited', 'case']` ❌ (missing `context`)
+- Monaco validation had: `['from', 'to', 'exclude', 'visited', 'case', 'context']` ✅
+- Python parser had: `["from", "to", "visited", "exclude", "case"]` ❌ (missing `context`)
+- No formal schema existed to define authority
+
+**Result**: Drift, bugs, and confusion about what's actually supported.
+
+### Solution Implemented
+
+**Schema is Authority**: Created `/graph-editor/public/schemas/query-dsl-1.0.0.json`
+
+**Authority Flow:**
+```
+query-dsl-1.0.0.json (SCHEMA = SINGLE SOURCE OF TRUTH)
+         ↓
+    queryDSL.ts (QUERY_FUNCTIONS constant)
+         ↓
+  QueryExpressionEditor.tsx (Monaco uses constant)
+         ↓
+    Python parser (documents schema as authority)
+```
+
+### Files Updated
+
+1. **Schema** (NEW): `/graph-editor/public/schemas/query-dsl-1.0.0.json`
+   - Defines valid functions: `["from", "to", "visited", "exclude", "context", "case"]`
+   - Defines argument patterns, structure
+   - **This is the authority**
+
+2. **TypeScript Constant** (NEW): `/graph-editor/src/lib/queryDSL.ts`
+   ```typescript
+   export const QUERY_FUNCTIONS = [
+     'from', 'to', 'visited', 'exclude', 'context', 'case'
+   ] as const;
+   ```
+   - Single source for TypeScript
+   - Used by Monaco, validation, parsing
+
+3. **Monaco Configuration** (UPDATED): `QueryExpressionEditor.tsx`
+   - Tokenizer: uses `QUERY_FUNCTIONS`
+   - Validation: uses `QUERY_FUNCTIONS`
+   - Error messages: uses `QUERY_FUNCTIONS`
+   - Chip parsing: uses `QUERY_FUNCTIONS`
+   - **No hardcoded function lists**
+
+4. **Python Parser** (UPDATED): `/lib/query_dsl.py`
+   - Added `context` support
+   - Docstring references schema as authority
+   - Matches all 6 functions from schema
+
+### No More Parallel Types
+
+**Before**: 
+- Hardcoded strings in 5+ places
+- Easy to drift
+- No way to know what's "correct"
+
+**After**:
+- Schema defines truth
+- One TS constant
+- Everything derives from constant
+- Python documents schema as reference
+
+### Adding New Query Functions
+
+To add a new query function:
+
+1. Update schema: `/graph-editor/public/schemas/query-dsl-1.0.0.json`
+   - Add to `$defs.QueryFunctionName.enum`
+
+2. Update TS constant: `/graph-editor/src/lib/queryDSL.ts`
+   - Add to `QUERY_FUNCTIONS` array
+   - Monaco auto-updates from this
+
+3. Update Python parser: `/lib/query_dsl.py`
+   - Add parsing logic if needed
+
+4. (Optional) Add icon: `outerChipConfig` in QueryExpressionEditor
+
+**That's it.** No hunting through code for hardcoded strings.
+
+### Validation
+
+Current state (all synced ✅):
+- Schema: 6 functions
+- TypeScript constant: 6 functions
+- Monaco tokenizer: uses constant
+- Monaco validation: uses constant
+- Python parser: 6 functions
+
+### Related Issues
+
+This schema drift contributed to the conditional probability migration issues:
+- When `context` was added to schema, it wasn't added to Monaco
+- When validating queries, different parts of the app had different definitions
+- Migration from old `{visited: [...]}` format was harder without formal schema
+
+**Lesson**: Schema-first approach prevents this entire class of bugs.
+

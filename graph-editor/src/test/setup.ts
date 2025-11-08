@@ -50,6 +50,15 @@ if (typeof global.IntersectionObserver === 'undefined') {
   }));
 }
 
+// Mock Monaco Editor (used by QueryExpressionEditor)
+vi.mock('@monaco-editor/react', () => ({
+  __esModule: true,
+  default: ({ value, onChange }: any) => null, // Minimal mock - component doesn't render Monaco in tests
+  Editor: vi.fn(),
+  DiffEditor: vi.fn(),
+  useMonaco: vi.fn(() => null),
+}));
+
 // Suppress console errors in tests (optional - comment out if debugging)
 // vi.spyOn(console, 'error').mockImplementation(() => {});
 // vi.spyOn(console, 'warn').mockImplementation(() => {});

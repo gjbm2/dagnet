@@ -1,8 +1,9 @@
 import React, { useRef, useEffect, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle } from 'lucide-react';
+import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, Settings } from 'lucide-react';
 import './QueryExpressionEditor.css';
+import { QUERY_FUNCTIONS } from '../lib/queryDSL';
 
 interface QueryExpressionEditorProps {
   value: string;
@@ -23,7 +24,7 @@ interface QueryExpressionEditorProps {
 }
 
 interface ParsedQueryChip {
-  type: 'from' | 'to' | 'exclude' | 'visited' | 'case';
+  type: 'from' | 'to' | 'exclude' | 'visited' | 'case' | 'context';
   values: string[];
   rawText: string;
 }
@@ -58,6 +59,10 @@ const outerChipConfig = {
   case: { 
     label: 'case', 
     icon: GitBranch
+  },
+  context: {
+    label: 'context',
+    icon: Settings
   }
 };
 
@@ -82,11 +87,11 @@ function parseQueryToChips(query: string): ParsedQueryChip[] {
   const chips: ParsedQueryChip[] = [];
   
   // Match ALL function calls in order they appear
-  const functionRegex = /(from|to|exclude|visited|case)\(([^)]+)\)/g;
+  const functionRegex = /(from|to|exclude|visited|case|context)\(([^)]+)\)/g;
   let match;
   
   while ((match = functionRegex.exec(query)) !== null) {
-    const funcType = match[1] as 'from' | 'to' | 'exclude' | 'visited' | 'case';
+    const funcType = match[1] as 'from' | 'to' | 'exclude' | 'visited' | 'case' | 'context';
     const content = match[2];
     
     chips.push({
@@ -157,7 +162,7 @@ export function QueryExpressionEditor({
     
     // Check for unknown function names
     const functionPattern = /\b([a-z_-]+)\s*\(/g;
-    const validFunctions = new Set(['from', 'to', 'exclude', 'visited', 'case', 'context']);
+    const validFunctions = new Set(QUERY_FUNCTIONS);
     let match;
     while ((match = functionPattern.exec(cleanValue)) !== null) {
       if (!validFunctions.has(match[1])) {
@@ -280,11 +285,11 @@ export function QueryExpressionEditor({
       
       // Syntax highlighting (Monarch tokenizer)
       monaco.languages.setMonarchTokensProvider('dagnet-query', {
-      keywords: ['from', 'to', 'exclude', 'visited', 'case'],
+      keywords: [...QUERY_FUNCTIONS],
       
       tokenizer: {
         root: [
-          [/\b(from|to|exclude|visited|case)\b/, 'keyword'],
+          [new RegExp(`\\b(${QUERY_FUNCTIONS.join('|')})\\b`), 'keyword'],
           [/[a-z0-9_-]+/, 'identifier'],
           [/[().,:]/, 'delimiter'],
         ]
@@ -561,7 +566,7 @@ export function QueryExpressionEditor({
       
       // 2. Check for unknown function names
       const functionPattern = /\b([a-z_-]+)\s*\(/g;
-      const validFunctions = new Set(['from', 'to', 'exclude', 'visited', 'case', 'context']);
+      const validFunctions = new Set(QUERY_FUNCTIONS);
       let match;
       while ((match = functionPattern.exec(text)) !== null) {
         const funcName = match[1];
@@ -570,7 +575,7 @@ export function QueryExpressionEditor({
           const endPos = model.getPositionAt(match.index + funcName.length);
           markers.push({
             severity: monaco.MarkerSeverity.Warning,
-            message: `Unknown function '${funcName}'. Valid functions: from, to, exclude, visited, case, context`,
+            message: `Unknown function '${funcName}'. Valid functions: ${QUERY_FUNCTIONS.join(', ')}`,
             startLineNumber: startPos.lineNumber,
             startColumn: startPos.column,
             endLineNumber: endPos.lineNumber,

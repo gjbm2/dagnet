@@ -1,8 +1,8 @@
 # PROJECT CONNECT: Data Connections System
 
-**Phase:** 1B (Phase 0 Complete, Phase 1 UI in progress)  
+**Phase:** 1D-E (Phase 0 Complete, Phase 1 UI in progress)  
 **Start Date:** 2025-11-05  
-**Status:** 🟡 Phase 1 - 85% Complete (Properties Panel refactored, QueryEditor needs polish)
+**Status:** 🟢 Phase 1 - 90% Complete (Python infrastructure ready, MSMDC next)
 
 This directory contains all design documentation for the Data Connections system implementation.
 
@@ -45,12 +45,25 @@ This directory contains all design documentation for the Data Connections system
   - QueryExpressionEditor prototype (Monaco + chips, needs polish)
   - Consistent styling and right-edge alignment
 - ✅ **QueryExpressionEditor polish complete** (1C done - Monaco integration, chips, validation, keyboard handling)
-- ⚠️ **TECHNICAL DEBT**: See `CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for conditional probability migration issues and graph-to-graph update architecture requirements (12-16 hours)
+- ✅ **Python Graph Compute Infrastructure Complete** (1D done - Nov 8, 2025):
+  - TypeScript ↔ Python API client with environment detection
+  - Local dev server setup (FastAPI on configurable port)
+  - Query DSL parser (Python ↔ TypeScript roundtrip validated)
+  - Test infrastructure (199 TS tests + 6 Python tests passing)
+  - Mock mode for frontend-only development
+  - Documentation complete with multi-machine setup guide
+  - **Ready for MSMDC algorithm implementation**
+- ⚠️ **TECHNICAL DEBT**: See `CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for:
+  - Conditional probability migration issues (backward compatibility hacks)
+  - Graph-to-graph update architecture requirements (UpdateManager patterns)
+  - Lost features: complementary conditional creation, color picker
+  - Estimated cleanup: 12-16 hours
 
-**Remaining Phase 1 Work:** ~18-25 hours
-- 1E: Graph auto-updates & Query String Builder (MSMDC algorithm) (6-8 hrs)
+**Remaining Phase 1 Work:** ~18-29 hours
+- 1E: MSMDC algorithm implementation in Python (4-6 hrs) **← NEXT**
+- 1E: Graph auto-updates & Query String Builder integration (2-3 hrs)
 - 1G: Connection Settings UI (needs design) (4-5 hrs)
-- 1H: Get connection actually working for Amplitude, Sheets
+- 1H: Get connection actually working for Amplitude, Sheets (6-8 hrs)
 - 1F: Top Menu "Data" (batch operations) (2-3 hrs)
 
 ## PHASE 2 work: *** NEEDS DETAILING ***
@@ -104,7 +117,13 @@ The override pattern for auto-calculated fields. Includes UpdateManager class de
 ### 4. **PHASE_1B_LIGHTNING_MENU.md** ⭐ UI DESIGN
 Complete UI design for Lightning Menu and Context Menus. Iconography, pathway visualizations, submenu patterns.
 
-### 5. **UUID_PRIMARY_KEY_REFACTOR.md** ⚠️ TECHNICAL DEBT
+### 5. **PYTHON_GRAPH_COMPUTE_ARCHITECTURE.md** ⭐ PYTHON SETUP
+Complete architecture for Python graph compute integration. Infrastructure status, development workflow, testing strategy. **Status: Phase 1 & 2 complete, ready for MSMDC implementation.**
+
+### 6. **CONDITIONAL_P_AND_GRAPH_UPDATES.md** ⚠️ TECHNICAL DEBT
+Documents conditional probability migration (old object format → new string format), backward compatibility hacks, and comprehensive graph-to-graph update architecture requirements.
+
+### 7. **UUID_PRIMARY_KEY_REFACTOR.md** ⚠️ TECHNICAL DEBT
 Documents UUID vs human-readable ID inconsistency. Fix after Phase 1 complete (~2-3 hrs).
 
 ---

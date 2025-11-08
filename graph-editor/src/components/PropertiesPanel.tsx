@@ -1897,8 +1897,8 @@ export default function PropertiesPanel({
                 const next = structuredClone(graph);
                 const edgeIndex = next.edges.findIndex((e: any) => 
                   e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                );
-                if (edgeIndex >= 0) {
+                                    );
+                                    if (edgeIndex >= 0) {
                   next.edges[edgeIndex].query = currentValue;
                   next.edges[edgeIndex].query_overridden = true;
                   if (next.metadata) {

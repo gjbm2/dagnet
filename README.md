@@ -1,0 +1,266 @@
+# DagNet - Directed Acyclic Graph Network Editor
+
+A web-based visual editor for creating and analyzing directed acyclic graphs (DAGs) with support for conditional probabilities, file-backed parameters, and advanced graph analytics.
+
+## Quick Start
+
+### First Time Setup
+
+1. **Clone the repository**
+   ```bash
+   git clone <your-repo-url>
+   cd dagnet
+   ```
+
+2. **Configure environment variables**
+   ```bash
+   cd graph-editor
+   cp .env.example .env
+   # Edit .env with your GitHub token and other settings
+   ```
+
+   **Required variables:**
+   - `VITE_GITHUB_TOKEN` - GitHub personal access token (for file operations)
+   - `VITE_GIT_REPO_OWNER` - Your GitHub username
+   - `VITE_GIT_REPO_NAME` - Your repository name
+
+   **Optional variables (defaults work for most setups):**
+   - `VITE_PORT=5173` - Frontend dev server port
+   - `VITE_PYTHON_API_PORT=9000` - Python backend port
+   - `VITE_PYTHON_API_URL=http://localhost:9000` - Python backend URL
+   - `VITE_USE_MOCK_COMPUTE=false` - Set to `true` for frontend-only development
+
+3. **Start development servers**
+   ```bash
+   cd ..  # Back to root
+   ./dev-start.sh
+   ```
+
+   This will:
+   - Install all dependencies (npm + Python)
+   - Start frontend on port specified in `.env` (default: 5173)
+   - Start Python API on port specified in `.env` (default: 9000)
+   - Open split tmux panes for both
+
+### Development (Local)
+
+```bash
+# One-command dev server (frontend + Python API in split panes):
+./dev-start.sh
+
+# With clean install (clears caches, reinstalls everything):
+./dev-start.sh --clean
+
+# Stop servers:
+./dev-stop.sh
+```
+
+**Access:**
+- Frontend: http://localhost:5173 (or your `VITE_PORT`)
+- Python API: http://localhost:9000 (or your `PYTHON_API_PORT`)
+- API Docs: http://localhost:9000/docs
+
+**Requirements:**
+- Node.js 18+
+- Python 3.9+
+- tmux (auto-installed by script if missing)
+- GitHub personal access token (create at https://github.com/settings/tokens)
+
+### Manual Setup
+
+```bash
+# Frontend
+cd graph-editor
+npm install
+npm run dev
+
+# Python API (separate terminal)
+python3 -m venv venv
+source venv/bin/activate
+pip install fastapi uvicorn[standard] networkx pydantic pytest
+python dev-server.py
+```
+
+## Project Structure
+
+```
+dagnet/
+├── api/                      # Serverless functions (TS + Python)
+├── graph-editor/             # Frontend React/TypeScript app
+├── lib/                      # Python graph computation libraries
+├── tests/                    # Python tests
+├── PROJECT_CONNECT/          # Technical documentation
+│   ├── README.md            # Project roadmap
+│   └── CURRENT/             # Active work documentation
+├── dev-server.py            # Local Python dev server
+├── dev-start.sh             # Quick-start script
+└── dev-stop.sh              # Stop all dev servers
+```
+
+## Features
+
+- **Visual Graph Editor**: Drag-and-drop nodes and edges
+- **Conditional Probabilities**: Define probabilities based on graph state
+- **File-Backed Parameters**: Link parameters to external data sources
+- **Query DSL**: Powerful query language for graph traversal
+- **What-If Analysis**: Simulate different scenarios
+- **Graph Analytics**: MSMDC, mutations, pruning (Python/NetworkX)
+- **Case Variants**: A/B testing and multivariate scenarios
+
+## Documentation
+
+See [PROJECT_CONNECT/README.md](PROJECT_CONNECT/README.md) for:
+- Current project status and roadmap
+- Technical debt tracking
+- Architecture decisions
+- Phase-by-phase implementation plan
+
+### Key Docs
+- [Python Graph Compute Architecture](PROJECT_CONNECT/CURRENT/PYTHON_GRAPH_COMPUTE_ARCHITECTURE.md)
+- [Conditional Probability & Graph Updates](PROJECT_CONNECT/CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md)
+- [Schema Changes](PROJECT_CONNECT/CURRENT/SCHEMA_CHANGES_AND_TODO.md)
+- [Data Model Hierarchy](PROJECT_CONNECT/CURRENT/DATA_MODEL_HIERARCHY.md)
+
+## Tech Stack
+
+**Frontend:**
+- React 18 + TypeScript
+- Vite
+- ReactFlow (graph visualization)
+- Monaco Editor (query DSL)
+- Zustand (state management)
+
+**Backend:**
+- Python 3.9+ (graph computation)
+- NetworkX (graph algorithms)
+- FastAPI (local dev server)
+- Vercel Serverless Functions (production)
+
+**Deployment:**
+- Vercel (edge network + serverless)
+- Region co-location for minimal latency
+
+## Development Workflow
+
+### Hot Reload
+Both servers support hot reload:
+- **Frontend**: Vite HMR (instant updates)
+- **Python**: Uvicorn auto-reload (restarts on file change)
+
+## Local development
+
+Using /dev-server.py:
+
+Local Development:
+┌─────────────────┐         ┌──────────────────┐
+│  Vite Frontend  │────────▶│  dev-server.py   │
+│  :5173          │  HTTP   │  :9000           │
+│  (TypeScript)   │◀────────│  (Python/FastAPI)│
+└─────────────────┘         └──────────────────┘
+                                     │
+                                     ▼
+                              ┌─────────────┐
+                              │ lib/*.py    │
+                              │ (NetworkX,  │
+                              │  algorithms)│
+                              └─────────────┘
+
+Production (Vercel):
+┌─────────────────┐         ┌──────────────────┐
+│  Static Assets  │────────▶│  Serverless Fns  │
+│  CDN            │  HTTP   │  /api/*.py       │
+│  (React build)  │◀────────│  (Python)        │
+└─────────────────┘         └──────────────────┘
+
+### Testing
+
+```bash
+# Frontend tests
+cd graph-editor
+npm test
+
+# Python tests
+source venv/bin/activate
+pytest tests/ -v
+pytest tests/ --cov=lib --cov-report=html
+```
+
+### Cleaning/Resetting
+
+```bash
+# Full clean and restart
+./dev-start.sh --clean
+
+# Manual cleanup
+cd graph-editor
+npm cache clean --force
+rm -rf node_modules package-lock.json
+cd ..
+rm -rf venv
+find . -type d -name "__pycache__" -exec rm -rf {} +
+```
+
+### Troubleshooting
+
+#### Port Already in Use
+
+If you get "port already in use" errors:
+
+1. **Change ports in `.env`:**
+   ```bash
+   # Edit graph-editor/.env
+   VITE_PORT=5174              # or any free port
+   VITE_PYTHON_API_PORT=9001   # or any free port
+   VITE_PYTHON_API_URL=http://localhost:9001  # match Python port
+   ```
+
+2. **Find what's using the port:**
+   ```bash
+   # Linux/Mac
+   lsof -i :5173
+   lsof -i :9000
+   
+   # Kill process if needed
+   kill -9 <PID>
+   ```
+
+3. **Or use dev-stop.sh to clean up:**
+   ```bash
+   ./dev-stop.sh
+   ```
+
+#### Python Server Not Starting
+
+- Ensure Python 3.9+ is installed: `python3 --version`
+- Check virtual environment: `source venv/bin/activate`
+- Manually install dependencies: `pip install fastapi uvicorn networkx pydantic pytest`
+
+#### Frontend Tests Skipping
+
+Some tests require Python backend running:
+- 11 integration tests will skip if Python server is not running
+- This is normal for frontend-only development
+- To run all tests: start Python server first with `python dev-server.py`
+
+#### Mock Mode for Frontend-Only Development
+
+If you don't want to run the Python backend:
+
+```bash
+# Set in graph-editor/.env
+VITE_USE_MOCK_COMPUTE=true
+```
+
+This returns mock data for all Python API calls.
+
+## Contributing
+
+1. Check [PROJECT_CONNECT/README.md](PROJECT_CONNECT/README.md) for current priorities
+2. Review technical debt in [CURRENT/](PROJECT_CONNECT/CURRENT/) docs
+3. Write tests for new features
+4. Ensure both frontend and Python tests pass
+
+## License
+
+MIT
+
