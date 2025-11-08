@@ -16,9 +16,9 @@ Grammar:
     case-clause    ::= ".case(" key ":" value ")"
     
     node-list      ::= node-id ("," node-id)*
-    node-id        ::= [a-z0-9-]+
-    key            ::= [a-z0-9-]+
-    value          ::= [a-z0-9-]+
+    node-id        ::= [a-z0-9_-]+
+    key            ::= [a-z0-9_-]+
+    value          ::= [a-z0-9_-]+
 
 Examples:
     "from(homepage).to(checkout)"
@@ -118,8 +118,8 @@ def parse_query(query: str) -> ParsedQuery:
         raise QueryParseError("Query must be a non-empty string")
     
     # Extract from() and to()
-    from_match = re.search(r'from\(([a-z0-9-]+)\)', query)
-    to_match = re.search(r'to\(([a-z0-9-]+)\)', query)
+    from_match = re.search(r'from\(([a-z0-9_-]+)\)', query)
+    to_match = re.search(r'to\(([a-z0-9_-]+)\)', query)
     
     if not from_match:
         raise QueryParseError("Query must contain 'from(node-id)'")
@@ -153,7 +153,7 @@ def _extract_node_list(query: str, constraint_type: str) -> List[str]:
         _extract_node_list("...exclude(a,b,c)...", "exclude") → ["a", "b", "c"]
         _extract_node_list("...visited(x)...", "visited") → ["x"]
     """
-    pattern = rf'{constraint_type}\(([a-z0-9-,]+)\)'
+    pattern = rf'{constraint_type}\(([a-z0-9_,-]+)\)'
     matches = re.findall(pattern, query)
     
     nodes = []
@@ -181,7 +181,7 @@ def _extract_key_value_pairs(query: str, function_type: str) -> List[KeyValuePai
         _extract_key_value_pairs("...context(device:mobile)...", "context")
             → [KeyValuePair("device", "mobile")]
     """
-    pattern = rf'{function_type}\(([a-z0-9-]+):([a-z0-9-]+)\)'
+    pattern = rf'{function_type}\(([a-z0-9_-]+):([a-z0-9_-]+)\)'
     matches = re.findall(pattern, query)
     
     return [KeyValuePair(key=m[0], value=m[1]) for m in matches]

@@ -90,8 +90,10 @@ fi
 echo -e "${GREEN}✅ Dependencies installed${NC}"
 echo ""
 
-# Load environment variables from .env if it exists
-if [ -f "graph-editor/.env" ]; then
+# Load environment variables from .env.local (priority) or .env (fallback)
+if [ -f "graph-editor/.env.local" ]; then
+    export $(grep -v '^#' graph-editor/.env.local | grep -E '^VITE_PORT=|^PYTHON_API_PORT=' | xargs)
+elif [ -f "graph-editor/.env" ]; then
     export $(grep -v '^#' graph-editor/.env | grep -E '^VITE_PORT=|^PYTHON_API_PORT=' | xargs)
 fi
 
@@ -104,13 +106,12 @@ echo -e "${YELLOW}  Left pane:  Frontend (http://localhost:${VITE_PORT})${NC}"
 echo -e "${YELLOW}  Right pane: Python API (http://localhost:${PYTHON_API_PORT})${NC}"
 echo ""
 echo -e "${BLUE}Tmux commands:${NC}"
-echo -e "  Ctrl+B then %        - Split vertically"
-echo -e "  Ctrl+B then \"        - Split horizontally"
+echo -e "  ${GREEN}Ctrl+B then R${NC}        - ${GREEN}⚡ Restart both servers${NC}"
+echo -e "  ${GREEN}Ctrl+B then K${NC}        - ${GREEN}⏹️  Kill both servers${NC}"
 echo -e "  Ctrl+B then ←/→      - Switch panes"
 echo -e "  Ctrl+B then [        - Scroll mode (q to exit)"
 echo -e "  Ctrl+B then d        - Detach (keeps running)"
 echo -e "  tmux attach          - Reattach to session"
-echo -e "  Ctrl+C (both panes)  - Stop servers"
 echo ""
 sleep 2
 
@@ -120,9 +121,20 @@ tmux kill-session -t dagnet 2>/dev/null || true
 # Create new tmux session with split panes
 tmux new-session -d -s dagnet -n dev
 
+# Load custom keybindings for this session
+tmux source-file $(pwd)/.tmux.conf.dagnet
+
 # Left pane: Frontend
 tmux send-keys -t dagnet:dev.0 "cd $(pwd)/graph-editor" C-m
-tmux send-keys -t dagnet:dev.0 "echo '🚀 Starting Frontend Dev Server...'" C-m
+tmux send-keys -t dagnet:dev.0 "clear" C-m
+tmux send-keys -t dagnet:dev.0 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
+tmux send-keys -t dagnet:dev.0 "echo '  🚀 VITE DEV SERVER (Frontend)'" C-m
+tmux send-keys -t dagnet:dev.0 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
+tmux send-keys -t dagnet:dev.0 "echo '  ⚡ Ctrl+B then R  - Restart both servers'" C-m
+tmux send-keys -t dagnet:dev.0 "echo '  ⏹️  Ctrl+B then K  - Kill both servers'" C-m
+tmux send-keys -t dagnet:dev.0 "echo '  ↔️  Ctrl+B then ←→ - Switch panes'" C-m
+tmux send-keys -t dagnet:dev.0 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
+tmux send-keys -t dagnet:dev.0 "echo ''" C-m
 tmux send-keys -t dagnet:dev.0 "npm run dev" C-m
 
 # Split window vertically and setup right pane: Python
@@ -130,7 +142,16 @@ tmux split-window -h -t dagnet:dev
 tmux send-keys -t dagnet:dev.1 "cd $(pwd)" C-m
 tmux send-keys -t dagnet:dev.1 "source venv/bin/activate" C-m
 tmux send-keys -t dagnet:dev.1 "export PYTHON_API_PORT=${PYTHON_API_PORT}" C-m
-tmux send-keys -t dagnet:dev.1 "echo '🐍 Starting Python API Server...'" C-m
+tmux send-keys -t dagnet:dev.1 "export VITE_PORT=${VITE_PORT}" C-m
+tmux send-keys -t dagnet:dev.1 "clear" C-m
+tmux send-keys -t dagnet:dev.1 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
+tmux send-keys -t dagnet:dev.1 "echo '  🐍 PYTHON API SERVER (Backend)'" C-m
+tmux send-keys -t dagnet:dev.1 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
+tmux send-keys -t dagnet:dev.1 "echo '  ⚡ Ctrl+B then R  - Restart both servers'" C-m
+tmux send-keys -t dagnet:dev.1 "echo '  ⏹️  Ctrl+B then K  - Kill both servers'" C-m
+tmux send-keys -t dagnet:dev.1 "echo '  ↔️  Ctrl+B then ←→ - Switch panes'" C-m
+tmux send-keys -t dagnet:dev.1 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
+tmux send-keys -t dagnet:dev.1 "echo ''" C-m
 tmux send-keys -t dagnet:dev.1 "python dev-server.py" C-m
 
 # Attach to the session

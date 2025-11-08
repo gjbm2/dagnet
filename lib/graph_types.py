@@ -73,7 +73,7 @@ class ConditionalProbability(BaseModel):
     - query: full retrieval path (HOW to fetch data) - auto-derived via MSMDC
     """
     condition: str = Field(..., description="Constraint expression using query DSL")
-    query: Optional[str] = Field(None, pattern=r"^from\([a-z0-9-]+\)\.to\([a-z0-9-]+\)", description="Full data retrieval query")
+    query: Optional[str] = Field(None, pattern=r"^from\([a-z0-9_-]+\)\.to\([a-z0-9_-]+\)", description="Full data retrieval query")
     query_overridden: bool = Field(False, description="If true, query was manually edited")
     p: ProbabilityParam
 
@@ -84,7 +84,7 @@ class ConditionalProbability(BaseModel):
 
 class EventReference(BaseModel):
     """Event reference for a node."""
-    id: str = Field(..., pattern=r"^[a-z0-9_]+$", description="Reference to event in events registry")
+    id: str = Field(..., pattern=r"^[a-z0-9_-]+$", description="Reference to event in events registry")
     id_overridden: bool = Field(False, description="If true, event ID was manually edited")
 
 
@@ -178,7 +178,7 @@ class Edge(BaseModel):
     label_overridden: bool = Field(False, description="If true, label was manually edited")
     description: Optional[str] = None
     description_overridden: bool = Field(False, description="If true, description was manually edited")
-    query: Optional[str] = Field(None, pattern=r"^from\([a-z0-9-]+\)\.to\([a-z0-9-]+\)", description="Query expression for data retrieval")
+    query: Optional[str] = Field(None, pattern=r"^from\([a-z0-9_-]+\)\.to\([a-z0-9_-]+\)", description="Query expression for data retrieval")
     query_overridden: bool = Field(False, description="If true, query was manually edited")
     p: ProbabilityParam = Field(..., description="Base probability (fallback when no conditionals match)")
     conditional_p: Optional[List[ConditionalProbability]] = Field(None, description="Conditional probabilities (first match wins)")

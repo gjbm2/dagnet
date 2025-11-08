@@ -54,8 +54,8 @@ class TestDSLParsing:
         parsed = parse_query(query)
         
         assert len(parsed.cases) == 1
-        assert parsed.cases[0].case_id == "test-1"
-        assert parsed.cases[0].variant == "treatment"
+        assert parsed.cases[0].key == "test-1"
+        assert parsed.cases[0].value == "treatment"
     
     def test_complex_query(self):
         """Parse complex query with multiple constraints."""
@@ -176,6 +176,22 @@ class TestDSLEdgeCases:
         
         assert parsed.from_node == "home-page"
         assert parsed.to_node == "check-out"
+    
+    def test_node_ids_with_underscores(self):
+        """Node IDs can contain underscores."""
+        query = "from(checkout_page).to(order_complete).visited(promo_viewed).exclude(cart_abandoned)"
+        parsed = parse_query(query)
+        assert parsed.from_node == "checkout_page"
+        assert parsed.to_node == "order_complete"
+        assert "promo_viewed" in parsed.visited
+        assert "cart_abandoned" in parsed.exclude
+    
+    def test_node_ids_with_mixed_separators(self):
+        """Node IDs can contain both underscores and hyphens."""
+        query = "from(page_1-mobile).to(page_2-desktop)"
+        parsed = parse_query(query)
+        assert parsed.from_node == "page_1-mobile"
+        assert parsed.to_node == "page_2-desktop"
 
 
 if __name__ == "__main__":

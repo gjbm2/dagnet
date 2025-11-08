@@ -12,7 +12,7 @@
     "raw": {
       "type": "string",
       "description": "Raw query string in DSL format",
-      "pattern": "^from\\([a-z0-9-]+\\)\\.to\\([a-z0-9-]+\\)(\\.(visited|exclude|case|context)\\([^)]+\\))*$",
+      "pattern": "^from\\([a-z0-9_-]+\\)\\.to\\([a-z0-9_-]+\\)(\\.(visited|exclude|case|context)\\([^)]+\\))*$",
       "examples": [
         "from(homepage).to(checkout)",
         "from(homepage).to(checkout).exclude(back-button)",
@@ -60,7 +60,7 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^[a-z0-9-]+(:[a-z0-9-]+)?$"
+            "pattern": "^[a-z0-9_-]+(:[a-z0-9_-]+)?$"
           }
         }
       }

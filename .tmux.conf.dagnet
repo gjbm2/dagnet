@@ -1,0 +1,33 @@
+# DagNet tmux session configuration
+# Custom keybindings for development
+
+# Ctrl+B then R - Restart both servers
+bind R run-shell "bash -c '\
+  tmux send-keys -t dagnet:dev.0 C-c; \
+  tmux send-keys -t dagnet:dev.1 C-c; \
+  sleep 1; \
+  tmux send-keys -t dagnet:dev.0 \"clear\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"echo \\\"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"echo \\\"  🚀 VITE DEV SERVER (Frontend)\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"echo \\\"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"echo \\\"  ⚡ Ctrl+B then R  - Restart both servers\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"echo \\\"  ⏹️  Ctrl+B then K  - Kill both servers\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"echo \\\"  ↔️  Ctrl+B then ←→ - Switch panes\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"echo \\\"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"echo \\\"\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.0 \"npm run dev\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"clear\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"echo \\\"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"echo \\\"  🐍 PYTHON API SERVER (Backend)\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"echo \\\"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"echo \\\"  ⚡ Ctrl+B then R  - Restart both servers\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"echo \\\"  ⏹️  Ctrl+B then K  - Kill both servers\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"echo \\\"  ↔️  Ctrl+B then ←→ - Switch panes\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"echo \\\"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"echo \\\"\\\"\" C-m; \
+  tmux send-keys -t dagnet:dev.1 \"python dev-server.py\" C-m; \
+'"
+
+# Ctrl+B then K - Kill both servers (don't restart)
+bind K run-shell "tmux send-keys -t dagnet:dev.0 C-c && tmux send-keys -t dagnet:dev.1 C-c"
+

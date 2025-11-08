@@ -36,7 +36,7 @@ That's it! 🎉
 
 ## Port Conflicts?
 
-Edit `graph-editor/.env`:
+Edit `graph-editor/.env.local` (or `.env`):
 
 ```bash
 VITE_PORT=5174              # Change frontend port
@@ -53,7 +53,7 @@ Then restart: `./dev-start.sh`
 Don't want to run Python backend:
 
 ```bash
-# In graph-editor/.env
+# In graph-editor/.env.local (or .env)
 VITE_USE_MOCK_COMPUTE=true
 ```
 
