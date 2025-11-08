@@ -16,6 +16,7 @@ export const QUERY_FUNCTIONS = [
   'from',
   'to', 
   'visited',
+  'visitedAny',
   'exclude',
   'context',
   'case'
@@ -47,7 +48,7 @@ export interface ParsedQuery {
  * Basic query pattern for validation.
  * Must start with from() or to(), then have any number of functions.
  */
-export const QUERY_PATTERN = /^(from|to)\([a-z0-9-]+\)\.(from|to|visited|exclude|context|case)\([^)]*\)(\.(visited|exclude|context|case)\([^)]*\))*$/;
+export const QUERY_PATTERN = /^(from|to)\([a-z0-9-]+\)\.(from|to|visited|visitedAny|exclude|context|case)\([^)]*\)(\.(visited|visitedAny|exclude|context|case)\([^)]*\))*$/;
 
 /**
  * Validate query string structure.
@@ -87,7 +88,7 @@ export function parseQueryBasic(query: string): ParsedQuery | null {
   if (!validateQueryStructure(query)) return null;
   
   const functions: ParsedQueryFunction[] = [];
-  const functionRegex = /(from|to|visited|exclude|context|case)\(([^)]+)\)/g;
+  const functionRegex = /(from|to|visited|visitedAny|exclude|context|case)\(([^)]+)\)/g;
   
   let match;
   while ((match = functionRegex.exec(query)) !== null) {

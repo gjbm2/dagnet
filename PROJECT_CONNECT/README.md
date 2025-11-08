@@ -29,7 +29,7 @@ This directory contains all design documentation for the Data Connections system
 - Yellow Calendar icon theme
 - 0 linter errors
 
-**Phase 1B Partial (Nov 7, 2025):** 🟡 **85% Complete**
+**Phase 1B-D Complete (Nov 8, 2025):** ✅ **100% Complete**
 - ✅ Lightning Menu component (React Portal, z-index fixed)
 - ✅ Node & Edge Context Menus extracted (submenu pattern)
 - ✅ DataOperationsService created (centralized orchestration)
@@ -49,22 +49,29 @@ This directory contains all design documentation for the Data Connections system
   - TypeScript ↔ Python API client with environment detection
   - Local dev server setup (FastAPI on configurable port)
   - Query DSL parser (Python ↔ TypeScript roundtrip validated)
-  - Test infrastructure (199 TS tests + 6 Python tests passing)
+  - Test infrastructure (199 TS tests + 116 Python tests passing)
   - Mock mode for frontend-only development
   - Documentation complete with multi-machine setup guide
-  - **Ready for MSMDC algorithm implementation**
+- ✅ **MSMDC Algorithm Complete** (1E done - Nov 8, 2025):
+  - Witness-guided algorithm (no exponential path enumeration)
+  - Cost-weighted literal selection for optimal query generation
+  - Full parameter coverage (base p, conditional p, costs, case variants)
+  - OR semantics via `visitedAny` term for complex funnel construction
+  - Condition rewriting for cost-effectiveness
+  - 18 MSMDC tests passing, covering complex graph topologies
+  - API endpoints: `/api/generate-query`, `/api/generate-all-queries`, `/api/generate-all-parameters`
+  - Monaco editor integration with autocomplete for `visitedAny`
 - ⚠️ **TECHNICAL DEBT**: See `CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for:
   - Conditional probability migration issues (backward compatibility hacks)
   - Graph-to-graph update architecture requirements (UpdateManager patterns)
   - Lost features: complementary conditional creation, color picker
   - Estimated cleanup: 12-16 hours
 
-**Remaining Phase 1 Work:** ~18-29 hours
-- 1E: MSMDC algorithm implementation in Python (4-6 hrs) **← NEXT**
-- 1E: Graph auto-updates & Query String Builder integration (2-3 hrs)
+**Remaining Phase 1 Work:** ~14-19 hours
+- 1F: Graph auto-updates & Query String Builder integration (2-3 hrs) **← NEXT**
 - 1G: Connection Settings UI (needs design) (4-5 hrs)
 - 1H: Get connection actually working for Amplitude, Sheets (6-8 hrs)
-- 1F: Top Menu "Data" (batch operations) (2-3 hrs)
+- 1I: Top Menu "Data" (batch operations) (2-3 hrs)
 
 ## PHASE 2 work: *** NEEDS DETAILING ***
 

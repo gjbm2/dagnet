@@ -83,6 +83,7 @@ async def parse_query_endpoint(request: Request):
                 "to_node": parsed.to_node,
                 "exclude": parsed.exclude,
                 "visited": parsed.visited,
+                "visited_any": getattr(parsed, "visited_any", []),
                 "context": [{"key": c.key, "value": c.value} for c in parsed.context],
                 "cases": [{"key": c.key, "value": c.value} for c in parsed.cases]
             },
@@ -130,6 +131,209 @@ async def query_graph_endpoint(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/generate-query")
+async def generate_query_endpoint(request: Request):
+    """
+    Generate optimal data retrieval query for an edge using MSMDC.
+    
+    This is for DATA RETRIEVAL (Amplitude, etc.), not topology filtering.
+    Returns minimal discriminating query string for external API calls.
+    """
+    try:
+        body = await request.json()
+        graph_data = body.get("graph")
+        edge_data = body.get("edge")
+        condition = body.get("condition")  # Optional constraint-only string
+        max_checks = body.get("maxChecks", 200)
+        literal_weights = body.get("literalWeights")  # Optional: {"visited":1, "exclude":10}
+        preserve_condition = body.get("preserveCondition", True)
+        preserve_case_context = body.get("preserveCaseContext", True)
+        
+        if not graph_data or not edge_data:
+            raise HTTPException(status_code=400, detail="Missing 'graph' or 'edge' field")
+        
+        # Import and run MSMDC
+        import sys
+        sys.path.insert(0, "lib")
+        from msmdc import generate_query_for_edge
+        from graph_types import Graph, Edge
+        
+        # Parse graph and edge
+        graph = Graph.model_validate(graph_data)
+        edge = Edge.model_validate(edge_data)
+        
+        result = generate_query_for_edge(
+            graph=graph,
+            edge=edge,
+            condition=condition,
+            max_checks=max_checks,
+            literal_weights=literal_weights,
+            preserve_condition=preserve_condition,
+            preserve_case_context=preserve_case_context
+        )
+        
+        return {
+            "query": result.query_string,
+            "stats": result.coverage_stats,
+            "satisfying": result.satisfying_found,
+            "success": True
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/generate-all-queries")
+async def generate_all_queries_endpoint(request: Request):
+    """
+    Generate queries for ALL edges in a graph (batch MSMDC).
+    
+    Performance optimization: Send graph once, get all queries back.
+    """
+    try:
+        body = await request.json()
+        graph_data = body.get("graph")
+        max_checks = body.get("maxChecks", 200)
+        literal_weights = body.get("literalWeights")
+        preserve_condition = body.get("preserveCondition", True)
+        preserve_case_context = body.get("preserveCaseContext", True)
+        
+        if not graph_data:
+            raise HTTPException(status_code=400, detail="Missing 'graph' field")
+        
+        import sys
+        sys.path.insert(0, "lib")
+        from msmdc import generate_query_for_edge
+        from graph_types import Graph
+        
+        graph = Graph.model_validate(graph_data)
+        
+        # Generate query for each edge and its conditional_p (if any)
+        results = {}
+        for edge in graph.edges:
+            edge_key = f"{edge.from_node}->{edge.to}"
+            results[edge_key] = {"base": None, "conditionals": []}
+            # Base (no condition)
+            try:
+                base = generate_query_for_edge(graph=graph, edge=edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
+                results[edge_key]["base"] = {
+                    "query": base.query_string,
+                    "stats": base.coverage_stats,
+                    "satisfying": base.satisfying_found
+                }
+            except Exception as e:
+                results[edge_key]["base"] = {"query": None, "error": str(e)}
+            # Conditionals
+            if getattr(edge, "conditional_p", None):
+                for cond in (edge.conditional_p or []):
+                    cond_str = getattr(cond, "condition", None)
+                    try:
+                        cond_res = generate_query_for_edge(graph=graph, edge=edge, condition=cond_str, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
+                        results[edge_key]["conditionals"].append({
+                            "condition": cond_str,
+                            "query": cond_res.query_string,
+                            "stats": cond_res.coverage_stats,
+                            "satisfying": cond_res.satisfying_found
+                        })
+                    except Exception as e:
+                        results[edge_key]["conditionals"].append({
+                            "condition": cond_str,
+                            "query": None,
+                            "error": str(e)
+                        })
+        
+        return {
+            "queries": results,
+            "success": True
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/generate-all-parameters")
+async def generate_all_parameters_endpoint(request: Request):
+    """
+    Generate queries for ALL parameters in a graph (comprehensive MSMDC).
+    
+    Covers:
+    - Edge base probabilities (edge.p)
+    - Edge conditional probabilities (edge.conditional_p[])
+    - Edge costs (cost_gbp, cost_time)
+    - Case node variants (node.case.variants[])
+    
+    Performance optimizations:
+    - downstreamOf: Only regenerate params for edges downstream of specified node
+    - paramTypes: Filter to specific parameter types only
+    
+    This is the complete "batch MSMDC for entire system" endpoint.
+    """
+    try:
+        body = await request.json()
+        graph_data = body.get("graph")
+        param_types = body.get("paramTypes")  # Optional: filter by type
+        downstream_of = body.get("downstreamOf")  # Optional: incremental updates
+        max_checks = body.get("maxChecks", 200)
+        literal_weights = body.get("literalWeights")
+        preserve_condition = body.get("preserveCondition", True)
+        preserve_case_context = body.get("preserveCaseContext", True)
+        
+        if not graph_data:
+            raise HTTPException(status_code=400, detail="Missing 'graph' field")
+        
+        import sys
+        sys.path.insert(0, "lib")
+        from msmdc import generate_all_parameter_queries, generate_queries_by_type
+        from graph_types import Graph
+        
+        graph = Graph.model_validate(graph_data)
+        
+        # Generate all parameters or filter by type/downstream
+        if param_types:
+            params_by_type = generate_queries_by_type(
+                graph, param_types, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context
+            )
+            all_params = []
+            for ptype, params in params_by_type.items():
+                all_params.extend(params)
+        else:
+            all_params = generate_all_parameter_queries(graph, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context)
+        
+        # Format response
+        parameters = []
+        stats_by_type = {}
+        
+        for param in all_params:
+            parameters.append({
+                "paramType": param.param_type,
+                "paramId": param.param_id,
+                "edgeKey": param.edge_key,
+                "condition": param.condition,
+                "query": param.query,
+                "stats": param.stats
+            })
+            
+            # Count by type
+            if param.param_type not in stats_by_type:
+                stats_by_type[param.param_type] = 0
+            stats_by_type[param.param_type] += 1
+        
+        return {
+            "parameters": parameters,
+            "stats": {
+                "total": len(parameters),
+                "byType": stats_by_type
+            },
+            "success": True
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     import os
@@ -145,9 +349,12 @@ if __name__ == "__main__":
     print("🔄 Auto-reload enabled")
     print("")
     print("Available endpoints:")
-    print("  GET  /                 - Health check")
-    print("  POST /api/parse-query  - Parse DSL query string")
-    print("  POST /api/query-graph  - Apply query to graph (full roundtrip)")
+    print("  GET  /                          - Health check")
+    print("  POST /api/parse-query           - Parse DSL query string")
+    print("  POST /api/query-graph           - Apply query to graph (topology filter)")
+    print("  POST /api/generate-query        - Generate MSMDC query for single edge")
+    print("  POST /api/generate-all-queries  - Batch MSMDC for all edges (base only)")
+    print("  POST /api/generate-all-parameters - COMPREHENSIVE: All params (p, cond_p, costs, cases)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"💡 Port: {port} (set via PYTHON_API_PORT env var)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

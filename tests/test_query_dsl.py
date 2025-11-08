@@ -192,6 +192,22 @@ class TestDSLEdgeCases:
         parsed = parse_query(query)
         assert parsed.from_node == "page_1-mobile"
         assert parsed.to_node == "page_2-desktop"
+    
+    def test_visited_any_single_call(self):
+        """visitedAny groups parse and reconstruct."""
+        query = "from(a).to(b).visitedAny(x,y,z)"
+        parsed = parse_query(query)
+        assert parsed.visited_any == [["x","y","z"]]
+        assert "visitedAny(x,y,z)" in parsed.raw
+    
+    def test_mixed_visited_and_visited_any(self):
+        """Both visited (AND) and visitedAny (OR) appear."""
+        query = "from(a).to(b).visited(p).visitedAny(x,y)"
+        parsed = parse_query(query)
+        assert parsed.visited == ["p"]
+        assert parsed.visited_any == [["x","y"]]
+        assert "visited(p)" in parsed.raw
+        assert "visitedAny(x,y)" in parsed.raw
 
 
 if __name__ == "__main__":
