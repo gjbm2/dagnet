@@ -75,7 +75,7 @@ export function ConditionalProbabilityEditor({
         condition: '',  // Empty condition (user will fill in)
         query: '',      // Empty query (will be auto-generated or manually set)
         query_overridden: false,
-        p: {}
+        p: { mean: 0.5 }  // Default probability parameter with mean
       }
     ]);
     setExpandedConditionIndex(conditions.length); // Expand the new condition
@@ -170,10 +170,9 @@ export function ConditionalProbabilityEditor({
                           [index]: { ...prev[index], condition: newCondition }
                         }));
                       }}
-                      onBlur={() => {
-                        const localCond = localConditions[index]?.condition;
-                        if (localCond !== undefined && localCond !== condition.condition) {
-                          updateCondition(index, { condition: localCond });
+                      onBlur={(currentValue) => {
+                        if (currentValue !== condition.condition) {
+                          updateCondition(index, { condition: currentValue });
                         }
                       }}
                       graph={graph}
@@ -236,11 +235,10 @@ export function ConditionalProbabilityEditor({
                           [index]: { ...prev[index], query: newQuery }
                         }));
                       }}
-                      onBlur={() => {
-                        const localQuery = localConditions[index]?.query;
-                        if (localQuery !== undefined && localQuery !== condition.query) {
+                      onBlur={(currentValue) => {
+                        if (currentValue !== condition.query) {
                           updateCondition(index, { 
-                            query: localQuery,
+                            query: currentValue,
                             query_overridden: true 
                           });
                         }

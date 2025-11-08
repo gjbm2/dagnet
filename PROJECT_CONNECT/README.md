@@ -44,10 +44,10 @@ This directory contains all design documentation for the Data Connections system
   - PropertiesPanel reduced 3129 → 2357 lines (25% reduction)
   - QueryExpressionEditor prototype (Monaco + chips, needs polish)
   - Consistent styling and right-edge alignment
-- ⏳ **IN PROGRESS:** QueryExpressionEditor polish and refinement
+- ✅ **QueryExpressionEditor polish complete** (1C done - Monaco integration, chips, validation, keyboard handling)
+- ⚠️ **TECHNICAL DEBT**: See `CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for conditional probability migration issues and graph-to-graph update architecture requirements (12-16 hours)
 
-**Remaining Phase 1 Work:** ~12-16 hours
-- 1C: QueryExpressionEditor polish (refinements, generalization) (2-3 hrs)
+**Remaining Phase 1 Work:** ~18-25 hours
 - 1E: Graph auto-updates & Query String Builder (MSMDC algorithm) (6-8 hrs)
 - 1G: Connection Settings UI (needs design) (4-5 hrs)
 - 1H: Get connection actually working for Amplitude, Sheets

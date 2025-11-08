@@ -118,12 +118,16 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
       signature,
       edges,
       color: edges[0]?.display?.conditional_color,
-      // Create display name from first edge's conditions using node ids
-      displayName: edges[0]?.conditional_p?.[0]?.condition?.visited?.length > 0
-        ? `visited(${edges[0].conditional_p[0].condition.visited.map((nodeRef: string) => {
-            const node = graph?.nodes.find((n: any) => n.uuid === nodeRef || n.id === nodeRef);
-            return node?.label || node?.id || nodeRef;
-          }).join(', ')})`
+      // Create display name from first edge's conditions
+      displayName: edges[0]?.conditional_p?.[0]?.condition
+        ? (typeof edges[0].conditional_p[0].condition === 'string'
+            ? edges[0].conditional_p[0].condition
+            : edges[0].conditional_p[0].condition?.visited?.length > 0
+              ? `visited(${edges[0].conditional_p[0].condition.visited.map((nodeRef: string) => {
+                  const node = graph?.nodes.find((n: any) => n.uuid === nodeRef || n.id === nodeRef);
+                  return node?.label || node?.id || nodeRef;
+                }).join(', ')})`
+              : 'Empty condition')
         : 'Empty condition'
     }));
   }, [graph, conditionalEdges]);
@@ -471,15 +475,23 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                         
                         // Find matching conditional_p option
                         const matchingCond = activeEdge.conditional_p?.find(cond => {
-                          const condIds = cond.condition.visited.map(ref => {
-                            const node = graph?.nodes.find(n => n.uuid === ref || n.id === ref);
-                            if (node) return node.uuid;
-                            return ref;
-                          }).sort().join(',');
-                          return condIds === overrideIds;
+                          // Handle both old {visited: [...]} format and new string format
+                          if (typeof cond.condition === 'string') {
+                            // For string format, use getConditionSignature for comparison
+                            return getConditionSignature(cond) === overrideIds;
+                          } else if (cond.condition?.visited) {
+                            // Old format
+                            const condIds = cond.condition.visited.map(ref => {
+                              const node = graph?.nodes.find(n => n.uuid === ref || n.id === ref);
+                              if (node) return node.uuid;
+                              return ref;
+                            }).sort().join(',');
+                            return condIds === overrideIds;
+                          }
+                          return false;
                         });
                         
-                        return matchingCond ? matchingCond.condition.visited.join(',') : '';
+                        return matchingCond ? getConditionSignature(matchingCond) : '';
                       })()}
                       onMouseDown={() => {
                         console.log(`[${ts()}] [WhatIfControl] conditional dropdown onMouseDown - suspending layout for 3s`);
@@ -538,13 +550,14 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                     >
                       <option value="">Base probabilities</option>
                       {group.edges[0]?.conditional_p?.map((cond, idx) => {
-                        const nodeNames = cond.condition.visited.map(nid => {
-                          const n = graph?.nodes.find(node => node.uuid === nid || node.id === nid);
-                          return n?.label || n?.id || nid;
-                        }).join(', ');
+                        // Handle both old {visited: [...]} format and new string format
+                        const conditionSig = getConditionSignature(cond);
+                        const displayLabel = typeof cond.condition === 'string' 
+                          ? cond.condition 
+                          : (cond.condition?.visited ? `visited(${cond.condition.visited.join(', ')})` : 'condition');
                         return (
-                          <option key={idx} value={cond.condition.visited.join(',')}>
-                            What if: visited({nodeNames})?
+                          <option key={idx} value={conditionSig}>
+                            What if: {displayLabel}?
                           </option>
                         );
                       })}

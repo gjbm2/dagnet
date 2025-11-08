@@ -43,7 +43,15 @@ export function getConditionSignature(edge: GraphEdge): string {
   
   // Sort conditions to ensure same signature for same set of conditions
   const signatures = edge.conditional_p
-    .map(cp => cp.condition.visited.sort().join('+'))
+    .map(cp => {
+      // Handle both old format {visited: [...]} and new string format
+      if (typeof cp.condition === 'string') {
+        return cp.condition;
+      } else if (cp.condition && (cp.condition as any).visited) {
+        return (cp.condition as any).visited.sort().join('+');
+      }
+      return '';
+    })
     .sort()
     .join('||');
   

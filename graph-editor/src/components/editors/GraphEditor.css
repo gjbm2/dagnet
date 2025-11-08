@@ -116,7 +116,7 @@
 
 /* Override inline z-index on minimize button */
 .graph-minimize-button[style*="z-index"] {
-  z-index: 10 !important; /* Below Monaco suggestions (200) but above normal content */
+  z-index: 10 !important; /* Below Monaco suggestions but above normal content */
 }
 
 .graph-minimize-button:hover {
