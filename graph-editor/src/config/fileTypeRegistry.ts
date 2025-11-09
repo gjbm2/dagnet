@@ -7,7 +7,7 @@
 
 export interface FileTypeConfig {
   /** The type identifier (matches ObjectType) */
-  type: 'graph' | 'parameter' | 'context' | 'case' | 'node' | 'event' | 'credentials' | 'settings' | 'markdown';
+  type: 'graph' | 'parameter' | 'context' | 'case' | 'node' | 'event' | 'credentials' | 'connections' | 'settings' | 'markdown';
   
   /** Display name (singular) */
   displayName: string;
@@ -17,6 +17,9 @@ export interface FileTypeConfig {
   
   /** JSON Schema file for validation and form generation */
   schemaFile: string;
+  
+  /** UI Schema file for custom form layout/widgets (optional) */
+  uiSchemaFile?: string;
   
   /** Primary directory where files are stored */
   directory: string;
@@ -143,6 +146,20 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     supportsInteractiveEdit: true,
     supportsRawEdit: true
   },
+  
+  connections: {
+    type: 'connections',
+    displayName: 'Connections',
+    displayNamePlural: 'Connections',
+    schemaFile: '/schemas/connections-schema.json',
+    uiSchemaFile: '/ui-schemas/connections-ui-schema.json',
+    directory: 'connections',
+    extensions: ['.yaml', '.yml', '.json'],
+    icon: '🔌',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
 
   markdown: {
     type: 'markdown',
@@ -236,6 +253,13 @@ export function getFileTypeConfig(type: string): FileTypeConfig | undefined {
  */
 export function getSchemaFile(type: string): string | undefined {
   return FILE_TYPE_REGISTRY[type]?.schemaFile;
+}
+
+/**
+ * Get UI schema file for a file type (optional)
+ */
+export function getUiSchemaFile(type: string): string | undefined {
+  return FILE_TYPE_REGISTRY[type]?.uiSchemaFile;
 }
 
 /**

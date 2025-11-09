@@ -109,6 +109,7 @@ export class AppDatabase extends Dexie {
    */
   async clearAll(): Promise<void> {
     // Clear all files except credentials
+    // Note: connections.yaml will be cleared and re-loaded from defaults on next startup
     const credentialsFile = await this.files.get('credentials-credentials');
     await this.files.clear();
     
@@ -120,6 +121,7 @@ export class AppDatabase extends Dexie {
     await this.tabs.clear();
     await this.appState.clear();
     // Don't clear settings or credentials - user preferences should persist
+    // Connections will be re-seeded from defaults (or git) on app reload
   }
 
   /**

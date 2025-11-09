@@ -11,6 +11,7 @@ export type ObjectType =
   | 'node'
   | 'event'
   | 'credentials'
+  | 'connections'
   | 'settings'
   | 'about'
   | 'markdown';

@@ -616,11 +616,12 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const { showConfirm } = useDialog();
 
-  // Load tabs from IndexedDB on mount and initialize credentials
+  // Load tabs from IndexedDB on mount, initialize credentials and connections
   useEffect(() => {
     const initializeApp = async () => {
       await loadTabsFromDB();
       await initializeCredentials();
+      await initializeConnections();
       await loadFromURLData();
     };
     initializeApp();
@@ -650,6 +651,15 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         git: []
       });
     }
+  };
+
+  /**
+   * Initialize connections file - seeds from git or creates from defaults
+   * This runs during TabProvider initialization, ensuring connections exist before any tabs open
+   */
+  const initializeConnections = async () => {
+    const { seedConnectionsFile } = await import('../init/seedConnections');
+    await seedConnectionsFile();
   };
 
   /**
@@ -950,10 +960,17 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             _fileId: item.id
           };
         }
-      } else if (item.type === 'credentials') {
-        console.log(`TabContext: Loading credentials ${item.name}...`);
-        // Credentials are loaded from IndexedDB, no need to fetch from Git
-        data = {};
+      } else if (item.type === 'credentials' || item.type === 'connections') {
+        console.log(`TabContext: Loading ${item.type} ${item.name}...`);
+        // These files are seeded/initialized separately
+        // Must already exist in IndexedDB - if not, initialization hasn't completed
+        const existing = await db.files.get(fileId);
+        if (!existing) {
+          throw new Error(`${item.type} file not found - initialization incomplete. Please refresh the page.`);
+        }
+        data = existing.data;
+        console.log(`TabContext: Loaded ${item.type} from IndexedDB with`, 
+          item.type === 'connections' ? (data?.connections?.length || 0) + ' connections' : 'data');
       } else if (item.type === 'markdown') {
         console.log(`TabContext: Loading markdown ${item.name}...`);
         // Load markdown content from local docs

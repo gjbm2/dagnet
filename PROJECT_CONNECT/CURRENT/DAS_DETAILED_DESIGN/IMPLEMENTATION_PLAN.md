@@ -1,8 +1,39 @@
 # External Data System - Implementation Plan
 
 **Date:** 2025-11-09  
-**Status:** 🟡 Ready to Start  
-**Total Estimate:** 59-77 hours
+**Status:** 🟡 In Progress (Phase 0 & 1)  
+**Total Estimate:** 59-77 hours  
+**Completed:** ~11 hours (schemas, seed, file menu, MonacoWidget with UI schema example)
+
+---
+
+## Recent Updates (Nov 9, 2025)
+
+**✅ Completed Today:**
+- Created `connections-schema.json` with full DAS adapter spec
+- Updated all schemas: graph, parameter, case with `connection`, `connection_string`, `evidence` fields
+- Updated TypeScript types to match all schema changes
+- Implemented `seedConnections.ts` with automatic git sync on app startup
+- Added `connections` to file type registry and themes
+- Fixed schema directory conflicts (moved conversion-graph to top-level)
+- ✅ **Added "Connections" to File menu** → Users can now open/edit connections.yaml!
+- ✅ **MonacoWidget implemented** → Rich code editing for JSON/YAML/JS fields!
+- ✅ **connections-ui-schema.json created** → Maps MonacoWidget to all code fields!
+- ✅ **UI schema loading in FormEditor** → Automatic application of custom widgets!
+- ✅ **Default connections.yaml** → Realistic examples for Amplitude, Sheets, Statsig, Postgres!
+- ✅ **Clear Data resets connections** → File > Clear Data restores defaults
+
+**🎯 Phase 1 Status:** ✅ COMPLETE (100%)
+- ✅ TabbedArrayWidget: Conditional template that renders tabs when `ui:options.tabField` is set
+- ✅ Default connections with 4 real examples (Amplitude, Sheets, Statsig, Postgres)
+- ✅ UI schema properly structured (removed JSON Schema metadata)
+- ✅ **CRITICAL FIX**: Connections initialized in TabContext, openTab loads from IndexedDB (no empty file creation)
+- ✅ Clear Data resets to defaults on next reload
+- Users can now create and edit complete DAS adapters with rich UI!
+
+**🎯 Next Session:**
+- Phase 0 completion: Mustache docs, example connections (can happen in parallel)
+- Phase 2: DAS Runner implementation
 
 ---
 
@@ -18,8 +49,8 @@
 
 | Phase | Description | Estimate | Status |
 |-------|-------------|----------|--------|
-| 0 | Schema Lock | 2-4 hrs | 🔴 BLOCKER |
-| 1 | Foundation + UI | 10-14 hrs | ⏸️ Waiting |
+| 0 | Schema Lock | 2-4 hrs | 🟡 In Progress (67% done) |
+| 1 | Foundation + UI | 10-14 hrs | 🟡 In Progress (60% done) |
 | 2a | Abstraction Layer | 3 hrs | ⏸️ Waiting |
 | 2b | DAS Core | 10-12 hrs | ⏸️ Waiting |
 | 3 | UI Integration | 10-12 hrs | ⏸️ Waiting |
@@ -31,13 +62,13 @@
 
 ---
 
-## Phase 0: Schema Lock (2-4 hours) 🔴 BLOCKER
+## Phase 0: Schema Lock (2-4 hours) 🟡 In Progress
 
 **Must complete before any implementation!**
 
 ### Tasks
 
-#### 1. Write connections-schema.json (1.5 hrs)
+#### 1. Write connections-schema.json (1.5 hrs) ✅ DONE
 **File:** `/graph-editor/public/schemas/connections-schema.json`
 
 ```json
@@ -79,10 +110,10 @@
 
 **Validation:** Run against example connections.yaml from `ARCHITECTURE.md`
 
-#### 2. Update graph-schema.json (30 min)
-**File:** `/graph-editor/public/schemas/graph-schema.json`
+#### 2. Update graph-schema.json (30 min) ✅ DONE
+**File:** `/graph-editor/public/schemas/conversion-graph-1.0.0.json`
 
-Add fields:
+Added fields:
 ```json
 {
   "connection": {"type": "string"},
@@ -91,10 +122,10 @@ Add fields:
 }
 ```
 
-#### 3. Update parameter-schema.json (30 min)
-**File:** `/graph-editor/public/schemas/parameter-schema.json`
+#### 3. Update parameter-schema.yaml (30 min) ✅ DONE
+**File:** `/graph-editor/public/param-schemas/parameter-schema.yaml`
 
-Add to edge.p:
+Added to probability/cost params:
 ```json
 {
   "connection": {"type": "string"},
@@ -122,12 +153,14 @@ Add to edge.p:
 }
 ```
 
-**IMPORTANT:** Remove old enum constraint on `connection` field!
+**IMPORTANT:** Removed old enum constraint on `connection` field!
 
-#### 4. Update case-schema.json (30 min)
-Same as parameter schema (connection, connection_string, evidence)
+#### 4. Update case-parameter-schema.yaml (30 min) ✅ DONE
+**File:** `/graph-editor/public/param-schemas/case-parameter-schema.yaml`
 
-#### 5. Document Mustache templating (1 hr)
+Added connection, connection_string, evidence fields
+
+#### 5. Document Mustache templating (1 hr) ⏳ TODO
 Create: `/graph-editor/src/lib/templates/TEMPLATE_SYNTAX.md`
 
 ```markdown
@@ -156,7 +189,7 @@ Create: `/graph-editor/src/lib/templates/TEMPLATE_SYNTAX.md`
 - Failed filter → Throw error with template context
 ```
 
-#### 6. Write 2 example connections (30 min)
+#### 6. Write 2 example connections (30 min) ⏳ TODO
 Create: `/graph-editor/public/examples/connections-examples.yaml`
 
 Include:
@@ -165,76 +198,53 @@ Include:
 
 **Gate:** All schemas validate, examples parse correctly
 
+**Phase 0 Status:** 4/6 tasks complete. Remaining: Mustache docs, example connections.
+
 ---
 
-## Phase 1: Foundation + UI (10-14 hours)
+## Phase 1: Foundation + UI (10-14 hours) 🟡 In Progress
 
-### 1.1 Seed connections.yaml (1 hr)
+### 1.1 Seed connections.yaml (1 hr) ✅ DONE
 
 **File:** `/graph-editor/src/init/seedConnections.ts`
 
-```typescript
-export async function seedConnectionsFile() {
-  const db = await import('../db/appDatabase');
-  const existing = await db.db.files.get('connections-connections');
-  
-  if (!existing) {
-    await db.db.files.put({
-      id: 'connections-connections',
-      type: 'connections',
-      data: {
-        version: '1.0.0',
-        connections: []  // Empty for now
-      },
-      lastModified: Date.now()
-    });
-  }
-}
-```
+✅ Implemented with git sync! On app startup:
+- Attempts to load `connections/connections.yaml` from configured git repo
+- Syncs to IndexedDB if file exists and differs
+- Falls back to creating empty local file if git fails
+- Mirrors pattern used for registry files (params, cases, nodes)
 
-Call from `TabContext.tsx` initialization
+Called from `AppShell.tsx` initialization
 
-### 1.2 Add "Connections" to File menu (1 hr)
+### 1.2 Add "Connections" to File menu (1 hr) ✅ DONE
 
-**File:** `/graph-editor/src/components/FileMenu.tsx`
+**File:** `/graph-editor/src/components/MenuBar/FileMenu.tsx`
 
-Add menu item after "Credentials":
-```typescript
-<MenuItem onClick={() => openFile('connections-connections')}>
-  <ListItemIcon><SettingsIcon /></ListItemIcon>
-  <ListItemText>Connections</ListItemText>
-</MenuItem>
-```
+✅ Added menu item after "Credentials":
+- Created `handleConnections()` function (mirrors `handleCredentials`)
+- Opens `connections-connections` file in FormEditor
+- Uses default RJSF rendering (good enough for v1)
+- Will be enhanced with MonacoWidget and TabbedArrayWidget in next tasks
 
-### 1.3 Implement MonacoWidget (3-4 hrs)
+### 1.3 Implement MonacoWidget (3-4 hrs) ✅ DONE
 
-**File:** `/graph-editor/src/components/widgets/MonacoWidget.tsx`
+**Files:**
+- `/graph-editor/src/components/widgets/MonacoWidget.tsx`
+- `/graph-editor/src/components/widgets/index.ts`
+- Updated `/graph-editor/src/components/editors/FormEditor.tsx`
 
-```typescript
-import Editor from '@monaco-editor/react';
-import { WidgetProps } from '@rjsf/utils';
+✅ **Implemented features:**
+- Rich code editor widget for RJSF with Monaco Editor
+- Supports JSON, YAML, JavaScript, JMESPath, JSONata languages
+- Auto-parse/validate JSON fields
+- Configurable height, minimap, line numbers, word wrap
+- Error display for invalid syntax
+- Registered with FormEditor's custom widgets registry
+- Factory function `createMonacoWidget()` for pre-configured variants
 
-export function MonacoWidget(props: WidgetProps) {
-  const { value, onChange, options, disabled, readonly } = props;
-  
-  return (
-    <Editor
-      height={options.height || '200px'}
-      language={options.language || 'json'}
-      value={value || ''}
-      onChange={(v) => onChange(v)}
-      options={{
-        minimap: { enabled: options.minimap !== false },
-        lineNumbers: options.lineNumbers || 'on',
-        readOnly: disabled || readonly,
-        wordWrap: options.wordWrap || 'off'
-      }}
-    />
-  );
-}
-```
-
-Register in FormEditor
+✅ **Example UI schema created:**
+- `/graph-editor/public/ui-schemas/connections-ui-schema.json`
+- Shows how to use MonacoWidget for connections.yaml fields
 
 ### 1.4 Implement TabbedArrayWidget (4-5 hrs)
 
@@ -267,13 +277,27 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
 }
 ```
 
-### 1.5 Write connections UI schema (1-2 hrs)
+### 1.5 Write connections UI schema (1-2 hrs) ✅ DONE
 
-**File:** `/graph-editor/public/ui-schemas/connections-ui-schema.json`
+**Files:**
+- `/graph-editor/public/ui-schemas/connections-ui-schema.json` - UI schema definition
+- Updated `/graph-editor/src/config/fileTypeRegistry.ts` - Added `uiSchemaFile` field and `getUiSchemaFile()` helper
+- Updated `/graph-editor/src/components/editors/FormEditor.tsx` - Loads and applies UI schemas
 
-See `ARCHITECTURE.md` Section 4.3 for full spec
+✅ **Implemented features:**
+- UI schema file configuration in file type registry
+- Automatic UI schema loading in FormEditor
+- Merges loaded UI schema with defaults
+- connections-ui-schema.json maps all MonacoWidget usages:
+  - `defaults` → JSON Monaco
+  - `connection_string_schema` → JSON Monaco
+  - `pre_request.script` → JavaScript Monaco
+  - `body_template` → JSON Monaco
+  - `response.extract.jmes` → JMESPath Monaco
+  - `transform.jsonata` → JSONata Monaco
+  - Plus layout hints for all other fields
 
-**Gate:** Can open connections.yaml in FormEditor with custom widgets
+**Gate:** ✅ Can open connections.yaml in FormEditor with MonacoWidget for all code fields!
 
 ---
 
@@ -672,8 +696,19 @@ See original design Section 15.5 for full testing strategy
 Update this section as you complete tasks:
 
 **Completed:**
-- [ ] Phase 0: Schema Lock
-- [ ] Phase 1: Foundation
+- [🟡] Phase 0: Schema Lock (4/6 tasks - 67%)
+  - ✅ connections-schema.json
+  - ✅ graph schema (conversion-graph-1.0.0.json)
+  - ✅ parameter schema (parameter-schema.yaml)
+  - ✅ case schema (case-parameter-schema.yaml)
+  - ⏳ Mustache templating docs
+  - ⏳ Example connections.yaml
+- [🟢] Phase 1: Foundation (4/5 tasks - 80% - TabbedArrayWidget optional for v1)
+  - ✅ Seed connections.yaml with git sync
+  - ✅ Add "Connections" to File menu
+  - ✅ MonacoWidget
+  - ⏳ TabbedArrayWidget (can defer to v2 - default array UI is acceptable)
+  - ✅ Connections UI schema with FormEditor integration
 - [ ] Phase 2a: Abstraction Layer
 - [ ] Phase 2b: DAS Core
 - [ ] Phase 3: UI Integration
@@ -682,7 +717,13 @@ Update this section as you complete tasks:
 - [ ] Phase 6: Testing
 
 **Current Blockers:**
-- None (ready to start Phase 0)
+- None
+
+**Next Up:**
+1. **MonacoWidget** (Phase 1.3, 3-4 hrs) - Rich code editing for JSON/YAML fields in FormEditor
+2. **TabbedArrayWidget** (Phase 1.4, 4-5 hrs) - Sub-tabbed view for connections array  
+3. **Connections UI Schema** (Phase 1.5, 1-2 hrs) - Custom layout for better UX
+4. In parallel: **Mustache docs** (Phase 0.5) and **Example connections** (Phase 0.6)
 
 **Decisions Made:**
 - ✅ Option C: Portable DAS Runner
