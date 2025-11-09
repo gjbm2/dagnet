@@ -30,10 +30,24 @@ export interface GoogleSheetsCredential {
   token: string;
 }
 
+/**
+ * Generic provider credentials structure
+ * Keys are provider names (matching credsRef in connections.yaml)
+ * Values are arbitrary objects with provider-specific credential fields
+ */
+export interface ProviderCredentials {
+  [providerKey: string]: Record<string, any>;
+}
+
 export interface CredentialsData {
   version?: string;
   defaultGitRepo?: string; // DEPRECATED: Use isDefault flag on git entries instead (will be removed in v2.0.0)
   git: GitRepositoryCredential[];
+  
+  // NEW: Generic provider credentials for DAS connections
+  providers?: ProviderCredentials;
+  
+  // DEPRECATED: Legacy credential formats (kept for backward compatibility)
   statsig?: StatsigCredential;
   googleSheets?: GoogleSheetsCredential;
 }
@@ -44,8 +58,14 @@ export interface CredentialsData {
  */
 export interface SystemCredentials {
   git: GitRepositoryCredential[];
+  
+  // NEW: Generic provider credentials for DAS connections
+  providers?: ProviderCredentials;
+  
+  // DEPRECATED: Legacy credential formats (kept for backward compatibility)
   statsig?: StatsigCredential;
   googleSheets?: GoogleSheetsCredential;
+  
   webhookSecret?: string;
 }
 

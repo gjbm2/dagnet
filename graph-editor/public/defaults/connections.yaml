@@ -1,6 +1,8 @@
 version: "1.0.0"
 connections:
   # Amplitude - Analytics & Funnel Data
+  # Uses Amplitude Dashboard REST API (Funnels)
+  # Docs: https://developers.amplitude.com/docs/dashboard-rest-api
   - name: amplitude-prod
     provider: amplitude
     kind: http
@@ -8,37 +10,66 @@ connections:
     enabled: true
     credsRef: amplitude
     defaults:
-      base_url: "https://amplitude.com"
-      exclude_test_users: true
+      base_url: "https://amplitude.com/api/2"
+      # Region-specific base URL:
+      # - US: https://amplitude.com/api/2
+      # - EU: https://analytics.eu.amplitude.com/api/2
+      base_url: "https://amplitude.com/api/2"
     connection_string_schema:
       type: object
       properties:
-        segment_filter:
-          type: string
-          description: "Optional segment filter (e.g., 'exclude_test_users')"
+        segment:  # Optional segmentation/filter definition (passes through to 's')
+          type: array
+          items:
+            type: object
+          description: "Optional array of segment filter objects as expected by Amplitude API"
     adapter:
+      # NOTE: This pre_request transformation is REQUIRED for Amplitude
+      # because DagNet query from(B).to(C).visited(A) must be transformed to
+      # a full funnel A>B>C, then extract only the B>C conversion
+      pre_request:
+        script: |
+          // Build full funnel including visited events
+          const events = [];
+          if (dsl.visited_event_ids && dsl.visited_event_ids.length > 0) {
+            events.push(...dsl.visited_event_ids.map(id => ({ event_type: id })));
+          }
+          events.push({ event_type: dsl.from_event_id });
+          events.push({ event_type: dsl.to_event_id });
+          
+          // Convert window to Amplitude date format (YYYYMMDD)
+          const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
+          dsl.start_date = formatDate(window.start);
+          dsl.end_date = formatDate(window.end);
+          dsl.funnel_events = events;
+          dsl.target_step_index = events.length - 2;  // Index of from_event in results
+          
+          return dsl;
       request:
-        url_template: "{{defaults.base_url}}/api/2/funnels"
+        url_template: "{{defaults.base_url}}/funnels"
         method: POST
         headers:
-          Authorization: "Bearer {{credentials.api_key}}"
+          # Dashboard REST API uses HTTP Basic auth: API Key (username) + Secret Key (password)
+          # Provide base64(apiKey:secretKey) in credentials.basic_auth_b64
+          Authorization: "Basic {{credentials.basic_auth_b64}}"
           Content-Type: "application/json"
         body_template: |
           {
-            "events": [
-              {"event_type": "{{dsl.from_event_id}}"},
-              {"event_type": "{{dsl.to_event_id}}"}
-            ],
-            "start": "{{window.start}}",
-            "end": "{{window.end}}"
+            "e": {{dsl.funnel_events}},
+            "start": "{{dsl.start_date}}",
+            "end": "{{dsl.end_date}}",
+            "m": "uniques",
+            "i": 1{{#connection_string.segment}},
+            "s": {{connection_string.segment}}{{/connection_string.segment}}
           }
       response:
         ok_when:
           status: [200]
         extract:
           jmes:
-            from_count: "data.steps[0].count"
-            to_count: "data.steps[1].count"
+            # Funnel response returns aggregated steps with counts
+            from_count: "data.steps[{{dsl.target_step_index}}].count"
+            to_count: "data.steps[{{dsl.target_step_index + 1}}].count"
       transform:
         steps:
           - var: p_mean
