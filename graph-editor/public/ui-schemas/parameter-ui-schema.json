@@ -1,16 +1,25 @@
 {
-  "ui:order": ["id", "name", "type", "query", "query_overridden", "connection", "connection_string", "values", "metadata"],
-  "id": {},
-  "name": {},
+  "ui:order": ["id", "name", "type", "query", "query_overridden", "connection", "connection_string", "value", "values", "metadata"],
+  "id": {
+    "ui:description": ""
+  },
+  "name": {
+    "ui:description": ""
+  },
   "type": {
-    "ui:widget": "select"
+    "ui:widget": "select",
+    "ui:description": ""
   },
   "query": {
+    "ui:description": "",
     "ui:help": "DSL: from(node-id).to(node-id)"
   },
-  "query_overridden": {},
+  "query_overridden": {
+    "ui:description": ""
+  },
   "connection": {
-    "ui:help": "Connection name from connections.yaml (e.g., amplitude-prod)"
+    "ui:description": "",
+    "ui:help": "Connection from connections.yaml (e.g., amplitude-prod)"
   },
   "connection_string": {
     "ui:widget": "MonacoWidget",
@@ -18,7 +27,8 @@
       "language": "json",
       "height": "100px"
     },
-    "ui:help": "Provider-specific JSON (e.g., {\"range\": \"Sheet1!A1:B10\"})"
+    "ui:description": "",
+    "ui:help": "Provider JSON (e.g., {\"range\": \"Sheet1!A1:B10\"})"
   },
   "values": {
     "ui:options": {
