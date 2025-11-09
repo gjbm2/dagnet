@@ -10,7 +10,6 @@ connections:
     enabled: true
     credsRef: amplitude
     defaults:
-      base_url: "https://amplitude.com/api/2"
       # Region-specific base URL:
       # - US: https://amplitude.com/api/2
       # - EU: https://analytics.eu.amplitude.com/api/2
