@@ -249,8 +249,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           onClose={onClose}
           autoFocus={false}
           autoSelect={false}
-            showSlider={true}
-            showBalanceButton={true}
+          showSlider={true}
           />
         </AutomatableField>
       </div>
@@ -261,7 +260,14 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
             Conditional Probabilities
           </label>
-          {edge.conditional_p.map((condP: any, cpIndex: number) => (
+          {edge.conditional_p.map((condP: any, cpIndex: number) => {
+            // Defensive check: skip if condition structure is invalid (old schema)
+            if (!condP.condition?.visited || !Array.isArray(condP.condition.visited)) {
+              console.warn(`[EdgeContextMenu] Skipping conditional_p with invalid/old schema format at index ${cpIndex}:`, condP);
+              return null;
+            }
+            
+            return (
             <div key={cpIndex} style={{ marginBottom: '8px', padding: '6px', border: '1px solid #eee', borderRadius: '3px' }}>
               <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>
                 Condition: {condP.condition.visited.join(', ') || 'None'}
@@ -307,11 +313,17 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       nextGraph.edges[currentEdgeIndex].conditional_p[cpIndex].p.mean = currentValue;
                       
                       const currentCondition = edge.conditional_p[cpIndex];
+                      // Defensive check: skip rebalance if condition structure is invalid
+                      if (!currentCondition.condition?.visited || !Array.isArray(currentCondition.condition.visited)) {
+                        console.warn('[EdgeContextMenu] Cannot rebalance conditional_p with invalid condition format');
+                        return;
+                      }
                       const conditionKey = JSON.stringify(currentCondition.condition.visited.sort());
                       
                       const siblingsWithSameCondition = siblings.filter(sibling => {
                         if (!sibling.conditional_p) return false;
                         return sibling.conditional_p.some((cp: any) => 
+                          cp.condition?.visited && Array.isArray(cp.condition.visited) &&
                           JSON.stringify(cp.condition.visited.sort()) === conditionKey
                         );
                       });
@@ -319,6 +331,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       if (siblingsWithSameCondition.length > 0) {
                         const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
                           const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                            cp.condition?.visited && Array.isArray(cp.condition.visited) &&
                             JSON.stringify(cp.condition.visited.sort()) === conditionKey
                           );
                           return sum + (matchingCondition?.p?.mean || 0);
@@ -331,10 +344,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                             );
                             if (siblingIndex >= 0) {
                               const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                cp.condition?.visited && Array.isArray(cp.condition.visited) &&
                                 JSON.stringify(cp.condition.visited.sort()) === conditionKey
                               );
                               if (matchingCondition && sibling.conditional_p) {
                                 const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                  cp.condition?.visited && Array.isArray(cp.condition.visited) &&
                                   JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                 );
                                 if (conditionIndex >= 0) {
@@ -355,10 +370,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                             );
                             if (siblingIndex >= 0) {
                               const matchingCondition = sibling.conditional_p?.find((cp: any) => 
+                                cp.condition?.visited && Array.isArray(cp.condition.visited) &&
                                 JSON.stringify(cp.condition.visited.sort()) === conditionKey
                               );
                               if (matchingCondition && sibling.conditional_p) {
                                 const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
+                                  cp.condition?.visited && Array.isArray(cp.condition.visited) &&
                                   JSON.stringify(cp.condition.visited.sort()) === conditionKey
                                 );
                                 if (conditionIndex >= 0) {
@@ -386,7 +403,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                 showBalanceButton={true}
               />
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

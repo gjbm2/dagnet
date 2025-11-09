@@ -1,8 +1,8 @@
 # PROJECT CONNECT: Data Connections System
 
-**Phase:** 1F (Phase 0 Complete, Phase 1E Complete, MSMDC Integration Done)  
+**Phase:** 1D-E (Phase 0 Complete, Phase 1 UI in progress)  
 **Start Date:** 2025-11-05  
-**Status:** 🟢 Phase 1 - 95% Complete (MSMDC live and integrated)
+**Status:** 🟢 Phase 1 - 90% Complete (Python infrastructure ready, MSMDC next)
 
 This directory contains all design documentation for the Data Connections system implementation.
 
@@ -29,7 +29,7 @@ This directory contains all design documentation for the Data Connections system
 - Yellow Calendar icon theme
 - 0 linter errors
 
-**Phase 1B-D Complete (Nov 8, 2025):** ✅ **100% Complete**
+**Phase 1B Partial (Nov 7, 2025):** 🟡 **85% Complete**
 - ✅ Lightning Menu component (React Portal, z-index fixed)
 - ✅ Node & Edge Context Menus extracted (submenu pattern)
 - ✅ DataOperationsService created (centralized orchestration)
@@ -49,38 +49,24 @@ This directory contains all design documentation for the Data Connections system
   - TypeScript ↔ Python API client with environment detection
   - Local dev server setup (FastAPI on configurable port)
   - Query DSL parser (Python ↔ TypeScript roundtrip validated)
-  - Test infrastructure (199 TS tests + 116 Python tests passing)
+  - Test infrastructure (199 TS tests + 6 Python tests passing)
   - Mock mode for frontend-only development
   - Documentation complete with multi-machine setup guide
-- ✅ **MSMDC Algorithm Complete & Integrated** (1E done - Nov 8, 2025):
-  - Witness-guided algorithm (no exponential path enumeration)
-  - Cost-weighted literal selection for optimal query generation
-  - Full parameter coverage (base p, conditional p, costs, case variants)
-  - OR semantics via `visitedAny` term for complex funnel construction
-  - Condition rewriting for cost-effectiveness
-  - Multi-parent edge detection (unconditional edges with alternate paths)
-  - 20 MSMDC tests passing, covering complex graph topologies
-  - API endpoints: `/api/generate-query`, `/api/generate-all-queries`, `/api/generate-all-parameters`
-  - Monaco editor integration with autocomplete for `visitedAny`
-  - **Live Integration Complete**:
-    - Automatic query regeneration on topology changes (edge/node add/delete)
-    - UUID → human-readable ID resolution in generated queries
-    - Stale closure fix for graph updates (explicit oldGraph passing)
-    - Real-time animation (600ms pulse) when queries auto-update
-    - AutomatableField triggers animation via `isAutoUpdating` flag
-    - Query updates visible in PropertiesPanel without manual refresh
-    - Toast notifications for query regeneration status
+  - **Ready for MSMDC algorithm implementation**
 - ⚠️ **TECHNICAL DEBT**: See `CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for:
   - Conditional probability migration issues (backward compatibility hacks)
   - Graph-to-graph update architecture requirements (UpdateManager patterns)
   - Lost features: complementary conditional creation, color picker
   - Estimated cleanup: 12-16 hours
 
-**Remaining Phase 1 Work:** ~10-13 hours
-- ~~1F: Graph auto-updates & Query String Builder integration~~ ✅ **COMPLETE**
-- 1G: Connection Settings UI (needs design) (4-5 hrs) **← NEXT**
-- 1H: Get connection actually working for Amplitude, Sheets (6-8 hrs)
-- 1I: Top Menu "Data" (batch operations) (2-3 hrs)
+**Remaining Phase 1 Work:** ~31-45 hours
+- 1E: MSMDC algorithm implementation in Python (4-6 hrs) **← NEXT**
+- 1E: Graph auto-updates & Query String Builder integration (2-3 hrs)
+- 1G: External Data System Implementation (19-25 hrs) - **DESIGN COMPLETE ✅**
+  - connections.yaml + DAS Runner + tab UI integration
+  - Single unified design, not scattered files
+- 1H: Test with Amplitude & PostgreSQL (4-6 hrs)
+- 1F: Top Menu "Data" (batch operations) (2-3 hrs)
 
 ## PHASE 2 work: *** NEEDS DETAILING ***
 
@@ -179,6 +165,9 @@ Documents UUID vs human-readable ID inconsistency. Fix after Phase 1 complete (~
 9. `QUERY_EXPRESSION_SYSTEM.md` - Query DSL, MSMDC algorithm
 10. `QUERY_SELECTOR_DESIGN.md` - QueryExpressionEditor UI
 11. `CONDITIONAL_PROBABILITY_DESIGN.md` - Conditional probability approach
+
+**Connections & External Data:**
+12. `EXTERNAL_DATA_SYSTEM_DESIGN.md` - ⭐ **NEW** Complete external data system (credentials + connections + DAS + UI)
 
 ### In `/REFERENCE/` (Background context only):
 

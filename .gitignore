@@ -4,6 +4,7 @@ node_modules/
 
 # Python
 venv/
+.venv/
 env/
 ENV/
 __pycache__/
