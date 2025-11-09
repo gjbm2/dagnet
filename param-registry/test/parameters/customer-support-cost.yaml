@@ -26,8 +26,8 @@ values:
     data_source:
       type: sheets
       url: "https://docs.google.com/spreadsheets/d/1a2b3c4d5e6f7g8h9i0j"
-      retrieved_at: "2025-02-01T09:00:00Z"
-      notes: "Includes agent time, tools, and overhead"
+    retrieved_at: "2025-02-01T09:00:00Z"
+    notes: "Includes agent time, tools, and overhead"
     
   - mean: 14.80
     stdev: 2.90
@@ -38,8 +38,8 @@ values:
     data_source:
       type: sheets
       url: "https://docs.google.com/spreadsheets/d/1a2b3c4d5e6f7g8h9i0j"
-      retrieved_at: "2025-03-01T09:00:00Z"
-      notes: "Cost reduction from new chat automation"
+    retrieved_at: "2025-03-01T09:00:00Z"
+    notes: "Cost reduction from new chat automation"
 
 # Metadata
 metadata:
