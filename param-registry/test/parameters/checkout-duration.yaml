@@ -27,7 +27,7 @@ values:
     data_source:
       type: amplitude
       retrieved_at: "2025-02-01T09:00:00Z"
-      notes: "Average checkout time on desktop"
+    notes: "Average checkout time on desktop"
     
   - mean: 310.0
     stdev: 95.0
@@ -39,7 +39,7 @@ values:
     data_source:
       type: amplitude
       retrieved_at: "2025-02-01T09:00:00Z"
-      notes: "Mobile checkout takes longer due to form entry"
+    notes: "Mobile checkout takes longer due to form entry"
 
 # Metadata
 metadata:

@@ -1,102 +1,65 @@
 {
   "ui:order": ["id", "name", "type", "query", "query_overridden", "connection", "connection_string", "values", "metadata"],
-  "id": {
-    "ui:help": "Unique identifier (lowercase, hyphens only).\nExamples: conversion-rate-baseline, email-campaign-cost"
-  },
-  "name": {
-    "ui:help": "Human-readable name shown in UI.\nExamples: Baseline Conversion Rate, Email Campaign Cost"
-  },
+  "id": {},
+  "name": {},
   "type": {
-    "ui:widget": "radio",
-    "ui:help": "Parameter type determines valid value range and display units"
+    "ui:widget": "select"
   },
   "query": {
-    "ui:help": "Query DSL for data retrieval. Auto-generated or manual.\n\nFormat: from(node-id).to(node-id)[.exclude(nodes)][.visited(nodes)][.case(id:variant)]\n\nExamples:\n• from(checkout).to(purchase)\n• from(cart).to(checkout).exclude(abandoned)\n• from(landing).to(signup).visited(feature-view)"
+    "ui:help": "DSL: from(node-id).to(node-id)"
   },
-  "query_overridden": {
-    "ui:help": "If true, query won't be auto-regenerated when graph changes"
-  },
+  "query_overridden": {},
   "connection": {
-    "ui:help": "Data source connection from connections.yaml.\n\nSelect from configured connections (e.g., amplitude-prod, sheets-readonly).\nLeave empty for manually-entered parameters."
+    "ui:help": "Connection name from connections.yaml (e.g., amplitude-prod)"
   },
   "connection_string": {
     "ui:widget": "MonacoWidget",
     "ui:options": {
       "language": "json",
-      "height": "150px",
-      "showLabel": true
+      "height": "100px"
     },
-    "ui:help": "JSON object with provider-specific settings (validated by connection's connection_string_schema).\n\nExamples:\n• Google Sheets: {\"spreadsheet_id\": \"...\", \"range\": \"Sheet1!A1:B10\"}\n• Amplitude: {\"segment_filter\": \"exclude_test_users\"}\n\n⚠️ Do NOT put secrets here - they go in credentials.yaml"
+    "ui:help": "Provider-specific JSON (e.g., {\"range\": \"Sheet1!A1:B10\"})"
   },
   "values": {
     "ui:options": {
       "orderable": true,
       "tabField": "window_from"
     },
-    "ui:help": "Array of parameter values. Use multiple values for time windows or different contexts.",
     "items": {
       "ui:title": " ",
-      "ui:order": ["mean", "stdev", "n", "k", "distribution", "window_from", "window_to", "context_id", "data_source"],
-      "mean": {
-        "ui:help": "Primary value (what users see/edit). For probability: 0-1"
-      },
-      "stdev": {
-        "ui:help": "Standard deviation (optional, for uncertainty modeling)"
-      },
-      "n": {
-        "ui:help": "Sample size / total trials. For probability: total observations"
-      },
-      "k": {
-        "ui:help": "Number of successes (for probability parameters). Can be derived from mean × n"
-      },
+      "mean": {},
+      "stdev": {},
+      "n": {},
+      "k": {},
       "distribution": {
-        "ui:widget": "radio",
-        "ui:help": "Statistical distribution type for Bayesian analysis"
+        "ui:widget": "select"
       },
-      "window_from": {
-        "ui:help": "Start of time window (ISO 8601: 2024-01-01T00:00:00Z).\nLeave empty for 'from beginning of time'"
-      },
-      "window_to": {
-        "ui:help": "End of time window (ISO 8601).\nLeave empty for 'to present day' or 'until next window'"
-      },
-      "context_id": {
-        "ui:help": "Optional context ID from contexts registry.\nAllows values to vary by device, segment, etc."
-      },
+      "window_from": {},
+      "window_to": {},
+      "context_id": {},
       "data_source": {
         "ui:options": {
           "accordion": true
         },
-        "ui:help": "Provenance: where this value came from and when",
         "type": {
-          "ui:widget": "radio",
-          "ui:help": "Source of this value (amplitude, sheets, manual, etc.)"
+          "ui:widget": "select"
         },
-        "url": {
-          "ui:help": "URL or path to original data source"
-        },
-        "retrieved_at": {
-          "ui:help": "When data was fetched from external source (ISO 8601)"
-        },
-        "edited_at": {
-          "ui:help": "When value was manually edited in graph editor (ISO 8601)"
-        },
-        "author": {
-          "ui:help": "User who manually edited this value"
-        },
+        "url": {},
+        "retrieved_at": {},
+        "edited_at": {},
+        "author": {},
         "query": {
           "ui:widget": "MonacoWidget",
           "ui:options": {
             "language": "json",
-            "height": "150px"
-          },
-          "ui:help": "Query configuration that produced this data (source-specific structure)"
+            "height": "80px"
+          }
         },
         "notes": {
           "ui:widget": "textarea",
           "ui:options": {
             "rows": 2
-          },
-          "ui:help": "Additional notes about this data source"
+          }
         }
       }
     }
@@ -105,89 +68,48 @@
     "ui:options": {
       "accordion": true
     },
-    "ui:order": ["description", "description_overridden", "units", "tags", "status", "constraints", "created_at", "updated_at", "author", "version", "aliases", "references"],
     "description": {
       "ui:widget": "textarea",
       "ui:options": {
-        "rows": 3
-      },
-      "ui:help": "Detailed description of what this parameter represents (10-500 chars)"
-    },
-    "description_overridden": {
-      "ui:help": "If true, description won't be auto-updated from graph metadata"
-    },
-    "units": {
-      "ui:help": "Units of measurement.\nExamples: probability, USD, GBP, seconds, days, percentage"
-    },
-    "constraints": {
-      "ui:options": {
-        "accordion": true
-      },
-      "ui:help": "Optional constraints on valid parameter values",
-      "min": {
-        "ui:help": "Minimum allowed value"
-      },
-      "max": {
-        "ui:help": "Maximum allowed value"
-      },
-      "discrete": {
-        "ui:help": "Whether parameter must be a discrete (integer) value"
-      },
-      "step": {
-        "ui:help": "Step size for discrete parameters (e.g., 0.01 for percentages)"
+        "rows": 2
       }
     },
+    "description_overridden": {},
+    "units": {},
     "tags": {
       "ui:options": {
         "orderable": true
-      },
-      "ui:help": "Tags for categorization and search (lowercase, hyphens only).\nExamples: conversion, checkout, baseline, email, marketing"
-    },
-    "created_at": {
-      "ui:help": "When this parameter was created (ISO 8601, auto-filled)"
-    },
-    "updated_at": {
-      "ui:help": "When this parameter was last modified (ISO 8601, auto-filled)"
-    },
-    "author": {
-      "ui:help": "Author or team responsible for this parameter"
-    },
-    "version": {
-      "ui:help": "Semantic version (e.g., 1.0.0, 1.2.3)"
+      }
     },
     "status": {
-      "ui:widget": "radio",
-      "ui:help": "Current status of this parameter definition"
+      "ui:widget": "select"
+    },
+    "version": {},
+    "author": {},
+    "created_at": {},
+    "updated_at": {},
+    "constraints": {
+      "ui:options": {
+        "accordion": true
+      }
     },
     "aliases": {
       "ui:options": {
         "orderable": true
-      },
-      "ui:help": "Alternative identifiers for this parameter (lowercase, hyphens only)"
+      }
     },
     "references": {
       "ui:options": {
-        "orderable": true,
-        "tabField": "title"
+        "orderable": true
       },
-      "ui:help": "References to papers, articles, or documentation",
       "items": {
-        "ui:title": " ",
+        "ui:options": {
+          "accordion": true
+        },
         "type": {
-          "ui:widget": "radio",
-          "ui:help": "Type of reference"
-        },
-        "title": {
-          "ui:help": "Title of the referenced work"
-        },
-        "url": {
-          "ui:help": "URL to the reference (if available)"
-        },
-        "doi": {
-          "ui:help": "Digital Object Identifier (if applicable)"
+          "ui:widget": "select"
         }
       }
     }
   }
 }
-
