@@ -59,13 +59,16 @@ This directory contains all design documentation for the Data Connections system
   - Lost features: complementary conditional creation, color picker
   - Estimated cleanup: 12-16 hours
 
-**Remaining Phase 1 Work:** ~31-45 hours
+**Remaining Phase 1 Work:** ~75-95 hours (revised estimate)
 - 1E: MSMDC algorithm implementation in Python (4-6 hrs) **← NEXT**
 - 1E: Graph auto-updates & Query String Builder integration (2-3 hrs)
-- 1G: External Data System Implementation (19-25 hrs) - **DESIGN COMPLETE ✅**
-  - connections.yaml + DAS Runner + tab UI integration
-  - Single unified design, not scattered files
-- 1H: Test with Amplitude & PostgreSQL (4-6 hrs)
+- 1G: External Data System Implementation (59-77 hrs) - **DESIGN COMPLETE ✅ Nov 9, 2025**
+  - **Comprehensive design in 7 focused documents** (see below)
+  - connections.yaml + credentials.yaml integration
+  - Portable DAS Runner (browser + Node.js compatible)
+  - Full UI integration (FormEditor, Window Selector, widgets)
+  - Complete test strategy (unit + integration + contract tests)
+- 1H: Test with Amplitude & PostgreSQL (included in 1G)
 - 1F: Top Menu "Data" (batch operations) (2-3 hrs)
 
 ## PHASE 2 work: *** NEEDS DETAILING ***
@@ -166,8 +169,22 @@ Documents UUID vs human-readable ID inconsistency. Fix after Phase 1 complete (~
 10. `QUERY_SELECTOR_DESIGN.md` - QueryExpressionEditor UI
 11. `CONDITIONAL_PROBABILITY_DESIGN.md` - Conditional probability approach
 
-**Connections & External Data:**
-12. `EXTERNAL_DATA_SYSTEM_DESIGN.md` - ⭐ **NEW** Complete external data system (credentials + connections + DAS + UI)
+**Connections & External Data** (⭐ **DESIGN COMPLETE - Nov 9, 2025**):
+
+_All DAS docs in `/CURRENT/DAS_DETAILED_DESIGN/`:_
+
+12. `DAS_DETAILED_DESIGN/SUMMARY.md` - ⭐ **START HERE** - Quick overview & next steps
+13. `DAS_DETAILED_DESIGN/ARCHITECTURE.md` - System overview, portable DAS Runner (Option C)
+14. `DAS_DETAILED_DESIGN/IMPLEMENTATION_PLAN.md` - 6-phase plan, 59-77 hours
+15. `DAS_DETAILED_DESIGN/DAS_RUNNER.md` - Core engine, interfaces, templating
+16. `DAS_DETAILED_DESIGN/CONNECTIONS_SPEC.md` - connections.yaml specification
+17. `DAS_DETAILED_DESIGN/SCHEMAS.md` - Graph/param/case/node updates
+18. `DAS_DETAILED_DESIGN/UI_COMPONENTS.md` - Widgets, FormEditor, selectors
+19. `DAS_DETAILED_DESIGN/DATA_FLOW.md` - End-to-end flow, buildDslFromEdge
+20. `DAS_DETAILED_DESIGN/COVERAGE_REPORT.md` - Validation of 100% coverage
+
+_Archive:_
+21. `ARCHIVE/EXTERNAL_DATA_SYSTEM_DESIGN.md` - Original 5082-line design (for deep dives)
 
 ### In `/REFERENCE/` (Background context only):
 
