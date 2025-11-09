@@ -35,6 +35,11 @@
             "enum": ["http", "sql"],
             "description": "Connection type: http for REST APIs, sql for databases"
           },
+          "auth_type": {
+            "type": "string",
+            "enum": ["google-service-account", "oauth", "basic", "api-key"],
+            "description": "Authentication type. 'google-service-account' auto-generates OAuth tokens from service account JSON."
+          },
           "description": {
             "type": "string",
             "description": "Human-readable description"

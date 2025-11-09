@@ -62,34 +62,34 @@ connections:
             "s": {{connection_string.segment}}{{/connection_string.segment}}
           }
       response:
-        ok_when:
-          status: [200]
         extract:
-          jmes:
-            # Funnel response returns aggregated steps with counts
-            from_count: "data.steps[{{dsl.target_step_index}}].count"
-            to_count: "data.steps[{{dsl.target_step_index + 1}}].count"
+          # Funnel response returns aggregated steps with counts
+          - name: from_count
+            jmes: "data.steps[{{target_step_index}}].count"
+          - name: to_count
+            jmes: "data.steps[{{target_step_index}}].count"
       transform:
-        steps:
-          - var: p_mean
-            jsonata: "to_count / from_count"
-          - var: n
-            jsonata: "from_count"
-          - var: k
-            jsonata: "to_count"
+        - name: p_mean
+          jsonata: "to_count / from_count"
+        - name: n
+          jsonata: "from_count"
+        - name: k
+          jsonata: "to_count"
       upsert:
-        mappings:
-          - from: p_mean
-            to: "/edges/{{edgeId}}/p/mean"
-          - from: n
-            to: "/edges/{{edgeId}}/p/evidence/n"
-          - from: k
-            to: "/edges/{{edgeId}}/p/evidence/k"
+        mode: replace
+        writes:
+          - target: "/edges/{{edgeId}}/p/mean"
+            value: "{{p_mean}}"
+          - target: "/edges/{{edgeId}}/p/evidence/n"
+            value: "{{n}}"
+          - target: "/edges/{{edgeId}}/p/evidence/k"
+            value: "{{k}}"
 
   # Google Sheets - Parameter Data
   - name: sheets-readonly
     provider: google-sheets
     kind: http
+    auth_type: google-service-account  # Tells DAS Runner to auto-generate OAuth tokens
     description: "Read-only access to Google Sheets for parameter data"
     enabled: true
     credsRef: google-sheets
@@ -101,38 +101,39 @@ connections:
       properties:
         spreadsheet_id:
           type: string
-          description: "Google Sheets spreadsheet ID"
+          description: "Google Sheets spreadsheet ID from URL"
         range:
           type: string
           description: "A1 notation range (e.g., 'Sheet1!A1:B10')"
+        expected_format:
+          type: string
+          description: "Optional hint for data format (e.g., 'p_mean, n, k')"
     adapter:
       request:
-        url_template: "https://sheets.googleapis.com/{{defaults.api_version}}/spreadsheets/{{connection_string.spreadsheet_id}}/values/{{connection_string.range}}"
+        url_template: "https://sheets.googleapis.com/v4/spreadsheets/{{connection_string.spreadsheet_id}}/values/{{connection_string.range}}"
         method: GET
         headers:
           Authorization: "Bearer {{credentials.access_token}}"
       response:
-        ok_when:
-          status: [200]
         extract:
-          jmes:
-            values: "values"
+          - name: values
+            jmes: "values"
       transform:
-        steps:
-          - var: p_mean
-            jsonata: "$number(values[0][1])"
-          - var: n
-            jsonata: "$number(values[1][1])"
-          - var: k
-            jsonata: "$number(values[2][1])"
+        - name: p_mean
+          jsonata: "$number(values[0][1])"
+        - name: n
+          jsonata: "$number(values[1][1])"
+        - name: k
+          jsonata: "$number(values[2][1])"
       upsert:
-        mappings:
-          - from: p_mean
-            to: "/edges/{{edgeId}}/p/mean"
-          - from: n
-            to: "/edges/{{edgeId}}/p/evidence/n"
-          - from: k
-            to: "/edges/{{edgeId}}/p/evidence/k"
+        mode: replace
+        writes:
+          - target: "/edges/{{edgeId}}/p/mean"
+            value: "{{p_mean}}"
+          - target: "/edges/{{edgeId}}/p/evidence/n"
+            value: "{{n}}"
+          - target: "/edges/{{edgeId}}/p/evidence/k"
+            value: "{{k}}"
 
   # Statsig - Feature Gate/Experiment Configuration
   - name: statsig-prod
@@ -152,33 +153,34 @@ connections:
           description: "Statsig project ID (optional override)"
     adapter:
       request:
-        url_template: "{{defaults.base_url}}/gates/{{case_id}}"
+        url_template: "{{connection.base_url}}/gates/{{caseId}}"
         method: GET
         headers:
           STATSIG-API-KEY: "{{credentials.console_api_key}}"
           Content-Type: "application/json"
       response:
-        ok_when:
-          status: [200]
         extract:
-          jmes:
-            gate_id: "data.id"
-            gate_name: "data.name"
-            enabled: "data.enabled"
-            rules: "data.rules"
+          - name: gate_id
+            jmes: "data.id"
+          - name: gate_name
+            jmes: "data.name"
+          - name: enabled
+            jmes: "data.enabled"
+          - name: rules
+            jmes: "data.rules"
       transform:
-        steps:
-          - var: variants
-            jsonata: |
-              rules[type='experiment'].returnValue{
-                'variant_id': $string(id),
-                'name': name,
-                'allocation': passPercentage / 100
-              }
+        - name: variants
+          jsonata: |
+            rules[type='experiment'].returnValue{
+              'variant_id': $string(id),
+              'name': name,
+              'allocation': passPercentage / 100
+            }
       upsert:
-        mappings:
-          - from: variants
-            to: "/nodes/{{nodeId}}/case/variants"
+        mode: replace
+        writes:
+          - target: "/nodes/{{nodeId}}/case/variants"
+            value: "{{variants}}"
 
   # PostgreSQL - Example for SQL-based data sources (disabled by default)
   - name: postgres-analytics
@@ -203,25 +205,24 @@ connections:
           Content-Type: "application/json"
         body_template: |
           {
-            "query": "SELECT COUNT(*) as n, SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) as k FROM {{defaults.schema}}.{{connection_string.table}} WHERE event_from = '{{dsl.from_event_id}}' AND event_to = '{{dsl.to_event_id}}' AND timestamp BETWEEN '{{window.start}}' AND '{{window.end}}'"
+            "query": "SELECT COUNT(*) as n, SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) as k FROM {{connection.schema}}.{{connection_string.table}} WHERE event_from = '{{from_event_id}}' AND event_to = '{{to_event_id}}' AND timestamp BETWEEN '{{window.start}}' AND '{{window.end}}'"
           }
       response:
-        ok_when:
-          status: [200]
         extract:
-          jmes:
-            n: "rows[0].n"
-            k: "rows[0].k"
+          - name: n
+            jmes: "rows[0].n"
+          - name: k
+            jmes: "rows[0].k"
       transform:
-        steps:
-          - var: p_mean
-            jsonata: "k / n"
+        - name: p_mean
+          jsonata: "k / n"
       upsert:
-        mappings:
-          - from: p_mean
-            to: "/edges/{{edgeId}}/p/mean"
-          - from: n
-            to: "/edges/{{edgeId}}/p/evidence/n"
-          - from: k
-            to: "/edges/{{edgeId}}/p/evidence/k"
+        mode: replace
+        writes:
+          - target: "/edges/{{edgeId}}/p/mean"
+            value: "{{p_mean}}"
+          - target: "/edges/{{edgeId}}/p/evidence/n"
+            value: "{{n}}"
+          - target: "/edges/{{edgeId}}/p/evidence/k"
+            value: "{{k}}"
 

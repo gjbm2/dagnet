@@ -11,6 +11,7 @@ import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { useSelectionContext } from './editors/GraphEditor';
 import { ItemBase } from '../hooks/useItemFiltering';
 import { LightningMenu } from './LightningMenu';
+import { fileOperationsService } from '../services/fileOperationsService';
 import './EnhancedSelector.css';
 
 interface EnhancedSelectorProps {
@@ -401,49 +402,29 @@ export function EnhancedSelector({
   };
 
   const handleCreateNew = async () => {
-    // Prepare default data with the typed ID injected
-    const defaultData = { 
-      id: inputValue,  // INJECT the typed ID
-      name: inputValue, 
-      description: '',
-      metadata: {
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }
-    };
-
-    // Create the file in FileRegistry with injected ID
-    const file = fileRegistry.getOrCreateFile(
-      `${type}-${inputValue}.yaml`, 
-      type, 
-      { repository: 'local', path: `${type}s/${inputValue}.yaml`, branch: 'main' },
-      defaultData
-    );
+    // Use fileOperationsService instead of direct FileRegistry calls
+    // This ensures proper parameter type handling
+    const metadata = type === 'parameter' && parameterType 
+      ? { parameterType }  // Pass through parameterType from props
+      : {};
     
-    const newItem = {
-      id: inputValue,
-      name: `${inputValue}.yaml`,
-      path: `${type}s/${inputValue}.yaml`,
-      type: type,
-      size: 0,
-      lastModified: new Date().toISOString(),
-      isLocal: true,
-      data: defaultData  // Include the data in the item
-    };
-    
-    // Add to navigator and open tab
-    await navOps.addLocalItem(newItem);
-    await tabOps.openTab(newItem, 'interactive');
-    await navOps.refreshItems();
+    await fileOperationsService.createFile(inputValue, type, {
+      openInTab: true,
+      viewMode: 'interactive',
+      metadata
+    });
 
     // Update the selector value
     setInputValue(inputValue);
     onChange(inputValue);
     setShowSuggestions(false);
     
-    // Call onAfterCreate if provided to allow parent to pull data
+    // Call onAfterCreate if provided (though data is now in FileRegistry)
     if (onAfterCreate) {
-      onAfterCreate(defaultData);
+      const file = fileRegistry.getFile(`${type}-${inputValue}`);
+      if (file) {
+        onAfterCreate(file.data);
+      }
     }
   };
 

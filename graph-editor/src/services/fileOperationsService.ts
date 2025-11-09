@@ -121,6 +121,28 @@ class FileOperationsService {
             ...metadata
           }
         };
+      } else if (type === 'parameter') {
+        // Use parameterType from metadata if creating from registry, else default to probability
+        const parameterType = metadata?.parameterType || 'probability';
+        
+        defaultData = {
+          id: name,
+          name,
+          type: parameterType, // From registry item or default to probability
+          description: '',
+          query_overridden: false,
+          values: [
+            { mean: 1 } // Array with one value object (schema requires array, not object)
+          ],
+          metadata: {
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            author: 'user',
+            version: '1.0.0',
+            status: 'draft',
+            ...(metadata || {})
+          }
+        };
       } else {
         defaultData = {
           id: name,
@@ -172,15 +194,8 @@ class FileOperationsService {
       await this.tabOps.openTab(item, viewMode);
     }
 
-    // 7. Refresh Navigator to show the new file
-    if (this.navigatorOps) {
-      // Small delay to ensure IndexedDB write completes
-      setTimeout(() => {
-        if (this.navigatorOps) {
-          this.navigatorOps.refreshItems();
-        }
-      }, 100);
-    }
+    // 7. No need to refresh - addLocalItem already added it to the navigator
+    // refreshItems would reload from workspace and wipe out local items!
 
     console.log(`FileOperationsService: Created ${fileId} successfully`);
 
