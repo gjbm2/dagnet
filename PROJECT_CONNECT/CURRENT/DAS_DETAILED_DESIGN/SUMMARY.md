@@ -149,9 +149,9 @@
 
 ### Next Steps
 
-1. Read `IMPLEMENTATION_PLAN.md` for detailed Phase 0 tasks
-2. Review `ARCHITECTURE.md` for system understanding
-3. Reference `DETAILED_DESIGN/` docs as needed during implementation
+1. Read `IMPLEMENTATION_PLAN.md` (in this directory) for detailed Phase 0 tasks
+2. Review `ARCHITECTURE.md` (in this directory) for system understanding
+3. Reference other docs in `DAS_DETAILED_DESIGN/` as needed during implementation
 4. Use `COVERAGE_REPORT.md` to find original design details if needed
 
 ---
