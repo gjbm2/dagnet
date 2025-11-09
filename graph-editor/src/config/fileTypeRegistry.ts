@@ -68,6 +68,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     displayName: 'Parameter',
     displayNamePlural: 'Parameters',
     schemaFile: '/param-schemas/parameter-schema.yaml',
+    uiSchemaFile: '/ui-schemas/parameter-ui-schema.json',
     directory: 'params',
     alternativeDirectories: ['parameters'],
     indexFile: 'parameters-index.yaml',

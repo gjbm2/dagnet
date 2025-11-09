@@ -1,15 +1,19 @@
 # Parameter: Customer Support Cost
 # Created: 2025-11-05
-# Schema: parameter-schema.yaml
+# Schema: parameter-schema.yaml v1.2.0
 # Type: Cost
 
 id: customer-support-cost
 name: Customer Support Cost per Contact
-description: Average cost incurred per customer support interaction
 type: cost_gbp
 
-# Query expression
-query: "cost(customer-support)"
+# Query expression (manual - cost parameter)
+# Note: Cost parameters may not have a from/to query
+query_overridden: true
+
+# Connection to external data source
+connection: "sheets-readonly"
+connection_string: '{"spreadsheet_id": "1a2b3c4d5e6f7g8h9i0j", "range": "Support Costs!A2:D100"}'
 
 # Historical values (timestamped)
 values:
@@ -19,8 +23,11 @@ values:
     distribution: lognormal
     window_from: "2025-01-01T00:00:00Z"
     window_to: "2025-01-31T23:59:59Z"
-    retrieved_at: "2025-02-01T09:00:00Z"
-    notes: "Includes agent time, tools, and overhead"
+    data_source:
+      type: sheets
+      url: "https://docs.google.com/spreadsheets/d/1a2b3c4d5e6f7g8h9i0j"
+      retrieved_at: "2025-02-01T09:00:00Z"
+      notes: "Includes agent time, tools, and overhead"
     
   - mean: 14.80
     stdev: 2.90
@@ -28,17 +35,21 @@ values:
     distribution: lognormal
     window_from: "2025-02-01T00:00:00Z"
     window_to: "2025-02-28T23:59:59Z"
-    retrieved_at: "2025-03-01T09:00:00Z"
-    notes: "Cost reduction from new chat automation"
+    data_source:
+      type: sheets
+      url: "https://docs.google.com/spreadsheets/d/1a2b3c4d5e6f7g8h9i0j"
+      retrieved_at: "2025-03-01T09:00:00Z"
+      notes: "Cost reduction from new chat automation"
 
-# Data source configuration
-source:
-  type: google_sheets
-  last_synced: "2025-03-01T09:00:00Z"
-
-connection:
-  sheet_id: "1a2b3c4d5e6f7g8h9i0j"
-  range: "Support Costs!A2:D100"
-  value_column: "C"
-  date_column: "A"
+# Metadata
+metadata:
+  description: "Average cost incurred per customer support interaction. Includes agent time, support tools, and operational overhead."
+  description_overridden: false
+  units: "GBP"
+  tags: ["cost", "support", "operations"]
+  created_at: "2025-01-15T10:00:00Z"
+  updated_at: "2025-03-01T09:00:00Z"
+  author: "finance-team"
+  version: "1.2.0"
+  status: active
 

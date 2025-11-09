@@ -52,6 +52,7 @@
         "ui:options": {
           "accordion": true
         },
+        "ui:help": "DAS adapter specification for data fetching and transformation.\n\n📖 Full template documentation:\nSee PROJECT_CONNECT/CURRENT/DAS_DETAILED_DESIGN/MUSTACHE_TEMPLATE_SPEC.md",
         "pre_request": {
           "ui:options": {
             "accordion": true
@@ -64,7 +65,7 @@
               "showLabel": true,
               "wordWrap": "on"
             },
-            "ui:help": "JavaScript code to transform query inputs before HTTP request. Return modified dsl object."
+            "ui:help": "JavaScript to transform query before request. MUST return modified dsl.\n\nAvailable in scope: dsl, window, context, defaults, connection_string\n\nCommon uses:\n• Date formatting: dsl.start_date = window.start.split('T')[0];\n• JSON serialization: dsl.events_json = JSON.stringify(events);\n• Build arrays: dsl.funnel = [visited, from, to];\n\nExample:\nconst formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');\ndsl.start_date = formatDate(window.start);\ndsl.end_date = formatDate(window.end);\nreturn dsl;"
           }
         },
         "request": {
@@ -72,7 +73,7 @@
             "accordion": true
           },
           "url_template": {
-            "ui:help": "Mustache template for URL. Variables: {{credentials.*}}, {{dsl.*}}, {{window.*}}, {{context.*}}"
+            "ui:help": "Mustache template for request URL.\n\nAvailable variables:\n• {{credentials.field}} - From credentials.yaml providers section\n• {{dsl.from_event_id}} - Source event from query\n• {{dsl.to_event_id}} - Target event from query\n• {{window.start}} - ISO datetime (e.g. 2024-01-01T00:00:00Z)\n• {{window.end}} - ISO datetime\n• {{defaults.field}} - From connection defaults\n• {{connection_string.field}} - From parameter overrides\n\nExample:\n{{defaults.base_url}}/api/funnels?key={{credentials.api_key}}"
           },
           "method": {
             "ui:widget": "radio"
@@ -83,7 +84,7 @@
               "language": "json",
               "height": "150px"
             },
-            "ui:help": "Header name/value pairs. Values can be Mustache templates."
+            "ui:help": "HTTP headers as JSON. Values support Mustache templates.\n\nExamples:\n• Bearer: \"Authorization\": \"Bearer {{credentials.access_token}}\"\n• Basic Auth: \"Authorization\": \"Basic {{credentials.basic_auth_b64}}\"\n• API Key: \"X-API-Key\": \"{{credentials.api_key}}\"\n• Custom: \"Content-Type\": \"application/json\""
           },
           "body_template": {
             "ui:widget": "MonacoWidget",
@@ -93,7 +94,7 @@
               "showLabel": true,
               "wordWrap": "on"
             },
-            "ui:help": "Mustache template for request body (POST/PUT/PATCH). Output must be valid JSON."
+            "ui:help": "Mustache template for request body. Output must be valid JSON.\n\nAvailable variables: same as url_template above.\n\nFor complex JSON (arrays/objects), use pre_request to serialize:\n  dsl.events_json = JSON.stringify(events);\n  return dsl;\nThen: {{{dsl.events_json}}} (triple braces for unescaped)\n\nExample:\n{\n  \"event_type\": \"{{dsl.from_event_id}}\",\n  \"start\": \"{{window.start}}\"\n}"
           }
         },
         "response": {
