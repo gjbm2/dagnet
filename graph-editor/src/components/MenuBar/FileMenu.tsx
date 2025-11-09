@@ -69,9 +69,9 @@ export function FileMenu() {
     setIsNewFileModalOpen(true);
   };
   
-  const handleCreateFile = async (name: string, type: ObjectType) => {
+  const handleCreateFile = async (name: string, type: ObjectType, extraMetadata?: any) => {
     // Use centralized file operations service
-    const metadata = type === 'graph' ? {
+    let metadata = type === 'graph' ? {
       policies: {
         default_outcome: 'abandon',
         overflow_policy: 'error',
@@ -80,6 +80,11 @@ export function FileMenu() {
       version: '1.0.0',
       author: 'Graph Editor'
     } : {};
+    
+    // Merge in any extra metadata (e.g., parameterType from registry)
+    if (extraMetadata) {
+      metadata = { ...metadata, ...extraMetadata };
+    }
     
     await fileOperationsService.createFile(name, type, {
       openInTab: true,

@@ -6,7 +6,7 @@ import { useNavigatorContext } from '../contexts/NavigatorContext';
 interface NewFileModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (name: string, type: ObjectType) => Promise<void>;
+  onCreate: (name: string, type: ObjectType, metadata?: any) => Promise<void>;
   fileType?: ObjectType; // If provided, type selector is hidden and this type is used
   defaultName?: string; // For duplicate functionality
 }
@@ -37,9 +37,14 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
     
     if (!index) return [];
     
-    // Extract IDs from the registry index
+    // Extract IDs from the registry index (preserve full item data for parameters)
     if (typeToUse === 'parameter' && 'parameters' in index) {
-      return (index as any).parameters.map((p: any) => ({ id: p.id, name: p.name, description: p.description }));
+      return (index as any).parameters.map((p: any) => ({ 
+        id: p.id, 
+        name: p.name, 
+        description: p.description,
+        type: p.type // Preserve parameter subtype (probability, cost_gbp, cost_time)
+      }));
     } else if (typeToUse === 'context' && 'contexts' in index) {
       return (index as any).contexts.map((c: any) => ({ id: c.id, name: c.name, description: c.description }));
     } else if (typeToUse === 'case' && 'cases' in index) {
@@ -93,7 +98,17 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
     setError(null);
 
     try {
-      await onCreate(nameToUse, typeToUse);
+      // If creating from registry, find the full registry item to pass its metadata
+      const selectedItem = creationMode === 'from-registry' 
+        ? registryItems.find((item: any) => item.id === selectedRegistryId)
+        : null;
+      
+      // For parameters created from registry, pass the parameter type (probability, cost_gbp, etc)
+      const metadata = selectedItem?.type ? { parameterType: selectedItem.type } : {};
+      
+      // onCreate signature is (name, objectType), but we also need to pass metadata
+      // The onCreate callback will need to handle metadata - let's update the callers
+      await onCreate(nameToUse, typeToUse, metadata);
       
       // Success - close modal
       handleCancel();

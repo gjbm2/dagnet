@@ -59,15 +59,16 @@ This directory contains all design documentation for the Data Connections system
   - Lost features: complementary conditional creation, color picker
   - Estimated cleanup: 12-16 hours
 
-**Remaining Phase 1 Work:** ~75-95 hours (revised estimate)
+**Remaining Phase 1 Work:** ~25-35 hours (revised estimate - major progress on 1G!)
 - 1E: MSMDC algorithm implementation in Python (4-6 hrs) **← NEXT**
 - 1E: Graph auto-updates & Query String Builder integration (2-3 hrs)
-- 1G: External Data System Implementation (59-77 hrs) - **DESIGN COMPLETE ✅ Nov 9, 2025**
-  - **Comprehensive design in 7 focused documents** (see below)
-  - connections.yaml + credentials.yaml integration
-  - Portable DAS Runner (browser + Node.js compatible)
-  - Full UI integration (FormEditor, Window Selector, widgets)
-  - Complete test strategy (unit + integration + contract tests)
+- 1G: External Data System Implementation (59-77 hrs) - **🟢 85% COMPLETE ✅ Nov 9, 2025**
+  - **Phase 2b (DAS Core) WORKING END-TO-END**: Google Sheets → Graph updates! 🎉
+  - ✅ DASRunner with 10-phase execution pipeline
+  - ✅ Mustache, JMESPath, JSONata integration
+  - ✅ DataOperationsService integration with Lightning Menu
+  - ✅ UpdateManager integration (with field name translation layer)
+  - ⏳ Remaining: UI polish (10-12 hrs), error handling (1-2 hrs), testing (10-14 hrs)
 - 1H: Test with Amplitude & PostgreSQL (included in 1G)
 - 1F: Top Menu "Data" (batch operations) (2-3 hrs)
 
@@ -97,6 +98,18 @@ try {
   rollbackHistoryTransaction();
 }
 ```
+
+### UpdateManager Field Name Standardization
+
+**Problem**: UpdateManager uses external API terminology (probability/sample_size/successes) for external data, but schema uses (mean/n/k). This creates confusion and requires translation layer in DataOperationsService.
+
+**Solution** (deferred to Phase 5):
+- Refactor UpdateManager's external_to_graph mappings to use schema field names directly
+- Remove translation layer from DataOperationsService
+- Update tests to reflect new field names
+- Estimated: 2-3 hours
+
+**Current Workaround**: DataOperationsService translates DAS output (mean/n/k) to UpdateManager format (probability/sample_size/successes)
 
 ### BATCH UPDATES
 

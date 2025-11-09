@@ -92,18 +92,35 @@ export async function seedConnectionsFile(): Promise<void> {
     }
     
     // Fallback: Load default connections.yaml if it doesn't exist locally
-    if (!existing) {
-      console.log('[seedConnections] Creating new connections.yaml from defaults');
-      const defaultData = await loadDefaultConnections();
-      
+    const defaultData = await loadDefaultConnections();
+    const defaultConnections = defaultData?.connections;
+    const defaultCount = Array.isArray(defaultConnections) ? defaultConnections.length : 0;
+    const existingConnections = existing?.data?.connections;
+    const existingCount = Array.isArray(existingConnections) ? existingConnections.length : 0;
+    const shouldReseedFromDefaults =
+      (!existing || (!existing.isDirty && existingCount === 0 && defaultCount > 0));
+
+    if (shouldReseedFromDefaults) {
+      console.log(
+        `[seedConnections] ${existing ? 'Reseeding' : 'Creating'} connections.yaml from defaults (${defaultCount} connections)`
+      );
+
       await db.files.put({
         fileId,
         type: 'connections',
         data: defaultData,
         lastModified: Date.now(),
-        viewTabs: []
+        viewTabs: existing?.viewTabs || [],
+        isDirty: false,
+        originalData: defaultData
       });
-      console.log('[seedConnections] ✅ connections.yaml created with', defaultData?.connections?.length || 0, 'default connections');
+      console.log(
+        '[seedConnections] ✅ connections.yaml',
+        existing ? 'reseeded' : 'created',
+        'with',
+        defaultCount,
+        'default connections'
+      );
     } else {
       console.log('[seedConnections] connections.yaml already exists, skipping seed');
     }

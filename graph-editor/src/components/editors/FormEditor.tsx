@@ -35,6 +35,9 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   
   // Guarded operation modal state (for Apply Settings)
   const [isGuardModalOpen, setIsGuardModalOpen] = useState(false);
+  
+  // Base64 encoder modal state
+  const [isBase64ModalOpen, setIsBase64ModalOpen] = useState(false);
 
   // Determine object type from fileId
   // Handle index files specially (e.g., 'parameter-index' → 'parameter-index')
@@ -201,7 +204,7 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'flex-end',
+          justifyContent: 'space-between',
           padding: '8px 16px',
           borderBottom: '1px solid #e5e7eb',
           background: '#fff',
@@ -209,6 +212,20 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
           top: 0,
           zIndex: 1
         }}>
+          <button
+            onClick={() => setIsBase64ModalOpen(true)}
+            style={{
+              background: '#6b7280',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              padding: '6px 12px',
+              fontSize: 13,
+              cursor: 'pointer'
+            }}
+          >
+            Base64 Encoder
+          </button>
           <button
             onClick={handleApplySettings}
             disabled={!isDirty}
@@ -448,7 +465,228 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
         warningMessage="Applying credentials will re-clone the workspace. Any uncommitted changes will be lost unless you commit them first."
         excludeFromDirtyCheck={['credentials-credentials']}
       />
+      
+      {/* Base64 encoder modal */}
+      {isBase64ModalOpen && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10000
+        }}>
+          <div style={{
+            background: '#fff',
+            borderRadius: 8,
+            maxWidth: '800px',
+            width: '90%',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            position: 'relative',
+            boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{
+              position: 'sticky',
+              top: 0,
+              background: '#fff',
+              borderBottom: '1px solid #e5e7eb',
+              padding: '16px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              zIndex: 1
+            }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Base64 Encoder</h2>
+              <button
+                onClick={() => setIsBase64ModalOpen(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  padding: '0 8px',
+                  color: '#6b7280'
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <Base64EncoderContent />
+          </div>
+        </div>
+      )}
     </>
+  );
+}
+
+// Inline Base64 Encoder Component (embedded in modal)
+function Base64EncoderContent() {
+  const [base64Output, setBase64Output] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setFileName(file.name);
+    setError('');
+    setBase64Output('');
+    setCopied(false);
+
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const base64 = btoa(content);
+        setBase64Output(base64);
+      } catch (err) {
+        setError(`Failed to encode file: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+
+    reader.onerror = () => {
+      setError('Failed to read file');
+    };
+
+    reader.readAsText(file);
+  };
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(base64Output);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div style={{ padding: '16px' }}>
+      <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '16px' }}>
+        Upload your service account JSON file to get its base64 encoding for credentials.yaml
+      </p>
+
+      <label style={{
+        display: 'block',
+        width: '100%',
+        padding: '32px',
+        border: '2px dashed #d1d5db',
+        borderRadius: 8,
+        textAlign: 'center',
+        cursor: 'pointer',
+        background: '#f9fafb',
+        marginBottom: '16px',
+        transition: 'all 0.2s'
+      }}>
+        <input
+          type="file"
+          hidden
+          onChange={handleFileUpload}
+          accept=".json,.txt,.yaml,.yml"
+        />
+        <div style={{ fontSize: '14px', color: '#6b7280' }}>
+          Click to select file or drag and drop
+        </div>
+        <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>
+          JSON, YAML, or TXT files
+        </div>
+      </label>
+
+      {fileName && (
+        <div style={{
+          padding: '12px',
+          background: '#dbeafe',
+          border: '1px solid #93c5fd',
+          borderRadius: 4,
+          marginBottom: '16px',
+          fontSize: '14px',
+          color: '#1e40af'
+        }}>
+          📄 {fileName}
+        </div>
+      )}
+
+      {error && (
+        <div style={{
+          padding: '12px',
+          background: '#fee2e2',
+          border: '1px solid #fca5a5',
+          borderRadius: 4,
+          marginBottom: '16px',
+          fontSize: '14px',
+          color: '#991b1b'
+        }}>
+          ⚠️ {error}
+        </div>
+      )}
+
+      {base64Output && (
+        <>
+          <textarea
+            readOnly
+            value={base64Output}
+            style={{
+              width: '100%',
+              minHeight: '200px',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              padding: '12px',
+              border: '1px solid #d1d5db',
+              borderRadius: 4,
+              marginBottom: '16px',
+              resize: 'vertical',
+              boxSizing: 'border-box'
+            }}
+          />
+          
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <button
+              onClick={handleCopy}
+              style={{
+                background: copied ? '#10b981' : '#2563eb',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 4,
+                padding: '8px 16px',
+                fontSize: '14px',
+                cursor: 'pointer',
+                fontWeight: 500
+              }}
+            >
+              {copied ? '✓ Copied!' : 'Copy to Clipboard'}
+            </button>
+            
+            <span style={{ fontSize: '12px', color: '#6b7280' }}>
+              {base64Output.length.toLocaleString()} characters
+            </span>
+          </div>
+
+          <div style={{
+            marginTop: '16px',
+            padding: '12px',
+            background: '#f3f4f6',
+            borderRadius: 4,
+            fontSize: '12px',
+            color: '#374151'
+          }}>
+            <strong>Next step:</strong> Paste into credentials.yaml under:<br />
+            <code style={{
+              background: '#fff',
+              padding: '2px 6px',
+              borderRadius: 3,
+              fontFamily: 'monospace'
+            }}>
+              providers.google-sheets.service_account_json_b64
+            </code>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

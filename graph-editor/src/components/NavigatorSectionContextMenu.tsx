@@ -37,10 +37,11 @@ export function NavigatorSectionContextMenu({ sectionType, x, y, onClose }: Navi
     return items;
   }, [sectionType]);
   
-  const handleCreateFile = async (name: string, type: ObjectType) => {
+  const handleCreateFile = async (name: string, type: ObjectType, metadata?: any) => {
     await fileOperationsService.createFile(name, type, {
       openInTab: true,
-      viewMode: 'interactive'
+      viewMode: 'interactive',
+      metadata
     });
     
     setIsNewFileModalOpen(false);

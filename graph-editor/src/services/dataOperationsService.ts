@@ -662,18 +662,163 @@ class DataOperationsService {
   
   /**
    * Get data from external source → graph (direct, not versioned)
-   * STUB for Phase 1
    */
   async getFromSourceDirect(options: {
     objectType: 'parameter' | 'case' | 'node';
     objectId: string;
     targetId?: string;
+    graph?: Graph | null;
+    setGraph?: (graph: Graph | null) => void;
   }): Promise<void> {
-    toast('Get from Source (direct) coming in Phase 2!', { icon: 'ℹ️', duration: 3000 });
-    // TODO Phase 2: Implement external source retrieval
-    // 1. Call external connector
-    // 2. Update graph directly (bypass file)
-    // 3. No file changes (nothing marked dirty)
+    const { objectType, objectId, targetId, graph, setGraph } = options;
+    
+    try {
+      // 1. Load the parameter/case/node file to get connection info
+      const fileId = `${objectType}-${objectId}`;
+      const file = fileRegistry.getFile(fileId);
+      
+      if (!file) {
+        toast.error(`${objectType} "${objectId}" not found`);
+        return;
+      }
+      
+      const data = file.data;
+      
+      // 2. Check if it has a connection configured
+      if (!data.connection) {
+        toast.error(`No connection configured for ${objectType} "${objectId}"`);
+        return;
+      }
+      
+      // 3. Parse connection_string (it's a JSON string in the schema)
+      let connectionString: any = {};
+      if (data.connection_string) {
+        try {
+          connectionString = typeof data.connection_string === 'string' 
+            ? JSON.parse(data.connection_string)
+            : data.connection_string;
+        } catch (e) {
+          toast.error('Invalid connection_string JSON');
+          return;
+        }
+      }
+      
+      // 4. Execute DAS Runner
+      const { createDASRunner } = await import('../lib/das');
+      const runner = createDASRunner();
+      
+      toast.loading('Fetching data from source...', { id: 'das-fetch' });
+      
+      const result = await runner.execute(data.connection, {}, {
+        connection_string: connectionString,
+        edgeId: targetId || 'unknown'
+      });
+      
+      if (!result.success) {
+        toast.error(`Failed to fetch data: ${result.error}`, { id: 'das-fetch' });
+        return;
+      }
+      
+      toast.success(`Fetched data from source`, { id: 'das-fetch' });
+      console.log('DAS Updates:', result.updates);
+      
+      // 5. Parse the updates to extract values
+      // Map DAS field names to UpdateManager's external data field names
+      const updateData: any = {};
+      for (const update of result.updates) {
+        console.log('Processing update:', update);
+        // Parse JSON Pointer: /edges/{edgeId}/p/mean → extract field and value
+        const parts = update.target.split('/').filter(Boolean);
+        console.log('Parts:', parts);
+        
+        // Example: ["edges", "test-edge-123", "p", "mean"] → field = "mean"
+        // Or: ["edges", "test-edge-123", "p", "evidence", "n"] → need to extract "n"
+        const field = parts[parts.length - 1]; // Last part is the field name
+        console.log('Field:', field, 'Value:', update.value);
+        
+        // Map to UpdateManager's expected field names for external data
+        // UpdateManager expects: probability, sample_size, successes
+        // DAS provides: mean, n, k
+        if (field === 'mean') {
+          updateData.probability = update.value;
+        } else if (field === 'n') {
+          updateData.sample_size = update.value;
+        } else if (field === 'k') {
+          updateData.successes = update.value;
+        } else {
+          updateData[field] = update.value;
+        }
+      }
+      
+      console.log('Extracted data from DAS (mapped to external format):', updateData);
+      
+      // 6. Apply directly to graph (no file update)
+      if (!targetId || !graph || !setGraph) {
+        toast.error('Cannot apply to graph: missing context');
+        return;
+      }
+      
+      // Find the target edge
+      const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
+      if (!targetEdge) {
+        toast.error('Target edge not found in graph');
+        return;
+      }
+      
+      // Call UpdateManager to transform and apply external data directly to graph
+      // DAS data is "external" data (not from file), so use handleExternalToGraph
+      console.log('[DataOperationsService] Calling UpdateManager with:', {
+        updateData,
+        targetEdge: {
+          uuid: targetEdge.uuid,
+          'p.mean': targetEdge.p?.mean,
+          'p.mean_overridden': targetEdge.p?.mean_overridden
+        }
+      });
+      
+      const updateResult = await updateManager.handleExternalToGraph(
+        updateData,  // External data with {mean, n, k, etc}
+        targetEdge,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      console.log('[DataOperationsService] UpdateManager result:', {
+        success: updateResult.success,
+        changesLength: updateResult.changes?.length,
+        changes: updateResult.changes
+      });
+      
+      if (!updateResult.success) {
+        toast.error('Failed to apply updates to graph');
+        return;
+      }
+      
+      // Apply the changes to the graph
+      if (updateResult.changes && updateResult.changes.length > 0) {
+        const nextGraph = structuredClone(graph);
+        const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === targetId || e.id === targetId);
+        
+        if (edgeIndex >= 0) {
+          applyChanges(nextGraph.edges[edgeIndex], updateResult.changes);
+          
+          if (nextGraph.metadata) {
+            nextGraph.metadata.updated_at = new Date().toISOString();
+          }
+          
+          setGraph(nextGraph);
+          toast.success(`Applied to graph: ${updateResult.changes.length} fields updated`);
+        }
+      } else {
+        toast('No changes to apply', { icon: 'ℹ️' });
+      }
+      
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`Error: ${message}`);
+      console.error('getFromSourceDirect error:', error);
+    }
   }
   
   /**

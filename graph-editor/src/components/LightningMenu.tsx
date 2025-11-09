@@ -131,7 +131,7 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   
   const handleGetFromSourceDirect = () => {
     setIsOpen(false);
-    dataOperationsService.getFromSourceDirect({ objectType, objectId, targetId });
+    dataOperationsService.getFromSourceDirect({ objectType, objectId, targetId, graph, setGraph });
   };
   
   const handleConnectionSettings = () => {
