@@ -4,9 +4,10 @@ import { useFileState, useTabContext, fileRegistry } from '../../contexts/TabCon
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import Form from '@rjsf/mui';
 import validator from '@rjsf/validator-ajv8';
-import { RJSFSchema } from '@rjsf/utils';
-import { getFileTypeConfig, getSchemaFile } from '../../config/fileTypeRegistry';
+import { RJSFSchema, RegistryWidgetsType, UiSchema, TemplatesType } from '@rjsf/utils';
+import { getFileTypeConfig, getSchemaFile, getUiSchemaFile } from '../../config/fileTypeRegistry';
 import { GuardedOperationModal } from '../modals/GuardedOperationModal';
+import { MonacoWidget, TabbedArrayWidget, AccordionObjectFieldTemplate } from '../widgets';
 
 /**
  * Form Editor
@@ -20,6 +21,7 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   const { operations: navOperations } = useNavigatorContext();
   const { activeTabId, operations: tabOperations } = useTabContext();
   const [schema, setSchema] = useState<RJSFSchema | null>(null);
+  const [uiSchema, setUiSchema] = useState<UiSchema | null>(null);
   const [formData, setFormData] = useState<any>(null);
   const initialDataRef = useRef<string>('');
   const hasLoadedRef = useRef(false);
@@ -85,6 +87,38 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
       }
     };
     loadSchema();
+  }, [objectType]);
+
+  // Load UI schema (optional, for custom widgets and layout)
+  useEffect(() => {
+    const loadUiSchema = async () => {
+      try {
+        const uiSchemaUrl = getUiSchemaFile(objectType);
+        
+        if (!uiSchemaUrl) {
+          console.log(`FormEditor: No UI schema configured for ${objectType}, using defaults`);
+          setUiSchema(null);
+          return;
+        }
+        
+        console.log(`FormEditor: Loading UI schema from ${uiSchemaUrl} for ${objectType}...`);
+        
+        const response = await fetch(uiSchemaUrl);
+        if (!response.ok) {
+          console.warn(`FormEditor: Failed to fetch UI schema: ${response.status}`);
+          setUiSchema(null);
+          return;
+        }
+        
+        const loadedUiSchema = await response.json();
+        console.log(`FormEditor: Loaded UI schema:`, loadedUiSchema);
+        setUiSchema(loadedUiSchema as UiSchema);
+      } catch (error) {
+        console.warn(`FormEditor: Error loading UI schema for ${objectType}:`, error);
+        setUiSchema(null);
+      }
+    };
+    loadUiSchema();
   }, [objectType]);
 
   // Sync external data changes to form
@@ -327,6 +361,17 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   };
 
 
+  // Custom widgets registry for RJSF
+  const customWidgets: RegistryWidgetsType = {
+    MonacoWidget: MonacoWidget
+  };
+
+  // Custom templates registry for RJSF
+  const customTemplates: Partial<TemplatesType> = {
+    ArrayFieldTemplate: TabbedArrayWidget, // Conditionally renders as tabs when ui:options.tabField is set
+    ObjectFieldTemplate: AccordionObjectFieldTemplate // Conditionally renders as accordion when ui:options.accordion = true
+  };
+
   if (!data) {
     return (
       <div className="editor-loading" style={{
@@ -368,7 +413,10 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
               disabled={readonly}
               liveValidate
               showErrorList={false}
+              widgets={customWidgets}
+              templates={customTemplates}
               uiSchema={{
+                ...uiSchema,
                 'ui:submitButtonOptions': {
                   norender: true
                 }

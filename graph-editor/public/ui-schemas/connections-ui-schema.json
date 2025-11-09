@@ -1,0 +1,185 @@
+{
+  "connections": {
+    "ui:options": {
+      "orderable": true,
+      "tabField": "name"
+    },
+    "items": {
+      "ui:title": " ",
+      "name": {
+        "ui:title": "Connection Name",
+        "ui:help": "Unique identifier (kebab-case). Example: amplitude-prod, sheets-readonly"
+      },
+      "provider": {
+        "ui:title": "Provider Type",
+        "ui:help": "Data source provider. Common values: amplitude, google-sheets, statsig, postgres"
+      },
+      "kind": {
+        "ui:widget": "radio",
+        "ui:help": "Connection type: 'http' for REST APIs, 'sql' for databases"
+      },
+      "description": {
+        "ui:widget": "textarea",
+        "ui:options": {
+          "rows": 2
+        }
+      },
+      "enabled": {
+        "ui:help": "Set to false to disable this connection without deleting it"
+      },
+      "credsRef": {
+        "ui:help": "Reference to credentials.yaml entry. Leave empty for public APIs."
+      },
+      "defaults": {
+        "ui:widget": "MonacoWidget",
+        "ui:options": {
+          "language": "json",
+          "height": "200px",
+          "showLabel": true
+        },
+        "ui:help": "Default values merged into all requests (e.g., project_id, base_url, global filters)"
+      },
+      "connection_string_schema": {
+        "ui:widget": "MonacoWidget",
+        "ui:options": {
+          "language": "json",
+          "height": "300px",
+          "showLabel": true
+        },
+        "ui:help": "JSON Schema defining per-parameter connection_string overrides"
+      },
+      "adapter": {
+        "ui:options": {
+          "accordion": true
+        },
+        "pre_request": {
+          "ui:options": {
+            "accordion": true
+          },
+          "script": {
+            "ui:widget": "MonacoWidget",
+            "ui:options": {
+              "language": "javascript",
+              "height": "400px",
+              "showLabel": true,
+              "wordWrap": "on"
+            },
+            "ui:help": "JavaScript code to transform query inputs before HTTP request. Return modified dsl object."
+          }
+        },
+        "request": {
+          "ui:options": {
+            "accordion": true
+          },
+          "url_template": {
+            "ui:help": "Mustache template for URL. Variables: {{credentials.*}}, {{dsl.*}}, {{window.*}}, {{context.*}}"
+          },
+          "method": {
+            "ui:widget": "radio"
+          },
+          "headers": {
+            "ui:widget": "MonacoWidget",
+            "ui:options": {
+              "language": "json",
+              "height": "150px"
+            },
+            "ui:help": "Header name/value pairs. Values can be Mustache templates."
+          },
+          "body_template": {
+            "ui:widget": "MonacoWidget",
+            "ui:options": {
+              "language": "json",
+              "height": "400px",
+              "showLabel": true,
+              "wordWrap": "on"
+            },
+            "ui:help": "Mustache template for request body (POST/PUT/PATCH). Output must be valid JSON."
+          }
+        },
+        "response": {
+          "ui:options": {
+            "accordion": true
+          },
+          "ok_when": {
+            "ui:options": {
+              "accordion": true
+            },
+            "status": {
+              "ui:options": {
+                "orderable": true
+              },
+              "ui:help": "Acceptable HTTP status codes (e.g., [200, 201])"
+            },
+            "jmes": {
+              "ui:widget": "MonacoWidget",
+              "ui:options": {
+                "language": "jmespath",
+                "height": "100px"
+              },
+              "ui:help": "JMESPath expression that should evaluate to truthy for success"
+            }
+          },
+          "extract": {
+            "ui:options": {
+              "accordion": true
+            },
+            "jmes": {
+              "ui:widget": "MonacoWidget",
+              "ui:options": {
+                "language": "json",
+                "height": "200px"
+              },
+              "ui:help": "Map of variable_name: jmespath_expression to extract values from response"
+            }
+          }
+        },
+        "transform": {
+          "ui:options": {
+            "accordion": true
+          },
+          "steps": {
+            "ui:options": {
+              "orderable": true,
+              "tabField": "var"
+            },
+            "items": {
+              "ui:title": " ",
+              "var": {
+                "ui:help": "Variable name to store result"
+              },
+              "jsonata": {
+                "ui:widget": "MonacoWidget",
+                "ui:options": {
+                  "language": "jsonata",
+                  "height": "100px"
+                },
+                "ui:help": "JSONata expression to compute derived value"
+              }
+            }
+          }
+        },
+        "upsert": {
+          "ui:options": {
+            "accordion": true
+          },
+          "mappings": {
+            "ui:options": {
+              "orderable": true,
+              "tabField": "from"
+            },
+            "items": {
+              "ui:title": " ",
+              "from": {
+                "ui:help": "Variable name from transform phase"
+              },
+              "to": {
+                "ui:help": "JSON Pointer to target location in graph (e.g., /edges/{{edgeId}}/p/mean)"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

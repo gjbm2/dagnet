@@ -1,0 +1,195 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://dagnet.dev/schemas/connections/v1.json",
+  "title": "Data Source Connections",
+  "description": "External data source configurations with integrated adapters",
+  "type": "object",
+  "required": ["version", "connections"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "default": "1.0.0",
+      "description": "Schema version"
+    },
+    "connections": {
+      "type": "array",
+      "description": "Array of connection definitions",
+      "items": {
+        "type": "object",
+        "required": ["name", "provider", "kind", "enabled", "adapter"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+            "description": "Unique connection name (kebab-case)"
+          },
+          "provider": {
+            "type": "string",
+            "description": "Provider identifier (e.g., 'amplitude', 'google-sheets', 'statsig', 'postgres')"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["http", "sql"],
+            "description": "Connection type: http for REST APIs, sql for databases"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether this connection is active"
+          },
+          "credsRef": {
+            "type": "string",
+            "description": "Reference to credentials.yaml entry (optional for public APIs)"
+          },
+          "defaults": {
+            "type": "object",
+            "description": "Default values merged into all requests (e.g., global filters)",
+            "additionalProperties": true
+          },
+          "connection_string_schema": {
+            "type": "object",
+            "description": "JSON Schema for validating per-parameter connection_string overrides",
+            "additionalProperties": true
+          },
+          "adapter": {
+            "type": "object",
+            "description": "DAS adapter specification for this connection",
+            "additionalProperties": false,
+            "properties": {
+              "pre_request": {
+                "type": "object",
+                "description": "Optional pre-processing phase to transform query inputs",
+                "additionalProperties": false,
+                "properties": {
+                  "script": {
+                    "type": "string",
+                    "description": "JavaScript code to transform dsl object (future: sandboxed execution)"
+                  }
+                }
+              },
+              "request": {
+                "type": "object",
+                "description": "HTTP/SQL request specification",
+                "required": ["url_template", "method"],
+                "additionalProperties": false,
+                "properties": {
+                  "url_template": {
+                    "type": "string",
+                    "description": "Mustache template for request URL. Variables: {{dsl.from_event_id}}, {{credentials.api_key}}, {{window.start}}, etc."
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "PATCH"],
+                    "description": "HTTP method"
+                  },
+                  "headers": {
+                    "type": "object",
+                    "description": "Header name/value pairs (values can be Mustache templates)",
+                    "additionalProperties": {"type": "string"}
+                  },
+                  "body_template": {
+                    "type": "string",
+                    "description": "Mustache template for request body (for POST/PUT/PATCH). Output must be valid JSON."
+                  }
+                }
+              },
+              "response": {
+                "type": "object",
+                "description": "Response parsing specification",
+                "additionalProperties": false,
+                "properties": {
+                  "ok_when": {
+                    "type": "object",
+                    "description": "Condition to determine success",
+                    "properties": {
+                      "status": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Acceptable HTTP status codes"
+                      },
+                      "jmes": {
+                        "type": "string",
+                        "description": "JMESPath expression that should evaluate to truthy for success"
+                      }
+                    }
+                  },
+                  "extract": {
+                    "type": "object",
+                    "description": "Extract values from response using JMESPath",
+                    "additionalProperties": false,
+                    "properties": {
+                      "jmes": {
+                        "type": "object",
+                        "description": "Map of variable_name: jmespath_expression",
+                        "additionalProperties": {"type": "string"}
+                      }
+                    }
+                  }
+                }
+              },
+              "transform": {
+                "type": "object",
+                "description": "JSONata transformations to compute derived values",
+                "additionalProperties": false,
+                "properties": {
+                  "steps": {
+                    "type": "array",
+                    "description": "Array of transformation steps",
+                    "items": {
+                      "type": "object",
+                      "required": ["var", "jsonata"],
+                      "properties": {
+                        "var": {
+                          "type": "string",
+                          "description": "Variable name to store result"
+                        },
+                        "jsonata": {
+                          "type": "string",
+                          "description": "JSONata expression"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "upsert": {
+                "type": "object",
+                "description": "Map computed variables to graph update paths",
+                "required": ["mappings"],
+                "additionalProperties": false,
+                "properties": {
+                  "mappings": {
+                    "type": "array",
+                    "description": "Array of value-to-path mappings",
+                    "items": {
+                      "type": "object",
+                      "required": ["from", "to"],
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "description": "Variable name from transform phase"
+                        },
+                        "to": {
+                          "type": "string",
+                          "description": "JSON Pointer to target location in graph"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

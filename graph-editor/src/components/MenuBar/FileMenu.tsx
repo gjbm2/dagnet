@@ -206,6 +206,18 @@ export function FileMenu() {
     await operations.openTab(credentialsItem, 'interactive');
   };
 
+  const handleConnections = async () => {
+    // Open connections configuration file
+    const connectionsItem = {
+      id: 'connections',
+      type: 'connections' as const,
+      name: 'Connections',
+      path: 'connections/connections.yaml'
+    };
+    
+    await operations.openTab(connectionsItem, 'interactive');
+  };
+
   const handleImportFromFile = () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -296,7 +308,8 @@ export function FileMenu() {
         '• Close all tabs\n' +
         '• Clear all cached files\n' +
         '• Reset layout\n' +
-        '• Keep settings intact\n\n' +
+        '• Reset connections to defaults\n' +
+        '• Keep settings and credentials intact\n\n' +
         'This action cannot be undone!',
       confirmLabel: 'Clear Data',
       cancelLabel: 'Cancel',
@@ -336,6 +349,7 @@ export function FileMenu() {
         '• Close all tabs\n' +
         '• Clear all cached files\n' +
         '• Reset layout and settings\n' +
+        '• Reset connections to defaults\n' +
         '• Clear all user preferences\n' +
         '• Remove all credentials\n\n' +
         'This action cannot be undone!',
@@ -532,6 +546,13 @@ export function FileMenu() {
             >
               Credentials...
               <div className="menubar-right-slot">⌘,</div>
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleConnections}
+            >
+              Connections...
             </Menubar.Item>
 
             <Menubar.Separator className="menubar-separator" />

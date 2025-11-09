@@ -1,0 +1,197 @@
+version: "1.0.0"
+connections:
+  # Amplitude - Analytics & Funnel Data
+  - name: amplitude-prod
+    provider: amplitude
+    kind: http
+    description: "Production Amplitude analytics for conversion funnel data"
+    enabled: true
+    credsRef: amplitude
+    defaults:
+      base_url: "https://amplitude.com"
+      exclude_test_users: true
+    connection_string_schema:
+      type: object
+      properties:
+        segment_filter:
+          type: string
+          description: "Optional segment filter (e.g., 'exclude_test_users')"
+    adapter:
+      request:
+        url_template: "{{defaults.base_url}}/api/2/funnels"
+        method: POST
+        headers:
+          Authorization: "Bearer {{credentials.api_key}}"
+          Content-Type: "application/json"
+        body_template: |
+          {
+            "events": [
+              {"event_type": "{{dsl.from_event_id}}"},
+              {"event_type": "{{dsl.to_event_id}}"}
+            ],
+            "start": "{{window.start}}",
+            "end": "{{window.end}}"
+          }
+      response:
+        ok_when:
+          status: [200]
+        extract:
+          jmes:
+            from_count: "data.steps[0].count"
+            to_count: "data.steps[1].count"
+      transform:
+        steps:
+          - var: p_mean
+            jsonata: "to_count / from_count"
+          - var: n
+            jsonata: "from_count"
+          - var: k
+            jsonata: "to_count"
+      upsert:
+        mappings:
+          - from: p_mean
+            to: "/edges/{{edgeId}}/p/mean"
+          - from: n
+            to: "/edges/{{edgeId}}/p/evidence/n"
+          - from: k
+            to: "/edges/{{edgeId}}/p/evidence/k"
+
+  # Google Sheets - Parameter Data
+  - name: sheets-readonly
+    provider: google-sheets
+    kind: http
+    description: "Read-only access to Google Sheets for parameter data"
+    enabled: true
+    credsRef: google-sheets
+    defaults:
+      api_version: "v4"
+    connection_string_schema:
+      type: object
+      required: [spreadsheet_id, range]
+      properties:
+        spreadsheet_id:
+          type: string
+          description: "Google Sheets spreadsheet ID"
+        range:
+          type: string
+          description: "A1 notation range (e.g., 'Sheet1!A1:B10')"
+    adapter:
+      request:
+        url_template: "https://sheets.googleapis.com/{{defaults.api_version}}/spreadsheets/{{connection_string.spreadsheet_id}}/values/{{connection_string.range}}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{credentials.access_token}}"
+      response:
+        ok_when:
+          status: [200]
+        extract:
+          jmes:
+            values: "values"
+      transform:
+        steps:
+          - var: p_mean
+            jsonata: "$number(values[0][1])"
+          - var: n
+            jsonata: "$number(values[1][1])"
+          - var: k
+            jsonata: "$number(values[2][1])"
+      upsert:
+        mappings:
+          - from: p_mean
+            to: "/edges/{{edgeId}}/p/mean"
+          - from: n
+            to: "/edges/{{edgeId}}/p/evidence/n"
+          - from: k
+            to: "/edges/{{edgeId}}/p/evidence/k"
+
+  # Statsig - Feature Gate/Experiment Configuration
+  - name: statsig-prod
+    provider: statsig
+    kind: http
+    description: "Production Statsig for experiment variant allocations"
+    enabled: true
+    credsRef: statsig
+    defaults:
+      base_url: "https://statsigapi.net/console/v1"
+      environment: production
+    connection_string_schema:
+      type: object
+      properties:
+        project_id:
+          type: string
+          description: "Statsig project ID (optional override)"
+    adapter:
+      request:
+        url_template: "{{defaults.base_url}}/gates/{{case_id}}"
+        method: GET
+        headers:
+          STATSIG-API-KEY: "{{credentials.console_api_key}}"
+          Content-Type: "application/json"
+      response:
+        ok_when:
+          status: [200]
+        extract:
+          jmes:
+            gate_id: "data.id"
+            gate_name: "data.name"
+            enabled: "data.enabled"
+            rules: "data.rules"
+      transform:
+        steps:
+          - var: variants
+            jsonata: |
+              rules[type='experiment'].returnValue{
+                'variant_id': $string(id),
+                'name': name,
+                'allocation': passPercentage / 100
+              }
+      upsert:
+        mappings:
+          - from: variants
+            to: "/nodes/{{nodeId}}/case/variants"
+
+  # PostgreSQL - Example for SQL-based data sources (disabled by default)
+  - name: postgres-analytics
+    provider: postgres
+    kind: sql
+    description: "PostgreSQL analytics database (example - configure credentials to enable)"
+    enabled: false
+    credsRef: postgres
+    defaults:
+      schema: public
+    connection_string_schema:
+      type: object
+      properties:
+        table:
+          type: string
+          description: "Table name for query"
+    adapter:
+      request:
+        url_template: "{{credentials.host}}:{{credentials.port}}/{{credentials.database}}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body_template: |
+          {
+            "query": "SELECT COUNT(*) as n, SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) as k FROM {{defaults.schema}}.{{connection_string.table}} WHERE event_from = '{{dsl.from_event_id}}' AND event_to = '{{dsl.to_event_id}}' AND timestamp BETWEEN '{{window.start}}' AND '{{window.end}}'"
+          }
+      response:
+        ok_when:
+          status: [200]
+        extract:
+          jmes:
+            n: "rows[0].n"
+            k: "rows[0].k"
+      transform:
+        steps:
+          - var: p_mean
+            jsonata: "k / n"
+      upsert:
+        mappings:
+          - from: p_mean
+            to: "/edges/{{edgeId}}/p/mean"
+          - from: n
+            to: "/edges/{{edgeId}}/p/evidence/n"
+          - from: k
+            to: "/edges/{{edgeId}}/p/evidence/k"
+

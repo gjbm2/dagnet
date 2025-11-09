@@ -22,7 +22,7 @@ import {
   FileType       // Markdown
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'settings' | 'about' | 'markdown';
+export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown';
 
 export interface ObjectTypeTheme {
   /** Light pastel background color */
@@ -100,6 +100,13 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     icon: Key,
     label: 'Credentials',
     emoji: '🔑'
+  },
+  connections: {
+    lightColor: '#E0F2FE',  // light sky
+    accentColor: '#0EA5E9', // sky-500
+    icon: Settings,
+    label: 'Connections',
+    emoji: '🔌'
   },
   settings: {
     lightColor: '#F3F4F6',  // light grey
