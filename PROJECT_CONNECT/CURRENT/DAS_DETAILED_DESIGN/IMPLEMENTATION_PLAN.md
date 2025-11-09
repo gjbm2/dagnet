@@ -2,7 +2,7 @@
 
 **Date:** 2025-11-09  
 **Status:** 🟡 In Progress (Phase 0 & 1)  
-**Total Estimate:** 59-77 hours  
+**Total Estimate:** 59-77 hours
 **Completed:** ~11 hours (schemas, seed, file menu, MonacoWidget with UI schema example)
 
 ---

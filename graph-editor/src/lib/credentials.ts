@@ -122,6 +122,30 @@ export class CredentialsManager {
   }
 
   /**
+   * Get provider-specific credentials for DAS connections
+   * @param providerKey - The provider key matching 'credsRef' in connections.yaml
+   * @returns Provider credentials object or null if not found
+   * 
+   * Example:
+   *   const creds = credentialsManager.getProviderCredentials('amplitude');
+   *   // Returns: { api_key: "...", secret_key: "..." }
+   */
+  getProviderCredentials(providerKey: string): Record<string, any> | null {
+    if (!this.currentCredentials?.providers) {
+      console.warn(`CredentialsManager: No providers defined in credentials`);
+      return null;
+    }
+    
+    const providerCreds = this.currentCredentials.providers[providerKey];
+    if (!providerCreds) {
+      console.warn(`CredentialsManager: Provider '${providerKey}' not found in credentials`);
+      return null;
+    }
+    
+    return providerCreds;
+  }
+
+  /**
    * Load credentials from URL parameters
    * Supports: ?secret=<secret_key> or ?creds=<json_credentials>
    */
