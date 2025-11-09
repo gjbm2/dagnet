@@ -249,7 +249,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           onClose={onClose}
           autoFocus={false}
           autoSelect={false}
-          showSlider={true}
+            showSlider={true}
           />
         </AutomatableField>
       </div>

@@ -95,6 +95,7 @@
               "properties": {
                 "source": { "type": "string", "description": "Connection name used for this fetch" },
                 "fetched_at": { "type": "string", "format": "date-time", "description": "ISO timestamp of fetch" },
+                "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from case file" },
                 "full_query": { "type": "string", "description": "Complete query string used for this fetch (case_id + environment + any filters). Example: case(checkout_test).env(production)" },
                 "variants": {
                   "type": "array",
@@ -234,6 +235,7 @@
             "window_to": { "type": "string", "format": "date-time", "description": "Time window end - optional, defines explicit period boundary" },
             "retrieved_at": { "type": "string", "format": "date-time", "description": "When this data was retrieved from source" },
             "source": { "type": "string", "description": "Connection name used for this retrieval" },
+            "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from parameter file" },
             "full_query": { "type": "string", "description": "Complete DSL query string used for this fetch (includes base query + window + context). Example: from(checkout).to(purchase).window(2025-01-01:2025-01-31).context(device:mobile)" },
             "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string (request, response, query, connection_string, etc.) for debugging/provenance. May be truncated if response is very large." }
           },
@@ -260,6 +262,23 @@
         "distribution_overridden": { "type": "boolean", "default": false, "description": "If true, distribution was manually edited and should not be auto-updated" },
         "connection": { "type": "string", "description": "Connection name from connections.yaml" },
         "connection_string": { "type": "string", "description": "JSON blob of provider-specific settings" },
+        "evidence": {
+          "type": "object",
+          "description": "Observations from data sources (context for n/k, NOT overridable). Optional fields depend on source type.",
+          "additionalProperties": false,
+          "properties": {
+            "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials) - required for cost data with observations" },
+            "k": { "type": "integer", "minimum": 0, "description": "Number of successes/observations - optional" },
+            "window_from": { "type": "string", "format": "date-time", "description": "Time window start - required when source provides observation period" },
+            "window_to": { "type": "string", "format": "date-time", "description": "Time window end - optional, defines explicit period boundary" },
+            "retrieved_at": { "type": "string", "format": "date-time", "description": "When this data was retrieved from source" },
+            "source": { "type": "string", "description": "Connection name used for this retrieval" },
+            "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from parameter file" },
+            "full_query": { "type": "string", "description": "Complete DSL query string used for this fetch (includes base query + window + context)" },
+            "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string for debugging/provenance. May be truncated if response is very large." }
+          },
+          "required": ["retrieved_at", "source"]
+        },
         "id": { "type": "string", "description": "Reference to cost parameter file (FK to parameter-{id}.yaml)" }
       },
       "required": ["mean"]

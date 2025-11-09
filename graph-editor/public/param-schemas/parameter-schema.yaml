@@ -60,8 +60,8 @@ properties:
       Example: "amplitude-prod", "sheets-readonly", "postgres-analytics"
   
   connection_string:
-    type: string
-    description: |
+        type: string
+        description: |
       JSON blob of provider-specific settings (validated against connection_string_schema in connections.yaml).
       This is for parameter-specific overrides/specializations.
       Example for Google Sheets: {"range": "Sheet1!A1:B10"}

@@ -330,8 +330,23 @@ export interface Evidence {
   window_from?: string; // Time window start (ISO date-time)
   window_to?: string; // Time window end (ISO date-time)
   retrieved_at?: string; // When data was retrieved (ISO date-time)
-  source?: 'amplitude' | 'sheets' | 'manual' | 'computed' | 'api';
-  query?: any; // Source-specific query structure
+  source?: string; // Connection name used for this retrieval
+  path?: 'direct' | 'file'; // How data was retrieved: 'direct' = fetched from connection, 'file' = synced from parameter file
+  full_query?: string; // Complete DSL query string (includes base query + window + context)
+  debug_trace?: string; // Complete execution trace as JSON string for debugging/provenance
+}
+
+export interface CaseEvidence {
+  source?: string; // Connection name used for this fetch
+  fetched_at?: string; // ISO timestamp of fetch
+  path?: 'direct' | 'file'; // How data was retrieved: 'direct' = fetched from connection, 'file' = synced from case file
+  full_query?: string; // Complete query string used for this fetch
+  variants?: Array<{
+    variant_id?: string;
+    name?: string;
+    allocation?: number;
+  }>;
+  debug_trace?: string; // Complete execution trace as JSON string for debugging/provenance
 }
 
 export interface ProbabilityParam {
@@ -343,9 +358,9 @@ export interface ProbabilityParam {
   distribution_overridden?: boolean; // If true, distribution was manually edited
   id?: string; // Reference to parameter file (FK to parameter-{id}.yaml)
   distribution?: 'normal' | 'beta' | 'uniform';
+  connection?: string; // Connection name from connections.yaml
+  connection_string?: string; // JSON blob of provider-specific settings
   evidence?: Evidence; // Observations from data sources
-  query?: string; // Query expression for data retrieval (e.g., path constraints)
-  query_overridden?: boolean; // If true, query was manually edited
 }
 
 export interface CostParam {
@@ -356,9 +371,9 @@ export interface CostParam {
   distribution_overridden?: boolean; // If true, distribution was manually edited
   id?: string; // Reference to cost parameter file (FK to parameter-{id}.yaml)
   distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform' | 'beta';
+  connection?: string; // Connection name from connections.yaml
+  connection_string?: string; // JSON blob of provider-specific settings
   evidence?: Evidence; // Observations from data sources
-  query?: string; // Query expression for data retrieval (e.g., path constraints)
-  query_overridden?: boolean; // If true, query was manually edited
 }
 
 export interface Condition {
@@ -448,6 +463,9 @@ export interface GraphNode {
     id: string; // Reference to case file (FK to case-{id}.yaml)
     status: CaseStatus;
     status_overridden?: boolean; // Override flag for auto-sync
+    connection?: string; // Connection name from connections.yaml
+    connection_string?: string; // JSON blob of provider-specific settings
+    evidence?: CaseEvidence; // Evidence from last variant fetch
     variants: CaseVariant[];
   };
 }
