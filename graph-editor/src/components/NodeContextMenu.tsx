@@ -58,6 +58,15 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   const hasCaseFile = !!nodeData?.case?.id; // case.id is the reference to the case file
   
   // Check if case file has connection (for "Get from Source")
+  const getCaseConnectionName = (): string | undefined => {
+    if (nodeData?.case?.connection) return nodeData.case.connection;
+    if (nodeData?.case?.id) {
+      const file = fileRegistry.getFile(`case-${nodeData.case.id}`);
+      return file?.data?.connection;
+    }
+    return undefined;
+  };
+  const caseConnectionName = getCaseConnectionName();
   const hasCaseConnection = hasCaseFile && (() => {
     const file = fileRegistry.getFile(`case-${nodeData?.case?.id}`);
     return !!file?.data?.connection;
@@ -389,7 +398,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
-                      <span>Get from Source (direct)</span>
+                      <span>Get from Source (direct){caseConnectionName ? ` (${caseConnectionName})` : ''}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Database size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -414,7 +423,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
-                      <span>Get from Source</span>
+                      <span>Get from Source{caseConnectionName ? ` (${caseConnectionName})` : ''}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <DatabaseZap size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>

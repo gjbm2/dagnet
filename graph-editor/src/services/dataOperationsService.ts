@@ -424,15 +424,35 @@ class DataOperationsService {
         return;
       }
       
+      // Also update connection settings (UPDATE operation, not APPEND)
+      // Connection settings go to top-level fields, not values[]
+      const updateResult = await updateManager.handleGraphToFile(
+        filteredEdge,      // source (filtered to only relevant parameter)
+        paramFile.data,    // target (parameter file)
+        'UPDATE',          // operation (update top-level fields)
+        'parameter',       // sub-destination
+        { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
+      );
+      
       // Apply changes to file data
       const updatedFileData = structuredClone(paramFile.data);
       console.log('[DataOperationsService] putParameterToFile - changes to apply:', {
         paramId,
-        changes: JSON.stringify(result.changes, null, 2)
+        appendChanges: JSON.stringify(result.changes, null, 2),
+        updateChanges: updateResult.changes ? JSON.stringify(updateResult.changes, null, 2) : 'none'
       });
+      
+      // Apply APPEND changes (values[])
       applyChanges(updatedFileData, result.changes);
+      
+      // Apply UPDATE changes (connection settings, etc.)
+      if (updateResult.success && updateResult.changes) {
+        applyChanges(updatedFileData, updateResult.changes);
+      }
       console.log('[DataOperationsService] putParameterToFile - after applyChanges:', {
-        'updatedFileData.values': JSON.stringify(updatedFileData.values, null, 2)
+        'updatedFileData.values': JSON.stringify(updatedFileData.values, null, 2),
+        'updatedFileData.connection': updatedFileData.connection,
+        'updatedFileData.connection_string': updatedFileData.connection_string
       });
       
       console.log('[DataOperationsService] Before updateFile:', {
@@ -1055,6 +1075,14 @@ class DataOperationsService {
         
         toast.success(`Fetched data from source`, { id: 'das-fetch' });
         console.log('DAS Updates:', result.updates);
+        console.log('[DataOperationsService] DAS result.raw:', {
+          hasRaw: !!result.raw,
+          rawKeys: result.raw ? Object.keys(result.raw) : [],
+          time_series: result.raw?.time_series,
+          time_seriesLength: Array.isArray(result.raw?.time_series) ? result.raw.time_series.length : 'not array',
+          dailyMode,
+          contextMode
+        });
       
         // 6. Parse the updates to extract values for simple queries
         // Map DAS field names to UpdateManager's external data field names

@@ -60,21 +60,38 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   
   // Check if we have ANY connection (direct OR file) - for "Get from Source (direct)"
   // This matches LightningMenu behavior: always show direct option if any connection exists
-  const hasProbabilityConnection = !!edge?.p?.connection || (() => {
-    if (!edge?.parameter_id) return false;
-    const file = fileRegistry.getFile(`parameter-${edge.parameter_id}`);
-    return !!file?.data?.connection;
-  })();
-  const hasCostGbpConnection = !!edge?.cost_gbp?.connection || (() => {
-    if (!edge?.cost_gbp_parameter_id) return false;
-    const file = fileRegistry.getFile(`parameter-${edge.cost_gbp_parameter_id}`);
-    return !!file?.data?.connection;
-  })();
-  const hasCostTimeConnection = !!edge?.cost_time?.connection || (() => {
-    if (!edge?.cost_time_parameter_id) return false;
-    const file = fileRegistry.getFile(`parameter-${edge.cost_time_parameter_id}`);
-    return !!file?.data?.connection;
-  })();
+  const getProbabilityConnectionName = (): string | undefined => {
+    if (edge?.p?.connection) return edge.p.connection;
+    if (edge?.parameter_id) {
+      const file = fileRegistry.getFile(`parameter-${edge.parameter_id}`);
+      return file?.data?.connection;
+    }
+    return undefined;
+  };
+  const getCostGbpConnectionName = (): string | undefined => {
+    if (edge?.cost_gbp?.connection) return edge.cost_gbp.connection;
+    if (edge?.cost_gbp_parameter_id) {
+      const file = fileRegistry.getFile(`parameter-${edge.cost_gbp_parameter_id}`);
+      return file?.data?.connection;
+    }
+    return undefined;
+  };
+  const getCostTimeConnectionName = (): string | undefined => {
+    if (edge?.cost_time?.connection) return edge.cost_time.connection;
+    if (edge?.cost_time_parameter_id) {
+      const file = fileRegistry.getFile(`parameter-${edge.cost_time_parameter_id}`);
+      return file?.data?.connection;
+    }
+    return undefined;
+  };
+  
+  const probabilityConnectionName = getProbabilityConnectionName();
+  const costGbpConnectionName = getCostGbpConnectionName();
+  const costTimeConnectionName = getCostTimeConnectionName();
+  
+  const hasProbabilityConnection = !!probabilityConnectionName;
+  const hasCostGbpConnection = !!costGbpConnectionName;
+  const hasCostTimeConnection = !!costTimeConnectionName;
   
   // Check if we have direct connections (without files) - for determining which handler to use
   const hasProbabilityDirectConnection = !!edge?.p?.connection && !edge?.parameter_id;
@@ -678,7 +695,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
-                      <span>Get from Source (direct)</span>
+                      <span>Get from Source (direct){probabilityConnectionName ? ` (${probabilityConnectionName})` : ''}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Database size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -703,7 +720,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
-                      <span>Get from Source</span>
+                      <span>Get from Source{probabilityConnectionName ? ` (${probabilityConnectionName})` : ''}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <DatabaseZap size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -913,7 +930,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
-                      <span>Get from Source (direct)</span>
+                      <span>Get from Source (direct){costGbpConnectionName ? ` (${costGbpConnectionName})` : ''}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Database size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -938,7 +955,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
-                      <span>Get from Source</span>
+                      <span>Get from Source{costGbpConnectionName ? ` (${costGbpConnectionName})` : ''}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <DatabaseZap size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -1059,7 +1076,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
-                      <span>Get from Source (direct)</span>
+                      <span>Get from Source (direct){costTimeConnectionName ? ` (${costTimeConnectionName})` : ''}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Database size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -1084,7 +1101,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
-                      <span>Get from Source</span>
+                      <span>Get from Source{costTimeConnectionName ? ` (${costTimeConnectionName})` : ''}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <DatabaseZap size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
