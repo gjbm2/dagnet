@@ -257,6 +257,20 @@ export class DASRunner {
       ? this.transformData(extracted, adapter.transform, context)
       : extracted;
     this.log('transform_data', `Transformed data`, transformed);
+    
+    // Debug logging for daily mode time_series extraction
+    if (context.context?.mode === 'daily' && extracted.day_funnels) {
+      this.log('transform_data', `Daily mode debug:`, {
+        mode: context.context.mode,
+        hasDayFunnels: !!extracted.day_funnels,
+        dayFunnelsKeys: extracted.day_funnels ? Object.keys(extracted.day_funnels) : [],
+        dayFunnelsType: typeof extracted.day_funnels,
+        dayFunnelsSeries: extracted.day_funnels?.series,
+        dayFunnelsXValues: extracted.day_funnels?.xValues,
+        timeSeriesLength: Array.isArray(transformed.time_series) ? transformed.time_series.length : 'not array',
+        timeSeries: transformed.time_series
+      });
+    }
 
     // Phase 7: Build update instructions
     const updates = this.buildUpdates(transformed, adapter.upsert, context);
@@ -424,7 +438,48 @@ export class DASRunner {
         expression.assign('window', context.window);
         expression.assign('context', context.context || {});
 
-        transformed[spec.name] = expression.evaluate(extracted);
+        // Evaluate against transformed (not extracted) so previous transform results are available
+        // This allows transforms to reference each other (e.g., time_series can reference mode)
+        const result = expression.evaluate(transformed);
+        transformed[spec.name] = result;
+        
+        // Debug logging for time_series transform
+        if (spec.name === 'time_series' && context.context?.mode === 'daily') {
+          console.log(`[DASRunner] time_series transform debug:`, {
+            specName: spec.name,
+            mode: transformed.mode,
+            hasDayFunnels: !!transformed.day_funnels,
+            dayFunnels: transformed.day_funnels,
+            dayFunnelsSeries: transformed.day_funnels?.series,
+            dayFunnelsXValues: transformed.day_funnels?.xValues,
+            dayFunnelsSeriesLength: Array.isArray(transformed.day_funnels?.series) ? transformed.day_funnels.series.length : 'not array',
+            dslFromStepIndex: context.dsl?.from_step_index,
+            dslToStepIndex: context.dsl?.to_step_index,
+            transformedKeys: Object.keys(transformed),
+            result: result,
+            resultLength: Array.isArray(result) ? result.length : 'not array',
+            resultType: typeof result,
+            expression: spec.jsonata.substring(0, 300)
+          });
+          
+          // Try evaluating parts of the expression separately to debug
+          try {
+            const testExpr1 = jsonata('$.mode');
+            const testMode = testExpr1.evaluate(transformed);
+            const testExpr2 = jsonata('$.day_funnels');
+            const testDayFunnels = testExpr2.evaluate(transformed);
+            const testExpr3 = jsonata('$.day_funnels.series');
+            const testSeries = testExpr3.evaluate(transformed);
+            console.log(`[DASRunner] JSONata field access test:`, {
+              '$.mode': testMode,
+              '$.day_funnels': testDayFunnels,
+              '$.day_funnels.series': testSeries,
+              'testSeriesLength': Array.isArray(testSeries) ? testSeries.length : 'not array'
+            });
+          } catch (e) {
+            console.error(`[DASRunner] JSONata field access test failed:`, e);
+          }
+        }
       } catch (error) {
         const errorMessage = error instanceof Error 
           ? error.message 
