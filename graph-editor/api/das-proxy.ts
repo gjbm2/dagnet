@@ -57,21 +57,17 @@ export default async function handler(
 
     const response = await fetch(proxyRequest.url, fetchOptions);
     
-    // Get response body
+    // Get response body as text
     const responseBody = await response.text();
     
-    // Try to parse as JSON, fall back to text if it fails
-    let responseData: any;
-    try {
-      responseData = JSON.parse(responseBody);
-    } catch {
-      responseData = responseBody;
-    }
+    // Forward response headers
+    const contentType = response.headers.get('content-type') || 'application/json';
 
     console.log(`[DAS Proxy] Response: ${response.status}`);
 
-    // Forward the response
-    res.status(response.status).json(responseData);
+    // Forward the response with original content type
+    res.setHeader('Content-Type', contentType);
+    res.status(response.status).send(responseBody);
   } catch (error) {
     console.error('[DAS Proxy] Error:', error);
     res.status(500).json({ 

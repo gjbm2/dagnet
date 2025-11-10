@@ -68,6 +68,8 @@ export async function handleProxyRequest(
     }
 
     console.log(`[DAS Proxy] ${proxyRequest.method} ${proxyRequest.url}`);
+    console.log(`[DAS Proxy] Headers:`, JSON.stringify(proxyRequest.headers, null, 2));
+    console.log(`[DAS Proxy] Body length:`, proxyRequest.body?.length || 0);
 
     // Forward the request
     const fetchOptions: RequestInit = {
