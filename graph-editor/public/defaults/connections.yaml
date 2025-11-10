@@ -78,12 +78,13 @@ connections:
           const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
           dsl.start_date = formatDate(window.start);
           dsl.end_date = formatDate(window.end);
-          dsl.funnel_events = events;
+          dsl.funnel_events_json = JSON.stringify(events);  // Mustache needs pre-stringified JSON
           dsl.from_step_index = events.length - 2;  // Index of from_event in results
           dsl.to_step_index = events.length - 1;    // Index of to_event in results
           
           console.log('[Amplitude Adapter] Built funnel:', {
-            events: dsl.funnel_events,
+            events: events,
+            events_json: dsl.funnel_events_json,
             from_index: dsl.from_step_index,
             to_index: dsl.to_step_index
           });
@@ -100,12 +101,12 @@ connections:
           Content-Type: "application/json"
         body_template: |
           {
-            "e": {{dsl.funnel_events}},
+            "e": {{{dsl.funnel_events_json}}},
             "start": "{{dsl.start_date}}",
             "end": "{{dsl.end_date}}",
             "m": "uniques",
             "i": 1{{#connection_string.segment}},
-            "s": {{connection_string.segment}}{{/connection_string.segment}}
+            "s": {{{connection_string.segment_json}}}{{/connection_string.segment}}
           }
       response:
         extract:
