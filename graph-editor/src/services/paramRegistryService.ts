@@ -38,12 +38,30 @@ export interface ParameterValue {
   mean: number;
   stdev?: number;
   distribution?: 'normal' | 'beta' | 'gamma' | 'lognormal' | 'uniform';
+  n?: number; // Aggregate sample size (sum of n_daily if present)
+  k?: number; // Aggregate successes (sum of k_daily if present)
+  
+  // Daily breakdown (optional - if source supports daily data)
+  n_daily?: number[]; // Daily sample sizes
+  k_daily?: number[]; // Daily successes
+  dates?: string[]; // Dates (YYYY-MM-DD) corresponding to n_daily/k_daily
+  
+  // Query signature (for consistency checking)
+  query_signature?: string; // SHA-256 hash of query configuration
+  
   window_from?: string; // ISO 8601 timestamp
+  window_to?: string; // ISO 8601 timestamp
   context_id?: string;
   data_source?: {
-    type: 'sheets' | 'api' | 'file' | 'manual' | 'calculated' | 'analytics';
+    type: 'sheets' | 'api' | 'file' | 'manual' | 'calculated' | 'analytics' | 'amplitude' | 'statsig' | 'optimizely';
     url?: string;
     notes?: string;
+    retrieved_at?: string; // ISO date-time
+    edited_at?: string; // ISO date-time
+    author?: string;
+    query?: any; // Query configuration object
+    full_query?: string; // Complete DSL query string
+    debug_trace?: string; // Complete execution trace as JSON string
   };
 }
 

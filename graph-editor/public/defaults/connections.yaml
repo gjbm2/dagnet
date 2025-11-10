@@ -98,11 +98,14 @@ connections:
           
           // Build query parameters for GET request
           // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&i=1&s={...}
+          // i=1 means daily breakdown (required for time-series)
+          // If context.mode is 'aggregate', we could omit i=1, but keeping it for consistency
+          const intervalParam = (context && context.mode === 'daily') ? 'i=1' : 'i=1';  // Always daily for now
           const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');
           const otherParams = [
             'start=' + startDate,
             'end=' + endDate,
-            'i=1',
+            intervalParam,
             segmentParam
           ].filter(p => p).join('&');  // Filter out empty strings
           
@@ -130,12 +133,33 @@ connections:
           Authorization: "Basic {{{credentials.basic_auth_b64}}}"
       response:
         extract:
-          # Funnel response returns data[0].cumulativeRaw as array of counts per step
+          # Extract aggregate data (cumulativeRaw) - always available
           - name: from_count
             jmes: "data[0].cumulativeRaw[{{from_step_index}}]"
           - name: to_count
             jmes: "data[0].cumulativeRaw[{{to_step_index}}]"
+          # Extract daily time-series data (dayFunnels) - available when i=1
+          - name: day_funnels
+            jmes: "data[0].dayFunnels"
       transform:
+        # Check if we have daily data (context.mode === 'daily')
+        - name: mode
+          jsonata: "$context.mode ? $context.mode : 'aggregate'"
+        - name: time_series
+          jsonata: |
+            (
+              $mode = 'daily' && $day_funnels && $day_funnels.series ?
+                $day_funnels.series ~> $map(function($dayData, $i) {
+                  $fromIdx := $number($dsl.from_step_index);
+                  $toIdx := $number($dsl.to_step_index);
+                  {
+                    "date": $day_funnels.xValues[$i],
+                    "n": $dayData[$fromIdx],
+                    "k": $dayData[$toIdx],
+                    "p": $dayData[$toIdx] / $dayData[$fromIdx]
+                  }
+                }) : []
+            )
         - name: p_mean
           jsonata: "to_count / from_count"
         - name: n

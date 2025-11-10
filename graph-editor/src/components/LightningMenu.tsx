@@ -33,6 +33,7 @@ interface LightningMenuProps {
   // For direct parameter references (no param file)
   paramSlot?: 'p' | 'cost_gbp' | 'cost_time'; // Which parameter on edge
   conditionalIndex?: number; // Which conditional_p in array
+  window?: { start: string; end: string } | null; // Window selector state
 }
 
 export const LightningMenu: React.FC<LightningMenuProps> = ({
@@ -43,7 +44,8 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   graph,
   setGraph,
   paramSlot,
-  conditionalIndex
+  conditionalIndex,
+  window
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
@@ -143,7 +145,9 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
       graph, 
       setGraph,
       paramSlot,
-      conditionalIndex 
+      conditionalIndex,
+      window: window || undefined, // Pass window if set
+      dailyMode: true // Enable daily mode for time-series storage
     });
   };
   

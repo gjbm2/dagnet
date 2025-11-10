@@ -76,7 +76,14 @@
    - ✅ Documented in connections.yaml with amplitude-test example
    - ⏭️ Next: Test with curl and validate with live Amplitude API
 
-2. **Case/Variant Filtering** (4-6 hrs)
+2. **Window Selector & Time-Series Caching** (16-22 hrs) 🔵 **PLANNED**
+   - ✅ Complete implementation plan created: `WINDOW_SELECTOR_IMPLEMENTATION_PLAN.md`
+   - Features: Incremental daily fetches, time-series caching, windowed aggregation
+   - 8 phases: Schema → Services → Integration → UI → Testing
+   - 24+ unit tests, 7 integration scenarios, comprehensive edge case handling
+   - See dedicated plan for full details
+
+3. **Case/Variant Filtering** (4-6 hrs)
    - Design case property mapping schema (Statsig case → Amplitude event property)
    - Extend event definitions with case_property_mappings
    - Implement case filter injection in pre_request script
@@ -85,8 +92,27 @@
 **Phase 3: UI Integration** (10-12 hrs remaining)
   - Connection selector dropdown in Properties Panel (~40% done)
   - Evidence display (last fetched, n/k/window)
-  - Window selector (floating date picker)
+  - Window selector (floating date picker) ✅ **COMPLETE**
   - Polish "Get from Source" UX (success feedback, animations)
+
+**Phase 3.5: Batch Operations** (8-12 hrs) 🔵 **PLANNED - NEXT PHASE**
+  - **Window Aggregation Batch Updates**: Update all affected edges atomically when window changes
+    - Batch `getParameterFromFile` calls for all edges with parameter files
+    - Progress indicators during batch operations
+    - Rollback on partial failure
+  - **Incremental Fetch Batch**: Fetch missing days for multiple parameters in parallel
+    - Group by connection type (e.g., all Amplitude queries together)
+    - Rate limiting and retry logic
+    - Progress tracking per parameter
+  - **Query Signature Consistency Batch**: Check all parameters for query changes
+    - Batch consistency checks before fetching
+    - User dialog for bulk query changes
+    - Option to clear cache for multiple parameters
+  - **UI Enhancements**:
+    - Batch operation progress modal
+    - "Apply Window to All" button in WindowSelector
+    - "Fetch Missing Days for All" action
+    - Error summary for failed operations
 
 **🎉 Recent Fixes (Nov 10, 2025):**
 - ✅ **BLOCKER RESOLVED**: Lightning Menu now shows WITHOUT parameter file

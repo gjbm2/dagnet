@@ -22,6 +22,7 @@ import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { Sparkles, FileText, Wrench } from 'lucide-react';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
+import { WindowSelector } from '../WindowSelector';
 
 // Context to share selection state with sidebar panels
 interface SelectionContextType {
@@ -1321,6 +1322,9 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
           width: '100%',
           overflow: 'hidden'
         }}>
+        {/* Window Selector - floating at top center */}
+        <WindowSelector />
+        
         {/* Main DockLayout - spans entire graph editor */}
         {dockLayout && (
           <DockLayout

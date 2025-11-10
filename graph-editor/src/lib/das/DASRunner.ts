@@ -416,6 +416,7 @@ export class DASRunner {
         expression.assign('extracted', extracted);
         expression.assign('dsl', context.dsl);
         expression.assign('window', context.window);
+        expression.assign('context', context.context || {});
 
         transformed[spec.name] = expression.evaluate(extracted);
       } catch (error) {
