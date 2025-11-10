@@ -45,20 +45,91 @@ export async function handleProxyRequest(
   }
 
   try {
-    // Read the request body
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      chunks.push(chunk);
-    }
-    const body = Buffer.concat(chunks).toString('utf8');
+    console.log('[DAS Proxy] Received POST request to /api/das-proxy');
+    console.log('[DAS Proxy] Content-Type:', req.headers['content-type']);
+    console.log('[DAS Proxy] Content-Length:', req.headers['content-length']);
+    console.log('[DAS Proxy] Stream readable:', req.readable);
+    console.log('[DAS Proxy] Stream readableEnded:', (req as any).readableEnded);
     
-    if (!body) {
+    // Read the request body using Promise-based approach (more reliable than for-await)
+    let body: string;
+    
+    // Helper function to read stream to string
+    const readStreamToString = (stream: NodeJS.ReadableStream): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        // If stream is already ended or not readable, reject
+        if ((stream as any).readableEnded || !stream.readable) {
+          reject(new Error('Stream already consumed or not readable'));
+          return;
+        }
+        
+        const chunks: Buffer[] = [];
+        stream.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        stream.on('end', () => {
+          resolve(Buffer.concat(chunks).toString('utf8'));
+        });
+        stream.on('error', reject);
+        
+        // Ensure stream is in flowing mode
+        if ((stream as any).readableFlowing === false) {
+          stream.resume();
+        }
+      });
+    };
+    
+    if ((req as any).body) {
+      // Body already parsed (e.g., by body-parser middleware)
+      body = typeof (req as any).body === 'string' 
+        ? (req as any).body 
+        : JSON.stringify((req as any).body);
+      console.log('[DAS Proxy] Using pre-parsed body, length:', body.length);
+    } else {
+      // Read body from stream using Promise-based approach
+      try {
+        body = await readStreamToString(req);
+        console.log('[DAS Proxy] Read body from stream, length:', body.length);
+        console.log('[DAS Proxy] Body preview:', body.substring(0, 200));
+      } catch (streamError) {
+        console.error('[DAS Proxy] Error reading body stream:', streamError);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ 
+          error: 'Failed to read request body',
+          details: streamError instanceof Error ? streamError.message : String(streamError),
+          streamState: {
+            readable: req.readable,
+            readableEnded: (req as any).readableEnded,
+            readableFlowing: (req as any).readableFlowing
+          }
+        }));
+        return;
+      }
+    }
+    
+    if (!body || body.trim() === '') {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Request body is required' }));
+      res.end(JSON.stringify({ 
+        error: 'Request body is required',
+        bodyLength: body?.length || 0,
+        hasBody: !!(req as any).body
+      }));
       return;
     }
 
-    const proxyRequest: ProxyRequest = JSON.parse(body);
+    let proxyRequest: ProxyRequest;
+    try {
+      proxyRequest = typeof body === 'string' ? JSON.parse(body) : body;
+    } catch (e) {
+      console.error('[DAS Proxy] JSON parse error:', e, 'Body:', body.substring(0, 200));
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ 
+        error: 'Invalid JSON in request body',
+        details: e instanceof Error ? e.message : String(e),
+        bodyPreview: body.substring(0, 100)
+      }));
+      return;
+    }
 
     // Validate request
     if (!proxyRequest.url || !proxyRequest.method) {

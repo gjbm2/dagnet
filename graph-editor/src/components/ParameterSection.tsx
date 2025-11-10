@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Info } from 'lucide-react';
 import { EnhancedSelector } from './EnhancedSelector';
+import { ConnectionSelector } from './ConnectionSelector';
 import ProbabilityInput from './ProbabilityInput';
 import { AutomatableField } from './AutomatableField';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
@@ -19,6 +20,8 @@ interface ParameterSectionProps {
   // Current parameter data
   param?: {
     id?: string;
+    connection?: string;
+    connection_string?: string;
     mean?: number;
     stdev?: number;
     distribution?: string;
@@ -75,10 +78,27 @@ export function ParameterSection({
 }: ParameterSectionProps) {
   // Local state for immediate input feedback
   const [localQuery, setLocalQuery] = useState(param?.query || '');
+  const [localConnectionString, setLocalConnectionString] = useState(
+    param?.connection_string ? JSON.stringify(JSON.parse(param.connection_string), null, 2) : ''
+  );
+  
+  // Sync local state when param changes externally
+  useEffect(() => {
+    setLocalQuery(param?.query || '');
+    if (param?.connection_string) {
+      try {
+        setLocalConnectionString(JSON.stringify(JSON.parse(param.connection_string), null, 2));
+      } catch {
+        // Invalid JSON - keep current state
+      }
+    } else {
+      setLocalConnectionString('');
+    }
+  }, [param?.query, param?.connection_string]);
   
   return (
     <div style={{ marginBottom: '20px' }}>
-      {/* Connection Selector */}
+      {/* Parameter ID Selector */}
       <EnhancedSelector
         type="parameter"
         parameterType={paramSlot === 'p' ? 'probability' : paramSlot}
@@ -96,6 +116,80 @@ export function ParameterSection({
         label=""
         placeholder={`Select or enter ${label.toLowerCase()} parameter ID...`}
       />
+      
+      {/* External Data Connection Section */}
+      <div style={{ marginTop: '16px', marginBottom: '16px', paddingTop: '16px', borderTop: '1px solid #E5E7EB' }}>
+        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '14px', color: '#374151' }}>
+          External Data Source
+        </label>
+        
+        {/* Connection Selector */}
+        <ConnectionSelector
+          value={param?.connection}
+          onChange={(connectionName) => {
+            onUpdate({ connection: connectionName });
+          }}
+          label="Connection"
+          disabled={disabled}
+        />
+        
+        {/* Connection String Editor (shown when connection is selected) */}
+        {param?.connection && (
+          <div style={{ marginTop: '12px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '12px', color: '#6B7280' }}>
+              Connection Settings (JSON)
+              <span style={{ marginLeft: '4px', color: '#9CA3AF' }} title="Provider-specific settings override. Usually empty unless you need custom configuration.">
+                <Info size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />
+              </span>
+            </label>
+            <textarea
+              value={localConnectionString}
+              onChange={(e) => {
+                setLocalConnectionString(e.target.value);
+              }}
+              onBlur={() => {
+                // Validate JSON before saving
+                try {
+                  if (localConnectionString.trim() === '') {
+                    onUpdate({ connection_string: undefined });
+                  } else {
+                    const parsed = JSON.parse(localConnectionString);
+                    onUpdate({ connection_string: JSON.stringify(parsed) });
+                  }
+                } catch (e) {
+                  // Invalid JSON - don't save, but keep the text for user to fix
+                  console.warn('Invalid JSON in connection_string:', e);
+                }
+              }}
+              placeholder='{"key": "value"}'
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                fontFamily: 'monospace',
+                fontSize: '12px',
+                minHeight: '80px',
+                resize: 'vertical',
+                boxSizing: 'border-box'
+              }}
+              disabled={disabled}
+            />
+            {localConnectionString && (() => {
+              try {
+                JSON.parse(localConnectionString);
+                return null;
+              } catch {
+                return (
+                  <div style={{ marginTop: '4px', fontSize: '11px', color: '#dc2626' }}>
+                    Invalid JSON. Please fix syntax errors.
+                  </div>
+                );
+              }
+            })()}
+          </div>
+        )}
+      </div>
       
       {/* Mean Value (Probability slider OR Cost input) */}
       <div style={{ marginBottom: '20px' }}>
