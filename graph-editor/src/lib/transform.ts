@@ -29,6 +29,8 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       type: n.type, // Add node type (normal/case)
       case: n.case, // Add case data for case nodes
       layout: n.layout, // Add layout object (includes color!)
+      event_id: n.event_id, // Add event_id for DAS queries
+      event_id_overridden: n.event_id_overridden, // Override flag
       onUpdate: callbacks?.onUpdateNode,
       onDelete: callbacks?.onDeleteNode,
       onDoubleClick: callbacks?.onDoubleClickNode,
@@ -64,11 +66,13 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       stdev: e.p?.stdev,
       locked: e.p?.locked,
       description: e.description,
-      cost_gbp: e.cost_gbp, // Flat cost structure
-      cost_time: e.cost_time, // Flat cost structure
+      p: e.p, // Full probability parameter object (includes connection, connection_string, query, evidence, conditional_ps)
+      cost_gbp: e.cost_gbp, // Full cost_gbp parameter object (includes connection, connection_string, query, evidence)
+      cost_time: e.cost_time, // Full cost_time parameter object (includes connection, connection_string, query, evidence)
       weight_default: e.weight_default,
       case_variant: e.case_variant, // Add case variant for case edges
       case_id: e.case_id, // Add case ID for case edges
+      query: e.query, // Direct query on edge (for backward compat)
       onUpdate: callbacks?.onUpdateEdge,
       onDelete: callbacks?.onDeleteEdge,
       onDoubleClick: callbacks?.onDoubleClickEdge,
@@ -97,6 +101,8 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
       entry: n.data.entry,
       type: n.data.type, // Add node type (normal/case)
       case: n.data.case, // Add case data for case nodes
+      event_id: n.data.event_id, // Add event_id for DAS queries
+      event_id_overridden: n.data.event_id_overridden, // Override flag
       layout: {
         ...n.data.layout, // Preserve all layout properties (including color!)
         x: Math.round(n.position.x),
@@ -125,18 +131,19 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         to: e.target,
         fromHandle: e.sourceHandle,
         toHandle: e.targetHandle,
-        p: { 
+        p: e.data?.p ?? { 
           ...originalEdge?.p,  // Preserve ALL p fields (id, distribution, evidence, etc.)
           mean: e.data?.probability ?? 0.5,
           stdev: e.data?.stdev,
           locked: e.data?.locked,
         },
-        cost_gbp: e.data?.cost_gbp, // Flat cost structure
-        cost_time: e.data?.cost_time, // Flat cost structure
+        cost_gbp: e.data?.cost_gbp ?? originalEdge?.cost_gbp, // Full cost_gbp parameter object
+        cost_time: e.data?.cost_time ?? originalEdge?.cost_time, // Full cost_time parameter object
         description: e.data?.description ?? '',
         weight_default: e.data?.weight_default,
         case_variant: e.data?.case_variant, // Add case variant for case edges
         case_id: e.data?.case_id, // Add case ID for case edges
+        query: e.data?.query ?? originalEdge?.query, // Query object for DAS
       };
       
       // DIAGNOSTIC: Log p.id transformation for the edge being edited

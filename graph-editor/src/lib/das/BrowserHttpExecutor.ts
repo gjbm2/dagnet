@@ -13,6 +13,12 @@ export class BrowserHttpExecutor implements HttpExecutor {
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
+      console.log('[BrowserHttpExecutor] About to fetch:', {
+        url: request.url,
+        urlType: typeof request.url,
+        urlLength: request.url?.length,
+        urlCharCodes: request.url?.split('').map(c => c.charCodeAt(0)).join(',')
+      });
       const response = await fetch(request.url, {
         method: request.method,
         headers: request.headers,

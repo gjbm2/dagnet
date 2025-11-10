@@ -31,6 +31,8 @@ interface ConversionNodeData {
     group?: string;
     color?: string;
   };
+  event_id?: string;
+  event_id_overridden?: boolean;
   sankeyWidth?: number;
   sankeyHeight?: number;
   useSankeyView?: boolean;
