@@ -67,13 +67,38 @@
 - Learned: UpdateManager field naming needs refactor (documented as tech debt)
 
 **🎯 Next Session:**
-- Phase 2b completion: Error handling polish, logging cleanup (1-2 hrs)
 - Phase 3: UI Integration (10-12 hrs)
   - Connection selector dropdown in Properties Panel
   - Evidence display (last fetched, n/k/window)
-  - Polish "Get from Source" UX (loading states, success feedback)
-  - Window selector (when needed for time-windowed queries)
-  - Remove debug logging from DataOperationsService
+  - Window selector (floating date picker)
+  - Polish "Get from Source" UX (success feedback, animations)
+
+**🎉 Recent Fixes (Nov 10, 2025):**
+- ✅ **BLOCKER RESOLVED**: Lightning Menu now shows WITHOUT parameter file
+  - Removed `isConnected` and `inputValue` requirements from EnhancedSelector
+  - Added `targetInstanceUuid` requirement instead (edge/node UUID)
+  - File operations properly disabled when no file connected
+  - **"Get from Source (direct)" works directly on edges!**
+- ✅ **WORKAROUND IMPLEMENTED**: Default 7-day window for DAS queries
+  - `getFromSourceDirect` now defaults to last 7 calendar days
+  - Window selector component can be added later for customization
+- ✅ **Connection Resolution Enhanced**: Support for direct edge connections
+  - `getFromSourceDirect` now reads connection from edge `p.connection` field
+  - Falls back to parameter file if `objectId` provided
+  - Enables testing Amplitude integration without creating parameter files
+
+**🔍 Debugging (Nov 10, 2025):**
+- Added debug logging to EnhancedSelector for Lightning Menu visibility
+- Check browser console for: `[EnhancedSelector] Lightning Menu conditions:`
+- Lightning Menu requires ALL of:
+  1. `disabled: false` - selector not disabled
+  2. `type: parameter/case/node` - correct selector type  
+  3. `hasGraph: true` - graph loaded in GraphStore
+  4. `hasTargetId: true` - edge/node UUID available (for direct operations)
+- **NOTE:** Lightning icon now shows even without parameter name!
+  - File operations disabled if no parameter selected
+  - "Get from Source (direct)" works without parameter file
+- If lightning icon missing, check console log to see which condition fails
 
 ---
 

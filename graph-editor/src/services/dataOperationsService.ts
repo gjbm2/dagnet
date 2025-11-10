@@ -669,41 +669,102 @@ class DataOperationsService {
     targetId?: string;
     graph?: Graph | null;
     setGraph?: (graph: Graph | null) => void;
+    // For direct parameter references (no param file)
+    paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+    conditionalIndex?: number;
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex } = options;
     
     try {
-      // 1. Load the parameter/case/node file to get connection info
-      const fileId = `${objectType}-${objectId}`;
-      const file = fileRegistry.getFile(fileId);
-      
-      if (!file) {
-        toast.error(`${objectType} "${objectId}" not found`);
-        return;
-      }
-      
-      const data = file.data;
-      
-      // 2. Check if it has a connection configured
-      if (!data.connection) {
-        toast.error(`No connection configured for ${objectType} "${objectId}"`);
-        return;
-      }
-      
-      // 3. Parse connection_string (it's a JSON string in the schema)
+      let connectionName: string | undefined;
       let connectionString: any = {};
-      if (data.connection_string) {
-        try {
-          connectionString = typeof data.connection_string === 'string' 
-            ? JSON.parse(data.connection_string)
-            : data.connection_string;
-        } catch (e) {
-          toast.error('Invalid connection_string JSON');
-          return;
+      
+      // Try to get connection info from parameter/case/node file (if objectId provided)
+      if (objectId) {
+        const fileId = `${objectType}-${objectId}`;
+        const file = fileRegistry.getFile(fileId);
+        
+        if (file) {
+          const data = file.data;
+          connectionName = data.connection;
+          
+          // Parse connection_string (it's a JSON string in the schema)
+          if (data.connection_string) {
+            try {
+              connectionString = typeof data.connection_string === 'string' 
+                ? JSON.parse(data.connection_string)
+                : data.connection_string;
+            } catch (e) {
+              toast.error('Invalid connection_string JSON in parameter file');
+              return;
+            }
+          }
         }
       }
       
-      // 4. Build DSL from edge query (if available in graph)
+      // If no connection from file, try to get it from the edge/node directly
+      if (!connectionName && targetId && graph) {
+        const target: any = objectType === 'parameter' 
+          ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId)
+          : graph.nodes?.find((n: any) => n.uuid === targetId || n.id === targetId);
+        
+        if (target) {
+          // For parameters, resolve the specific parameter location
+          if (objectType === 'parameter') {
+            let param: any = null;
+            
+            // If paramSlot specified, use that (e.g., 'p', 'cost_gbp', 'cost_time')
+            if (paramSlot) {
+              param = target[paramSlot];
+              
+              // If conditionalIndex specified, get from conditional_ps array
+              if (conditionalIndex !== undefined && param?.conditional_ps) {
+                param = param.conditional_ps[conditionalIndex];
+              }
+            }
+            // Otherwise, default to p (backward compatibility)
+            else {
+              param = target.p;
+            }
+            
+            if (param) {
+              connectionName = param.connection;
+              if (param.connection_string) {
+                try {
+                  connectionString = typeof param.connection_string === 'string'
+                    ? JSON.parse(param.connection_string)
+                    : param.connection_string;
+                } catch (e) {
+                  toast.error('Invalid connection_string JSON on edge');
+                  return;
+                }
+              }
+            }
+          }
+          // For other types, check top-level connection
+          else if (target.connection) {
+            connectionName = target.connection;
+            if (target.connection_string) {
+              try {
+                connectionString = typeof target.connection_string === 'string'
+                  ? JSON.parse(target.connection_string)
+                  : target.connection_string;
+              } catch (e) {
+                toast.error('Invalid connection_string JSON');
+                return;
+              }
+            }
+          }
+        }
+      }
+      
+      // 2. Check if we have a connection configured
+      if (!connectionName) {
+        toast.error(`No connection configured. Please set the 'connection' field.`);
+        return;
+      }
+      
+      // 3. Build DSL from edge query (if available in graph)
       let dsl: any = {};
       let connectionProvider: string | undefined;
       
@@ -724,7 +785,7 @@ class DataOperationsService {
           const { createDASRunner } = await import('../lib/das');
           const tempRunner = createDASRunner();
           try {
-            const connection = await (tempRunner as any).connectionProvider.getConnection(data.connection);
+            const connection = await (tempRunner as any).connectionProvider.getConnection(connectionName);
             connectionProvider = connection.provider;
           } catch (e) {
             console.warn('Could not load connection for provider mapping:', e);
@@ -752,10 +813,20 @@ class DataOperationsService {
       const { createDASRunner } = await import('../lib/das');
       const runner = createDASRunner();
       
+      // Default window: last 7 calendar days
+      const now = new Date();
+      const sevenDaysAgo = new Date(now);
+      sevenDaysAgo.setDate(now.getDate() - 7);
+      const defaultWindow = {
+        start: sevenDaysAgo.toISOString(),
+        end: now.toISOString()
+      };
+      
       toast.loading('Fetching data from source...', { id: 'das-fetch' });
       
-      const result = await runner.execute(data.connection, dsl, {
+      const result = await runner.execute(connectionName, dsl, {
         connection_string: connectionString,
+        window: defaultWindow,
         edgeId: targetId || 'unknown'
       });
       

@@ -3,6 +3,7 @@ connections:
   # Amplitude - Analytics & Funnel Data
   # Uses Amplitude Dashboard REST API (Funnels)
   # Docs: https://developers.amplitude.com/docs/dashboard-rest-api
+  # NOTE: Time window defaults to last 7 calendar days (until Window Selector UI is implemented)
   - name: amplitude-prod
     provider: amplitude
     kind: http
@@ -89,7 +90,7 @@ connections:
           
           return dsl;
       request:
-        url_template: "{{defaults.base_url}}/funnels"
+        url_template: "{{connection.base_url}}/funnels"
         method: POST
         headers:
           # Dashboard REST API uses HTTP Basic auth: API Key (username) + Secret Key (password)
