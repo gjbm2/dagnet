@@ -12,13 +12,15 @@
     "raw": {
       "type": "string",
       "description": "Raw query string in DSL format",
-      "pattern": "^from\\([a-z0-9_-]+\\)\\.to\\([a-z0-9_-]+\\)(\\.(visited|visitedAny|exclude|case|context)\\([^)]+\\))*$",
+      "pattern": "^from\\([a-z0-9_-]+\\)\\.to\\([a-z0-9_-]+\\)(\\.(visited|visitedAny|exclude|case|context|minus|plus)\\([^)]+\\))*$",
       "examples": [
         "from(homepage).to(checkout)",
         "from(homepage).to(checkout).exclude(back-button)",
         "from(product-view).to(checkout).visited(add-to-cart)",
         "from(start).to(end).exclude(detour-a,detour-b).visited(checkpoint)",
-        "from(homepage).to(checkout).case(onboarding-test:treatment)"
+        "from(homepage).to(checkout).case(onboarding-test:treatment)",
+        "from(a).to(c).minus(from(a).to(c).visited(d))",
+        "from(a).to(m).minus(from(a).to(m).visited(b)).plus(from(a).to(m).visited(b).visited(d))"
       ]
     },
     "ast": {
@@ -51,7 +53,7 @@
       "properties": {
         "name": {
           "type": "string",
-          "enum": ["from", "to", "visited", "visitedAny", "exclude", "context", "case"],
+          "enum": ["from", "to", "visited", "visitedAny", "exclude", "context", "case", "minus", "plus"],
           "description": "Function name"
         },
         "args": {
@@ -60,7 +62,7 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^[a-z0-9_-]+(:[a-z0-9_-]+)?$"
+            "pattern": "^[a-z0-9-]+(:[a-z0-9-]+)?$"
           }
         }
       }
@@ -70,7 +72,7 @@
       "type": "string",
       "enum": ["from", "to", "visited", "exclude", "context", "case"],
       "description": "Valid query function names",
-      "$comment": "Semantics: from(A)=start at node A, to(B)=end at node B, visited(X)=must visit X, exclude(Y)=must NOT visit Y, case(id:variant)=filter by experiment, context(key:val)=context constraint"
+      "$comment": "Semantics: from(A)=start at node A, to(B)=end at node B, visited(X)=must visit X, visitedAny(X,Y)=visit at least one, exclude(Y)=must NOT visit Y, case(id:variant)=filter by experiment, context(key:val)=context constraint, minus(query)=subtract funnel (coefficient -1), plus(query)=add-back funnel (coefficient +1, for inclusion-exclusion)"
     }
   },
   

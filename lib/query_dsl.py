@@ -2,19 +2,21 @@
 Query DSL Parser and Validator
 
 Schema Authority: /graph-editor/public/schemas/query-dsl-1.0.0.json
-Valid Functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case"]
+Valid Functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case", "minus", "plus"]
 
 Grammar:
     query          ::= from-clause to-clause constraint*
     from-clause    ::= "from(" node-id ")"
     to-clause      ::= "to(" node-id ")"
-    constraint     ::= exclude-clause | visited-clause | context-clause | case-clause
+    constraint     ::= exclude-clause | visited-clause | visitedAny-clause | context-clause | case-clause | minus-clause | plus-clause
     
     exclude-clause    ::= ".exclude(" node-list ")"
     visited-clause    ::= ".visited(" node-list ")"
     visitedAny-clause ::= ".visitedAny(" node-list ")"
-    context-clause ::= ".context(" key ":" value ")"
-    case-clause    ::= ".case(" key ":" value ")"
+    context-clause    ::= ".context(" key ":" value ")"
+    case-clause       ::= ".case(" key ":" value ")"
+    minus-clause      ::= ".minus(" query ")"
+    plus-clause       ::= ".plus(" query ")"
     
     node-list      ::= node-id ("," node-id)*
     node-id        ::= [a-z0-9_-]+
@@ -54,7 +56,7 @@ class ParsedQuery:
     - Composable: Constraints are logically ANDed
     
     Schema authority: /graph-editor/public/schemas/query-dsl-1.0.0.json
-    Valid functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case"]
+    Valid functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case", "minus", "plus"]
     """
     from_node: str              # Source node ID
     to_node: str                # Target node ID
@@ -63,6 +65,8 @@ class ParsedQuery:
     visited_any: List[List[str]]# Groups where at least one must be visited (OR per group)
     context: List[KeyValuePair] # Context filters (e.g., device:mobile)
     cases: List[KeyValuePair]   # Case/variant filters (e.g., test-id:variant)
+    minus: List['ParsedQuery']  # Subtractive terms (coefficient -1, for inclusion-exclusion)
+    plus: List['ParsedQuery']   # Add-back terms (coefficient +1, for inclusion-exclusion)
     
     @property
     def raw(self) -> str:
@@ -84,6 +88,12 @@ class ParsedQuery:
         
         for case in self.cases:
             parts.append(f"case({case.key}:{case.value})")
+        
+        for minus_query in self.minus:
+            parts.append(f"minus({minus_query.raw})")
+        
+        for plus_query in self.plus:
+            parts.append(f"plus({plus_query.raw})")
         
         return ".".join(parts)
 
@@ -143,6 +153,10 @@ def parse_query(query: str) -> ParsedQuery:
     context = _extract_key_value_pairs(query, 'context')
     cases = _extract_key_value_pairs(query, 'case')
     
+    # Extract minus/plus clauses (recursive)
+    minus_queries = _extract_nested_queries(query, 'minus')
+    plus_queries = _extract_nested_queries(query, 'plus')
+    
     return ParsedQuery(
         from_node=from_node,
         to_node=to_node,
@@ -150,7 +164,9 @@ def parse_query(query: str) -> ParsedQuery:
         visited=visited,
         visited_any=visited_any,
         context=context,
-        cases=cases
+        cases=cases,
+        minus=minus_queries,
+        plus=plus_queries
     )
 
 
@@ -213,6 +229,36 @@ def _extract_node_groups(query: str, function_type: str) -> List[List[str]]:
                 nodes.append(n)
         groups.append(nodes)
     return groups
+
+
+def _extract_nested_queries(query: str, function_name: str) -> List['ParsedQuery']:
+    """
+    Extract and recursively parse nested queries from minus/plus clauses.
+    
+    Args:
+        query: Full query string
+        function_name: "minus" or "plus"
+        
+    Returns:
+        List of parsed nested queries
+    """
+    nested_queries = []
+    
+    # Match .minus(from(...).to(...)) or .plus(from(...).to(...))
+    # Need to handle nested parentheses carefully
+    pattern = rf'\.{function_name}\(([^)]+(?:\([^)]*\))*)\)'
+    matches = re.findall(pattern, query)
+    
+    for match in matches:
+        # Recursively parse the inner query
+        try:
+            inner = parse_query(match)
+            nested_queries.append(inner)
+        except QueryParseError:
+            # Skip malformed nested queries
+            continue
+    
+    return nested_queries
 
 
 def validate_query(
