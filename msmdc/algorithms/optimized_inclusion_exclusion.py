@@ -132,14 +132,13 @@ def compile_optimized_inclusion_exclusion(
         sign = (-1) ** size
         
         for combo in sorted(by_size[size]):
-            # Build query term
-            visited_list = '.'.join([f"visited({h})" for h in combo])
-            term = f"from({split_node}).to({merge_node}).{visited_list}"
+            # Build compact term: just node list (inherits from/to from base)
+            node_list = ','.join(combo)
             
             if sign < 0:
-                terms.append((f"minus({term})", sign))
+                terms.append((f"minus({node_list})", sign))
             else:
-                terms.append((f"plus({term})", sign))
+                terms.append((f"plus({node_list})", sign))
     
     # Build query string
     query_parts = [base]

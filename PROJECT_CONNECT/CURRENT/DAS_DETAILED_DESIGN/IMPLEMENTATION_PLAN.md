@@ -66,9 +66,24 @@
 - End-to-end test: Google Sheets → Graph working perfectly
 - Learned: UpdateManager field naming needs refactor (documented as tech debt)
 
-**🎯 Next Session:**
-- Phase 3: UI Integration (10-12 hrs)
-  - Connection selector dropdown in Properties Panel
+**🎯 Next Session Priorities:**
+
+**Critical (Amplitude Production Readiness):**
+1. **Cohort Exclusion** ✅ **COMPLETE** (~1 hr)
+   - ✅ Researched Amplitude API cohort parameter: `s=` with JSON segmentation
+   - ✅ Added `excluded_cohorts: ["9z057h6i"]` to amplitude-prod defaults
+   - ✅ Pre_request script auto-injects cohort exclusion via s= parameter
+   - ✅ Documented in connections.yaml with amplitude-test example
+   - ⏭️ Next: Test with curl and validate with live Amplitude API
+
+2. **Case/Variant Filtering** (4-6 hrs)
+   - Design case property mapping schema (Statsig case → Amplitude event property)
+   - Extend event definitions with case_property_mappings
+   - Implement case filter injection in pre_request script
+   - Test variant filtering (treatment vs control)
+
+**Phase 3: UI Integration** (10-12 hrs remaining)
+  - Connection selector dropdown in Properties Panel (~40% done)
   - Evidence display (last fetched, n/k/window)
   - Window selector (floating date picker)
   - Polish "Get from Source" UX (success feedback, animations)

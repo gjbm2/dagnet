@@ -1036,6 +1036,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       });
     }
     
+    // Preserve current ReactFlow node positions in the graph
+    // This prevents nodes from jumping back to old positions when graph is synced
+    nextGraph.nodes.forEach((node: any) => {
+      const reactFlowNode = nodes.find(n => n.id === node.uuid || n.id === node.id);
+      if (reactFlowNode && node.layout) {
+        node.layout.x = reactFlowNode.position.x;
+        node.layout.y = reactFlowNode.position.y;
+      }
+    });
+    
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }

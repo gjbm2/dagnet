@@ -325,9 +325,9 @@ export default function PropertiesPanel({
         setLocalEdgeData((prev: any) => {
           const updates: any = { ...prev };
           
-          // Only update probability fields if there's a connected parameter
-          // (if p.id exists, UpdateManager might have loaded new data)
-          if (edge.p?.id && edge.p?.mean !== undefined) {
+          // Only update probability fields if there's a connected parameter AND value actually changed
+          // Skip if value is the same (prevents interrupting user's slider drag)
+          if (edge.p?.id && edge.p?.mean !== undefined && edge.p.mean !== prev.probability) {
             updates.probability = edge.p.mean;
             updates.stdev = edge.p.stdev;
           }
@@ -582,6 +582,24 @@ export default function PropertiesPanel({
   const selectedEdge = selectedEdgeId && graph.edges ? graph.edges.find((e: any) => 
     e.uuid === selectedEdgeId
   ) : null;
+
+  // Calculate if edge probability is unbalanced (siblings don't sum to 1)
+  const isEdgeProbabilityUnbalanced = React.useMemo(() => {
+    if (!selectedEdge || !graph.edges || selectedEdge.p?.mean === undefined) return false;
+    
+    const sourceNode = selectedEdge.from;
+    const siblings = graph.edges.filter((e: any) => 
+      e.from === sourceNode && 
+      !e.conditional_p &&  // Only regular edges
+      e.p?.mean !== undefined
+    );
+    
+    if (siblings.length <= 1) return false;  // Need at least 2 edges to be unbalanced
+    
+    const total = siblings.reduce((sum, e) => sum + (e.p?.mean || 0), 0);
+    const diff = Math.abs(total - 1);
+    return diff > 0.01;  // Unbalanced if differs by more than 1%
+  }, [selectedEdge, graph.edges]);
 
   // Helper: GET edge parameter from file
   const getEdgeParam = useCallback(async (paramSlot: 'p' | 'cost_gbp' | 'cost_time') => {
@@ -1841,6 +1859,7 @@ export default function PropertiesPanel({
                       ? 'Sub-Route Probability (within variant)' 
                       : 'Probability'}
                       showBalanceButton={true}
+                      isUnbalanced={isEdgeProbabilityUnbalanced}
                       showQueryEditor={false}
                     />
                   </CollapsibleSection>

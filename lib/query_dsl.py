@@ -15,8 +15,8 @@ Grammar:
     visitedAny-clause ::= ".visitedAny(" node-list ")"
     context-clause    ::= ".context(" key ":" value ")"
     case-clause       ::= ".case(" key ":" value ")"
-    minus-clause      ::= ".minus(" query ")"
-    plus-clause       ::= ".plus(" query ")"
+    minus-clause      ::= ".minus(" node-list ")"
+    plus-clause       ::= ".plus(" node-list ")"
     
     node-list      ::= node-id ("," node-id)*
     node-id        ::= [a-z0-9_-]+
@@ -65,8 +65,8 @@ class ParsedQuery:
     visited_any: List[List[str]]# Groups where at least one must be visited (OR per group)
     context: List[KeyValuePair] # Context filters (e.g., device:mobile)
     cases: List[KeyValuePair]   # Case/variant filters (e.g., test-id:variant)
-    minus: List['ParsedQuery']  # Subtractive terms (coefficient -1, for inclusion-exclusion)
-    plus: List['ParsedQuery']   # Add-back terms (coefficient +1, for inclusion-exclusion)
+    minus: List[List[str]]      # Subtractive node sets (coefficient -1, inherits base from/to)
+    plus: List[List[str]]       # Add-back node sets (coefficient +1, inherits base from/to)
     
     @property
     def raw(self) -> str:
@@ -89,11 +89,11 @@ class ParsedQuery:
         for case in self.cases:
             parts.append(f"case({case.key}:{case.value})")
         
-        for minus_query in self.minus:
-            parts.append(f"minus({minus_query.raw})")
+        for minus_nodes in self.minus:
+            parts.append(f"minus({','.join(minus_nodes)})")
         
-        for plus_query in self.plus:
-            parts.append(f"plus({plus_query.raw})")
+        for plus_nodes in self.plus:
+            parts.append(f"plus({','.join(plus_nodes)})")
         
         return ".".join(parts)
 
@@ -153,9 +153,9 @@ def parse_query(query: str) -> ParsedQuery:
     context = _extract_key_value_pairs(query, 'context')
     cases = _extract_key_value_pairs(query, 'case')
     
-    # Extract minus/plus clauses (recursive)
-    minus_queries = _extract_nested_queries(query, 'minus')
-    plus_queries = _extract_nested_queries(query, 'plus')
+    # Extract minus/plus clauses (now just node lists, not nested queries)
+    minus_node_sets = _extract_node_groups(query, 'minus')
+    plus_node_sets = _extract_node_groups(query, 'plus')
     
     return ParsedQuery(
         from_node=from_node,
@@ -165,8 +165,8 @@ def parse_query(query: str) -> ParsedQuery:
         visited_any=visited_any,
         context=context,
         cases=cases,
-        minus=minus_queries,
-        plus=plus_queries
+        minus=minus_node_sets,
+        plus=plus_node_sets
     )
 
 
