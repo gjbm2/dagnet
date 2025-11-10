@@ -58,6 +58,29 @@ properties:
         segment: "ServiceLineManagement Confirmed"
         mixpanel: "service_line_management_confirmed"
   
+  amplitude_filters:
+    type: array
+    description: "Property filters to apply when querying this event in Amplitude"
+    items:
+      type: object
+      properties:
+        property:
+          type: string
+          description: "Property name to filter on"
+        operator:
+          type: string
+          enum: ["is", "is not", "is any of", "is not any of", "contains", "does not contain"]
+          description: "Filter operator"
+        values:
+          type: array
+          items:
+            type: string
+          description: "Values to filter by"
+    examples:
+      - - property: "value"
+          operator: "is any of"
+          values: ["DO_MOST_OF_IT_FOR_ME", "DO_ALL_OF_IT_FOR_ME"]
+  
   connectors:
     type: object
     description: "Platform-specific mappings (only if platform uses different names)"

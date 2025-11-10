@@ -12,6 +12,12 @@
  * @returns DSL object with resolved provider-specific event names
  * @throws Error if nodes not found or missing event_ids
  */
+export interface EventFilter {
+  property: string;
+  operator: string;
+  values: string[];
+}
+
 export interface DslObject {
   from: string;
   to: string;
@@ -20,12 +26,14 @@ export interface DslObject {
   visitedAny?: string[][];
   context?: Array<{ key: string; value: string }>;
   case?: Array<{ key: string; value: string }>;
+  event_filters?: Record<string, EventFilter[]>; // Map of event_name -> filters
 }
 
 export interface EventDefinition {
   id: string;
   name: string;
   provider_event_names?: Record<string, string>;
+  amplitude_filters?: EventFilter[];
   [key: string]: any;
 }
 
@@ -65,7 +73,10 @@ export async function buildDslFromEdge(
     return node;
   };
   
-  // Helper to resolve event_id to provider-specific event name
+  // Track event filters
+  const eventFilters: Record<string, EventFilter[]> = {};
+  
+  // Helper to resolve event_id to provider-specific event name and collect filters
   const resolveEventName = async (eventId: string): Promise<string> => {
     // If no event loader or no provider specified, return event_id as-is
     if (!eventLoader || !connectionProvider) {
@@ -81,6 +92,13 @@ export async function buildDslFromEdge(
       
       if (providerEventName) {
         console.log(`Mapped event_id "${eventId}" → "${providerEventName}" for provider "${connectionProvider}"`);
+        
+        // Collect Amplitude filters if this is Amplitude provider
+        if (connectionProvider === 'amplitude' && eventDef.amplitude_filters) {
+          eventFilters[providerEventName] = eventDef.amplitude_filters;
+          console.log(`Added filters for "${providerEventName}":`, eventDef.amplitude_filters);
+        }
+        
         return providerEventName;
       }
       
@@ -230,6 +248,12 @@ export async function buildDslFromEdge(
   
   if (query.case) {
     dsl.case = query.case;
+  }
+  
+  // Add event filters if any were collected
+  if (Object.keys(eventFilters).length > 0) {
+    dsl.event_filters = eventFilters;
+    console.log('DSL with event filters:', dsl.event_filters);
   }
   
   return dsl;

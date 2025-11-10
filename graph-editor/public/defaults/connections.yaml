@@ -28,13 +28,50 @@ connections:
       # a full funnel A>B>C, then extract only the B>C conversion
       pre_request:
         script: |
+          // Helper: Convert filter operator to Amplitude format
+          const mapOperator = (op) => {
+            const mapping = {
+              "is": "is",
+              "is not": "is not",
+              "is any of": "is",
+              "is not any of": "is not",
+              "contains": "contains",
+              "does not contain": "does not contain"
+            };
+            return mapping[op] || "is";
+          };
+          
+          // Helper: Build event step with optional filters
+          const buildEventStep = (eventName, filters) => {
+            const step = { event_type: eventName };
+            
+            // Add property filters if defined
+            if (filters && filters.length > 0) {
+              step.filters = filters.map(f => ({
+                subprop_type: "event",
+                subprop_key: f.property,
+                subprop_op: mapOperator(f.operator),
+                subprop_value: f.values
+              }));
+            }
+            
+            return step;
+          };
+          
           // Build full funnel including visited events
           const events = [];
-          if (dsl.visited_event_ids && dsl.visited_event_ids.length > 0) {
-            events.push(...dsl.visited_event_ids.map(id => ({ event_type: id })));
+          const eventFilters = dsl.event_filters || {};
+          
+          // Add visited events to funnel (if any)
+          if (dsl.visited && dsl.visited.length > 0) {
+            events.push(...dsl.visited.map(eventName => 
+              buildEventStep(eventName, eventFilters[eventName])
+            ));
           }
-          events.push({ event_type: dsl.from_event_id });
-          events.push({ event_type: dsl.to_event_id });
+          
+          // Add from → to events
+          events.push(buildEventStep(dsl.from, eventFilters[dsl.from]));
+          events.push(buildEventStep(dsl.to, eventFilters[dsl.to]));
           
           // Convert window to Amplitude date format (YYYYMMDD)
           const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
@@ -43,6 +80,12 @@ connections:
           dsl.funnel_events = events;
           dsl.from_step_index = events.length - 2;  // Index of from_event in results
           dsl.to_step_index = events.length - 1;    // Index of to_event in results
+          
+          console.log('[Amplitude Adapter] Built funnel:', {
+            events: dsl.funnel_events,
+            from_index: dsl.from_step_index,
+            to_index: dsl.to_step_index
+          });
           
           return dsl;
       request:
