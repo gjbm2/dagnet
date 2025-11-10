@@ -51,11 +51,11 @@ export class BrowserHttpExecutor implements HttpExecutor {
         // Direct request (for local development or when proxy is disabled)
         console.log(`[BrowserHttpExecutor] Direct ${request.method} request to:`, request.url);
         response = await fetch(request.url, {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-          signal: controller.signal,
-        });
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+        signal: controller.signal,
+      });
       }
       
       const rawBody = await response.text();

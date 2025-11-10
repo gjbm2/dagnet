@@ -681,19 +681,19 @@ class DataOperationsService {
       
       // Try to get connection info from parameter/case/node file (if objectId provided)
       if (objectId) {
-        const fileId = `${objectType}-${objectId}`;
-        const file = fileRegistry.getFile(fileId);
-        
+      const fileId = `${objectType}-${objectId}`;
+      const file = fileRegistry.getFile(fileId);
+      
         if (file) {
-          const data = file.data;
+      const data = file.data;
           connectionName = data.connection;
           
           // Parse connection_string (it's a JSON string in the schema)
-          if (data.connection_string) {
-            try {
-              connectionString = typeof data.connection_string === 'string' 
-                ? JSON.parse(data.connection_string)
-                : data.connection_string;
+      if (data.connection_string) {
+        try {
+          connectionString = typeof data.connection_string === 'string' 
+            ? JSON.parse(data.connection_string)
+            : data.connection_string;
             } catch (e) {
               toast.error('Invalid connection_string JSON in parameter file');
               return;
@@ -749,10 +749,10 @@ class DataOperationsService {
                 connectionString = typeof target.connection_string === 'string'
                   ? JSON.parse(target.connection_string)
                   : target.connection_string;
-              } catch (e) {
-                toast.error('Invalid connection_string JSON');
-                return;
-              }
+        } catch (e) {
+          toast.error('Invalid connection_string JSON');
+          return;
+        }
             }
           }
         }

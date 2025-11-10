@@ -113,11 +113,11 @@ connections:
           Authorization: "Basic {{{credentials.basic_auth_b64}}}"
       response:
         extract:
-          # Funnel response returns aggregated steps with counts
+          # Funnel response returns data[0].cumulativeRaw as array of counts per step
           - name: from_count
-            jmes: "data.steps[{{from_step_index}}].count"
+            jmes: "data[0].cumulativeRaw[{{from_step_index}}]"
           - name: to_count
-            jmes: "data.steps[{{to_step_index}}].count"
+            jmes: "data[0].cumulativeRaw[{{to_step_index}}]"
       transform:
         - name: p_mean
           jsonata: "to_count / from_count"

@@ -587,16 +587,16 @@ export function EnhancedSelector({
               hasFile: !!currentItem?.hasFile
             });
             return shouldShow ? (
-              <LightningMenu
-                objectType={type}
+            <LightningMenu
+              objectType={type}
                 objectId={inputValue || ''}
-                hasFile={!!currentItem?.hasFile}
-                targetId={targetInstanceUuid}
-                graph={graph}
-                setGraph={setGraph}
+              hasFile={!!currentItem?.hasFile}
+              targetId={targetInstanceUuid}
+              graph={graph}
+              setGraph={setGraph}
                 paramSlot={paramSlot}
                 conditionalIndex={conditionalIndex}
-              />
+            />
             ) : null;
           })()}
         </div>
