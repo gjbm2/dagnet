@@ -792,13 +792,31 @@ class DataOperationsService {
           }
           
           try {
+            // Event loader that reads from IDB
+            const eventLoader = async (eventId: string) => {
+              const fileId = `event-${eventId}`;
+              const file = fileRegistry.getFile(fileId);
+              
+              if (file && file.data) {
+                console.log(`Loaded event "${eventId}" from IDB:`, file.data);
+                return file.data;
+              }
+              
+              // Fallback: return minimal event without mapping
+              console.warn(`Event "${eventId}" not found in IDB, using fallback`);
+              return {
+                id: eventId,
+                name: eventId,
+                provider_event_names: {}
+              };
+            };
+            
             // Build DSL with event mapping
-            // Pass edge with query string - buildDslFromEdge needs to handle parsing
             dsl = await buildDslFromEdge(
               targetEdge,
               graph,
               connectionProvider,
-              (eventId: string) => paramRegistryService.loadEvent(eventId)
+              eventLoader
             );
             console.log('Built DSL from edge with event mapping:', dsl);
           } catch (error) {
