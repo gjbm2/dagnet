@@ -149,7 +149,7 @@ export class DASRunner {
 
   /**
    * Execute pre-request JavaScript transformation script.
-   * Script has access to: dsl, window, connection_string, console
+   * Script has access to: dsl, window, connection_string, connection, context, console
    * Script can mutate dsl object to add calculated fields.
    */
   private executePreRequestScript(script: string, context: ExecutionContext): void {
@@ -162,6 +162,8 @@ export class DASRunner {
         dsl: context.dsl,
         window: context.window,
         connection_string: context.connection_string,
+        connection: context.connection,
+        context: context.context,
         // Provide safe console for debugging
         console: {
           log: (...args: unknown[]) => this.log('pre_request_script', 'Script log', args),
@@ -180,6 +182,8 @@ export class DASRunner {
         'dsl',
         'window',
         'connection_string',
+        'connection',
+        'context',
         'console',
         script
       );
@@ -188,6 +192,8 @@ export class DASRunner {
         scriptEnv.dsl,
         scriptEnv.window,
         scriptEnv.connection_string,
+        scriptEnv.connection,
+        scriptEnv.context,
         scriptEnv.console
       );
       

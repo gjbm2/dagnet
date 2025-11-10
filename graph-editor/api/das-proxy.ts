@@ -35,11 +35,28 @@ export default async function handler(
   }
 
   try {
-    const proxyRequest = req.body as ProxyRequest;
+    // Parse request body (Vercel may or may not auto-parse depending on Content-Type)
+    let proxyRequest: ProxyRequest;
+    if (typeof req.body === 'string') {
+      try {
+        proxyRequest = JSON.parse(req.body);
+      } catch (e) {
+        res.status(400).json({ error: 'Invalid JSON in request body', details: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+    } else if (req.body && typeof req.body === 'object') {
+      proxyRequest = req.body as ProxyRequest;
+    } else {
+      res.status(400).json({ error: 'Request body is required' });
+      return;
+    }
 
     // Validate request
     if (!proxyRequest.url || !proxyRequest.method) {
-      res.status(400).json({ error: 'url and method are required' });
+      res.status(400).json({ 
+        error: 'url and method are required',
+        received: { url: proxyRequest.url, method: proxyRequest.method, bodyType: typeof req.body }
+      });
       return;
     }
 

@@ -86,14 +86,16 @@ connections:
           const endDate = formatDate(window.end);
           
           // Build segmentation parameter for cohort exclusions
+          // Amplitude API expects: s=[{"prop":"userdata_cohort","op":"is not","values":["cohortId"]}]
           let segmentParam = '';
           if (connection.excluded_cohorts && connection.excluded_cohorts.length > 0) {
             const segments = connection.excluded_cohorts.map(cohortId => ({
-              type: "cohort",
-              id: cohortId,
-              match: "exclude"
+              prop: "userdata_cohort",
+              op: "is not",  // "is not" for exclude
+              values: [cohortId]
             }));
-            segmentParam = 's=' + encodeURIComponent(JSON.stringify({ segments }));
+            // s parameter should be a JSON array, not an object with a segments property
+            segmentParam = 's=' + encodeURIComponent(JSON.stringify(segments));
           }
           
           // Build query parameters for GET request
