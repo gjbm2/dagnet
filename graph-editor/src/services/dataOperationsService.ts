@@ -1028,15 +1028,23 @@ class DataOperationsService {
           // UpdateManager expects: probability, sample_size, successes
           // DAS provides: mean, n, k
           if (field === 'mean') {
-            updateData.probability = update.value;
+            updateData.probability = typeof update.value === 'number' ? update.value : Number(update.value);
           } else if (field === 'n') {
-            updateData.sample_size = update.value;
+            updateData.sample_size = typeof update.value === 'number' ? update.value : Number(update.value);
           } else if (field === 'k') {
-            updateData.successes = update.value;
+            updateData.successes = typeof update.value === 'number' ? update.value : Number(update.value);
           } else {
             updateData[field] = update.value;
           }
         }
+        
+        // Add data_source metadata for direct external connections
+        updateData.data_source = {
+          type: connectionName?.includes('amplitude') ? 'amplitude' : 'api',
+          retrieved_at: new Date().toISOString(),
+          query: dsl,
+          full_query: dsl.query || JSON.stringify(dsl),
+        };
         
         console.log('Extracted data from DAS (mapped to external format):', updateData);
         

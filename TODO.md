@@ -49,6 +49,7 @@
   - See: Phase 0.3 discussion on flexible data handling
 
 ### Medium Priority
+- Polish "Get from Source" UX (success feedback, animations -- apply to graph elements as well as sidebar)
 - docs to cover: MSMDC, connections
 - **FormEditor UI Schemas (Class-Specific Layouts)**
   - Context: FormEditor auto-generates forms from JSON schemas, but layout isn't always optimal

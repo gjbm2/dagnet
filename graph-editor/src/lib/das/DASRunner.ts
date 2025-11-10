@@ -538,7 +538,7 @@ export class DASRunner {
       }
       if (error.phase === 'template') {
         return `Request template error. Check console for details.`;
-      }
+    }
       return `Execution failed in phase "${error.phase}". Check console for details.`;
     }
 

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Info } from 'lucide-react';
+import { Info, Database } from 'lucide-react';
 import { EnhancedSelector } from './EnhancedSelector';
 import { ConnectionSelector } from './ConnectionSelector';
+import { ConnectionSettingsModal } from './ConnectionSettingsModal';
 import ProbabilityInput from './ProbabilityInput';
 import { AutomatableField } from './AutomatableField';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
@@ -78,23 +79,12 @@ export function ParameterSection({
 }: ParameterSectionProps) {
   // Local state for immediate input feedback
   const [localQuery, setLocalQuery] = useState(param?.query || '');
-  const [localConnectionString, setLocalConnectionString] = useState(
-    param?.connection_string ? JSON.stringify(JSON.parse(param.connection_string), null, 2) : ''
-  );
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   
   // Sync local state when param changes externally
   useEffect(() => {
     setLocalQuery(param?.query || '');
-    if (param?.connection_string) {
-      try {
-        setLocalConnectionString(JSON.stringify(JSON.parse(param.connection_string), null, 2));
-      } catch {
-        // Invalid JSON - keep current state
-      }
-    } else {
-      setLocalConnectionString('');
-    }
-  }, [param?.query, param?.connection_string]);
+  }, [param?.query]);
   
   return (
     <div style={{ marginBottom: '20px' }}>
@@ -119,77 +109,92 @@ export function ParameterSection({
       
       {/* External Data Connection Section */}
       <div style={{ marginTop: '16px', marginBottom: '16px', paddingTop: '16px', borderTop: '1px solid #E5E7EB' }}>
-        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '14px', color: '#374151' }}>
-          External Data Source
-        </label>
-        
-        {/* Connection Selector */}
-        <ConnectionSelector
-          value={param?.connection}
-          onChange={(connectionName) => {
-            onUpdate({ connection: connectionName });
+        <AutomatableField
+          label="External Data Source"
+          value={param?.connection || ''}
+          overridden={param?.connection_overridden || false}
+          onClearOverride={() => {
+            onUpdate({ connection_overridden: false });
           }}
-          label="Connection"
-          disabled={disabled}
-        />
-        
-        {/* Connection String Editor (shown when connection is selected) */}
-        {param?.connection && (
-          <div style={{ marginTop: '12px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '12px', color: '#6B7280' }}>
-              Connection Settings (JSON)
-              <span style={{ marginLeft: '4px', color: '#9CA3AF' }} title="Provider-specific settings override. Usually empty unless you need custom configuration.">
-                <Info size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />
-              </span>
-            </label>
-            <textarea
-              value={localConnectionString}
-              onChange={(e) => {
-                setLocalConnectionString(e.target.value);
+        >
+          {/* Connection Controls Row */}
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '8px', 
+            width: '100%',
+            flex: '1 1 auto',
+            minWidth: 0
+          }}>
+            {/* Database Icon Button */}
+            <button
+              type="button"
+              onClick={() => setIsSettingsModalOpen(true)}
+              disabled={disabled}
+              title="Edit connection and settings"
+              style={{
+                padding: '6px',
+                background: 'white',
+                border: '1px solid #D1D5DB',
+                borderRadius: '6px',
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: param?.connection ? '#374151' : '#6B7280',
+                transition: 'all 0.2s',
+                flexShrink: 0,
+                height: '28px',
+                width: '28px',
+                margin: 0
               }}
-              onBlur={() => {
-                // Validate JSON before saving
-                try {
-                  if (localConnectionString.trim() === '') {
-                    onUpdate({ connection_string: undefined });
-                  } else {
-                    const parsed = JSON.parse(localConnectionString);
-                    onUpdate({ connection_string: JSON.stringify(parsed) });
-                  }
-                } catch (e) {
-                  // Invalid JSON - don't save, but keep the text for user to fix
-                  console.warn('Invalid JSON in connection_string:', e);
+              onMouseEnter={(e) => {
+                if (!disabled) {
+                  e.currentTarget.style.background = '#F9FAFB';
+                  e.currentTarget.style.borderColor = '#9CA3AF';
+                  e.currentTarget.style.color = '#374151';
                 }
               }}
-              placeholder='{"key": "value"}'
-              style={{
-                width: '100%',
-                padding: '8px',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                fontFamily: 'monospace',
-                fontSize: '12px',
-                minHeight: '80px',
-                resize: 'vertical',
-                boxSizing: 'border-box'
+              onMouseLeave={(e) => {
+                if (!disabled) {
+                  e.currentTarget.style.background = 'white';
+                  e.currentTarget.style.borderColor = '#D1D5DB';
+                  e.currentTarget.style.color = param?.connection ? '#374151' : '#6B7280';
+                }
               }}
-              disabled={disabled}
-            />
-            {localConnectionString && (() => {
-              try {
-                JSON.parse(localConnectionString);
-                return null;
-              } catch {
-                return (
-                  <div style={{ marginTop: '4px', fontSize: '11px', color: '#dc2626' }}>
-                    Invalid JSON. Please fix syntax errors.
-                  </div>
-                );
-              }
-            })()}
+            >
+              <Database size={16} />
+            </button>
+            
+            {/* Connection Dropdown */}
+            <div style={{ flex: '1 1 0', minWidth: 0, margin: 0 }}>
+              <ConnectionSelector
+                value={param?.connection}
+                onChange={(connectionName) => {
+                  onUpdate({ connection: connectionName, connection_overridden: true });
+                }}
+                hideLabel={true}
+                disabled={disabled}
+              />
+            </div>
           </div>
-        )}
+        </AutomatableField>
       </div>
+      
+      {/* Connection Settings Modal */}
+      <ConnectionSettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        connectionName={param?.connection}
+        currentConnectionString={param?.connection_string}
+        onSave={(connectionString, newConnectionName) => {
+          onUpdate({ 
+            connection_string: connectionString,
+            connection: newConnectionName || param?.connection,
+            connection_overridden: true
+          });
+        }}
+      />
       
       {/* Mean Value (Probability slider OR Cost input) */}
       <div style={{ marginBottom: '20px' }}>

@@ -1,0 +1,223 @@
+.connection-settings-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.connection-settings-modal {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  width: 90%;
+  max-width: 600px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.connection-settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #E5E7EB;
+}
+
+.connection-settings-modal-title {
+  display: flex;
+  align-items: center;
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.connection-settings-modal-subtitle {
+  margin-left: 8px;
+  font-size: 14px;
+  font-weight: 400;
+  color: #6B7280;
+}
+
+.connection-settings-modal-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  color: #6B7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.connection-settings-modal-close:hover {
+  background: #F3F4F6;
+  color: #111827;
+}
+
+.connection-settings-modal-content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.connection-settings-loading,
+.connection-settings-empty,
+.connection-settings-error {
+  text-align: center;
+  padding: 40px 20px;
+  color: #6B7280;
+}
+
+.connection-settings-error {
+  color: #DC2626;
+}
+
+.connection-settings-hint {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #9CA3AF;
+}
+
+.connection-settings-hint code {
+  background: #F3F4F6;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+.connection-settings-schema-description {
+  margin-bottom: 20px;
+  padding: 12px;
+  background: #F9FAFB;
+  border-left: 3px solid #3B82F6;
+  border-radius: 4px;
+  font-size: 14px;
+  color: #374151;
+}
+
+.connection-settings-field {
+  margin-bottom: 20px;
+}
+
+.connection-settings-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.connection-settings-label .required {
+  color: #DC2626;
+  margin-left: 4px;
+}
+
+.connection-settings-description {
+  font-size: 12px;
+  color: #6B7280;
+  margin-bottom: 8px;
+  margin-top: -2px;
+}
+
+.connection-settings-input,
+.connection-settings-textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #D1D5DB;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.connection-settings-input:focus,
+.connection-settings-textarea:focus {
+  outline: none;
+  border-color: #3B82F6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.connection-settings-input.error,
+.connection-settings-textarea.error {
+  border-color: #DC2626;
+}
+
+.connection-settings-textarea {
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.connection-settings-checkbox-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.connection-settings-checkbox {
+  margin-right: 8px;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.connection-settings-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #DC2626;
+}
+
+.connection-settings-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid #E5E7EB;
+}
+
+.connection-settings-button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.connection-settings-button.secondary {
+  background: white;
+  color: #374151;
+  border: 1px solid #D1D5DB;
+}
+
+.connection-settings-button.secondary:hover {
+  background: #F9FAFB;
+}
+
+.connection-settings-button.primary {
+  background: #3B82F6;
+  color: white;
+}
+
+.connection-settings-button.primary:hover:not(:disabled) {
+  background: #2563EB;
+}
+
+.connection-settings-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
