@@ -17,6 +17,10 @@ connections:
       # - US: https://amplitude.com/api/2
       # - EU: https://analytics.eu.amplitude.com/api/2
       base_url: "https://amplitude.com/api/2"
+      # Cohort exclusions (internal test users - commercially irrelevant)
+      # NOTE: Create amplitude-test connection without this exclusion for internal testing
+      excluded_cohorts:
+        - "9z057h6i"  # Internal test users cohort
     connection_string_schema:
       type: object
       properties:
@@ -81,14 +85,26 @@ connections:
           const startDate = formatDate(window.start);
           const endDate = formatDate(window.end);
           
+          // Build segmentation parameter for cohort exclusions
+          let segmentParam = '';
+          if (connection.excluded_cohorts && connection.excluded_cohorts.length > 0) {
+            const segments = connection.excluded_cohorts.map(cohortId => ({
+              type: "cohort",
+              id: cohortId,
+              match: "exclude"
+            }));
+            segmentParam = 's=' + encodeURIComponent(JSON.stringify({ segments }));
+          }
+          
           // Build query parameters for GET request
-          // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&i=1
+          // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&i=1&s={...}
           const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');
           const otherParams = [
             'start=' + startDate,
             'end=' + endDate,
-            'i=1'
-          ].join('&');
+            'i=1',
+            segmentParam
+          ].filter(p => p).join('&');  // Filter out empty strings
           
           dsl.query_params = eventParams + '&' + otherParams;
           dsl.from_step_index = events.length - 2;  // Index of from_event in results
@@ -98,7 +114,8 @@ connections:
             events: events,
             query_params: dsl.query_params,
             from_index: dsl.from_step_index,
-            to_index: dsl.to_step_index
+            to_index: dsl.to_step_index,
+            excluded_cohorts: connection.excluded_cohorts || []
           });
           
           return dsl;
@@ -134,6 +151,28 @@ connections:
             value: "{{n}}"
           - target: "/edges/{{edgeId}}/p/evidence/k"
             value: "{{k}}"
+
+  # Amplitude Test - Include internal test users (disabled by default)
+  # Uncomment and enable this connection to analyze internal test user behavior
+  # - name: amplitude-test
+  #   provider: amplitude
+  #   kind: http
+  #   description: "Amplitude analytics INCLUDING internal test users"
+  #   enabled: false
+  #   credsRef: amplitude
+  #   defaults:
+  #     base_url: "https://amplitude.com/api/2"
+  #     # NO excluded_cohorts - includes all users including test cohort 9z057h6i
+  #   connection_string_schema:
+  #     type: object
+  #     properties:
+  #       segment:
+  #         type: array
+  #         items:
+  #           type: object
+  #   adapter:
+  #     # Use same adapter configuration as amplitude-prod
+  #     # (copy pre_request, request, response, transform, upsert sections if needed)
 
   # Google Sheets - Parameter Data
   - name: sheets-readonly

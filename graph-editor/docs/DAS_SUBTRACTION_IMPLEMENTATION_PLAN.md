@@ -1365,9 +1365,32 @@ if (ENABLE_SUBTRACTIVE_QUERIES && parsed.minusTerms.length > 0) {
 
 ### Open Questions
 1. **Partial failures?** If 1 of 3 minus terms fails, do we fail the entire query or use partial data?
-   - **Initial answer:** Fail entire composite; partial data produces incorrect k
-2. **Monaco nesting UX?** How to visually represent `minus(from(...).to(...))` in chip mode?
-   - **Initial answer:** Nested chips or expand to editor mode for complex queries
+   - **Answer:** Fail entire composite; partial data produces incorrect k
+
+### Amplitude-Specific Requirements (High Priority)
+
+1. **Cohort Filtering** ✅ **IMPLEMENTED**
+   - **Need:** Exclude internal test users cohort (cohort_id: `9z057h6i`) from all Amplitude queries
+   - **Research:** ✅ Confirmed `s=` segmentation parameter with JSON format
+     - Format: `s={"segments":[{"type":"cohort","id":"9z057h6i","match":"exclude"}]}`
+   - **Implementation:** ✅ Complete
+     - Added `excluded_cohorts: ["9z057h6i"]` to amplitude-prod connection defaults
+     - Pre_request script automatically injects cohort exclusion into s= parameter
+     - amplitude-test connection example provided (disabled, for internal testing)
+   - **Next:** Test with curl to validate parameter format with live Amplitude API
+   
+2. **Case/Variant Filtering**
+   - **Need:** Filter Amplitude queries by experiment variants (e.g., treatment vs control)
+   - **Context:** Gate definitions in Statsig, but Amplitude events need variant filtering
+   - **Requirements:**
+     - Event instrumentation must send variant data to Amplitude (e.g., event property "variant")
+     - Case definitions need Amplitude property name mapping
+     - DSL `.case(experiment-id:treatment)` should inject Amplitude event filter
+   - **Implementation:**
+     - Extend event schema: add `case_property_mappings: { amplitude: { property: "variant" } }`
+     - In pre_request: parse DSL case filters, map to Amplitude event property filters
+     - Inject into event filters array alongside amplitude_filters
+   - **Depends on:** Front-end instrumentation sending variant properties
 
 ### Future Work (v2+)
 

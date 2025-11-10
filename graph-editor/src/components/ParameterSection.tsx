@@ -112,9 +112,11 @@ export function ParameterSection({
             <ProbabilityInput
               value={param?.mean ?? 0}
               onChange={(newValue) => {
-                // Optional: Update local state
+                // Update graph immediately while dragging (provides real-time feedback)
+                onUpdate({ mean: newValue, mean_overridden: true });
               }}
               onCommit={(newValue) => {
+                // Commit is called on mouse release (same update, just ensures consistency)
                 onUpdate({ mean: newValue, mean_overridden: true });
               }}
               onRebalance={onRebalance}

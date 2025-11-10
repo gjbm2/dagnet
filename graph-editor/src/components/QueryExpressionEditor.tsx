@@ -24,7 +24,7 @@ interface QueryExpressionEditorProps {
 }
 
 interface ParsedQueryChip {
-  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context';
+  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'minus' | 'plus';
   values: string[];
   rawText: string;
 }
@@ -56,8 +56,8 @@ const outerChipConfig = {
     label: 'visited', 
     icon: MapPinCheckInside
   },
-  visitedAny: { 
-    label: 'visitedAny', 
+  visitedAny: {
+    label: 'visitedAny',
     icon: MapPinCheckInside
   },
   case: { 
@@ -67,6 +67,14 @@ const outerChipConfig = {
   context: {
     label: 'context',
     icon: Settings
+  },
+  minus: {
+    label: 'minus',
+    icon: MapPinXInside  // Reuse exclude icon or import Minus from lucide-react
+  },
+  plus: {
+    label: 'plus',
+    icon: MapPinCheckInside  // Reuse visited icon or import Plus from lucide-react
   }
 };
 
@@ -91,16 +99,16 @@ function parseQueryToChips(query: string): ParsedQueryChip[] {
   const chips: ParsedQueryChip[] = [];
   
   // Match ALL function calls in order they appear
-  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context)\(([^)]+)\)/g;
+  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context|minus|plus)\(([^)]+)\)/g;
   let match;
   
   while ((match = functionRegex.exec(query)) !== null) {
-    const funcType = match[1] as 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context';
+    const funcType = match[1] as 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'minus' | 'plus';
     const content = match[2];
     
     chips.push({
       type: funcType,
-      values: (funcType === 'exclude' || funcType === 'visited' || funcType === 'visitedAny') 
+      values: (funcType === 'exclude' || funcType === 'visited') 
         ? content.split(',').map(s => s.trim())
         : [content],
       rawText: match[0]
@@ -379,8 +387,8 @@ export function QueryExpressionEditor({
           };
         }
         
-        // After .exclude( or .visited( or .visitedAny( → suggest node IDs (graph + registry)
-        if (/\.(exclude|visited|visitedAny)\([^)]*$/.test(textUntilPosition)) {
+        // After .exclude( or .visited( → suggest node IDs (graph + registry)
+        if (/\.(exclude|visited)\([^)]*$/.test(textUntilPosition)) {
           return {
             suggestions: allNodes.map((n: any) => ({
               label: n.label,
@@ -466,7 +474,7 @@ export function QueryExpressionEditor({
               kind: monaco.languages.CompletionItemKind.Function,
               insertText: 'exclude($0)',
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              documentation: 'Exclude nodes from path (rules out paths containing ANY of these nodes)',
+              documentation: 'Exclude nodes from path (rules out paths containing these nodes)',
               detail: '.exclude(node-id, ...)',
               range,
               sortText: '2'
@@ -476,7 +484,7 @@ export function QueryExpressionEditor({
               kind: monaco.languages.CompletionItemKind.Function,
               insertText: 'visited($0)',
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              documentation: 'Must visit ALL of these nodes (rules out paths missing any)',
+              documentation: 'Must visit these nodes (rules out paths NOT containing these nodes)',
               detail: '.visited(node-id, ...)',
               range,
               sortText: '3'
@@ -500,6 +508,26 @@ export function QueryExpressionEditor({
               detail: '.case(case-id:variant-name)',
               range,
               sortText: '4'
+            },
+            {
+              label: 'minus',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'minus($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Subtract paths visiting these nodes (inherits base from/to, coefficient -1)',
+              detail: '.minus(node-id, ...)',
+              range,
+              sortText: '5'
+            },
+            {
+              label: 'plus',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'plus($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Add back paths visiting these nodes (coefficient +1, for inclusion-exclusion)',
+              detail: '.plus(node-id, ...)',
+              range,
+              sortText: '6'
             }
           );
           

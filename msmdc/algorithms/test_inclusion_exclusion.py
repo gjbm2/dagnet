@@ -93,8 +93,9 @@ def test_simple_diamond():
     )
     assert query_ac.startswith("from(a).to(c)")
     assert "minus" in query_ac
-    assert ("visited(b)" in query_ac or "visited(d)" in query_ac)
-    # No add-backs needed for single competing branch
+    # Compact format: minus(b) or minus(d), no visited() wrapper
+    assert ("minus(b)" in query_ac or "minus(d)" in query_ac)
+    # No add-backs needed for diamond (only 1 competing path per branch)
     assert "plus" not in query_ac
 
 

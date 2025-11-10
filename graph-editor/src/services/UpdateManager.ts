@@ -482,7 +482,18 @@ export class UpdateManager {
       throw new Error(`No mapping configuration for ${key}`);
     }
     
-    return await this.applyMappings(fileData, graphEntity, config.mappings, options);
+    const result = await this.applyMappings(fileData, graphEntity, config.mappings, options);
+    
+    // AUTO-REBALANCE: After parameter update from file pull, rebalance siblings
+    // This applies to "Get from file" - if p(A>B) gets updated, auto-compute p(A>C)
+    if (result.success && subDest === 'parameter' && !options.validateOnly) {
+      result.metadata = result.metadata || {};
+      result.metadata.requiresSiblingRebalance = true;
+      result.metadata.updatedEdgeId = graphEntity.uuid || graphEntity.id;
+      result.metadata.updatedField = 'p';
+    }
+    
+    return result;
   }
   
   private async updateGraphFromExternal(
@@ -498,7 +509,18 @@ export class UpdateManager {
       throw new Error(`No mapping configuration for ${key}`);
     }
     
-    return await this.applyMappings(externalData, graphEntity, config.mappings, options);
+    const result = await this.applyMappings(externalData, graphEntity, config.mappings, options);
+    
+    // AUTO-REBALANCE: After parameter update from external source, rebalance siblings
+    // This applies to DAS (Amplitude, etc.) - if p(A>B) gets data, auto-compute p(A>C)
+    if (result.success && subDest === 'parameter' && !options.validateOnly) {
+      result.metadata = result.metadata || {};
+      result.metadata.requiresSiblingRebalance = true;
+      result.metadata.updatedEdgeId = graphEntity.uuid || graphEntity.id;
+      result.metadata.updatedField = 'p';
+    }
+    
+    return result;
   }
   
   private async appendExternalToFile(

@@ -231,10 +231,27 @@ class DataOperationsService {
           nextGraph.metadata.updated_at = new Date().toISOString();
         }
         
-        // Save to graph store
-        setGraph(nextGraph);
+        // AUTO-REBALANCE: If UpdateManager flagged this update as needing sibling rebalance
+        // This applies to file pulls (same as external data), but NOT manual slider edits
+        let finalGraph = nextGraph;
+        if (result.metadata?.requiresSiblingRebalance) {
+          const { rebalanceSiblingParameters } = await import('../utils/rebalanceUtils');
+          finalGraph = rebalanceSiblingParameters(
+            nextGraph,
+            result.metadata.updatedEdgeId,
+            result.metadata.updatedField
+          );
+        }
         
-        toast.success(`✓ Updated from ${paramId}.yaml`, { duration: 2000 });
+        // Save to graph store
+        setGraph(finalGraph);
+        
+        const hadRebalance = finalGraph !== nextGraph;
+        if (hadRebalance) {
+          toast.success(`✓ Updated from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
+        } else {
+          toast.success(`✓ Updated from ${paramId}.yaml`, { duration: 2000 });
+        }
       }
       
     } catch (error) {
@@ -842,49 +859,86 @@ class DataOperationsService {
       
       toast.loading('Fetching data from source...', { id: 'das-fetch' });
       
-      const result = await runner.execute(connectionName, dsl, {
-        connection_string: connectionString,
-        window: defaultWindow,
-        edgeId: targetId || 'unknown'
-      });
+      // Check if query uses composite operators (minus/plus for inclusion-exclusion)
+      const queryString = dsl.query || '';
+      const isComposite = /\.(minus|plus)\(/.test(queryString);
       
-      if (!result.success) {
-        toast.error(`Failed to fetch data: ${result.error}`, { id: 'das-fetch' });
-        return;
-      }
+      let updateData: any = {};
       
-      toast.success(`Fetched data from source`, { id: 'das-fetch' });
-      console.log('DAS Updates:', result.updates);
-      
-      // 6. Parse the updates to extract values
-      // Map DAS field names to UpdateManager's external data field names
-      const updateData: any = {};
-      for (const update of result.updates) {
-        console.log('Processing update:', update);
-        // Parse JSON Pointer: /edges/{edgeId}/p/mean → extract field and value
-        const parts = update.target.split('/').filter(Boolean);
-        console.log('Parts:', parts);
+      if (isComposite) {
+        // Composite query: use inclusion-exclusion executor
+        console.log('[DataOps] Detected composite query, using inclusion-exclusion executor');
         
-        // Example: ["edges", "test-edge-123", "p", "mean"] → field = "mean"
-        // Or: ["edges", "test-edge-123", "p", "evidence", "n"] → need to extract "n"
-        const field = parts[parts.length - 1]; // Last part is the field name
-        console.log('Field:', field, 'Value:', update.value);
+        const { executeCompositeQuery } = await import('../lib/das/compositeQueryExecutor');
         
-        // Map to UpdateManager's expected field names for external data
-        // UpdateManager expects: probability, sample_size, successes
-        // DAS provides: mean, n, k
-        if (field === 'mean') {
-          updateData.probability = update.value;
-        } else if (field === 'n') {
-          updateData.sample_size = update.value;
-        } else if (field === 'k') {
-          updateData.successes = update.value;
-        } else {
-          updateData[field] = update.value;
+        try {
+          const combined = await executeCompositeQuery(
+            queryString,
+            { ...dsl, window: defaultWindow },
+            connectionName,
+            runner
+          );
+          
+          // Map combined result to update format
+          updateData = {
+            probability: combined.p_mean,
+            sample_size: combined.n,
+            successes: combined.k
+          };
+          
+          toast.success(`Fetched data from source (${combined.evidence.k}/${combined.evidence.n})`, { id: 'das-fetch' });
+          console.log('Composite query result:', combined);
+          
+        } catch (error) {
+          toast.error(`Composite query failed: ${error instanceof Error ? error.message : String(error)}`, { id: 'das-fetch' });
+          return;
         }
-      }
+        
+      } else {
+        // Simple query: use standard DAS runner
+        const result = await runner.execute(connectionName, dsl, {
+          connection_string: connectionString,
+          window: defaultWindow,
+          edgeId: targetId || 'unknown'
+        });
+        
+        if (!result.success) {
+          toast.error(`Failed to fetch data: ${result.error}`, { id: 'das-fetch' });
+          return;
+        }
+        
+        toast.success(`Fetched data from source`, { id: 'das-fetch' });
+        console.log('DAS Updates:', result.updates);
       
-      console.log('Extracted data from DAS (mapped to external format):', updateData);
+        // 6. Parse the updates to extract values for simple queries
+        // Map DAS field names to UpdateManager's external data field names
+        for (const update of result.updates) {
+          console.log('Processing update:', update);
+          // Parse JSON Pointer: /edges/{edgeId}/p/mean → extract field and value
+          const parts = update.target.split('/').filter(Boolean);
+          console.log('Parts:', parts);
+          
+          // Example: ["edges", "test-edge-123", "p", "mean"] → field = "mean"
+          // Or: ["edges", "test-edge-123", "p", "evidence", "n"] → need to extract "n"
+          const field = parts[parts.length - 1]; // Last part is the field name
+          console.log('Field:', field, 'Value:', update.value);
+          
+          // Map to UpdateManager's expected field names for external data
+          // UpdateManager expects: probability, sample_size, successes
+          // DAS provides: mean, n, k
+          if (field === 'mean') {
+            updateData.probability = update.value;
+          } else if (field === 'n') {
+            updateData.sample_size = update.value;
+          } else if (field === 'k') {
+            updateData.successes = update.value;
+          } else {
+            updateData[field] = update.value;
+          }
+        }
+        
+        console.log('Extracted data from DAS (mapped to external format):', updateData);
+      }
       
       // 7. Apply directly to graph (no file update)
       if (!targetId || !graph || !setGraph) {
@@ -941,8 +995,26 @@ class DataOperationsService {
             nextGraph.metadata.updated_at = new Date().toISOString();
           }
           
-          setGraph(nextGraph);
-          toast.success(`Applied to graph: ${updateResult.changes.length} fields updated`);
+          // AUTO-REBALANCE: If UpdateManager flagged this update as needing sibling rebalance
+          // This applies to both external data (DAS) and file pulls, but NOT manual slider edits
+          let finalGraph = nextGraph;
+          if (updateResult.metadata?.requiresSiblingRebalance) {
+            const { rebalanceSiblingParameters } = await import('../utils/rebalanceUtils');
+            finalGraph = rebalanceSiblingParameters(
+              nextGraph,
+              updateResult.metadata.updatedEdgeId,
+              updateResult.metadata.updatedField
+            );
+          }
+          
+          setGraph(finalGraph);
+          
+          const hadRebalance = finalGraph !== nextGraph;
+          if (hadRebalance) {
+            toast.success(`Applied: ${updateResult.changes.length} fields + siblings rebalanced`);
+          } else {
+            toast.success(`Applied to graph: ${updateResult.changes.length} fields updated`);
+          }
         }
       } else {
         toast('No changes to apply', { icon: 'ℹ️' });
