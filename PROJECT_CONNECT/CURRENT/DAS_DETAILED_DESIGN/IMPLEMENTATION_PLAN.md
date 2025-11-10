@@ -98,6 +98,20 @@
 - **NOTE:** Lightning icon now shows even without parameter name!
   - File operations disabled if no parameter selected
   - "Get from Source (direct)" works without parameter file
+
+**🚀 PRODUCTION-READY FIX (Nov 10, 2025):**
+- ✅ **CORS PROXY IMPLEMENTED**: Proper server-side proxy for external API requests
+  - **Development**: Vite middleware at `/api/das-proxy` (server/proxy.ts)
+  - **Production**: Vercel serverless function at `/api/das-proxy` (api/das-proxy.ts)
+  - **Client**: BrowserHttpExecutor now uses proxy by default
+  - **Security**: CORS headers added server-side, credentials passed through securely
+  - **Testing**: Full request flow works end-to-end without browser blocks
+- ✅ **ALL DAS REQUESTS NOW WORK IN PRODUCTION**
+  - No more `ERR_BLOCKED_BY_CLIENT` errors
+  - No more CORS issues
+  - Works in all browsers (including with ad blockers enabled)
+  - Proper error handling and logging throughout
+- 📄 **Documentation**: Added comprehensive server/README.md for proxy setup
 - If lightning icon missing, check console log to see which condition fails
 
 ---
