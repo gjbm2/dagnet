@@ -13,7 +13,9 @@
         "x": -436,
         "y": 80,
         "rank": 0
-      }
+      },
+      "event_id": "household-created",
+      "event_id_overridden": true
     },
     {
       "uuid": "52207d6c-d3e3-4fda-a727-484eb1706041",
@@ -23,7 +25,9 @@
       "layout": {
         "x": -65,
         "y": -67
-      }
+      },
+      "event_id": "delegation-completed",
+      "event_id_overridden": true
     },
     {
       "uuid": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1",
@@ -142,7 +146,7 @@
     "created_at": "2025-10-21T10:21:58.922Z",
     "author": "Test file",
     "description": "Default empty graph",
-    "updated_at": "2025-10-23T22:25:01.687Z",
+    "updated_at": "2025-11-10T10:27:23.122Z",
     "name": "selection-test.json",
     "source": "git",
     "branch": "main"
