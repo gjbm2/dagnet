@@ -15,7 +15,7 @@ provider_event_names:
 # Amplitude-specific property filters for funnel queries
 # These filters will be sent to Amplitude API when constructing funnel queries
 amplitude_filters:
-  - property: "value"
+  - property: "level"
     operator: "is any of"
     values: ["DO_MOST_OF_IT_FOR_ME", "DO_ALL_OF_IT_FOR_ME"]
 
