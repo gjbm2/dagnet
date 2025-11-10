@@ -361,6 +361,7 @@ export interface ProbabilityParam {
   distribution?: 'normal' | 'beta' | 'uniform';
   connection?: string; // Connection name from connections.yaml
   connection_string?: string; // JSON blob of provider-specific settings
+  query?: any; // Query object for data retrieval (DSL query: from/to/visited/etc)
   evidence?: Evidence; // Observations from data sources
 }
 

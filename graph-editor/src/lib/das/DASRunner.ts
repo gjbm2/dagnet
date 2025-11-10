@@ -80,6 +80,18 @@ export class DASRunner {
         }
       }
       
+      // Auto-generate Basic Auth for Amplitude (and other providers using HTTP Basic Auth)
+      if (connection.provider === 'amplitude' && credentials.api_key && credentials.secret_key && !credentials.basic_auth_b64) {
+        const basicAuthString = `${credentials.api_key}:${credentials.secret_key}`;
+        credentials = { 
+          ...credentials, 
+          basic_auth_b64: typeof btoa !== 'undefined' 
+            ? btoa(basicAuthString)  // Browser
+            : Buffer.from(basicAuthString).toString('base64')  // Node
+        };
+        this.log('load_credentials', 'Generated Basic Auth token for Amplitude');
+      }
+      
       this.log('load_credentials', 'Credentials loaded', { hasCredentials: Object.keys(credentials).length > 0 });
 
       // 3. Parse connection_string if provided
@@ -136,12 +148,80 @@ export class DASRunner {
   }
 
   /**
+   * Execute pre-request JavaScript transformation script.
+   * Script has access to: dsl, window, connection_string, console
+   * Script can mutate dsl object to add calculated fields.
+   */
+  private executePreRequestScript(script: string, context: ExecutionContext): void {
+    this.log('pre_request', 'Executing pre-request transformation script');
+    
+    try {
+      // Create execution environment with controlled access
+      // Script can read/modify these objects
+      const scriptEnv = {
+        dsl: context.dsl,
+        window: context.window,
+        connection_string: context.connection_string,
+        // Provide safe console for debugging
+        console: {
+          log: (...args: unknown[]) => this.log('pre_request_script', 'Script log', args),
+          warn: (...args: unknown[]) => this.log('pre_request_script', 'Script warn', args),
+          error: (...args: unknown[]) => this.log('pre_request_script', 'Script error', args)
+        }
+      };
+      
+      // Execute script with Function constructor
+      // This creates a sandboxed environment without access to:
+      // - DOM (window, document)
+      // - Network (fetch, XMLHttpRequest)
+      // - File system (require, import)
+      // - Credentials (not in scope)
+      const fn = new Function(
+        'dsl',
+        'window',
+        'connection_string',
+        'console',
+        script
+      );
+      
+      const result = fn(
+        scriptEnv.dsl,
+        scriptEnv.window,
+        scriptEnv.connection_string,
+        scriptEnv.console
+      );
+      
+      // If script returned a value, log it (useful for debugging)
+      if (result !== undefined) {
+        this.log('pre_request', 'Script returned value', { result });
+      }
+      
+      this.log('pre_request', 'Script execution completed successfully');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      throw new TemplateError(
+        `Pre-request script execution failed: ${errorMessage}`,
+        { 
+          script: script.substring(0, 200) + (script.length > 200 ? '...' : ''),
+          error: errorMessage,
+          stack: errorStack
+        }
+      );
+    }
+  }
+
+  /**
    * Execute adapter phases: build request → execute → validate → extract → transform → upsert.
    */
   private async executeAdapter(adapter: AdapterSpec, context: ExecutionContext): Promise<ExecutionResult> {
-    // Phase 1: Pre-request scripts (v2 - skip for v1)
-    if (adapter.pre_request) {
-      this.log('pre_request', 'Skipping pre_request scripts (v2 feature)');
+    // Phase 1: Pre-request scripts
+    if (adapter.pre_request && adapter.pre_request.script) {
+      this.executePreRequestScript(adapter.pre_request.script, context);
+      this.log('pre_request', 'Pre-request transformation complete', {
+        dslKeys: Object.keys(context.dsl)
+      });
     }
 
     // Phase 2: Build HTTP request

@@ -438,6 +438,72 @@ class ParamRegistryService {
     };
   }
 
+  // Load events-index.yaml
+  async loadEventsIndex(): Promise<any> {
+    const yamlText = await this.loadFile('events-index.yaml');
+    const data = yaml.load(yamlText) as any;
+    return data;
+  }
+
+  // Load a specific event by ID
+  async loadEvent(eventId: string): Promise<any> {
+    // Strip extension if present
+    const cleanId = eventId.replace(/\.(yaml|yml|json)$/, '');
+    
+    try {
+      const index = await this.loadEventsIndex();
+      const entry = index.events?.find((e: any) => e.id === cleanId);
+      
+      if (entry && entry.file_path) {
+        const yamlText = await this.loadFile(entry.file_path);
+        const eventData = yaml.load(yamlText) as any;
+        return eventData;
+      }
+      
+      // Event exists in index but has no file (planned event) - return minimal event
+      if (entry) {
+        console.log(`Event ${cleanId} exists in index but has no file (planned), returning minimal event`);
+        return {
+          id: cleanId,
+          name: cleanId,
+          description: 'Planned event (no detail file yet)',
+          tags: entry.tags || []
+        };
+      }
+    } catch (indexError) {
+      console.log(`Event index not available, trying direct file load:`, indexError);
+    }
+    
+    // Fallback: try loading directly using directory config from registry
+    const config = getFileTypeConfig('event');
+    const directory = config?.directory || 'events';
+    
+    // Try with different extensions
+    const extensions = ['.yaml', '.yml', '.json'];
+    for (const ext of extensions) {
+      const filePath = eventId.includes('/') ? eventId : `${directory}/${cleanId}${ext}`;
+      console.log(`Trying to load event from: ${filePath}`);
+      
+      try {
+        const yamlText = await this.loadFile(filePath);
+        const eventData = yaml.load(yamlText) as any;
+        return eventData;
+      } catch (error) {
+        // Try next extension
+        continue;
+      }
+    }
+    
+    // If all else fails, return a minimal event object without provider_event_names
+    console.warn(`Could not load event ${cleanId}, returning minimal default`);
+    return {
+      id: cleanId,
+      name: cleanId,
+      description: 'Event definition not found',
+      tags: []
+    };
+  }
+
   // Load parameters-index.yaml
   async loadRegistry(): Promise<Registry> {
     try {
