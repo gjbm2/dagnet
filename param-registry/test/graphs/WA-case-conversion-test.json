@@ -1,0 +1,101 @@
+{
+  "nodes": [
+    {
+      "uuid": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "id": "create-account",
+      "label": "Create account",
+      "absorbing": false,
+      "layout": {
+        "x": -656,
+        "y": 232
+      }
+    },
+    {
+      "uuid": "9189af7b-aae3-4611-a546-c845c6b8bc37",
+      "id": "delegate",
+      "label": "Delegate",
+      "absorbing": false,
+      "layout": {
+        "x": -354,
+        "y": 138
+      }
+    },
+    {
+      "uuid": "83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e",
+      "id": "manual-mode",
+      "label": "Manual mode",
+      "absorbing": false,
+      "layout": {
+        "x": -333,
+        "y": 312
+      }
+    },
+    {
+      "uuid": "31c35c2c-c058-4616-96d8-7fa1d6b27d0d",
+      "id": "abandon",
+      "label": "Abandon",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": {
+        "x": -318,
+        "y": 457
+      }
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "beb38757-1c04-40b7-be32-1c9b02a4f71b->83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e",
+      "id": "create-account-to-manual-mode",
+      "from": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "to": "83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.15
+      },
+      "description": "",
+      "query": "from(create-account).to(manual-mode)"
+    },
+    {
+      "uuid": "beb38757-1c04-40b7-be32-1c9b02a4f71b->31c35c2c-c058-4616-96d8-7fa1d6b27d0d",
+      "id": "create-account-to-abandon",
+      "from": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "to": "31c35c2c-c058-4616-96d8-7fa1d6b27d0d",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.3
+      },
+      "description": "",
+      "query": "from(create-account).to(abandon)"
+    },
+    {
+      "uuid": "create-account-to-delegate",
+      "id": "create-account-to-delegate",
+      "from": "beb38757-1c04-40b7-be32-1c9b02a4f71b",
+      "to": "9189af7b-aae3-4611-a546-c845c6b8bc37",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.55
+      },
+      "description": "",
+      "query": "from(create-account).to(delegate)"
+    }
+  ],
+  "policies": {
+    "default_outcome": "abandon",
+    "overflow_policy": "error",
+    "free_edge_policy": "complement"
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created_at": "2025-10-16T22:14:49.473Z",
+    "author": "Graph Editor",
+    "description": "Default empty graph",
+    "updated_at": "2025-11-10T07:32:43.801Z",
+    "name": "bsse-conversion-4.json",
+    "source": "git",
+    "branch": "main"
+  }
+}
