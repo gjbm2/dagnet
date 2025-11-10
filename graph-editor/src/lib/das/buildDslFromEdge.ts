@@ -39,23 +39,81 @@ export interface EventDefinition {
 
 export type EventLoader = (eventId: string) => Promise<EventDefinition>;
 
+/**
+ * Parse query string like "from(a).to(b).visited(c)" into object
+ */
+function parseQueryString(queryString: string): any {
+  const query: any = {};
+  
+  // Match from(...)
+  const fromMatch = queryString.match(/from\(([^)]+)\)/);
+  if (fromMatch) query.from = fromMatch[1];
+  
+  // Match to(...)
+  const toMatch = queryString.match(/to\(([^)]+)\)/);
+  if (toMatch) query.to = toMatch[1];
+  
+  // Match visited(...) - can appear multiple times
+  const visitedMatches = queryString.matchAll(/visited\(([^)]+)\)/g);
+  query.visited = [];
+  for (const match of visitedMatches) {
+    // Split by comma for multiple nodes in one visited()
+    const nodes = match[1].split(',').map(n => n.trim());
+    query.visited.push(...nodes);
+  }
+  
+  // Match exclude(...)
+  const excludeMatches = queryString.matchAll(/exclude\(([^)]+)\)/g);
+  query.exclude = [];
+  for (const match of excludeMatches) {
+    const nodes = match[1].split(',').map(n => n.trim());
+    query.exclude.push(...nodes);
+  }
+  
+  // Match context(key:value)
+  const contextMatches = queryString.matchAll(/context\(([^:]+):([^)]+)\)/g);
+  query.context = [];
+  for (const match of contextMatches) {
+    query.context.push({ key: match[1].trim(), value: match[2].trim() });
+  }
+  
+  // Match case(key:value)
+  const caseMatches = queryString.matchAll(/case\(([^:]+):([^)]+)\)/g);
+  query.case = [];
+  for (const match of caseMatches) {
+    query.case.push({ key: match[1].trim(), value: match[2].trim() });
+  }
+  
+  return query;
+}
+
 export async function buildDslFromEdge(
   edge: any,
   graph: any,
   connectionProvider?: string,
   eventLoader?: EventLoader
 ): Promise<DslObject> {
-  // Edge.p.query has: { from: "node-checkout", to: "node-purchase", visited: [...] }
-  // We need to look up those nodes to get their event_ids
-  // Then map event_ids to provider-specific event names
+  // Edge.query is a string: "from(nodeA).to(nodeB).visited(nodeC)"
+  // We need to parse it, look up nodes to get event_ids,
+  // then map event_ids to provider-specific event names
   
-  const query = edge.p?.query;
-  if (!query) {
+  const queryString = edge.query;
+  if (!queryString || typeof queryString !== 'string') {
     throw new Error(
-      `Edge missing query object: ${edge.from} → ${edge.to}\n\n` +
+      `Edge missing query string: ${edge.from} → ${edge.to}\n\n` +
       `To fix:\n` +
-      `1. Ensure edge.p.query is defined\n` +
-      `2. Query should specify: {from: "node-id", to: "node-id"}`
+      `1. Ensure edge.query is defined\n` +
+      `2. Query should be string like: "from(nodeA).to(nodeB)"`
+    );
+  }
+  
+  // Parse query string to extract node references
+  const query = parseQueryString(queryString);
+  if (!query.from || !query.to) {
+    throw new Error(
+      `Invalid query format: "${queryString}"\n\n` +
+      `Expected format: "from(nodeA).to(nodeB)"\n` +
+      `Got: from="${query.from || 'missing'}", to="${query.to || 'missing'}"`
     );
   }
   

@@ -711,7 +711,11 @@ class DataOperationsService {
         // Find the target edge
         const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
         
-        if (targetEdge && (targetEdge.p as any)?.query) {
+        if (targetEdge && targetEdge.query) {
+          // Parse query string (format: "from(nodeA).to(nodeB)")
+          // For now, pass the edge with query string to buildDslFromEdge
+          // which will parse node references and resolve event names
+          
           // Load buildDslFromEdge and event loader
           const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
           const { paramRegistryService } = await import('./paramRegistryService');
@@ -728,6 +732,7 @@ class DataOperationsService {
           
           try {
             // Build DSL with event mapping
+            // Pass edge with query string - buildDslFromEdge needs to handle parsing
             dsl = await buildDslFromEdge(
               targetEdge,
               graph,
