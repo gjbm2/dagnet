@@ -12,20 +12,40 @@ from typing import List, Set, Optional, Tuple
 def get_competing_first_hops(
     graph: nx.DiGraph,
     split_node: str,
-    kept_target: str
+    kept_target: str,
+    merge_node: str = None
 ) -> List[str]:
     """
-    Return all first hops from split_node except kept_target.
+    Return all first hops from split_node that lead to paths we need to exclude.
+    
+    If merge_node is provided and differs from kept_target, we need to find
+    all first hops that have paths to merge_node, excluding the direct kept edge.
     
     Args:
         graph: Directed acyclic graph
         split_node: Source node with multiple outgoing edges
         kept_target: The direct target we want to isolate
+        merge_node: The merge point (if different from kept_target)
         
     Returns:
         List of competing first-hop node IDs
     """
-    return [t for t in graph.successors(split_node) if t != kept_target]
+    if merge_node is None or merge_node == kept_target:
+        # Simple case: just exclude the direct target
+        return [t for t in graph.successors(split_node) if t != kept_target]
+    
+    # Complex case: find all first hops that can reach merge (excluding direct edge to kept_target)
+    competing = []
+    for first_hop in graph.successors(split_node):
+        if first_hop == kept_target:
+            # This is the direct edge we're trying to isolate; skip it
+            continue
+        
+        # Check if this first hop can reach the merge
+        if nx.has_path(graph, first_hop, merge_node):
+            competing.append(first_hop)
+    
+    return competing
 
 
 def find_minimal_merge(
@@ -189,36 +209,39 @@ def compile_query_for_edge(
     graph: nx.DiGraph,
     edge: Tuple[str, str],
     provider: str,
-    supports_native_exclude: bool
+    supports_native_exclude: bool,
+    use_optimized: bool = True
 ) -> str:
     """
     Generate the optimal query DSL string for an edge, given provider capabilities.
     
     Policy:
     - If provider supports native excludes: use exclude() (single query)
-    - If provider lacks native support: compile to minus() (composite query)
+    - If provider lacks native support: compile to inclusion-exclusion (minus/plus terms)
     
     Args:
         graph: Directed acyclic graph
         edge: (source, target) tuple
         provider: Provider name (for logging)
         supports_native_exclude: Whether provider supports native exclude
+        use_optimized: If True, use optimized inclusion-exclusion with reachability pruning
         
     Returns:
-        Complete DSL query string
+        Complete DSL query string (or tuple of (query, terms) if returning coefficients)
     """
     source, target = edge
     
+    # For edge discrimination, merge is ALWAYS the target
+    # We're measuring P(a→b) = users who go from event a to event b
+    merge_node = target
+    
     # Determine if this edge needs exclusion logic
-    # (i.e., are there competing branches from source?)
-    competing = get_competing_first_hops(graph, source, target)
+    # (i.e., are there competing branches from source that can reach target?)
+    competing = get_competing_first_hops(graph, source, target, merge_node)
     
     if not competing:
         # Simple edge; no exclusion needed
         return f"from({source}).to({target})"
-    
-    # Find minimal merge point
-    merge_node = find_minimal_merge(graph, source, target)
     
     # Check if provider supports native excludes
     if supports_native_exclude:
@@ -226,8 +249,13 @@ def compile_query_for_edge(
         excludes_list = ",".join(competing)
         return f"from({source}).to({merge_node}).exclude({excludes_list})"
     
-    # Provider doesn't support native excludes; compile to minus()
-    return compile_to_subtractive_query(
+    # Provider doesn't support native excludes
+    # Use optimized inclusion-exclusion
+    from optimized_inclusion_exclusion import compile_optimized_inclusion_exclusion
+    
+    query, terms = compile_optimized_inclusion_exclusion(
         graph, source, target, merge_node, competing
     )
+    
+    return query
 
