@@ -1,0 +1,17 @@
+# Event: Household Created
+# Created: 2025-11-10
+# Schema: event-schema.yaml
+
+id: household-created
+name: Household Created
+description: Household has created an account in the system
+category: conversion
+tags: ["onboarding", "account", "conversion"]
+
+# Provider-specific event name mappings
+provider_event_names:
+  amplitude: "Household Created"
+
+metadata:
+  created_at: "2025-11-10T00:00:00Z"
+  status: active
