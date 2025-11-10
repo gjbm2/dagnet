@@ -10,6 +10,8 @@ connections:
     description: "Production Amplitude analytics for conversion funnel data"
     enabled: true
     credsRef: amplitude
+    # NOTE: Demo/test credentials - events may not exist in the test project
+    # For real data, configure actual Amplitude project credentials
     defaults:
       # Region-specific base URL:
       # - US: https://amplitude.com/api/2
@@ -80,12 +82,11 @@ connections:
           const endDate = formatDate(window.end);
           
           // Build query parameters for GET request
-          // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&m=uniques&i=1
+          // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&i=1
           const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');
           const otherParams = [
             'start=' + startDate,
             'end=' + endDate,
-            'm=uniques',
             'i=1'
           ].join('&');
           
