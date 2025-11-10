@@ -334,6 +334,56 @@ async def generate_all_parameters_endpoint(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/stats-enhance")
+async def stats_enhance_endpoint(request: Request):
+    """
+    Enhance raw aggregation with statistical methods (MCMC, Bayesian, trend-aware, robust).
+    
+    Heavy computations that benefit from NumPy/SciPy are handled here.
+    Lightweight operations (inverse-variance weighting) are handled in TypeScript.
+    
+    Request: {
+        "raw": {
+            "method": "naive",
+            "n": 1000,
+            "k": 600,
+            "mean": 0.6,
+            "stdev": 0.015,
+            "raw_data": [{"date": "2025-11-03", "n": 100, "k": 60, "p": 0.6}, ...],
+            "window": {"start": "2025-11-03", "end": "2025-11-10"},
+            "days_included": 8,
+            "days_missing": 0
+        },
+        "method": "mcmc" | "bayesian-complex" | "trend-aware" | "robust"
+    }
+    
+    Response: EnhancedAggregation with enhanced mean, stdev, confidence_interval, trend
+    """
+    try:
+        body = await request.json()
+        raw_data = body.get("raw")
+        method = body.get("method")
+        
+        if not raw_data:
+            raise HTTPException(status_code=400, detail="Missing 'raw' field")
+        if not method:
+            raise HTTPException(status_code=400, detail="Missing 'method' field")
+        
+        # Import and enhance
+        from stats_enhancement import enhance_aggregation
+        
+        enhanced = enhance_aggregation(raw_data, method)
+        
+        return {
+            **enhanced,
+            "success": True
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     import os
@@ -355,6 +405,7 @@ if __name__ == "__main__":
     print("  POST /api/generate-query        - Generate MSMDC query for single edge")
     print("  POST /api/generate-all-queries  - Batch MSMDC for all edges (base only)")
     print("  POST /api/generate-all-parameters - COMPREHENSIVE: All params (p, cond_p, costs, cases)")
+    print("  POST /api/stats-enhance         - Statistical enhancement (MCMC, Bayesian, trend-aware, robust)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"💡 Port: {port} (set via PYTHON_API_PORT env var)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

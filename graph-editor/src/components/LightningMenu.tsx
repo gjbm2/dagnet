@@ -138,6 +138,9 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   
   const handleGetFromSourceDirect = () => {
     setIsOpen(false);
+    // dailyMode should only be true when fetching to a parameter file (objectId exists)
+    // When fetching directly to graph (no file), use aggregate mode
+    const hasParameterFile = !!objectId && objectId.trim() !== '';
     dataOperationsService.getFromSourceDirect({ 
       objectType, 
       objectId, 
@@ -147,7 +150,7 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
       paramSlot,
       conditionalIndex,
       window: window || undefined, // Pass window if set
-      dailyMode: true // Enable daily mode for time-series storage
+      dailyMode: hasParameterFile // Only enable daily mode when fetching to file
     });
   };
   

@@ -716,6 +716,40 @@ export class UpdateManager {
       { sourceField: 'label', targetField: 'name' },
       { sourceField: 'description', targetField: 'description' },
       { sourceField: 'query', targetField: 'query' },
+      // Connection settings: initialize from graph if present
+      // Probability parameter connection
+      { 
+        sourceField: 'p.connection', 
+        targetField: 'connection',
+        condition: (source) => !!source.p?.connection && source.p?.id
+      },
+      { 
+        sourceField: 'p.connection_string', 
+        targetField: 'connection_string',
+        condition: (source) => !!source.p?.connection_string && source.p?.id
+      },
+      // Cost GBP parameter connection
+      { 
+        sourceField: 'cost_gbp.connection', 
+        targetField: 'connection',
+        condition: (source) => !!source.cost_gbp?.connection && source.cost_gbp?.id
+      },
+      { 
+        sourceField: 'cost_gbp.connection_string', 
+        targetField: 'connection_string',
+        condition: (source) => !!source.cost_gbp?.connection_string && source.cost_gbp?.id
+      },
+      // Cost Time parameter connection
+      { 
+        sourceField: 'cost_time.connection', 
+        targetField: 'connection',
+        condition: (source) => !!source.cost_time?.connection && source.cost_time?.id
+      },
+      { 
+        sourceField: 'cost_time.connection_string', 
+        targetField: 'connection_string',
+        condition: (source) => !!source.cost_time?.connection_string && source.cost_time?.id
+      },
       // Type field: determine from which edge param is populated
       { 
         sourceField: 'p', 
@@ -777,33 +811,105 @@ export class UpdateManager {
     ]);
     
     // Flow B.UPDATE: Graph → File/Parameter (UPDATE metadata)
+    // NOTE: Connection settings always sync from graph to file (file doesn't have override flags)
+    // If graph has overridden connection, PUT will update file to match graph's override
+    // NOTE: query and description respect file-side override flags
     this.addMapping('graph_to_file', 'UPDATE', 'parameter', [
-      { sourceField: 'description', targetField: 'description' },
-      { sourceField: 'query', targetField: 'query' }
+      { 
+        sourceField: 'description', 
+        targetField: 'description',
+        overrideFlag: 'metadata.description_overridden' // Respect file-side override
+      },
+      { 
+        sourceField: 'query', 
+        targetField: 'query',
+        overrideFlag: 'query_overridden' // Respect file-side override
+      },
+      // Connection settings: always sync from graph to file
+      // Probability parameter connection
+      { 
+        sourceField: 'p.connection', 
+        targetField: 'connection',
+        condition: (source) => !!source.p?.connection && source.p?.id
+      },
+      { 
+        sourceField: 'p.connection_string', 
+        targetField: 'connection_string',
+        condition: (source) => !!source.p?.connection_string && source.p?.id
+      },
+      // Cost GBP parameter connection
+      { 
+        sourceField: 'cost_gbp.connection', 
+        targetField: 'connection',
+        condition: (source) => !!source.cost_gbp?.connection && source.cost_gbp?.id
+      },
+      { 
+        sourceField: 'cost_gbp.connection_string', 
+        targetField: 'connection_string',
+        condition: (source) => !!source.cost_gbp?.connection_string && source.cost_gbp?.id
+      },
+      // Cost Time parameter connection
+      { 
+        sourceField: 'cost_time.connection', 
+        targetField: 'connection',
+        condition: (source) => !!source.cost_time?.connection && source.cost_time?.id
+      },
+      { 
+        sourceField: 'cost_time.connection_string', 
+        targetField: 'connection_string',
+        condition: (source) => !!source.cost_time?.connection_string && source.cost_time?.id
+      }
     ]);
     
     // Flow B.APPEND: Graph → File/Parameter (APPEND new value)
     this.addMapping('graph_to_file', 'APPEND', 'parameter', [
       // Probability parameter: edge.p.* → parameter.values[]
-      // Only include fields that are actually set (non-undefined)
-      // Don't copy stale evidence data (n, k) from previous file pulls
+      // Preserve all relevant fields including evidence data if present
+      // NOTE: Do NOT include daily values (n_daily, k_daily, dates) - those are only from external data pulls
       { 
         sourceField: 'p.mean', 
         targetField: 'values[]',
         condition: (source, target) => target.type === 'probability' || target.parameter_type === 'probability',
         transform: (value, source) => {
           const entry: any = { mean: value };
+          
+          // Statistical fields
           if (source.p.stdev !== undefined) entry.stdev = source.p.stdev;
           if (source.p.distribution) entry.distribution = source.p.distribution;
-          // Add timestamp so this entry is recognized as "latest"
-          entry.window_from = new Date().toISOString();
-          // Add provenance for manual edits
-          entry.data_source = {
-            type: 'manual',
-            edited_at: new Date().toISOString()
-            // TODO: Add author from credentials when available
-          };
-          // Don't include n/k/window_to - these are evidence from data pulls, not user edits
+          
+          // Evidence fields (if present - from data pulls)
+          // NOTE: Do NOT include n_daily/k_daily/dates - those are only for external data pulls
+          if (source.p.evidence) {
+            if (source.p.evidence.n !== undefined) entry.n = source.p.evidence.n;
+            if (source.p.evidence.k !== undefined) entry.k = source.p.evidence.k;
+            if (source.p.evidence.window_from) entry.window_from = source.p.evidence.window_from;
+            if (source.p.evidence.window_to) entry.window_to = source.p.evidence.window_to;
+          }
+          
+          // If no evidence window_from, use current time
+          if (!entry.window_from) {
+            entry.window_from = new Date().toISOString();
+          }
+          
+          // Data source: preserve from edge if exists, otherwise mark as manual
+          if (source.p.data_source) {
+            entry.data_source = source.p.data_source;
+          } else if (source.p.evidence?.source) {
+            // If evidence has source info, construct data_source from evidence
+            entry.data_source = {
+              type: source.p.evidence.source,
+              retrieved_at: source.p.evidence.retrieved_at || new Date().toISOString(),
+              full_query: source.p.evidence.full_query,
+              debug_trace: source.p.evidence.debug_trace
+            };
+          } else {
+            // Manual edit - no evidence or data_source
+            entry.data_source = {
+              type: 'manual',
+              edited_at: new Date().toISOString()
+            };
+          }
+          
           return entry;
         }
       },
@@ -814,15 +920,41 @@ export class UpdateManager {
         condition: (source, target) => target.type === 'cost_gbp' || target.parameter_type === 'cost_gbp',
         transform: (value, source) => {
           const entry: any = { mean: value };
+          
+          // Statistical fields
           if (source.cost_gbp.stdev !== undefined) entry.stdev = source.cost_gbp.stdev;
           if (source.cost_gbp.distribution) entry.distribution = source.cost_gbp.distribution;
-          // Add timestamp so this entry is recognized as "latest"
-          entry.window_from = new Date().toISOString();
-          // Add provenance for manual edits
-          entry.data_source = {
-            type: 'manual',
-            edited_at: new Date().toISOString()
-          };
+          
+          // Evidence fields (if present - from data pulls)
+          if (source.cost_gbp.evidence) {
+            if (source.cost_gbp.evidence.n !== undefined) entry.n = source.cost_gbp.evidence.n;
+            if (source.cost_gbp.evidence.k !== undefined) entry.k = source.cost_gbp.evidence.k;
+            if (source.cost_gbp.evidence.window_from) entry.window_from = source.cost_gbp.evidence.window_from;
+            if (source.cost_gbp.evidence.window_to) entry.window_to = source.cost_gbp.evidence.window_to;
+          }
+          
+          // If no evidence window_from, use current time
+          if (!entry.window_from) {
+            entry.window_from = new Date().toISOString();
+          }
+          
+          // Data source: preserve from edge if exists, otherwise mark as manual
+          if (source.cost_gbp.data_source) {
+            entry.data_source = source.cost_gbp.data_source;
+          } else if (source.cost_gbp.evidence?.source) {
+            entry.data_source = {
+              type: source.cost_gbp.evidence.source,
+              retrieved_at: source.cost_gbp.evidence.retrieved_at || new Date().toISOString(),
+              full_query: source.cost_gbp.evidence.full_query,
+              debug_trace: source.cost_gbp.evidence.debug_trace
+            };
+          } else {
+            entry.data_source = {
+              type: 'manual',
+              edited_at: new Date().toISOString()
+            };
+          }
+          
           return entry;
         }
       },
@@ -833,15 +965,41 @@ export class UpdateManager {
         condition: (source, target) => target.type === 'cost_time' || target.parameter_type === 'cost_time',
         transform: (value, source) => {
           const entry: any = { mean: value };
+          
+          // Statistical fields
           if (source.cost_time.stdev !== undefined) entry.stdev = source.cost_time.stdev;
           if (source.cost_time.distribution) entry.distribution = source.cost_time.distribution;
-          // Add timestamp so this entry is recognized as "latest"
-          entry.window_from = new Date().toISOString();
-          // Add provenance for manual edits
-          entry.data_source = {
-            type: 'manual',
-            edited_at: new Date().toISOString()
-          };
+          
+          // Evidence fields (if present - from data pulls)
+          if (source.cost_time.evidence) {
+            if (source.cost_time.evidence.n !== undefined) entry.n = source.cost_time.evidence.n;
+            if (source.cost_time.evidence.k !== undefined) entry.k = source.cost_time.evidence.k;
+            if (source.cost_time.evidence.window_from) entry.window_from = source.cost_time.evidence.window_from;
+            if (source.cost_time.evidence.window_to) entry.window_to = source.cost_time.evidence.window_to;
+          }
+          
+          // If no evidence window_from, use current time
+          if (!entry.window_from) {
+            entry.window_from = new Date().toISOString();
+          }
+          
+          // Data source: preserve from edge if exists, otherwise mark as manual
+          if (source.cost_time.data_source) {
+            entry.data_source = source.cost_time.data_source;
+          } else if (source.cost_time.evidence?.source) {
+            entry.data_source = {
+              type: source.cost_time.evidence.source,
+              retrieved_at: source.cost_time.evidence.retrieved_at || new Date().toISOString(),
+              full_query: source.cost_time.evidence.full_query,
+              debug_trace: source.cost_time.evidence.debug_trace
+            };
+          } else {
+            entry.data_source = {
+              type: 'manual',
+              edited_at: new Date().toISOString()
+            };
+          }
+          
           return entry;
         }
       }
@@ -992,6 +1150,32 @@ export class UpdateManager {
         targetField: 'p.evidence.window_to',
         condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
       },
+      { 
+        sourceField: 'values[latest].data_source', 
+        targetField: 'p.data_source',
+        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+      },
+      // Map data_source fields to evidence if data_source exists
+      { 
+        sourceField: 'values[latest].data_source.retrieved_at', 
+        targetField: 'p.evidence.retrieved_at',
+        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && source.values?.[source.values.length - 1]?.data_source?.retrieved_at
+      },
+      { 
+        sourceField: 'values[latest].data_source.type', 
+        targetField: 'p.evidence.source',
+        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && source.values?.[source.values.length - 1]?.data_source?.type
+      },
+      { 
+        sourceField: 'values[latest].data_source.full_query', 
+        targetField: 'p.evidence.full_query',
+        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && source.values?.[source.values.length - 1]?.data_source?.full_query
+      },
+      { 
+        sourceField: 'values[latest].data_source.debug_trace', 
+        targetField: 'p.evidence.debug_trace',
+        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && source.values?.[source.values.length - 1]?.data_source?.debug_trace
+      },
       
       // Cost GBP parameters → edge.cost_gbp.*
       { 
@@ -1052,13 +1236,33 @@ export class UpdateManager {
         targetField: 'cost_time.evidence.window_to',
         condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
       },
+      { 
+        sourceField: 'values[latest].data_source', 
+        targetField: 'cost_time.data_source',
+        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+      },
+      { 
+        sourceField: 'values[latest].data_source.retrieved_at', 
+        targetField: 'cost_time.evidence.retrieved_at',
+        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && source.values?.[source.values.length - 1]?.data_source?.retrieved_at
+      },
+      { 
+        sourceField: 'values[latest].data_source.type', 
+        targetField: 'cost_time.evidence.source',
+        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && source.values?.[source.values.length - 1]?.data_source?.type
+      },
+      { 
+        sourceField: 'values[latest].data_source.full_query', 
+        targetField: 'cost_time.evidence.full_query',
+        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && source.values?.[source.values.length - 1]?.data_source?.full_query
+      },
+      { 
+        sourceField: 'values[latest].data_source.debug_trace', 
+        targetField: 'cost_time.evidence.debug_trace',
+        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && source.values?.[source.values.length - 1]?.data_source?.debug_trace
+      },
       
       // NOTE: Query string is NOT synced from file→graph
-      // Query is mastered in the graph (derived from topology via MSMDC or manually edited)
-      // It flows graph→file during PUT operations to enable self-contained data retrieval
-      // but does NOT flow file→graph during GET operations (would be context-invalid)
-      
-      // NOTE: Conditional probabilities (edge.conditional_p[]) reuse the same mappings as edge.p
       // The dataOperationsService must:
       // 1. Find the conditional_p[i] element where p.parameter_id matches the paramId
       // 2. Pass conditional_p[i].p (the ProbabilityParam object) as the target to UpdateManager
@@ -1067,6 +1271,47 @@ export class UpdateManager {
       
       // NOTE: We do NOT map parameter.name or parameter.description to edge.label or edge.description
       // Those are edge-level metadata and should be independent of the parameter
+      
+      // Connection settings: sync from file to graph if not overridden
+      // Probability parameter connection
+      { 
+        sourceField: 'connection', 
+        targetField: 'p.connection',
+        overrideFlag: 'p.connection_overridden',
+        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && !!source.connection
+      },
+      { 
+        sourceField: 'connection_string', 
+        targetField: 'p.connection_string',
+        overrideFlag: 'p.connection_overridden',
+        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && !!source.connection_string
+      },
+      // Cost GBP parameter connection
+      { 
+        sourceField: 'connection', 
+        targetField: 'cost_gbp.connection',
+        overrideFlag: 'cost_gbp.connection_overridden',
+        condition: (source) => (source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp') && !!source.connection
+      },
+      { 
+        sourceField: 'connection_string', 
+        targetField: 'cost_gbp.connection_string',
+        overrideFlag: 'cost_gbp.connection_overridden',
+        condition: (source) => (source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp') && !!source.connection_string
+      },
+      // Cost Time parameter connection
+      { 
+        sourceField: 'connection', 
+        targetField: 'cost_time.connection',
+        overrideFlag: 'cost_time.connection_overridden',
+        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && !!source.connection
+      },
+      { 
+        sourceField: 'connection_string', 
+        targetField: 'cost_time.connection_string',
+        overrideFlag: 'cost_time.connection_overridden',
+        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && !!source.connection_string
+      }
     ]);
     
     // Flow H: File/Case → Graph (UPDATE case node)
@@ -1202,15 +1447,16 @@ export class UpdateManager {
         targetField: 'p.mean',
         overrideFlag: 'p.mean_overridden',
         transform: (probability, source) => {
-          // If source provides probability directly, use it
-          if (probability !== undefined) {
-            return probability;
-          }
-          // Otherwise calculate from n/k if both available
+          // Always recalculate from n/k if both are available to ensure consistency
+          // This prevents discrepancies from rounding or stale probability values
           if (source.sample_size > 0 && source.successes !== undefined) {
             // Calculate probability, clamping to [0, 1] in case of data errors
             const calculated = source.successes / source.sample_size;
             return Math.max(0, Math.min(1, calculated));
+          }
+          // Fallback to provided probability if n/k not available
+          if (probability !== undefined) {
+            return probability;
           }
           // No probability data available - don't update mean
           return undefined;
