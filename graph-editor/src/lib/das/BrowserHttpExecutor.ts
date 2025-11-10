@@ -2,10 +2,16 @@ import type { HttpExecutor, HttpRequest, HttpResponse } from './HttpExecutor';
 
 interface BrowserHttpExecutorOptions {
   defaultTimeoutMs?: number;
+  useProxy?: boolean;
 }
 
 export class BrowserHttpExecutor implements HttpExecutor {
-  constructor(private readonly options: BrowserHttpExecutorOptions = {}) {}
+  private readonly useProxy: boolean;
+  
+  constructor(private readonly options: BrowserHttpExecutorOptions = {}) {
+    // Use proxy by default in browser environment
+    this.useProxy = options.useProxy ?? true;
+  }
 
   async execute(request: HttpRequest): Promise<HttpResponse> {
     const controller = new AbortController();
@@ -13,18 +19,43 @@ export class BrowserHttpExecutor implements HttpExecutor {
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      console.log('[BrowserHttpExecutor] About to fetch:', {
-        url: request.url,
-        urlType: typeof request.url,
-        urlLength: request.url?.length,
-        urlCharCodes: request.url?.split('').map(c => c.charCodeAt(0)).join(',')
-      });
-      const response = await fetch(request.url, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-        signal: controller.signal,
-      });
+      let response: Response;
+      
+      if (this.useProxy) {
+        // Send request through our proxy to avoid CORS issues
+        console.log(`[BrowserHttpExecutor] Proxying ${request.method} request to:`, request.url);
+        
+        const proxyResponse = await fetch('/api/das-proxy', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            url: request.url,
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+          }),
+          signal: controller.signal,
+        });
+        
+        if (!proxyResponse.ok) {
+          const errorData = await proxyResponse.json().catch(() => ({}));
+          throw new Error(errorData.error || `Proxy request failed with status ${proxyResponse.status}`);
+        }
+        
+        response = proxyResponse;
+      } else {
+        // Direct request (for local development or when proxy is disabled)
+        console.log(`[BrowserHttpExecutor] Direct ${request.method} request to:`, request.url);
+        response = await fetch(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+          signal: controller.signal,
+        });
+      }
+      
       const rawBody = await response.text();
       const parsedBody = this.parseBody(rawBody, response.headers.get('content-type') ?? undefined);
 
