@@ -150,10 +150,10 @@ connections:
         - name: time_series
           jsonata: |
             (
-              $mode = 'daily' and $day_funnels and $day_funnels.series ?
-                $day_funnels.series ~> $map(function($dayData, $i) {
+              $.mode = 'daily' and $.day_funnels and $.day_funnels.series ?
+                $.day_funnels.series ~> $map(function($dayData, $i) {
                   {
-                    "date": $day_funnels.xValues[$i],
+                    "date": $.day_funnels.xValues[$i],
                     "n": $dayData[$number($dsl.from_step_index)],
                     "k": $dayData[$number($dsl.to_step_index)],
                     "p": $dayData[$number($dsl.to_step_index)] / $dayData[$number($dsl.from_step_index)]

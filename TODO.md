@@ -49,6 +49,7 @@
   - See: Phase 0.3 discussion on flexible data handling
 
 ### Medium Priority
+- Let's add a rename on File menu, nav bar context menu which (a) renames the file (b) reviews registry and updates any ids in any graphs/files to match
 - Polish "Get from Source" UX (success feedback, animations -- apply to graph elements as well as sidebar)
 - docs to cover: MSMDC, connections
 - **FormEditor UI Schemas (Class-Specific Layouts)**

@@ -577,11 +577,13 @@ export function EnhancedSelector({
 
           {/* Lightning Menu - data operations */}
           {(() => {
-            const shouldShow = !disabled && (type === 'parameter' || type === 'case' || type === 'node') && graph && targetInstanceUuid;
-            // Use computed hasFile value (checks file_path or fileRegistry) instead of currentItem?.hasFile
+            // Show LightningMenu for parameter, case, node, and event (events only show file operations, no external connections)
+            const shouldShow = !disabled && (type === 'parameter' || type === 'case' || type === 'node' || type === 'event') && graph && targetInstanceUuid;
+            // Use computed hasFile value (checks file_path or fileRegistry)
+            // Note: fileRegistry.getFile expects format "parameter-{id}" not "parameter-{id}.yaml"
             const computedHasFile = inputValue && (
               allItems.find((item: any) => item.id === inputValue)?.file_path || 
-              fileRegistry.getFile(`${type}-${inputValue}.yaml`) !== null
+              fileRegistry.getFile(`${type}-${inputValue}`) !== null
             );
             console.log('[EnhancedSelector] Lightning Menu conditions:', {
               disabled,
