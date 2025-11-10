@@ -14,6 +14,7 @@ interface ConnectionSelectorProps {
   value: string | undefined;
   onChange: (connectionName: string | undefined) => void;
   label?: string;
+  hideLabel?: boolean; // If true, don't render the label (for inline layouts)
   disabled?: boolean;
 }
 
@@ -21,6 +22,7 @@ export function ConnectionSelector({
   value,
   onChange,
   label = 'Connection',
+  hideLabel = false,
   disabled = false
 }: ConnectionSelectorProps) {
   const [connections, setConnections] = useState<ConnectionDefinition[]>([]);
@@ -49,10 +51,12 @@ export function ConnectionSelector({
   }
 
   return (
-    <div className="connection-selector">
-      <label className="connection-selector-label">{label}</label>
+    <div className={`connection-selector ${hideLabel ? 'connection-selector-inline' : ''}`}>
+      {!hideLabel && label && (
+        <label className="connection-selector-label">{label}</label>
+      )}
       <select
-        className="connection-selector-select"
+        className={`connection-selector-select ${hideLabel ? 'connection-selector-select-inline' : ''}`}
         value={value || ''}
         onChange={(e) => {
           const newValue = e.target.value === '' ? undefined : e.target.value;

@@ -63,9 +63,9 @@ export async function handleProxyRequest(
           return;
         }
         
-        const chunks: Buffer[] = [];
+    const chunks: Buffer[] = [];
         stream.on('data', (chunk: Buffer) => {
-          chunks.push(chunk);
+      chunks.push(chunk);
         });
         stream.on('end', () => {
           resolve(Buffer.concat(chunks).toString('utf8'));

@@ -15,7 +15,7 @@ import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { AutomatableField } from './AutomatableField';
 import { roundTo4DP } from '../utils/rounding';
-import { Folders, TrendingUpDown, ChevronRight } from 'lucide-react';
+import { Folders, TrendingUpDown, ChevronRight, Database } from 'lucide-react';
 
 interface EdgeContextMenuProps {
   x: number;
@@ -50,11 +50,17 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const edge = graph?.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
   
   // Check for connected parameters from the actual edge object
-  const hasProbabilityParam = !!edge?.parameter_id;
+  // Check for file-based connections (parameter_id) OR direct connections (connection field)
+  const hasProbabilityParam = !!edge?.parameter_id || !!edge?.p?.connection;
   const hasConditionalParam = edge?.conditional_p && edge.conditional_p.length > 0;
-  const hasCostGbpParam = !!edge?.cost_gbp_parameter_id;
-  const hasCostTimeParam = !!edge?.cost_time_parameter_id;
+  const hasCostGbpParam = !!edge?.cost_gbp_parameter_id || !!edge?.cost_gbp?.connection;
+  const hasCostTimeParam = !!edge?.cost_time_parameter_id || !!edge?.cost_time?.connection;
   const hasAnyParam = hasProbabilityParam || hasConditionalParam || hasCostGbpParam || hasCostTimeParam;
+  
+  // Check if we have direct connections (without files)
+  const hasProbabilityDirectConnection = !!edge?.p?.connection && !edge?.parameter_id;
+  const hasCostGbpDirectConnection = !!edge?.cost_gbp?.connection && !edge?.cost_gbp_parameter_id;
+  const hasCostTimeDirectConnection = !!edge?.cost_time?.connection && !edge?.cost_time_parameter_id;
   
   // Check if it's a case edge with variants
   const isCaseEdge = edge?.case_id && edge?.case_variant;
@@ -113,6 +119,32 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         setGraph
       });
     }
+    onClose();
+  };
+
+  const handleGetFromSourceDirect = (paramType: 'probability' | 'cost_gbp' | 'cost_time') => {
+    // Map paramType to paramSlot
+    const paramSlot: 'p' | 'cost_gbp' | 'cost_time' = paramType === 'probability' ? 'p' : paramType;
+    
+    // Check if connection exists for this parameter slot
+    const param = paramSlot === 'p' ? edge?.p : edge?.[paramSlot];
+    if (!param?.connection) {
+      console.warn(`[EdgeContextMenu] No connection found for ${paramSlot}`);
+      return;
+    }
+
+    // Call getFromSourceDirect with correct parameters
+    // objectId is undefined because we're using direct connection (not from param file)
+    dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: '', // Empty - using direct connection from edge
+      targetId: edgeId, // Edge UUID
+      graph,
+      setGraph,
+      paramSlot, // 'p' | 'cost_gbp' | 'cost_time'
+      window: undefined, // Use default window
+      dailyMode: true // Enable daily mode for time-series storage
+    });
     onClose();
   };
 
@@ -554,50 +586,80 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  <div
-                    onClick={() => handleGetFromFile('probability')}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Get data from file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <Folders size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <TrendingUpDown size={12} />
+                  {/* Show "Get from Source (direct)" if there's a direct connection */}
+                  {hasProbabilityDirectConnection && (
+                    <div
+                      onClick={() => handleGetFromSourceDirect('probability')}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get from Source (direct)</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <Database size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
                     </div>
-                  </div>
-                  <div
-                    onClick={() => handlePutToFile('probability')}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Put data to file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <TrendingUpDown size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <Folders size={12} />
-                    </div>
-                  </div>
+                  )}
+                  {/* Show file operations if there's a parameter file */}
+                  {edge?.parameter_id && (
+                    <>
+                      <div
+                        onClick={() => handleGetFromFile('probability')}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Get data from file</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                          <Folders size={12} />
+                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                          <TrendingUpDown size={12} />
+                        </div>
+                      </div>
+                      <div
+                        onClick={() => handlePutToFile('probability')}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Put data to file</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                          <TrendingUpDown size={12} />
+                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                          <Folders size={12} />
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -732,50 +794,80 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  <div
-                    onClick={() => handleGetFromFile('cost_gbp')}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Get data from file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <Folders size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <TrendingUpDown size={12} />
+                  {/* Show "Get from Source (direct)" if there's a direct connection */}
+                  {hasCostGbpDirectConnection && (
+                    <div
+                      onClick={() => handleGetFromSourceDirect('cost_gbp')}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get from Source (direct)</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <Database size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
                     </div>
-                  </div>
-                  <div
-                    onClick={() => handlePutToFile('cost_gbp')}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Put data to file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <TrendingUpDown size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <Folders size={12} />
-                    </div>
-                  </div>
+                  )}
+                  {/* Show file operations if there's a parameter file */}
+                  {edge?.cost_gbp_parameter_id && (
+                    <>
+                      <div
+                        onClick={() => handleGetFromFile('cost_gbp')}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Get data from file</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                          <Folders size={12} />
+                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                          <TrendingUpDown size={12} />
+                        </div>
+                      </div>
+                      <div
+                        onClick={() => handlePutToFile('cost_gbp')}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Put data to file</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                          <TrendingUpDown size={12} />
+                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                          <Folders size={12} />
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -821,50 +913,80 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  <div
-                    onClick={() => handleGetFromFile('cost_time')}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Get data from file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <Folders size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <TrendingUpDown size={12} />
+                  {/* Show "Get from Source (direct)" if there's a direct connection */}
+                  {hasCostTimeDirectConnection && (
+                    <div
+                      onClick={() => handleGetFromSourceDirect('cost_time')}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get from Source (direct)</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <Database size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
                     </div>
-                  </div>
-                  <div
-                    onClick={() => handlePutToFile('cost_time')}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Put data to file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <TrendingUpDown size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <Folders size={12} />
-                    </div>
-                  </div>
+                  )}
+                  {/* Show file operations if there's a parameter file */}
+                  {edge?.cost_time_parameter_id && (
+                    <>
+                      <div
+                        onClick={() => handleGetFromFile('cost_time')}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Get data from file</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                          <Folders size={12} />
+                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                          <TrendingUpDown size={12} />
+                        </div>
+                      </div>
+                      <div
+                        onClick={() => handlePutToFile('cost_time')}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Put data to file</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                          <TrendingUpDown size={12} />
+                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                          <Folders size={12} />
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

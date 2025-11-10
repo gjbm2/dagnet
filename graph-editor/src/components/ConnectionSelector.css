@@ -2,6 +2,10 @@
   margin-bottom: 16px;
 }
 
+.connection-selector-inline {
+  margin-bottom: 0;
+}
+
 .connection-selector-label {
   display: block;
   margin-bottom: 8px;
@@ -36,6 +40,12 @@
   outline: none;
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.connection-selector-select-inline {
+  height: 28px; /* Match settings icon button height (16px icon + 6px padding top + 6px padding bottom) */
+  padding: 4px 12px;
+  font-size: 13px;
 }
 
 .connection-selector-error {

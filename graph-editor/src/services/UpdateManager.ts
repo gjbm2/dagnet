@@ -1231,6 +1231,10 @@ export class UpdateManager {
       { 
         sourceField: 'source', 
         targetField: 'p.evidence.source'
+      },
+      { 
+        sourceField: 'data_source', 
+        targetField: 'p.data_source'
       }
     ]);
     
