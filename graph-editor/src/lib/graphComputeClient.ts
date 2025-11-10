@@ -78,6 +78,49 @@ export interface AnalyticsResponse {
   stats: Record<string, any>;
 }
 
+export interface StatsEnhanceRequest {
+  raw: {
+    method: string;
+    n: number;
+    k: number;
+    mean: number;
+    stdev: number;
+    raw_data?: Array<{
+      date: string;
+      n: number;
+      k: number;
+      p: number;
+    }>;
+    window: {
+      start: string;
+      end: string;
+    };
+    days_included: number;
+    days_missing: number;
+  };
+  method: string;
+}
+
+export interface StatsEnhanceResponse {
+  method: string;
+  n: number;
+  k: number;
+  mean: number;
+  stdev: number;
+  confidence_interval?: [number, number] | null;
+  trend?: {
+    direction: 'increasing' | 'decreasing' | 'stable';
+    slope: number;
+    significance: number;
+  } | null;
+  metadata: {
+    raw_method: string;
+    enhancement_method: string;
+    data_points: number;
+  };
+  success?: boolean;
+}
+
 export interface HealthResponse {
   status: string;
   service?: string;
@@ -264,6 +307,48 @@ export class GraphComputeClient {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(`Parameter generation failed: ${error.detail || response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Enhance raw aggregation with statistical methods (MCMC, Bayesian, trend-aware, robust)
+   */
+  async enhanceStats(
+    raw: StatsEnhanceRequest['raw'],
+    method: string
+  ): Promise<StatsEnhanceResponse> {
+    if (this.useMock) {
+      // Mock response
+      return {
+        method,
+        n: raw.n,
+        k: raw.k,
+        mean: raw.mean,
+        stdev: raw.stdev,
+        confidence_interval: null,
+        trend: null,
+        metadata: {
+          raw_method: raw.method,
+          enhancement_method: method,
+          data_points: raw.days_included,
+        },
+      };
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/stats-enhance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        raw,
+        method,
+      } as StatsEnhanceRequest),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(`Stats enhancement failed: ${error.detail || error.error || response.statusText}`);
     }
 
     return response.json();

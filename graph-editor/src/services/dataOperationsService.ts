@@ -183,8 +183,12 @@ class DataOperationsService {
               window
             );
             
-            // Enhance with statistical methods (currently NoOp)
-            const enhanced = statisticalEnhancementService.enhance(aggregation, 'none');
+            // Enhance with statistical methods (inverse-variance weighting by default)
+            // Handle both sync (TS) and async (Python) results
+            const enhancedResult = statisticalEnhancementService.enhance(aggregation, 'inverse-variance');
+            const enhanced = enhancedResult instanceof Promise 
+              ? await enhancedResult 
+              : enhancedResult;
             
             // Create a new aggregated value entry
             const aggregatedValue: ParameterValue = {
@@ -745,19 +749,60 @@ class DataOperationsService {
   
   /**
    * Get data from external source → file → graph (versioned)
-   * STUB for Phase 1
+   * 
+   * Fetches data from external source, appends to file values[], then updates graph from file.
+   * This is the "versioned" pathway: Source → File → Graph
    */
   async getFromSource(options: {
     objectType: 'parameter' | 'case' | 'node';
     objectId: string;
     targetId?: string;
+    graph?: Graph | null;
+    setGraph?: (graph: Graph | null) => void;
+    paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+    conditionalIndex?: number;
+    window?: DateRange;
   }): Promise<void> {
-    toast('Get from Source coming in Phase 2!', { icon: 'ℹ️', duration: 3000 });
-    // TODO Phase 2: Implement external source retrieval
-    // 1. Call external connector (Amplitude, Sheets, etc.)
-    // 2. Append new data to file values[]
-    // 3. Update graph from file
-    // 4. Mark file as dirty
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window } = options;
+    
+    // For now, only parameters support versioned fetching
+    if (objectType !== 'parameter') {
+      toast.error('Versioned fetching only supported for parameters');
+      return;
+    }
+    
+    try {
+      // 1. Fetch from source using getFromSourceDirect with dailyMode=true
+      // This will fetch data and store it in the parameter file
+      await this.getFromSourceDirect({
+        objectType: 'parameter',
+        objectId, // Parameter file ID
+        targetId,
+        graph,
+        setGraph,
+        paramSlot,
+        conditionalIndex,
+        window,
+        dailyMode: true // Always use daily mode for versioned fetching
+      });
+      
+      // 2. Update graph from file (standard file-to-graph flow)
+      if (targetId && graph && setGraph) {
+        await this.getParameterFromFile({
+          paramId: objectId,
+          edgeId: targetId,
+          graph,
+          setGraph,
+          window // Use same window for aggregation
+        });
+      }
+      
+      toast.success('Fetched from source and updated graph from file');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`Error fetching from source: ${message}`);
+      console.error('getFromSource error:', error);
+    }
   }
   
   /**
@@ -1198,19 +1243,35 @@ class DataOperationsService {
   
   /**
    * Open connection settings modal
-   * STUB for Phase 1
+   * Opens File > Connections tab
    */
   async openConnectionSettings(objectType: 'parameter' | 'case', objectId: string): Promise<void> {
-    toast('Connection Settings modal coming in Phase 2!', { icon: '⚙️', duration: 3000 });
-    // TODO Phase 2: Build connection settings modal
-    // - Edit source_type (amplitude, sheets, api, etc.)
-    // - Edit connection_settings JSON blob
-    // - Save to file, mark dirty
+    // Open connections file using fileOperationsService
+    const { fileOperationsService } = await import('./fileOperationsService');
+    const connectionsItem = {
+      id: 'connections',
+      type: 'connections' as const,
+      name: 'Connections',
+      path: 'connections/connections.yaml'
+    };
+    
+    await fileOperationsService.openFile(connectionsItem, {
+      viewMode: 'interactive',
+      switchIfExists: true
+    });
   }
   
   /**
    * Open sync status modal
-   * STUB for Phase 1
+   * 
+   * Should show comparison:
+   * - Current value in graph (with override status)
+   * - Current value in file (latest values[] entry)
+   * - Last retrieved from source (evidence fields: n, k, window_from, window_to)
+   * - Sync/conflict indicators (overridden fields, missing data, etc.)
+   * - Query signature consistency (if query changed since last fetch)
+   * 
+   * STUB for Phase 1 - shows toast notification
    */
   async openSyncStatus(objectType: 'parameter' | 'case' | 'node', objectId: string): Promise<void> {
     toast('Sync Status modal coming in Phase 2!', { icon: '📊', duration: 3000 });

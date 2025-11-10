@@ -253,7 +253,8 @@ export function EnhancedSelector({
         let left = rect.left;
         
         // Ensure dropdown stays within viewport horizontally
-        const viewportWidth = window.innerWidth;
+        // Use globalThis to avoid shadowing the window prop from useGraphStore
+        const viewportWidth = globalThis.innerWidth;
         if (left + dropdownWidth > viewportWidth - 20) {
           left = viewportWidth - dropdownWidth - 20; // 20px margin from right edge
         }
@@ -262,7 +263,7 @@ export function EnhancedSelector({
         }
         
         // Ensure dropdown stays within viewport vertically
-        const viewportHeight = window.innerHeight;
+        const viewportHeight = globalThis.innerHeight;
         if (top + dropdownHeight > viewportHeight - 20) {
           // Show above input if there's not enough space below
           if (rect.top - dropdownHeight - 4 > 20) {
@@ -280,11 +281,11 @@ export function EnhancedSelector({
       // Update position on scroll
       const scrollContainer = inputRef.current.closest('.properties-panel, .dock-panel');
       scrollContainer?.addEventListener('scroll', updatePosition);
-      window.addEventListener('scroll', updatePosition, true); // Use capture to catch all scroll events
+      globalThis.addEventListener('scroll', updatePosition, true); // Use capture to catch all scroll events
       
       return () => {
         scrollContainer?.removeEventListener('scroll', updatePosition);
-        window.removeEventListener('scroll', updatePosition, true);
+        globalThis.removeEventListener('scroll', updatePosition, true);
       };
     }
   }, [showSuggestions]);
@@ -577,6 +578,11 @@ export function EnhancedSelector({
           {/* Lightning Menu - data operations */}
           {(() => {
             const shouldShow = !disabled && (type === 'parameter' || type === 'case' || type === 'node') && graph && targetInstanceUuid;
+            // Use computed hasFile value (checks file_path or fileRegistry) instead of currentItem?.hasFile
+            const computedHasFile = inputValue && (
+              allItems.find((item: any) => item.id === inputValue)?.file_path || 
+              fileRegistry.getFile(`${type}-${inputValue}.yaml`) !== null
+            );
             console.log('[EnhancedSelector] Lightning Menu conditions:', {
               disabled,
               inputValue,
@@ -584,13 +590,14 @@ export function EnhancedSelector({
               hasGraph: !!graph,
               hasTargetId: !!targetInstanceUuid,
               shouldShow,
-              hasFile: !!currentItem?.hasFile
+              hasFile: !!computedHasFile,
+              currentItemHasFile: !!currentItem?.hasFile
             });
             return shouldShow ? (
             <LightningMenu
               objectType={type}
                 objectId={inputValue || ''}
-              hasFile={!!currentItem?.hasFile}
+              hasFile={!!computedHasFile}
               targetId={targetInstanceUuid}
               graph={graph}
               setGraph={setGraph}
