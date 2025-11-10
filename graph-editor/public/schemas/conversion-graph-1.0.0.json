@@ -35,6 +35,11 @@
         "label_overridden": { "type": "boolean", "default": false, "description": "If true, label was manually edited and should not be auto-updated" },
         "description": { "type": "string" },
         "description_overridden": { "type": "boolean", "default": false, "description": "If true, description was manually edited and should not be auto-updated" },
+        "event_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]+$",
+          "description": "Direct event ID for DAS queries (allows underscore and hyphen for production event names)"
+        },
         "event": {
           "type": "object",
           "description": "Event reference for this node (optional)",
