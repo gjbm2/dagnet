@@ -161,11 +161,11 @@ connections:
                 }) : []
             )
         - name: p_mean
-          jsonata: "to_count / from_count"
+          jsonata: "$number(from_count) > 0 ? $number(to_count) / $number(from_count) : 0"
         - name: n
-          jsonata: "from_count"
+          jsonata: "$number(from_count)"
         - name: k
-          jsonata: "to_count"
+          jsonata: "$number(to_count)"
       upsert:
         mode: replace
         writes:

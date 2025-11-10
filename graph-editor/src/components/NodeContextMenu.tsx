@@ -8,7 +8,8 @@ import React, { useState } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
-import { Folders, TrendingUpDown, ChevronRight, Share2 } from 'lucide-react';
+import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap } from 'lucide-react';
+import { fileRegistry } from '../contexts/TabContext';
 import toast from 'react-hot-toast';
 
 interface NodeContextMenuProps {
@@ -56,6 +57,13 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   const isCaseNode = !!nodeData?.case;
   const hasCaseFile = !!nodeData?.case?.id; // case.id is the reference to the case file
   
+  // Check if case file has connection (for "Get from Source")
+  const hasCaseConnection = hasCaseFile && (() => {
+    const file = fileRegistry.getFile(`case-${nodeData?.case?.id}`);
+    return !!file?.data?.connection;
+  })();
+  const hasCaseDirectConnection = !!nodeData?.case?.connection && !hasCaseFile;
+  
   const hasAnyFile = hasNodeFile || hasCaseFile;
 
   const handleGetNodeFromFile = () => {
@@ -101,6 +109,36 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
         setGraph
       });
     }
+    onClose();
+  };
+
+  const handleGetCaseFromSourceDirect = () => {
+    if (!nodeData?.case?.connection && !hasCaseConnection) {
+      toast.error('No connection configured for case');
+      return;
+    }
+    
+    // For cases, getFromSourceDirect is not yet fully implemented
+    // Show a message for now
+    toast('Case "Get from Source (direct)" coming soon!', { icon: 'ℹ️', duration: 3000 });
+    onClose();
+  };
+
+  const handleGetCaseFromSourceVersioned = () => {
+    if (!nodeData?.case?.id) {
+      toast.error('No case file connected');
+      return;
+    }
+    
+    // Call getFromSource (versioned) - fetches to file then updates graph
+    dataOperationsService.getFromSource({
+      objectType: 'case',
+      objectId: nodeData.case.id,
+      targetId: nodeId,
+      graph,
+      setGraph,
+      window: undefined
+    });
     onClose();
   };
 
@@ -333,51 +371,108 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                     marginLeft: '4px',
                     whiteSpace: 'nowrap'
                   }}
-                >
-                  <div
-                    onClick={handleGetCaseFromFile}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                   >
-                    <span>Get data from file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <Folders size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <TrendingUpDown size={12} />
+                  {/* Show "Get from Source (direct)" if there's ANY connection (direct OR file) */}
+                  {(hasCaseConnection || hasCaseDirectConnection) && (
+                    <div
+                      onClick={handleGetCaseFromSourceDirect}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get from Source (direct)</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <Database size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
                     </div>
-                  </div>
-                  <div
-                    onClick={handlePutCaseToFile}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Put data to file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <TrendingUpDown size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <Folders size={12} />
+                  )}
+                  {/* Show "Get from Source" (versioned) if there's a case file with connection */}
+                  {hasCaseConnection && (
+                    <div
+                      onClick={handleGetCaseFromSourceVersioned}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get from Source</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <DatabaseZap size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <Folders size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>+</span>
+                        <TrendingUpDown size={12} />
+                      </div>
                     </div>
-                  </div>
+                  )}
+                  {/* Show file operations if there's a case file */}
+                  {hasCaseFile && (
+                    <>
+                      <div
+                        onClick={handleGetCaseFromFile}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Get data from file</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                          <Folders size={12} />
+                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                          <TrendingUpDown size={12} />
+                        </div>
+                      </div>
+                      <div
+                        onClick={handlePutCaseToFile}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Put data to file</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                          <TrendingUpDown size={12} />
+                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                          <Folders size={12} />
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

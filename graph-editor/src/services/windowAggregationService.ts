@@ -106,7 +106,7 @@ export class WindowAggregationService {
    * 
    * @param timeSeries Array of daily data points
    * @param window Date range to aggregate
-   * @returns Aggregated statistics
+   * @returns Aggregated statistics (naive pooling - sum n and k)
    */
   aggregateWindow(
     timeSeries: TimeSeriesPoint[],
@@ -138,7 +138,7 @@ export class WindowAggregationService {
 
     const daysMissing = daysInWindow - filtered.length;
 
-    // Aggregate: sum n and k
+    // Naive aggregation: sum n and k
     const totalN = filtered.reduce((sum, point) => sum + point.n, 0);
     const totalK = filtered.reduce((sum, point) => sum + point.k, 0);
 

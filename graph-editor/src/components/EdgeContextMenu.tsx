@@ -15,7 +15,8 @@ import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { AutomatableField } from './AutomatableField';
 import { roundTo4DP } from '../utils/rounding';
-import { Folders, TrendingUpDown, ChevronRight, Database } from 'lucide-react';
+import { Folders, TrendingUpDown, ChevronRight, Database, DatabaseZap } from 'lucide-react';
+import { fileRegistry } from '../contexts/TabContext';
 
 interface EdgeContextMenuProps {
   x: number;
@@ -57,10 +58,42 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const hasCostTimeParam = !!edge?.cost_time_parameter_id || !!edge?.cost_time?.connection;
   const hasAnyParam = hasProbabilityParam || hasConditionalParam || hasCostGbpParam || hasCostTimeParam;
   
-  // Check if we have direct connections (without files)
+  // Check if we have ANY connection (direct OR file) - for "Get from Source (direct)"
+  // This matches LightningMenu behavior: always show direct option if any connection exists
+  const hasProbabilityConnection = !!edge?.p?.connection || (() => {
+    if (!edge?.parameter_id) return false;
+    const file = fileRegistry.getFile(`parameter-${edge.parameter_id}`);
+    return !!file?.data?.connection;
+  })();
+  const hasCostGbpConnection = !!edge?.cost_gbp?.connection || (() => {
+    if (!edge?.cost_gbp_parameter_id) return false;
+    const file = fileRegistry.getFile(`parameter-${edge.cost_gbp_parameter_id}`);
+    return !!file?.data?.connection;
+  })();
+  const hasCostTimeConnection = !!edge?.cost_time?.connection || (() => {
+    if (!edge?.cost_time_parameter_id) return false;
+    const file = fileRegistry.getFile(`parameter-${edge.cost_time_parameter_id}`);
+    return !!file?.data?.connection;
+  })();
+  
+  // Check if we have direct connections (without files) - for determining which handler to use
   const hasProbabilityDirectConnection = !!edge?.p?.connection && !edge?.parameter_id;
   const hasCostGbpDirectConnection = !!edge?.cost_gbp?.connection && !edge?.cost_gbp_parameter_id;
   const hasCostTimeDirectConnection = !!edge?.cost_time?.connection && !edge?.cost_time_parameter_id;
+  
+  // Check if parameter files have connections (for versioned "Get from Source")
+  const hasProbabilityFileConnection = !!edge?.parameter_id && (() => {
+    const file = fileRegistry.getFile(`parameter-${edge.parameter_id}`);
+    return !!file?.data?.connection;
+  })();
+  const hasCostGbpFileConnection = !!edge?.cost_gbp_parameter_id && (() => {
+    const file = fileRegistry.getFile(`parameter-${edge.cost_gbp_parameter_id}`);
+    return !!file?.data?.connection;
+  })();
+  const hasCostTimeFileConnection = !!edge?.cost_time_parameter_id && (() => {
+    const file = fileRegistry.getFile(`parameter-${edge.cost_time_parameter_id}`);
+    return !!file?.data?.connection;
+  })();
   
   // Check if it's a case edge with variants
   const isCaseEdge = edge?.case_id && edge?.case_variant;
@@ -126,24 +159,65 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     // Map paramType to paramSlot
     const paramSlot: 'p' | 'cost_gbp' | 'cost_time' = paramType === 'probability' ? 'p' : paramType;
     
-    // Check if connection exists for this parameter slot
+    // Check if connection exists on edge OR in file
     const param = paramSlot === 'p' ? edge?.p : edge?.[paramSlot];
-    if (!param?.connection) {
-      console.warn(`[EdgeContextMenu] No connection found for ${paramSlot}`);
+    let paramId: string | undefined;
+    if (paramType === 'probability') paramId = edge?.parameter_id;
+    if (paramType === 'cost_gbp') paramId = edge?.cost_gbp_parameter_id;
+    if (paramType === 'cost_time') paramId = edge?.cost_time_parameter_id;
+    
+    // Check for connection on edge OR in file
+    const hasEdgeConnection = !!param?.connection;
+    const hasFileConnection = !!paramId && (() => {
+      const file = fileRegistry.getFile(`parameter-${paramId}`);
+      return !!file?.data?.connection;
+    })();
+    
+    if (!hasEdgeConnection && !hasFileConnection) {
+      console.warn(`[EdgeContextMenu] No connection found for ${paramSlot} (checked edge and file)`);
       return;
     }
 
-    // Call getFromSourceDirect with correct parameters
-    // objectId is undefined because we're using direct connection (not from param file)
+    // Call getFromSourceDirect
+    // If connection is on edge, use empty objectId (direct connection)
+    // If connection is in file, use paramId (will load connection from file)
     dataOperationsService.getFromSourceDirect({
       objectType: 'parameter',
-      objectId: '', // Empty - using direct connection from edge
+      objectId: hasEdgeConnection ? '' : paramId || '', // Empty if direct, paramId if from file
       targetId: edgeId, // Edge UUID
       graph,
       setGraph,
       paramSlot, // 'p' | 'cost_gbp' | 'cost_time'
       window: undefined, // Use default window
-      dailyMode: true // Enable daily mode for time-series storage
+      dailyMode: false // Direct to graph - use aggregate mode, not daily
+    });
+    onClose();
+  };
+
+  const handleGetFromSourceVersioned = (paramType: 'probability' | 'cost_gbp' | 'cost_time') => {
+    // Get parameter ID from edge
+    let paramId: string | undefined;
+    if (paramType === 'probability') paramId = edge?.parameter_id;
+    if (paramType === 'cost_gbp') paramId = edge?.cost_gbp_parameter_id;
+    if (paramType === 'cost_time') paramId = edge?.cost_time_parameter_id;
+
+    if (!paramId) {
+      console.warn(`[EdgeContextMenu] No parameter file ID found for ${paramType}`);
+      return;
+    }
+
+    // Map paramType to paramSlot
+    const paramSlot: 'p' | 'cost_gbp' | 'cost_time' = paramType === 'probability' ? 'p' : paramType;
+
+    // Call getFromSource (versioned) - fetches to file then updates graph
+    dataOperationsService.getFromSource({
+      objectType: 'parameter',
+      objectId: paramId, // Parameter file ID
+      targetId: edgeId, // Edge UUID
+      graph,
+      setGraph,
+      paramSlot, // 'p' | 'cost_gbp' | 'cost_time'
+      window: undefined // Use default window
     });
     onClose();
   };
@@ -586,8 +660,9 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  {/* Show "Get from Source (direct)" if there's a direct connection */}
-                  {hasProbabilityDirectConnection && (
+                  {/* Show "Get from Source (direct)" if there's ANY connection (direct OR file) */}
+                  {/* Matches LightningMenu: always show direct option if any connection exists */}
+                  {hasProbabilityConnection && (
                     <div
                       onClick={() => handleGetFromSourceDirect('probability')}
                       style={{
@@ -607,6 +682,33 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Database size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
+                    </div>
+                  )}
+                  {/* Show "Get from Source" (versioned) if there's a parameter file with connection */}
+                  {hasProbabilityFileConnection && (
+                    <div
+                      onClick={() => handleGetFromSourceVersioned('probability')}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get from Source</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <DatabaseZap size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <Folders size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>+</span>
                         <TrendingUpDown size={12} />
                       </div>
                     </div>
@@ -794,8 +896,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  {/* Show "Get from Source (direct)" if there's a direct connection */}
-                  {hasCostGbpDirectConnection && (
+                  {/* Show "Get from Source (direct)" if there's ANY connection (direct OR file) */}
+                  {hasCostGbpConnection && (
                     <div
                       onClick={() => handleGetFromSourceDirect('cost_gbp')}
                       style={{
@@ -815,6 +917,33 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Database size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
+                    </div>
+                  )}
+                  {/* Show "Get from Source" (versioned) if there's a parameter file with connection */}
+                  {hasCostGbpFileConnection && (
+                    <div
+                      onClick={() => handleGetFromSourceVersioned('cost_gbp')}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get from Source</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <DatabaseZap size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <Folders size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>+</span>
                         <TrendingUpDown size={12} />
                       </div>
                     </div>
@@ -913,8 +1042,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  {/* Show "Get from Source (direct)" if there's a direct connection */}
-                  {hasCostTimeDirectConnection && (
+                  {/* Show "Get from Source (direct)" if there's ANY connection (direct OR file) */}
+                  {hasCostTimeConnection && (
                     <div
                       onClick={() => handleGetFromSourceDirect('cost_time')}
                       style={{
@@ -934,6 +1063,33 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Database size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
+                    </div>
+                  )}
+                  {/* Show "Get from Source" (versioned) if there's a parameter file with connection */}
+                  {hasCostTimeFileConnection && (
+                    <div
+                      onClick={() => handleGetFromSourceVersioned('cost_time')}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get from Source</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <DatabaseZap size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <Folders size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>+</span>
                         <TrendingUpDown size={12} />
                       </div>
                     </div>
