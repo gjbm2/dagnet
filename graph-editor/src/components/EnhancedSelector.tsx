@@ -49,6 +49,9 @@ interface EnhancedSelectorProps {
   onClear?: () => void;
   /** UUID of the graph node/edge instance being edited (for auto-get operations) */
   targetInstanceUuid?: string;
+  /** For direct parameter references without param file */
+  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  conditionalIndex?: number;
 }
 
 /**
@@ -81,7 +84,9 @@ export function EnhancedSelector({
   onOpenItem,
   onAfterCreate,
   onClear,
-  targetInstanceUuid
+  targetInstanceUuid,
+  paramSlot,
+  conditionalIndex
 }: EnhancedSelectorProps) {
   console.log(`[${new Date().toISOString()}] [EnhancedSelector] RENDER (type=${type}, value=${value})`);
   const { operations: navOps } = useNavigatorContext();
@@ -570,16 +575,30 @@ export function EnhancedSelector({
           )}
 
           {/* Lightning Menu - data operations */}
-          {!disabled && inputValue && isConnected && (type === 'parameter' || type === 'case' || type === 'node') && graph && (
-            <LightningMenu
-              objectType={type}
-              objectId={inputValue}
-              hasFile={!!currentItem?.hasFile}
-              targetId={targetInstanceUuid}
-              graph={graph}
-              setGraph={setGraph}
-            />
-          )}
+          {(() => {
+            const shouldShow = !disabled && (type === 'parameter' || type === 'case' || type === 'node') && graph && targetInstanceUuid;
+            console.log('[EnhancedSelector] Lightning Menu conditions:', {
+              disabled,
+              inputValue,
+              type,
+              hasGraph: !!graph,
+              hasTargetId: !!targetInstanceUuid,
+              shouldShow,
+              hasFile: !!currentItem?.hasFile
+            });
+            return shouldShow ? (
+              <LightningMenu
+                objectType={type}
+                objectId={inputValue || ''}
+                hasFile={!!currentItem?.hasFile}
+                targetId={targetInstanceUuid}
+                graph={graph}
+                setGraph={setGraph}
+                paramSlot={paramSlot}
+                conditionalIndex={conditionalIndex}
+              />
+            ) : null;
+          })()}
         </div>
       </div>
 

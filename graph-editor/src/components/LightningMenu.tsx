@@ -30,6 +30,9 @@ interface LightningMenuProps {
   targetId?: string; // graph element ID (edge, node)
   graph: any; // Tab-specific graph
   setGraph: (graph: any) => void; // Tab-specific graph setter
+  // For direct parameter references (no param file)
+  paramSlot?: 'p' | 'cost_gbp' | 'cost_time'; // Which parameter on edge
+  conditionalIndex?: number; // Which conditional_p in array
 }
 
 export const LightningMenu: React.FC<LightningMenuProps> = ({
@@ -38,7 +41,9 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   hasFile,
   targetId,
   graph,
-  setGraph
+  setGraph,
+  paramSlot,
+  conditionalIndex
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
@@ -131,7 +136,15 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   
   const handleGetFromSourceDirect = () => {
     setIsOpen(false);
-    dataOperationsService.getFromSourceDirect({ objectType, objectId, targetId, graph, setGraph });
+    dataOperationsService.getFromSourceDirect({ 
+      objectType, 
+      objectId, 
+      targetId, 
+      graph, 
+      setGraph,
+      paramSlot,
+      conditionalIndex 
+    });
   };
   
   const handleConnectionSettings = () => {

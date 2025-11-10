@@ -84,6 +84,7 @@ export function ParameterSection({
         parameterType={paramSlot === 'p' ? 'probability' : paramSlot}
         value={param?.id || ''}
         targetInstanceUuid={objectId}
+        paramSlot={paramSlot}
         onChange={(newParamId) => {
           if (!newParamId) {
             onUpdate({ id: undefined });
