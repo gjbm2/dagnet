@@ -1,10 +1,28 @@
 # DagNet TODO
 
 ### High Priority
-- auto-reroiute still fucked
-- CTRL+p-sliding is broken again
+- **P-Slider Auto-Balance NOT WORKING**
+  - STATUS: Sibling edges don't auto-adjust when dragging probability slider
+  - Issue: `handleEdgeProbSlide` in PropertiesPanel.tsx (line ~650-700) should auto-adjust sibling probabilities
+  - Sibling finding logic exists and works for rebalance button
+  - But slider onChange doesn't trigger sibling updates
+  - Related: Rebalance indicator now works (fixed: added `isEdgeProbabilityUnbalanced` memo, line ~586-602)
+  - Next: Wire up slider onChange to call same sibling adjustment logic as rebalance button uses
+  
+- **Auto-Reroute Node Position Revert - STILL BROKEN**
+  - PROBLEM: When moving a node and triggering auto-reroute, node position reverts to prior state
+  - Log evidence: tmp.log lines 265-411 show node drag stop → force reroute → full rebuild → positions revert
+  - ATTEMPTED FIX (FAILED): Added node position preservation in performAutoReroute (GraphCanvas.tsx line ~1039-1047)
+    - Tried: Update nextGraph.nodes[].layout.{x,y} from ReactFlow positions before setGraph()
+    - Theory: cloned graph had old positions, triggered full rebuild pulling old positions back
+    - Result: DID NOT WORK - positions still revert
+  - ROOT ISSUE: Line 411 in log shows "Slow path: Topology changed, doing full rebuild" even though nothing changed
+    - Edge count same, node count same, edge IDs same
+    - But still triggers full rebuild at GraphCanvas.tsx ~line 1558
+    - Full rebuild pulls positions from graph store which has old positions
+  - NEXT: Need to either (a) prevent full rebuild when only handles change, OR (b) ensure ReactFlow positions are authoritative during rebuild
+
 - global/local weights whacked (why???)
-- nodes not setting on auto-re-route
 - fix tools panel view options (Again)
 - Amplitude, Google sheets pull through params
 - Context support
