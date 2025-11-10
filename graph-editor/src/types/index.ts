@@ -112,6 +112,8 @@ export interface TabState {
     targetPanel?: string;
     // Node visibility state (per-tab, not per-file)
     hiddenNodes?: Set<string>; // Set of node IDs that are hidden
+    // Window selector state (per-file, shared across tabs - stored in first tab's editorState)
+    window?: { start: string; end: string } | null;
     // NEW: Sidebar state (Phase 1 - Icon Bar)
     sidebarState?: {
       mode: 'minimized' | 'maximized';
@@ -324,6 +326,24 @@ export type NodeType = 'normal' | 'case';
 export type CaseStatus = 'active' | 'paused' | 'completed';
 export type OverflowPolicy = 'error' | 'normalize' | 'cap';
 export type FreeEdgePolicy = 'complement' | 'uniform' | 'weighted';
+
+/**
+ * Time-series data point (daily breakdown)
+ */
+export interface TimeSeriesPoint {
+  date: string; // YYYY-MM-DD
+  n: number;
+  k: number;
+  p: number;
+}
+
+/**
+ * Date range for window aggregation
+ */
+export interface DateRange {
+  start: string; // YYYY-MM-DD or ISO 8601
+  end: string; // YYYY-MM-DD or ISO 8601
+}
 
 export interface Evidence {
   n?: number; // Sample size (total trials)

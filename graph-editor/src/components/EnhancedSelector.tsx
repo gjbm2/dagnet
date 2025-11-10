@@ -92,7 +92,7 @@ export function EnhancedSelector({
   const { operations: navOps } = useNavigatorContext();
   const { tabs, operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
-  const { graph, setGraph, setAutoUpdating } = useGraphStore();
+  const { graph, setGraph, setAutoUpdating, window } = useGraphStore();
   
   const [inputValue, setInputValue] = useState(value);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -596,6 +596,7 @@ export function EnhancedSelector({
               setGraph={setGraph}
                 paramSlot={paramSlot}
                 conditionalIndex={conditionalIndex}
+              window={window}
             />
             ) : null;
           })()}

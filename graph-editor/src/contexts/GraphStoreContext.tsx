@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useRef, useEffect } from 'react';
 import { create, StoreApi, UseBoundStore } from 'zustand';
 import type { GraphData } from '../types';
+import { useTabContext } from './TabContext';
+import { db } from '../db/appDatabase';
 
 /**
  * Graph Store Type
@@ -13,6 +15,10 @@ export interface GraphStore {
   // Auto-update flag (for animation suppression)
   isAutoUpdating: boolean;
   setAutoUpdating: (updating: boolean) => void;
+  
+  // Window selector state (for data fetching)
+  window: { start: string; end: string } | null;
+  setWindow: (window: { start: string; end: string } | null) => void;
   
   // History
   history: GraphData[];
@@ -44,6 +50,14 @@ export function createGraphStore(): GraphStoreHook {
     isAutoUpdating: false,
     setAutoUpdating: (updating: boolean) => {
       set({ isAutoUpdating: updating });
+    },
+    
+    // Window selector state
+    window: null,
+    setWindow: (window: { start: string; end: string } | null) => {
+      set({ window });
+      // Persist to localStorage (keyed by fileId, which is available via closure in GraphStoreProvider)
+      // Note: We'll save this in the provider effect since fileId isn't available here
     },
     
     // History management
@@ -181,19 +195,82 @@ export function GraphStoreProvider({
   children: React.ReactNode;
   fileId: string;
 }) {
+  const { tabs, operations: tabOps } = useTabContext();
+  
   // Get or create store for this file
   const store = React.useMemo(() => {
     if (!storeRegistry.has(fileId)) {
       console.log(`GraphStoreProvider: Creating new store for file ${fileId}`);
-      storeRegistry.set(fileId, createGraphStore());
+      const newStore = createGraphStore();
+      storeRegistry.set(fileId, newStore);
     } else {
       console.log(`GraphStoreProvider: Reusing existing store for file ${fileId}`);
     }
     return storeRegistry.get(fileId)!;
   }, [fileId]);
   
+  // Load persisted window state from any tab's editorState (IndexedDB)
+  useEffect(() => {
+    const loadWindowFromTabs = async () => {
+      // Find any tab for this fileId
+      const fileTabs = tabs.filter(t => t.fileId === fileId);
+      if (fileTabs.length > 0) {
+        const firstTab = fileTabs[0];
+        const savedWindow = firstTab.editorState?.window;
+        if (savedWindow !== undefined) {
+          store.setState({ window: savedWindow });
+          console.log(`GraphStoreProvider: Loaded persisted window for ${fileId} from tab ${firstTab.id}:`, savedWindow);
+        }
+      } else {
+        // No tabs yet - try loading from IndexedDB directly
+        try {
+          const dbTabs = await db.getTabsForFile(fileId);
+          if (dbTabs.length > 0) {
+            const savedWindow = dbTabs[0].editorState?.window;
+            if (savedWindow !== undefined) {
+              store.setState({ window: savedWindow });
+              console.log(`GraphStoreProvider: Loaded persisted window for ${fileId} from IndexedDB:`, savedWindow);
+            }
+          }
+        } catch (e) {
+          console.warn(`GraphStoreProvider: Failed to load window from IndexedDB for ${fileId}:`, e);
+        }
+      }
+    };
+    
+    loadWindowFromTabs();
+  }, [fileId, tabs, store]);
+  
   // Track active instances of this file
   const instanceCountRef = useRef(0);
+  
+  // Subscribe to window changes and persist to all tabs' editorState (IndexedDB)
+  useEffect(() => {
+    let prevWindow: { start: string; end: string } | null = null;
+    
+    const unsubscribe = store.subscribe(async (state) => {
+      const currentWindow = state.window;
+      // Only persist if window actually changed
+      if (currentWindow !== prevWindow) {
+        prevWindow = currentWindow;
+        
+        // Update all tabs for this fileId
+        const fileTabs = tabs.filter(t => t.fileId === fileId);
+        if (fileTabs.length > 0) {
+          console.log(`GraphStoreProvider: Persisting window for ${fileId} to ${fileTabs.length} tabs:`, currentWindow);
+          await Promise.all(
+            fileTabs.map(tab => 
+              tabOps.updateTabState(tab.id, { window: currentWindow })
+            )
+          );
+        }
+      }
+    });
+    
+    return () => {
+      unsubscribe();
+    };
+  }, [store, fileId, tabs, tabOps]);
   
   useEffect(() => {
     instanceCountRef.current++;

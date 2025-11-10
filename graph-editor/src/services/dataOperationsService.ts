@@ -30,7 +30,10 @@
 import toast from 'react-hot-toast';
 import { fileRegistry } from '../contexts/TabContext';
 import { UpdateManager } from './UpdateManager';
-import type { Graph } from '../types';
+import type { Graph, DateRange } from '../types';
+import { windowAggregationService, parameterToTimeSeries } from './windowAggregationService';
+import { statisticalEnhancementService } from './statisticalEnhancementService';
+import type { ParameterValue } from './paramRegistryService';
 
 // Shared UpdateManager instance
 const updateManager = new UpdateManager();
@@ -101,6 +104,9 @@ class DataOperationsService {
    * 
    * Reads parameter file, uses UpdateManager to transform data,
    * applies changes to graph edge, respects override flags.
+   * 
+   * If window is provided and parameter has daily data (n_daily/k_daily),
+   * aggregates the daily data for the specified window.
    */
   async getParameterFromFile(options: {
     paramId: string;
@@ -108,8 +114,9 @@ class DataOperationsService {
     graph: Graph | null;
     setGraph: (graph: Graph | null) => void;
     setAutoUpdating?: (updating: boolean) => void;
+    window?: DateRange; // Optional: if provided, aggregate daily data for this window
   }): Promise<void> {
-    const { paramId, edgeId, graph, setGraph, setAutoUpdating } = options;
+    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window } = options;
     
     // Set auto-updating flag to enable animations
     if (setAutoUpdating) {
@@ -146,12 +153,88 @@ class DataOperationsService {
       
       console.log('[DataOperationsService] TARGET EDGE AT START:', {
         'edge.uuid': targetEdge.uuid,
-        'edge.p': JSON.stringify(targetEdge.p)
+        'edge.p': JSON.stringify(targetEdge.p),
+        'window': window
       });
+      
+      // If window is provided, aggregate daily data from parameter file
+      let aggregatedData = paramFile.data;
+      if (window && paramFile.data?.values) {
+        // Find the latest value entry with daily data
+        const valuesWithDaily = (paramFile.data.values as ParameterValue[])
+          .filter(v => v.n_daily && v.k_daily && v.dates)
+          .sort((a, b) => {
+            // Sort by window_to descending (most recent first)
+            const aDate = a.window_to ? new Date(a.window_to).getTime() : 0;
+            const bDate = b.window_to ? new Date(b.window_to).getTime() : 0;
+            return bDate - aDate;
+          });
+        
+        if (valuesWithDaily.length > 0) {
+          // Use the most recent value entry with daily data
+          const latestValue = valuesWithDaily[0];
+          
+          try {
+            // Aggregate the window
+            const aggregation = windowAggregationService.aggregateFromParameter(
+              latestValue.n_daily,
+              latestValue.k_daily,
+              latestValue.dates,
+              window
+            );
+            
+            // Enhance with statistical methods (currently NoOp)
+            const enhanced = statisticalEnhancementService.enhance(aggregation, 'none');
+            
+            // Create a new aggregated value entry
+            const aggregatedValue: ParameterValue = {
+              mean: enhanced.mean,
+              stdev: enhanced.stdev,
+              n: enhanced.n,
+              k: enhanced.k,
+              window_from: window.start,
+              window_to: window.end,
+              data_source: {
+                type: latestValue.data_source?.type || 'file',
+                retrieved_at: new Date().toISOString(),
+                query: latestValue.data_source?.query,
+                full_query: latestValue.data_source?.full_query,
+              },
+            };
+            
+            // Create a modified parameter file data with aggregated value
+            aggregatedData = {
+              ...paramFile.data,
+              values: [aggregatedValue], // Replace with single aggregated value
+            };
+            
+            console.log('[DataOperationsService] Window aggregation result:', {
+              window,
+              aggregation,
+              aggregatedValue,
+            });
+            
+            if (aggregation.days_missing > 0) {
+              toast(`⚠ Aggregated ${aggregation.days_included} days (${aggregation.days_missing} missing)`, {
+                icon: '⚠️',
+                duration: 3000,
+              });
+            }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            toast.error(`Window aggregation failed: ${errorMsg}`);
+            // Fall back to regular file-to-graph update
+            console.warn('[DataOperationsService] Falling back to regular update:', error);
+          }
+        } else {
+          // No daily data available, fall back to regular update
+          console.log('[DataOperationsService] No daily data found, using regular update');
+        }
+      }
       
       // Call UpdateManager to transform data
       const result = await updateManager.handleFileToGraph(
-        paramFile.data,    // source (parameter file data)
+        aggregatedData,    // source (parameter file data, possibly aggregated)
         targetEdge,        // target (graph edge)
         'UPDATE',          // operation
         'parameter',       // sub-destination
@@ -234,12 +317,12 @@ class DataOperationsService {
         // AUTO-REBALANCE: If UpdateManager flagged this update as needing sibling rebalance
         // This applies to file pulls (same as external data), but NOT manual slider edits
         let finalGraph = nextGraph;
-        if (result.metadata?.requiresSiblingRebalance) {
+        if ((result.metadata as any)?.requiresSiblingRebalance) {
           const { rebalanceSiblingParameters } = await import('../utils/rebalanceUtils');
           finalGraph = rebalanceSiblingParameters(
             nextGraph,
-            result.metadata.updatedEdgeId,
-            result.metadata.updatedField
+            (result.metadata as any).updatedEdgeId,
+            (result.metadata as any).updatedField
           );
         }
         
@@ -679,6 +762,9 @@ class DataOperationsService {
   
   /**
    * Get data from external source → graph (direct, not versioned)
+   * 
+   * If window is provided and daily mode is enabled, fetches daily time-series data
+   * and stores it in the parameter file (if objectType is 'parameter').
    */
   async getFromSourceDirect(options: {
     objectType: 'parameter' | 'case' | 'node';
@@ -689,8 +775,10 @@ class DataOperationsService {
     // For direct parameter references (no param file)
     paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
     conditionalIndex?: number;
+    window?: DateRange; // Optional: date range for fetching
+    dailyMode?: boolean; // If true, fetch daily time-series data
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, dailyMode } = options;
     
     try {
       let connectionName: string | undefined;
@@ -848,16 +936,19 @@ class DataOperationsService {
       const { createDASRunner } = await import('../lib/das');
       const runner = createDASRunner();
       
-      // Default window: last 7 calendar days
+      // Determine window: use provided window or default to last 7 days
       const now = new Date();
       const sevenDaysAgo = new Date(now);
       sevenDaysAgo.setDate(now.getDate() - 7);
-      const defaultWindow = {
+      const fetchWindow = window || {
         start: sevenDaysAgo.toISOString(),
         end: now.toISOString()
       };
       
-      toast.loading('Fetching data from source...', { id: 'das-fetch' });
+      // Set context mode: 'daily' if dailyMode is true, otherwise 'aggregate'
+      const contextMode = dailyMode ? 'daily' : 'aggregate';
+      
+      toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}...`, { id: 'das-fetch' });
       
       // Check if query uses composite operators (minus/plus for inclusion-exclusion)
       const queryString = dsl.query || '';
@@ -874,7 +965,7 @@ class DataOperationsService {
         try {
           const combined = await executeCompositeQuery(
             queryString,
-            { ...dsl, window: defaultWindow },
+            { ...dsl, window: fetchWindow },
             connectionName,
             runner
           );
@@ -898,7 +989,8 @@ class DataOperationsService {
         // Simple query: use standard DAS runner
         const result = await runner.execute(connectionName, dsl, {
           connection_string: connectionString,
-          window: defaultWindow,
+          window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+          context: { mode: contextMode }, // Pass mode to adapter (daily or aggregate)
           edgeId: targetId || 'unknown'
         });
         
@@ -938,6 +1030,66 @@ class DataOperationsService {
         }
         
         console.log('Extracted data from DAS (mapped to external format):', updateData);
+        
+        // 6a. If dailyMode is true and we have time_series data, store it in parameter file
+        if (dailyMode && objectType === 'parameter' && result.raw?.time_series) {
+          const timeSeries = result.raw.time_series as Array<{ date: string; n: number; k: number; p: number }>;
+          
+          if (timeSeries.length > 0) {
+            try {
+              // Convert time_series to parameter file format
+              const n_daily = timeSeries.map(ts => ts.n);
+              const k_daily = timeSeries.map(ts => ts.k);
+              const dates = timeSeries.map(ts => ts.date);
+              
+              // Get parameter file
+              const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
+              if (paramFile) {
+                // Create new value entry with daily data
+                const newValue: ParameterValue = {
+                  mean: updateData.probability || (updateData.sample_size > 0 ? updateData.successes / updateData.sample_size : 0),
+                  stdev: undefined, // Will be calculated if needed
+                  n: updateData.sample_size,
+                  k: updateData.successes,
+                  n_daily,
+                  k_daily,
+                  dates,
+                  window_from: fetchWindow.start,
+                  window_to: fetchWindow.end,
+                  data_source: {
+                    type: connectionName?.includes('amplitude') ? 'amplitude' : 'api',
+                    retrieved_at: new Date().toISOString(),
+                    query: dsl,
+                    full_query: dsl.query || JSON.stringify(dsl),
+                  },
+                };
+                
+                // Append to values array
+                const updatedFileData = structuredClone(paramFile.data);
+                if (!updatedFileData.values) {
+                  updatedFileData.values = [];
+                }
+                updatedFileData.values.push(newValue);
+                
+                // Update file
+                await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);
+                
+                console.log('[DataOperationsService] Stored daily time-series data:', {
+                  paramId: objectId,
+                  days: timeSeries.length,
+                  window: fetchWindow,
+                });
+                
+                toast.success(`✓ Stored ${timeSeries.length} days of daily data`, { duration: 2000 });
+              } else {
+                console.warn('[DataOperationsService] Parameter file not found, skipping time-series storage');
+              }
+            } catch (error) {
+              console.error('[DataOperationsService] Failed to store time-series data:', error);
+              // Don't fail the whole operation, just log the error
+            }
+          }
+        }
       }
       
       // 7. Apply directly to graph (no file update)
@@ -998,12 +1150,12 @@ class DataOperationsService {
           // AUTO-REBALANCE: If UpdateManager flagged this update as needing sibling rebalance
           // This applies to both external data (DAS) and file pulls, but NOT manual slider edits
           let finalGraph = nextGraph;
-          if (updateResult.metadata?.requiresSiblingRebalance) {
+          if ((updateResult.metadata as any)?.requiresSiblingRebalance) {
             const { rebalanceSiblingParameters } = await import('../utils/rebalanceUtils');
             finalGraph = rebalanceSiblingParameters(
               nextGraph,
-              updateResult.metadata.updatedEdgeId,
-              updateResult.metadata.updatedField
+              (updateResult.metadata as any).updatedEdgeId,
+              (updateResult.metadata as any).updatedField
             );
           }
           

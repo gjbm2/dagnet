@@ -1,0 +1,83 @@
+.window-selector {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 10000;
+  pointer-events: auto;
+}
+
+.window-selector-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: white;
+  padding: 8px 12px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  border: 1px solid #e0e0e0;
+}
+
+.window-selector-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  white-space: nowrap;
+}
+
+.window-selector-input {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #333;
+  background: white;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.window-selector-input:hover {
+  border-color: #999;
+}
+
+.window-selector-input:focus {
+  outline: none;
+  border-color: #1976d2;
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.1);
+}
+
+.window-selector-separator {
+  font-size: 14px;
+  color: #666;
+  margin: 0 4px;
+}
+
+.window-selector-button {
+  padding: 6px 16px;
+  margin-left: 8px;
+  border: 1px solid #1976d2;
+  border-radius: 4px;
+  background: #1976d2;
+  color: white;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+  white-space: nowrap;
+}
+
+.window-selector-button:hover:not(:disabled) {
+  background: #1565c0;
+  border-color: #1565c0;
+}
+
+.window-selector-button:active:not(:disabled) {
+  background: #0d47a1;
+  border-color: #0d47a1;
+}
+
+.window-selector-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+

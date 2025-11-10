@@ -92,6 +92,7 @@ properties:
           description: |
             Sample size for statistical analysis (evidence/observation).
             For probability parameters, represents total trials.
+            If n_daily is present, this is the aggregate total (sum of n_daily).
         
         k:
           type: integer
@@ -99,6 +100,45 @@ properties:
           description: |
             Number of successes (for probability parameters, optional).
             Used for Bayesian analysis. Can be derived from mean × n if not specified.
+            If n_daily/k_daily are present, this is the aggregate total (sum of k_daily).
+        
+        # Daily breakdown (optional - if source supports daily data like Amplitude)
+        n_daily:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          description: |
+            Daily sample sizes (optional, if source supports daily data).
+            One value per day. Must match length of dates array if present.
+        
+        k_daily:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          description: |
+            Daily successes (optional, if source supports daily data).
+            One value per day. Must match length of dates array if present.
+        
+        dates:
+          type: array
+          items:
+            type: string
+            format: date
+          description: |
+            Dates corresponding to n_daily/k_daily arrays (YYYY-MM-DD format).
+            Must match length of n_daily/k_daily arrays if present.
+            Used for incremental fetching and window aggregation.
+        
+        # Query signature (for consistency checking between successive values[] entries)
+        query_signature:
+          type: string
+          description: |
+            SHA-256 hash of query configuration (connection + DSL + filters + events).
+            Computed from data_source.debug_trace when available.
+            Used for detecting query changes between successive values[] entries.
+            If missing, can be recomputed from debug_trace.
         
         distribution:
           type: string
@@ -157,6 +197,17 @@ properties:
             notes:
               type: string
               description: "Additional notes about data source"
+            full_query:
+              type: string
+              description: |
+                Complete DSL query string (includes base query + window + context).
+                Example: from(checkout).to(purchase).window(2025-01-01:2025-01-31).context(device:mobile)
+            debug_trace:
+              type: string
+              description: |
+                Complete execution trace as JSON string (request, response, query, connection_string, etc.)
+                for debugging/provenance. May be truncated if response is very large.
+                Contains: query, connection, connection_string, window, context, request, response.
           additionalProperties: false
       additionalProperties: false
   
