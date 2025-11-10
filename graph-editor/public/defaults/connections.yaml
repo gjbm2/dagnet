@@ -90,7 +90,7 @@ connections:
           
           return dsl;
       request:
-        url_template: "{{connection.base_url}}/funnels"
+        url_template: "{{{connection.base_url}}}/funnels"
         method: POST
         headers:
           # Dashboard REST API uses HTTP Basic auth: API Key (username) + Secret Key (password)
@@ -155,7 +155,7 @@ connections:
           description: "Optional hint for data format (e.g., 'p_mean, n, k')"
     adapter:
       request:
-        url_template: "https://sheets.googleapis.com/v4/spreadsheets/{{connection_string.spreadsheet_id}}/values/{{connection_string.range}}"
+        url_template: "https://sheets.googleapis.com/v4/spreadsheets/{{{connection_string.spreadsheet_id}}}/values/{{{connection_string.range}}}"
         method: GET
         headers:
           Authorization: "Bearer {{credentials.access_token}}"
@@ -198,7 +198,7 @@ connections:
           description: "Statsig project ID (optional override)"
     adapter:
       request:
-        url_template: "{{connection.base_url}}/gates/{{caseId}}"
+        url_template: "{{{connection.base_url}}}/gates/{{{caseId}}}"
         method: GET
         headers:
           STATSIG-API-KEY: "{{credentials.console_api_key}}"
@@ -244,7 +244,7 @@ connections:
           description: "Table name for query"
     adapter:
       request:
-        url_template: "{{credentials.host}}:{{credentials.port}}/{{credentials.database}}"
+        url_template: "{{{credentials.host}}}:{{{credentials.port}}}/{{{credentials.database}}}"
         method: POST
         headers:
           Content-Type: "application/json"
