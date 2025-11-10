@@ -76,38 +76,40 @@ connections:
           
           // Convert window to Amplitude date format (YYYYMMDD)
           const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
-          dsl.start_date = formatDate(window.start);
-          dsl.end_date = formatDate(window.end);
-          dsl.funnel_events_json = JSON.stringify(events);  // Mustache needs pre-stringified JSON
+          const startDate = formatDate(window.start);
+          const endDate = formatDate(window.end);
+          
+          // Build query parameters for GET request
+          // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&m=uniques&i=1
+          const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');
+          const otherParams = [
+            'start=' + startDate,
+            'end=' + endDate,
+            'm=uniques',
+            'i=1'
+          ].join('&');
+          
+          dsl.query_params = eventParams + '&' + otherParams;
           dsl.from_step_index = events.length - 2;  // Index of from_event in results
           dsl.to_step_index = events.length - 1;    // Index of to_event in results
           
           console.log('[Amplitude Adapter] Built funnel:', {
             events: events,
-            events_json: dsl.funnel_events_json,
+            query_params: dsl.query_params,
             from_index: dsl.from_step_index,
             to_index: dsl.to_step_index
           });
           
           return dsl;
       request:
-        url_template: "{{{connection.base_url}}}/funnels"
-        method: POST
+        # Dashboard REST API uses GET with query parameters
+        url_template: "{{{connection.base_url}}}/funnels?{{{dsl.query_params}}}"
+        method: GET
         headers:
           # Dashboard REST API uses HTTP Basic auth: API Key (username) + Secret Key (password)
           # Provide base64(apiKey:secretKey) in credentials.basic_auth_b64
           # NOTE: Use triple braces {{{ }}} to prevent HTML escaping of base64 padding (=)
           Authorization: "Basic {{{credentials.basic_auth_b64}}}"
-          Content-Type: "application/json"
-        body_template: |
-          {
-            "e": {{{dsl.funnel_events_json}}},
-            "start": "{{dsl.start_date}}",
-            "end": "{{dsl.end_date}}",
-            "m": "uniques",
-            "i": 1{{#connection_string.segment}},
-            "s": {{{connection_string.segment_json}}}{{/connection_string.segment}}
-          }
       response:
         extract:
           # Funnel response returns aggregated steps with counts
