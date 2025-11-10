@@ -48,6 +48,16 @@ properties:
     description: "Tags for filtering, search, and categorization"
     examples: [["checkout", "conversion"], ["ecommerce", "payment"]]
   
+  provider_event_names:
+    type: object
+    description: "Provider-specific event name mappings (flat key-value pairs)"
+    additionalProperties:
+      type: string
+    examples:
+      - amplitude: "ServiceLineManagement Confirmed"
+        segment: "ServiceLineManagement Confirmed"
+        mixpanel: "service_line_management_confirmed"
+  
   connectors:
     type: object
     description: "Platform-specific mappings (only if platform uses different names)"

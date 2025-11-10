@@ -41,7 +41,8 @@ connections:
           dsl.start_date = formatDate(window.start);
           dsl.end_date = formatDate(window.end);
           dsl.funnel_events = events;
-          dsl.target_step_index = events.length - 2;  // Index of from_event in results
+          dsl.from_step_index = events.length - 2;  // Index of from_event in results
+          dsl.to_step_index = events.length - 1;    // Index of to_event in results
           
           return dsl;
       request:
@@ -65,9 +66,9 @@ connections:
         extract:
           # Funnel response returns aggregated steps with counts
           - name: from_count
-            jmes: "data.steps[{{target_step_index}}].count"
+            jmes: "data.steps[{{from_step_index}}].count"
           - name: to_count
-            jmes: "data.steps[{{target_step_index}}].count"
+            jmes: "data.steps[{{to_step_index}}].count"
       transform:
         - name: p_mean
           jsonata: "to_count / from_count"

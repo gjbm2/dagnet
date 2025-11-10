@@ -703,13 +703,53 @@ class DataOperationsService {
         }
       }
       
-      // 4. Execute DAS Runner
+      // 4. Build DSL from edge query (if available in graph)
+      let dsl: any = {};
+      let connectionProvider: string | undefined;
+      
+      if (targetId && graph) {
+        // Find the target edge
+        const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
+        
+        if (targetEdge && (targetEdge.p as any)?.query) {
+          // Load buildDslFromEdge and event loader
+          const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
+          const { paramRegistryService } = await import('./paramRegistryService');
+          
+          // Get connection to extract provider
+          const { createDASRunner } = await import('../lib/das');
+          const tempRunner = createDASRunner();
+          try {
+            const connection = await (tempRunner as any).connectionProvider.getConnection(data.connection);
+            connectionProvider = connection.provider;
+          } catch (e) {
+            console.warn('Could not load connection for provider mapping:', e);
+          }
+          
+          try {
+            // Build DSL with event mapping
+            dsl = await buildDslFromEdge(
+              targetEdge,
+              graph,
+              connectionProvider,
+              (eventId: string) => paramRegistryService.loadEvent(eventId)
+            );
+            console.log('Built DSL from edge with event mapping:', dsl);
+          } catch (error) {
+            console.error('Error building DSL from edge:', error);
+            toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+            return;
+          }
+        }
+      }
+      
+      // 5. Execute DAS Runner
       const { createDASRunner } = await import('../lib/das');
       const runner = createDASRunner();
       
       toast.loading('Fetching data from source...', { id: 'das-fetch' });
       
-      const result = await runner.execute(data.connection, {}, {
+      const result = await runner.execute(data.connection, dsl, {
         connection_string: connectionString,
         edgeId: targetId || 'unknown'
       });
@@ -722,7 +762,7 @@ class DataOperationsService {
       toast.success(`Fetched data from source`, { id: 'das-fetch' });
       console.log('DAS Updates:', result.updates);
       
-      // 5. Parse the updates to extract values
+      // 6. Parse the updates to extract values
       // Map DAS field names to UpdateManager's external data field names
       const updateData: any = {};
       for (const update of result.updates) {
@@ -752,7 +792,7 @@ class DataOperationsService {
       
       console.log('Extracted data from DAS (mapped to external format):', updateData);
       
-      // 6. Apply directly to graph (no file update)
+      // 7. Apply directly to graph (no file update)
       if (!targetId || !graph || !setGraph) {
         toast.error('Cannot apply to graph: missing context');
         return;

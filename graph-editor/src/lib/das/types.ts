@@ -67,7 +67,7 @@ export interface ResponseSpec {
 }
 
 export interface AdapterSpec {
-  pre_request?: PreRequestScript[];
+  pre_request?: PreRequestScript;  // Single script, not array (as per connections.yaml schema)
   request: RequestSpec;
   response: ResponseSpec;
   transform?: TransformSpec[];
