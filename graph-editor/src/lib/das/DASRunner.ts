@@ -426,10 +426,28 @@ export class DASRunner {
 
         transformed[spec.name] = expression.evaluate(extracted);
       } catch (error) {
+        const errorMessage = error instanceof Error 
+          ? error.message 
+          : typeof error === 'object' && error !== null
+            ? JSON.stringify(error)
+            : String(error);
+        const errorDetails = error instanceof Error && error.stack
+          ? error.stack
+          : errorMessage;
+        
+        console.error(`[DASRunner] JSONata transformation error for "${spec.name}":`, {
+          expression: spec.jsonata,
+          error: errorMessage,
+          stack: errorDetails,
+          extracted: Object.keys(extracted),
+          dsl: context.dsl ? Object.keys(context.dsl) : 'missing',
+          context: context.context
+        });
+        
         throw new DASExecutionError(
-          `JSONata transformation failed for "${spec.name}": ${error instanceof Error ? error.message : String(error)}`,
+          `JSONata transformation failed for "${spec.name}": ${errorMessage}`,
           'transform',
-          { expression: spec.jsonata }
+          { expression: spec.jsonata, error: errorMessage, details: errorDetails }
         );
       }
     }
@@ -510,10 +528,21 @@ export class DASRunner {
     }
 
     if (error instanceof DASExecutionError) {
-      return `Execution failed in phase "${error.phase}": ${error.message}`;
+      // For transform phase errors (JSONata), provide user-friendly message
+      if (error.phase === 'transform') {
+        return `Data transformation failed. Check console for details.`;
+      }
+      // For other phases, show phase-specific messages
+      if (error.phase === 'extract') {
+        return `Failed to extract data from API response. Check console for details.`;
+      }
+      if (error.phase === 'template') {
+        return `Request template error. Check console for details.`;
+      }
+      return `Execution failed in phase "${error.phase}". Check console for details.`;
     }
 
-    return `Execution failed: ${error.message}`;
+    return `Execution failed. Check console for details.`;
   }
 
   /**

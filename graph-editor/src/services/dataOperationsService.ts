@@ -995,7 +995,16 @@ class DataOperationsService {
         });
         
         if (!result.success) {
-          toast.error(`Failed to fetch data: ${result.error}`, { id: 'das-fetch' });
+          // Log technical details to console
+          console.error('[DataOperationsService] DAS execution failed:', {
+            error: result.error,
+            phase: result.phase,
+            details: result.details
+          });
+          
+          // Show user-friendly message in toast
+          const userMessage = result.error || 'Failed to fetch data from source';
+          toast.error(userMessage, { id: 'das-fetch' });
           return;
         }
         
