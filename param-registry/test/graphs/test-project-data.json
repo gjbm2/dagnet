@@ -9,25 +9,25 @@
         "is_start": true,
         "entry_weight": 1
       },
+      "event_id": "household-created",
+      "event_id_overridden": true,
       "layout": {
         "x": -436,
         "y": 80,
         "rank": 0
-      },
-      "event_id": "household-created",
-      "event_id_overridden": true
+      }
     },
     {
       "uuid": "52207d6c-d3e3-4fda-a727-484eb1706041",
       "id": "b",
       "label": "B",
       "absorbing": false,
+      "event_id": "delegation-completed",
+      "event_id_overridden": true,
       "layout": {
         "x": -65,
         "y": -67
-      },
-      "event_id": "delegation-completed",
-      "event_id_overridden": true
+      }
     },
     {
       "uuid": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1",
@@ -64,18 +64,6 @@
   ],
   "edges": [
     {
-      "uuid": "550e8400-e29b-41d4-a716-446655440001->52207d6c-d3e3-4fda-a727-484eb1706041",
-      "id": "start-to-node-2",
-      "from": "550e8400-e29b-41d4-a716-446655440001",
-      "to": "52207d6c-d3e3-4fda-a727-484eb1706041",
-      "fromHandle": "right-out",
-      "toHandle": "left",
-      "p": {
-        "mean": 1
-      },
-      "description": ""
-    },
-    {
       "uuid": "52207d6c-d3e3-4fda-a727-484eb1706041->efb60fac-b7ac-431a-8a70-6eb33b345861",
       "id": "node-2-to-node-4",
       "from": "52207d6c-d3e3-4fda-a727-484eb1706041",
@@ -85,7 +73,8 @@
       "p": {
         "mean": 0.25
       },
-      "description": ""
+      "description": "",
+      "query": "from(b).to(e)"
     },
     {
       "uuid": "550e8400-e29b-41d4-a716-446655440001->1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1",
@@ -97,7 +86,8 @@
       "p": {
         "mean": 0
       },
-      "description": ""
+      "description": "",
+      "query": "from(a).to(c)"
     },
     {
       "uuid": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1->efb60fac-b7ac-431a-8a70-6eb33b345861",
@@ -109,7 +99,8 @@
       "p": {
         "mean": 0.75
       },
-      "description": ""
+      "description": "",
+      "query": "from(c).to(e)"
     },
     {
       "uuid": "52207d6c-d3e3-4fda-a727-484eb1706041->982e2577-27c6-41c5-8250-9a87aec2db20",
@@ -121,7 +112,8 @@
       "p": {
         "mean": 0.75
       },
-      "description": ""
+      "description": "",
+      "query": "from(b).to(d)"
     },
     {
       "uuid": "1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1->982e2577-27c6-41c5-8250-9a87aec2db20",
@@ -133,7 +125,22 @@
       "p": {
         "mean": 0.25
       },
-      "description": ""
+      "description": "",
+      "query": "from(c).to(d)"
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440001->52207d6c-d3e3-4fda-a727-484eb1706041",
+      "id": "start-to-node-2",
+      "from": "550e8400-e29b-41d4-a716-446655440001",
+      "to": "52207d6c-d3e3-4fda-a727-484eb1706041",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 1,
+        "id": "test"
+      },
+      "description": "",
+      "query": "from(a).to(b)"
     }
   ],
   "policies": {
@@ -146,7 +153,7 @@
     "created_at": "2025-10-21T10:21:58.922Z",
     "author": "Test file",
     "description": "Default empty graph",
-    "updated_at": "2025-11-10T10:27:23.122Z",
+    "updated_at": "2025-11-10T10:37:52.621Z",
     "name": "selection-test.json",
     "source": "git",
     "branch": "main"
