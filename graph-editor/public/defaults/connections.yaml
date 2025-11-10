@@ -95,7 +95,8 @@ connections:
         headers:
           # Dashboard REST API uses HTTP Basic auth: API Key (username) + Secret Key (password)
           # Provide base64(apiKey:secretKey) in credentials.basic_auth_b64
-          Authorization: "Basic {{credentials.basic_auth_b64}}"
+          # NOTE: Use triple braces {{{ }}} to prevent HTML escaping of base64 padding (=)
+          Authorization: "Basic {{{credentials.basic_auth_b64}}}"
           Content-Type: "application/json"
         body_template: |
           {
