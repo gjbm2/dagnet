@@ -194,18 +194,24 @@ export function rebalanceSiblingParameters(
     
     // Separate overridden from non-overridden
     const overriddenEdges = allSiblings.filter((e: any) => e.p.mean_overridden);
-    const nonOverriddenEdges = allSiblings.filter((e: any) => !e.p.mean_overridden);
+    // CRITICAL: Exclude the updated edge from non-overridden edges - it already has its correct value
+    const nonOverriddenEdges = allSiblings.filter((e: any) => 
+      !e.p.mean_overridden && 
+      (e.uuid !== updatedEdgeId && e.id !== updatedEdgeId) // Exclude the updated edge
+    );
     
-    if (nonOverriddenEdges.length === 0) return nextGraph; // All are overridden, nothing to do
+    if (nonOverriddenEdges.length === 0) return nextGraph; // All are overridden or only the updated edge exists, nothing to do
     
-    // Calculate total weight from overridden edges
+    // Calculate total weight from overridden edges AND the updated edge
+    // The updated edge's value is fixed and should be included in the total
+    const updatedEdgeValue = targetEdge.p?.mean || 0;
     const overriddenTotal = overriddenEdges.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
-    const remainingWeight = Math.max(0, 1 - overriddenTotal); // Clamp to prevent negative
+    const remainingWeight = Math.max(0, 1 - overriddenTotal - updatedEdgeValue); // Subtract updated edge value
     
-    // Calculate current total of non-overridden edges
+    // Calculate current total of non-overridden edges (excluding updated edge)
     const nonOverriddenTotal = nonOverriddenEdges.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
     
-    // Pro-rate remaining weight across non-overridden edges
+    // Pro-rate remaining weight across non-overridden edges (excluding updated edge)
     if (nonOverriddenTotal > 0) {
       nonOverriddenEdges.forEach((e: any) => {
         const edgeIndexToUpdate = nextGraph.edges.findIndex((edge: any) => 
