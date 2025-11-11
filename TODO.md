@@ -4,8 +4,10 @@ CRITICAL
 
 @CONDITIONAL_PROBABILITY_STATUS --- ref
 
+- query_signature isn't bringin through event_ids for the nodes -- needs to draw those in as well as node names
 - get from file isn't updating graph store... it's rendering on screen, but graph json itself isn't updating.
   ⦁	when I set param overridden in sidebar, and then 'get from file' it still updates target edges (even though should be overridden!) _and_ then tries to rebalance, creating a mess
+- download CSV built from selected funnel (or generate Google spreadsheet?)
 
 - Remove api secrets from server logs, pls
 - node renaming, file renaming -- need to handle globally

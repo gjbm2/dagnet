@@ -45,15 +45,83 @@ const windowAggregationService = new WindowAggregationService();
 /**
  * Compute query signature (SHA-256 hash) for consistency checking
  * Uses Web Crypto API available in modern browsers
+ * 
+ * Includes event_ids from nodes to detect when event definitions change
  */
-async function computeQuerySignature(dsl: any, connectionName?: string): Promise<string> {
+async function computeQuerySignature(
+  dsl: any, 
+  connectionName?: string,
+  graph?: Graph | null,
+  edge?: any
+): Promise<string> {
   try {
+    // Extract event_ids from nodes if graph and edge are provided
+    let from_event_id: string | undefined;
+    let to_event_id: string | undefined;
+    let visited_event_ids: string[] = [];
+    let exclude_event_ids: string[] = [];
+    
+    if (graph && edge && edge.query) {
+      // Helper to find node by ID or UUID
+      const findNode = (ref: string): any | undefined => {
+        let node = graph.nodes?.find((n: any) => n.id === ref);
+        if (!node) {
+          node = graph.nodes?.find((n: any) => n.uuid === ref);
+        }
+        return node;
+      };
+      
+      // Parse query to get node references
+      try {
+        const { parseDSL } = await import('../lib/queryDSL');
+        const parsed = parseDSL(edge.query);
+        
+        // Extract event_ids from from/to nodes
+        const fromNode = parsed.from ? findNode(parsed.from) : null;
+        const toNode = parsed.to ? findNode(parsed.to) : null;
+        
+        if (fromNode) from_event_id = fromNode.event_id;
+        if (toNode) to_event_id = toNode.event_id;
+        
+        // Extract event_ids from visited nodes
+        if (parsed.visited && Array.isArray(parsed.visited)) {
+          visited_event_ids = parsed.visited
+            .map((ref: string) => {
+              const node = findNode(ref);
+              return node?.event_id;
+            })
+            .filter((id: string | undefined): id is string => !!id);
+        }
+        
+        // Extract event_ids from exclude nodes
+        if (parsed.exclude && Array.isArray(parsed.exclude)) {
+          exclude_event_ids = parsed.exclude
+            .map((ref: string) => {
+              const node = findNode(ref);
+              return node?.event_id;
+            })
+            .filter((id: string | undefined): id is string => !!id);
+        }
+      } catch (error) {
+        console.warn('[DataOperationsService] Failed to parse query for event_ids:', error);
+        // Continue without event_ids if parsing fails
+      }
+    }
+    
     // Create a canonical representation of the query
+    // Include both node IDs (for backward compatibility) and event_ids (for change detection)
     const canonical = JSON.stringify({
       connection: connectionName || '',
+      // Provider-specific event names (from DSL)
       from: dsl.from || '',
       to: dsl.to || '',
       visited: (dsl.visited || []).sort(),
+      exclude: (dsl.exclude || []).sort(),
+      // Original event_ids from nodes (for change detection)
+      from_event_id: from_event_id || '',
+      to_event_id: to_event_id || '',
+      visited_event_ids: visited_event_ids.sort(),
+      exclude_event_ids: exclude_event_ids.sort(),
       event_filters: dsl.event_filters || {},
       context: (dsl.context || []).sort(),
       case: (dsl.case || []).sort(),
@@ -255,8 +323,33 @@ class DataOperationsService {
                   eventLoader
                 );
                 
-                // Compute expected query signature
-                expectedQuerySignature = await computeQuerySignature(dsl, connectionName);
+                // Compute expected query signature (include event_ids from nodes)
+                expectedQuerySignature = await computeQuerySignature(dsl, connectionName, graph, targetEdge);
+                
+                // Find the latest query signature by timestamp
+                // Group entries by query signature and find the most recent timestamp for each
+                const signatureTimestamps = new Map<string, string>();
+                let hasAnySignatures = false;
+                for (const value of valuesWithDaily) {
+                  if (value.query_signature) {
+                    hasAnySignatures = true;
+                    const timestamp = value.data_source?.retrieved_at || value.window_to || value.window_from || '';
+                    const existingTimestamp = signatureTimestamps.get(value.query_signature);
+                    if (!existingTimestamp || timestamp > existingTimestamp) {
+                      signatureTimestamps.set(value.query_signature, timestamp);
+                    }
+                  }
+                }
+                
+                // Find the latest signature (one with the most recent timestamp)
+                let latestQuerySignature: string | undefined;
+                let latestTimestamp = '';
+                for (const [signature, timestamp] of signatureTimestamps.entries()) {
+                  if (timestamp > latestTimestamp) {
+                    latestTimestamp = timestamp;
+                    latestQuerySignature = signature;
+                  }
+                }
                 
                 // Check all value entries for signature consistency
                 for (const value of valuesWithDaily) {
@@ -269,17 +362,49 @@ class DataOperationsService {
                   }
                 }
                 
-                if (querySignatureMismatch) {
+                // If we found a latest signature and it differs from expected, use the latest one
+                // (This handles the case where event definitions changed)
+                const signatureToUse = latestQuerySignature || expectedQuerySignature;
+                
+                if (querySignatureMismatch || (latestQuerySignature && latestQuerySignature !== expectedQuerySignature)) {
                   console.warn('[DataOperationsService] Query signature mismatch detected:', {
                     expectedSignature: expectedQuerySignature,
+                    latestSignature: latestQuerySignature,
+                    signatureToUse,
                     mismatchedEntries,
                     totalEntries: valuesWithDaily.length,
                   });
                   
-                  toast(`⚠ Aggregating data with different query signatures (${mismatchedEntries.length} entry/entries)`, {
-                    icon: '⚠️',
-                    duration: 5000,
-                  });
+                  if (latestQuerySignature && latestQuerySignature !== expectedQuerySignature) {
+                    toast(`⚠ Using latest query signature (event definitions may have changed). Filtering to matching entries only.`, {
+                      icon: '⚠️',
+                      duration: 5000,
+                    });
+                  } else {
+                    toast(`⚠ Aggregating data with different query signatures (${mismatchedEntries.length} entry/entries)`, {
+                      icon: '⚠️',
+                      duration: 5000,
+                    });
+                  }
+                }
+                
+                // Filter to only use entries matching the latest/expected signature
+                // Only filter if we have entries with signatures (otherwise use all entries as legacy data)
+                if (signatureToUse && hasAnySignatures) {
+                  const beforeFilter = valuesWithDaily.length;
+                  // Only include entries that match the signature (exclude entries with different signatures)
+                  // Entries without query_signature are excluded if we're filtering by signature
+                  const filteredValues = valuesWithDaily.filter(v => 
+                    v.query_signature === signatureToUse
+                  );
+                  
+                  if (filteredValues.length < beforeFilter) {
+                    const excludedCount = beforeFilter - filteredValues.length;
+                    console.log(`[DataOperationsService] Filtered ${beforeFilter} entries to ${filteredValues.length} matching signature ${signatureToUse} (excluded ${excludedCount} entries with different/missing signatures)`);
+                    // Replace valuesWithDaily with filtered list
+                    valuesWithDaily.length = 0;
+                    valuesWithDaily.push(...filteredValues);
+                  }
                 }
               } catch (error) {
                 console.warn('[DataOperationsService] Failed to validate query signature:', error);
@@ -453,6 +578,10 @@ class DataOperationsService {
             });
             
             if (aggregation.days_missing > 0) {
+              // Missing data detected - this is expected when filtering to latest signature
+              // If called from "get from file", suggest getting from source
+              // If called from "get from source", the fetch logic should handle it
+              
               // Build detailed message about missing dates
               let message = `⚠ Aggregated ${aggregation.days_included} days (${aggregation.days_missing} missing)`;
               
@@ -474,6 +603,9 @@ class DataOperationsService {
                 ).join(', ');
                 console.warn('[DataOperationsService] Missing date gaps:', gapSummary);
               }
+              
+              // This is called from "get from file" - suggest getting from source
+              message += `. Try getting from source to fetch missing data.`;
               
               toast(message, {
                 icon: '⚠️',
@@ -1045,8 +1177,9 @@ class DataOperationsService {
     paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
     conditionalIndex?: number;
     window?: DateRange;
+    bustCache?: boolean; // If true, ignore existing dates and re-fetch everything
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, bustCache } = options;
     
     // For now, only parameters support versioned fetching
     if (objectType !== 'parameter') {
@@ -1066,7 +1199,8 @@ class DataOperationsService {
         paramSlot,
         conditionalIndex,
         window,
-        dailyMode: true // Always use daily mode for versioned fetching
+        dailyMode: true, // Always use daily mode for versioned fetching
+        bustCache // Pass through bust cache flag
       });
       
       // 2. Update graph from file (standard file-to-graph flow)
@@ -1105,8 +1239,9 @@ class DataOperationsService {
     conditionalIndex?: number;
     window?: DateRange; // Optional: date range for fetching
     dailyMode?: boolean; // If true, fetch daily time-series data
+    bustCache?: boolean; // If true, ignore existing dates and re-fetch everything
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, dailyMode } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, dailyMode, bustCache } = options;
     
     try {
       let connectionName: string | undefined;
@@ -1289,14 +1424,72 @@ class DataOperationsService {
       if (dailyMode && objectType === 'parameter' && objectId) {
         const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
         if (paramFile && paramFile.data) {
-          // Compute query signature for consistency checking
-          querySignature = await computeQuerySignature(dsl, connectionName);
+          // Compute query signature for consistency checking (include event_ids from nodes)
+          const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
+          querySignature = await computeQuerySignature(dsl, connectionName, graph, targetEdge);
           
-          // Calculate incremental fetch
+          // Filter parameter file values to latest signature before calculating incremental fetch
+          // This ensures we only consider dates from matching signature when determining what to fetch
+          let filteredParamData = paramFile.data;
+          if (querySignature && paramFile.data.values && Array.isArray(paramFile.data.values)) {
+            // Find latest signature by timestamp (same logic as in getParameterFromFile)
+            const valuesWithDaily = (paramFile.data.values as ParameterValue[])
+              .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
+            
+            if (valuesWithDaily.length > 0) {
+              const signatureTimestamps = new Map<string, string>();
+              let hasAnySignatures = false;
+              
+              for (const value of valuesWithDaily) {
+                if (value.query_signature) {
+                  hasAnySignatures = true;
+                  const timestamp = value.data_source?.retrieved_at || value.window_to || value.window_from || '';
+                  const existingTimestamp = signatureTimestamps.get(value.query_signature);
+                  if (!existingTimestamp || timestamp > existingTimestamp) {
+                    signatureTimestamps.set(value.query_signature, timestamp);
+                  }
+                }
+              }
+              
+              // Find latest signature
+              let latestQuerySignature: string | undefined;
+              let latestTimestamp = '';
+              for (const [sig, ts] of signatureTimestamps.entries()) {
+                if (ts > latestTimestamp) {
+                  latestTimestamp = ts;
+                  latestQuerySignature = sig;
+                }
+              }
+              
+              // Use latest signature if found, otherwise use expected signature
+              const signatureToUse = latestQuerySignature || querySignature;
+              
+              // Filter values to only those matching the signature
+              // Only filter if we have entries with signatures (otherwise use all entries as legacy data)
+              if (signatureToUse && hasAnySignatures) {
+                const filteredValues = paramFile.data.values.filter((v: ParameterValue) => 
+                  v.query_signature === signatureToUse
+                );
+                
+                if (filteredValues.length < paramFile.data.values.length) {
+                  console.log(`[DataOperationsService] Filtered ${paramFile.data.values.length} values to ${filteredValues.length} matching signature ${signatureToUse} before incremental fetch`);
+                  console.log(`[DataOperationsService] This ensures we only fetch missing dates for the latest query signature (event definitions may have changed)`);
+                  filteredParamData = {
+                    ...paramFile.data,
+                    values: filteredValues
+                  };
+                }
+              }
+            }
+          }
+          
+          // Calculate incremental fetch (pass bustCache flag)
+          // Use filtered data so we only consider dates from matching signature
           const incrementalResult = calculateIncrementalFetch(
-            paramFile.data,
+            filteredParamData,
             requestedWindow,
-            querySignature
+            querySignature,
+            bustCache || false
           );
           
           console.log('[DataOperationsService] Incremental fetch analysis:', {
@@ -1308,8 +1501,8 @@ class DataOperationsService {
             fetchWindow: incrementalResult.fetchWindow, // Combined window for backward compat
           });
           
-          if (!incrementalResult.needsFetch) {
-            // All dates already exist - skip fetching
+          if (!incrementalResult.needsFetch && !bustCache) {
+            // All dates already exist - skip fetching (unless bustCache is true)
             shouldSkipFetch = true;
             toast.success(`All ${incrementalResult.totalDays} days already cached`, { id: 'das-fetch' });
             console.log('[DataOperationsService] Skipping fetch - all dates already exist');
@@ -1317,21 +1510,23 @@ class DataOperationsService {
             // We have multiple contiguous gaps - chain requests for each
             actualFetchWindows = incrementalResult.fetchWindows;
             const gapCount = incrementalResult.fetchWindows.length;
+            const cacheBustText = bustCache ? ' (busting cache)' : '';
             toast.loading(
-              `Fetching ${incrementalResult.daysToFetch} missing days across ${gapCount} gap${gapCount > 1 ? 's' : ''} (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`,
+              `Fetching ${incrementalResult.daysToFetch} missing days across ${gapCount} gap${gapCount > 1 ? 's' : ''}${bustCache ? ' (busting cache)' : ` (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`}`,
               { id: 'das-fetch' }
             );
           } else if (incrementalResult.fetchWindow) {
             // Fallback to combined window (shouldn't happen, but keep for safety)
             actualFetchWindows = [incrementalResult.fetchWindow];
             toast.loading(
-              `Fetching ${incrementalResult.daysToFetch} missing days (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`,
+              `Fetching ${incrementalResult.daysToFetch} missing days${bustCache ? ' (busting cache)' : ` (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`}`,
               { id: 'das-fetch' }
             );
           } else {
             // Fallback to requested window
             actualFetchWindows = [requestedWindow];
-            toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}...`, { id: 'das-fetch' });
+            const cacheBustText = bustCache ? ' (busting cache)' : '';
+            toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}${cacheBustText}...`, { id: 'das-fetch' });
           }
         } else {
           // No parameter file - use requested window
