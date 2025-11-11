@@ -24,6 +24,8 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 - **Baseline Values**: Default conversion rates and costs
 - **Treatment Values**: Experimental or alternative values
 - **Contexts**: Different scenarios or user segments
+- **Data Connections**: Link parameters to external data sources (Amplitude, Google Sheets, etc.)
+- **Time-Series Data**: Daily breakdowns stored in parameter files for aggregation and analysis
 
 ### What-If Analysis
 - **Override Values**: Temporarily change parameters to see impact
@@ -125,9 +127,17 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 - **Case Schemas**: Design experiment case structures
 
 ### Integration
-- **Google Sheets**: Export data to spreadsheets for analysis
-- **Statsig**: Integrate with Statsig for experiment management
+- **Data Connections**: Connect parameters to external data sources via DAS adapters
+  - **Amplitude**: Fetch conversion funnel data with daily time-series support
+  - **Google Sheets**: Read parameter data from spreadsheets
+  - **Statsig**: Fetch experiment variant allocations
+  - **Custom Adapters**: Create your own adapters for any HTTP or SQL data source
+- **Batch Operations**: Fetch data for multiple parameters at once with progress tracking
+- **Window Aggregation**: Aggregate daily data across date ranges
+- **Incremental Fetching**: Only fetch missing days when expanding date windows
 - **API Access**: Use the API for programmatic access
+
+See [Data Connections & Adapters](./data-connections.md) for detailed documentation.
 
 ### Automation
 - **Batch Operations**: Process multiple files at once

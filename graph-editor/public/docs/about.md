@@ -84,10 +84,20 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 
 ## Version Information
 
-- **Version**: 1.0.0
-- **Build Date**: January 2025
+- **Version**: 0.9.0-alpha
+- **Release Date**: November 2025
 - **License**: MIT
 - **Repository**: [github.com/gjbm2/dagnet](https://github.com/gjbm2/dagnet)
+
+### What's New in 0.9 Alpha
+
+- **Data Connections & Adapters**: Full DAS (Data Adapter Service) implementation with support for Amplitude, Google Sheets, PostgreSQL, and custom adapters
+- **Time-Series Data**: Daily data breakdowns with incremental fetching and window aggregation
+- **Batch Operations**: Bulk data fetching and updates across multiple parameters
+- **Window Selector**: Date range selection with automatic data coverage checking
+- **Query Signature Validation**: Automatic detection of query parameter changes
+- **Enhanced Update Manager**: Improved sync between graph, file, and external sources
+- **Statistical Enhancement**: Inverse-variance weighting and pluggable statistical methods
 
 ## Getting Started
 
