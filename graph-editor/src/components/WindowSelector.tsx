@@ -6,7 +6,7 @@
  * Shows "Fetch data" button if data is missing for connected parameters/cases.
  */
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import type { DateRange } from '../types';
 import { dataOperationsService } from '../services/dataOperationsService';
@@ -23,6 +23,31 @@ interface BatchItem {
   objectId: string;
   targetId: string;
   paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+}
+
+// Phase 3: Coverage cache - memoize coverage check results per window
+interface CoverageCacheEntry {
+  windowKey: string; // Normalized window string
+  hasMissingData: boolean;
+  hasAnyConnection: boolean;
+  paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'cost_time' }>;
+  graphHash: string; // Hash of graph structure to invalidate when graph changes
+}
+
+// Module-level cache (scoped to component instance via ref)
+const coverageCache = new Map<string, CoverageCacheEntry>();
+
+// Helper to create cache key from normalized window
+function getWindowKey(window: DateRange): string {
+  return `${window.start}|${window.end}`;
+}
+
+// Helper to create a simple hash of graph structure (edges/nodes IDs)
+function getGraphHash(graph: any): string {
+  if (!graph) return '';
+  const edgeIds = (graph.edges || []).map((e: any) => e.uuid || e.id).sort().join(',');
+  const nodeIds = (graph.nodes || []).map((n: any) => n.uuid || n.id).sort().join(',');
+  return `${edgeIds}|${nodeIds}`;
 }
 
 export function WindowSelector() {
@@ -183,6 +208,64 @@ export function WindowSelector() {
       // Window differs from last aggregated - check coverage
       setIsCheckingCoverage(true);
       
+      // Phase 3: Check cache first
+      const windowKey = getWindowKey(normalizedWindow);
+      const currentGraphHash = getGraphHash(currentGraph);
+      const cacheKey = `${windowKey}|${currentGraphHash}`;
+      const cachedResult = coverageCache.get(cacheKey);
+      
+      // If cache hit and graph hash matches, use cached result
+      if (cachedResult && cachedResult.graphHash === currentGraphHash) {
+        console.log(`[WindowSelector] Using cached coverage result for window:`, normalizedWindow);
+        setNeedsFetch(cachedResult.hasAnyConnection && cachedResult.hasMissingData);
+        
+        // If we have params to aggregate and no missing data, trigger aggregation
+        if (cachedResult.paramsToAggregate.length > 0 && !cachedResult.hasMissingData) {
+          // Reuse aggregation logic from below
+          isAggregatingRef.current = true;
+          lastAggregatedWindowRef.current = normalizedWindow;
+          
+          try {
+            let updatedGraph = currentGraph;
+            for (const { paramId, edgeId, slot } of cachedResult.paramsToAggregate) {
+              try {
+                await dataOperationsService.getParameterFromFile({
+                  paramId,
+                  edgeId,
+                  graph: updatedGraph,
+                  setGraph: (g) => { if (g) updatedGraph = g; },
+                  window: normalizedWindow,
+                });
+              } catch (error) {
+                console.error(`[WindowSelector] Failed to aggregate param ${paramId}:`, error);
+              }
+            }
+            
+            if (updatedGraph !== currentGraph) {
+              graphRef.current = updatedGraph;
+              setGraph(updatedGraph);
+            }
+            
+            setTimeout(() => {
+              setLastAggregatedWindow(normalizedWindow);
+              isAggregatingRef.current = false;
+            }, 0);
+          } catch (error) {
+            isAggregatingRef.current = false;
+            lastAggregatedWindowRef.current = null;
+            throw error;
+          }
+        } else {
+          isAggregatingRef.current = false;
+        }
+        
+        setIsCheckingCoverage(false);
+        return;
+      }
+      
+      // Cache miss - compute coverage
+      console.log(`[WindowSelector] Computing coverage check for window:`, normalizedWindow);
+      
       try {
         let hasMissingData = false;
         let hasAnyConnection = false;
@@ -267,6 +350,17 @@ export function WindowSelector() {
         
         // Set needsFetch flag
         setNeedsFetch(hasAnyConnection && hasMissingData);
+        
+        // Phase 3: Cache the computed result
+        const cacheEntry: CoverageCacheEntry = {
+          windowKey,
+          hasMissingData,
+          hasAnyConnection,
+          paramsToAggregate: [...paramsToAggregate], // Copy array
+          graphHash: currentGraphHash,
+        };
+        coverageCache.set(cacheKey, cacheEntry);
+        console.log(`[WindowSelector] Cached coverage result for window:`, normalizedWindow);
         
         // Auto-aggregate parameters that have all data for this window
         if (paramsToAggregate.length > 0 && !hasMissingData) {
@@ -358,6 +452,18 @@ export function WindowSelector() {
     const startStr = start.toISOString().split('T')[0];
     const endStr = end.toISOString().split('T')[0];
     
+    const newWindow: DateRange = { start: startStr, end: endStr };
+    
+    // Phase 3: Early short-circuit - skip setWindow if functionally same
+    if (windowsMatch(newWindow, window)) {
+      console.log(`[WindowSelector] Preset ${days} days skipped (window unchanged):`, {
+        start: startStr,
+        end: endStr,
+        currentWindow: window
+      });
+      return; // No-op: window is functionally the same
+    }
+    
     console.log(`[WindowSelector] Preset ${days} days:`, {
       start: startStr,
       end: endStr,
@@ -365,10 +471,7 @@ export function WindowSelector() {
       includesToday: endStr === new Date().toISOString().split('T')[0],
     });
     
-    setWindow({
-      start: startStr,
-      end: endStr,
-    });
+    setWindow(newWindow);
   };
   
   // Helper to check if current window matches a preset
