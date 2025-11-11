@@ -1554,24 +1554,25 @@ export class UpdateManager {
     // ============================================================
     
     // Flow L: External → Graph/Parameter (UPDATE edge directly)
+    // Uses schema terminology: mean, n, k, stdev (not external API terminology)
     this.addMapping('external_to_graph', 'UPDATE', 'parameter', [
       { 
-        sourceField: 'probability', 
+        sourceField: 'mean', 
         targetField: 'p.mean',
         overrideFlag: 'p.mean_overridden',
-        transform: (probability, source) => {
-          // Prefer explicit probability if provided (may be adjusted/rounded)
-          // Only recalculate if explicit probability not available
-          if (probability !== undefined && probability !== null) {
-            return this.roundTo3DP(probability);
+        transform: (mean, source) => {
+          // Prefer explicit mean if provided (may be adjusted/rounded)
+          // Only recalculate if explicit mean not available
+          if (mean !== undefined && mean !== null) {
+            return this.roundTo3DP(mean);
           }
           // Fallback: calculate from n/k if both are available
-          if (source.sample_size > 0 && source.successes !== undefined) {
-            // Calculate probability, clamping to [0, 1] in case of data errors
-            const calculated = source.successes / source.sample_size;
+          if (source.n > 0 && source.k !== undefined) {
+            // Calculate mean, clamping to [0, 1] in case of data errors
+            const calculated = source.k / source.n;
             return this.roundTo3DP(Math.max(0, Math.min(1, calculated)));
           }
-          // No probability data available - don't update mean
+          // No mean data available - don't update mean
           return undefined;
         }
       },
@@ -1588,11 +1589,11 @@ export class UpdateManager {
         }
       },
       { 
-        sourceField: 'sample_size', 
+        sourceField: 'n', 
         targetField: 'p.evidence.n'
       },
       { 
-        sourceField: 'successes', 
+        sourceField: 'k', 
         targetField: 'p.evidence.k'
       },
       { 
@@ -1632,24 +1633,25 @@ export class UpdateManager {
     // ============================================================
     
     // Flow Q: External → File/Parameter (APPEND to values[])
+    // Uses schema terminology: mean, n, k, stdev (not external API terminology)
     this.addMapping('external_to_file', 'APPEND', 'parameter', [
       { 
         sourceField: 'data', 
         targetField: 'values[]',
         transform: (externalData) => {
           // Calculate mean from n/k if not provided directly
-          let mean = externalData.probability;
-          if (mean === undefined && externalData.sample_size > 0 && externalData.successes !== undefined) {
+          let mean = externalData.mean;
+          if (mean === undefined && externalData.n > 0 && externalData.k !== undefined) {
             // Calculate and clamp to [0, 1]
-            mean = Math.max(0, Math.min(1, externalData.successes / externalData.sample_size));
+            mean = Math.max(0, Math.min(1, externalData.k / externalData.n));
           }
           
-          // Build value object with whatever fields we have
+          // Build value object with whatever fields we have (using schema terminology)
           const value: any = {};
           if (mean !== undefined) value.mean = mean;
           if (externalData.stdev !== undefined) value.stdev = externalData.stdev;
-          if (externalData.sample_size !== undefined) value.n = externalData.sample_size;
-          if (externalData.successes !== undefined) value.k = externalData.successes;
+          if (externalData.n !== undefined) value.n = externalData.n;
+          if (externalData.k !== undefined) value.k = externalData.k;
           if (externalData.window_from) value.window_from = externalData.window_from;
           if (externalData.window_to) value.window_to = externalData.window_to;
           if (externalData.retrieved_at) value.retrieved_at = externalData.retrieved_at;
