@@ -26,13 +26,97 @@ interface BatchItem {
 }
 
 export function WindowSelector() {
-  const { graph, window, setWindow, setGraph } = useGraphStore();
+  const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow } = useGraphStore();
   const [needsFetch, setNeedsFetch] = useState(false);
   const [isCheckingCoverage, setIsCheckingCoverage] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
+  const [showButton, setShowButton] = useState(false); // Track button visibility for animations
+  const [showShimmer, setShowShimmer] = useState(false); // Track shimmer animation
   
-  // Track last aggregated window to prevent infinite loops
-  const lastAggregatedWindowRef = React.useRef<string | null>(null);
+  const isInitialMountRef = React.useRef(true);
+  const isAggregatingRef = React.useRef(false); // Track if we're currently aggregating to prevent loops
+  const lastAggregatedWindowRef = React.useRef<DateRange | null>(null); // Track lastAggregatedWindow to avoid dependency loop
+  const graphRef = React.useRef<typeof graph>(graph); // Track graph to avoid dependency loop
+  const prevWindowRef = React.useRef<string | null>(null); // Track previous window for shimmer trigger
+  
+  // Sync refs with state (separate effects to avoid triggering aggregation)
+  useEffect(() => {
+    graphRef.current = graph;
+  }, [graph]);
+  
+  useEffect(() => {
+    if (lastAggregatedWindow) {
+      const normalized = {
+        start: lastAggregatedWindow.start.includes('T') ? lastAggregatedWindow.start : `${lastAggregatedWindow.start}T00:00:00Z`,
+        end: lastAggregatedWindow.end.includes('T') ? lastAggregatedWindow.end : `${lastAggregatedWindow.end}T23:59:59Z`,
+      };
+      lastAggregatedWindowRef.current = normalized;
+    } else {
+      lastAggregatedWindowRef.current = null;
+    }
+  }, [lastAggregatedWindow]);
+  
+  // Handle button appearance/disappearance animations
+  useEffect(() => {
+    if (needsFetch && !showButton) {
+      // Button appearing: show it with fade-in
+      setShowButton(true);
+      // Trigger shimmer after a short delay to ensure button is visible
+      setTimeout(() => {
+        setShowShimmer(true);
+        setTimeout(() => setShowShimmer(false), 600); // Match shimmer animation duration
+      }, 100);
+    } else if (!needsFetch && showButton) {
+      // Button disappearing: fade out and shrink width smoothly
+      setShowShimmer(false);
+      // Wait for fade-out animation (300ms) before removing from DOM
+      // This allows width animation to complete smoothly
+      setTimeout(() => {
+        setShowButton(false);
+      }, 300);
+    }
+  }, [needsFetch, showButton]);
+  
+  // Trigger shimmer whenever window changes and fetch is required
+  useEffect(() => {
+    if (!window) {
+      prevWindowRef.current = null;
+      return;
+    }
+    
+    const windowKey = `${window.start}|${window.end}`;
+    const windowChanged = windowKey !== prevWindowRef.current;
+    
+    // Update ref
+    prevWindowRef.current = windowKey;
+    
+    // If window changed and button is visible and fetch is required, trigger shimmer
+    if (windowChanged && needsFetch && showButton) {
+      setShowShimmer(false); // Reset first
+      setTimeout(() => {
+        setShowShimmer(true);
+        setTimeout(() => setShowShimmer(false), 600);
+      }, 50);
+    }
+  }, [window, needsFetch, showButton]);
+  
+  // Helper to compare windows (normalized to ISO timestamps)
+  const windowsMatch = (w1: DateRange | null, w2: DateRange | null): boolean => {
+    if (!w1 || !w2) return false;
+    // Normalize start dates to T00:00:00Z and end dates to T23:59:59Z
+    const normalizeStart = (d: string) => d.includes('T') ? d : (d.includes('Z') ? d : `${d}T00:00:00Z`);
+    const normalizeEnd = (d: string) => {
+      if (d.includes('T')) {
+        // If already has time, check if it's end-of-day (23:59:59)
+        if (d.includes('23:59:59')) return d;
+        // Otherwise, replace time with 23:59:59
+        return d.replace(/T\d{2}:\d{2}:\d{2}/, 'T23:59:59').replace(/T\d{2}:\d{2}:\d{2}\.\d{3}/, 'T23:59:59');
+      }
+      if (d.includes('Z')) return d.replace(/T\d{2}:\d{2}:\d{2}/, 'T23:59:59').replace(/T\d{2}:\d{2}:\d{2}\.\d{3}/, 'T23:59:59');
+      return `${d}T23:59:59Z`;
+    };
+    return normalizeStart(w1.start) === normalizeStart(w2.start) && normalizeEnd(w1.end) === normalizeEnd(w2.end);
+  };
   
   // Show if graph has any edges with parameter files (for windowed aggregation)
   // This includes both external connections and file-based parameters
@@ -57,12 +141,46 @@ export function WindowSelector() {
   
   // Check data coverage and auto-aggregate when window changes
   useEffect(() => {
+    // Check refs BEFORE scheduling debounced function to prevent multiple queued executions
+    if (isAggregatingRef.current) {
+      return; // Already aggregating, skip
+    }
+    
     const checkDataCoverageAndAggregate = async () => {
-      if (!graph || !window) {
+      // Use ref for graph to avoid dependency on graph changes
+      const currentGraph = graphRef.current;
+      if (!currentGraph || !window) {
         setNeedsFetch(false);
         return;
       }
       
+      // Skip on initial mount - wait for lastAggregatedWindow to load from persistence
+      if (isInitialMountRef.current) {
+        isInitialMountRef.current = false;
+        return;
+      }
+      
+      // Double-check aggregation flag (in case it was set between scheduling and execution)
+      if (isAggregatingRef.current) {
+        return;
+      }
+      
+      // Normalize window dates to ISO timestamps for comparison (define once, use everywhere)
+      const normalizedWindow: DateRange = {
+        start: currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`,
+        end: currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`,
+      };
+      
+      // Use ref value for comparison (avoids dependency loop)
+      const normalizedLastAggregated: DateRange | null = lastAggregatedWindowRef.current;
+      
+      // If current window matches last aggregated window, no action needed
+      if (windowsMatch(normalizedWindow, normalizedLastAggregated)) {
+        setNeedsFetch(false);
+        return;
+      }
+      
+      // Window differs from last aggregated - check coverage
       setIsCheckingCoverage(true);
       
       try {
@@ -70,15 +188,9 @@ export function WindowSelector() {
         let hasAnyConnection = false;
         const paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'cost_time' }> = [];
         
-        // Normalize window dates to ISO timestamps for calculateIncrementalFetch
-        const normalizedWindow: DateRange = {
-          start: currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`,
-          end: currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`,
-        };
-        
-        // Check all parameters in graph
-        if (graph.edges) {
-          for (const edge of graph.edges) {
+        // Check all parameters in graph (use ref to avoid dependency)
+        if (currentGraph.edges) {
+          for (const edge of currentGraph.edges) {
             const edgeId = edge.uuid || edge.id || '';
             
             // Check each parameter slot
@@ -134,9 +246,9 @@ export function WindowSelector() {
           }
         }
         
-        // Check cases
-        if (graph.nodes) {
-          for (const node of graph.nodes) {
+        // Check cases (use ref to avoid dependency)
+        if (currentGraph.nodes) {
+          for (const node of currentGraph.nodes) {
             if (node.case?.id) {
               const caseId = node.case.id;
               const caseFile = fileRegistry.getFile(`case-${caseId}`);
@@ -157,31 +269,57 @@ export function WindowSelector() {
         setNeedsFetch(hasAnyConnection && hasMissingData);
         
         // Auto-aggregate parameters that have all data for this window
-        // But only if we haven't already aggregated for this exact window (prevents loops)
-        const windowKey = `${normalizedWindow.start}|${normalizedWindow.end}`;
-        const alreadyAggregated = lastAggregatedWindowRef.current === windowKey;
-        
-        if (paramsToAggregate.length > 0 && !hasMissingData && !alreadyAggregated) {
+        if (paramsToAggregate.length > 0 && !hasMissingData) {
           console.log(`[WindowSelector] Auto-aggregating ${paramsToAggregate.length} parameters for window:`, normalizedWindow);
-          lastAggregatedWindowRef.current = windowKey; // Mark as aggregated
           
-          for (const { paramId, edgeId, slot } of paramsToAggregate) {
-            try {
-              await dataOperationsService.getParameterFromFile({
-                paramId,
-                edgeId,
-                graph,
-                setGraph: (g) => {
-                  if (g) setGraph(g);
-                },
-                window: normalizedWindow,
-              });
-            } catch (error) {
-              console.error(`[WindowSelector] Failed to aggregate param ${paramId}:`, error);
+          // Set flag to prevent re-triggering during aggregation
+          isAggregatingRef.current = true;
+          
+          // Update ref IMMEDIATELY to prevent any re-triggering from setGraph calls
+          lastAggregatedWindowRef.current = normalizedWindow;
+          
+          try {
+            // Batch all graph updates - collect them and apply once at the end
+            let updatedGraph = currentGraph;
+            
+            for (const { paramId, edgeId, slot } of paramsToAggregate) {
+              try {
+                // Use a local setGraph that accumulates changes without triggering the effect
+                await dataOperationsService.getParameterFromFile({
+                  paramId,
+                  edgeId,
+                  graph: updatedGraph,
+                  setGraph: (g) => {
+                    if (g) updatedGraph = g;
+                  },
+                  window: normalizedWindow,
+                });
+              } catch (error) {
+                console.error(`[WindowSelector] Failed to aggregate param ${paramId}:`, error);
+              }
             }
+            
+            // Apply all graph updates at once (only if graph actually changed)
+            // Update ref immediately to prevent re-triggering
+            if (updatedGraph !== currentGraph) {
+              graphRef.current = updatedGraph;
+              setGraph(updatedGraph);
+            }
+            
+            // Update state (deferred to prevent re-triggering)
+            setTimeout(() => {
+              setLastAggregatedWindow(normalizedWindow);
+              isAggregatingRef.current = false;
+            }, 0);
+          } catch (error) {
+            isAggregatingRef.current = false;
+            // Reset ref on error
+            lastAggregatedWindowRef.current = null;
+            throw error;
           }
-        } else if (alreadyAggregated) {
-          console.log(`[WindowSelector] Skipping auto-aggregation - already aggregated for this window`);
+        } else {
+          // No aggregation needed - clear flag if it was set
+          isAggregatingRef.current = false;
         }
       } catch (error) {
         console.error('[WindowSelector] Error checking data coverage:', error);
@@ -194,17 +332,7 @@ export function WindowSelector() {
     // Debounce coverage check
     const timeoutId = setTimeout(checkDataCoverageAndAggregate, 300);
     return () => clearTimeout(timeoutId);
-  }, [graph, currentWindow, window, setGraph]);
-  
-  // Reset aggregated window when window actually changes (user changes it)
-  React.useEffect(() => {
-    if (window) {
-      const windowKey = `${currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`}|${currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`}`;
-      if (lastAggregatedWindowRef.current !== windowKey) {
-        lastAggregatedWindowRef.current = null; // Reset when window changes
-      }
-    }
-  }, [currentWindow.start, currentWindow.end]);
+  }, [currentWindow, window, setGraph, setLastAggregatedWindow]); // Removed graph and lastAggregatedWindow from dependencies - using refs instead to prevent loop
   
   const handleDateRangeChange = (start: string, end: string) => {
     setWindow({ start, end });
@@ -242,6 +370,53 @@ export function WindowSelector() {
       end: endStr,
     });
   };
+  
+  // Helper to check if current window matches a preset
+  const getActivePreset = (): number | 'today' | null => {
+    if (!window) return null;
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+    
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    
+    // Check if it's "today" preset (start and end are same day, and it's today)
+    if (window.start === window.end && window.start === todayStr) {
+      return 'today';
+    }
+    
+    // Check if it's "7d" preset (end is yesterday, start is 7 days before)
+    const sevenDaysAgo = new Date(yesterday);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+    if (window.end === yesterdayStr && window.start === sevenDaysAgoStr) {
+      return 7;
+    }
+    
+    // Check if it's "30d" preset (end is yesterday, start is 30 days before)
+    const thirtyDaysAgo = new Date(yesterday);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
+    const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+    if (window.end === yesterdayStr && window.start === thirtyDaysAgoStr) {
+      return 30;
+    }
+    
+    // Check if it's "90d" preset (end is yesterday, start is 90 days before)
+    const ninetyDaysAgo = new Date(yesterday);
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 89);
+    const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().split('T')[0];
+    if (window.end === yesterdayStr && window.start === ninetyDaysAgoStr) {
+      return 90;
+    }
+    
+    return null;
+  };
+  
+  const activePreset = getActivePreset();
   
   // Collect batch items that need fetching (have connections but missing data)
   const batchItemsToFetch = useMemo(() => {
@@ -397,7 +572,12 @@ export function WindowSelector() {
       }
       
       // Re-check coverage after fetch
-      // Trigger coverage check by updating a dependency
+      // Update lastAggregatedWindow after successful fetch
+      if (successCount > 0) {
+        setLastAggregatedWindow(normalizedWindow);
+      }
+      
+      // Trigger coverage check by updating window (will detect if still needs fetch)
       setWindow({ ...window! });
     } catch (error) {
       toast.dismiss(progressToastId);
@@ -411,14 +591,11 @@ export function WindowSelector() {
   return (
     <div className={`window-selector ${!needsFetch ? 'window-selector-compact' : ''}`}>
       <div className="window-selector-content">
-        <label htmlFor="window-start" className="window-selector-label">
-          Window:
-        </label>
         <div className="window-selector-presets">
           <button
             type="button"
             onClick={() => handlePreset('today')}
-            className="window-selector-preset"
+            className={`window-selector-preset ${activePreset === 'today' ? 'active' : ''}`}
             title="Today only"
           >
             Today
@@ -426,7 +603,7 @@ export function WindowSelector() {
           <button
             type="button"
             onClick={() => handlePreset(7)}
-            className="window-selector-preset"
+            className={`window-selector-preset ${activePreset === 7 ? 'active' : ''}`}
             title="Last 7 days"
           >
             7d
@@ -434,7 +611,7 @@ export function WindowSelector() {
           <button
             type="button"
             onClick={() => handlePreset(30)}
-            className="window-selector-preset"
+            className={`window-selector-preset ${activePreset === 30 ? 'active' : ''}`}
             title="Last 30 days"
           >
             30d
@@ -442,7 +619,7 @@ export function WindowSelector() {
           <button
             type="button"
             onClick={() => handlePreset(90)}
-            className="window-selector-preset"
+            className={`window-selector-preset ${activePreset === 90 ? 'active' : ''}`}
             title="Last 90 days"
           >
             90d
@@ -454,11 +631,11 @@ export function WindowSelector() {
           onChange={handleDateRangeChange}
           maxDate={new Date().toISOString().split('T')[0]}
         />
-        {needsFetch && (
+        {showButton && (
           <button
             onClick={handleFetchData}
             disabled={isCheckingCoverage || isFetching || batchItemsToFetch.length === 0}
-            className="window-selector-button"
+            className={`window-selector-button ${showShimmer ? 'shimmer' : ''}`}
             title={
               isCheckingCoverage
                 ? "Checking data coverage..."

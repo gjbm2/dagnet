@@ -20,6 +20,10 @@ export interface GraphStore {
   window: { start: string; end: string } | null;
   setWindow: (window: { start: string; end: string } | null) => void;
   
+  // Last window that data was aggregated for (to detect if window changed due to time passing)
+  lastAggregatedWindow: { start: string; end: string } | null;
+  setLastAggregatedWindow: (window: { start: string; end: string } | null) => void;
+  
   // History
   history: GraphData[];
   historyIndex: number;
@@ -58,6 +62,12 @@ export function createGraphStore(): GraphStoreHook {
       set({ window });
       // Persist to localStorage (keyed by fileId, which is available via closure in GraphStoreProvider)
       // Note: We'll save this in the provider effect since fileId isn't available here
+    },
+    
+    // Last aggregated window
+    lastAggregatedWindow: null,
+    setLastAggregatedWindow: (lastAggregatedWindow: { start: string; end: string } | null) => {
+      set({ lastAggregatedWindow });
     },
     
     // History management
@@ -217,9 +227,14 @@ export function GraphStoreProvider({
       if (fileTabs.length > 0) {
         const firstTab = fileTabs[0];
         const savedWindow = firstTab.editorState?.window;
+        const savedLastAggregatedWindow = firstTab.editorState?.lastAggregatedWindow;
         if (savedWindow !== undefined) {
           store.setState({ window: savedWindow });
           console.log(`GraphStoreProvider: Loaded persisted window for ${fileId} from tab ${firstTab.id}:`, savedWindow);
+        }
+        if (savedLastAggregatedWindow !== undefined) {
+          store.setState({ lastAggregatedWindow: savedLastAggregatedWindow });
+          console.log(`GraphStoreProvider: Loaded persisted lastAggregatedWindow for ${fileId} from tab ${firstTab.id}:`, savedLastAggregatedWindow);
         }
       } else {
         // No tabs yet - try loading from IndexedDB directly
@@ -227,9 +242,14 @@ export function GraphStoreProvider({
           const dbTabs = await db.getTabsForFile(fileId);
           if (dbTabs.length > 0) {
             const savedWindow = dbTabs[0].editorState?.window;
+            const savedLastAggregatedWindow = dbTabs[0].editorState?.lastAggregatedWindow;
             if (savedWindow !== undefined) {
               store.setState({ window: savedWindow });
               console.log(`GraphStoreProvider: Loaded persisted window for ${fileId} from IndexedDB:`, savedWindow);
+            }
+            if (savedLastAggregatedWindow !== undefined) {
+              store.setState({ lastAggregatedWindow: savedLastAggregatedWindow });
+              console.log(`GraphStoreProvider: Loaded persisted lastAggregatedWindow for ${fileId} from IndexedDB:`, savedLastAggregatedWindow);
             }
           }
         } catch (e) {
@@ -247,10 +267,13 @@ export function GraphStoreProvider({
   // Subscribe to window changes and persist to all tabs' editorState (IndexedDB)
   useEffect(() => {
     let prevWindow: { start: string; end: string } | null = null;
+    let prevLastAggregatedWindow: { start: string; end: string } | null = null;
     
     const unsubscribe = store.subscribe(async (state) => {
       const currentWindow = state.window;
-      // Only persist if window actually changed
+      const currentLastAggregatedWindow = state.lastAggregatedWindow;
+      
+      // Persist window if changed
       if (currentWindow !== prevWindow) {
         prevWindow = currentWindow;
         
@@ -261,6 +284,22 @@ export function GraphStoreProvider({
           await Promise.all(
             fileTabs.map(tab => 
               tabOps.updateTabState(tab.id, { window: currentWindow })
+            )
+          );
+        }
+      }
+      
+      // Persist lastAggregatedWindow if changed
+      if (currentLastAggregatedWindow !== prevLastAggregatedWindow) {
+        prevLastAggregatedWindow = currentLastAggregatedWindow;
+        
+        // Update all tabs for this fileId
+        const fileTabs = tabs.filter(t => t.fileId === fileId);
+        if (fileTabs.length > 0) {
+          console.log(`GraphStoreProvider: Persisting lastAggregatedWindow for ${fileId} to ${fileTabs.length} tabs:`, currentLastAggregatedWindow);
+          await Promise.all(
+            fileTabs.map(tab => 
+              tabOps.updateTabState(tab.id, { lastAggregatedWindow: currentLastAggregatedWindow })
             )
           );
         }
