@@ -1,6 +1,32 @@
 # DagNet TODO
 
 ### High Priority
+- **Conditional Probability Migration - BROKEN** ⚠️ **CRITICAL**
+  - STATUS: Conditional probability format migrated from `condition: {visited: [...]}` to `condition: "visited(...)"` string format, but multiple files still use old format
+  - **Impact**: Conditional probabilities may not work correctly in several critical areas
+  - **Broken Files** (from `PROJECT_CONNECT/CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md`):
+    - `EdgeContextMenu.tsx` - 12 occurrences, HIGH priority (context menu broken)
+    - `runner.ts` - 3 occurrences, HIGH priority (simulation runner broken)
+    - `conditionalReferences.ts` - 4 occurrences, HIGH priority (graph operations broken)
+    - `whatIf.ts` - 4 occurrences, CRITICAL priority (what-if calculations broken)
+    - `ConditionalProbabilitiesSection.tsx` - 31 occurrences, MEDIUM priority (old UI component, may be unused)
+  - **Backward Compatibility Hacks** (temporary fixes that need removal):
+    - `conditionalColors.ts` (line ~90) - handles both formats
+    - `conditionalValidation.ts` (lines 19-42) - `getVisitedNodeIds()` hack, used in 7 locations
+    - `ConversionEdge.tsx` (lines 27-50) - duplicate `getVisitedNodeIds()` hack
+    - `WhatIfAnalysisControl.tsx` (lines 123-131, 478-491, 543-545) - multiple format checks
+    - `ConditionalProbabilityEditor.tsx` (lines 135-140) - display hack
+  - **Lost Features**:
+    - Complementary conditional creation (auto-add conditionals to sibling edges)
+    - Color picker for conditional probabilities
+  - **Migration Required**:
+    1. Phase 1: Data migration script (convert old format in graph files)
+    2. Phase 2: Code migration (remove hacks, update all consumers to use query expression parser)
+    3. Phase 3: Restore lost features via UpdateManager architecture
+    4. Phase 4: Full testing
+  - **Estimated**: 12-16 hours cleanup
+  - **Reference**: See `PROJECT_CONNECT/CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for full details
+
 - **P-Slider Auto-Balance NOT WORKING**
   - STATUS: Sibling edges don't auto-adjust when dragging probability slider
   - Issue: `handleEdgeProbSlide` in PropertiesPanel.tsx (line ~650-700) should auto-adjust sibling probabilities
