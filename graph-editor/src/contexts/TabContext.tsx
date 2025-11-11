@@ -636,10 +636,10 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       await db.saveAppState({ activeTabId: tab.id });
     };
     
-    window.addEventListener('dagnet:openTemporaryTab', handleTemporaryTab as EventListener);
+    window.addEventListener('dagnet:openTemporaryTab', handleTemporaryTab as unknown as EventListener);
     
     return () => {
-      window.removeEventListener('dagnet:openTemporaryTab', handleTemporaryTab as EventListener);
+      window.removeEventListener('dagnet:openTemporaryTab', handleTemporaryTab as unknown as EventListener);
     };
   }, []);
 

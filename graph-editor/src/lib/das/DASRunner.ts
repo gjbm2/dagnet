@@ -265,8 +265,8 @@ export class DASRunner {
         hasDayFunnels: !!extracted.day_funnels,
         dayFunnelsKeys: extracted.day_funnels ? Object.keys(extracted.day_funnels) : [],
         dayFunnelsType: typeof extracted.day_funnels,
-        dayFunnelsSeries: extracted.day_funnels?.series,
-        dayFunnelsXValues: extracted.day_funnels?.xValues,
+        dayFunnelsSeries: (extracted.day_funnels as any)?.series,
+        dayFunnelsXValues: (extracted.day_funnels as any)?.xValues,
         timeSeriesLength: Array.isArray(transformed.time_series) ? transformed.time_series.length : 'not array',
         timeSeries: transformed.time_series
       });
@@ -450,9 +450,9 @@ export class DASRunner {
             mode: transformed.mode,
             hasDayFunnels: !!transformed.day_funnels,
             dayFunnels: transformed.day_funnels,
-            dayFunnelsSeries: transformed.day_funnels?.series,
-            dayFunnelsXValues: transformed.day_funnels?.xValues,
-            dayFunnelsSeriesLength: Array.isArray(transformed.day_funnels?.series) ? transformed.day_funnels.series.length : 'not array',
+                      dayFunnelsSeries: (transformed.day_funnels as any)?.series,
+                      dayFunnelsXValues: (transformed.day_funnels as any)?.xValues,
+                      dayFunnelsSeriesLength: Array.isArray((transformed.day_funnels as any)?.series) ? (transformed.day_funnels as any).series.length : 'not array',
             dslFromStepIndex: context.dsl?.from_step_index,
             dslToStepIndex: context.dsl?.to_step_index,
             transformedKeys: Object.keys(transformed),

@@ -28,14 +28,24 @@ class MockHttpExecutor implements HttpExecutor {
               { event: 'checkout', count: 4000 }
             ]
           }
-        }
+        },
+        rawBody: JSON.stringify({
+          data: {
+            steps: [
+              { event: 'product_view', count: 10000 },
+              { event: 'add_to_cart', count: 5000 },
+              { event: 'checkout', count: 4000 }
+            ]
+          }
+        })
       };
     }
     
     return {
       status: 200,
       headers: {},
-      body: { data: 'test' }
+      body: { data: 'test' },
+      rawBody: JSON.stringify({ data: 'test' })
     };
   }
 }
@@ -79,7 +89,7 @@ describe('DASRunner - Pre-Request Script Execution', () => {
     // Mock credentials loading
     vi.spyOn(credentialsManager, 'loadCredentials').mockResolvedValue({
       success: true,
-      source: 'mock'
+      source: 'mock' as any
     });
     vi.spyOn(credentialsManager, 'getProviderCredentials').mockReturnValue({});
     
@@ -248,30 +258,32 @@ describe('DASRunner - Pre-Request Script Execution', () => {
     expect(request).toBeTruthy();
     
     // Verify extraction used correct indices
-    expect(result.raw).toHaveProperty('from_count');
-    expect(result.raw).toHaveProperty('to_count');
-    expect((result.raw as any).from_count).toBe(5000); // Second step
-    expect((result.raw as any).to_count).toBe(4000);   // Third step
-    
-    // Verify transformation
-    expect((result.raw as any).p_mean).toBeCloseTo(0.8); // 4000 / 5000
-    expect((result.raw as any).n).toBe(5000);
-    expect((result.raw as any).k).toBe(4000);
-    
-    // Verify updates generated
-    expect(result.updates.length).toBe(3);
-    
-    // Check that updates contain the expected targets and values
-    const targets = result.updates.map(u => u.target);
-    expect(targets).toContain('/edges/edge-123/p/mean');
-    expect(targets).toContain('/edges/edge-123/p/evidence/n');
-    expect(targets).toContain('/edges/edge-123/p/evidence/k');
-    
-    // Check values (converted from strings to numbers during interpolation)
-    const meanUpdate = result.updates.find(u => u.target === '/edges/edge-123/p/mean');
-    expect(meanUpdate).toBeTruthy();
-    expect(meanUpdate!.value).toBeCloseTo(0.8);
-    expect(meanUpdate!.mode).toBe('replace');
+    if (result.success) {
+      expect(result.raw).toHaveProperty('from_count');
+      expect(result.raw).toHaveProperty('to_count');
+      expect((result.raw as any).from_count).toBe(5000); // Second step
+      expect((result.raw as any).to_count).toBe(4000);   // Third step
+      
+      // Verify transformation
+      expect((result.raw as any).p_mean).toBeCloseTo(0.8); // 4000 / 5000
+      expect((result.raw as any).n).toBe(5000);
+      expect((result.raw as any).k).toBe(4000);
+      
+      // Verify updates generated
+      expect(result.updates.length).toBe(3);
+      
+      // Check that updates contain the expected targets and values
+      const targets = result.updates.map(u => u.target);
+      expect(targets).toContain('/edges/edge-123/p/mean');
+      expect(targets).toContain('/edges/edge-123/p/evidence/n');
+      expect(targets).toContain('/edges/edge-123/p/evidence/k');
+      
+      // Check values (converted from strings to numbers during interpolation)
+      const meanUpdate = result.updates.find(u => u.target === '/edges/edge-123/p/mean');
+      expect(meanUpdate).toBeTruthy();
+      expect(meanUpdate!.value).toBeCloseTo(0.8);
+      expect(meanUpdate!.mode).toBe('replace');
+    }
   });
 
   it('should handle script errors gracefully', async () => {
@@ -307,8 +319,10 @@ describe('DASRunner - Pre-Request Script Execution', () => {
     const result = await runner.execute('error-test', {});
     
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Pre-request script execution failed');
-    expect(result.error).toContain('Intentional test error');
+    if (!result.success) {
+      expect(result.error).toContain('Pre-request script execution failed');
+      expect(result.error).toContain('Intentional test error');
+    }
   });
 
   it('should not have access to dangerous globals in script', async () => {

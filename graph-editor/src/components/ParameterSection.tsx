@@ -112,9 +112,9 @@ export function ParameterSection({
         <AutomatableField
           label="External Data Source"
           value={param?.connection || ''}
-          overridden={param?.connection_overridden || false}
+          overridden={false}
           onClearOverride={() => {
-            onUpdate({ connection_overridden: false });
+            // Connection override not yet implemented
           }}
         >
           {/* Connection Controls Row */}

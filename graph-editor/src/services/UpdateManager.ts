@@ -488,9 +488,9 @@ export class UpdateManager {
     // This applies to "Get from file" - if p(A>B) gets updated, auto-compute p(A>C)
     if (result.success && subDest === 'parameter' && !options.validateOnly) {
       result.metadata = result.metadata || {};
-      result.metadata.requiresSiblingRebalance = true;
-      result.metadata.updatedEdgeId = graphEntity.uuid || graphEntity.id;
-      result.metadata.updatedField = 'p';
+      (result.metadata as any).requiresSiblingRebalance = true;
+      (result.metadata as any).updatedEdgeId = graphEntity.uuid || graphEntity.id;
+      (result.metadata as any).updatedField = 'p';
     }
     
     return result;
@@ -515,9 +515,9 @@ export class UpdateManager {
     // This applies to DAS (Amplitude, etc.) - if p(A>B) gets data, auto-compute p(A>C)
     if (result.success && subDest === 'parameter' && !options.validateOnly) {
       result.metadata = result.metadata || {};
-      result.metadata.requiresSiblingRebalance = true;
-      result.metadata.updatedEdgeId = graphEntity.uuid || graphEntity.id;
-      result.metadata.updatedField = 'p';
+      (result.metadata as any).requiresSiblingRebalance = true;
+      (result.metadata as any).updatedEdgeId = graphEntity.uuid || graphEntity.id;
+      (result.metadata as any).updatedField = 'p';
     }
     
     return result;

@@ -77,14 +77,23 @@ async function executeSubQuery(
   console.log(`[SubQuery ${id}] Executing: from(${funnel.from}).to(${funnel.to}) [coeff=${coefficient>0?'+':''}${coefficient}]`);
   
   try {
-    const result = await runner.execute(dsl, connectionName);
+    const result = await runner.execute(connectionName, dsl, {});
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Query execution failed');
+    }
+    
+    // TypeScript narrows to ExecutionSuccess after success check
+    const successResult = result as { success: true; raw: Record<string, unknown> };
+    const raw = successResult.raw || {};
+    const extracted = raw.extracted as any;
     
     const subResult: SubQueryResult = {
       id,
-      from_count: result.extracted?.from_count || 0,
-      to_count: result.extracted?.to_count || 0,
+      from_count: extracted?.from_count || 0,
+      to_count: extracted?.to_count || 0,
       coefficient,
-      raw_response: result.raw_response
+      raw_response: raw.raw_response
     };
     
     console.log(`[SubQuery ${id}] Result: from=${subResult.from_count}, to=${subResult.to_count}`);

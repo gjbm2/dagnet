@@ -43,7 +43,7 @@ export function AccordionObjectFieldTemplate(props: ObjectFieldTemplateProps) {
       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
         <Typography>
           {title || 'Details'}
-          {required && required.length > 0 && (
+          {Array.isArray(required) && required.length > 0 && (
             <span style={{ color: 'red', marginLeft: '4px' }}>*</span>
           )}
         </Typography>

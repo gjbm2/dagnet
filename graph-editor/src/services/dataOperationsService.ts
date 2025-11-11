@@ -440,8 +440,8 @@ class DataOperationsService {
               },
               aggregatedValue: {
                 ...aggregatedValue,
-                stdev: aggregatedValue.stdev,
-                stdevPercent: (aggregatedValue.stdev * 100).toFixed(2) + '%',
+                stdev: aggregatedValue.stdev ?? 0,
+                stdevPercent: ((aggregatedValue.stdev ?? 0) * 100).toFixed(2) + '%',
               },
               entriesProcessed: valuesWithDaily.length,
               totalDays: allTimeSeries.length,

@@ -141,9 +141,14 @@ export function getEdgeConditionalReferences(
   // Conditional probability references
   if (edge.conditional_p) {
     for (const conditionalProb of edge.conditional_p) {
+      // Extract visited node IDs (handles both old {visited: []} and new string format)
+      const visitedNodeIds = typeof conditionalProb.condition === 'string'
+        ? [] // New format - would need query parser, skip for now
+        : (conditionalProb.condition as any).visited || [];
+      
       // Resolve node references (UUID or ID) to human-readable IDs
-      const nodeIds = conditionalProb.condition.visited
-        .map(nodeRef => {
+      const nodeIds = visitedNodeIds
+        .map((nodeRef: string) => {
           const node = graph.nodes.find(n => n.uuid === nodeRef || n.id === nodeRef);
           if (!node?.id) {
             console.warn(`Node ${nodeRef} not found or has no ID`);
@@ -154,7 +159,7 @@ export function getEdgeConditionalReferences(
         .filter((id): id is string => id !== null);
       
       // Skip if we couldn't resolve all node IDs
-      if (nodeIds.length !== conditionalProb.condition.visited.length) {
+      if (nodeIds.length !== visitedNodeIds.length) {
         continue;
       }
       
@@ -261,7 +266,10 @@ export function findConditionalProbabilityByReference(
   // Find matching condition
   const nodeUuidSet = new Set(nodeUuids);
   for (const conditionalProb of edge.conditional_p) {
-    const conditionUuids = new Set(conditionalProb.condition.visited);
+    const visitedNodeIds = typeof conditionalProb.condition === 'string'
+      ? [] // New format - would need query parser, skip for now
+      : (conditionalProb.condition as any).visited || [];
+    const conditionUuids = new Set(visitedNodeIds);
     
     // Check if sets are equal
     if (nodeUuidSet.size === conditionUuids.size && 

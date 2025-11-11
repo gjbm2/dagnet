@@ -35,7 +35,10 @@ function findTrackedNodes(graph: Graph): Set<string> {
   for (const edge of graph.edges) {
     if (edge.conditional_p) {
       for (const conditionalProb of edge.conditional_p) {
-        for (const nodeId of conditionalProb.condition.visited) {
+        const visitedNodeIds = typeof conditionalProb.condition === 'string'
+          ? [] // New format - would need query parser, skip for now
+          : (conditionalProb.condition as any).visited || [];
+        for (const nodeId of visitedNodeIds) {
           tracked.add(nodeId);
         }
       }
@@ -86,7 +89,10 @@ function getEffectiveEdgeProbability(
     // Find matching conditional probability for this override
     if (edge.conditional_p) {
       for (const conditionalProb of edge.conditional_p) {
-        const requiredNodes = new Set(conditionalProb.condition.visited);
+        const visitedNodeIds = typeof conditionalProb.condition === 'string'
+          ? [] // New format - would need query parser, skip for now
+          : (conditionalProb.condition as any).visited || [];
+        const requiredNodes = new Set(visitedNodeIds);
         
         if (setsEqual(requiredNodes, overrideVisitedSet)) {
           return conditionalProb.p.mean ?? 0.5;
@@ -101,7 +107,10 @@ function getEffectiveEdgeProbability(
   // Check for matching conditional probability based on actual visited set
   if (edge.conditional_p && edge.conditional_p.length > 0) {
     for (const conditionalProb of edge.conditional_p) {
-      const requiredNodes = new Set(conditionalProb.condition.visited);
+      const visitedNodeIds = typeof conditionalProb.condition === 'string'
+        ? [] // New format - would need query parser, skip for now
+        : (conditionalProb.condition as any).visited || [];
+      const requiredNodes = new Set(visitedNodeIds);
       
       // Exact match: visited set must contain exactly these nodes (and no others)
       if (setsEqual(requiredNodes, visitedSet)) {

@@ -141,16 +141,24 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   
   const handleGetFromSource = () => {
     setIsOpen(false);
-    dataOperationsService.getFromSource({ objectType, objectId, targetId });
+    if (objectType === 'event') {
+      // Events don't support external data connections
+      return;
+    }
+    dataOperationsService.getFromSource({ objectType: objectType as 'parameter' | 'case' | 'node', objectId, targetId });
   };
   
   const handleGetFromSourceDirect = () => {
     setIsOpen(false);
+    if (objectType === 'event') {
+      // Events don't support external data connections
+      return;
+    }
     // dailyMode should only be true when fetching to a parameter file (objectId exists)
     // When fetching directly to graph (no file), use aggregate mode
     const hasParameterFile = !!objectId && objectId.trim() !== '';
     dataOperationsService.getFromSourceDirect({ 
-      objectType, 
+      objectType: objectType as 'parameter' | 'case' | 'node', 
       objectId, 
       targetId, 
       graph, 
@@ -171,7 +179,11 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   
   const handleSyncStatus = () => {
     setIsOpen(false);
-    dataOperationsService.openSyncStatus(objectType, objectId);
+    if (objectType === 'event') {
+      // Events don't support sync status
+      return;
+    }
+    dataOperationsService.openSyncStatus(objectType as 'parameter' | 'case' | 'node', objectId);
   };
   
   // Check for connections (matching EdgeContextMenu/NodeContextMenu logic)
