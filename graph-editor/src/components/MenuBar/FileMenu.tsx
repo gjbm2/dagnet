@@ -547,23 +547,6 @@ export function FileMenu() {
 
             <Menubar.Item 
               className="menubar-item" 
-              onSelect={handleCredentials}
-            >
-              Credentials...
-              <div className="menubar-right-slot">⌘,</div>
-            </Menubar.Item>
-
-            <Menubar.Item 
-              className="menubar-item" 
-              onSelect={handleConnections}
-            >
-              Connections...
-            </Menubar.Item>
-
-            <Menubar.Separator className="menubar-separator" />
-
-            <Menubar.Item 
-              className="menubar-item" 
               onSelect={handleClearData}
             >
               Clear Data...

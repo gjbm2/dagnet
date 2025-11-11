@@ -50,8 +50,11 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   const allHidden = selectedNodeIds.length > 0 && selectedNodeIds.every(id => activeTabId && tabOperations.isNodeHidden(activeTabId, id));
   const isMultiSelect = selectedNodeIds.length > 1;
   
-  // Check if node has connected node file
-  const hasNodeFile = !!nodeData?.id; // Has node_id connection
+  // Check if node has connected node file (file must actually exist for "Get from file")
+  const hasNodeFile = nodeData?.id ? !!fileRegistry.getFile(`node-${nodeData.id}`) : false;
+  
+  // Check if node can put to file (file exists OR node.id exists - can create file)
+  const canPutNodeToFile = !!nodeData?.id;
   
   // Check if it's a case node (node.case object exists)
   const isCaseNode = !!nodeData?.case;
@@ -73,7 +76,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   })();
   const hasCaseDirectConnection = !!nodeData?.case?.connection && !hasCaseFile;
   
-  const hasAnyFile = hasNodeFile || hasCaseFile;
+  const hasAnyFile = hasNodeFile || hasCaseFile || canPutNodeToFile;
 
   const handleGetNodeFromFile = () => {
     if (nodeData?.id) {
@@ -253,7 +256,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
           
           {/* Node file submenu */}
-          {hasNodeFile && (
+          {canPutNodeToFile && (
             <div
               style={{ position: 'relative' }}
               onMouseEnter={() => setOpenSubmenu('node')}
@@ -292,28 +295,30 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  <div
-                    onClick={handleGetNodeFromFile}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Get data from file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <Folders size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <TrendingUpDown size={12} />
+                  {hasNodeFile && (
+                    <div
+                      onClick={handleGetNodeFromFile}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get data from file</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <Folders size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
                     </div>
-                  </div>
+                  )}
                   <div
                     onClick={handlePutNodeToFile}
                     style={{
