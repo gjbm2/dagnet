@@ -2,6 +2,8 @@
 
 CRITICAL
 
+@CONDITIONAL_PROBABILITY_STATUS --- ref
+
 - get from file isn't updating graph store... it's rendering on screen, but graph json itself isn't updating.
   ⦁	when I set param overridden in sidebar, and then 'get from file' it still updates target edges (even though should be overridden!) _and_ then tries to rebalance, creating a mess
 
