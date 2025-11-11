@@ -90,19 +90,19 @@ export function DataOperationsMenu({
           hasDirectConnection = !!conditionalParam?.connection;
           directConnectionName = conditionalParam?.connection;
         } else {
-          // Determine which parameter slot we're checking
-          let param: any = null;
-          
-          if (paramSlot === 'p' || !paramSlot) {
-            param = edge.p;
-          } else if (paramSlot === 'cost_gbp') {
-            param = edge.cost_gbp;
-          } else if (paramSlot === 'cost_time') {
-            param = edge.cost_time;
-          }
-          
-          hasDirectConnection = !!param?.connection;
-          directConnectionName = param?.connection;
+        // Determine which parameter slot we're checking
+        let param: any = null;
+        
+        if (paramSlot === 'p' || !paramSlot) {
+          param = edge.p;
+        } else if (paramSlot === 'cost_gbp') {
+          param = edge.cost_gbp;
+        } else if (paramSlot === 'cost_time') {
+          param = edge.cost_time;
+        }
+        
+        hasDirectConnection = !!param?.connection;
+        directConnectionName = param?.connection;
         }
       }
     }

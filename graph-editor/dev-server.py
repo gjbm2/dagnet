@@ -249,129 +249,108 @@ async def generate_all_queries_endpoint(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/generate-all-parameters")
-async def generate_all_parameters_endpoint(request: Request):
-    """
-    Generate queries for ALL parameters in a graph (comprehensive MSMDC).
+# Shared handler functions (matching consolidated python-api.py structure)
+def handle_generate_all_parameters(data):
+    """Shared handler for generate-all-parameters (used by both dev-server and python-api.py)."""
+    graph_data = data.get('graph')
+    param_types = data.get('paramTypes')  # Optional: filter by type
+    downstream_of = data.get('downstream_of')  # Optional: incremental updates (snake_case to match production)
+    max_checks = data.get('maxChecks', 200)
+    literal_weights = data.get('literal_weights')  # snake_case to match production
+    preserve_condition = data.get('preserve_condition', True)  # snake_case to match production
+    preserve_case_context = data.get('preserveCaseContext', True)
     
-    Covers:
-    - Edge base probabilities (edge.p)
-    - Edge conditional probabilities (edge.conditional_p[])
-    - Edge costs (cost_gbp, cost_time)
-    - Case node variants (node.case.variants[])
+    if not graph_data:
+        raise HTTPException(status_code=400, detail="Missing 'graph' field")
     
-    Performance optimizations:
-    - downstreamOf: Only regenerate params for edges downstream of specified node
-    - paramTypes: Filter to specific parameter types only
+    from msmdc import generate_all_parameter_queries, generate_queries_by_type
+    from graph_types import Graph
     
-    This is the complete "batch MSMDC for entire system" endpoint.
-    """
-    try:
-        body = await request.json()
-        graph_data = body.get("graph")
-        param_types = body.get("paramTypes")  # Optional: filter by type
-        downstream_of = body.get("downstreamOf")  # Optional: incremental updates
-        max_checks = body.get("maxChecks", 200)
-        literal_weights = body.get("literalWeights")
-        preserve_condition = body.get("preserveCondition", True)
-        preserve_case_context = body.get("preserveCaseContext", True)
-        
-        if not graph_data:
-            raise HTTPException(status_code=400, detail="Missing 'graph' field")
-        
-        from msmdc import generate_all_parameter_queries, generate_queries_by_type
-        from graph_types import Graph
-        
-        graph = Graph.model_validate(graph_data)
-        
-        # Generate all parameters or filter by type/downstream
-        if param_types:
-            params_by_type = generate_queries_by_type(
-                graph, param_types, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context
-            )
-            all_params = []
-            for ptype, params in params_by_type.items():
-                all_params.extend(params)
-        else:
-            all_params = generate_all_parameter_queries(graph, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context)
-        
-        # Format response
-        parameters = []
-        stats_by_type = {}
-        
-        for param in all_params:
-            parameters.append({
-                "paramType": param.param_type,
-                "paramId": param.param_id,
-                "edgeKey": param.edge_key,
-                "condition": param.condition,
-                "query": param.query,
-                "stats": param.stats
-            })
-            
-            # Count by type
-            if param.param_type not in stats_by_type:
-                stats_by_type[param.param_type] = 0
-            stats_by_type[param.param_type] += 1
-        
-        return {
-            "parameters": parameters,
-            "stats": {
-                "total": len(parameters),
-                "byType": stats_by_type
-            },
-            "success": True
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/stats-enhance")
-async def stats_enhance_endpoint(request: Request):
-    """
-    Enhance raw aggregation with statistical methods (MCMC, Bayesian, trend-aware, robust).
+    graph = Graph.model_validate(graph_data)
     
-    Heavy computations that benefit from NumPy/SciPy are handled here.
-    Lightweight operations (inverse-variance weighting) are handled in TypeScript.
+    # Generate all parameters or filter by type/downstream
+    if param_types:
+        params_by_type = generate_queries_by_type(
+            graph, param_types, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context
+        )
+        all_params = []
+        for ptype, params in params_by_type.items():
+            all_params.extend(params)
+    else:
+        all_params = generate_all_parameter_queries(graph, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context)
     
-    Request: {
-        "raw": {
-            "method": "naive",
-            "n": 1000,
-            "k": 600,
-            "mean": 0.6,
-            "stdev": 0.015,
-            "raw_data": [{"date": "2025-11-03", "n": 100, "k": 60, "p": 0.6}, ...],
-            "window": {"start": "2025-11-03", "end": "2025-11-10"},
-            "days_included": 8,
-            "days_missing": 0
+    # Format response
+    parameters = []
+    stats_by_type = {}
+    
+    for param in all_params:
+        parameters.append({
+            "paramType": param.param_type,
+            "paramId": param.param_id,
+            "edgeKey": param.edge_key,
+            "condition": param.condition,
+            "query": param.query,
+            "stats": param.stats
+        })
+        
+        # Count by type
+        if param.param_type not in stats_by_type:
+            stats_by_type[param.param_type] = 0
+        stats_by_type[param.param_type] += 1
+    
+    return {
+        "parameters": parameters,
+        "stats": {
+            "total": len(parameters),
+            "byType": stats_by_type
         },
-        "method": "mcmc" | "bayesian-complex" | "trend-aware" | "robust"
+        "success": True
     }
+
+
+def handle_stats_enhance(data):
+    """Shared handler for stats-enhance (used by both dev-server and python-api.py)."""
+    raw_data = data.get('raw')
+    method = data.get('method')
     
-    Response: EnhancedAggregation with enhanced mean, stdev, confidence_interval, trend
+    if not raw_data:
+        raise HTTPException(status_code=400, detail="Missing 'raw' field")
+    if not method:
+        raise HTTPException(status_code=400, detail="Missing 'method' field")
+    
+    from stats_enhancement import enhance_aggregation
+    
+    enhanced = enhance_aggregation(raw_data, method)
+    
+    return {
+        **enhanced,
+        "success": True
+    }
+
+
+# Consolidated Python API endpoint (matches production python-api.py structure)
+# Routes both /api/python-api and the original paths for consistency
+@app.post("/api/python-api")
+@app.post("/api/generate-all-parameters")
+@app.post("/api/stats-enhance")
+async def python_api_endpoint(request: Request):
+    """
+    Consolidated Python API router (matches production structure).
+    
+    Routes to:
+    - /api/generate-all-parameters -> handle_generate_all_parameters
+    - /api/stats-enhance -> handle_stats_enhance
     """
     try:
         body = await request.json()
-        raw_data = body.get("raw")
-        method = body.get("method")
+        path = request.url.path.split('?')[0]  # Remove query params
         
-        if not raw_data:
-            raise HTTPException(status_code=400, detail="Missing 'raw' field")
-        if not method:
-            raise HTTPException(status_code=400, detail="Missing 'method' field")
-        
-        # Import and enhance
-        from stats_enhancement import enhance_aggregation
-        
-        enhanced = enhance_aggregation(raw_data, method)
-        
-        return {
-            **enhanced,
-            "success": True
-        }
+        if path == '/api/generate-all-parameters':
+            return handle_generate_all_parameters(body)
+        elif path == '/api/stats-enhance':
+            return handle_stats_enhance(body)
+        else:
+            raise HTTPException(status_code=404, detail=f"Unknown endpoint: {path}")
     except HTTPException:
         raise
     except Exception as e:
@@ -398,8 +377,8 @@ if __name__ == "__main__":
     print("  POST /api/query-graph           - Apply query to graph (topology filter)")
     print("  POST /api/generate-query        - Generate MSMDC query for single edge")
     print("  POST /api/generate-all-queries  - Batch MSMDC for all edges (base only)")
-    print("  POST /api/generate-all-parameters - COMPREHENSIVE: All params (p, cond_p, costs, cases)")
-    print("  POST /api/stats-enhance         - Statistical enhancement (MCMC, Bayesian, trend-aware, robust)")
+    print("  POST /api/generate-all-parameters - All params (p, cond_p, costs, cases)")
+    print("  POST /api/stats-enhance           - Statistical enhancement")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"💡 Port: {port} (set via PYTHON_API_PORT env var)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
