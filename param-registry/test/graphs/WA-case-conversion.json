@@ -393,21 +393,13 @@
       "description": "",
       "conditional_p": [
         {
-          "condition": {
-            "visited": [
-              "node-24"
-            ]
-          },
+          "condition": "visited(node-24)",
           "p": {
             "mean": 0.13
           }
         },
         {
-          "condition": {
-            "visited": [
-              "node-25"
-            ]
-          },
+          "condition": "visited(node-25)",
           "p": {
             "mean": 0.13
           }
@@ -430,21 +422,13 @@
       "description": "",
       "conditional_p": [
         {
-          "condition": {
-            "visited": [
-              "node-24"
-            ]
-          },
+          "condition": "visited(node-24)",
           "p": {
             "mean": 0.87
           }
         },
         {
-          "condition": {
-            "visited": [
-              "node-25"
-            ]
-          },
+          "condition": "visited(node-25)",
           "p": {
             "mean": 0.87
           }
@@ -563,11 +547,7 @@
       "description": "",
       "conditional_p": [
         {
-          "condition": {
-            "visited": [
-              "coffee-promotion"
-            ]
-          },
+          "condition": "visited(coffee-promotion)",
           "p": {
             "mean": 0.6
           }
@@ -590,11 +570,7 @@
       "description": "",
       "conditional_p": [
         {
-          "condition": {
-            "visited": [
-              "coffee-promotion"
-            ]
-          },
+          "condition": "visited(coffee-promotion)",
           "p": {
             "mean": 0.4
           }
