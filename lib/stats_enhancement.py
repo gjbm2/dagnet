@@ -91,14 +91,14 @@ def _enhance_mcmc(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     alpha = k + 1
     beta = n - k + 1
     
-    # Calculate mean (mode of beta distribution)
-    mean = alpha / (alpha + beta)
+    # Calculate mean (mode of beta distribution) and round to 3 decimal places
+    mean = round(alpha / (alpha + beta), 3)
     
     # Calculate standard deviation
     variance = (alpha * beta) / ((alpha + beta) ** 2 * (alpha + beta + 1))
     stdev = math.sqrt(variance)
     
-    # 95% confidence interval
+    # 95% confidence interval, rounded to 3 decimal places
     ci_lower, ci_upper = stats.beta.interval(0.95, alpha, beta)
     
     return {
@@ -107,7 +107,7 @@ def _enhance_mcmc(raw_data: Dict[str, Any]) -> Dict[str, Any]:
         'k': k,
         'mean': float(mean),
         'stdev': float(stdev),
-        'confidence_interval': [float(ci_lower), float(ci_upper)],
+        'confidence_interval': [round(float(ci_lower), 3), round(float(ci_upper), 3)],
         'trend': None,
         'metadata': {
             'raw_method': raw_data['method'],
@@ -192,7 +192,7 @@ def _enhance_trend_aware(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     # Use trend-adjusted mean (project forward or use weighted average)
     # For now, use simple weighted average favoring recent days
     weights = np.linspace(0.5, 1.0, len(p_values))  # More weight to recent
-    trend_adjusted_mean = np.average(p_values, weights=weights)
+    trend_adjusted_mean = round(np.average(p_values, weights=weights), 3)
     
     # Recalculate k from trend-adjusted mean
     trend_adjusted_k = int(round(trend_adjusted_mean * raw_data['n']))
@@ -263,8 +263,8 @@ def _enhance_robust(raw_data: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
     
-    # Use median as robust estimator (less sensitive to outliers)
-    robust_mean = float(np.median(p_values))
+    # Use median as robust estimator (less sensitive to outliers), rounded to 3 decimal places
+    robust_mean = round(float(np.median(p_values)), 3)
     
     # Use IQR-based standard deviation (more robust than sample std)
     q1, q3 = np.percentile(p_values, [25, 75])
@@ -278,7 +278,7 @@ def _enhance_robust(raw_data: Dict[str, Any]) -> Dict[str, Any]:
         'method': 'robust',
         'n': raw_data['n'],
         'k': robust_k,
-        'mean': robust_mean,
+        'mean': float(robust_mean),
         'stdev': robust_stdev,
         'confidence_interval': None,
         'trend': None,

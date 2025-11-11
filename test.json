@@ -1,304 +1,78 @@
-id: test2
-name: test2
-type: probability
-query_overridden: false
-connection: amplitude-prod
-values:
-  - mean: 1
-    n_daily: []
-    k_daily: []
-    dates: []
-  - mean: 0.55
-    n_daily: []
-    k_daily: []
-    dates: []
-    window_from: '2025-11-10T23:48:21.427Z'
-    data_source:
-      type: manual
-      edited_at: '2025-11-10T23:48:21.427Z'
-  - mean: 0.6131868131868132
-    'n': 1820
-    k: 1116
-    n_daily:
-      - 270
-      - 186
-      - 539
-      - 144
-      - 113
-      - 63
-      - 95
-      - 410
-    k_daily:
-      - 161
-      - 121
-      - 307
-      - 83
-      - 84
-      - 43
-      - 62
-      - 255
-    dates:
-      - '2025-11-03'
-      - '2025-11-04'
-      - '2025-11-05'
-      - '2025-11-06'
-      - '2025-11-07'
-      - '2025-11-08'
-      - '2025-11-09'
-      - '2025-11-10'
-    window_from: '2025-11-03T23:50:12.913Z'
-    window_to: '2025-11-10T23:50:12.913Z'
-    data_source:
-      type: amplitude
-      retrieved_at: '2025-11-10T23:50:14.787Z'
-      query:
-        from: Household Created
-        to: ServiceLevel Confirmed
-        context: []
-        case: []
-        event_filters:
-          ServiceLevel Confirmed:
-            - property: level
-              operator: is any of
-              values:
-                - DO_MOST_OF_IT_FOR_ME
-                - DO_ALL_OF_IT_FOR_ME
-        query_params: >-
-          e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22ServiceLevel%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22level%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22DO_MOST_OF_IT_FOR_ME%22%2C%22DO_ALL_OF_IT_FOR_ME%22%5D%7D%5D%7D&start=20251103&end=20251110&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-        from_step_index: 0
-        to_step_index: 1
-      full_query: >-
-        {"from":"Household Created","to":"ServiceLevel Confirmed","context":[],"case":[],"event_filters":{"ServiceLevel
-        Confirmed":[{"property":"level","operator":"is any
-        of","values":["DO_MOST_OF_IT_FOR_ME","DO_ALL_OF_IT_FOR_ME"]}]},"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22ServiceLevel%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22level%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22DO_MOST_OF_IT_FOR_ME%22%2C%22DO_ALL_OF_IT_FOR_ME%22%5D%7D%5D%7D&start=20251103&end=20251110&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-  - mean: 0.6131868131868132
-    'n': 1820
-    k: 1116
-    n_daily:
-      - 270
-      - 186
-      - 539
-      - 144
-      - 113
-      - 63
-      - 95
-      - 410
-    k_daily:
-      - 161
-      - 121
-      - 307
-      - 83
-      - 84
-      - 43
-      - 62
-      - 255
-    dates:
-      - '2025-11-03'
-      - '2025-11-04'
-      - '2025-11-05'
-      - '2025-11-06'
-      - '2025-11-07'
-      - '2025-11-08'
-      - '2025-11-09'
-      - '2025-11-10'
-    window_from: '2025-11-03T23:52:06.657Z'
-    window_to: '2025-11-10T23:52:06.657Z'
-    data_source:
-      type: amplitude
-      retrieved_at: '2025-11-10T23:52:08.035Z'
-      query:
-        from: Household Created
-        to: ServiceLevel Confirmed
-        context: []
-        case: []
-        event_filters:
-          ServiceLevel Confirmed:
-            - property: level
-              operator: is any of
-              values:
-                - DO_MOST_OF_IT_FOR_ME
-                - DO_ALL_OF_IT_FOR_ME
-        query_params: >-
-          e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22ServiceLevel%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22level%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22DO_MOST_OF_IT_FOR_ME%22%2C%22DO_ALL_OF_IT_FOR_ME%22%5D%7D%5D%7D&start=20251103&end=20251110&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-        from_step_index: 0
-        to_step_index: 1
-      full_query: >-
-        {"from":"Household Created","to":"ServiceLevel Confirmed","context":[],"case":[],"event_filters":{"ServiceLevel
-        Confirmed":[{"property":"level","operator":"is any
-        of","values":["DO_MOST_OF_IT_FOR_ME","DO_ALL_OF_IT_FOR_ME"]}]},"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22ServiceLevel%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22level%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22DO_MOST_OF_IT_FOR_ME%22%2C%22DO_ALL_OF_IT_FOR_ME%22%5D%7D%5D%7D&start=20251103&end=20251110&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-  - mean: 0.6147945205479453
-    'n': 1825
-    k: 1122
-    n_daily:
-      - 270
-      - 186
-      - 539
-      - 144
-      - 113
-      - 63
-      - 95
-      - 415
-    k_daily:
-      - 161
-      - 121
-      - 307
-      - 83
-      - 84
-      - 43
-      - 62
-      - 261
-    dates:
-      - '2025-11-03'
-      - '2025-11-04'
-      - '2025-11-05'
-      - '2025-11-06'
-      - '2025-11-07'
-      - '2025-11-08'
-      - '2025-11-09'
-      - '2025-11-10'
-    window_from: '2025-11-03T23:57:40.266Z'
-    window_to: '2025-11-10T23:57:40.266Z'
-    query_signature: 727568c37af5ad22f80e644faa8e4e4ee359ff03327608bb56852668ea3442cd
-    data_source:
-      type: amplitude
-      retrieved_at: '2025-11-10T23:57:40.266Z'
-  - mean: 0.6195528609321713
-    'n': 2639
-    k: 1635
-    n_daily:
-      - 219
-      - 124
-      - 246
-      - 230
-      - 270
-      - 186
-      - 539
-      - 144
-      - 113
-      - 63
-      - 95
-      - 410
-    k_daily:
-      - 142
-      - 74
-      - 161
-      - 142
-      - 161
-      - 121
-      - 307
-      - 83
-      - 84
-      - 43
-      - 62
-      - 255
-    dates:
-      - '2025-10-30'
-      - '2025-10-31'
-      - '2025-11-01'
-      - '2025-11-02'
-      - '2025-11-03'
-      - '2025-11-04'
-      - '2025-11-05'
-      - '2025-11-06'
-      - '2025-11-07'
-      - '2025-11-08'
-      - '2025-11-09'
-      - '2025-11-10'
-    window_from: '2025-10-30T00:00:00.000Z'
-    window_to: '2025-11-10T00:00:00.000Z'
-    query_signature: 727568c37af5ad22f80e644faa8e4e4ee359ff03327608bb56852668ea3442cd
-    data_source:
-      type: amplitude
-      retrieved_at: '2025-11-11T00:09:58.472Z'
-  - mean: 0.6412776412776413
-    'n': 407
-    k: 261
-    n_daily:
-      - 346
-      - 61
-    k_daily:
-      - 224
-      - 37
-    dates:
-      - '2025-10-28'
-      - '2025-10-29'
-    window_from: '2025-10-28T00:00:00Z'
-    window_to: '2025-10-29T23:59:59Z'
-    query_signature: 727568c37af5ad22f80e644faa8e4e4ee359ff03327608bb56852668ea3442cd
-    data_source:
-      type: amplitude
-      retrieved_at: '2025-11-11T00:15:57.343Z'
-  - mean: 0.5977854023705552
-    'n': 6412
-    k: 3833
-    n_daily:
-      - 356
-      - 1152
-      - 354
-      - 779
-      - 613
-      - 553
-      - 214
-      - 130
-      - 97
-      - 286
-      - 501
-      - 124
-      - 40
-      - 133
-      - 587
-      - 493
-    k_daily:
-      - 212
-      - 698
-      - 207
-      - 480
-      - 381
-      - 292
-      - 135
-      - 88
-      - 64
-      - 179
-      - 284
-      - 80
-      - 21
-      - 85
-      - 322
-      - 305
-    dates:
-      - '2025-10-12'
-      - '2025-10-13'
-      - '2025-10-14'
-      - '2025-10-15'
-      - '2025-10-16'
-      - '2025-10-17'
-      - '2025-10-18'
-      - '2025-10-19'
-      - '2025-10-20'
-      - '2025-10-21'
-      - '2025-10-22'
-      - '2025-10-23'
-      - '2025-10-24'
-      - '2025-10-25'
-      - '2025-10-26'
-      - '2025-10-27'
-    window_from: '2025-10-12T00:00:00Z'
-    window_to: '2025-10-27T23:59:59Z'
-    query_signature: 727568c37af5ad22f80e644faa8e4e4ee359ff03327608bb56852668ea3442cd
-    data_source:
-      type: amplitude
-      retrieved_at: '2025-11-11T00:28:05.349Z'
+nodes:
+  - uuid: beb38757-1c04-40b7-be32-1c9b02a4f71b
+    id: create-account
+    label: Create account
+    absorbing: false
+    event_id: household-created
+    event_id_overridden: true
+    layout:
+      x: -656
+      'y': 232
+  - uuid: 9189af7b-aae3-4611-a546-c845c6b8bc37
+    id: delegate
+    label: Delegate
+    absorbing: false
+    event_id: delegation-completed
+    event_id_overridden: true
+    layout:
+      x: -354
+      'y': 138
+  - uuid: 83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e
+    id: manual-mode
+    label: Manual mode
+    absorbing: false
+    layout:
+      x: -333
+      'y': 312
+  - uuid: 31c35c2c-c058-4616-96d8-7fa1d6b27d0d
+    id: abandon
+    label: Abandon
+    absorbing: true
+    outcome_type: failure
+    layout:
+      x: -318
+      'y': 457
+edges:
+  - uuid: beb38757-1c04-40b7-be32-1c9b02a4f71b->83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e
+    id: create-account-to-manual-mode
+    from: beb38757-1c04-40b7-be32-1c9b02a4f71b
+    to: 83e5e3b1-f52b-40ae-a1dc-beb929ff7a0e
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.15
+    description: ''
+    query: from(create-account).to(manual-mode)
+  - uuid: beb38757-1c04-40b7-be32-1c9b02a4f71b->31c35c2c-c058-4616-96d8-7fa1d6b27d0d
+    id: create-account-to-abandon
+    from: beb38757-1c04-40b7-be32-1c9b02a4f71b
+    to: 31c35c2c-c058-4616-96d8-7fa1d6b27d0d
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.3
+    description: ''
+    query: from(create-account).to(abandon)
+  - uuid: create-account-to-delegate
+    id: create-account-to-delegate
+    from: beb38757-1c04-40b7-be32-1c9b02a4f71b
+    to: 9189af7b-aae3-4611-a546-c845c6b8bc37
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.55
+    description: ''
+    query: from(create-account).to(delegate)
+policies:
+  default_outcome: abandon
+  overflow_policy: error
+  free_edge_policy: complement
 metadata:
-  description_overridden: false
-  constraints:
-    discrete: false
-  tags: []
-  created_at: '2025-11-10T23:48:10.847Z'
-  updated_at: '2025-11-10T23:48:10.847Z'
-  author: user
   version: 1.0.0
-  status: draft
-  aliases: []
-  references: []
-  parameterType: probability
-description: ''
+  created_at: '2025-10-16T22:14:49.473Z'
+  author: Graph Editor
+  description: Default empty graph
+  updated_at: '2025-11-10T10:12:38.114Z'
+  name: bsse-conversion-4.json
+  source: git
+  branch: main
