@@ -244,8 +244,8 @@ export class WindowAggregationService {
     const totalN = filtered.reduce((sum, point) => sum + point.n, 0);
     const totalK = filtered.reduce((sum, point) => sum + point.k, 0);
 
-    // Calculate mean (p = k/n)
-    const mean = totalN > 0 ? totalK / totalN : 0;
+    // Calculate mean (p = k/n) and round to 3 decimal places
+    const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
 
     // Calculate standard deviation (binomial)
     const stdev = calculateStdev(totalN, totalK);
@@ -291,12 +291,14 @@ export class WindowAggregationService {
  * @param paramFileData Parameter file data (with values[] array)
  * @param requestedWindow Date range requested for fetching
  * @param querySignature Optional: only consider values with matching query signature
+ * @param bustCache If true, ignore existing dates and return all dates as missing
  * @returns Incremental fetch result with missing dates and reduced window
  */
 export function calculateIncrementalFetch(
   paramFileData: { values?: ParameterValue[] },
   requestedWindow: DateRange,
-  querySignature?: string
+  querySignature?: string,
+  bustCache: boolean = false
 ): IncrementalFetchResult {
   // Normalize requested window dates
   const normalizedWindow: DateRange = {
@@ -307,7 +309,8 @@ export function calculateIncrementalFetch(
   // Extract all existing dates from parameter file values
   const existingDates = new Set<string>();
   
-  if (paramFileData.values && Array.isArray(paramFileData.values)) {
+  // If bustCache is true, skip checking existing dates
+  if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
     for (const value of paramFileData.values) {
       // If query signature is provided, only consider matching values
       if (querySignature && value.query_signature !== querySignature) {
@@ -467,7 +470,8 @@ export function mergeTimeSeriesIntoParameter(
   // Calculate aggregate totals for this new entry
   const totalN = n_daily.reduce((sum, n) => sum + n, 0);
   const totalK = k_daily.reduce((sum, k) => sum + k, 0);
-  const mean = totalN > 0 ? totalK / totalN : 0;
+  // Round mean to 3 decimal places
+  const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
 
   // Create NEW value entry with only the new days
   const newValue: ParameterValue = {

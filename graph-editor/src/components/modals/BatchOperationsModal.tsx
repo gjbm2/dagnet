@@ -67,6 +67,7 @@ export function BatchOperationsModal({
   const { operations } = useTabContext();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [createLog, setCreateLog] = useState(false);
+  const [bustCache, setBustCache] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [results, setResults] = useState<OperationResult[]>([]);
@@ -201,12 +202,14 @@ export function BatchOperationsModal({
       const selectable = batchItems.filter(item => !item.reason);
       setSelectedItems(new Set(selectable.map(item => item.id)));
       setCreateLog(false);
+      setBustCache(false);
       setProgress({ current: 0, total: 0 });
       setResults([]);
       setLogContent('');
     } else {
       setSelectedItems(new Set());
       setCreateLog(false);
+      setBustCache(false);
       setProgress({ current: 0, total: 0 });
       setResults([]);
       setLogContent('');
@@ -342,7 +345,8 @@ export function BatchOperationsModal({
               graph,
               setGraph,
               paramSlot: item.paramSlot,
-              window: window || undefined
+              window: window || undefined,
+              bustCache
             });
             
             // Get edge after operation to extract details
@@ -390,7 +394,8 @@ export function BatchOperationsModal({
               setGraph,
               paramSlot: item.paramSlot,
               window: window || undefined,
-              dailyMode: false
+              dailyMode: false,
+              bustCache
             });
             
             // Get edge after operation to extract details
@@ -778,6 +783,23 @@ export function BatchOperationsModal({
                   <span style={{ fontSize: '14px' }}>Create log file</span>
                 </label>
               </div>
+
+              {/* Bust cache checkbox (only show for get-from-sources operations) */}
+              {(operationType === 'get-from-sources' || operationType === 'get-from-sources-direct') && (
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={bustCache}
+                      onChange={(e) => setBustCache(e.target.checked)}
+                      style={{ marginRight: '8px' }}
+                    />
+                    <span style={{ fontSize: '14px' }}>
+                      Bust cache (re-fetch all dates, even if already cached)
+                    </span>
+                  </label>
+                </div>
+              )}
             </>
           )}
         </div>

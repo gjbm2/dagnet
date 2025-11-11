@@ -152,8 +152,8 @@ export class InverseVarianceEnhancer implements StatisticalEnhancer {
       }
     }
 
-    // Weighted mean probability
-    const weightedMean = weightSum > 0 ? weightedSum / weightSum : raw.mean;
+    // Weighted mean probability, rounded to 3 decimal places
+    const weightedMean = weightSum > 0 ? Math.round((weightedSum / weightSum) * 1000) / 1000 : raw.mean;
     
     // Recompute k from weighted mean and total n
     // This preserves the relationship k = p × n
