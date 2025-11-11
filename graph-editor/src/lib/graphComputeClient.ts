@@ -25,7 +25,7 @@ const USE_MOCK = import.meta.env.VITE_USE_MOCK_COMPUTE === 'true';
 // ============================================================
 
 export interface QueryParseRequest {
-  query: string;
+  query_string: string;
 }
 
 export interface KeyValuePair {
@@ -38,44 +38,14 @@ export interface QueryParseResponse {
   to_node: string;
   exclude: string[];
   visited: string[];
-  visited_any: string[][];  // Array of OR groups
   context: KeyValuePair[];
   cases: KeyValuePair[];
 }
 
-export interface MSMDCRequest {
-  graph: any;  // Graph type
-  edge_id: string;
-  condition_index: number;
-}
-
-export interface MSMDCResponse {
-  query: string;
-  explanation: string;
-}
-
-export interface MutationRequest {
-  graph: any;
-  mutation_type: 'rebalance' | 'propagate_color' | 'add_complementary';
-  params: Record<string, any>;
-}
-
-export interface MutationResponse {
-  graph: any;
-  changes: Array<{
-    entity_id: string;
-    field: string;
-    old_value: any;
-    new_value: any;
-  }>;
-}
-
-export interface AnalyticsRequest {
-  graph: any;
-}
-
-export interface AnalyticsResponse {
-  stats: Record<string, any>;
+export interface HealthResponse {
+  status: string;
+  service?: string;
+  env?: string;
 }
 
 export interface StatsEnhanceRequest {
@@ -121,12 +91,6 @@ export interface StatsEnhanceResponse {
   success?: boolean;
 }
 
-export interface HealthResponse {
-  status: string;
-  service?: string;
-  env?: string;
-}
-
 // ============================================================
 // GraphComputeClient
 // ============================================================
@@ -166,7 +130,6 @@ export class GraphComputeClient {
         to_node: 'b',
         exclude: [],
         visited: [],
-        visited_any: [],
         context: [],
         cases: [],
       };
@@ -175,7 +138,7 @@ export class GraphComputeClient {
     const response = await fetch(`${this.baseUrl}/api/parse-query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: queryString } as QueryParseRequest),
+      body: JSON.stringify({ query_string: queryString } as QueryParseRequest),
     });
 
     if (!response.ok) {
@@ -183,103 +146,9 @@ export class GraphComputeClient {
       throw new Error(`Query parsing failed: ${error.detail || error.error || response.statusText}`);
     }
 
-    const data = await response.json();
-    return data.parsed;
-  }
-
-  /**
-   * Generate MSMDC query for conditional probability
-   */
-  async generateMSMDCQuery(
-    graph: any,
-    edgeId: string,
-    conditionIndex: number
-  ): Promise<MSMDCResponse> {
-    if (this.useMock) {
-      return {
-        query: `from(mock-a).to(mock-b).visited(mock-c)`,
-        explanation: '[MOCK] MSMDC query generated',
-      };
-    }
-
-    const response = await fetch(`${this.baseUrl}/api/msmdc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        graph,
-        edge_id: edgeId,
-        condition_index: conditionIndex,
-      } as MSMDCRequest),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`MSMDC generation failed: ${error.detail || error.error || response.statusText}`);
-    }
-
     return response.json();
   }
 
-  /**
-   * Apply graph mutation (rebalancing, propagation, etc.)
-   */
-  async applyMutation(
-    graph: any,
-    mutationType: MutationRequest['mutation_type'],
-    params: Record<string, any>
-  ): Promise<MutationResponse> {
-    if (this.useMock) {
-      return {
-        graph,
-        changes: [],
-      };
-    }
-
-    const response = await fetch(`${this.baseUrl}/api/mutations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        graph,
-        mutation_type: mutationType,
-        params,
-      } as MutationRequest),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`Mutation failed: ${error.detail || error.error || response.statusText}`);
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Get graph analytics/stats
-   */
-  async getAnalytics(graph: any): Promise<AnalyticsResponse> {
-    if (this.useMock) {
-      return {
-        stats: {
-          node_count: 0,
-          edge_count: 0,
-        },
-      };
-    }
-
-    const response = await fetch(`${this.baseUrl}/api/analytics`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ graph } as AnalyticsRequest),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`Analytics failed: ${error.detail || error.error || response.statusText}`);
-    }
-
-    return response.json();
-  }
-  
   /**
    * Generate MSMDC queries for all parameters in graph
    */
