@@ -3881,12 +3881,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Clear the drag flag - this allows ReactFlow→Graph sync to run and update positions
     isDraggingNodeRef.current = false;
     
+    // Explicitly sync positions from ReactFlow to graph store immediately
+    // The useEffect might not run immediately, so we do it manually here
+    if (graph && nodes.length > 0) {
+      const updatedGraph = fromFlow(nodes, edges, graph);
+      if (updatedGraph) {
+        const updatedJson = JSON.stringify(updatedGraph);
+        // Only update if positions actually changed
+        if (updatedJson !== lastSyncedReactFlowRef.current) {
+          console.log(`🎯 Syncing node positions to graph store after drag`);
+          isSyncingRef.current = true;
+          lastSyncedReactFlowRef.current = updatedJson;
+          setGraph(updatedGraph);
+          // Reset syncing flag after a brief delay
+          setTimeout(() => {
+            isSyncingRef.current = false;
+          }, 0);
+        }
+      }
+    }
+    
     // Save the FINAL position to history after the ReactFlow→Store sync completes
     // Use setTimeout to ensure sync completes first
     setTimeout(() => {
       saveHistoryState('Move node');
     }, 0);
-  }, [saveHistoryState]);
+  }, [saveHistoryState, graph, nodes, edges, setGraph]);
 
   // Add new node
   const addNode = useCallback(() => {

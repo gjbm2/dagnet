@@ -102,10 +102,16 @@ export function useSidebarState(tabId?: string) {
   
   // Persist local state changes to tab state (separate effect to avoid circular updates)
   const prevStateRef = useRef<SidebarState>(state);
+  // Phase 4: Use ref for tabOps to avoid re-running effect when it changes reference
+  const tabOpsRef = useRef(tabOps);
+  useEffect(() => {
+    tabOpsRef.current = tabOps;
+  }, [tabOps]);
+  
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [useSidebarState] useEffect#SB1: Persist sidebar state (changed=${prevStateRef.current !== state})`);
     // Only persist if state actually changed (not initial mount or tab switch)
-    if (tabId && tabOps.updateTabState && prevStateRef.current !== state) {
+    if (tabId && tabOpsRef.current.updateTabState && prevStateRef.current !== state) {
       // Use a flag to track if this change came from us or from tab state
       // Note: We skip comparing savedDockLayout because it's large and may have circular refs
       // Instead, we rely on the fact that savedDockLayout only changes when the layout actually changes
@@ -121,7 +127,7 @@ export function useSidebarState(tabId?: string) {
       if (!stateMatchesMemoized) {
         // Note: hasAutoOpened is session-only and not persisted to IndexedDB
         console.log(`[${new Date().toISOString()}] [useSidebarState] Persisting state to tab (mode=${state.mode}, width=${state.sidebarWidth}):`, state);
-        tabOps.updateTabState(tabId, {
+        tabOpsRef.current.updateTabState(tabId, {
           sidebarState: state
         });
       } else {
@@ -129,7 +135,7 @@ export function useSidebarState(tabId?: string) {
       }
     }
     prevStateRef.current = state;
-  }, [state, tabId, tabOps, memoizedStoredState]);
+  }, [state, tabId, memoizedStoredState]); // Phase 4: Removed tabOps - using ref instead
   
   /**
    * Minimize sidebar to icon bar

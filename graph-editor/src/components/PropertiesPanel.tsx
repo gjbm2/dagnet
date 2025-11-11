@@ -416,7 +416,7 @@ export default function PropertiesPanel({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEdgeId, graph, setGraph, onSelectedEdgeChange]);
+  }, []); // Phase 4: Removed unused dependencies - handler doesn't use selectedEdgeId, graph, setGraph, or onSelectedEdgeChange
 
   // Listen for field focus requests
   useEffect(() => {
