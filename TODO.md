@@ -1,50 +1,27 @@
 # DagNet TODO
 
-> **Recent Work:** See [WHAT_IF_DSL_REFACTOR_SUMMARY.md](./WHAT_IF_DSL_REFACTOR_SUMMARY.md) for detailed summary of the DSL-based what-if refactor completed on 2025-01-11.
+## Data project
+**Case/Variant Filtering** (4-6 hrs)
+ - Design case property mapping schema (Statsig case → Amplitude event property)
+ - Extend event definitions with case_property_mappings
+ - Implement case filter injection in pre_request script
+ - Test variant filtering (treatment vs control)
 
-CRITICAL
-
-- get from file isn't updating graph store... it's rendering on screen, but graph json itself isn't updating.
-  ⦁	when I set param overridden in sidebar, and then 'get from file' it still updates target edges (even though should be overridden!) _and_ then tries to rebalance, creating a mess
-- download CSV built from selected funnel (or generate Google spreadsheet?)
-
-- Remove api secrets from server logs, pls
-- node renaming, file renaming -- need to handle globally
-- systematically review that graph changes now go through UpdateManager not random code
-
-  **Case/Variant Filtering** (4-6 hrs)
-   - Design case property mapping schema (Statsig case → Amplitude event property)
-   - Extend event definitions with case_property_mappings
-   - Implement case filter injection in pre_request script
-   - Test variant filtering (treatment vs control)
-
-**📝 Technical Debt Identified:**
-- UpdateManager uses external API terminology (probability/sample_size/successes) instead of schema terminology (mean/n/k)
-- This creates confusion and unnecessary translation layer in DataOperationsService
-- **TODO (Phase 5)**: Refactor UpdateManager external_to_graph mappings to use sche
-
+## Major components
 - Scenario viewer (snapshotting)
 - Context support
 - Latency/lag management
 - Dashboarding views
 - Bayesian modelling (...is expected?)
+- Asynch / api updates
+
+- download CSV built from selected funnel (or generate Google spreadsheet?)
+- node renaming, file renaming -- need to handle globally
+- systematically review that DELETE graph changes  go through UpdateManager
+
 
 ### Analytics / Model Fitting (Future)
 - add moving arrow effect, speed of animation scale on log lag
-- **Standard Deviation Calculation Strategy**
-  - Currently: `stdev` defaults to 0 or simple estimates
-  - Need proper calculation based on:
-    - Distribution type (beta for probabilities, lognormal for costs, etc.)
-    - Sample size (n) and confidence
-    - Historical variance if available
-    - Bayesian priors vs. frequentist estimates
-  - Decision: Defer to model fitting analytics phase
-  - Context: Different data sources provide different levels of detail:
-    - Amplitude funnels: Can calculate from n/k using beta distribution
-    - Google Sheets: No statistical context, might need historical variance
-    - Manual entry: User may provide or leave as 0
-  - Should be smart about deriving when possible, but not too opinionated
-  - See: Phase 0.3 discussion on flexible data handling
 
 ### Medium Priority
 - fix tools panel view options (Again)
