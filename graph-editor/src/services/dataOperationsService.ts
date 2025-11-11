@@ -733,8 +733,9 @@ class DataOperationsService {
         
         // Save to graph store
         // Dispatch event to suppress store→file sync (this is a programmatic update from file, not user edit)
-        if (typeof window !== 'undefined' && window.dispatchEvent) {
-          window.dispatchEvent(new CustomEvent('dagnet:suppressStoreToFileSync', { detail: { duration: 200 } }));
+        // Use globalThis.window to avoid shadowing from the 'window' parameter (DateRange)
+        if (typeof globalThis.window !== 'undefined' && globalThis.window.dispatchEvent) {
+          globalThis.window.dispatchEvent(new CustomEvent('dagnet:suppressStoreToFileSync', { detail: { duration: 200 } }));
         }
         setGraph(finalGraph);
         
