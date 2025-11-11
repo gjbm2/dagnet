@@ -9,6 +9,13 @@
 
 import { describe, it, expect } from 'vitest';
 import { QUERY_FUNCTIONS, type QueryFunctionName } from '../queryDSL';
+import {
+  parseConstraints,
+  parseDSL,
+  getVisitedNodeIds,
+  evaluateConstraint,
+  normalizeConstraintString
+} from '../queryDSL';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -245,6 +252,356 @@ describe('Query DSL Constants', () => {
       
       // Should use 'as const' assertion
       expect(sourceContent).toContain('as const');
+    });
+  });
+});
+
+// ============================================================
+// TEST SUITE 7: DSL Parsing Functions
+// ============================================================
+
+describe('DSL Parsing Functions', () => {
+  describe('parseConstraints', () => {
+    it('should parse simple visited constraint', () => {
+      const result = parseConstraints('visited(node-a)');
+      expect(result.visited).toEqual(['node-a']);
+      expect(result.exclude).toEqual([]);
+      expect(result.context).toEqual([]);
+      expect(result.cases).toEqual([]);
+      expect(result.visitedAny).toEqual([]);
+    });
+
+    it('should parse multiple visited nodes', () => {
+      const result = parseConstraints('visited(node-a, node-b, node-c)');
+      expect(result.visited).toEqual(['node-a', 'node-b', 'node-c']);
+    });
+
+    it('should parse multiple visited() calls', () => {
+      const result = parseConstraints('visited(node-a).visited(node-b)');
+      expect(result.visited).toEqual(['node-a', 'node-b']);
+    });
+
+    it('should parse exclude constraint', () => {
+      const result = parseConstraints('exclude(node-x)');
+      expect(result.exclude).toEqual(['node-x']);
+      expect(result.visited).toEqual([]);
+    });
+
+    it('should parse context constraint', () => {
+      const result = parseConstraints('context(device:mobile)');
+      expect(result.context).toEqual([{ key: 'device', value: 'mobile' }]);
+    });
+
+    it('should parse multiple context constraints', () => {
+      const result = parseConstraints('context(device:mobile).context(browser:chrome)');
+      expect(result.context).toEqual([
+        { key: 'device', value: 'mobile' },
+        { key: 'browser', value: 'chrome' }
+      ]);
+    });
+
+    it('should parse case constraint', () => {
+      const result = parseConstraints('case(test:treatment)');
+      expect(result.cases).toEqual([{ key: 'test', value: 'treatment' }]);
+    });
+
+    it('should parse visitedAny constraint', () => {
+      const result = parseConstraints('visitedAny(node-a, node-b)');
+      expect(result.visitedAny).toEqual([['node-a', 'node-b']]);
+    });
+
+    it('should parse complex constraint with all types', () => {
+      const result = parseConstraints('visited(node-a, node-b).exclude(node-x).context(device:mobile).case(test:treatment).visitedAny(node-c, node-d)');
+      expect(result.visited).toEqual(['node-a', 'node-b']);
+      expect(result.exclude).toEqual(['node-x']);
+      expect(result.context).toEqual([{ key: 'device', value: 'mobile' }]);
+      expect(result.cases).toEqual([{ key: 'test', value: 'treatment' }]);
+      expect(result.visitedAny).toEqual([['node-c', 'node-d']]);
+    });
+
+    it('should handle empty string', () => {
+      const result = parseConstraints('');
+      expect(result.visited).toEqual([]);
+      expect(result.exclude).toEqual([]);
+      expect(result.context).toEqual([]);
+      expect(result.cases).toEqual([]);
+      expect(result.visitedAny).toEqual([]);
+    });
+
+    it('should handle null/undefined', () => {
+      expect(parseConstraints(null)).toEqual({
+        visited: [],
+        exclude: [],
+        context: [],
+        cases: [],
+        visitedAny: []
+      });
+      expect(parseConstraints(undefined)).toEqual({
+        visited: [],
+        exclude: [],
+        context: [],
+        cases: [],
+        visitedAny: []
+      });
+    });
+
+    it('should deduplicate visited nodes', () => {
+      const result = parseConstraints('visited(node-a, node-b, node-a)');
+      expect(result.visited).toEqual(['node-a', 'node-b']);
+    });
+
+    it('should deduplicate context/case pairs', () => {
+      const result = parseConstraints('context(device:mobile).context(device:mobile)');
+      expect(result.context).toEqual([{ key: 'device', value: 'mobile' }]);
+    });
+
+    it('should handle whitespace in node lists', () => {
+      const result = parseConstraints('visited( node-a , node-b )');
+      expect(result.visited).toEqual(['node-a', 'node-b']);
+    });
+  });
+
+  describe('parseDSL', () => {
+    it('should parse full query with from/to', () => {
+      const result = parseDSL('from(node-a).to(node-b).visited(node-c)');
+      expect(result.from).toBe('node-a');
+      expect(result.to).toBe('node-b');
+      expect(result.visited).toEqual(['node-c']);
+    });
+
+    it('should parse constraint-only DSL (no from/to)', () => {
+      const result = parseDSL('visited(node-a).exclude(node-b)');
+      expect(result.from).toBeUndefined();
+      expect(result.to).toBeUndefined();
+      expect(result.visited).toEqual(['node-a']);
+      expect(result.exclude).toEqual(['node-b']);
+    });
+
+    it('should preserve raw string', () => {
+      const dsl = 'from(a).to(b).visited(c)';
+      const result = parseDSL(dsl);
+      expect(result.raw).toBe(dsl);
+    });
+
+    it('should handle empty string', () => {
+      const result = parseDSL('');
+      expect(result.raw).toBe('');
+      expect(result.from).toBeUndefined();
+      expect(result.to).toBeUndefined();
+    });
+  });
+
+  describe('getVisitedNodeIds', () => {
+    it('should extract visited nodes from simple constraint', () => {
+      const result = getVisitedNodeIds('visited(node-a)');
+      expect(result).toEqual(['node-a']);
+    });
+
+    it('should extract visited nodes from complex constraint', () => {
+      const result = getVisitedNodeIds('visited(node-a, node-b).exclude(node-x).context(device:mobile)');
+      expect(result).toEqual(['node-a', 'node-b']);
+    });
+
+    it('should extract visited nodes from full query', () => {
+      const result = getVisitedNodeIds('from(node-a).to(node-b).visited(node-c, node-d)');
+      expect(result).toEqual(['node-c', 'node-d']);
+    });
+
+    it('should handle multiple visited() calls', () => {
+      const result = getVisitedNodeIds('visited(node-a).visited(node-b)');
+      expect(result).toEqual(['node-a', 'node-b']);
+    });
+
+    it('should return empty array for no visited nodes', () => {
+      expect(getVisitedNodeIds('exclude(node-x)')).toEqual([]);
+      expect(getVisitedNodeIds('')).toEqual([]);
+      expect(getVisitedNodeIds(null)).toEqual([]);
+    });
+  });
+
+  describe('evaluateConstraint', () => {
+    it('should evaluate visited constraint correctly', () => {
+      const visitedNodes = new Set(['node-a', 'node-b']);
+      expect(evaluateConstraint('visited(node-a)', visitedNodes)).toBe(true);
+      expect(evaluateConstraint('visited(node-a, node-b)', visitedNodes)).toBe(true);
+      expect(evaluateConstraint('visited(node-a, node-c)', visitedNodes)).toBe(false);
+    });
+
+    it('should evaluate exclude constraint correctly', () => {
+      const visitedNodes = new Set(['node-a', 'node-b']);
+      expect(evaluateConstraint('exclude(node-x)', visitedNodes)).toBe(true);
+      expect(evaluateConstraint('exclude(node-a)', visitedNodes)).toBe(false);
+      expect(evaluateConstraint('visited(node-a).exclude(node-b)', visitedNodes)).toBe(false);
+    });
+
+    it('should evaluate visitedAny constraint correctly', () => {
+      const visitedNodes = new Set(['node-a']);
+      expect(evaluateConstraint('visitedAny(node-a, node-b)', visitedNodes)).toBe(true);
+      expect(evaluateConstraint('visitedAny(node-c, node-d)', visitedNodes)).toBe(false);
+      expect(evaluateConstraint('visitedAny(node-a, node-b).visitedAny(node-c, node-d)', visitedNodes)).toBe(true);
+    });
+
+    it('should evaluate context constraint correctly', () => {
+      const visitedNodes = new Set(['node-a']);
+      const context = { device: 'mobile', browser: 'chrome' };
+      
+      expect(evaluateConstraint('context(device:mobile)', visitedNodes, context)).toBe(true);
+      expect(evaluateConstraint('context(device:desktop)', visitedNodes, context)).toBe(false);
+      expect(evaluateConstraint('context(device:mobile).context(browser:chrome)', visitedNodes, context)).toBe(true);
+      expect(evaluateConstraint('context(device:mobile).context(browser:firefox)', visitedNodes, context)).toBe(false);
+    });
+
+    it('should evaluate case constraint correctly', () => {
+      const visitedNodes = new Set(['node-a']);
+      const caseVariants = { test: 'treatment', experiment: 'variant-b' };
+      
+      expect(evaluateConstraint('case(test:treatment)', visitedNodes, undefined, caseVariants)).toBe(true);
+      expect(evaluateConstraint('case(test:control)', visitedNodes, undefined, caseVariants)).toBe(false);
+      expect(evaluateConstraint('case(test:treatment).case(experiment:variant-b)', visitedNodes, undefined, caseVariants)).toBe(true);
+    });
+
+    it('should evaluate complex constraint with all types', () => {
+      const visitedNodes = new Set(['node-a', 'node-b']);
+      const context = { device: 'mobile' };
+      const caseVariants = { test: 'treatment' };
+      
+      const constraint = 'visited(node-a).exclude(node-x).context(device:mobile).case(test:treatment).visitedAny(node-b, node-c)';
+      expect(evaluateConstraint(constraint, visitedNodes, context, caseVariants)).toBe(true);
+    });
+
+    it('should return false if visited constraint not satisfied', () => {
+      const visitedNodes = new Set(['node-a']);
+      expect(evaluateConstraint('visited(node-a, node-b)', visitedNodes)).toBe(false);
+    });
+
+    it('should return false if exclude constraint violated', () => {
+      const visitedNodes = new Set(['node-a', 'node-x']);
+      expect(evaluateConstraint('visited(node-a).exclude(node-x)', visitedNodes)).toBe(false);
+    });
+
+    it('should return true for empty constraint', () => {
+      const visitedNodes = new Set(['node-a']);
+      expect(evaluateConstraint('', visitedNodes)).toBe(true);
+    });
+  });
+
+  describe('normalizeConstraintString', () => {
+    it('should normalize simple visited constraint', () => {
+      const result = normalizeConstraintString('visited(node-b, node-a)');
+      expect(result).toBe('visited(node-a, node-b)');
+    });
+
+    it('should normalize multiple constraint types', () => {
+      const result = normalizeConstraintString('visited(node-b, node-a).exclude(node-y, node-x)');
+      // Order: visited, exclude, context, cases, visitedAny (as per implementation)
+      expect(result).toBe('visited(node-a, node-b).exclude(node-x, node-y)');
+    });
+
+    it('should normalize context constraints', () => {
+      const result = normalizeConstraintString('context(browser:chrome).context(device:mobile)');
+      expect(result).toBe('context(browser:chrome).context(device:mobile)');
+    });
+
+    it('should normalize case constraints', () => {
+      const result = normalizeConstraintString('case(experiment:variant-b).case(test:treatment)');
+      expect(result).toBe('case(experiment:variant-b).case(test:treatment)');
+    });
+
+    it('should normalize visitedAny constraints', () => {
+      const result = normalizeConstraintString('visitedAny(node-b, node-a)');
+      expect(result).toBe('visitedAny(node-a, node-b)');
+    });
+
+    it('should handle empty constraint', () => {
+      expect(normalizeConstraintString('')).toBe('');
+    });
+
+    it('should produce consistent output for same input', () => {
+      const input = 'visited(node-b, node-a).exclude(node-x)';
+      const result1 = normalizeConstraintString(input);
+      const result2 = normalizeConstraintString(input);
+      expect(result1).toBe(result2);
+    });
+
+    it('should produce same output for semantically equivalent constraints', () => {
+      const input1 = 'visited(node-b, node-a)';
+      const input2 = 'visited(node-a, node-b)';
+      expect(normalizeConstraintString(input1)).toBe(normalizeConstraintString(input2));
+    });
+  });
+
+  describe('Edge Cases and Error Handling', () => {
+    it('should handle malformed constraint gracefully', () => {
+      // Missing closing parenthesis
+      const result = parseConstraints('visited(node-a');
+      expect(result.visited).toEqual([]);
+    });
+
+    it('should handle nested parentheses', () => {
+      // This shouldn't happen in valid DSL, but parser should handle it
+      const result = parseConstraints('visited(node-a(node-b))');
+      // Parser will extract what it can
+      expect(result.visited.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should handle empty node lists', () => {
+      const result = parseConstraints('visited()');
+      expect(result.visited).toEqual([]);
+    });
+
+    it('should handle whitespace-only node lists', () => {
+      const result = parseConstraints('visited(  ,  )');
+      expect(result.visited).toEqual([]);
+    });
+
+    it('should handle non-string input to parseConstraints', () => {
+      // TypeScript should prevent this, but runtime check exists
+      const result = parseConstraints(null as any);
+      expect(result.visited).toEqual([]);
+    });
+  });
+
+  describe('Integration: Real-world scenarios', () => {
+    it('should parse migrated conditional probability format', () => {
+      // Simulates what we migrated from old format
+      const migratedCondition = 'visited(coffee-promotion)';
+      const parsed = parseConstraints(migratedCondition);
+      expect(parsed.visited).toEqual(['coffee-promotion']);
+      
+      const visitedNodes = new Set(['coffee-promotion']);
+      expect(evaluateConstraint(migratedCondition, visitedNodes)).toBe(true);
+    });
+
+    it('should handle multiple conditional probabilities on same edge', () => {
+      const conditions = [
+        'visited(node-24)',
+        'visited(node-25)'
+      ];
+      
+      conditions.forEach(condition => {
+        const parsed = parseConstraints(condition);
+        expect(parsed.visited.length).toBe(1);
+      });
+    });
+
+    it('should normalize for comparison in EdgeContextMenu', () => {
+      // Simulates condition comparison logic
+      const condition1 = 'visited(node-b, node-a)';
+      const condition2 = 'visited(node-a, node-b)';
+      
+      const normalized1 = normalizeConstraintString(condition1);
+      const normalized2 = normalizeConstraintString(condition2);
+      
+      expect(normalized1).toBe(normalized2);
+    });
+
+    it('should work with conditionalReferences format', () => {
+      const condition = 'visited(coffee-promotion)';
+      const normalized = normalizeConstraintString(condition);
+      const parsed = parseConstraints(normalized);
+      
+      expect(parsed.visited).toEqual(['coffee-promotion']);
+      expect(normalized).toBe('visited(coffee-promotion)');
     });
   });
 });

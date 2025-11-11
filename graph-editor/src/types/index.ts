@@ -400,6 +400,11 @@ export interface CostParam {
   evidence?: Evidence; // Observations from data sources
 }
 
+/**
+ * @deprecated Use string format for conditions instead (Query DSL)
+ * Old format: { visited: ['node-a', 'node-b'] }
+ * New format: "visited(node-a, node-b)"
+ */
 export interface Condition {
   visited: string[]; // Array of node IDs that must be visited
   query?: string; // Query expression for conditionality (alternative to visited array)
@@ -407,7 +412,8 @@ export interface Condition {
 
 export interface ConditionalProbability {
   // Semantic constraint: determines WHEN this conditional applies (runtime evaluation)
-  condition: Condition | string; // String format: "visited(promo)" or "context(device:mobile)"
+  // Uses Query DSL string format: "visited(promo)", "context(device:mobile)", etc.
+  condition: string;
   
   // Full data retrieval query: determines HOW to fetch data from external sources
   // Auto-derived from condition + edge topology, but can be manually overridden
@@ -415,6 +421,9 @@ export interface ConditionalProbability {
   query_overridden?: boolean; // If true, query was manually edited (don't regenerate)
   
   p: ProbabilityParam; // Probability when condition is satisfied
+  
+  // Display color for this condition (propagates to matching conditions on sibling edges)
+  color?: string; // hex color
 }
 
 export interface MonetaryCost {

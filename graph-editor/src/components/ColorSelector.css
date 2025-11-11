@@ -132,3 +132,26 @@
   position: relative;
 }
 
+/* Clear button */
+.color-selector-clear {
+  padding: 4px 8px;
+  font-size: 11px;
+  background: #f1f1f1;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-top: 4px;
+  color: #666;
+  transition: all 0.2s ease;
+}
+
+.color-selector-clear:hover:not(:disabled) {
+  background: #e5e5e5;
+  border-color: #bbb;
+}
+
+.color-selector-clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+

@@ -7,6 +7,7 @@
  */
 
 import type { Graph, GraphEdge, GraphNode } from '../types';
+import { getVisitedNodeIds, evaluateConstraint } from './queryDSL';
 
 export interface RunnerResult {
   nodeProbabilities: Map<string, number>;
@@ -35,12 +36,13 @@ function findTrackedNodes(graph: Graph): Set<string> {
   for (const edge of graph.edges) {
     if (edge.conditional_p) {
       for (const conditionalProb of edge.conditional_p) {
-        const visitedNodeIds = typeof conditionalProb.condition === 'string'
-          ? [] // New format - would need query parser, skip for now
-          : (conditionalProb.condition as any).visited || [];
+        // Extract visited nodes from condition (works for both old and new format)
+        const visitedNodeIds = getVisitedNodeIds(conditionalProb.condition);
         for (const nodeId of visitedNodeIds) {
           tracked.add(nodeId);
         }
+        // TODO: For exclude() constraints, we might need to track excluded nodes too
+        // This would require more sophisticated state tracking
       }
     }
   }
@@ -89,9 +91,14 @@ function getEffectiveEdgeProbability(
     // Find matching conditional probability for this override
     if (edge.conditional_p) {
       for (const conditionalProb of edge.conditional_p) {
-        const visitedNodeIds = typeof conditionalProb.condition === 'string'
-          ? [] // New format - would need query parser, skip for now
-          : (conditionalProb.condition as any).visited || [];
+        // Skip old format conditions
+        if (typeof conditionalProb.condition !== 'string') {
+          continue;
+        }
+        
+        // For override matching, we only match on visited nodes (override is Set<nodeIds>)
+        // Full DSL evaluation would require context/case info which isn't in override
+        const visitedNodeIds = getVisitedNodeIds(conditionalProb.condition);
         const requiredNodes = new Set(visitedNodeIds);
         
         if (setsEqual(requiredNodes, overrideVisitedSet)) {
@@ -107,13 +114,18 @@ function getEffectiveEdgeProbability(
   // Check for matching conditional probability based on actual visited set
   if (edge.conditional_p && edge.conditional_p.length > 0) {
     for (const conditionalProb of edge.conditional_p) {
-      const visitedNodeIds = typeof conditionalProb.condition === 'string'
-        ? [] // New format - would need query parser, skip for now
-        : (conditionalProb.condition as any).visited || [];
-      const requiredNodes = new Set(visitedNodeIds);
+      // Skip old format conditions
+      if (typeof conditionalProb.condition !== 'string') {
+        continue;
+      }
       
-      // Exact match: visited set must contain exactly these nodes (and no others)
-      if (setsEqual(requiredNodes, visitedSet)) {
+      // Use evaluateConstraint for full DSL evaluation (supports exclude, context, case)
+      // Note: context and caseVariants are empty for now - runner doesn't have this context
+      // TODO: Extend runner to support context/case overrides if needed
+      const context: Record<string, string> = {};
+      const caseVariants: Record<string, string> = {};
+      
+      if (evaluateConstraint(conditionalProb.condition, visitedSet, context, caseVariants)) {
         return conditionalProb.p.mean ?? 0.5;
       }
     }

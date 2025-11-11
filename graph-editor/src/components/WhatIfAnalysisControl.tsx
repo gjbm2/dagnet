@@ -3,6 +3,7 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useWhatIfContext } from '../contexts/WhatIfContext';
 import { getConditionalColor, getConditionSignature } from '@/lib/conditionalColors';
+import { getVisitedNodeIds, normalizeConstraintString } from '@/lib/queryDSL';
 
 export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
   const { graph } = useGraphStore();
@@ -121,12 +122,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
       displayName: edges[0]?.conditional_p?.[0]?.condition
         ? (typeof edges[0].conditional_p[0].condition === 'string'
             ? edges[0].conditional_p[0].condition
-            : edges[0].conditional_p[0].condition?.visited?.length > 0
-              ? `visited(${edges[0].conditional_p[0].condition.visited.map((nodeRef: string) => {
-                  const node = graph?.nodes.find((n: any) => n.uuid === nodeRef || n.id === nodeRef);
-                  return node?.label || node?.id || nodeRef;
-                }).join(', ')})`
-              : 'Empty condition')
+            : 'Empty condition')
         : 'Empty condition'
     }));
   }, [graph, conditionalEdges]);
@@ -474,23 +470,23 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                         
                         // Find matching conditional_p option
                         const matchingCond = activeEdge.conditional_p?.find(cond => {
-                          // Handle both old {visited: [...]} format and new string format
-                          if (typeof cond.condition === 'string') {
-                            // For string format, use getConditionSignature for comparison
-                            return getConditionSignature(cond) === overrideIds;
-                          } else if (cond.condition?.visited) {
-                            // Old format
-                            const condIds = cond.condition.visited.map(ref => {
-                              const node = graph?.nodes.find(n => n.uuid === ref || n.id === ref);
-                              if (node) return node.uuid;
-                              return ref;
-                            }).sort().join(',');
-                            return condIds === overrideIds;
+                          // Skip old format conditions
+                          if (typeof cond.condition !== 'string') {
+                            return false;
                           }
-                          return false;
+                          
+                          // Get visited nodes from condition
+                          const visitedNodeIds = getVisitedNodeIds(cond.condition);
+                          const condIds = visitedNodeIds.map(ref => {
+                            const node = graph?.nodes.find(n => n.uuid === ref || n.id === ref);
+                            if (node) return node.uuid;
+                            return ref;
+                          }).sort().join(',');
+                          
+                          return condIds === overrideIds;
                         });
                         
-                        return matchingCond ? getConditionSignature(matchingCond) : '';
+                        return matchingCond ? normalizeConstraintString(matchingCond.condition) : '';
                       })()}
                       onMouseDown={() => {
                         console.log(`[${ts()}] [WhatIfControl] conditional dropdown onMouseDown - suspending layout for 3s`);
@@ -549,11 +545,14 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                     >
                       <option value="">Base probabilities</option>
                       {group.edges[0]?.conditional_p?.map((cond, idx) => {
-                        // Handle both old {visited: [...]} format and new string format
-                        const conditionSig = getConditionSignature(cond);
-                        const displayLabel = typeof cond.condition === 'string' 
-                          ? cond.condition 
-                          : (cond.condition?.visited ? `visited(${cond.condition.visited.join(', ')})` : 'condition');
+                        // Skip old format conditions
+                        if (typeof cond.condition !== 'string') {
+                          return null;
+                        }
+                        
+                        const conditionSig = normalizeConstraintString(cond.condition);
+                        const displayLabel = cond.condition;
+                        
                         return (
                           <option key={idx} value={conditionSig}>
                             What if: {displayLabel}?

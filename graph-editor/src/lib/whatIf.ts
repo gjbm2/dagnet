@@ -7,6 +7,8 @@
  * - Conditional probability what-ifs (edge-driven)
  */
 
+import { parseConstraints, evaluateConstraint } from './queryDSL';
+
 export type WhatIfOverrides = {
   caseOverrides?: Record<string, string>;
   // Conditional edge overrides: edgeId -> forced visited nodes (hyperprior activation)
@@ -115,14 +117,22 @@ export function computeEffectiveEdgeProbability(
       // override is a Set<string> of forced visited nodes (hyperprior activation)
       // Find the conditional_p that matches these visited nodes
       for (const conditionalProb of edge.conditional_p) {
-        if (!conditionalProb?.condition?.visited) continue;
+        // Skip old format conditions
+        if (typeof conditionalProb.condition !== 'string') {
+          continue;
+        }
+        
+        // Parse condition to get visited nodes
+        const parsed = parseConstraints(conditionalProb.condition);
         
         // Resolve all condition node references to IDs
-        const conditionNodeIds = conditionalProb.condition.visited.map((ref: string) => 
+        const conditionNodeIds = parsed.visited.map((ref: string) => 
           resolveNodeRefToId(graph, ref)
         );
         
         // Check if the override matches this condition (same set of nodes)
+        // Note: For now, we only match on visited nodes. Full DSL evaluation would require
+        // context and case information which isn't available in the override Set.
         const overrideArray = Array.from(override).sort();
         const conditionArray = conditionNodeIds.sort();
         
@@ -141,20 +151,20 @@ export function computeEffectiveEdgeProbability(
       const implicitlyVisited = getImplicitlyVisitedNodes(graph, whatIfOverrides, legacyWhatIfAnalysis);
       const allVisitedNodes = new Set([...implicitlyVisited, ...(givenVisitedNodes || [])]);
       
-      if (allVisitedNodes.size > 0) {
+      // Build context and case variant maps for evaluation
+      // TODO: Extract from whatIfOverrides if we add context/case override support
+      const context: Record<string, string> = {};
+      const caseVariants: Record<string, string> = {};
+      
+      if (allVisitedNodes.size > 0 || Object.keys(context).length > 0 || Object.keys(caseVariants).length > 0) {
         for (const conditionalProb of edge.conditional_p) {
-          if (!conditionalProb?.condition?.visited) continue;
+          // Skip old format conditions
+          if (typeof conditionalProb.condition !== 'string') {
+            continue;
+          }
           
-          // Resolve all condition node references to IDs
-          const conditionNodeIds = conditionalProb.condition.visited.map((ref: string) => 
-            resolveNodeRefToId(graph, ref)
-          );
-          
-          // Check if ALL required nodes are visited (either implicitly or in path context)
-          const allVisited = conditionNodeIds.length > 0 &&
-                           conditionNodeIds.every((nodeId: string) => allVisitedNodes.has(nodeId));
-          
-          if (allVisited) {
+          // Use evaluateConstraint for full DSL evaluation (supports exclude, context, case)
+          if (evaluateConstraint(conditionalProb.condition, allVisitedNodes, context, caseVariants)) {
             // Automatically apply conditional probability
             probability = conditionalProb.p?.mean ?? probability;
             break;
@@ -223,12 +233,22 @@ export function getEdgeWhatIfDisplay(
       // Find the matching conditional probability
       let matchingProb = edge.p?.mean ?? 0;
       for (const conditionalProb of edge.conditional_p) {
-        if (!conditionalProb?.condition?.visited) continue;
+        // Skip old format conditions
+        if (typeof conditionalProb.condition !== 'string') {
+          continue;
+        }
         
-        const conditionNodeIds = conditionalProb.condition.visited.map((ref: string) => 
+        // Parse condition to get visited nodes
+        const parsed = parseConstraints(conditionalProb.condition);
+        
+        // Resolve all condition node references to IDs
+        const conditionNodeIds = parsed.visited.map((ref: string) => 
           resolveNodeRefToId(graph, ref)
         );
         
+        // Check if the override matches this condition (same set of nodes)
+        // Note: For now, we only match on visited nodes. Full DSL evaluation would require
+        // context and case information which isn't available in the override Set.
         const overrideArray = Array.from(override).sort();
         const conditionArray = conditionNodeIds.sort();
         
@@ -248,18 +268,19 @@ export function getEdgeWhatIfDisplay(
       // IMPLICIT activation via case what-if (hyperprior)
       const implicitlyVisited = getImplicitlyVisitedNodes(graph, whatIfOverrides, legacyWhatIfAnalysis);
       
-      if (implicitlyVisited.size > 0) {
+      // Build context and case variant maps for evaluation
+      const context: Record<string, string> = {};
+      const caseVariants: Record<string, string> = {};
+      
+      if (implicitlyVisited.size > 0 || Object.keys(context).length > 0 || Object.keys(caseVariants).length > 0) {
         for (const conditionalProb of edge.conditional_p) {
-          if (!conditionalProb?.condition?.visited) continue;
+          // Skip old format conditions
+          if (typeof conditionalProb.condition !== 'string') {
+            continue;
+          }
           
-          const conditionNodeIds = conditionalProb.condition.visited.map((ref: string) => 
-            resolveNodeRefToId(graph, ref)
-          );
-          
-          const allVisited = conditionNodeIds.length > 0 &&
-                           conditionNodeIds.every((nodeId: string) => implicitlyVisited.has(nodeId));
-          
-          if (allVisited) {
+          // Use evaluateConstraint for full DSL evaluation (supports exclude, context, case)
+          if (evaluateConstraint(conditionalProb.condition, implicitlyVisited, context, caseVariants)) {
             return {
               type: 'conditional',
               probability: conditionalProb.p?.mean ?? 0,

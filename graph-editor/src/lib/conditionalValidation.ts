@@ -8,38 +8,10 @@ import {
   ValidationWarning,
   ConditionalProbability,
 } from '../types';
+import { getVisitedNodeIds } from './queryDSL';
 
 // Tolerance for probability sum validation
 const PROB_SUM_TOLERANCE = 0.001;
-
-/**
- * Helper function to extract visited node IDs from a condition
- * Handles both old format {visited: [...]} and new string format "visited(node1, node2)"
- */
-function getVisitedNodeIds(condition: any): string[] {
-  if (!condition) return [];
-  
-  // Old format: {visited: [...]}
-  if (typeof condition === 'object' && condition.visited && Array.isArray(condition.visited)) {
-    return condition.visited;
-  }
-  
-  // New format: string like "visited(node1, node2)" or "case(x).visited(y)"
-  if (typeof condition === 'string') {
-    const visited: string[] = [];
-    // Match all visited(...) patterns
-    const visitedRegex = /visited\(([^)]+)\)/g;
-    let match;
-    while ((match = visitedRegex.exec(condition)) !== null) {
-      // Split by comma and trim
-      const nodes = match[1].split(',').map(s => s.trim()).filter(s => s);
-      visited.push(...nodes);
-    }
-    return visited;
-  }
-  
-  return [];
-}
 
 /**
  * Validate conditional probabilities in the graph
