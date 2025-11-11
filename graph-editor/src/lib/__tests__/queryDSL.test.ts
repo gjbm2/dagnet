@@ -18,8 +18,8 @@ describe('Query DSL Constants', () => {
   // ============================================================
 
   describe('Schema Authority', () => {
-    it('should have exactly 6 functions', () => {
-      expect(QUERY_FUNCTIONS).toHaveLength(6);
+    it('should have exactly 9 functions', () => {
+      expect(QUERY_FUNCTIONS).toHaveLength(9);
     });
 
     it('should contain all required functions in correct order', () => {
@@ -27,9 +27,12 @@ describe('Query DSL Constants', () => {
         'from',
         'to',
         'visited',
+        'visitedAny',
         'exclude',
         'context',
-        'case'
+        'case',
+        'minus',
+        'plus'
       ]);
     });
 
@@ -39,7 +42,7 @@ describe('Query DSL Constants', () => {
       // This test just verifies the array exists and has the right type
       const arr: readonly string[] = QUERY_FUNCTIONS;
       expect(arr).toBeDefined();
-      expect(arr.length).toBe(6);
+      expect(arr.length).toBe(9);
     });
 
     it('should match schema definition exactly', () => {
@@ -52,7 +55,7 @@ describe('Query DSL Constants', () => {
       const schemaFunctions = schema.$defs?.QueryFunction?.properties?.name?.enum;
       
       expect(schemaFunctions).toBeDefined();
-      expect(schemaFunctions).toHaveLength(6);
+      expect(schemaFunctions).toHaveLength(9);
       
       // Check that all schema functions are in QUERY_FUNCTIONS
       schemaFunctions.forEach((func: string) => {
@@ -77,12 +80,15 @@ describe('Query DSL Constants', () => {
         'from',
         'to', 
         'visited',
+        'visitedAny',
         'exclude',
         'context',
-        'case'
+        'case',
+        'minus',
+        'plus'
       ];
       
-      expect(validNames).toHaveLength(6);
+      expect(validNames).toHaveLength(9);
     });
 
     it('should enforce literal types', () => {
@@ -90,11 +96,14 @@ describe('Query DSL Constants', () => {
       const from: QueryFunctionName = 'from';
       const to: QueryFunctionName = 'to';
       const visited: QueryFunctionName = 'visited';
+      const visitedAny: QueryFunctionName = 'visitedAny';
       const exclude: QueryFunctionName = 'exclude';
       const context: QueryFunctionName = 'context';
       const caseFunc: QueryFunctionName = 'case';
+      const minus: QueryFunctionName = 'minus';
+      const plus: QueryFunctionName = 'plus';
       
-      expect([from, to, visited, exclude, context, caseFunc]).toHaveLength(6);
+      expect([from, to, visited, visitedAny, exclude, context, caseFunc, minus, plus]).toHaveLength(9);
     });
 
     it('should be usable in array operations', () => {
@@ -104,7 +113,7 @@ describe('Query DSL Constants', () => {
       
       expect(functionSet.has('from')).toBe(true);
       expect(functionSet.has('invalid' as any)).toBe(false);
-      expect(functionSet.size).toBe(6);
+      expect(functionSet.size).toBe(9);
       
       const filtered = functionsCopy.filter(f => f.startsWith('c'));
       expect(filtered).toContain('context');
@@ -122,16 +131,19 @@ describe('Query DSL Constants', () => {
       expect(QUERY_FUNCTIONS[0]).toBe('from');
       expect(QUERY_FUNCTIONS[1]).toBe('to');
       expect(QUERY_FUNCTIONS[2]).toBe('visited');
-      expect(QUERY_FUNCTIONS[3]).toBe('exclude');
-      expect(QUERY_FUNCTIONS[4]).toBe('context');
-      expect(QUERY_FUNCTIONS[5]).toBe('case');
+      expect(QUERY_FUNCTIONS[3]).toBe('visitedAny');
+      expect(QUERY_FUNCTIONS[4]).toBe('exclude');
+      expect(QUERY_FUNCTIONS[5]).toBe('context');
+      expect(QUERY_FUNCTIONS[6]).toBe('case');
+      expect(QUERY_FUNCTIONS[7]).toBe('minus');
+      expect(QUERY_FUNCTIONS[8]).toBe('plus');
     });
 
     it('should be importable consistently', () => {
       // Verify the constant can be imported and used
       expect(QUERY_FUNCTIONS).toBeDefined();
       expect(Array.isArray(QUERY_FUNCTIONS)).toBe(true);
-      expect(QUERY_FUNCTIONS.length).toBe(6);
+      expect(QUERY_FUNCTIONS.length).toBe(9);
     });
   });
 

@@ -113,7 +113,7 @@ export class InverseVarianceEnhancer implements StatisticalEnhancer {
     // If no daily data, fall back to naive result
     if (!raw.raw_data || raw.raw_data.length === 0) {
       return {
-        method: raw.method,
+        method: 'inverse-variance',
         n: raw.n,
         k: raw.k,
         mean: raw.mean,

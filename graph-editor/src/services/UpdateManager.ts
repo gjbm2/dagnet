@@ -879,7 +879,9 @@ export class UpdateManager {
           
           // Evidence fields (if present - from data pulls)
           // NOTE: Do NOT include n_daily/k_daily/dates - those are only for external data pulls
-          if (source.p.evidence) {
+          // Only include evidence if it's from a data_source (not stale from previous GET)
+          // Manual edits should NOT include stale evidence - check if data_source exists and is not manual
+          if (source.p.evidence && source.p.data_source && source.p.data_source.type && source.p.data_source.type !== 'manual') {
             if (source.p.evidence.n !== undefined) entry.n = source.p.evidence.n;
             if (source.p.evidence.k !== undefined) entry.k = source.p.evidence.k;
             if (source.p.evidence.window_from) entry.window_from = source.p.evidence.window_from;
@@ -1447,16 +1449,16 @@ export class UpdateManager {
         targetField: 'p.mean',
         overrideFlag: 'p.mean_overridden',
         transform: (probability, source) => {
-          // Always recalculate from n/k if both are available to ensure consistency
-          // This prevents discrepancies from rounding or stale probability values
+          // Prefer explicit probability if provided (may be adjusted/rounded)
+          // Only recalculate if explicit probability not available
+          if (probability !== undefined && probability !== null) {
+            return probability;
+          }
+          // Fallback: calculate from n/k if both are available
           if (source.sample_size > 0 && source.successes !== undefined) {
             // Calculate probability, clamping to [0, 1] in case of data errors
             const calculated = source.successes / source.sample_size;
             return Math.max(0, Math.min(1, calculated));
-          }
-          // Fallback to provided probability if n/k not available
-          if (probability !== undefined) {
-            return probability;
           }
           // No probability data available - don't update mean
           return undefined;

@@ -104,20 +104,31 @@ dagnet/
 - **Visual Graph Editor**: Drag-and-drop nodes and edges
 - **Conditional Probabilities**: Define probabilities based on graph state
 - **File-Backed Parameters**: Link parameters to external data sources
+- **Data Connections & Adapters**: Connect to Amplitude, Google Sheets, PostgreSQL, and more via DAS (Data Adapter Service)
+- **Time-Series Data**: Daily breakdowns with incremental fetching and window aggregation
 - **Query DSL**: Powerful query language for graph traversal
 - **What-If Analysis**: Simulate different scenarios
 - **Graph Analytics**: MSMDC, mutations, pruning (Python/NetworkX)
 - **Case Variants**: A/B testing and multivariate scenarios
+- **Batch Operations**: Bulk data fetching and updates across multiple parameters
 
 ## Documentation
 
+### User Documentation
+- [User Guide](graph-editor/public/docs/user-guide.md) - Getting started and core concepts
+- [Data Connections & Adapters](graph-editor/public/docs/data-connections.md) - Connect to external data sources
+- [Query Expressions](graph-editor/public/docs/query-expressions.md) - Query DSL reference
+- [What-If Analysis](graph-editor/public/docs/what-ifs-with-conditionals.md) - Scenario modeling
+- [API Reference](graph-editor/public/docs/api-reference.md) - Programmatic access
+
+### Technical Documentation
 See [PROJECT_CONNECT/README.md](PROJECT_CONNECT/README.md) for:
 - Current project status and roadmap
 - Technical debt tracking
 - Architecture decisions
 - Phase-by-phase implementation plan
 
-### Key Docs
+### Key Technical Docs
 - [Python Graph Compute Architecture](PROJECT_CONNECT/CURRENT/PYTHON_GRAPH_COMPUTE_ARCHITECTURE.md)
 - [Conditional Probability & Graph Updates](PROJECT_CONNECT/CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md)
 - [Schema Changes](PROJECT_CONNECT/CURRENT/SCHEMA_CHANGES_AND_TODO.md)

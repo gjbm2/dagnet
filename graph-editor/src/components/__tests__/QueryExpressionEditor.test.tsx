@@ -182,8 +182,8 @@ describe('QueryExpressionEditor - Parsing Logic', () => {
       expect(allFunctions).toContain('case');
     });
 
-    it('should have exactly 6 schema-defined functions', () => {
-      expect(QUERY_FUNCTIONS).toHaveLength(6);
+    it('should have exactly 9 schema-defined functions', () => {
+      expect(QUERY_FUNCTIONS).toHaveLength(9);
     });
 
     it('should parse all schema-defined functions', () => {
