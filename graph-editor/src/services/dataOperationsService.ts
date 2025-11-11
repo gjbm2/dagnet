@@ -1776,6 +1776,61 @@ class DataOperationsService {
         }
       } else if (!dailyMode) {
         console.log('Extracted data from DAS (mapped to external format):', updateData);
+        
+        // Calculate stdev and enhance stats if we have n and k (same codepath as file pulls)
+        if (updateData.sample_size && updateData.successes !== undefined) {
+          const n = updateData.sample_size;
+          const k = updateData.successes;
+          const p = updateData.probability ?? (k / n);
+          
+          // Create raw aggregation (same format as windowAggregationService.aggregateWindow returns)
+          // For direct pulls, we have a single aggregated point (no daily time-series)
+          const rawAggregation = {
+            method: 'naive' as const,
+            n,
+            k,
+            mean: p,
+            stdev: (p === 0 || p === 1 || n === 0) ? 0 : Math.sqrt((p * (1 - p)) / n),
+            raw_data: [], // No daily data for direct pulls
+            window: window || {
+              start: new Date().toISOString().split('T')[0],
+              end: new Date().toISOString().split('T')[0]
+            },
+            days_included: 1,
+            days_missing: 0,
+            missing_dates: [],
+            gaps: [],
+            missing_at_start: false,
+            missing_at_end: false,
+            has_middle_gaps: false
+          };
+          
+          // Enhance with statistical methods (same as file pulls: inverse-variance)
+          // Handle both sync (TS) and async (Python) results
+          const enhancedResult = statisticalEnhancementService.enhance(rawAggregation, 'inverse-variance');
+          const enhanced = enhancedResult instanceof Promise 
+            ? await enhancedResult 
+            : enhancedResult;
+          
+          // Update with enhanced stats (same as file pull path)
+          updateData.probability = enhanced.mean;
+          updateData.stdev = enhanced.stdev;
+          
+          console.log('[DataOperationsService] Enhanced stats from external data (same codepath as file pulls):', {
+            raw: {
+              mean: rawAggregation.mean,
+              stdev: rawAggregation.stdev,
+              n: rawAggregation.n,
+              k: rawAggregation.k
+            },
+            enhanced: {
+              mean: enhanced.mean,
+              stdev: enhanced.stdev,
+              n: enhanced.n,
+              k: enhanced.k
+            }
+          });
+        }
       }
       
       // 7. Apply directly to graph (only if NOT in dailyMode)
@@ -1816,7 +1871,8 @@ class DataOperationsService {
         console.log('[DataOperationsService] UpdateManager result:', {
           success: updateResult.success,
           changesLength: updateResult.changes?.length,
-          changes: updateResult.changes
+          changes: updateResult.changes,
+          metadata: updateResult.metadata
         });
         
         if (!updateResult.success) {
@@ -1838,22 +1894,34 @@ class DataOperationsService {
             
             // AUTO-REBALANCE: If UpdateManager flagged this update as needing sibling rebalance
             // This applies to both external data (DAS) and file pulls, but NOT manual slider edits
+            // Also rebalance if probability was provided in updateData (even if value didn't change)
             let finalGraph = nextGraph;
-            if ((updateResult.metadata as any)?.requiresSiblingRebalance) {
+            const shouldRebalance = (updateResult.metadata as any)?.requiresSiblingRebalance || 
+                                   (updateData.probability !== undefined && updateData.probability !== null);
+            
+            console.log('[DataOperationsService] Rebalance check:', {
+              requiresSiblingRebalance: (updateResult.metadata as any)?.requiresSiblingRebalance,
+              hasProbability: updateData.probability !== undefined && updateData.probability !== null,
+              shouldRebalance,
+              updatedField: (updateResult.metadata as any)?.updatedField
+            });
+            
+            if (shouldRebalance) {
               // Use UpdateManager's rebalance method
               const { UpdateManager } = await import('./UpdateManager');
               const updateManagerInstance = new UpdateManager();
-              const updatedEdgeId = (updateResult.metadata as any).updatedEdgeId;
-              const updatedField = (updateResult.metadata as any).updatedField;
+              const updatedEdgeId = (updateResult.metadata as any)?.updatedEdgeId || targetId;
               
-              // Rebalance based on field type
-              if (updatedField === 'p.mean') {
-                finalGraph = updateManagerInstance.rebalanceEdgeProbabilities(
-                  nextGraph,
-                  updatedEdgeId,
-                  false // Don't force rebalance - respect overrides
-                );
-              }
+              console.log('[DataOperationsService] Calling rebalanceEdgeProbabilities:', {
+                edgeId: updatedEdgeId,
+                targetId
+              });
+              
+              finalGraph = updateManagerInstance.rebalanceEdgeProbabilities(
+                nextGraph,
+                updatedEdgeId,
+                false // Don't force rebalance - respect overrides
+              );
             }
             
             setGraph(finalGraph);

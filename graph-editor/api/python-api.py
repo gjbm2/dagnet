@@ -67,94 +67,25 @@ class handler(BaseHTTPRequestHandler):
     
     def handle_generate_all_parameters(self, data):
         """Handle generate-all-parameters endpoint."""
-        # Extract parameters
-        graph_data = data.get('graph')
-        param_types = data.get('paramTypes')  # Optional: filter by type
-        downstream_of = data.get('downstream_of')  # Optional: incremental updates
-        max_checks = data.get('maxChecks', 200)
-        literal_weights = data.get('literal_weights')
-        preserve_condition = data.get('preserve_condition', True)
-        preserve_case_context = data.get('preserveCaseContext', True)
-        
-        if not graph_data:
-            self.send_error_response(400, "Missing 'graph' field")
-            return
-        
-        # Import modules
-        from msmdc import generate_all_parameter_queries, generate_queries_by_type
-        from graph_types import Graph
-        
-        # Parse graph
-        graph = Graph.model_validate(graph_data)
-        
-        # Generate all parameters or filter by type/downstream
-        if param_types:
-            params_by_type = generate_queries_by_type(
-                graph, param_types, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context
-            )
-            all_params = []
-            for ptype, params in params_by_type.items():
-                all_params.extend(params)
-        else:
-            all_params = generate_all_parameter_queries(
-                graph, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context
-            )
-        
-        # Format response
-        parameters = []
-        stats_by_type = {}
-        
-        for param in all_params:
-            parameters.append({
-                "paramType": param.param_type,
-                "paramId": param.param_id,
-                "edgeKey": param.edge_key,
-                "condition": param.condition,
-                "query": param.query,
-                "stats": param.stats
-            })
-            
-            # Count by type
-            if param.param_type not in stats_by_type:
-                stats_by_type[param.param_type] = 0
-            stats_by_type[param.param_type] += 1
-        
-        response = {
-            "parameters": parameters,
-            "stats": {
-                "total": len(parameters),
-                "byType": stats_by_type
-            },
-            "success": True
-        }
-        
-        self.send_success_response(response)
+        try:
+            from api_handlers import handle_generate_all_parameters as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
     
     def handle_stats_enhance(self, data):
         """Handle stats-enhance endpoint."""
-        # Extract parameters
-        raw_data = data.get('raw')
-        method = data.get('method')
-        
-        if not raw_data:
-            self.send_error_response(400, "Missing 'raw' field")
-            return
-        
-        if not method:
-            self.send_error_response(400, "Missing 'method' field")
-            return
-        
-        # Import and enhance
-        from stats_enhancement import enhance_aggregation
-        
-        enhanced = enhance_aggregation(raw_data, method)
-        
-        response = {
-            **enhanced,
-            "success": True
-        }
-        
-        self.send_success_response(response)
+        try:
+            from api_handlers import handle_stats_enhance as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
     
     def send_success_response(self, data):
         """Send successful JSON response."""
