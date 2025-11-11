@@ -592,6 +592,8 @@ class DataOperationsService {
         }
         
         // Save to graph store
+        // Dispatch event to suppress store→file sync (this is a programmatic update from file, not user edit)
+        globalThis.window.dispatchEvent(new CustomEvent('dagnet:suppressStoreToFileSync', { detail: { duration: 200 } }));
         setGraph(finalGraph);
         
         const hadRebalance = finalGraph !== nextGraph;
@@ -1451,14 +1453,28 @@ class DataOperationsService {
           console.log(`[DataOperationsService] DAS result for gap ${gapIndex + 1}:`, {
             updates: result.updates.length,
             hasTimeSeries: !!result.raw?.time_series,
-            timeSeriesLength: Array.isArray(result.raw?.time_series) ? result.raw.time_series.length : 0,
+            timeSeriesType: typeof result.raw?.time_series,
+            timeSeriesIsArray: Array.isArray(result.raw?.time_series),
+            timeSeriesLength: Array.isArray(result.raw?.time_series) ? result.raw.time_series.length : (result.raw?.time_series ? 'not array' : 'null/undefined'),
+            timeSeriesValue: result.raw?.time_series,
             window: fetchWindow,
           });
         
           // Collect time-series data if in daily mode
           if (dailyMode && result.raw?.time_series) {
-            const timeSeries = result.raw.time_series as Array<{ date: string; n: number; k: number; p: number }>;
-            allTimeSeriesData.push(...timeSeries);
+            // Ensure time_series is an array before spreading
+            const timeSeries = result.raw.time_series;
+            if (Array.isArray(timeSeries)) {
+              allTimeSeriesData.push(...timeSeries);
+            } else {
+              // If it's not an array (e.g., single object), wrap it
+              console.warn(`[DataOperationsService] time_series is not an array, wrapping:`, {
+                type: typeof timeSeries,
+                isArray: Array.isArray(timeSeries),
+                value: timeSeries
+              });
+              allTimeSeriesData.push(timeSeries as { date: string; n: number; k: number; p: number });
+            }
           }
           
           // Parse the updates to extract values for simple queries (use latest result for non-daily mode)
@@ -1556,84 +1572,91 @@ class DataOperationsService {
         console.log('Extracted data from DAS (mapped to external format):', updateData);
       }
       
-      // 7. Apply directly to graph (no file update)
-      if (!targetId || !graph || !setGraph) {
-        toast.error('Cannot apply to graph: missing context');
-        return;
-      }
-      
-      // Find the target edge
-      const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
-      if (!targetEdge) {
-        toast.error('Target edge not found in graph');
-        return;
-      }
-      
-      // Call UpdateManager to transform and apply external data directly to graph
-      // DAS data is "external" data (not from file), so use handleExternalToGraph
-      console.log('[DataOperationsService] Calling UpdateManager with:', {
-        updateData,
-        targetEdge: {
-          uuid: targetEdge.uuid,
-          'p.mean': targetEdge.p?.mean,
-          'p.mean_overridden': targetEdge.p?.mean_overridden
+      // 7. Apply directly to graph (only if NOT in dailyMode)
+      // When dailyMode is true, the versioned path (getFromSource) will update the graph
+      // via getParameterFromFile after the file is updated
+      if (!dailyMode) {
+        if (!targetId || !graph || !setGraph) {
+          toast.error('Cannot apply to graph: missing context');
+          return;
         }
-      });
-      
-      const updateResult = await updateManager.handleExternalToGraph(
-        updateData,  // External data with {mean, n, k, etc}
-        targetEdge,
-        'UPDATE',
-        'parameter',
-        { interactive: false }
-      );
-      
-      console.log('[DataOperationsService] UpdateManager result:', {
-        success: updateResult.success,
-        changesLength: updateResult.changes?.length,
-        changes: updateResult.changes
-      });
-      
-      if (!updateResult.success) {
-        toast.error('Failed to apply updates to graph');
-        return;
-      }
-      
-      // Apply the changes to the graph
-      if (updateResult.changes && updateResult.changes.length > 0) {
-        const nextGraph = structuredClone(graph);
-        const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === targetId || e.id === targetId);
         
-        if (edgeIndex >= 0) {
-          applyChanges(nextGraph.edges[edgeIndex], updateResult.changes);
-          
-          if (nextGraph.metadata) {
-            nextGraph.metadata.updated_at = new Date().toISOString();
+        // Find the target edge
+        const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
+        if (!targetEdge) {
+          toast.error('Target edge not found in graph');
+          return;
+        }
+        
+        // Call UpdateManager to transform and apply external data directly to graph
+        // DAS data is "external" data (not from file), so use handleExternalToGraph
+        console.log('[DataOperationsService] Calling UpdateManager with:', {
+          updateData,
+          targetEdge: {
+            uuid: targetEdge.uuid,
+            'p.mean': targetEdge.p?.mean,
+            'p.mean_overridden': targetEdge.p?.mean_overridden
           }
+        });
+        
+        const updateResult = await updateManager.handleExternalToGraph(
+          updateData,  // External data with {mean, n, k, etc}
+          targetEdge,
+          'UPDATE',
+          'parameter',
+          { interactive: false }
+        );
+        
+        console.log('[DataOperationsService] UpdateManager result:', {
+          success: updateResult.success,
+          changesLength: updateResult.changes?.length,
+          changes: updateResult.changes
+        });
+        
+        if (!updateResult.success) {
+          toast.error('Failed to apply updates to graph');
+          return;
+        }
+        
+        // Apply the changes to the graph
+        if (updateResult.changes && updateResult.changes.length > 0) {
+          const nextGraph = structuredClone(graph);
+          const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === targetId || e.id === targetId);
           
-          // AUTO-REBALANCE: If UpdateManager flagged this update as needing sibling rebalance
-          // This applies to both external data (DAS) and file pulls, but NOT manual slider edits
-          let finalGraph = nextGraph;
-          if ((updateResult.metadata as any)?.requiresSiblingRebalance) {
-            const { rebalanceSiblingParameters } = await import('../utils/rebalanceUtils');
-            finalGraph = rebalanceSiblingParameters(
-              nextGraph,
-              (updateResult.metadata as any).updatedEdgeId,
-              (updateResult.metadata as any).updatedField
-            );
+          if (edgeIndex >= 0) {
+            applyChanges(nextGraph.edges[edgeIndex], updateResult.changes);
+            
+            if (nextGraph.metadata) {
+              nextGraph.metadata.updated_at = new Date().toISOString();
+            }
+            
+            // AUTO-REBALANCE: If UpdateManager flagged this update as needing sibling rebalance
+            // This applies to both external data (DAS) and file pulls, but NOT manual slider edits
+            let finalGraph = nextGraph;
+            if ((updateResult.metadata as any)?.requiresSiblingRebalance) {
+              const { rebalanceSiblingParameters } = await import('../utils/rebalanceUtils');
+              finalGraph = rebalanceSiblingParameters(
+                nextGraph,
+                (updateResult.metadata as any).updatedEdgeId,
+                (updateResult.metadata as any).updatedField
+              );
+            }
+            
+            setGraph(finalGraph);
+            
+            const hadRebalance = finalGraph !== nextGraph;
+            if (hadRebalance) {
+              toast.success(`Applied: ${updateResult.changes.length} fields + siblings rebalanced`);
+            } else {
+              toast.success(`Applied to graph: ${updateResult.changes.length} fields updated`);
+            }
           }
-          
-          setGraph(finalGraph);
-          
-          const hadRebalance = finalGraph !== nextGraph;
-          if (hadRebalance) {
-            toast.success(`Applied: ${updateResult.changes.length} fields + siblings rebalanced`);
-          } else {
-            toast.success(`Applied to graph: ${updateResult.changes.length} fields updated`);
-          }
+        } else {
+          toast('No changes to apply', { icon: 'ℹ️' });
         }
       } else {
-        toast('No changes to apply', { icon: 'ℹ️' });
+        // In dailyMode, we've already updated the file - graph will be updated by getFromSource via getParameterFromFile
+        console.log('[DataOperationsService] Skipping direct graph update (dailyMode=true, versioned path will handle it)');
       }
       
     } catch (error) {

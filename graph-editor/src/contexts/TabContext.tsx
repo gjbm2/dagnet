@@ -842,12 +842,38 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       }
     }
     
-    setTabs(deserializedTabs);
-
+    // Set tabs and activeTabId together - React 18 automatically batches these
+    // But we need to ensure activeTabId is set in the same synchronous call
     const appState = await db.getAppState();
+    let activeTabIdToSet: string | null = null;
+    
     if (appState?.activeTabId) {
-      setActiveTabId(appState.activeTabId);
+      // Validate that the activeTabId exists in the restored tabs
+      const activeTabExists = deserializedTabs.some(t => t.id === appState.activeTabId);
+      if (activeTabExists) {
+        activeTabIdToSet = appState.activeTabId;
+        console.log(`TabContext: Restoring activeTabId from IndexedDB: ${appState.activeTabId}`);
+      } else {
+        // Active tab doesn't exist - use first tab or null
+        activeTabIdToSet = deserializedTabs.length > 0 ? deserializedTabs[0].id : null;
+        if (activeTabIdToSet) {
+          await db.saveAppState({ activeTabId: activeTabIdToSet });
+          console.log(`TabContext: Active tab ${appState.activeTabId} not found, using first tab: ${activeTabIdToSet}`);
+        } else {
+          console.log(`TabContext: No tabs restored, activeTabId will be null`);
+        }
+      }
+    } else if (deserializedTabs.length > 0) {
+      // No saved activeTabId, but we have tabs - use first one
+      activeTabIdToSet = deserializedTabs[0].id;
+      await db.saveAppState({ activeTabId: activeTabIdToSet });
+      console.log(`TabContext: No saved activeTabId, using first tab: ${activeTabIdToSet}`);
     }
+    
+    // Set both state updates together - React 18 will batch them
+    // This ensures tabs exist before activeTabId is checked by components
+    setTabs(deserializedTabs);
+    setActiveTabId(activeTabIdToSet);
   };
 
   /**

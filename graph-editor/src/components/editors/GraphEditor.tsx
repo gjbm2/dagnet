@@ -1079,6 +1079,21 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     }
   }, [graph, data, updateData]);
 
+  // Listen for suppress store→file sync event (for programmatic updates from file pulls)
+  useEffect(() => {
+    const handler = (e: any) => {
+      const duration = e?.detail?.duration ?? 200;
+      console.log(`[${new Date().toISOString()}] [GraphEditor] EVENT: dagnet:suppressStoreToFileSync received, suppressing for ${duration}ms`);
+      syncingRef.current = true;
+      setTimeout(() => {
+        syncingRef.current = false;
+        console.log(`[${new Date().toISOString()}] [GraphEditor] Suppression period ended, sync re-enabled`);
+      }, duration);
+    };
+    window.addEventListener('dagnet:suppressStoreToFileSync' as any, handler);
+    return () => window.removeEventListener('dagnet:suppressStoreToFileSync' as any, handler);
+  }, []);
+
   // Keyboard shortcuts for undo/redo - ONLY when this tab is active
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#14: Setup keyboard shortcuts`);

@@ -114,6 +114,8 @@ export interface TabState {
     hiddenNodes?: Set<string>; // Set of node IDs that are hidden
     // Window selector state (per-file, shared across tabs - stored in first tab's editorState)
     window?: { start: string; end: string } | null;
+    // Last window that data was aggregated for (to detect if window changed due to time passing)
+    lastAggregatedWindow?: { start: string; end: string } | null;
     // NEW: Sidebar state (Phase 1 - Icon Bar)
     sidebarState?: {
       mode: 'minimized' | 'maximized';
