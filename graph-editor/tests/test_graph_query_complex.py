@@ -8,7 +8,7 @@ import pytest
 import sys
 import os
 
-# Add lib/ to path
+# Add lib/ to path (lib is sibling to tests/ in graph-editor/)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'lib'))
 
 from graph_select import apply_query_to_graph

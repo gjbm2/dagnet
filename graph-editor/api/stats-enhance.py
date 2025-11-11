@@ -15,10 +15,10 @@ import json
 import sys
 import os
 
-# Add lib/ to Python path (lib is at project root, one level up from graph-editor/api)
+# Add lib/ to Python path (lib is now in graph-editor/, one level up from graph-editor/api)
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))
-lib_path = os.path.join(project_root, 'lib')
+graph_editor_dir = os.path.dirname(current_dir)  # graph-editor/
+lib_path = os.path.join(graph_editor_dir, 'lib')
 sys.path.insert(0, lib_path)
 
 

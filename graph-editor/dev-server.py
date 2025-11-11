@@ -153,8 +153,6 @@ async def generate_query_endpoint(request: Request):
             raise HTTPException(status_code=400, detail="Missing 'graph' or 'edge' field")
         
         # Import and run MSMDC
-        import sys
-        sys.path.insert(0, "lib")
         from msmdc import generate_query_for_edge
         from graph_types import Graph, Edge
         
@@ -202,8 +200,6 @@ async def generate_all_queries_endpoint(request: Request):
         if not graph_data:
             raise HTTPException(status_code=400, detail="Missing 'graph' field")
         
-        import sys
-        sys.path.insert(0, "lib")
         from msmdc import generate_query_for_edge
         from graph_types import Graph
         
@@ -283,8 +279,6 @@ async def generate_all_parameters_endpoint(request: Request):
         if not graph_data:
             raise HTTPException(status_code=400, detail="Missing 'graph' field")
         
-        import sys
-        sys.path.insert(0, "lib")
         from msmdc import generate_all_parameter_queries, generate_queries_by_type
         from graph_types import Graph
         

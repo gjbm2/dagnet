@@ -7,7 +7,10 @@ Based on: query-algorithms-white-paper.md
 
 import pytest
 import sys
-sys.path.insert(0, "lib")
+import os
+
+# Add lib/ to path (lib is sibling to tests/ in graph-editor/)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'lib'))
 
 from msmdc import generate_query_for_edge, QueryConstraints
 from graph_types import Graph, Node, Edge, Metadata, Policies

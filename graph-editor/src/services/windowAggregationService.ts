@@ -244,8 +244,8 @@ export class WindowAggregationService {
     const totalN = filtered.reduce((sum, point) => sum + point.n, 0);
     const totalK = filtered.reduce((sum, point) => sum + point.k, 0);
 
-    // Calculate mean (p = k/n) and round to 3 decimal places
-    const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
+    // Calculate mean (p = k/n) with sufficient precision for calculations
+    const mean = totalN > 0 ? totalK / totalN : 0;
 
     // Calculate standard deviation (binomial)
     const stdev = calculateStdev(totalN, totalK);

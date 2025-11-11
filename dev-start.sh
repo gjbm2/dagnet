@@ -47,7 +47,7 @@ if [ "$CLEAN_MODE" = true ]; then
     cd ..
     
     echo -e "${GREEN}🧹 Cleaning Python environment and cache...${NC}"
-    rm -rf venv
+    rm -rf graph-editor/venv
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     find . -type f -name "*.pyc" -delete 2>/dev/null || true
     find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
@@ -65,8 +65,8 @@ cd ..
 
 # Setup Python environment
 echo -e "${GREEN}🐍 Setting up Python environment...${NC}"
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
+if [ ! -d "graph-editor/venv" ]; then
+    cd graph-editor && python3 -m venv venv && cd ..
     INSTALL_PY_DEPS=true
 else
     INSTALL_PY_DEPS=false
@@ -77,12 +77,12 @@ if [ "$CLEAN_MODE" = true ]; then
     INSTALL_PY_DEPS=true
 fi
 
-source venv/bin/activate
+source graph-editor/venv/bin/activate
 
 if [ "$INSTALL_PY_DEPS" = true ]; then
     echo -e "${GREEN}📦 Installing Python dependencies...${NC}"
     pip install --upgrade pip
-    pip install -q fastapi uvicorn[standard] networkx pydantic pytest
+    cd graph-editor && pip install -r requirements.txt && cd ..
 else
     echo -e "${GREEN}✓ Using existing Python environment${NC}"
 fi
@@ -139,7 +139,7 @@ tmux send-keys -t dagnet:dev.0 "npm run dev" C-m
 
 # Split window vertically and setup right pane: Python
 tmux split-window -h -t dagnet:dev
-tmux send-keys -t dagnet:dev.1 "cd $(pwd)" C-m
+tmux send-keys -t dagnet:dev.1 "cd $(pwd)/graph-editor" C-m
 tmux send-keys -t dagnet:dev.1 "source venv/bin/activate" C-m
 tmux send-keys -t dagnet:dev.1 "export PYTHON_API_PORT=${PYTHON_API_PORT}" C-m
 tmux send-keys -t dagnet:dev.1 "export VITE_PORT=${VITE_PORT}" C-m
