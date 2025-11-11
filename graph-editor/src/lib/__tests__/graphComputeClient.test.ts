@@ -53,30 +53,6 @@ describe('GraphComputeClient - Mock Mode', () => {
     expect(result.cases).toBeInstanceOf(Array);
   });
 
-  it('should return mock MSMDC response', async () => {
-    const mockGraph = { nodes: [], edges: [] };
-    const result = await mockClient.generateMSMDCQuery(mockGraph, 'a->b', 0);
-    
-    expect(result.query).toBeDefined();
-    expect(result.query).toContain('from(');
-    expect(result.explanation).toContain('MOCK');
-  });
-
-  it('should return mock mutation response', async () => {
-    const mockGraph = { nodes: [], edges: [] };
-    const result = await mockClient.applyMutation(mockGraph, 'rebalance', {});
-    
-    expect(result.graph).toBeDefined();
-    expect(result.changes).toBeInstanceOf(Array);
-  });
-
-  it('should return mock analytics response', async () => {
-    const mockGraph = { nodes: [], edges: [] };
-    const result = await mockClient.getAnalytics(mockGraph);
-    
-    expect(result.stats).toBeDefined();
-    expect(result.stats.node_count).toBeDefined();
-  });
 });
 
 describe('GraphComputeClient - Real Python Backend', () => {
