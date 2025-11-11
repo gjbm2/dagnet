@@ -12,6 +12,12 @@ interface ColorSelectorProps {
   disabled?: boolean;
   /** Compact mode: shows only current color swatch, opens popup on click */
   compact?: boolean;
+  /** Custom preset colors array (defaults to standard presets) */
+  presetColors?: Array<{ name: string; value: string }>;
+  /** Optional callback when color is cleared/reset */
+  onClear?: () => void;
+  /** Show clear/reset button */
+  showClear?: boolean;
 }
 
 // Standard preset colors (9 options)
@@ -32,16 +38,20 @@ const PRESET_COLORS = [
  * 
  * Color picker with standard presets and custom option.
  * Features:
- * - 9 preset colors in a grid
+ * - Configurable preset colors in a grid
  * - Custom color option using HTML5 color picker
  * - Clean visual design
+ * - Optional clear/reset button
  */
 export function ColorSelector({
   value,
   onChange,
   label = 'Color',
   disabled = false,
-  compact = false
+  compact = false,
+  presetColors = PRESET_COLORS,
+  onClear,
+  showClear = false
 }: ColorSelectorProps) {
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customColor, setCustomColor] = useState(value);
@@ -96,7 +106,7 @@ export function ColorSelector({
   };
 
   // Check if current value is a preset
-  const isPreset = PRESET_COLORS.some(preset => preset.value === value);
+  const isPreset = presetColors.some(preset => preset.value === value);
 
   // Compact mode: just show a small color swatch
   if (compact) {
@@ -113,7 +123,7 @@ export function ColorSelector({
           <div ref={popupRef} className="color-selector-compact-popup">
             {/* Preset colors grid */}
             <div className="color-selector-presets">
-              {PRESET_COLORS.map(preset => (
+              {presetColors.map(preset => (
                 <button
                   key={preset.value}
                   type="button"
@@ -181,7 +191,7 @@ export function ColorSelector({
 
       {/* Preset colors grid */}
       <div className="color-selector-presets">
-        {PRESET_COLORS.map(preset => (
+        {presetColors.map(preset => (
           <button
             key={preset.value}
             type="button"
@@ -233,6 +243,19 @@ export function ColorSelector({
           disabled={disabled}
         />
       </div>
+      
+      {/* Clear button (if enabled) */}
+      {showClear && value && onClear && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="color-selector-clear"
+          disabled={disabled}
+          title="Reset to default"
+        >
+          Reset
+        </button>
+      )}
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { EnhancedSelector } from './EnhancedSelector';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
 import { ParameterSection } from './ParameterSection';
+import { ColorSelector } from './ColorSelector';
+import { CONDITIONAL_COLOR_PALETTE, getConditionalColor } from '@/lib/conditionalColors';
 import './ConditionalProbabilityEditor.css';
 
 // Match the updated graph schema structure
@@ -26,6 +28,9 @@ interface ConditionalCondition {
     locked?: boolean;
     parameter_id?: string;
   };
+  
+  // Display color for this condition
+  color?: string;
 }
 
 interface ConditionalProbabilityEditorProps {
@@ -37,10 +42,16 @@ interface ConditionalProbabilityEditorProps {
   graph?: any;
   /** Edge ID for query auto-generation context */
   edgeId?: string;
+  /** Edge object (for color picker) */
+  edge?: any;
   /** Callback when parameter updates (for individual conditional param) */
   onUpdateParam?: (index: number, changes: any) => void;
   /** Callback for rebalancing conditional probabilities */
   onRebalanceParam?: (index: number, newValue: number) => void;
+  /** Callback when condition color changes (index, color) */
+  onUpdateConditionColor?: (index: number, color: string | undefined) => Promise<void>;
+  /** Callback when condition is removed (for UpdateManager integration) */
+  onRemoveCondition?: (index: number) => Promise<void>;
 }
 
 /**
@@ -60,8 +71,11 @@ export function ConditionalProbabilityEditor({
   onChange,
   graph,
   edgeId,
+  edge,
   onUpdateParam,
-  onRebalanceParam
+  onRebalanceParam,
+  onUpdateConditionColor,
+  onRemoveCondition
 }: ConditionalProbabilityEditorProps) {
   const [expandedConditionIndex, setExpandedConditionIndex] = useState<number | null>(null);
   
@@ -81,8 +95,14 @@ export function ConditionalProbabilityEditor({
     setExpandedConditionIndex(conditions.length); // Expand the new condition
   };
 
-  const removeCondition = (index: number) => {
-    onChange(conditions.filter((_, i) => i !== index));
+  const removeCondition = async (index: number) => {
+    if (onRemoveCondition) {
+      // Use UpdateManager for proper sibling deletion
+      await onRemoveCondition(index);
+    } else {
+      // Fallback: just remove from local array
+      onChange(conditions.filter((_, i) => i !== index));
+    }
     if (expandedConditionIndex === index) {
       setExpandedConditionIndex(null);
     }
@@ -108,10 +128,8 @@ export function ConditionalProbabilityEditor({
         
         // Handle both old format {visited: [...]} and new format (string)
         const conditionDisplay = typeof condition.condition === 'string' 
-          ? condition.condition 
-          : (condition.condition as any)?.visited?.length > 0
-            ? `visited(${(condition.condition as any).visited.join(', ')})`
-            : '';
+          ? condition.condition
+          : '';
         
         return (
           <div key={index} className="conditional-probability-condition">
@@ -250,6 +268,32 @@ export function ConditionalProbabilityEditor({
                     />
                   </AutomatableField>
                 </div>
+                
+                {/* Color picker for this condition */}
+                {onUpdateConditionColor && (
+                  <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #E5E7EB' }}>
+                    <ColorSelector
+                      label="Condition Color"
+                      value={condition.color || getConditionalColor(edge) || '#4ade80'}
+                      onChange={async (color) => {
+                        if (onUpdateConditionColor) {
+                          await onUpdateConditionColor(index, color);
+                        } else {
+                          updateCondition(index, { color });
+                        }
+                      }}
+                      presetColors={CONDITIONAL_COLOR_PALETTE.map(color => ({ name: color, value: color }))}
+                      showClear={!!condition.color}
+                      onClear={async () => {
+                        if (onUpdateConditionColor) {
+                          await onUpdateConditionColor(index, undefined);
+                        } else {
+                          updateCondition(index, { color: undefined });
+                        }
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>

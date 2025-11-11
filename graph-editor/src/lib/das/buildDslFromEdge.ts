@@ -12,6 +12,8 @@
  * @returns DSL object with resolved provider-specific event names
  * @throws Error if nodes not found or missing event_ids
  */
+import { parseDSL } from '../queryDSL';
+
 export interface EventFilter {
   property: string;
   operator: string;
@@ -41,48 +43,20 @@ export type EventLoader = (eventId: string) => Promise<EventDefinition>;
 
 /**
  * Parse query string like "from(a).to(b).visited(c)" into object
+ * @deprecated Use parseDSL() from queryDSL.ts instead
  */
 function parseQueryString(queryString: string): any {
-  const query: any = {};
+  const parsed = parseDSL(queryString);
   
-  // Match from(...)
-  const fromMatch = queryString.match(/from\(([^)]+)\)/);
-  if (fromMatch) query.from = fromMatch[1];
-  
-  // Match to(...)
-  const toMatch = queryString.match(/to\(([^)]+)\)/);
-  if (toMatch) query.to = toMatch[1];
-  
-  // Match visited(...) - can appear multiple times
-  const visitedMatches = queryString.matchAll(/visited\(([^)]+)\)/g);
-  query.visited = [];
-  for (const match of visitedMatches) {
-    // Split by comma for multiple nodes in one visited()
-    const nodes = match[1].split(',').map(n => n.trim());
-    query.visited.push(...nodes);
-  }
-  
-  // Match exclude(...)
-  const excludeMatches = queryString.matchAll(/exclude\(([^)]+)\)/g);
-  query.exclude = [];
-  for (const match of excludeMatches) {
-    const nodes = match[1].split(',').map(n => n.trim());
-    query.exclude.push(...nodes);
-  }
-  
-  // Match context(key:value)
-  const contextMatches = queryString.matchAll(/context\(([^:]+):([^)]+)\)/g);
-  query.context = [];
-  for (const match of contextMatches) {
-    query.context.push({ key: match[1].trim(), value: match[2].trim() });
-  }
-  
-  // Match case(key:value)
-  const caseMatches = queryString.matchAll(/case\(([^:]+):([^)]+)\)/g);
-  query.case = [];
-  for (const match of caseMatches) {
-    query.case.push({ key: match[1].trim(), value: match[2].trim() });
-  }
+  // Convert to legacy format for backward compatibility
+  const query: any = {
+    from: parsed.from,
+    to: parsed.to,
+    visited: parsed.visited,
+    exclude: parsed.exclude,
+    context: parsed.context.map(({key, value}) => ({ key, value })),
+    case: parsed.cases.map(({key, value}) => ({ key, value }))
+  };
   
   return query;
 }

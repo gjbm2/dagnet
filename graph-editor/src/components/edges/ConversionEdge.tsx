@@ -5,6 +5,7 @@ import { useGraphStore } from '../../contexts/GraphStoreContext';
 import Tooltip from '@/components/Tooltip';
 import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
+import { getVisitedNodeIds } from '@/lib/queryDSL';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -19,35 +20,6 @@ const USE_SMOOTH_STEP = false;
 const EDGE_OPACITY = 0.8; // Adjustable transparency (0-1)
 const EDGE_BLEND_MODE = 'multiply'; // 'normal', 'multiply', 'screen', 'difference'
 const USE_GROUP_BASED_BLENDING = false; // Enable scenario-specific blending
-
-/**
- * Helper function to extract visited node IDs from a condition
- * Handles both old format {visited: [...]} and new string format "visited(node1, node2)"
- */
-function getVisitedNodeIds(condition: any): string[] {
-  if (!condition) return [];
-  
-  // Old format: {visited: [...]}
-  if (typeof condition === 'object' && condition.visited && Array.isArray(condition.visited)) {
-    return condition.visited;
-  }
-  
-  // New format: string like "visited(node1, node2)" or "case(x).visited(y)"
-  if (typeof condition === 'string') {
-    const visited: string[] = [];
-    // Match all visited(...) patterns
-    const visitedRegex = /visited\(([^)]+)\)/g;
-    let match;
-    while ((match = visitedRegex.exec(condition)) !== null) {
-      // Split by comma and trim
-      const nodes = match[1].split(',').map(s => s.trim()).filter(s => s);
-      visited.push(...nodes);
-    }
-    return visited;
-  }
-  
-  return [];
-}
 
 interface ConversionEdgeData {
   uuid: string;
@@ -267,11 +239,14 @@ export default function ConversionEdge({
   
   // Get the full edge object from graph (needed for tooltips and colors)
   // Find edge in graph (check both uuid and human-readable id after Phase 0.0 migration)
-  const fullEdge = graph?.edges.find((e: any) => 
-    e.uuid === id ||           // ReactFlow uses UUID as edge ID
-    e.id === id ||             // Human-readable ID
-    `${e.from}->${e.to}` === id  // Fallback format
-  );
+  // Memoize to ensure it updates when graph changes
+  const fullEdge = useMemo(() => {
+    return graph?.edges.find((e: any) => 
+      e.uuid === id ||           // ReactFlow uses UUID as edge ID
+      e.id === id ||             // Human-readable ID
+      `${e.from}->${e.to}` === id  // Fallback format
+    );
+  }, [graph, id, graph?.edges?.map(e => `${e.uuid}-${JSON.stringify(e.conditional_p)}`).join(',')]);
   
   // UNIFIED: Compute effective probability using shared logic
   const effectiveProbability = useMemo(() => {
@@ -970,8 +945,19 @@ export default function ConversionEdge({
   const finalLabelX = adjustedLabelPosition?.x ?? labelX;
   const finalLabelY = adjustedLabelPosition?.y ?? labelY;
 
+  // Helper function to convert hex to RGB (must be defined before useMemo)
+  const hexToRgb = (hex: string) => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+      r: parseInt(result[1], 16),
+      g: parseInt(result[2], 16),
+      b: parseInt(result[3], 16)
+    } : { r: 153, g: 153, b: 153 }; // fallback to gray
+  };
+
   // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
-  const getEdgeColor = () => {
+  // Memoize color computation to ensure it updates when conditional_p colors change
+  const edgeColor = useMemo(() => {
     // Selected edges: darker gray to distinguish from highlighted edges
     if (selected) {
       return '#222'; // very dark gray for selection
@@ -1035,17 +1021,9 @@ export default function ConversionEdge({
     }
     
     return '#b3b3b3'; // 15% lighter gray for normal edges
-  };
-
-  // Helper function to convert hex to RGB
-  const hexToRgb = (hex: string) => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result ? {
-      r: parseInt(result[1], 16),
-      g: parseInt(result[2], 16),
-      b: parseInt(result[3], 16)
-    } : { r: 153, g: 153, b: 153 }; // fallback to gray
-  };
+  }, [selected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.probability, fullEdge, source, graph?.nodes, graph?.metadata?.updated_at]);
+  
+  const getEdgeColor = () => edgeColor;
 
   const handleDelete = useCallback(() => {
     deleteElements({ edges: [{ id }] });

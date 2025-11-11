@@ -2590,7 +2590,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [graph, getAllExistingIds]);
 
   // Handle new connections
-  const onConnect = useCallback((connection: Connection) => {
+  const onConnect = useCallback(async (connection: Connection) => {
     if (!graph) return;
     
     // Capture the current graph at the start of this callback
@@ -2632,9 +2632,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
 
-    // Generate a sensible id for the edge
-    const edgeId = generateEdgeId(connection.source, connection.target) || `${connection.source}->${connection.target}`;
-    
     // If source is a case node with multiple variants, show variant selection modal
     if (isCaseNode && sourceNode.case && sourceNode.case.variants.length > 1) {
       setPendingConnection(connection);
@@ -2643,70 +2640,38 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return; // Don't create the edge yet, wait for variant selection
     }
     
-    // Add edge directly to graph state (not ReactFlow state)
-    const nextGraph = structuredClone(currentGraph);
-    
-    // Map handle IDs to match our node component
-    // Source handles: "top" -> "top-out", "left" -> "left-out", etc.
-    // Target handles: keep as-is ("top", "left", "right", "bottom")
-    const sourceHandle = connection.sourceHandle ? 
-      (connection.sourceHandle.endsWith('-out') ? connection.sourceHandle : `${connection.sourceHandle}-out`) : 
-      null;
-    const targetHandle = connection.targetHandle || null;
-    
-    // Calculate smart default probability based on existing outgoing edges
-    const existingOutgoingEdges = nextGraph.edges.filter((e: any) => e.from === connection.source);
-    let defaultProbability: number;
-    
-    if (existingOutgoingEdges.length === 0) {
-      // First edge from this node - default to 1.0 (100%)
-      defaultProbability = 1.0;
-    } else {
-      // Subsequent edges - default to remaining probability
-      const existingProbabilitySum = existingOutgoingEdges.reduce((sum, edge) => {
-        return sum + (edge.p?.mean || 0);
-      }, 0);
-      defaultProbability = Math.max(0, 1.0 - existingProbabilitySum);
-    }
-    
-    const newEdge: any = {
-      uuid: edgeId,
-      id: edgeId,
-      from: connection.source,
-      to: connection.target,
-      fromHandle: sourceHandle,
-      toHandle: targetHandle,
-      p: {
-        mean: defaultProbability
-      }
-    };
+    // Use UpdateManager to create edge with proper ID generation and probability calculation
+    const { updateManager } = await import('../services/UpdateManager');
+    const options: any = {};
     
     // If source is a case node with single variant, automatically assign variant properties
     if (isCaseNode && sourceNode.case && sourceNode.case.variants.length === 1) {
       const variant = sourceNode.case.variants[0];
-      newEdge.case_id = sourceNode.case.id;
-      newEdge.case_variant = variant.name;
-      // Set p.mean to 1.0 for single-path case edges (default sub-routing)
-      newEdge.p.mean = 1.0;
-      console.log('Created case edge with single variant:', newEdge);
+      options.case_id = sourceNode.case.id;
+      options.case_variant = variant.name;
     }
     
-    nextGraph.edges.push(newEdge);
+    const { graph: nextGraph, edgeId } = updateManager.createEdge(
+      currentGraph,
+      {
+        source: connection.source!,
+        target: connection.target!,
+        sourceHandle: connection.sourceHandle || null,
+        targetHandle: connection.targetHandle || null
+      },
+      options
+    );
     
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
-    // Update graph state - this will trigger graph->ReactFlow sync
-    // Pass the old graph explicitly to avoid stale closure
-    setGraph(nextGraph, currentGraph);
+    // Use graphMutationService to trigger query regeneration
+    const { graphMutationService } = await import('../services/graphMutationService');
+    await graphMutationService.updateGraph(currentGraph, nextGraph, setGraph);
     saveHistoryState('Add edge', undefined, edgeId);
     
     // Select the new edge after a brief delay to allow sync to complete
     setTimeout(() => {
       onSelectedEdgeChange(edgeId);
     }, 50);
-  }, [graph, setGraph, generateEdgeId, wouldCreateCycle, onSelectedEdgeChange, saveHistoryState]);
+  }, [graph, setGraph, wouldCreateCycle, onSelectedEdgeChange, saveHistoryState]);
 
   // Variant selection modal state
   const [showVariantModal, setShowVariantModal] = useState(false);
@@ -2714,7 +2679,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const [caseNodeVariants, setCaseNodeVariants] = useState<any[]>([]);
 
   // Handle variant selection for case edges
-  const handleVariantSelection = useCallback((variant: any) => {
+  const handleVariantSelection = useCallback(async (variant: any) => {
     if (!pendingConnection || !graph) return;
     
     // Capture the current graph at the start of this callback
@@ -2740,37 +2705,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
     
-    // Generate edge properties (for case variant edges, use variant-specific ID)
-    const edgeId = `${pendingConnection.source}-${variant.name}->${pendingConnection.target}`;
-    
-    // Create the edge with variant properties
-    const nextGraph = structuredClone(currentGraph);
-    nextGraph.edges.push({
-      uuid: edgeId,
-      id: edgeId,
-      from: pendingConnection.source!,
-      to: pendingConnection.target!,
-      fromHandle: pendingConnection.sourceHandle || undefined,
-      toHandle: pendingConnection.targetHandle || undefined,
-      case_id: sourceNode.case.id,
-      case_variant: variant.name,
-      p: {
-        mean: 1.0 // Default to 1.0 for single-path case edges
+    // Use UpdateManager to create edge with variant properties
+    const { updateManager } = await import('../services/UpdateManager');
+    const { graph: nextGraph, edgeId } = updateManager.createEdge(
+      currentGraph,
+      {
+        source: pendingConnection.source!,
+        target: pendingConnection.target!,
+        sourceHandle: pendingConnection.sourceHandle || null,
+        targetHandle: pendingConnection.targetHandle || null
+      },
+      {
+        case_id: sourceNode.case.id,
+        case_variant: variant.name
       }
-    });
+    );
     
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
-    setGraph(nextGraph, currentGraph);
-    saveHistoryState('Add edge', undefined, nextGraph.edges[nextGraph.edges.length - 1].id);
+    // Use graphMutationService to trigger query regeneration
+    const { graphMutationService } = await import('../services/graphMutationService');
+    await graphMutationService.updateGraph(currentGraph, nextGraph, setGraph);
+    saveHistoryState('Add edge', undefined, edgeId);
     
     // Close modal and clear state
     setShowVariantModal(false);
     setPendingConnection(null);
     setCaseNodeVariants([]);
-  }, [pendingConnection, graph, setGraph, generateEdgeId, saveHistoryState]);
+  }, [pendingConnection, graph, setGraph, saveHistoryState]);
   
   // Handle Shift+Drag lasso selection
   const [isLassoSelecting, setIsLassoSelecting] = useState(false);

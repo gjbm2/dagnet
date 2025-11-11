@@ -42,16 +42,17 @@ export function getConditionSignature(edge: GraphEdge): string {
   }
   
   // Sort conditions to ensure same signature for same set of conditions
+  // Use condition strings directly (already normalized)
   const signatures = edge.conditional_p
     .map(cp => {
-      // Handle both old format {visited: [...]} and new string format
       if (typeof cp.condition === 'string') {
         return cp.condition;
-      } else if (cp.condition && (cp.condition as any).visited) {
-        return (cp.condition as any).visited.sort().join('+');
       }
+      // Skip old format
+      console.warn('Old format condition detected in getConditionSignature');
       return '';
     })
+    .filter(s => s !== '')
     .sort()
     .join('||');
   
@@ -61,9 +62,11 @@ export function getConditionSignature(edge: GraphEdge): string {
 /**
  * Get the color for a conditional edge
  * Priority:
- * 1. User override (edge.display.conditional_color)
- * 2. Conditional group color
- * 3. Generated from condition signature
+ * 1. First condition with a user-set color (condition.color)
+ * 2. Generated from condition signature
+ * 
+ * Note: Colors are now stored per-condition, not per-edge.
+ * If multiple conditions have colors, we use the first one.
  */
 export function getConditionalColor(edge: GraphEdge): string | null {
   // Check if edge has conditional probabilities
@@ -71,15 +74,15 @@ export function getConditionalColor(edge: GraphEdge): string | null {
     return null;
   }
   
-  // Priority 1: User override
-  if (edge.display?.conditional_color) {
-    return edge.display.conditional_color;
+  // Priority 1: Check for user-set color on any condition
+  // Use the first condition that has a color set
+  for (const cp of edge.conditional_p) {
+    if (cp.color) {
+      return cp.color;
+    }
   }
   
-  // Priority 2: Conditional group (if implemented)
-  // For now, we'll skip this and go straight to signature-based
-  
-  // Priority 3: Generate from condition signature
+  // Priority 2: Generate from condition signature (fallback)
   const signature = getConditionSignature(edge);
   if (!signature) {
     return null;

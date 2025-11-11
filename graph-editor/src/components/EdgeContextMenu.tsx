@@ -18,6 +18,7 @@ import { roundTo4DP } from '../utils/rounding';
 import { Folders, TrendingUpDown, ChevronRight, Database, DatabaseZap } from 'lucide-react';
 import { fileRegistry } from '../contexts/TabContext';
 import { useGraphStore } from '../contexts/GraphStoreContext';
+import { getVisitedNodeIds, normalizeConstraintString } from '../lib/queryDSL';
 
 interface EdgeContextMenuProps {
   x: number;
@@ -390,16 +391,20 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
             Conditional Probabilities
           </label>
           {edge.conditional_p.map((condP: any, cpIndex: number) => {
-            // Defensive check: skip if condition structure is invalid (old schema)
-            if (!condP.condition?.visited || !Array.isArray(condP.condition.visited)) {
-              console.warn(`[EdgeContextMenu] Skipping conditional_p with invalid/old schema format at index ${cpIndex}:`, condP);
+            // Skip old format conditions
+            if (typeof condP.condition !== 'string') {
+              console.warn(`[EdgeContextMenu] Skipping conditional_p with old format at index ${cpIndex}:`, condP);
               return null;
             }
+            
+            // Get visited nodes for display (backward compatibility)
+            const visitedNodes = getVisitedNodeIds(condP.condition);
+            const conditionDisplay = condP.condition; // Use full condition string
             
             return (
             <div key={cpIndex} style={{ marginBottom: '8px', padding: '6px', border: '1px solid #eee', borderRadius: '3px' }}>
               <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>
-                Condition: {condP.condition.visited.join(', ') || 'None'}
+                Condition: {conditionDisplay || 'None'}
               </div>
               <ProbabilityInput
                 value={condP.p.mean}
@@ -442,27 +447,27 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                       nextGraph.edges[currentEdgeIndex].conditional_p[cpIndex].p.mean = currentValue;
                       
                       const currentCondition = edge.conditional_p[cpIndex];
-                      // Defensive check: skip rebalance if condition structure is invalid
-                      if (!currentCondition.condition?.visited || !Array.isArray(currentCondition.condition.visited)) {
-                        console.warn('[EdgeContextMenu] Cannot rebalance conditional_p with invalid condition format');
+                      // Skip old format conditions
+                      if (typeof currentCondition.condition !== 'string') {
+                        console.warn('[EdgeContextMenu] Cannot rebalance conditional_p with old format');
                         return;
                       }
-                      const conditionKey = JSON.stringify(currentCondition.condition.visited.sort());
+                      const conditionKey = normalizeConstraintString(currentCondition.condition);
                       
                       const siblingsWithSameCondition = siblings.filter(sibling => {
                         if (!sibling.conditional_p) return false;
-                        return sibling.conditional_p.some((cp: any) => 
-                          cp.condition?.visited && Array.isArray(cp.condition.visited) &&
-                          JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                        );
+                        return sibling.conditional_p.some((cp: any) => {
+                          if (typeof cp.condition !== 'string') return false;
+                          return normalizeConstraintString(cp.condition) === conditionKey;
+                        });
                       });
                       
                       if (siblingsWithSameCondition.length > 0) {
                         const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
-                          const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                            cp.condition?.visited && Array.isArray(cp.condition.visited) &&
-                            JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                          );
+                          const matchingCondition = sibling.conditional_p?.find((cp: any) => {
+                            if (typeof cp.condition !== 'string') return false;
+                            return normalizeConstraintString(cp.condition) === conditionKey;
+                          });
                           return sum + (matchingCondition?.p?.mean || 0);
                         }, 0);
                         
@@ -472,15 +477,15 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                               (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id)
                             );
                             if (siblingIndex >= 0) {
-                              const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                cp.condition?.visited && Array.isArray(cp.condition.visited) &&
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
+                              const matchingCondition = sibling.conditional_p?.find((cp: any) => {
+                                if (typeof cp.condition !== 'string') return false;
+                                return normalizeConstraintString(cp.condition) === conditionKey;
+                              });
                               if (matchingCondition && sibling.conditional_p) {
-                                const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
-                                  cp.condition?.visited && Array.isArray(cp.condition.visited) &&
-                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                );
+                                const conditionIndex = sibling.conditional_p.findIndex((cp: any) => {
+                                  if (typeof cp.condition !== 'string') return false;
+                                  return normalizeConstraintString(cp.condition) === conditionKey;
+                                });
                                 if (conditionIndex >= 0) {
                                   const siblingCurrentValue = matchingCondition.p?.mean || 0;
                                   const newValue = (siblingCurrentValue / siblingsTotal) * remainingProbability;
@@ -498,15 +503,15 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                               (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id)
                             );
                             if (siblingIndex >= 0) {
-                              const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                                cp.condition?.visited && Array.isArray(cp.condition.visited) &&
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
+                              const matchingCondition = sibling.conditional_p?.find((cp: any) => {
+                                if (typeof cp.condition !== 'string') return false;
+                                return normalizeConstraintString(cp.condition) === conditionKey;
+                              });
                               if (matchingCondition && sibling.conditional_p) {
-                                const conditionIndex = sibling.conditional_p.findIndex((cp: any) => 
-                                  cp.condition?.visited && Array.isArray(cp.condition.visited) &&
-                                  JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                                );
+                                const conditionIndex = sibling.conditional_p.findIndex((cp: any) => {
+                                  if (typeof cp.condition !== 'string') return false;
+                                  return normalizeConstraintString(cp.condition) === conditionKey;
+                                });
                                 if (conditionIndex >= 0) {
                                   if (nextGraph.edges[siblingIndex].conditional_p) {
                                     nextGraph.edges[siblingIndex].conditional_p[conditionIndex].p.mean = equalShare;

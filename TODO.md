@@ -1,34 +1,15 @@
 # DagNet TODO
 
-- Minus autocomplete not working in query/selector
-- Remove api secrets from server logs, pls
+CRITICAL
 
-### High Priority
-- **Conditional Probability Migration - BROKEN** ⚠️ **CRITICAL**
-  - STATUS: Conditional probability format migrated from `condition: {visited: [...]}` to `condition: "visited(...)"` string format, but multiple files still use old format
-  - **Impact**: Conditional probabilities may not work correctly in several critical areas
-  - **Broken Files** (from `PROJECT_CONNECT/CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md`):
-    - `EdgeContextMenu.tsx` - 12 occurrences, HIGH priority (context menu broken)
-    - `runner.ts` - 3 occurrences, HIGH priority (simulation runner broken)
-    - `conditionalReferences.ts` - 4 occurrences, HIGH priority (graph operations broken)
-    - `whatIf.ts` - 4 occurrences, CRITICAL priority (what-if calculations broken)
-    - `ConditionalProbabilitiesSection.tsx` - 31 occurrences, MEDIUM priority (old UI component, may be unused)
-  - **Backward Compatibility Hacks** (temporary fixes that need removal):
-    - `conditionalColors.ts` (line ~90) - handles both formats
-    - `conditionalValidation.ts` (lines 19-42) - `getVisitedNodeIds()` hack, used in 7 locations
-    - `ConversionEdge.tsx` (lines 27-50) - duplicate `getVisitedNodeIds()` hack
-    - `WhatIfAnalysisControl.tsx` (lines 123-131, 478-491, 543-545) - multiple format checks
-    - `ConditionalProbabilityEditor.tsx` (lines 135-140) - display hack
-  - **Lost Features**:
-    - Complementary conditional creation (auto-add conditionals to sibling edges)
-    - Color picker for conditional probabilities
-  - **Migration Required**:
-    1. Phase 1: Data migration script (convert old format in graph files)
-    2. Phase 2: Code migration (remove hacks, update all consumers to use query expression parser)
-    3. Phase 3: Restore lost features via UpdateManager architecture
-    4. Phase 4: Full testing
-  - **Estimated**: 12-16 hours cleanup
-  - **Reference**: See `PROJECT_CONNECT/CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for full details
+- get from file isn't updating graph store... it's rendering on screen, but graph json itself isn't updating.
+  ⦁	when I set param overridden in sidebar, and then 'get from file' it still updates target edges (even though should be overridden!) _and_ then tries to rebalance, creating a mess
+
+- Remove api secrets from server logs, pls
+- node renaming, file renaming -- need to handle globally
+- systematically review that graph changes now go through UpdateManager not random code
+- whatif : conditional ps not working
+- conditonal p : rebalance manually only on click rebalance not full auto
 
 - **P-Slider Auto-Balance NOT WORKING**
   - STATUS: Sibling edges don't auto-adjust when dragging probability slider
@@ -37,19 +18,6 @@
   - But slider onChange doesn't trigger sibling updates
   - Related: Rebalance indicator now works (fixed: added `isEdgeProbabilityUnbalanced` memo, line ~586-602)
   - Next: Wire up slider onChange to call same sibling adjustment logic as rebalance button uses
-  
-- **Auto-Reroute Node Position Revert - STILL BROKEN**
-  - PROBLEM: When moving a node and triggering auto-reroute, node position reverts to prior state
-  - Log evidence: tmp.log lines 265-411 show node drag stop → force reroute → full rebuild → positions revert
-  - ATTEMPTED FIX (FAILED): Added node position preservation in performAutoReroute (GraphCanvas.tsx line ~1039-1047)
-    - Tried: Update nextGraph.nodes[].layout.{x,y} from ReactFlow positions before setGraph()
-    - Theory: cloned graph had old positions, triggered full rebuild pulling old positions back
-    - Result: DID NOT WORK - positions still revert
-  - ROOT ISSUE: Line 411 in log shows "Slow path: Topology changed, doing full rebuild" even though nothing changed
-    - Edge count same, node count same, edge IDs same
-    - But still triggers full rebuild at GraphCanvas.tsx ~line 1558
-    - Full rebuild pulls positions from graph store which has old positions
-  - NEXT: Need to either (a) prevent full rebuild when only handles change, OR (b) ensure ReactFlow positions are authoritative during rebuild
 
   **Case/Variant Filtering** (4-6 hrs)
    - Design case property mapping schema (Statsig case → Amplitude event property)
@@ -89,6 +57,7 @@
   - See: Phase 0.3 discussion on flexible data handling
 
 ### Medium Priority
+- Minus autocomplete not working in query/selector
 - Let's add a bool 'Force retrieve' to 'Get all data' modal, which ignores current values check and gets a new slab of dailies anyway. 
   - Also add a 'Force updates' which ignores 'overridden' flags and 
 - Let's add a rename on File menu, nav bar context menu which (a) renames the file (b) reviews registry and updates any ids in any graphs/files to match

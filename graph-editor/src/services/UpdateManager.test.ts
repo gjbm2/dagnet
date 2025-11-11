@@ -1096,5 +1096,232 @@ describe('UpdateManager', () => {
       // It's stored so external services know if it was manually edited
     });
   });
+  
+  // ============================================================
+  // TEST SUITE: Graph-to-Graph Updates
+  // Conditional Probability Management
+  // ============================================================
+  
+  describe('Conditional Probability Management', () => {
+    it('should add conditional probability to edge and propagate to siblings', () => {
+      const graph = {
+        nodes: [
+          { id: 'A', uuid: 'node-a' },
+          { id: 'B', uuid: 'node-b' },
+          { id: 'C', uuid: 'node-c' }
+        ],
+        edges: [
+          { id: 'edge-1', uuid: 'edge-1', from: 'A', to: 'B', p: { mean: 0.5 } },
+          { id: 'edge-2', uuid: 'edge-2', from: 'A', to: 'C', p: { mean: 0.5 } }
+        ],
+        metadata: {}
+      };
+      
+      const newCondition = {
+        condition: 'visited(node-x)',
+        query: '',
+        query_overridden: false,
+        p: { mean: 0.7 }
+      };
+      
+      const result = updateManager.addConditionalProbability(graph, 'edge-1', newCondition);
+      
+      // Current edge should have the condition
+      expect(result.edges[0].conditional_p).toBeDefined();
+      expect(result.edges[0].conditional_p.length).toBe(1);
+      expect(result.edges[0].conditional_p[0].condition).toBe('visited(node-x)');
+      
+      // Sibling edge should also have the condition
+      expect(result.edges[1].conditional_p).toBeDefined();
+      expect(result.edges[1].conditional_p.length).toBe(1);
+      expect(result.edges[1].conditional_p[0].condition).toBe('visited(node-x)');
+      
+      // Sibling should inherit default probability from its base p.mean
+      expect(result.edges[1].conditional_p[0].p.mean).toBe(0.5);
+    });
+    
+    it('should update conditional probabilities and sync matching conditions on siblings', () => {
+      const graph = {
+        nodes: [
+          { id: 'A', uuid: 'node-a' },
+          { id: 'B', uuid: 'node-b' },
+          { id: 'C', uuid: 'node-c' }
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            uuid: 'edge-1',
+            from: 'A',
+            to: 'B',
+            p: { mean: 0.5 },
+            conditional_p: [
+              { condition: 'visited(node-x)', query: '', query_overridden: false, p: { mean: 0.7 } }
+            ]
+          },
+          {
+            id: 'edge-2',
+            uuid: 'edge-2',
+            from: 'A',
+            to: 'C',
+            p: { mean: 0.5 },
+            conditional_p: [
+              { condition: 'visited(node-x)', query: '', query_overridden: false, p: { mean: 0.6 } }
+            ]
+          }
+        ],
+        metadata: {}
+      };
+      
+      const newConditions = [
+        {
+          condition: 'visited(node-y)', // Changed condition string
+          query: 'from(A).to(B).visited(node-y)',
+          query_overridden: true,
+          p: { mean: 0.8 }
+        }
+      ];
+      
+      const result = updateManager.updateConditionalProbabilities(graph, 'edge-1', newConditions);
+      
+      // Current edge should have updated condition
+      expect(result.edges[0].conditional_p.length).toBe(1);
+      expect(result.edges[0].conditional_p[0].condition).toBe('visited(node-y)');
+      expect(result.edges[0].conditional_p[0].p.mean).toBe(0.8);
+      
+      // Sibling edge should have updated condition (condition string changed)
+      expect(result.edges[1].conditional_p.length).toBe(1);
+      expect(result.edges[1].conditional_p[0].condition).toBe('visited(node-y)');
+      // Sibling should preserve its own p.mean (0.6), not use the new one (0.8)
+      expect(result.edges[1].conditional_p[0].p.mean).toBe(0.6);
+    });
+    
+    it('should add new conditions to siblings when conditions are added', () => {
+      const graph = {
+        nodes: [
+          { id: 'A', uuid: 'node-a' },
+          { id: 'B', uuid: 'node-b' },
+          { id: 'C', uuid: 'node-c' }
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            uuid: 'edge-1',
+            from: 'A',
+            to: 'B',
+            p: { mean: 0.5 },
+            conditional_p: [
+              { condition: 'visited(node-x)', query: '', query_overridden: false, p: { mean: 0.7 } }
+            ]
+          },
+          {
+            id: 'edge-2',
+            uuid: 'edge-2',
+            from: 'A',
+            to: 'C',
+            p: { mean: 0.5 },
+            conditional_p: [
+              { condition: 'visited(node-x)', query: '', query_overridden: false, p: { mean: 0.6 } }
+            ]
+          }
+        ],
+        metadata: {}
+      };
+      
+      const newConditions = [
+        { condition: 'visited(node-x)', query: '', query_overridden: false, p: { mean: 0.7 } },
+        { condition: 'visited(node-y)', query: '', query_overridden: false, p: { mean: 0.8 } } // New condition
+      ];
+      
+      const result = updateManager.updateConditionalProbabilities(graph, 'edge-1', newConditions);
+      
+      // Current edge should have both conditions
+      expect(result.edges[0].conditional_p.length).toBe(2);
+      
+      // Sibling edge should also have both conditions
+      expect(result.edges[1].conditional_p.length).toBe(2);
+      expect(result.edges[1].conditional_p.some((c: any) => c.condition === 'visited(node-y)')).toBe(true);
+    });
+    
+    it('should remove conditions from siblings when conditions are removed', () => {
+      const graph = {
+        nodes: [
+          { id: 'A', uuid: 'node-a' },
+          { id: 'B', uuid: 'node-b' },
+          { id: 'C', uuid: 'node-c' }
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            uuid: 'edge-1',
+            from: 'A',
+            to: 'B',
+            p: { mean: 0.5 },
+            conditional_p: [
+              { condition: 'visited(node-x)', query: '', query_overridden: false, p: { mean: 0.7 } },
+              { condition: 'visited(node-y)', query: '', query_overridden: false, p: { mean: 0.8 } }
+            ]
+          },
+          {
+            id: 'edge-2',
+            uuid: 'edge-2',
+            from: 'A',
+            to: 'C',
+            p: { mean: 0.5 },
+            conditional_p: [
+              { condition: 'visited(node-x)', query: '', query_overridden: false, p: { mean: 0.6 } },
+              { condition: 'visited(node-y)', query: '', query_overridden: false, p: { mean: 0.7 } }
+            ]
+          }
+        ],
+        metadata: {}
+      };
+      
+      const newConditions = [
+        { condition: 'visited(node-x)', query: '', query_overridden: false, p: { mean: 0.7 } } // Removed node-y
+      ];
+      
+      const result = updateManager.updateConditionalProbabilities(graph, 'edge-1', newConditions);
+      
+      // Current edge should have one condition
+      expect(result.edges[0].conditional_p.length).toBe(1);
+      
+      // Sibling edge should also have only one condition (node-y removed)
+      expect(result.edges[1].conditional_p.length).toBe(1);
+      expect(result.edges[1].conditional_p[0].condition).toBe('visited(node-x)');
+    });
+    
+    it('should not modify edges from different source nodes', () => {
+      const graph = {
+        nodes: [
+          { id: 'A', uuid: 'node-a' },
+          { id: 'B', uuid: 'node-b' },
+          { id: 'C', uuid: 'node-c' },
+          { id: 'D', uuid: 'node-d' }
+        ],
+        edges: [
+          { id: 'edge-1', uuid: 'edge-1', from: 'A', to: 'B', p: { mean: 0.5 } },
+          { id: 'edge-2', uuid: 'edge-2', from: 'A', to: 'C', p: { mean: 0.5 } },
+          { id: 'edge-3', uuid: 'edge-3', from: 'D', to: 'B', p: { mean: 0.5 } } // Different source
+        ],
+        metadata: {}
+      };
+      
+      const newCondition = {
+        condition: 'visited(node-x)',
+        query: '',
+        query_overridden: false,
+        p: { mean: 0.7 }
+      };
+      
+      const result = updateManager.addConditionalProbability(graph, 'edge-1', newCondition);
+      
+      // Sibling from same source should have condition
+      expect(result.edges[1].conditional_p).toBeDefined();
+      expect(result.edges[1].conditional_p.length).toBe(1);
+      
+      // Edge from different source should NOT have condition
+      expect(result.edges[2].conditional_p).toBeUndefined();
+    });
+  });
 });
 

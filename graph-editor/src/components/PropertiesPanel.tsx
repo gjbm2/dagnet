@@ -19,6 +19,7 @@ import { AutomatableField } from './AutomatableField';
 import { ParameterSection } from './ParameterSection';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff } from 'lucide-react';
+import { normalizeConstraintString } from '@/lib/queryDSL';
 import './PropertiesPanel.css';
 import type { Evidence } from '../types';
 
@@ -348,6 +349,11 @@ export default function PropertiesPanel({
         if (edge.query !== undefined) {
           setLocalEdgeQuery(edge.query);
         }
+        
+        // Sync conditional probabilities when graph changes
+        if (edge.conditional_p) {
+          setLocalConditionalP(edge.conditional_p);
+        }
       }
     }
   }, [graph, selectedEdgeId]);
@@ -653,6 +659,10 @@ export default function PropertiesPanel({
       }
       Object.assign(next.edges[edgeIndex].conditional_p![condIndex].p!, changes);
       
+      // Update local state to reflect the change
+      const updatedConditionalP = [...(next.edges[edgeIndex].conditional_p || [])];
+      setLocalConditionalP(updatedConditionalP);
+      
       if (next.metadata) {
         next.metadata.updated_at = new Date().toISOString();
       }
@@ -740,41 +750,61 @@ export default function PropertiesPanel({
       }
       nextGraph.edges[currentEdgeIndex].conditional_p![condIndex].p!.mean = newValue;
       
-      // Find sibling edges with same condition
+      // Get the condition string and normalize it for comparison
+      const currentCondition = currentEdge.conditional_p[condIndex].condition;
+      const currentConditionStr = typeof currentCondition === 'string' ? currentCondition : '';
+      const normalizedCurrent = normalizeConstraintString(currentConditionStr);
+      
+      // Find sibling edges with same condition (using normalized comparison)
       const siblings = nextGraph.edges.filter((edge: any, idx: number) => 
         idx !== currentEdgeIndex && 
         edge.from === sourceNode &&
         edge.conditional_p &&
-        edge.conditional_p[condIndex] &&
-        edge.conditional_p[condIndex].condition &&
-        currentEdge.conditional_p &&
-        currentEdge.conditional_p[condIndex] &&
-        currentEdge.conditional_p[condIndex].condition &&
-        JSON.stringify(edge.conditional_p[condIndex].condition) === 
-        JSON.stringify(currentEdge.conditional_p[condIndex].condition)
+        edge.conditional_p.some((cond: any) => {
+          const condStr = typeof cond.condition === 'string' ? cond.condition : '';
+          return normalizeConstraintString(condStr) === normalizedCurrent;
+        })
       );
       
       if (siblings.length > 0) {
         const remainingProbability = roundTo4DP(1 - newValue);
-        const siblingsTotal = siblings.reduce((sum, sibling) => {
-          return sum + (sibling.conditional_p![condIndex]?.p?.mean || 0);
+        
+        // Find matching condition index in each sibling
+        const siblingsWithMatchingCondition = siblings.map((sibling: any) => {
+          const matchingIndex = sibling.conditional_p.findIndex((cond: any) => {
+            const condStr = typeof cond.condition === 'string' ? cond.condition : '';
+            return normalizeConstraintString(condStr) === normalizedCurrent;
+          });
+          return { sibling, matchingIndex };
+        }).filter((item: any) => item.matchingIndex >= 0);
+        
+        const siblingsTotal = siblingsWithMatchingCondition.reduce((sum, item) => {
+          return sum + (item.sibling.conditional_p[item.matchingIndex]?.p?.mean || 0);
         }, 0);
         
-        siblings.forEach((sibling) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-          if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p && nextGraph.edges[siblingIndex].conditional_p![condIndex]) {
-            const siblingCurrentValue = sibling.conditional_p![condIndex]?.p?.mean || 0;
+        siblingsWithMatchingCondition.forEach((item: any) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+            (e.uuid === item.sibling.uuid && e.uuid) || (e.id === item.sibling.id && e.id)
+          );
+          
+          if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p && 
+              nextGraph.edges[siblingIndex].conditional_p[item.matchingIndex]) {
+            const siblingCurrentValue = item.sibling.conditional_p[item.matchingIndex]?.p?.mean || 0;
             const newSiblingValue = siblingsTotal > 0
               ? roundTo4DP((siblingCurrentValue / siblingsTotal) * remainingProbability)
-              : roundTo4DP(remainingProbability / siblings.length);
+              : roundTo4DP(remainingProbability / siblingsWithMatchingCondition.length);
             
-            if (!nextGraph.edges[siblingIndex].conditional_p![condIndex].p) {
-              nextGraph.edges[siblingIndex].conditional_p![condIndex].p = {};
+            if (!nextGraph.edges[siblingIndex].conditional_p![item.matchingIndex].p) {
+              nextGraph.edges[siblingIndex].conditional_p![item.matchingIndex].p = {};
             }
-            nextGraph.edges[siblingIndex].conditional_p![condIndex].p!.mean = newSiblingValue;
+            nextGraph.edges[siblingIndex].conditional_p![item.matchingIndex].p!.mean = newSiblingValue;
           }
         });
       }
+      
+      // Update local state
+      const updatedConditionalP = [...(nextGraph.edges[currentEdgeIndex].conditional_p || [])];
+      setLocalConditionalP(updatedConditionalP);
       
       if (nextGraph.metadata) {
         nextGraph.metadata.updated_at = new Date().toISOString();
@@ -1957,27 +1987,77 @@ export default function PropertiesPanel({
                   
                   <ConditionalProbabilityEditor
                     conditions={localConditionalP}
-                    onChange={(newConditions) => {
+                    onChange={async (newConditions) => {
                       setLocalConditionalP(newConditions);
-                              if (selectedEdgeId && graph) {
-                                const nextGraph = structuredClone(graph);
-                                const edgeIndex = nextGraph.edges.findIndex((edge: any) => 
-                                  edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
-                                );
-                                if (edgeIndex >= 0) {
-                                  nextGraph.edges[edgeIndex].conditional_p = newConditions.length > 0 ? newConditions as any : undefined;
-                                  if (nextGraph.metadata) {
-                                    nextGraph.metadata.updated_at = new Date().toISOString();
-                                  }
-                                  setGraph(nextGraph);
-                          saveHistoryState('Update conditional probabilities', undefined, selectedEdgeId);
-                        }
+                      if (selectedEdgeId && graph) {
+                        const oldGraph = graph;
+                        
+                        // Use UpdateManager to handle graph-to-graph updates (sibling propagation)
+                        const { updateManager } = await import('../services/UpdateManager');
+                        const nextGraph = updateManager.updateConditionalProbabilities(
+                          graph,
+                          selectedEdgeId,
+                          newConditions
+                        );
+                        
+                        // Use graphMutationService to trigger query regeneration
+                        const { graphMutationService } = await import('../services/graphMutationService');
+                        await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                        saveHistoryState('Update conditional probabilities', undefined, selectedEdgeId);
                       }
                     }}
-                              graph={graph}
+                    graph={graph}
                     edgeId={selectedEdgeId || undefined}
+                    edge={selectedEdge}
                     onUpdateParam={updateConditionalPParam}
                     onRebalanceParam={rebalanceConditionalP}
+                    onUpdateConditionColor={async (index: number, color: string | undefined) => {
+                      if (!selectedEdgeId || !graph) return;
+                      const oldGraph = graph;
+                      
+                      // Use UpdateManager to propagate condition color to matching conditions on siblings
+                      const { updateManager } = await import('../services/UpdateManager');
+                      const nextGraph = updateManager.propagateConditionalColor(
+                        graph,
+                        selectedEdgeId,
+                        index,
+                        color
+                      );
+                      
+                      // Update local state
+                      const updatedConditions = nextGraph.edges.find((e: any) => 
+                        e.uuid === selectedEdgeId || e.id === selectedEdgeId
+                      )?.conditional_p || [];
+                      setLocalConditionalP(updatedConditions);
+                      
+                      // Use graphMutationService to trigger query regeneration
+                      const { graphMutationService } = await import('../services/graphMutationService');
+                      await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                      saveHistoryState('Update conditional probability color', undefined, selectedEdgeId);
+                    }}
+                    onRemoveCondition={async (index: number) => {
+                      if (!selectedEdgeId || !graph) return;
+                      const oldGraph = graph;
+                      
+                      // Use UpdateManager to handle deletion with sibling propagation
+                      const { updateManager } = await import('../services/UpdateManager');
+                      const nextGraph = updateManager.removeConditionalProbability(
+                        graph,
+                        selectedEdgeId,
+                        index
+                      );
+                      
+                      // Update local state
+                      const updatedConditions = nextGraph.edges.find((e: any) => 
+                        e.uuid === selectedEdgeId || e.id === selectedEdgeId
+                      )?.conditional_p || [];
+                      setLocalConditionalP(updatedConditions);
+                      
+                      // Use graphMutationService to trigger query regeneration
+                      const { graphMutationService } = await import('../services/graphMutationService');
+                      await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                      saveHistoryState('Remove conditional probability', undefined, selectedEdgeId);
+                    }}
                   />
 
                 </CollapsibleSection>

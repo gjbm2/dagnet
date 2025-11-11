@@ -25,6 +25,10 @@
 // Note: Removed EventEmitter (Node.js only) - browser doesn't support it
 // TODO: Implement browser-compatible event system if needed (e.g., CustomEvent)
 
+import { generateUniqueId } from '../lib/idUtils';
+import { getSiblingEdges } from '../lib/conditionalColors';
+import { normalizeConstraintString } from '../lib/queryDSL';
+
 // ============================================================
 // TYPES & INTERFACES
 // ============================================================
@@ -1692,6 +1696,575 @@ export class UpdateManager {
   
   public clearAuditLog(): void {
     this.auditLog = [];
+  }
+  
+  // ============================================================
+  // GRAPH-TO-GRAPH UPDATE METHODS
+  // Conditional Probability Management
+  // ============================================================
+  
+  /**
+   * Add conditional probability to an edge and propagate to sibling edges.
+   * This is a graph-to-graph update that affects multiple edges.
+   * 
+   * @param graph - The current graph
+   * @param edgeId - ID of the edge to add condition to
+   * @param condition - The conditional probability object to add
+   * @returns Updated graph with condition added to edge and siblings
+   */
+  addConditionalProbability(
+    graph: any,
+    edgeId: string,
+    condition: any
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const currentEdge = nextGraph.edges[edgeIndex];
+    
+    // Add condition to current edge
+    if (!currentEdge.conditional_p) {
+      currentEdge.conditional_p = [];
+    }
+    currentEdge.conditional_p.push(structuredClone(condition));
+    
+    // Propagate to sibling edges (same source node)
+    const siblings = getSiblingEdges(currentEdge, nextGraph);
+    const defaultP = currentEdge.p?.mean ?? 0.5;
+    const condStr = typeof condition.condition === 'string' ? condition.condition : '';
+    
+    siblings.forEach((sibling: any) => {
+      const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+        e.uuid === sibling.uuid || e.id === sibling.id || 
+        (e.from === sibling.from && e.to === sibling.to)
+      );
+      
+      if (siblingIndex >= 0 && condStr) {
+        const siblingEdge = nextGraph.edges[siblingIndex];
+        if (!siblingEdge.conditional_p) {
+          siblingEdge.conditional_p = [];
+        }
+        
+        // Check if sibling already has this condition (by normalized string)
+        const hasMatching = siblingEdge.conditional_p.some((existingCond: any) => {
+          const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+          return normalizeConstraintString(existingStr) === normalizeConstraintString(condStr);
+        });
+        
+        if (!hasMatching) {
+          siblingEdge.conditional_p.push({
+            condition: condStr,
+            query: condition.query || '',
+            query_overridden: condition.query_overridden || false,
+            p: {
+              mean: siblingEdge.p?.mean ?? defaultP,
+              ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
+            }
+          });
+        }
+      }
+    });
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'addConditionalProbability',
+      details: {
+        edgeId,
+        condition: condStr,
+        siblingsUpdated: siblings.length
+      }
+    });
+    
+    return nextGraph;
+  }
+  
+  /**
+   * Update conditional probabilities on an edge and sync matching conditions on siblings.
+   * 
+   * @param graph - The current graph
+   * @param edgeId - ID of the edge being updated
+   * @param newConditions - Array of all conditional probabilities for this edge
+   * @returns Updated graph with conditions synced to siblings
+   */
+  updateConditionalProbabilities(
+    graph: any,
+    edgeId: string,
+    newConditions: any[]
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const currentEdge = nextGraph.edges[edgeIndex];
+    const wasEmpty = !currentEdge.conditional_p || currentEdge.conditional_p.length === 0;
+    const isNowEmpty = newConditions.length === 0;
+    
+    // Update current edge
+    nextGraph.edges[edgeIndex].conditional_p = isNowEmpty ? undefined : newConditions.map(c => structuredClone(c));
+    
+    // If adding conditions (not removing), propagate to sibling edges
+    if (!isNowEmpty && wasEmpty) {
+      const siblings = getSiblingEdges(currentEdge, nextGraph);
+      const defaultP = currentEdge.p?.mean ?? 0.5;
+      
+      siblings.forEach((sibling: any) => {
+        const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+          e.uuid === sibling.uuid || e.id === sibling.id || 
+          (e.from === sibling.from && e.to === sibling.to)
+        );
+        
+        if (siblingIndex >= 0) {
+          const siblingEdge = nextGraph.edges[siblingIndex];
+          if (!siblingEdge.conditional_p) {
+            siblingEdge.conditional_p = [];
+          }
+          
+          // Add matching conditions to sibling
+          newConditions.forEach((newCond: any) => {
+            const condStr = typeof newCond.condition === 'string' ? newCond.condition : '';
+            if (!condStr) return;
+            
+            const hasMatching = siblingEdge.conditional_p?.some((existingCond: any) => {
+              const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+              return normalizeConstraintString(existingStr) === normalizeConstraintString(condStr);
+            }) || false;
+            
+            if (!hasMatching) {
+              if (!siblingEdge.conditional_p) {
+                siblingEdge.conditional_p = [];
+              }
+              siblingEdge.conditional_p.push({
+                condition: condStr,
+                query: newCond.query || '',
+                query_overridden: newCond.query_overridden || false,
+                p: {
+                  mean: siblingEdge.p?.mean ?? defaultP,
+                  ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
+                }
+              });
+            }
+          });
+        }
+      });
+    }
+    
+    // If updating existing conditions, sync matching conditions on siblings
+    if (!wasEmpty && !isNowEmpty) {
+      const siblings = getSiblingEdges(currentEdge, nextGraph);
+      
+      // Track old conditions by normalized string for comparison
+      const oldConditions = (currentEdge.conditional_p || []).map((cond: any) => {
+        const condStr = typeof cond.condition === 'string' ? cond.condition : '';
+        return normalizeConstraintString(condStr);
+      });
+      
+      siblings.forEach((sibling: any) => {
+        const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+          e.uuid === sibling.uuid || e.id === sibling.id || 
+          (e.from === sibling.from && e.to === sibling.to)
+        );
+        
+        if (siblingIndex >= 0) {
+          const siblingEdge = nextGraph.edges[siblingIndex];
+          if (!siblingEdge.conditional_p) {
+            siblingEdge.conditional_p = [];
+          }
+          
+          // For each new condition, find matching sibling condition and update structure
+          newConditions.forEach((newCond: any) => {
+            const condStr = typeof newCond.condition === 'string' ? newCond.condition : '';
+            // Skip empty conditions for sibling propagation (they'll be added when user fills them in)
+            if (!condStr) return;
+            
+            const normalizedNew = normalizeConstraintString(condStr);
+            
+            // Find matching condition in sibling (by normalized string)
+            const matchingIndex = siblingEdge.conditional_p.findIndex((existingCond: any) => {
+              const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+              return normalizeConstraintString(existingStr) === normalizedNew;
+            });
+            
+            if (matchingIndex >= 0) {
+              // Update existing matching condition (preserve p.mean if already set, update condition string)
+              const existingP = siblingEdge.conditional_p[matchingIndex].p?.mean;
+              siblingEdge.conditional_p[matchingIndex] = {
+                condition: condStr, // Update to new condition string
+                query: newCond.query || siblingEdge.conditional_p[matchingIndex].query || '',
+                query_overridden: newCond.query_overridden || siblingEdge.conditional_p[matchingIndex].query_overridden || false,
+                p: {
+                  mean: existingP !== undefined ? existingP : (siblingEdge.p?.mean ?? 0.5),
+                  ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
+                }
+              };
+            } else {
+              // New condition not found in sibling - check if it's a renamed condition
+              // (old condition string changed to new condition string)
+              const wasRenamed = oldConditions.some((oldNorm: string) => {
+                // Check if any old condition might have been renamed to this new one
+                // This is a heuristic: if sibling had the old condition, assume it was renamed
+                return siblingEdge.conditional_p.some((existingCond: any) => {
+                  const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+                  return normalizeConstraintString(existingStr) === oldNorm;
+                });
+              });
+              
+              if (!wasRenamed) {
+                // Truly new condition - add it to sibling
+                siblingEdge.conditional_p.push({
+                  condition: condStr,
+                  query: newCond.query || '',
+                  query_overridden: newCond.query_overridden || false,
+                  p: {
+                    mean: siblingEdge.p?.mean ?? 0.5,
+                    ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
+                  }
+                });
+              }
+            }
+          });
+          
+          // Remove conditions from sibling that no longer exist in current edge
+          const newNormalized = newConditions.map((cond: any) => {
+            const condStr = typeof cond.condition === 'string' ? cond.condition : '';
+            return normalizeConstraintString(condStr);
+          });
+          
+          siblingEdge.conditional_p = siblingEdge.conditional_p.filter((existingCond: any) => {
+            const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+            const normalizedExisting = normalizeConstraintString(existingStr);
+            // Keep if it matches a new condition OR if it's not in the old conditions (wasn't synced)
+            return newNormalized.includes(normalizedExisting) || !oldConditions.includes(normalizedExisting);
+          });
+        }
+      });
+    }
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'updateConditionalProbabilities',
+      details: {
+        edgeId,
+        conditionsCount: newConditions.length
+      }
+    });
+    
+    return nextGraph;
+  }
+  
+  /**
+   * Remove conditional probability from an edge and remove matching conditions from siblings.
+   * This is a graph-to-graph update that affects multiple edges.
+   * 
+   * @param graph - The current graph
+   * @param edgeId - ID of the edge to remove condition from
+   * @param condIndex - Index of the condition to remove
+   * @returns Updated graph with condition removed from edge and siblings
+   */
+  removeConditionalProbability(
+    graph: any,
+    edgeId: string,
+    condIndex: number
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const currentEdge = nextGraph.edges[edgeIndex];
+    
+    if (!currentEdge.conditional_p || condIndex >= currentEdge.conditional_p.length) {
+      console.warn('[UpdateManager] Condition index out of range:', condIndex);
+      return graph;
+    }
+    
+    // Get the condition string to match on siblings
+    const conditionToRemove = currentEdge.conditional_p[condIndex];
+    const condStr = typeof conditionToRemove.condition === 'string' ? conditionToRemove.condition : '';
+    
+    // Remove condition from current edge
+    currentEdge.conditional_p.splice(condIndex, 1);
+    if (currentEdge.conditional_p.length === 0) {
+      currentEdge.conditional_p = undefined;
+    }
+    
+    // Remove matching conditions from sibling edges (same source node)
+    if (condStr) {
+      const siblings = getSiblingEdges(currentEdge, nextGraph);
+      const normalizedToRemove = normalizeConstraintString(condStr);
+      
+      siblings.forEach((sibling: any) => {
+        const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+          e.uuid === sibling.uuid || e.id === sibling.id || 
+          (e.from === sibling.from && e.to === sibling.to)
+        );
+        
+        if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p) {
+          const siblingEdge = nextGraph.edges[siblingIndex];
+          
+          // Find and remove matching condition (by normalized string)
+          const matchingIndex = siblingEdge.conditional_p.findIndex((cond: any) => {
+            const existingStr = typeof cond.condition === 'string' ? cond.condition : '';
+            return normalizeConstraintString(existingStr) === normalizedToRemove;
+          });
+          
+          if (matchingIndex >= 0) {
+            siblingEdge.conditional_p.splice(matchingIndex, 1);
+            if (siblingEdge.conditional_p.length === 0) {
+              siblingEdge.conditional_p = undefined;
+            }
+          }
+        }
+      });
+    }
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'removeConditionalProbability',
+      details: {
+        edgeId,
+        condIndex,
+        condition: condStr
+      }
+    });
+    
+    return nextGraph;
+  }
+  
+  /**
+   * Create a new edge in the graph with proper ID generation and default probability calculation.
+   * This is a graph-to-graph update that may affect sibling edge probabilities.
+   * 
+   * @param graph - The current graph
+   * @param connection - Connection object with source, target, sourceHandle, targetHandle
+   * @param options - Optional edge properties (case_id, case_variant, etc.)
+   * @returns Updated graph with new edge added
+   */
+  createEdge(
+    graph: any,
+    connection: {
+      source: string;
+      target: string;
+      sourceHandle?: string | null;
+      targetHandle?: string | null;
+    },
+    options?: {
+      case_id?: string;
+      case_variant?: string;
+      uuid?: string;
+      id?: string;
+    }
+  ): { graph: any; edgeId: string } {
+    const nextGraph = structuredClone(graph);
+    
+    // Find source and target nodes to get their IDs
+    const sourceNode = nextGraph.nodes.find((n: any) => 
+      n.uuid === connection.source || n.id === connection.source
+    );
+    const targetNode = nextGraph.nodes.find((n: any) => 
+      n.uuid === connection.target || n.id === connection.target
+    );
+    
+    if (!sourceNode || !targetNode) {
+      console.warn('[UpdateManager] Source or target node not found:', {
+        source: connection.source,
+        target: connection.target
+      });
+      return { graph, edgeId: '' };
+    }
+    
+    const sourceId = sourceNode.id || sourceNode.uuid || connection.source;
+    const targetId = targetNode.id || targetNode.uuid || connection.target;
+    
+    // Generate unique edge ID
+    const baseId = options?.id || `${sourceId}-to-${targetId}`;
+    const existingIds = nextGraph.edges.map((e: any) => e.id || e.uuid).filter(Boolean);
+    const edgeId = options?.id || generateUniqueId(baseId, existingIds);
+    const edgeUuid = options?.uuid || edgeId;
+    
+    // Calculate smart default probability based on existing outgoing edges
+    const existingOutgoingEdges = nextGraph.edges.filter((e: any) => 
+      e.from === connection.source || e.from === sourceNode.uuid || e.from === sourceNode.id
+    );
+    
+    let defaultProbability: number;
+    if (existingOutgoingEdges.length === 0) {
+      // First edge from this node - default to 1.0 (100%)
+      defaultProbability = 1.0;
+    } else {
+      // Subsequent edges - default to remaining probability
+      const existingProbabilitySum = existingOutgoingEdges.reduce((sum: number, edge: any) => {
+        return sum + (edge.p?.mean || 0);
+      }, 0);
+      defaultProbability = Math.max(0, 1.0 - existingProbabilitySum);
+    }
+    
+    // Map handle IDs to match our node component
+    // Source handles: "top" -> "top-out", "left" -> "left-out", etc.
+    const sourceHandle = connection.sourceHandle ? 
+      (connection.sourceHandle.endsWith('-out') ? connection.sourceHandle : `${connection.sourceHandle}-out`) : 
+      null;
+    const targetHandle = connection.targetHandle || null;
+    
+    // Create new edge
+    const newEdge: any = {
+      uuid: edgeUuid,
+      id: edgeId,
+      from: connection.source,
+      to: connection.target,
+      fromHandle: sourceHandle,
+      toHandle: targetHandle,
+      p: {
+        mean: options?.case_variant ? 1.0 : defaultProbability // Case edges default to 1.0
+      }
+    };
+    
+    // Add case properties if provided
+    if (options?.case_id) {
+      newEdge.case_id = options.case_id;
+    }
+    if (options?.case_variant) {
+      newEdge.case_variant = options.case_variant;
+    }
+    
+    nextGraph.edges.push(newEdge);
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'createEdge',
+      details: {
+        edgeId,
+        source: connection.source,
+        target: connection.target,
+        defaultProbability
+      }
+    });
+    
+    return { graph: nextGraph, edgeId };
+  }
+  
+  /**
+   * Propagate condition-level color to matching conditions on sibling edges.
+   * Colors are stored per condition, not per edge.
+   * 
+   * @param graph - The current graph
+   * @param edgeId - ID of the edge with the condition
+   * @param condIndex - Index of the condition to update color for
+   * @param color - Color to set (or undefined to clear)
+   * @returns Updated graph with color propagated to matching conditions on siblings
+   */
+  propagateConditionalColor(
+    graph: any,
+    edgeId: string,
+    condIndex: number,
+    color: string | undefined
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const currentEdge = nextGraph.edges[edgeIndex];
+    
+    if (!currentEdge.conditional_p || condIndex >= currentEdge.conditional_p.length) {
+      console.warn('[UpdateManager] Condition index out of range:', condIndex);
+      return graph;
+    }
+    
+    // Update color on current condition
+    const conditionToUpdate = currentEdge.conditional_p[condIndex];
+    const condStr = typeof conditionToUpdate.condition === 'string' ? conditionToUpdate.condition : '';
+    
+    if (color === undefined) {
+      delete currentEdge.conditional_p[condIndex].color;
+    } else {
+      currentEdge.conditional_p[condIndex].color = color;
+    }
+    
+    // Propagate to matching conditions on sibling edges (same source node, matching condition string)
+    if (condStr) {
+      const siblings = getSiblingEdges(currentEdge, nextGraph);
+      const normalizedToUpdate = normalizeConstraintString(condStr);
+      
+      siblings.forEach((sibling: any) => {
+        const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+          e.uuid === sibling.uuid || e.id === sibling.id || 
+          (e.from === sibling.from && e.to === sibling.to)
+        );
+        
+        if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p) {
+          const siblingEdge = nextGraph.edges[siblingIndex];
+          
+          // Find matching condition (by normalized string) and update its color
+          const matchingIndex = siblingEdge.conditional_p.findIndex((cond: any) => {
+            const existingStr = typeof cond.condition === 'string' ? cond.condition : '';
+            return normalizeConstraintString(existingStr) === normalizedToUpdate;
+          });
+          
+          if (matchingIndex >= 0) {
+            if (color === undefined) {
+              delete siblingEdge.conditional_p[matchingIndex].color;
+            } else {
+              siblingEdge.conditional_p[matchingIndex].color = color;
+            }
+          }
+        }
+      });
+    }
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'propagateConditionalColor',
+      details: {
+        edgeId,
+        condIndex,
+        color: color || 'cleared'
+      }
+    });
+    
+    return nextGraph;
   }
 }
 
