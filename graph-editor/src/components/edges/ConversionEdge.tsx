@@ -131,8 +131,20 @@ export default function ConversionEdge({
       lines.push(`Edge: ${data.id}`);
     }
     
-    // Probability info
-    lines.push(`Probability: ${(data.probability * 100).toFixed(1)}%`);
+    // Probability info - show effective probability for case edges, sub-route probability otherwise
+    // Check if case edge (has case_variant, infer case_id from source if needed)
+    const isCaseEdgeForTooltip = fullEdge?.case_variant && (
+      fullEdge?.case_id || 
+      (graph?.nodes?.find((n: any) => n.uuid === fullEdge?.from || n.id === fullEdge?.from)?.type === 'case')
+    );
+    if (isCaseEdgeForTooltip) {
+      // Case edge: show effective probability (variant weight * sub-route probability)
+      lines.push(`Effective Probability: ${(effectiveProbability * 100).toFixed(1)}%`);
+      lines.push(`Sub-Route Probability: ${(data.probability * 100).toFixed(1)}%`);
+    } else {
+      // Regular edge: show probability
+      lines.push(`Probability: ${(effectiveProbability * 100).toFixed(1)}%`);
+    }
     if (data.stdev) {
       lines.push(`Std Dev: ${(data.stdev * 100).toFixed(1)}%`);
     }
@@ -248,11 +260,64 @@ export default function ConversionEdge({
     );
   }, [graph, id, graph?.edges?.map(e => `${e.uuid}-${JSON.stringify(e.conditional_p)}`).join(',')]);
   
+  // Get variant weights string for dependency tracking (for case edges)
+  // This must be calculated directly from graph, not from fullEdge, to ensure it updates
+  const variantWeightsKey = useMemo(() => {
+    if (!graph) return '';
+    const currentEdge = graph.edges.find((e: any) => 
+      e.uuid === id || e.id === id || `${e.from}->${e.to}` === id
+    );
+    if (!currentEdge?.case_variant) return '';
+    
+    // Infer case_id from source node if not set
+    let caseId = currentEdge.case_id;
+    if (!caseId) {
+      const sourceNode = graph.nodes.find((n: any) => n.uuid === currentEdge.from || n.id === currentEdge.from);
+      if (sourceNode?.type === 'case') {
+        caseId = sourceNode.case?.id || sourceNode.uuid || sourceNode.id;
+      }
+    }
+    
+    if (!caseId) return '';
+    
+    // Find the case node (check case.id, uuid, or id)
+    const caseNode = graph.nodes.find((n: any) => 
+      n.type === 'case' && (
+        n.case?.id === caseId || 
+        n.uuid === caseId || 
+        n.id === caseId
+      )
+    );
+    if (!caseNode?.case?.variants) return '';
+    // Create a key that changes when any variant weight changes
+    return caseNode.case.variants.map((v: any) => `${v.name}-${v.weight}`).join(',');
+  }, [
+    graph, 
+    id,
+    // Explicitly depend on variant weights from all case nodes to catch changes
+    graph?.nodes?.filter((n: any) => n.type === 'case').map((n: any) => 
+      n.case?.variants?.map((v: any) => `${v.name}-${v.weight}`).join(',') || ''
+    ).join('|')
+  ]);
+  
   // UNIFIED: Compute effective probability using shared logic
   const effectiveProbability = useMemo(() => {
+    if (!graph) return 0;
     const whatIfOverrides = { caseOverrides, conditionalOverrides };
     return computeEffectiveEdgeProbability(graph, id, whatIfOverrides, null);
-  }, [id, caseOverrides, conditionalOverrides, graph?.edges?.find(e => e.uuid === id || e.id === id)?.p?.mean, graph?.metadata?.updated_at]);
+  }, [
+    id, 
+    caseOverrides, 
+    conditionalOverrides, 
+    // Depend on the entire graph object so it recalculates when variant weights change
+    graph,
+    // Also explicitly depend on the edge's p.mean and case_id/case_variant
+    graph?.edges?.find(e => e.uuid === id || e.id === id)?.p?.mean,
+    graph?.edges?.find(e => e.uuid === id || e.id === id)?.case_id,
+    graph?.edges?.find(e => e.uuid === id || e.id === id)?.case_variant,
+    // Depend on variant weights for the case node (if this is a case edge)
+    variantWeightsKey
+  ]);
 
   // For dashed lines, we need the actual effective weight (flow-based), not just What-If overrides
   const effectiveWeight = useMemo(() => {
@@ -329,7 +394,20 @@ export default function ConversionEdge({
     }
   }, [strokeWidth]);
   
-  const isCaseEdge = data?.case_id || data?.case_variant;
+  const isCaseEdge = (() => {
+    // Check if edge has case_variant
+    if (!fullEdge?.case_variant && !data?.case_variant) return false;
+    
+    // Check if case_id is set, or if source node is a case node
+    const hasCaseId = fullEdge?.case_id || data?.case_id;
+    if (hasCaseId) return true;
+    
+    // Infer from source node
+    const sourceNode = graph?.nodes?.find((n: any) => 
+      n.uuid === fullEdge?.from || n.id === fullEdge?.from
+    );
+    return sourceNode?.type === 'case';
+  })();
 
   // Apply offsets to source and target positions for Sankey-style visualization
   const sourceOffsetX = data?.sourceOffsetX || 0;
@@ -1463,7 +1541,7 @@ export default function ConversionEdge({
                 </div>
               </div>
             ) : isCaseEdge ? (
-              // Case edge without override: show variant weight (purple) and sub-route probability (gray)
+              // Case edge without override: show effective probability (v * p) and variant name
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <div style={{ 
                   fontWeight: 'bold', 
@@ -1480,7 +1558,7 @@ export default function ConversionEdge({
                   fontSize: '10px',
                   color: '#666'
                 }}>
-                  variant weight
+                  {data?.case_variant || 'variant'}
                 </div>
               </div>
             ) : (

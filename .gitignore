@@ -39,6 +39,8 @@ MANIFEST
 dist/
 build/
 *.tsbuildinfo
+**/dist/
+**/*.tsbuildinfo
 
 # Generated documentation index
 graph-editor/public/docs/index.json

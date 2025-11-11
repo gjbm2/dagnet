@@ -1,9 +1,18 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useWhatIfContext } from '../contexts/WhatIfContext';
 import { getConditionalColor, getConditionSignature } from '@/lib/conditionalColors';
-import { getVisitedNodeIds, normalizeConstraintString } from '@/lib/queryDSL';
+import { 
+  normalizeConstraintString, 
+  evaluateConstraint, 
+  parseConstraints,
+  generateCaseDSL,
+  augmentDSLWithConstraint,
+  removeConstraintFromDSL
+} from '@/lib/queryDSL';
+import { convertOverridesToDSL, parseWhatIfDSL } from '@/lib/whatIf';
+import { QueryExpressionEditor } from './QueryExpressionEditor';
 
 export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
   const { graph } = useGraphStore();
@@ -13,81 +22,124 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
   const myTab = tabs.find(t => t.id === tabId);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // What-if state: prefer fast context (visual), fallback to tab state
+  // NEW: Use whatIfDSL as primary source of truth
+  // Convert old format to DSL on mount if needed (backward compatibility)
+  const whatIfDSL = useMemo(() => {
+    // First check if DSL is already set
+    if (myTab?.editorState?.whatIfDSL !== undefined) {
+      return myTab.editorState.whatIfDSL;
+    }
+    
+    // Otherwise, convert old format to DSL
+    const oldCaseOverrides = whatIfCtx?.caseOverrides ?? myTab?.editorState?.caseOverrides ?? {};
+    const oldConditionalOverrides = myTab?.editorState?.conditionalOverrides ?? {};
+    
+    // Only convert if there are actual overrides
+    if (Object.keys(oldCaseOverrides).length > 0 || Object.keys(oldConditionalOverrides).length > 0) {
+      const convertedDSL = convertOverridesToDSL(oldCaseOverrides, oldConditionalOverrides, graph);
+      // Auto-migrate: save DSL and clear old format
+      if (tabId && convertedDSL) {
+        tabOps.updateTabState(tabId, { 
+          whatIfDSL: convertedDSL,
+          caseOverrides: {},
+          conditionalOverrides: {}
+        });
+      }
+      return convertedDSL;
+    }
+    
+    return null;
+  }, [myTab?.editorState?.whatIfDSL, myTab?.editorState?.caseOverrides, myTab?.editorState?.conditionalOverrides, graph, tabId, whatIfCtx?.caseOverrides]);
+  
+  // Parse DSL to get overrides (for backward compatibility with whatIf.ts)
+  const parsedOverrides = useMemo(() => {
+    return parseWhatIfDSL(whatIfDSL, graph);
+  }, [whatIfDSL, graph]);
+  
+  // Legacy support: still expose caseOverrides and conditionalOverrides for whatIf.ts
+  const caseOverrides = parsedOverrides.caseOverrides || {};
+  const conditionalOverrides = parsedOverrides.conditionalOverrides || {};
+  
+  // Legacy whatIfAnalysis support
   const whatIfAnalysis = (whatIfCtx?.whatIfAnalysis !== undefined ? whatIfCtx?.whatIfAnalysis : myTab?.editorState?.whatIfAnalysis);
-  const caseOverrides = (whatIfCtx?.caseOverrides !== undefined ? whatIfCtx?.caseOverrides : (myTab?.editorState?.caseOverrides || {}));
-  const conditionalOverrides = (whatIfCtx?.conditionalOverrides !== undefined ? whatIfCtx?.conditionalOverrides : (myTab?.editorState?.conditionalOverrides || {}));
   
-  // Helper to update tab's what-if state
-  const setWhatIfAnalysis = (analysis: any) => {
-    if (whatIfCtx?.setWhatIfAnalysis) {
-      console.log(`[${ts()}] [WhatIfControl] setWhatIfAnalysis`);
-      whatIfCtx.setWhatIfAnalysis(analysis);
-      return;
-    }
-    if (tabId) {
-      console.log(`[${ts()}] [WhatIfControl] setWhatIfAnalysis via tabOps.updateTabState`);
-      tabOps.updateTabState(tabId, { whatIfAnalysis: analysis });
-    }
-  };
-  
-  const setCaseOverride = (nodeId: string, variantName: string | null) => {
-    performance.mark('whatif-setCaseOverride-start');
-    console.log(`[${ts()}] [WhatIfControl] setCaseOverride called:`, { nodeId, variantName, tabId });
+  // Helper to update what-if DSL
+  const setWhatIfDSL = useCallback((dsl: string | null) => {
+    if (!tabId) return;
+    
     // Mark start of a What-If update for latency measurement
     window.dispatchEvent(new CustomEvent('dagnet:whatif-start', { detail: { t0: performance.now(), tabId } }));
-    performance.mark('whatif-after-dispatch');
-    // No-op if value unchanged
-    const current = (whatIfCtx?.caseOverrides ?? myTab?.editorState?.caseOverrides ?? {}) as Record<string, string>;
-    if ((variantName === null && !(nodeId in current)) || (variantName !== null && current[nodeId] === variantName)) {
-      console.log(`[${ts()}] [WhatIfControl] setCaseOverride no-op (unchanged)`);
-      performance.mark('whatif-noop-end');
-      performance.measure('⚡ whatif-noop', 'whatif-setCaseOverride-start', 'whatif-noop-end');
-      return;
+    
+    tabOps.updateTabState(tabId, { whatIfDSL: dsl });
+    
+    // Also update context for immediate visual feedback (convert DSL to old format temporarily)
+    if (whatIfCtx) {
+      const parsed = parseWhatIfDSL(dsl || null, graph);
+      if (whatIfCtx.setCaseOverride) {
+        // Clear all first
+        Object.keys(whatIfCtx.caseOverrides || {}).forEach(nodeId => {
+          whatIfCtx.setCaseOverride!(nodeId, null);
+        });
+        // Then set new ones
+        Object.entries(parsed.caseOverrides || {}).forEach(([nodeId, variant]) => {
+          whatIfCtx.setCaseOverride!(nodeId, variant);
+        });
+      }
+      if (whatIfCtx.setConditionalOverride) {
+        // Clear all first
+        Object.keys(whatIfCtx.conditionalOverrides || {}).forEach(edgeId => {
+          whatIfCtx.setConditionalOverride!(edgeId, null);
+        });
+        // Then set new ones (convert string to Set for context)
+        Object.entries(parsed.conditionalOverrides || {}).forEach(([edgeId, condition]) => {
+          if (typeof condition === 'string') {
+            const parsedCond = parseConstraints(condition);
+            whatIfCtx.setConditionalOverride!(edgeId, new Set(parsedCond.visited));
+          }
+        });
+      }
     }
-    performance.mark('whatif-before-context-update');
-    if (whatIfCtx?.setCaseOverride) {
-      whatIfCtx.setCaseOverride(nodeId, variantName);
-      performance.mark('whatif-after-context-update');
-      performance.measure('⚡ whatif-context-update', 'whatif-before-context-update', 'whatif-after-context-update');
-      performance.measure('⚡ whatif-setCaseOverride-TOTAL', 'whatif-setCaseOverride-start', 'whatif-after-context-update');
-      console.log(`[${ts()}] [WhatIfControl] setCaseOverride completed (context path)`);
-      return;
-    }
-    if (!tabId) return;
-    const newOverrides = { ...caseOverrides };
-    if (variantName === null) delete newOverrides[nodeId]; else newOverrides[nodeId] = variantName;
-    console.log(`[${ts()}] [WhatIfControl] updateTabState(caseOverrides) start`);
-    tabOps.updateTabState(tabId, { caseOverrides: newOverrides });
-    performance.mark('whatif-after-tabstate-update');
-    performance.measure('⚡ whatif-tabstate-update', 'whatif-before-context-update', 'whatif-after-tabstate-update');
-    performance.measure('⚡ whatif-setCaseOverride-TOTAL', 'whatif-setCaseOverride-start', 'whatif-after-tabstate-update');
-    console.log(`[${ts()}] [WhatIfControl] setCaseOverride completed (tabOps path)`);
-  };
+  }, [tabId, graph, whatIfCtx]);
   
-  const setConditionalOverride = (edgeId: string, value: Set<string> | null) => {
-    if (whatIfCtx?.setConditionalOverride) {
-      console.log(`[${ts()}] [WhatIfControl] setConditionalOverride`);
-      whatIfCtx.setConditionalOverride(edgeId, value);
-      return;
-    }
-    if (!tabId) return;
-    const newOverrides = { ...conditionalOverrides } as Record<string, Set<string>>;
-    if (value === null) delete newOverrides[edgeId]; else newOverrides[edgeId] = value;
-    console.log(`[${ts()}] [WhatIfControl] updateTabState(conditionalOverrides) start`);
-    tabOps.updateTabState(tabId, { conditionalOverrides: newOverrides });
-  };
+  // Helper to add case override to DSL
+  const addCaseOverride = useCallback((nodeId: string, variantName: string) => {
+    if (!graph) return;
+    const caseNode = graph.nodes.find((n: any) => n.type === 'case' && (n.uuid === nodeId || n.id === nodeId));
+    if (!caseNode) return;
+    
+    const caseId = caseNode.case?.id || caseNode.uuid || caseNode.id;
+    const caseDSL = generateCaseDSL(caseId, variantName, !!caseNode.case?.id);
+    const newDSL = augmentDSLWithConstraint(whatIfDSL, caseDSL);
+    setWhatIfDSL(newDSL);
+  }, [graph, whatIfDSL, setWhatIfDSL]);
   
-  const clearAllOverrides = () => {
-    if (whatIfCtx?.clearAllOverrides) {
-      console.log(`[${ts()}] [WhatIfControl] clearAllOverrides via context`);
-      whatIfCtx.clearAllOverrides();
-      return;
-    }
-    if (!tabId) return;
-    console.log(`[${ts()}] [WhatIfControl] clearAllOverrides via tabOps.updateTabState`);
-    tabOps.updateTabState(tabId, { whatIfAnalysis: null, caseOverrides: {}, conditionalOverrides: {} });
-  };
+  // Helper to remove case override from DSL
+  const removeCaseOverride = useCallback((nodeId: string, variantName: string) => {
+    if (!graph) return;
+    const caseNode = graph.nodes.find((n: any) => n.type === 'case' && (n.uuid === nodeId || n.id === nodeId));
+    if (!caseNode) return;
+    
+    const caseId = caseNode.case?.id || caseNode.uuid || caseNode.id;
+    const caseDSL = generateCaseDSL(caseId, variantName, !!caseNode.case?.id);
+    const newDSL = removeConstraintFromDSL(whatIfDSL, caseDSL);
+    setWhatIfDSL(newDSL || null);
+  }, [graph, whatIfDSL, setWhatIfDSL]);
+  
+  // Helper to add conditional override to DSL
+  const addConditionalOverride = useCallback((condition: string) => {
+    const newDSL = augmentDSLWithConstraint(whatIfDSL, condition);
+    setWhatIfDSL(newDSL);
+  }, [whatIfDSL, setWhatIfDSL]);
+  
+  // Helper to remove conditional override from DSL
+  const removeConditionalOverride = useCallback((condition: string) => {
+    const newDSL = removeConstraintFromDSL(whatIfDSL, condition);
+    setWhatIfDSL(newDSL || null);
+  }, [whatIfDSL, setWhatIfDSL]);
+  
+  const clearAllOverrides = useCallback(() => {
+    setWhatIfDSL(null);
+  }, [setWhatIfDSL]);
 
   // Get all case nodes and conditional edges
   const caseNodes = useMemo(() => {
@@ -149,165 +201,47 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
     );
   }, [conditionGroups, searchTerm]);
 
-  // Count active overrides (including whatIfAnalysis)
-  const activeCount = (whatIfAnalysis ? 1 : 0) + 
-                     Object.keys(caseOverrides).length +
-                     Object.keys(conditionalOverrides).length;
-
-  // Get case node display name
-  const getCaseNodeName = useCallback((nodeRef: string) => {
-    const node = graph?.nodes.find(n => n.uuid === nodeRef || n.id === nodeRef);
-    return node?.label || node?.id || nodeRef;
-  }, [graph]);
-
-  // Get conditional edge display name
-  const getConditionalEdgeName = useCallback((edgeId: string) => {
-    const edge = graph?.edges.find(e => e.uuid === edgeId || e.id === edgeId);
-    return edge?.id || edge?.id || edgeId;
-  }, [graph]);
+  // Count active overrides
+  const activeCount = whatIfDSL ? 1 : 0;
 
   return (
     <div>
-      {/* Active overrides chips */}
-      {activeCount > 0 && (
-        <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-          {whatIfAnalysis && (
-            <div
-              style={{
-                background: '#8B5CF6',
-                color: 'white',
-                padding: '4px 8px',
-                borderRadius: '4px',
-                fontSize: '11px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <span>🎭 {getCaseNodeName(whatIfAnalysis.caseNodeId)}: {whatIfAnalysis.selectedVariant}</span>
-              <button
-                onClick={() => setWhatIfAnalysis(null)}
-                style={{
-                  background: 'rgba(255,255,255,0.3)',
-                  border: 'none',
-                  color: 'white',
-                  borderRadius: '3px',
-                  cursor: 'pointer',
-                  padding: '0 4px',
-                  fontSize: '11px'
-                }}
-              >
-                ×
-              </button>
-            </div>
-          )}
-          {Object.entries(caseOverrides).map(([nodeRef, variant]) => {
-            const node = graph?.nodes.find(n => n.uuid === nodeRef || n.id === nodeRef);
-            const nodeColor = node?.layout?.color || '#8B5CF6';
-            return (
-              <div
-                key={nodeRef}
-                style={{
-                  background: nodeColor,
-                  color: 'white',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  fontSize: '11px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
-                }}
-              >
-                <span>🎭 {getCaseNodeName(nodeRef)}: {variant}</span>
-                <button
-                  onClick={() => setCaseOverride(nodeRef, null)}
-                  style={{
-                    background: 'rgba(255,255,255,0.3)',
-                    border: 'none',
-                    color: 'white',
-                    borderRadius: '3px',
-                    cursor: 'pointer',
-                    padding: '0 4px',
-                    fontSize: '11px'
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
-          {(() => {
-            // Group conditional overrides by condition signature to avoid duplicates
-            const groupedOverrides = new Map<string, { visitedNodes: Set<string>, edgeIds: string[], color: string }>();
-            
-            Object.entries(conditionalOverrides).forEach(([edgeId, visitedNodes]) => {
-              const edge = graph?.edges.find(e => e.uuid === edgeId || e.id === edgeId);
-              const signature = Array.from(visitedNodes).sort().join(',');
-              
-              if (!groupedOverrides.has(signature)) {
-                groupedOverrides.set(signature, {
-                  visitedNodes,
-                  edgeIds: [edgeId],
-                  color: edge ? (getConditionalColor(edge) || '#4ade80') : '#4ade80'
-                });
-              } else {
-                groupedOverrides.get(signature)!.edgeIds.push(edgeId);
-              }
-            });
-            
-            return Array.from(groupedOverrides.entries()).map(([signature, group]) => {
-              // Display which nodes are forced as visited
-              const nodeNames = Array.from(group.visitedNodes).map(nodeRef => {
-                const node = graph?.nodes.find(n => n.uuid === nodeRef || n.id === nodeRef);
-                return node?.label || node?.id || nodeRef;
-              }).join(', ');
-              
-              return (
-                <div
-                  key={signature}
-                  style={{
-                    background: group.color,
-                    color: 'white',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <span>🔀 visited({nodeNames})</span>
-                  <button
-                    onClick={() => {
-                      if (!tabId) return;
-                      // Clear ALL edges with this condition
-                      const newOverrides = { ...conditionalOverrides };
-                      group.edgeIds.forEach(edgeId => {
-                        delete newOverrides[edgeId];
-                      });
-                      tabOps.updateTabState(tabId, { conditionalOverrides: newOverrides });
-                    }}
-                    style={{
-                      background: 'rgba(255,255,255,0.3)',
-                      border: 'none',
-                      color: 'white',
-                      borderRadius: '3px',
-                      cursor: 'pointer',
-                      padding: '0 4px',
-                      fontSize: '11px'
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              );
-            });
-          })()}
+      {/* DSL Editor - NEW: Use QueryExpressionEditor for display/editing */}
+      <div style={{ marginBottom: '16px' }}>
+        <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '8px', color: '#333' }}>
+          What-If Scenario
         </div>
-      )}
+        <QueryExpressionEditor
+          value={whatIfDSL || ''}
+          onChange={(newDSL) => {
+            setWhatIfDSL(newDSL || null);
+          }}
+          graph={graph}
+          placeholder="case(case_id:treatment).visited(nodea)"
+          height="80px"
+          readonly={false}
+        />
+        {whatIfDSL && (
+          <button
+            onClick={clearAllOverrides}
+            style={{
+              marginTop: '8px',
+              padding: '6px 12px',
+              background: '#ef4444',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px'
+            }}
+          >
+            Clear All
+          </button>
+        )}
+      </div>
 
       {/* Main content */}
-      <div style={{ marginTop: activeCount > 0 ? '8px' : '0' }}>
+      <div style={{ marginTop: '8px' }}>
           {/* Search */}
           <input
             type="text"
@@ -331,7 +265,20 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                 🎭 Case Nodes
               </div>
               {filteredCaseNodes.map(node => {
-                const isActive = node.id in caseOverrides;
+                // Check if this case node has an override in the DSL
+                const parsed = parseConstraints(whatIfDSL || '');
+                const caseOverride = parsed.cases.find(c => {
+                  const caseNode = graph?.nodes.find((n: any) => 
+                    n.type === 'case' && (
+                      n.case?.id === c.key || 
+                      n.uuid === c.key || 
+                      n.id === c.key ||
+                      (n.uuid === node.uuid || n.id === node.id)
+                    )
+                  );
+                  return caseNode && (caseNode.uuid === node.uuid || caseNode.id === node.id);
+                });
+                const isActive = !!caseOverride;
                 const variants = node.case?.variants || [];
                 const nodeColor = node.layout?.color || '#e5e7eb';
                 
@@ -365,33 +312,45 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                       {node.label || node.id}
                     </div>
                   <select
-                      value={caseOverrides[node.id] || ''}
-                      onMouseDown={() => {
-                        console.log(`[${ts()}] [WhatIfControl] dropdown onMouseDown - suspending layout for 3s`);
-                        window.dispatchEvent(new CustomEvent('dagnet:suspendLayout', { 
-                          detail: { ms: 3000 }
-                        }));
-                      }}
-                      onFocus={() => {
-                        console.log(`[${ts()}] [WhatIfControl] dropdown onFocus - suspending layout for 3s`);
-                        window.dispatchEvent(new CustomEvent('dagnet:suspendLayout', { 
-                          detail: { ms: 3000 }
-                        }));
-                      }}
+                      value={(() => {
+                        // Check if this case node has an override in the DSL
+                        const parsed = parseConstraints(whatIfDSL || '');
+                        const caseOverride = parsed.cases.find(c => {
+                          // Match by case.id or node UUID/ID
+                          const caseNode = graph?.nodes.find((n: any) => 
+                            n.type === 'case' && (
+                              n.case?.id === c.key || 
+                              n.uuid === c.key || 
+                              n.id === c.key ||
+                              (n.uuid === node.uuid || n.id === node.id)
+                            )
+                          );
+                          return caseNode && (caseNode.uuid === node.uuid || caseNode.id === node.id);
+                        });
+                        return caseOverride?.value || '';
+                      })()}
                       onChange={(e) => {
-                        performance.mark('dropdown-onChange-start');
-                        console.log(`[${ts()}] [WhatIfControl] dropdown onChange fired`);
                         const variantName = e.target.value;
-                        performance.mark('dropdown-before-setCaseOverride');
                         if (variantName) {
-                          setCaseOverride(node.id, variantName);
+                          addCaseOverride(node.id || node.uuid, variantName);
                         } else {
-                          setCaseOverride(node.id, null);
+                          // Find current override and remove it
+                          const parsed = parseConstraints(whatIfDSL || '');
+                          const caseOverride = parsed.cases.find(c => {
+                            const caseNode = graph?.nodes.find((n: any) => 
+                              n.type === 'case' && (
+                                n.case?.id === c.key || 
+                                n.uuid === c.key || 
+                                n.id === c.key ||
+                                (n.uuid === node.uuid || n.id === node.id)
+                              )
+                            );
+                            return caseNode && (caseNode.uuid === node.uuid || caseNode.id === node.id);
+                          });
+                          if (caseOverride) {
+                            removeCaseOverride(node.id || node.uuid, caseOverride.value);
+                          }
                         }
-                        performance.mark('dropdown-after-setCaseOverride');
-                        performance.measure('⚡ dropdown-onChange-TOTAL', 'dropdown-onChange-start', 'dropdown-after-setCaseOverride');
-                        performance.measure('⚡ dropdown-setCaseOverride-call', 'dropdown-before-setCaseOverride', 'dropdown-after-setCaseOverride');
-                        console.log(`[${ts()}] [WhatIfControl] dropdown onChange completed`);
                       }}
                       style={{
                         width: '100%',
@@ -423,8 +382,19 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                 🔀 Conditional Probability Groups
               </div>
               {filteredConditionGroups.map((group, groupIdx) => {
-                // Check if any edge in this group has an active override
-                const anyActive = group.edges.some(e => e.id in conditionalOverrides);
+                // Check if any edge in this group has an active override in the DSL
+                const parsed = parseConstraints(whatIfDSL || '');
+                const anyActive = group.edges[0]?.conditional_p?.some(cond => {
+                  if (typeof cond.condition !== 'string') return false;
+                  const normalizedCond = normalizeConstraintString(cond.condition);
+                  const dslHasVisited = parsed.visited.length > 0 && 
+                    cond.condition.includes('visited(') &&
+                    parsed.visited.some(v => cond.condition.includes(v));
+                  const dslHasExclude = parsed.exclude.length > 0 &&
+                    cond.condition.includes('exclude(') &&
+                    parsed.exclude.some(e => cond.condition.includes(e));
+                  return dslHasVisited || dslHasExclude || normalizeConstraintString(whatIfDSL || '') === normalizedCond;
+                }) || false;
                 const groupColor = group.color || '#4ade80';
                 
                 return (
@@ -457,81 +427,48 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                     </div>
                     <select
                       value={(() => {
-                        // Find first active edge in group to determine dropdown value
-                        const activeEdge = group.edges.find(e => e.id in conditionalOverrides);
-                        if (!activeEdge) return '';
-                        
-                        const override = conditionalOverrides[activeEdge.id];
-                        if (!override) return '';
-                        
-                        // The override is a Set<string> of forced visited nodes
-                        // Convert to sorted array for comparison
-                        const overrideIds = Array.from(override).sort().join(',');
-                        
-                        // Find matching conditional_p option
-                        const matchingCond = activeEdge.conditional_p?.find(cond => {
-                          // Skip old format conditions
-                          if (typeof cond.condition !== 'string') {
-                            return false;
+                        // Check if any edge in this group has an active override in the DSL
+                        const parsed = parseConstraints(whatIfDSL || '');
+                        // Find matching condition from DSL
+                        for (const cond of group.edges[0]?.conditional_p || []) {
+                          if (typeof cond.condition !== 'string') continue;
+                          const normalizedCond = normalizeConstraintString(cond.condition);
+                          // Check if DSL contains this condition (or a superset)
+                          const dslHasVisited = parsed.visited.length > 0 && 
+                            cond.condition.includes('visited(') &&
+                            parsed.visited.some(v => cond.condition.includes(v));
+                          const dslHasExclude = parsed.exclude.length > 0 &&
+                            cond.condition.includes('exclude(') &&
+                            parsed.exclude.some(e => cond.condition.includes(e));
+                          
+                          if (dslHasVisited || dslHasExclude || normalizeConstraintString(whatIfDSL || '') === normalizedCond) {
+                            return normalizedCond;
                           }
-                          
-                          // Get visited nodes from condition
-                          const visitedNodeIds = getVisitedNodeIds(cond.condition);
-                          const condIds = visitedNodeIds.map(ref => {
-                            const node = graph?.nodes.find(n => n.uuid === ref || n.id === ref);
-                            if (node) return node.uuid;
-                            return ref;
-                          }).sort().join(',');
-                          
-                          return condIds === overrideIds;
-                        });
-                        
-                        return matchingCond ? normalizeConstraintString(matchingCond.condition) : '';
+                        }
+                        return '';
                       })()}
-                      onMouseDown={() => {
-                        console.log(`[${ts()}] [WhatIfControl] conditional dropdown onMouseDown - suspending layout for 3s`);
-                        window.dispatchEvent(new CustomEvent('dagnet:suspendLayout', { 
-                          detail: { ms: 3000 }
-                        }));
-                      }}
-                      onFocus={() => {
-                        console.log(`[${ts()}] [WhatIfControl] conditional dropdown onFocus - suspending layout for 3s`);
-                        window.dispatchEvent(new CustomEvent('dagnet:suspendLayout', { 
-                          detail: { ms: 3000 }
-                        }));
-                      }}
                       onChange={(e) => {
                         const value = e.target.value;
-                        if (!tabId) return;
-                        
-                        // Update ALL edges in the group at once (not one by one)
-                        const newOverrides = { ...conditionalOverrides };
-                        
                         if (!value) {
-                          // Clear all edges in group
-                          group.edges.forEach(edge => {
-                            delete newOverrides[edge.id];
-                          });
+                          // Remove condition from DSL
+                          // Find which condition was active
+                          const parsed = parseConstraints(whatIfDSL || '');
+                          // Remove visited/exclude that match this group's conditions
+                          for (const cond of group.edges[0]?.conditional_p || []) {
+                            if (typeof cond.condition !== 'string') continue;
+                            const normalizedCond = normalizeConstraintString(cond.condition);
+                            const condParsed = parseConstraints(normalizedCond);
+                            // Remove matching visited/exclude nodes
+                            const newDSL = removeConstraintFromDSL(whatIfDSL, normalizedCond);
+                            if (newDSL !== whatIfDSL) {
+                              setWhatIfDSL(newDSL || null);
+                              break;
+                            }
+                          }
                         } else {
-                          // Set override for all edges in group
-                          const nodeRefs = value.split(',');
-                          // Resolve all references (could be UUIDs or IDs) to actual UUIDs
-                          const resolvedIds = nodeRefs.map(ref => {
-                            // Try to find by UUID or ID
-                            const node = graph?.nodes.find(n => n.uuid === ref || n.id === ref);
-                            if (node) return node.uuid;
-                            // Return as-is if not found
-                            return ref;
-                          });
-                          
-                          const visitedSet = new Set(resolvedIds);
-                          group.edges.forEach(edge => {
-                            newOverrides[edge.id] = visitedSet;
-                          });
+                          // Add condition to DSL
+                          addConditionalOverride(value);
                         }
-                        
-                        // Single update with all changes
-                        tabOps.updateTabState(tabId, { conditionalOverrides: newOverrides });
                       }}
                       style={{
                         width: '100%',

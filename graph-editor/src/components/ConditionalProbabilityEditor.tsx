@@ -47,7 +47,9 @@ interface ConditionalProbabilityEditorProps {
   /** Callback when parameter updates (for individual conditional param) */
   onUpdateParam?: (index: number, changes: any) => void;
   /** Callback for rebalancing conditional probabilities */
-  onRebalanceParam?: (index: number, newValue: number) => void;
+  onRebalanceParam?: (index: number) => void;
+  /** Map of condition index to whether it's unbalanced */
+  isConditionalUnbalanced?: Map<number, boolean>;
   /** Callback when condition color changes (index, color) */
   onUpdateConditionColor?: (index: number, color: string | undefined) => Promise<void>;
   /** Callback when condition is removed (for UpdateManager integration) */
@@ -74,6 +76,7 @@ export function ConditionalProbabilityEditor({
   edge,
   onUpdateParam,
   onRebalanceParam,
+  isConditionalUnbalanced,
   onUpdateConditionColor,
   onRemoveCondition
 }: ConditionalProbabilityEditorProps) {
@@ -215,13 +218,15 @@ export function ConditionalProbabilityEditor({
                       updateCondition(index, { p: { ...condition.p, ...changes } });
                     }
                   }}
-                  onRebalance={(newValue) => {
+                  onRebalance={() => {
                     if (onRebalanceParam) {
-                      onRebalanceParam(index, newValue);
+                      // Pass condition index only - handler uses current graph value
+                      onRebalanceParam(index);
                     }
                   }}
                   label="Conditional Probability"
                   showBalanceButton={true}
+                  isUnbalanced={isConditionalUnbalanced?.get(index) || false}
                   showQueryEditor={false}
                 />
                 

@@ -7,15 +7,155 @@
  * - Conditional probability what-ifs (edge-driven)
  */
 
-import { parseConstraints, evaluateConstraint } from './queryDSL';
+import { parseConstraints, evaluateConstraint, normalizeConstraintString, parseDSL } from './queryDSL';
 
 export type WhatIfOverrides = {
   caseOverrides?: Record<string, string>;
-  // Conditional edge overrides: edgeId -> forced visited nodes (hyperprior activation)
-  conditionalOverrides?: Record<string, Set<string>>;
+  // Conditional edge overrides: edgeId -> normalized condition string (e.g., "visited(node-a)")
+  // Supports both string (new) and Set<string> (backward compat) formats
+  conditionalOverrides?: Record<string, string | Set<string>>;
+  // NEW: Unified DSL string (e.g., "case(case_id:treatment).visited(nodea)")
+  // If provided, this takes precedence and will be parsed to populate caseOverrides/conditionalOverrides
+  whatIfDSL?: string | null;
   // Version counter for triggering re-renders when overrides change
   _version?: number;
 };
+
+/**
+ * What-If DSL string format (new unified approach)
+ * Example: "case(case_id:treatment).visited(nodea).exclude(nodeb)"
+ */
+export type WhatIfDSL = string | null;
+
+/**
+ * Parse a what-if DSL string into separate override objects (for backward compatibility).
+ * 
+ * @param dsl - DSL string (e.g., "case(case_id:treatment).visited(nodea)")
+ * @param graph - Graph object (for resolving node references)
+ * @returns Object with caseOverrides and conditionalOverrides
+ */
+export function parseWhatIfDSL(dsl: WhatIfDSL, graph?: any): WhatIfOverrides {
+  if (!dsl || !dsl.trim()) {
+    return { caseOverrides: {}, conditionalOverrides: {} };
+  }
+  
+  const parsed = parseDSL(dsl);
+  const caseOverrides: Record<string, string> = {};
+  const conditionalOverrides: Record<string, string> = {};
+  
+  // Extract case overrides from case() functions
+  // Format: case(case_id:variant) or case(node_id:variant)
+  parsed.cases.forEach(({key, value}) => {
+    if (graph) {
+      // Try to find case node by case.id or node ID/UUID
+      const caseNode = graph.nodes?.find((n: any) => 
+        n.type === 'case' && (
+          n.case?.id === key || 
+          n.uuid === key || 
+          n.id === key
+        )
+      );
+      
+      if (caseNode) {
+        // Use node UUID or ID as the key
+        const nodeKey = caseNode.uuid || caseNode.id;
+        if (nodeKey) {
+          caseOverrides[nodeKey] = value;
+        }
+      }
+    } else {
+      // Without graph, use key as-is (assumes it's a node ID)
+      caseOverrides[key] = value;
+    }
+  });
+  
+  // Extract conditional overrides from visited/exclude functions
+  // For now, we'll create a normalized condition string
+  // In the future, we might want to map this to specific edges
+  if (parsed.visited.length > 0 || parsed.exclude.length > 0) {
+    const conditionString = normalizeConstraintString(dsl);
+    // For now, we'll need to match this against edges' conditional_p conditions
+    // This is a simplified approach - in practice, you might want to store edge-specific mappings
+    if (graph?.edges) {
+      graph.edges.forEach((edge: any) => {
+        if (edge.conditional_p && edge.conditional_p.length > 0) {
+          // Check if any conditional_p condition matches this DSL
+          const matches = edge.conditional_p.some((cp: any) => {
+            if (typeof cp.condition !== 'string') return false;
+            const edgeCondition = normalizeConstraintString(cp.condition);
+            return edgeCondition === conditionString;
+          });
+          
+          if (matches) {
+            const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+            conditionalOverrides[edgeId] = conditionString;
+          }
+        }
+      });
+    }
+  }
+  
+  return { caseOverrides, conditionalOverrides };
+}
+
+/**
+ * Convert old override format to DSL string (for backward compatibility).
+ * 
+ * @param caseOverrides - Case overrides object
+ * @param conditionalOverrides - Conditional overrides object
+ * @param graph - Graph object (for resolving node references)
+ * @returns DSL string
+ */
+export function convertOverridesToDSL(
+  caseOverrides: Record<string, string> | undefined,
+  conditionalOverrides: Record<string, string | Set<string>> | undefined,
+  graph?: any
+): WhatIfDSL {
+  const parts: string[] = [];
+  
+  // Convert case overrides to case() functions
+  if (caseOverrides) {
+    Object.entries(caseOverrides).forEach(([nodeRef, variant]) => {
+      if (graph) {
+        const caseNode = graph.nodes?.find((n: any) => 
+          n.type === 'case' && (n.uuid === nodeRef || n.id === nodeRef)
+        );
+        if (caseNode?.case?.id) {
+          parts.push(`case(case_id:${variant})`);
+        } else {
+          parts.push(`case(${nodeRef}:${variant})`);
+        }
+      } else {
+        parts.push(`case(${nodeRef}:${variant})`);
+      }
+    });
+  }
+  
+  // Convert conditional overrides to visited/exclude functions
+  if (conditionalOverrides) {
+    const visitedNodes = new Set<string>();
+    const excludeNodes = new Set<string>();
+    
+    Object.values(conditionalOverrides).forEach(override => {
+      if (typeof override === 'string') {
+        const parsed = parseConstraints(override);
+        parsed.visited.forEach(v => visitedNodes.add(v));
+        parsed.exclude.forEach(e => excludeNodes.add(e));
+      } else if (override instanceof Set) {
+        override.forEach(v => visitedNodes.add(v));
+      }
+    });
+    
+    if (visitedNodes.size > 0) {
+      parts.push(`visited(${Array.from(visitedNodes).sort().join(', ')})`);
+    }
+    if (excludeNodes.size > 0) {
+      parts.push(`exclude(${Array.from(excludeNodes).sort().join(', ')})`);
+    }
+  }
+  
+  return parts.length > 0 ? parts.join('.') : null;
+}
 
 /**
  * Resolve a node reference (could be ID or id) to its actual ID
@@ -106,40 +246,53 @@ export function computeEffectiveEdgeProbability(
   );
   if (!edge) return 0;
   
+  // NEW: Support DSL string in whatIfOverrides
+  // If whatIfOverrides contains a DSL string, parse it first
+  let effectiveOverrides = whatIfOverrides;
+  if (whatIfOverrides?.whatIfDSL !== undefined) {
+    const parsed = parseWhatIfDSL(whatIfOverrides.whatIfDSL, graph);
+    effectiveOverrides = {
+      ...whatIfOverrides,
+      caseOverrides: parsed.caseOverrides,
+      conditionalOverrides: parsed.conditionalOverrides
+    };
+  }
+  
   // Start with base probability
   let probability = edge.p?.mean ?? 0;
   
   // 1. Apply conditional probability override (EXPLICIT what-if)
   if (edge.conditional_p && edge.conditional_p.length > 0) {
-    const override = whatIfOverrides?.conditionalOverrides?.[edgeId];
+    const override = effectiveOverrides?.conditionalOverrides?.[edgeId];
     
     if (override !== undefined) {
-      // override is a Set<string> of forced visited nodes (hyperprior activation)
-      // Find the conditional_p that matches these visited nodes
-      for (const conditionalProb of edge.conditional_p) {
-        // Skip old format conditions
-        if (typeof conditionalProb.condition !== 'string') {
-          continue;
+      // Override is now a normalized condition string (e.g., "visited(node-a)")
+      // Match it directly against the edge's conditional_p conditions
+      const overrideCondition = typeof override === 'string' ? override : null;
+      
+      if (overrideCondition) {
+        // New format: match condition string directly
+        for (const conditionalProb of edge.conditional_p) {
+          if (typeof conditionalProb.condition !== 'string') continue;
+          const normalizedCond = normalizeConstraintString(conditionalProb.condition);
+          if (normalizedCond === overrideCondition) {
+            probability = conditionalProb.p?.mean ?? probability;
+            break;
+          }
         }
+      } else {
+        // Backward compatibility: override is Set<string> of visited nodes
+        // Use evaluateConstraint() to match
+        const overrideSet = override instanceof Set ? override : new Set(Array.isArray(override) ? override : []);
+        const context: Record<string, string> = {};
+        const caseVariants: Record<string, string> = {};
         
-        // Parse condition to get visited nodes
-        const parsed = parseConstraints(conditionalProb.condition);
-        
-        // Resolve all condition node references to IDs
-        const conditionNodeIds = parsed.visited.map((ref: string) => 
-          resolveNodeRefToId(graph, ref)
-        );
-        
-        // Check if the override matches this condition (same set of nodes)
-        // Note: For now, we only match on visited nodes. Full DSL evaluation would require
-        // context and case information which isn't available in the override Set.
-        const overrideArray = Array.from(override).sort();
-        const conditionArray = conditionNodeIds.sort();
-        
-        if (JSON.stringify(overrideArray) === JSON.stringify(conditionArray)) {
-          // Force this conditional probability to be active
-          probability = conditionalProb.p?.mean ?? probability;
-          break;
+        for (const conditionalProb of edge.conditional_p) {
+          if (typeof conditionalProb.condition !== 'string') continue;
+          if (evaluateConstraint(conditionalProb.condition, overrideSet, context, caseVariants)) {
+            probability = conditionalProb.p?.mean ?? probability;
+            break;
+          }
         }
       }
     } else {
@@ -148,7 +301,7 @@ export function computeEffectiveEdgeProbability(
       // 2. Path analysis context (givenVisitedNodes)
       
       // Combine implicit (from case what-ifs) and explicit path context nodes
-      const implicitlyVisited = getImplicitlyVisitedNodes(graph, whatIfOverrides, legacyWhatIfAnalysis);
+      const implicitlyVisited = getImplicitlyVisitedNodes(graph, effectiveOverrides, legacyWhatIfAnalysis);
       const allVisitedNodes = new Set([...implicitlyVisited, ...(givenVisitedNodes || [])]);
       
       // Build context and case variant maps for evaluation
@@ -175,25 +328,43 @@ export function computeEffectiveEdgeProbability(
   }
   
   // 2. Apply case variant weight (if case edge)
-  if (edge.case_id && edge.case_variant) {
-    // Find the case node
-    const caseNode = graph.nodes.find((n: any) => n.type === 'case' && n.case?.id === edge.case_id);
-    
-    if (caseNode?.case?.variants) {
-      // Find the variant
-      const variant = caseNode.case.variants.find((v: any) => v.name === edge.case_variant);
-      let variantWeight = variant?.weight ?? 0;
-      
-      // Apply what-if override (new system first, then legacy)
-      const newOverride = whatIfOverrides?.caseOverrides?.[caseNode.id];
-      if (newOverride !== undefined) {
-        variantWeight = edge.case_variant === newOverride ? 1.0 : 0.0;
-      } else if (legacyWhatIfAnalysis && legacyWhatIfAnalysis.caseNodeId === caseNode.id) {
-        variantWeight = edge.case_variant === legacyWhatIfAnalysis.selectedVariant ? 1.0 : 0.0;
+  // Case edges can have case_variant set, and we infer case_id from the source node if missing
+  if (edge.case_variant) {
+    // Infer case_id from source node if not set
+    let caseId = edge.case_id;
+    if (!caseId) {
+      const sourceNode = graph.nodes.find((n: any) => n.uuid === edge.from || n.id === edge.from);
+      if (sourceNode?.type === 'case') {
+        caseId = sourceNode.case?.id || sourceNode.uuid || sourceNode.id;
       }
+    }
+    
+    if (caseId) {
+      // Find the case node (check case.id, uuid, or id)
+      const caseNode = graph.nodes.find((n: any) => 
+        n.type === 'case' && (
+          n.case?.id === caseId || 
+          n.uuid === caseId || 
+          n.id === caseId
+        )
+      );
       
-      // Multiply probability by variant weight
-      probability = probability * variantWeight;
+      if (caseNode?.case?.variants) {
+        // Find the variant
+        const variant = caseNode.case.variants.find((v: any) => v.name === edge.case_variant);
+        let variantWeight = variant?.weight ?? 0;
+        
+        // Apply what-if override (new system first, then legacy)
+        const newOverride = effectiveOverrides?.caseOverrides?.[caseNode.id];
+        if (newOverride !== undefined) {
+          variantWeight = edge.case_variant === newOverride ? 1.0 : 0.0;
+        } else if (legacyWhatIfAnalysis && legacyWhatIfAnalysis.caseNodeId === caseNode.id) {
+          variantWeight = edge.case_variant === legacyWhatIfAnalysis.selectedVariant ? 1.0 : 0.0;
+        }
+        
+        // Multiply probability by variant weight
+        probability = probability * variantWeight;
+      }
     }
   }
   
@@ -224,37 +395,51 @@ export function getEdgeWhatIfDisplay(
   );
   if (!edge) return null;
   
+  // NEW: Support DSL string in whatIfOverrides
+  // If whatIfOverrides contains a DSL string, parse it first
+  let effectiveOverrides = whatIfOverrides;
+  if (whatIfOverrides?.whatIfDSL !== undefined) {
+    const parsed = parseWhatIfDSL(whatIfOverrides.whatIfDSL, graph);
+    effectiveOverrides = {
+      ...whatIfOverrides,
+      caseOverrides: parsed.caseOverrides,
+      conditionalOverrides: parsed.conditionalOverrides
+    };
+  }
+  
   // Check for conditional override (explicit or implicit)
   if (edge.conditional_p && edge.conditional_p.length > 0) {
-    const override = whatIfOverrides?.conditionalOverrides?.[edgeId];
+    const override = effectiveOverrides?.conditionalOverrides?.[edgeId];
     
     if (override !== undefined) {
-      // EXPLICIT override - override is Set<string> of forced visited nodes
-      // Find the matching conditional probability
+      // Override is now a normalized condition string (e.g., "visited(node-a)")
+      // Match it directly against the edge's conditional_p conditions
+      const overrideCondition = typeof override === 'string' ? override : null;
+      
       let matchingProb = edge.p?.mean ?? 0;
-      for (const conditionalProb of edge.conditional_p) {
-        // Skip old format conditions
-        if (typeof conditionalProb.condition !== 'string') {
-          continue;
+      
+      if (overrideCondition) {
+        // New format: match condition string directly
+        for (const conditionalProb of edge.conditional_p) {
+          if (typeof conditionalProb.condition !== 'string') continue;
+          const normalizedCond = normalizeConstraintString(conditionalProb.condition);
+          if (normalizedCond === overrideCondition) {
+            matchingProb = conditionalProb.p?.mean ?? matchingProb;
+            break;
+          }
         }
+      } else {
+        // Backward compatibility: override is Set<string> of visited nodes
+        const overrideSet = override instanceof Set ? override : new Set(Array.isArray(override) ? override : []);
+        const context: Record<string, string> = {};
+        const caseVariants: Record<string, string> = {};
         
-        // Parse condition to get visited nodes
-        const parsed = parseConstraints(conditionalProb.condition);
-        
-        // Resolve all condition node references to IDs
-        const conditionNodeIds = parsed.visited.map((ref: string) => 
-          resolveNodeRefToId(graph, ref)
-        );
-        
-        // Check if the override matches this condition (same set of nodes)
-        // Note: For now, we only match on visited nodes. Full DSL evaluation would require
-        // context and case information which isn't available in the override Set.
-        const overrideArray = Array.from(override).sort();
-        const conditionArray = conditionNodeIds.sort();
-        
-        if (JSON.stringify(overrideArray) === JSON.stringify(conditionArray)) {
-          matchingProb = conditionalProb.p?.mean ?? matchingProb;
-          break;
+        for (const conditionalProb of edge.conditional_p) {
+          if (typeof conditionalProb.condition !== 'string') continue;
+          if (evaluateConstraint(conditionalProb.condition, overrideSet, context, caseVariants)) {
+            matchingProb = conditionalProb.p?.mean ?? matchingProb;
+            break;
+          }
         }
       }
       
@@ -266,7 +451,7 @@ export function getEdgeWhatIfDisplay(
       };
     } else {
       // IMPLICIT activation via case what-if (hyperprior)
-      const implicitlyVisited = getImplicitlyVisitedNodes(graph, whatIfOverrides, legacyWhatIfAnalysis);
+      const implicitlyVisited = getImplicitlyVisitedNodes(graph, effectiveOverrides, legacyWhatIfAnalysis);
       
       // Build context and case variant maps for evaluation
       const context: Record<string, string> = {};
@@ -302,7 +487,7 @@ export function getEdgeWhatIfDisplay(
       let variantWeight = variant?.weight ?? 0;
       let isOverridden = false;
       
-      const newOverride = whatIfOverrides?.caseOverrides?.[caseNode.id];
+      const newOverride = effectiveOverrides?.caseOverrides?.[caseNode.id];
       if (newOverride !== undefined) {
         variantWeight = edge.case_variant === newOverride ? 1.0 : 0.0;
         isOverridden = true;
