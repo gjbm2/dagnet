@@ -28,6 +28,11 @@ describe('StatisticalEnhancementService', () => {
     window: { start: '2024-11-01', end: '2024-11-07' } as DateRange,
     days_included: 7,
     days_missing: 0,
+    missing_dates: [],
+    gaps: [],
+    missing_at_start: false,
+    missing_at_end: false,
+    has_middle_gaps: false,
   });
 
   describe('NoOpEnhancer', () => {
@@ -64,6 +69,11 @@ describe('StatisticalEnhancementService', () => {
         window: { start: '2024-11-01', end: '2024-11-02' } as DateRange,
         days_included: 2,
         days_missing: 0,
+        missing_dates: [],
+        gaps: [],
+        missing_at_start: false,
+        missing_at_end: false,
+        has_middle_gaps: false,
       };
 
       const result = enhancer.enhance(raw);
@@ -76,10 +86,10 @@ describe('StatisticalEnhancementService', () => {
   });
 
   describe('StatisticalEnhancementService', () => {
-    it('should enhance with default "none" method (pass-through)', () => {
+    it('should enhance with default "none" method (pass-through)', async () => {
       const raw: RawAggregation = createMockRawAggregation(1000, 300);
 
-      const result = statisticalEnhancementService.enhance(raw);
+      const result = await statisticalEnhancementService.enhance(raw);
 
       expect(result.method).toBe('naive');
       expect(result.n).toBe(1000);
@@ -88,10 +98,10 @@ describe('StatisticalEnhancementService', () => {
       expect(result.metadata.enhancement_method).toBe('none');
     });
 
-    it('should enhance with explicit "none" method', () => {
+    it('should enhance with explicit "none" method', async () => {
       const raw: RawAggregation = createMockRawAggregation(1000, 300);
 
-      const result = statisticalEnhancementService.enhance(raw, 'none');
+      const result = await statisticalEnhancementService.enhance(raw, 'none');
 
       expect(result.method).toBe('naive');
       expect(result.n).toBe(1000);
@@ -99,11 +109,11 @@ describe('StatisticalEnhancementService', () => {
       expect(result.metadata.enhancement_method).toBe('none');
     });
 
-    it('should fallback to "none" for unknown method', () => {
+    it('should fallback to "none" for unknown method', async () => {
       const raw: RawAggregation = createMockRawAggregation(1000, 300);
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      const result = statisticalEnhancementService.enhance(raw, 'bayesian');
+      const result = await statisticalEnhancementService.enhance(raw, 'bayesian');
 
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('Unknown enhancement method: bayesian')
@@ -115,7 +125,7 @@ describe('StatisticalEnhancementService', () => {
       consoleSpy.mockRestore();
     });
 
-    it('should register and use custom enhancer', () => {
+    it('should register and use custom enhancer', async () => {
       const customEnhancer = {
         enhance(raw: RawAggregation) {
           return {
@@ -138,17 +148,17 @@ describe('StatisticalEnhancementService', () => {
       statisticalEnhancementService.registerEnhancer('custom', customEnhancer);
 
       const raw: RawAggregation = createMockRawAggregation(1000, 300);
-      const result = statisticalEnhancementService.enhance(raw, 'custom');
+      const result = await statisticalEnhancementService.enhance(raw, 'custom');
 
       expect(result.method).toBe('custom');
       expect(result.confidence_interval).toEqual([0.25, 0.35]);
       expect(result.metadata.enhancement_method).toBe('custom');
     });
 
-    it('should handle edge case: zero conversions', () => {
+    it('should handle edge case: zero conversions', async () => {
       const raw: RawAggregation = createMockRawAggregation(1000, 0);
 
-      const result = statisticalEnhancementService.enhance(raw);
+      const result = await statisticalEnhancementService.enhance(raw);
 
       expect(result.n).toBe(1000);
       expect(result.k).toBe(0);
@@ -156,10 +166,10 @@ describe('StatisticalEnhancementService', () => {
       expect(result.stdev).toBe(0);
     });
 
-    it('should handle edge case: perfect conversion rate', () => {
+    it('should handle edge case: perfect conversion rate', async () => {
       const raw: RawAggregation = createMockRawAggregation(1000, 1000);
 
-      const result = statisticalEnhancementService.enhance(raw);
+      const result = await statisticalEnhancementService.enhance(raw);
 
       expect(result.n).toBe(1000);
       expect(result.k).toBe(1000);
@@ -167,7 +177,7 @@ describe('StatisticalEnhancementService', () => {
       expect(result.stdev).toBe(0);
     });
 
-    it('should preserve days_included in metadata', () => {
+    it('should preserve days_included in metadata', async () => {
       const raw: RawAggregation = {
         method: 'naive',
         n: 5000,
@@ -178,9 +188,14 @@ describe('StatisticalEnhancementService', () => {
         window: { start: '2024-11-01', end: '2024-11-10' } as DateRange,
         days_included: 10,
         days_missing: 0,
+        missing_dates: [],
+        gaps: [],
+        missing_at_start: false,
+        missing_at_end: false,
+        has_middle_gaps: false,
       };
 
-      const result = statisticalEnhancementService.enhance(raw);
+      const result = await statisticalEnhancementService.enhance(raw);
 
       expect(result.metadata.data_points).toBe(10);
     });

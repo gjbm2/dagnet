@@ -74,14 +74,14 @@ function applyQueryToGraph(
     
     if (field === 'cost_gbp' && edge) {
       if (edge.cost_gbp) {
-        edge.cost_gbp.query = newQuery;
+        (edge.cost_gbp as any).query = newQuery;
         return { applied: true, location: `edge ${edge.from}->${edge.to} cost_gbp` };
       }
     }
     
     if (field === 'cost_time' && edge) {
       if (edge.cost_time) {
-        edge.cost_time.query = newQuery;
+        (edge.cost_time as any).query = newQuery;
         return { applied: true, location: `edge ${edge.from}->${edge.to} cost_time` };
       }
     }
@@ -116,7 +116,7 @@ function applyQueryToGraph(
       // Check cost_gbp
       if (edge.cost_gbp?.id === paramId) {
         if (edge.cost_gbp) {
-          edge.cost_gbp.query = newQuery;
+          (edge.cost_gbp as any).query = newQuery;
         }
         return { applied: true, location: `edge ${edge.from}->${edge.to} cost_gbp` };
       }
@@ -124,7 +124,7 @@ function applyQueryToGraph(
       // Check cost_time
       if (edge.cost_time?.id === paramId) {
         if (edge.cost_time) {
-          edge.cost_time.query = newQuery;
+          (edge.cost_time as any).query = newQuery;
         }
         return { applied: true, location: `edge ${edge.from}->${edge.to} cost_time` };
       }
@@ -330,8 +330,8 @@ export class QueryRegenerationService {
         const idx = parseInt(field.match(/\[(\d+)\]/)![1]);
         return edge.conditional_p?.[idx]?.query || null;
       }
-      if (field === 'cost_gbp' && edge) return edge.cost_gbp?.query || null;
-      if (field === 'cost_time' && edge) return edge.cost_time?.query || null;
+      if (field === 'cost_gbp' && edge) return (edge.cost_gbp as any)?.query || null;
+      if (field === 'cost_time' && edge) return (edge.cost_time as any)?.query || null;
       if (field === 'case' && node) return null;  // TBD
       
       return null;
@@ -344,8 +344,8 @@ export class QueryRegenerationService {
             if (cond.p?.id === paramId) return cond.query || null;
           }
         }
-        if (edge.cost_gbp?.id === paramId) return edge.cost_gbp.query || null;
-        if (edge.cost_time?.id === paramId) return edge.cost_time.query || null;
+        if (edge.cost_gbp?.id === paramId) return (edge.cost_gbp as any).query || null;
+        if (edge.cost_time?.id === paramId) return (edge.cost_time as any).query || null;
       }
       
       for (const node of graph.nodes) {
@@ -371,8 +371,8 @@ export class QueryRegenerationService {
         const idx = parseInt(field.match(/\[(\d+)\]/)![1]);
         return edge.conditional_p?.[idx]?.query_overridden || false;
       }
-      if (field === 'cost_gbp' && edge) return edge.cost_gbp?.query_overridden || false;
-      if (field === 'cost_time' && edge) return edge.cost_time?.query_overridden || false;
+      if (field === 'cost_gbp' && edge) return (edge.cost_gbp as any)?.query_overridden || false;
+      if (field === 'cost_time' && edge) return (edge.cost_time as any)?.query_overridden || false;
       
       return false;
     } else {
@@ -384,8 +384,8 @@ export class QueryRegenerationService {
             if (cond.p?.id === paramId) return cond.query_overridden || false;
           }
         }
-        if (edge.cost_gbp?.id === paramId) return edge.cost_gbp?.query_overridden || false;
-        if (edge.cost_time?.id === paramId) return edge.cost_time?.query_overridden || false;
+        if (edge.cost_gbp?.id === paramId) return (edge.cost_gbp as any)?.query_overridden || false;
+        if (edge.cost_time?.id === paramId) return (edge.cost_time as any)?.query_overridden || false;
       }
       
       return false;

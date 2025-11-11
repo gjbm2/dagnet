@@ -8,9 +8,11 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  windowAggregationService,
+  WindowAggregationService,
   parameterToTimeSeries,
 } from '../windowAggregationService';
+
+const windowAggregationService = new WindowAggregationService();
 import type { TimeSeriesPoint, DateRange } from '../../types';
 
 describe('WindowAggregationService', () => {

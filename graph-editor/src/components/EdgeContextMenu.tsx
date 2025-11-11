@@ -1178,7 +1178,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       {/* Properties */}
       <div
         onClick={() => {
-          window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+          globalThis.window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
           onClose();
         }}
         style={{

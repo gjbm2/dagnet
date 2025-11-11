@@ -63,12 +63,12 @@ describe('Case Variant Synchronization', () => {
       // First variant synced from file (weight not overridden)
       expect(graphNode.case.variants[0].name).toBe('control');
       expect(graphNode.case.variants[0].weight).toBe(0.5);
-      expect(graphNode.case.variants[0].description).toBe('Control group');
+      expect((graphNode.case.variants[0] as any).description).toBe('Control group');
       
       // Second variant added from file
       expect(graphNode.case.variants[1].name).toBe('treatment');
       expect(graphNode.case.variants[1].weight).toBe(0.5);
-      expect(graphNode.case.variants[1].description).toBe('Treatment group');
+      expect((graphNode.case.variants[1] as any).description).toBe('Treatment group');
     });
     
     it('should preserve graph-only variants not in file (if they have edges or overrides)', async () => {
@@ -364,8 +364,8 @@ describe('Case Variant Synchronization', () => {
       
       // Should use latest schedule (Feb)
       expect(graphNode.case.variants).toHaveLength(2);
-      expect(graphNode.case.variants[0].weight).toBe(0.3);
-      expect(graphNode.case.variants[1].weight).toBe(0.7);
+      expect((graphNode.case.variants[0] as any).weight).toBe(0.3);
+      expect((graphNode.case.variants[1] as any).weight).toBe(0.7);
     });
   });
   
@@ -653,8 +653,8 @@ describe('Case Variant Synchronization', () => {
       expect(graphNode.case.variants).toHaveLength(2);
       
       // Should handle null/undefined gracefully
-      expect(graphNode.case.variants[0].description).toBe(null);
-      expect(graphNode.case.variants[1].description).toBeUndefined();
+      expect((graphNode.case.variants[0] as any).description).toBe(null);
+      expect((graphNode.case.variants[1] as any).description).toBeUndefined();
     });
     
     it('should handle weight normalization errors gracefully', async () => {
@@ -685,8 +685,8 @@ describe('Case Variant Synchronization', () => {
       // UpdateManager doesn't validate sums - that's business logic elsewhere
       // It just syncs the data as-is
       expect(result.success).toBe(true);
-      expect(graphNode.case.variants[0].weight).toBe(0.3);
-      expect(graphNode.case.variants[1].weight).toBe(0.3);
+      expect((graphNode.case.variants[0] as any).weight).toBe(0.3);
+      expect((graphNode.case.variants[1] as any).weight).toBe(0.3);
     });
   });
   
@@ -707,7 +707,7 @@ describe('Case Variant Synchronization', () => {
       };
       
       // Step 2: GET to graph
-      const graphNode = {
+      const graphNode: any = {
         case: {
           variants: []
         }
@@ -722,10 +722,14 @@ describe('Case Variant Synchronization', () => {
       );
       
       // Step 3: User edits in graph
-      graphNode.case.variants[0].weight = 0.6;
-      graphNode.case.variants[0].weight_overridden = true;
-      graphNode.case.variants[1].weight = 0.4;
-      graphNode.case.variants[1].weight_overridden = true;
+      if (graphNode.case.variants[0]) {
+        graphNode.case.variants[0].weight = 0.6;
+        graphNode.case.variants[0].weight_overridden = true;
+      }
+      if (graphNode.case.variants[1]) {
+        graphNode.case.variants[1].weight = 0.4;
+        graphNode.case.variants[1].weight_overridden = true;
+      }
       
       // Step 4: PUT back to file
       const updatedFile = {

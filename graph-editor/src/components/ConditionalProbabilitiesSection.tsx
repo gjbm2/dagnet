@@ -171,13 +171,20 @@ export default function ConditionalProbabilitiesSection({
                     >
                       <input
                         type="checkbox"
-                        checked={
-                          condition.condition.visited.includes(node.id) || 
-                          condition.condition.visited.includes(node.id)
-                        }
+                        checked={(() => {
+                          const cond = condition.condition;
+                          if (typeof cond === 'object' && cond !== null && 'visited' in cond && Array.isArray(cond.visited)) {
+                            return cond.visited.includes(node.id);
+                          }
+                          return false;
+                        })()}
                         onChange={(e) => {
                           const newConditions = [...conditions];
-                          let visited = [...condition.condition.visited];
+                          const cond = condition.condition;
+                          const visitedArray = (typeof cond === 'object' && cond !== null && 'visited' in cond && Array.isArray(cond.visited))
+                            ? cond.visited
+                            : [];
+                          let visited = [...visitedArray];
                           
                           // Track if this is the first node being selected (group creation trigger)
                           const wasEmpty = visited.length === 0;
@@ -352,20 +359,29 @@ export default function ConditionalProbabilitiesSection({
                         
                         const currentCondition = edge.conditional_p?.[index];
                         if (!currentCondition) return;
-                        const conditionKey = JSON.stringify(currentCondition.condition.visited.sort());
+                        const currentVisited = (typeof currentCondition.condition === 'object' && currentCondition.condition.visited && Array.isArray(currentCondition.condition.visited))
+                          ? currentCondition.condition.visited
+                          : [];
+                        const conditionKey = JSON.stringify(currentVisited.sort());
                         
                         const siblingsWithSameCondition = siblings.filter(sibling => {
                           if (!sibling.conditional_p) return false;
-                          return sibling.conditional_p.some((cp: any) => 
-                            JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                          );
+                          return sibling.conditional_p.some((cp: any) => {
+                            const cpVisited = (typeof cp.condition === 'object' && cp.condition.visited && Array.isArray(cp.condition.visited))
+                              ? cp.condition.visited
+                              : [];
+                            return JSON.stringify(cpVisited.sort()) === conditionKey;
+                          });
                         });
                         
                         if (siblingsWithSameCondition.length > 0) {
                           const siblingsTotal = siblingsWithSameCondition.reduce((sum, sibling) => {
-                            const matchingCondition = sibling.conditional_p?.find((cp: any) => 
-                              JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                            );
+                            const matchingCondition = sibling.conditional_p?.find((cp: any) => {
+                              const cpVisited = (typeof cp.condition === 'object' && cp.condition.visited && Array.isArray(cp.condition.visited))
+                                ? cp.condition.visited
+                                : [];
+                              return JSON.stringify(cpVisited.sort()) === conditionKey;
+                            });
                             return sum + (matchingCondition?.p?.mean || 0);
                           }, 0);
                           
@@ -441,12 +457,18 @@ export default function ConditionalProbabilitiesSection({
                             const remainingProbability = roundTo4DP(1 - currentValue);
                             
                             // Calculate total current probability of siblings for this condition
-                            const conditionKey = JSON.stringify(condition.condition.visited.sort());
+                            const visitedArray = (typeof condition.condition === 'object' && condition.condition.visited && Array.isArray(condition.condition.visited))
+                              ? condition.condition.visited
+                              : [];
+                            const conditionKey = JSON.stringify(visitedArray.sort());
                             const siblingsWithSameCondition = siblings.filter(sibling => {
                               if (!sibling.conditional_p) return false;
-                              return sibling.conditional_p.some((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
+                              return sibling.conditional_p.some((cp: any) => {
+                                const cpVisited = (typeof cp.condition === 'object' && cp.condition.visited && Array.isArray(cp.condition.visited))
+                                  ? cp.condition.visited
+                                  : [];
+                                return JSON.stringify(cpVisited.sort()) === conditionKey;
+                              });
                             });
                             
                             if (siblingsWithSameCondition.length > 0) {
@@ -527,13 +549,27 @@ export default function ConditionalProbabilitiesSection({
                             if (siblings.length === 0) return '#f8f9fa';
                             
                             // Calculate total probability mass for this condition
-                            const conditionKey = JSON.stringify(condition.condition.visited.sort());
+                            const cond = condition.condition;
+                            let visitedArray: string[] = [];
+                            if (typeof cond === 'string') {
+                              // New format - skip for now
+                              visitedArray = [];
+                            } else {
+                              const condObj = cond as any;
+                              if (condObj !== null && typeof condObj === 'object' && !Array.isArray(condObj) && 'visited' in condObj && Array.isArray(condObj.visited)) {
+                                visitedArray = condObj.visited;
+                              }
+                            }
+                            const conditionKey = JSON.stringify(visitedArray.sort());
                             const currentValue = condition.p.mean;
                             const siblingsTotal = siblings.reduce((sum, sibling) => {
                               if (!sibling.conditional_p) return sum;
-                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => {
+                                const cpVisited = (typeof cp.condition === 'object' && cp.condition.visited && Array.isArray(cp.condition.visited))
+                                  ? cp.condition.visited
+                                  : [];
+                                return JSON.stringify(cpVisited.sort()) === conditionKey;
+                              });
                               return sum + (matchingCondition?.p?.mean || 0);
                             }, 0);
                             const totalMass = currentValue + siblingsTotal;
@@ -558,13 +594,27 @@ export default function ConditionalProbabilitiesSection({
                             if (siblings.length === 0) return '1px solid #ddd';
                             
                             // Calculate total probability mass for this condition
-                            const conditionKey = JSON.stringify(condition.condition.visited.sort());
+                            const cond = condition.condition;
+                            let visitedArray: string[] = [];
+                            if (typeof cond === 'string') {
+                              // New format - skip for now
+                              visitedArray = [];
+                            } else {
+                              const condObj = cond as any;
+                              if (condObj !== null && typeof condObj === 'object' && !Array.isArray(condObj) && 'visited' in condObj && Array.isArray(condObj.visited)) {
+                                visitedArray = condObj.visited;
+                              }
+                            }
+                            const conditionKey = JSON.stringify(visitedArray.sort());
                             const currentValue = condition.p.mean;
                             const siblingsTotal = siblings.reduce((sum, sibling) => {
                               if (!sibling.conditional_p) return sum;
-                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => {
+                                const cpVisited = (typeof cp.condition === 'object' && cp.condition.visited && Array.isArray(cp.condition.visited))
+                                  ? cp.condition.visited
+                                  : [];
+                                return JSON.stringify(cpVisited.sort()) === conditionKey;
+                              });
                               return sum + (matchingCondition?.p?.mean || 0);
                             }, 0);
                             const totalMass = currentValue + siblingsTotal;
@@ -591,13 +641,27 @@ export default function ConditionalProbabilitiesSection({
                             if (siblings.length === 0) return '#666';
                             
                             // Calculate total probability mass for this condition
-                            const conditionKey = JSON.stringify(condition.condition.visited.sort());
+                            const cond = condition.condition;
+                            let visitedArray: string[] = [];
+                            if (typeof cond === 'string') {
+                              // New format - skip for now
+                              visitedArray = [];
+                            } else {
+                              const condObj = cond as any;
+                              if (condObj !== null && typeof condObj === 'object' && !Array.isArray(condObj) && 'visited' in condObj && Array.isArray(condObj.visited)) {
+                                visitedArray = condObj.visited;
+                              }
+                            }
+                            const conditionKey = JSON.stringify(visitedArray.sort());
                             const currentValue = condition.p.mean;
                             const siblingsTotal = siblings.reduce((sum, sibling) => {
                               if (!sibling.conditional_p) return sum;
-                              const matchingCondition = sibling.conditional_p.find((cp: any) => 
-                                JSON.stringify(cp.condition.visited.sort()) === conditionKey
-                              );
+                              const matchingCondition = sibling.conditional_p.find((cp: any) => {
+                                const cpVisited = (typeof cp.condition === 'object' && cp.condition.visited && Array.isArray(cp.condition.visited))
+                                  ? cp.condition.visited
+                                  : [];
+                                return JSON.stringify(cpVisited.sort()) === conditionKey;
+                              });
                               return sum + (matchingCondition?.p?.mean || 0);
                             }, 0);
                             const totalMass = currentValue + siblingsTotal;
