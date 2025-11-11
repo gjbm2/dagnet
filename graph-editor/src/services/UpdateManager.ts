@@ -144,6 +144,98 @@ export class UpdateManager {
     return Math.round(value * 1000) / 1000;
   }
   
+  /**
+   * Distribute remainingWeight proportionally among items, ensuring sum equals exactly remainingWeight.
+   * Rounds all but the last item, then sets the last to make up the difference.
+   * 
+   * @param items - Array of items to distribute to
+   * @param getCurrentValue - Function to get current value from item
+   * @param setValue - Function to set new value on item
+   * @param remainingWeight - Total weight to distribute (must sum to exactly this)
+   * @param currentTotal - Current sum of all items (for proportional distribution)
+   */
+  private distributeWithExactSum(
+    items: any[],
+    getCurrentValue: (item: any) => number,
+    setValue: (item: any, value: number) => void,
+    remainingWeight: number,
+    currentTotal: number
+  ): void {
+    if (items.length === 0) return;
+    
+    console.log('[UpdateManager] distributeWithExactSum:', {
+      itemsCount: items.length,
+      remainingWeight,
+      currentTotal,
+      itemsCurrentValues: items.map(item => getCurrentValue(item))
+    });
+    
+    if (currentTotal === 0) {
+      // Equal distribution
+      const equalShare = this.roundTo3DP(remainingWeight / items.length);
+      let sum = 0;
+      const newValues: number[] = [];
+      items.forEach((item, index) => {
+        if (index === items.length - 1) {
+          // Last item gets the remainder to ensure exact sum
+          const lastValue = remainingWeight - sum;
+          const roundedLast = this.roundTo3DP(lastValue);
+          newValues.push(roundedLast);
+          setValue(item, roundedLast);
+        } else {
+          newValues.push(equalShare);
+          setValue(item, equalShare);
+          sum += equalShare;
+        }
+      });
+      const finalSum = newValues.reduce((s, v) => s + v, 0);
+      console.log('[UpdateManager] distributeWithExactSum (equal):', {
+        equalShare,
+        newValues,
+        finalSum,
+        expectedSum: remainingWeight,
+        diff: Math.abs(finalSum - remainingWeight)
+      });
+    } else {
+      // Proportional distribution
+      const unroundedValues: number[] = [];
+      let sum = 0;
+      
+      // Calculate unrounded values
+      items.forEach((item) => {
+        const currentValue = getCurrentValue(item);
+        const unrounded = (currentValue / currentTotal) * remainingWeight;
+        unroundedValues.push(unrounded);
+      });
+      
+      const newValues: number[] = [];
+      // Round all but the last, accumulate sum
+      items.forEach((item, index) => {
+        if (index === items.length - 1) {
+          // Last item gets the remainder to ensure exact sum
+          const lastValue = remainingWeight - sum;
+          const roundedLast = this.roundTo3DP(lastValue);
+          newValues.push(roundedLast);
+          setValue(item, roundedLast);
+        } else {
+          const rounded = this.roundTo3DP(unroundedValues[index]);
+          newValues.push(rounded);
+          setValue(item, rounded);
+          sum += rounded;
+        }
+      });
+      
+      const finalSum = newValues.reduce((s, v) => s + v, 0);
+      console.log('[UpdateManager] distributeWithExactSum (proportional):', {
+        unroundedValues,
+        newValues,
+        finalSum,
+        expectedSum: remainingWeight,
+        diff: Math.abs(finalSum - remainingWeight)
+      });
+    }
+  }
+  
   // ============================================================
   // LEVEL 1: DIRECTION HANDLERS (5 methods)
   // ============================================================
@@ -498,10 +590,14 @@ export class UpdateManager {
     // AUTO-REBALANCE: After parameter update from file pull, rebalance siblings
     // This applies to "Get from file" - if p(A>B) gets updated, auto-compute p(A>C)
     if (result.success && subDest === 'parameter' && !options.validateOnly) {
-      result.metadata = result.metadata || {};
-      (result.metadata as any).requiresSiblingRebalance = true;
-      (result.metadata as any).updatedEdgeId = graphEntity.uuid || graphEntity.id;
-      (result.metadata as any).updatedField = 'p';
+      // Check if p.mean was actually updated
+      const pMeanUpdated = result.changes?.some(change => change.field === 'p.mean');
+      if (pMeanUpdated) {
+        result.metadata = result.metadata || {};
+        (result.metadata as any).requiresSiblingRebalance = true;
+        (result.metadata as any).updatedEdgeId = graphEntity.uuid || graphEntity.id;
+        (result.metadata as any).updatedField = 'p.mean';
+      }
     }
     
     return result;
@@ -525,10 +621,14 @@ export class UpdateManager {
     // AUTO-REBALANCE: After parameter update from external source, rebalance siblings
     // This applies to DAS (Amplitude, etc.) - if p(A>B) gets data, auto-compute p(A>C)
     if (result.success && subDest === 'parameter' && !options.validateOnly) {
-      result.metadata = result.metadata || {};
-      (result.metadata as any).requiresSiblingRebalance = true;
-      (result.metadata as any).updatedEdgeId = graphEntity.uuid || graphEntity.id;
-      (result.metadata as any).updatedField = 'p';
+      // Check if p.mean was actually updated
+      const pMeanUpdated = result.changes?.some(change => change.field === 'p.mean');
+      if (pMeanUpdated) {
+        result.metadata = result.metadata || {};
+        (result.metadata as any).requiresSiblingRebalance = true;
+        (result.metadata as any).updatedEdgeId = graphEntity.uuid || graphEntity.id;
+        (result.metadata as any).updatedField = 'p.mean';
+      }
     }
     
     return result;
@@ -1463,15 +1563,27 @@ export class UpdateManager {
           // Prefer explicit probability if provided (may be adjusted/rounded)
           // Only recalculate if explicit probability not available
           if (probability !== undefined && probability !== null) {
-            return probability;
+            return this.roundTo3DP(probability);
           }
           // Fallback: calculate from n/k if both are available
           if (source.sample_size > 0 && source.successes !== undefined) {
             // Calculate probability, clamping to [0, 1] in case of data errors
             const calculated = source.successes / source.sample_size;
-            return Math.max(0, Math.min(1, calculated));
+            return this.roundTo3DP(Math.max(0, Math.min(1, calculated)));
           }
           // No probability data available - don't update mean
+          return undefined;
+        }
+      },
+      { 
+        sourceField: 'stdev', 
+        targetField: 'p.stdev',
+        overrideFlag: 'p.stdev_overridden',
+        transform: (stdev, source) => {
+          // Round stdev to 3dp for consistency
+          if (stdev !== undefined && stdev !== null) {
+            return this.roundTo3DP(stdev);
+          }
           return undefined;
         }
       },
@@ -2419,7 +2531,8 @@ export class UpdateManager {
     }
     
     // IMPORTANT: Preserve the origin edge's current value - don't change it
-    const originValue = currentEdge.p?.mean ?? 0;
+    // Round to 3dp to ensure consistent precision (external data may have many decimal places)
+    const originValue = this.roundTo3DP(currentEdge.p?.mean ?? 0);
     
     // Find all sibling edges with the same parameter subtype (p, cost_gbp, or cost_time)
     // For case edges: only rebalance edges with the same case_variant and case_id
@@ -2516,43 +2629,53 @@ export class UpdateManager {
     
     if (forceRebalance) {
       // Force rebalance: ignore all override flags, distribute proportionally
-      const siblingsTotal = siblings.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
+      // Prepare sibling items with indices for distribution
+      const siblingItems = siblings.map((sibling: any) => {
+        const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+          const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+          const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
+          return eId === sId;
+        });
+        return { sibling, index: siblingIndex };
+      }).filter((item: any) => item.index >= 0);
       
-      if (siblingsTotal > 0) {
-        siblings.forEach((sibling: any) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => {
-            const eId = e.uuid || e.id || `${e.from}->${e.to}`;
-            const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
-            return eId === sId;
-          });
-          if (siblingIndex >= 0) {
-            if (!nextGraph.edges[siblingIndex].p) {
-              nextGraph.edges[siblingIndex].p = {};
-            }
-            const siblingCurrentValue = sibling.p?.mean || 0;
-            const newSiblingValue = this.roundTo3DP((siblingCurrentValue / siblingsTotal) * remainingWeight);
-            nextGraph.edges[siblingIndex].p.mean = newSiblingValue;
-            delete nextGraph.edges[siblingIndex].p.mean_overridden;
-          }
-        });
-      } else {
-        // Equal distribution if all siblings are zero
-        const equalShare = this.roundTo3DP(remainingWeight / siblings.length);
-        siblings.forEach((sibling: any) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => {
-            const eId = e.uuid || e.id || `${e.from}->${e.to}`;
-            const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
-            return eId === sId;
-          });
-          if (siblingIndex >= 0) {
-            if (!nextGraph.edges[siblingIndex].p) {
-              nextGraph.edges[siblingIndex].p = {};
-            }
-            nextGraph.edges[siblingIndex].p.mean = equalShare;
-            delete nextGraph.edges[siblingIndex].p.mean_overridden;
-          }
-        });
-      }
+      // Ensure p objects exist
+      siblingItems.forEach((item: any) => {
+        if (!nextGraph.edges[item.index].p) {
+          nextGraph.edges[item.index].p = {};
+        }
+      });
+      
+      // Calculate siblingsTotal from nextGraph.edges (after ensuring p objects exist)
+      const siblingsTotal = siblingItems.reduce((sum: number, item: any) => {
+        return sum + (nextGraph.edges[item.index].p?.mean || 0);
+      }, 0);
+      
+      // Distribute with exact sum
+      // IMPORTANT: Read from nextGraph.edges, not item.sibling, to get current values
+      this.distributeWithExactSum(
+        siblingItems,
+        (item: any) => nextGraph.edges[item.index].p?.mean || 0,
+        (item: any, value: number) => {
+          nextGraph.edges[item.index].p.mean = value;
+          delete nextGraph.edges[item.index].p.mean_overridden;
+        },
+        remainingWeight,
+        siblingsTotal
+      );
+      
+      // Verify final sum
+      const finalSum = siblingItems.reduce((sum, item) => {
+        return sum + (nextGraph.edges[item.index].p?.mean || 0);
+      }, 0);
+      const totalWithOrigin = originValue + finalSum;
+      console.log('[UpdateManager] Rebalance verification:', {
+        originValue,
+        siblingsSum: finalSum,
+        totalWithOrigin,
+        expectedTotal: 1.0,
+        diff: Math.abs(totalWithOrigin - 1.0)
+      });
     } else {
       // Normal rebalance: respect override flags
       const overriddenEdges = siblings.filter((e: any) => e.p?.mean_overridden);
@@ -2562,40 +2685,61 @@ export class UpdateManager {
       const remainingForNonOverridden = Math.max(0, remainingWeight - overriddenTotal);
       
       if (nonOverriddenEdges.length > 0) {
-        const nonOverriddenTotal = nonOverriddenEdges.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
+        // Prepare sibling items with indices for distribution
+        const siblingItems = nonOverriddenEdges.map((sibling: any) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+            const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+            const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
+            return eId === sId;
+          });
+          return { sibling, index: siblingIndex };
+        }).filter((item: any) => item.index >= 0);
         
-        if (nonOverriddenTotal > 0) {
-          nonOverriddenEdges.forEach((sibling: any) => {
-            const siblingIndex = nextGraph.edges.findIndex((e: any) => {
-              const eId = e.uuid || e.id || `${e.from}->${e.to}`;
-              const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
-              return eId === sId;
-            });
-            if (siblingIndex >= 0) {
-              if (!nextGraph.edges[siblingIndex].p) {
-                nextGraph.edges[siblingIndex].p = {};
-              }
-              const siblingCurrentValue = sibling.p?.mean || 0;
-              const newSiblingValue = this.roundTo3DP((siblingCurrentValue / nonOverriddenTotal) * remainingForNonOverridden);
-              nextGraph.edges[siblingIndex].p.mean = newSiblingValue;
-            }
+        // Ensure p objects exist
+        siblingItems.forEach((item: any) => {
+          if (!nextGraph.edges[item.index].p) {
+            nextGraph.edges[item.index].p = {};
+          }
+        });
+        
+        // Calculate nonOverriddenTotal from nextGraph.edges (after ensuring p objects exist)
+        const nonOverriddenTotal = siblingItems.reduce((sum: number, item: any) => {
+          return sum + (nextGraph.edges[item.index].p?.mean || 0);
+        }, 0);
+        
+        // Distribute with exact sum
+        // IMPORTANT: Read from nextGraph.edges, not item.sibling, to get current values
+        this.distributeWithExactSum(
+          siblingItems,
+          (item: any) => nextGraph.edges[item.index].p?.mean || 0,
+          (item: any, value: number) => {
+            nextGraph.edges[item.index].p.mean = value;
+          },
+          remainingForNonOverridden,
+          nonOverriddenTotal
+        );
+        
+        // Verify final sum
+        const finalSum = siblingItems.reduce((sum, item) => {
+          return sum + (nextGraph.edges[item.index].p?.mean || 0);
+        }, 0);
+        const overriddenSum = overriddenEdges.reduce((sum, e) => {
+          const edgeIndex = nextGraph.edges.findIndex((ge: any) => {
+            const eId = ge.uuid || ge.id || `${ge.from}->${ge.to}`;
+            const sId = e.uuid || e.id || `${e.from}->${e.to}`;
+            return eId === sId;
           });
-        } else {
-          const equalShare = this.roundTo3DP(remainingForNonOverridden / nonOverriddenEdges.length);
-          nonOverriddenEdges.forEach((sibling: any) => {
-            const siblingIndex = nextGraph.edges.findIndex((e: any) => {
-              const eId = e.uuid || e.id || `${e.from}->${e.to}`;
-              const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
-              return eId === sId;
-            });
-            if (siblingIndex >= 0) {
-              if (!nextGraph.edges[siblingIndex].p) {
-                nextGraph.edges[siblingIndex].p = {};
-              }
-              nextGraph.edges[siblingIndex].p.mean = equalShare;
-            }
-          });
-        }
+          return sum + (edgeIndex >= 0 ? (nextGraph.edges[edgeIndex].p?.mean || 0) : 0);
+        }, 0);
+        const totalWithOrigin = originValue + overriddenSum + finalSum;
+        console.log('[UpdateManager] Rebalance verification (with overrides):', {
+          originValue,
+          overriddenSum,
+          nonOverriddenSum: finalSum,
+          totalWithOrigin,
+          expectedTotal: 1.0,
+          diff: Math.abs(totalWithOrigin - 1.0)
+        });
       }
     }
     
@@ -2653,9 +2797,10 @@ export class UpdateManager {
     }
     
     // IMPORTANT: Preserve the origin condition's current value - don't change it
+    // Round to 3dp to ensure consistent precision (external data may have many decimal places)
     const condition = currentEdge.conditional_p[condIndex];
     const conditionStr = typeof condition.condition === 'string' ? condition.condition : '';
-    const originValue = condition.p?.mean ?? 0;
+    const originValue = this.roundTo3DP(condition.p?.mean ?? 0);
     
     if (!conditionStr) return nextGraph;
     
@@ -2685,48 +2830,43 @@ export class UpdateManager {
         return sum + (matchingCond?.p?.mean || 0);
       }, 0);
       
-      if (siblingsTotal > 0) {
-        siblings.forEach((sibling: any) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => 
-            e.uuid === sibling.uuid || e.id === sibling.id || `${e.from}->${e.to}` === `${sibling.from}->${sibling.to}`
-          );
-          if (siblingIndex >= 0) {
-            const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
-              const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-              return cpConditionStr === conditionStr;
-            });
-            if (matchingCond) {
-              if (!matchingCond.p) {
-                matchingCond.p = {};
-              }
-              const siblingCurrentValue = matchingCond.p?.mean || 0;
-              const newSiblingValue = this.roundTo3DP((siblingCurrentValue / siblingsTotal) * remainingWeight);
-              matchingCond.p.mean = newSiblingValue;
-              delete matchingCond.p.mean_overridden;
+      // Prepare sibling items with indices and matching conditions for distribution
+      const siblingItems = siblings.map((sibling: any) => {
+        const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+          e.uuid === sibling.uuid || e.id === sibling.id || `${e.from}->${e.to}` === `${sibling.from}->${sibling.to}`
+        );
+        if (siblingIndex >= 0) {
+          const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
+            const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+            return cpConditionStr === conditionStr;
+          });
+          if (matchingCond) {
+            if (!matchingCond.p) {
+              matchingCond.p = {};
             }
+            return { sibling, index: siblingIndex, cond: matchingCond };
           }
-        });
-      } else {
-        const equalShare = siblings.length > 0 ? this.roundTo3DP(remainingWeight / siblings.length) : 0;
-        siblings.forEach((sibling: any) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => 
-            e.uuid === sibling.uuid || e.id === sibling.id || `${e.from}->${e.to}` === `${sibling.from}->${sibling.to}`
-          );
-          if (siblingIndex >= 0) {
-            const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
-              const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-              return cpConditionStr === conditionStr;
-            });
-            if (matchingCond) {
-              if (!matchingCond.p) {
-                matchingCond.p = {};
-              }
-              matchingCond.p.mean = equalShare;
-              delete matchingCond.p.mean_overridden;
-            }
-          }
-        });
-      }
+        }
+        return null;
+      }).filter((item: any) => item !== null);
+      
+      // Distribute with exact sum
+      this.distributeWithExactSum(
+        siblingItems,
+        (item: any) => {
+          const matchingCond = item.sibling.conditional_p?.find((cp: any) => {
+            const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+            return cpConditionStr === conditionStr;
+          });
+          return matchingCond?.p?.mean || 0;
+        },
+        (item: any, value: number) => {
+          item.cond.p.mean = value;
+          delete item.cond.p.mean_overridden;
+        },
+        remainingWeight,
+        siblingsTotal
+      );
     } else {
       // Normal rebalance: respect override flags
       const overriddenSiblings: any[] = [];
@@ -2752,46 +2892,39 @@ export class UpdateManager {
         const nonOverriddenTotal = nonOverriddenSiblings.reduce((sum: number, item: any) => 
           sum + (item.matchingCond?.p?.mean || 0), 0);
         
-        if (nonOverriddenTotal > 0) {
-          nonOverriddenSiblings.forEach((item: any) => {
-            const siblingIndex = nextGraph.edges.findIndex((e: any) => 
-              e.uuid === item.sibling.uuid || e.id === item.sibling.id || `${e.from}->${e.to}` === `${item.sibling.from}->${item.sibling.to}`
-            );
-            if (siblingIndex >= 0) {
-              const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
-                const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-                return cpConditionStr === conditionStr;
-              });
-              if (matchingCond) {
-                if (!matchingCond.p) {
-                  matchingCond.p = {};
-                }
-                const siblingCurrentValue = item.matchingCond?.p?.mean || 0;
-                const newSiblingValue = this.roundTo3DP((siblingCurrentValue / nonOverriddenTotal) * remainingForNonOverridden);
-                matchingCond.p.mean = newSiblingValue;
+        // Prepare sibling items with indices and matching conditions for distribution
+        const siblingItems = nonOverriddenSiblings.map((item: any) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+            e.uuid === item.sibling.uuid || e.id === item.sibling.id || `${e.from}->${e.to}` === `${item.sibling.from}->${item.sibling.to}`
+          );
+          if (siblingIndex >= 0) {
+            const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
+              const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+              return cpConditionStr === conditionStr;
+            });
+            if (matchingCond) {
+              if (!matchingCond.p) {
+                matchingCond.p = {};
               }
+              return { sibling: item.sibling, index: siblingIndex, cond: matchingCond };
             }
-          });
-        } else {
-          const equalShare = this.roundTo3DP(remainingForNonOverridden / nonOverriddenSiblings.length);
-          nonOverriddenSiblings.forEach((item: any) => {
-            const siblingIndex = nextGraph.edges.findIndex((e: any) => 
-              e.uuid === item.sibling.uuid || e.id === item.sibling.id || `${e.from}->${e.to}` === `${item.sibling.from}->${item.sibling.to}`
-            );
-            if (siblingIndex >= 0) {
-              const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
-                const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-                return cpConditionStr === conditionStr;
-              });
-              if (matchingCond) {
-                if (!matchingCond.p) {
-                  matchingCond.p = {};
-                }
-                matchingCond.p.mean = equalShare;
-              }
-            }
-          });
-        }
+          }
+          return null;
+        }).filter((item: any) => item !== null);
+        
+        // Distribute with exact sum
+        this.distributeWithExactSum(
+          siblingItems,
+          (item: any) => item.sibling.conditional_p?.find((cp: any) => {
+            const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+            return cpConditionStr === conditionStr;
+          })?.p?.mean || 0,
+          (item: any, value: number) => {
+            item.cond.p.mean = value;
+          },
+          remainingForNonOverridden,
+          nonOverriddenTotal
+        );
       }
     }
     
@@ -2849,8 +2982,9 @@ export class UpdateManager {
     }
     
     // IMPORTANT: Preserve the origin variant's current value - don't change it
+    // Round to 3dp to ensure consistent precision (external data may have many decimal places)
     const originVariant = caseNode.case.variants[variantIndex];
-    const originValue = originVariant.weight ?? 0;
+    const originValue = this.roundTo3DP(originVariant.weight ?? 0);
     
     // Calculate remaining weight (1 - origin variant value)
     const remainingWeight = Math.max(0, 1 - originValue);
@@ -2864,21 +2998,17 @@ export class UpdateManager {
       // Force rebalance: ignore all override flags, distribute proportionally
       const otherVariantsTotal = otherVariants.reduce((sum: number, v: any) => sum + (v.weight || 0), 0);
       
-      if (otherVariantsTotal > 0) {
-        otherVariants.forEach((variant: any) => {
-          const variantCurrentWeight = variant.weight || 0;
-          const newWeight = this.roundTo3DP((variantCurrentWeight / otherVariantsTotal) * remainingWeight);
-          variant.weight = newWeight;
+      // Distribute with exact sum
+      this.distributeWithExactSum(
+        otherVariants,
+        (variant: any) => variant.weight || 0,
+        (variant: any, value: number) => {
+          variant.weight = value;
           delete variant.weight_overridden;
-        });
-      } else {
-        // Equal distribution if all other variants are zero
-        const equalShare = this.roundTo3DP(remainingWeight / otherVariants.length);
-        otherVariants.forEach((variant: any) => {
-          variant.weight = equalShare;
-          delete variant.weight_overridden;
-        });
-      }
+        },
+        remainingWeight,
+        otherVariantsTotal
+      );
     } else {
       // Normal rebalance: respect override flags
       const overriddenVariants = otherVariants.filter((v: any) => v.weight_overridden);
@@ -2890,18 +3020,16 @@ export class UpdateManager {
       if (nonOverriddenVariants.length > 0) {
         const nonOverriddenTotal = nonOverriddenVariants.reduce((sum: number, v: any) => sum + (v.weight || 0), 0);
         
-        if (nonOverriddenTotal > 0) {
-          nonOverriddenVariants.forEach((variant: any) => {
-            const variantCurrentWeight = variant.weight || 0;
-            const newWeight = this.roundTo3DP((variantCurrentWeight / nonOverriddenTotal) * remainingForNonOverridden);
-            variant.weight = newWeight;
-          });
-        } else {
-          const equalShare = this.roundTo3DP(remainingForNonOverridden / nonOverriddenVariants.length);
-          nonOverriddenVariants.forEach((variant: any) => {
-            variant.weight = equalShare;
-          });
-        }
+        // Distribute with exact sum
+        this.distributeWithExactSum(
+          nonOverriddenVariants,
+          (variant: any) => variant.weight || 0,
+          (variant: any, value: number) => {
+            variant.weight = value;
+          },
+          remainingForNonOverridden,
+          nonOverriddenTotal
+        );
       }
     }
     

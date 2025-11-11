@@ -249,83 +249,8 @@ async def generate_all_queries_endpoint(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Shared handler functions (matching consolidated python-api.py structure)
-def handle_generate_all_parameters(data):
-    """Shared handler for generate-all-parameters (used by both dev-server and python-api.py)."""
-    graph_data = data.get('graph')
-    param_types = data.get('paramTypes')  # Optional: filter by type
-    downstream_of = data.get('downstream_of')  # Optional: incremental updates (snake_case to match production)
-    max_checks = data.get('maxChecks', 200)
-    literal_weights = data.get('literal_weights')  # snake_case to match production
-    preserve_condition = data.get('preserve_condition', True)  # snake_case to match production
-    preserve_case_context = data.get('preserveCaseContext', True)
-    
-    if not graph_data:
-        raise HTTPException(status_code=400, detail="Missing 'graph' field")
-    
-    from msmdc import generate_all_parameter_queries, generate_queries_by_type
-    from graph_types import Graph
-    
-    graph = Graph.model_validate(graph_data)
-    
-    # Generate all parameters or filter by type/downstream
-    if param_types:
-        params_by_type = generate_queries_by_type(
-            graph, param_types, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context
-        )
-        all_params = []
-        for ptype, params in params_by_type.items():
-            all_params.extend(params)
-    else:
-        all_params = generate_all_parameter_queries(graph, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context)
-    
-    # Format response
-    parameters = []
-    stats_by_type = {}
-    
-    for param in all_params:
-        parameters.append({
-            "paramType": param.param_type,
-            "paramId": param.param_id,
-            "edgeKey": param.edge_key,
-            "condition": param.condition,
-            "query": param.query,
-            "stats": param.stats
-        })
-        
-        # Count by type
-        if param.param_type not in stats_by_type:
-            stats_by_type[param.param_type] = 0
-        stats_by_type[param.param_type] += 1
-    
-    return {
-        "parameters": parameters,
-        "stats": {
-            "total": len(parameters),
-            "byType": stats_by_type
-        },
-        "success": True
-    }
-
-
-def handle_stats_enhance(data):
-    """Shared handler for stats-enhance (used by both dev-server and python-api.py)."""
-    raw_data = data.get('raw')
-    method = data.get('method')
-    
-    if not raw_data:
-        raise HTTPException(status_code=400, detail="Missing 'raw' field")
-    if not method:
-        raise HTTPException(status_code=400, detail="Missing 'method' field")
-    
-    from stats_enhancement import enhance_aggregation
-    
-    enhanced = enhance_aggregation(raw_data, method)
-    
-    return {
-        **enhanced,
-        "success": True
-    }
+# Import shared handlers (used by both dev-server and python-api.py)
+from api_handlers import handle_generate_all_parameters, handle_stats_enhance
 
 
 # Consolidated Python API endpoint (matches production python-api.py structure)
@@ -353,6 +278,8 @@ async def python_api_endpoint(request: Request):
             raise HTTPException(status_code=404, detail=f"Unknown endpoint: {path}")
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
