@@ -70,8 +70,8 @@ export function DataOperationsMenu({
   let hasFileConnection = false; // File exists AND has connection - for "Get from Source" (versioned)
   let connectionName: string | undefined;
   
-  if (objectType === 'parameter' && objectId) {
-    // Check for connection in file first
+  if (objectType === 'parameter') {
+    // Check for connection in file first (if objectId exists)
     const file = objectId ? fileRegistry.getFile(`parameter-${objectId}`) : null;
     const fileExists = !!file;
     const hasFileConn = !!file?.data?.connection;
@@ -84,19 +84,26 @@ export function DataOperationsMenu({
       const edge = graph?.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
       
       if (edge) {
-        // Determine which parameter slot we're checking
-        let param: any = null;
-        
-        if (paramSlot === 'p' || !paramSlot) {
-          param = edge.p;
-        } else if (paramSlot === 'cost_gbp') {
-          param = edge.cost_gbp;
-        } else if (paramSlot === 'cost_time') {
-          param = edge.cost_time;
+        // Check for conditional probability connection if conditionalIndex is provided
+        if (conditionalIndex !== undefined && conditionalIndex >= 0 && edge.conditional_p?.[conditionalIndex]) {
+          const conditionalParam = edge.conditional_p[conditionalIndex].p;
+          hasDirectConnection = !!conditionalParam?.connection;
+          directConnectionName = conditionalParam?.connection;
+        } else {
+          // Determine which parameter slot we're checking
+          let param: any = null;
+          
+          if (paramSlot === 'p' || !paramSlot) {
+            param = edge.p;
+          } else if (paramSlot === 'cost_gbp') {
+            param = edge.cost_gbp;
+          } else if (paramSlot === 'cost_time') {
+            param = edge.cost_time;
+          }
+          
+          hasDirectConnection = !!param?.connection;
+          directConnectionName = param?.connection;
         }
-        
-        hasDirectConnection = !!param?.connection;
-        directConnectionName = param?.connection;
       }
     }
     

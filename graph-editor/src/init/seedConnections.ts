@@ -46,7 +46,7 @@ export async function seedConnectionsFile(): Promise<void> {
         const basePath = gitCred.basePath || '';
         const fullPath = basePath ? `${basePath}/connections/connections.yaml` : 'connections/connections.yaml';
         
-        const apiUrl = `${gitConfig.githubApiBase}/repos/${gitCred.owner}/${gitCred.repo}/contents/${fullPath}?ref=${gitCred.branch || 'main'}`;
+        const apiUrl = `${gitConfig.githubApiBase}/repos/${gitCred.owner}/${gitCred.repo || gitCred.name}/contents/${fullPath}?ref=${gitCred.branch || 'main'}`;
         
         const headers: HeadersInit = {
           'Accept': 'application/vnd.github.v3+json',
@@ -57,7 +57,7 @@ export async function seedConnectionsFile(): Promise<void> {
           headers['Authorization'] = `token ${gitCred.token}`;
         }
         
-        console.log(`[seedConnections] Fetching from: ${gitCred.owner}/${gitCred.repo} - ${fullPath}`);
+        console.log(`[seedConnections] Fetching from: ${gitCred.owner}/${gitCred.repo || gitCred.name} - ${fullPath}`);
         const response = await fetch(apiUrl, { headers });
         
         if (response.ok) {

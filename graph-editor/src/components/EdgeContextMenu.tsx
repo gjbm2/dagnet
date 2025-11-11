@@ -77,6 +77,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const hasConditionalParam = edge?.conditional_p?.some((cp: any) => 
     cp.p?.parameter_id || cp.p?.id || cp.p?.connection
   ) || false;
+  // Get the first conditional parameter ID (for file operations)
+  const firstConditionalParamId = edge?.conditional_p?.find((cp: any) => 
+    cp.p?.parameter_id || cp.p?.id
+  )?.p?.parameter_id || edge?.conditional_p?.find((cp: any) => 
+    cp.p?.parameter_id || cp.p?.id
+  )?.p?.id;
   const costGbpParameterId = edge?.cost_gbp_parameter_id || edge?.cost_gbp?.id;
   const hasCostGbpParam = !!costGbpParameterId || !!edge?.cost_gbp?.connection;
   const costTimeParameterId = edge?.cost_time_parameter_id || edge?.cost_time?.id;
@@ -504,8 +510,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                 >
                   <DataOperationsMenu
                     objectType="parameter"
-                    objectId={parameterId || ''}
-                    hasFile={!!parameterId}
+                    objectId={firstConditionalParamId || ''}
+                    hasFile={!!firstConditionalParamId}
                     targetId={edgeId}
                     graph={graph}
                     setGraph={setGraph}
