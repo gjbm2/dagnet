@@ -1,27 +1,23 @@
-# Event: Delegation Completed
-# Created: 2025-11-10
-# Schema: event-schema.yaml
-
 id: delegation-completed
 name: Delegation Completed
 description: Household has completed delegation step
 category: user_action
-tags: ["onboarding", "delegation", "service-level"]
-
-# Provider-specific event name mappings with property filters
+tags:
+  - onboarding
+  - delegation
+  - service-level
 provider_event_names:
-  amplitude: "ServiceLevel Confirmed"
-
-# Amplitude-specific property filters for funnel queries
-# These filters will be sent to Amplitude API when constructing funnel queries
+  amplitude: Household DelegationStatusChanged
 amplitude_filters:
-  - property: "level"
-    operator: "is any of"
-    values: ["DO_MOST_OF_IT_FOR_ME", "DO_ALL_OF_IT_FOR_ME"]
-
+  - property: newDelegationStatus
+    operator: is any of
+    values:
+      - ON
 metadata:
-  created_at: "2025-11-10T00:00:00Z"
+  created_at: 2025-11-10T00:00:00Z
   status: active
-  notes: |
+  notes: >
     This event requires property-based filtering in Amplitude funnel queries.
+
     Only count events where value is DO_MOST_OF_IT_FOR_ME or DO_ALL_OF_IT_FOR_ME.
+  updated_at: 2025-11-11T21:57:42.458Z
