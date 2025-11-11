@@ -140,6 +140,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     displayName: 'Credentials',
     displayNamePlural: 'Credentials',
     schemaFile: '/schemas/credentials-schema.json',
+    uiSchemaFile: '/ui-schemas/credentials-ui-schema.json',
     directory: 'credentials',
     extensions: ['.yaml', '.yml', '.json'],
     icon: '🔐',

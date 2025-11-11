@@ -1,9 +1,29 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { CommitRequest } from '../../types';
 import { useTabContext } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
+import { fileRegistry } from '../../contexts/TabContext';
 import './Dialog.css';
 import './CommitDialog.css';
+
+/**
+ * Helper: Get icon for object type
+ */
+function getIconForType(type: string): string {
+  const icons: Record<string, string> = {
+    graph: '📊',
+    parameter: '📋',
+    context: '🏷️',
+    case: '📦',
+    node: '🔵',
+    event: '📅',
+    credentials: '🔐',
+    connections: '🔌',
+    settings: '⚙️',
+    about: 'ℹ️'
+  };
+  return icons[type] || '📄';
+}
 
 /**
  * Commit Dialog
@@ -21,18 +41,50 @@ interface CommitDialogProps {
 }
 
 export function CommitDialog({ isOpen, onClose, onCommit }: CommitDialogProps) {
-  const { operations } = useTabContext();
+  const { tabs } = useTabContext();
   const { state } = useNavigatorContext();
   
-  const dirtyTabs = operations.getDirtyTabs();
+  // Get ALL dirty files (not just those with open tabs)
+  const dirtyFiles = useMemo(() => {
+    if (!isOpen) return [];
+    return fileRegistry.getDirtyFiles();
+  }, [isOpen]);
   
-  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(
-    new Set(dirtyTabs.map(tab => tab.fileId))
-  );
+  // Create file info objects with name and icon
+  const dirtyFileInfos = useMemo(() => {
+    return dirtyFiles.map(file => {
+      const [type, ...nameParts] = file.fileId.split('-');
+      const name = nameParts.join('-').replace(/\.(json|yaml|yml)$/, '');
+      const tab = tabs.find(t => t.fileId === file.fileId);
+      
+      return {
+        fileId: file.fileId,
+        name: file.name || name,
+        icon: tab?.icon || getIconForType(type),
+        type
+      };
+    });
+  }, [dirtyFiles, tabs]);
+  
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
   const [useNewBranch, setUseNewBranch] = useState(false);
   const [newBranchName, setNewBranchName] = useState('');
   const [commitMessage, setCommitMessage] = useState('');
   const [isCommitting, setIsCommitting] = useState(false);
+
+  // Initialize selected files when dialog opens or dirty files change
+  useEffect(() => {
+    if (isOpen && dirtyFileInfos.length > 0) {
+      // Select all dirty files by default
+      setSelectedFileIds(new Set(dirtyFileInfos.map(f => f.fileId)));
+    } else if (!isOpen) {
+      // Reset when dialog closes
+      setSelectedFileIds(new Set());
+      setCommitMessage('');
+      setUseNewBranch(false);
+      setNewBranchName('');
+    }
+  }, [isOpen, dirtyFileInfos]);
 
   if (!isOpen) return null;
 
@@ -47,7 +99,7 @@ export function CommitDialog({ isOpen, onClose, onCommit }: CommitDialogProps) {
   };
 
   const handleSelectAll = () => {
-    setSelectedFileIds(new Set(dirtyTabs.map(tab => tab.fileId)));
+    setSelectedFileIds(new Set(dirtyFileInfos.map(f => f.fileId)));
   };
 
   const handleDeselectAll = () => {
@@ -98,9 +150,6 @@ export function CommitDialog({ isOpen, onClose, onCommit }: CommitDialogProps) {
     }
   };
 
-  // Group tabs by fileId (multiple tabs can view same file)
-  const uniqueFiles = Array.from(new Set(dirtyTabs.map(tab => tab.fileId)));
-
   return (
     <div className="dialog-overlay">
       <div className="dialog-content commit-dialog">
@@ -112,7 +161,7 @@ export function CommitDialog({ isOpen, onClose, onCommit }: CommitDialogProps) {
           {/* File Selection */}
           <div className="commit-section">
             <div className="commit-section-header">
-              <h3>Select Files ({selectedFileIds.size} of {uniqueFiles.length})</h3>
+              <h3>Select Files ({selectedFileIds.size} of {dirtyFileInfos.length})</h3>
               <div className="commit-section-actions">
                 <button 
                   className="commit-link-button"
@@ -130,29 +179,26 @@ export function CommitDialog({ isOpen, onClose, onCommit }: CommitDialogProps) {
             </div>
 
             <div className="commit-file-list">
-              {uniqueFiles.length === 0 ? (
+              {dirtyFileInfos.length === 0 ? (
                 <div className="commit-empty">No modified files</div>
               ) : (
-                uniqueFiles.map(fileId => {
-                  const tab = dirtyTabs.find(t => t.fileId === fileId);
-                  if (!tab) return null;
-
+                dirtyFileInfos.map(fileInfo => {
                   return (
-                    <div key={fileId} className="commit-file-item">
+                    <div key={fileInfo.fileId} className="commit-file-item">
                       <label className="commit-checkbox-label">
                         <input
                           type="checkbox"
-                          checked={selectedFileIds.has(fileId)}
-                          onChange={() => handleToggleFile(fileId)}
+                          checked={selectedFileIds.has(fileInfo.fileId)}
+                          onChange={() => handleToggleFile(fileInfo.fileId)}
                         />
-                        <span className="commit-file-icon">{tab.icon}</span>
-                        <span className="commit-file-name">{tab.title}</span>
+                        <span className="commit-file-icon">{fileInfo.icon}</span>
+                        <span className="commit-file-name">{fileInfo.name}</span>
                       </label>
                       <button 
                         className="commit-link-button"
                         onClick={() => {
                           // TODO: Show diff viewer
-                          console.log('Show diff for', fileId);
+                          console.log('Show diff for', fileInfo.fileId);
                         }}
                       >
                         Diff

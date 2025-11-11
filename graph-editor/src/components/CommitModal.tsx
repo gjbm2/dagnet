@@ -53,8 +53,8 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
     return dirtyFiles
       .filter(file => {
         const type = file.fileId.split('-')[0] as ObjectType;
-        // Only allow graph, parameter, context, case files
-        return ['graph', 'parameter', 'context', 'case'].includes(type);
+        // Allow graph, parameter, context, case, node, and event files
+        return ['graph', 'parameter', 'context', 'case', 'node', 'event'].includes(type);
       })
       .map(file => {
         const fileId = file.fileId;
