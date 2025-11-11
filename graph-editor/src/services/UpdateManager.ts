@@ -1923,16 +1923,25 @@ export class UpdateManager {
             } else {
               // New condition not found in sibling - check if it's a renamed condition
               // (old condition string changed to new condition string)
-              const wasRenamed = oldConditions.some((oldNorm: string) => {
-                // Check if any old condition might have been renamed to this new one
-                // This is a heuristic: if sibling had the old condition, assume it was renamed
-                return siblingEdge.conditional_p.some((existingCond: any) => {
-                  const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
-                  return normalizeConstraintString(existingStr) === oldNorm;
-                });
+              // Find the old condition in sibling that matches one of the old conditions
+              const oldConditionIndex = siblingEdge.conditional_p.findIndex((existingCond: any) => {
+                const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+                return oldConditions.includes(normalizeConstraintString(existingStr));
               });
               
-              if (!wasRenamed) {
+              if (oldConditionIndex >= 0) {
+                // This is a renamed condition - update the old one to the new one
+                const existingP = siblingEdge.conditional_p[oldConditionIndex].p?.mean;
+                siblingEdge.conditional_p[oldConditionIndex] = {
+                  condition: condStr, // Update to new condition string
+                  query: newCond.query || siblingEdge.conditional_p[oldConditionIndex].query || '',
+                  query_overridden: newCond.query_overridden || siblingEdge.conditional_p[oldConditionIndex].query_overridden || false,
+                  p: {
+                    mean: existingP !== undefined ? existingP : (siblingEdge.p?.mean ?? 0.5),
+                    ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
+                  }
+                };
+              } else {
                 // Truly new condition - add it to sibling
                 siblingEdge.conditional_p.push({
                   condition: condStr,

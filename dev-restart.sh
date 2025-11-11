@@ -28,7 +28,7 @@ sleep 1
 tmux send-keys -t dagnet:dev.0 "npm run dev" C-m
 
 # Restart Python (right pane) 
-tmux send-keys -t dagnet:dev.1 "python dev-server.py" C-m
+tmux send-keys -t dagnet:dev.1 "cd $(pwd)/graph-editor && python dev-server.py" C-m
 
 echo -e "${GREEN}✅ Servers restarted${NC}"
 
