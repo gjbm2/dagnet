@@ -175,28 +175,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   useEffect(() => {
     if (prevNodesRef.current !== nodes) {
       nodesChangeCountRef.current++;
-      console.log(`[${new Date().toISOString()}] [GraphCanvas] NODES ARRAY NEW REFERENCE (count: ${nodesChangeCountRef.current}, length: ${nodes.length})`);
       prevNodesRef.current = nodes;
       // Update nodes map ref
       nodesMapRef.current = new Map(nodes.map(n => [n.id, n]));
     }
     if (prevEdgesRef.current !== edges) {
       edgesChangeCountRef.current++;
-      console.log(`[${new Date().toISOString()}] [GraphCanvas] EDGES ARRAY NEW REFERENCE (count: ${edgesChangeCountRef.current}, length: ${edges.length})`);
       prevEdgesRef.current = edges;
     }
   }, [nodes, edges]);
   
   // Custom onEdgesChange handler to prevent automatic deletion
   const onEdgesChange = useCallback((changes: any[]) => {
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] onEdgesChange called (${changes.length} changes)`);
-    
     // Filter out remove changes to prevent automatic deletion
     const filteredChanges = changes.filter(change => change.type !== 'remove');
-    
-    if (filteredChanges.length !== changes.length) {
-      console.log(`[${new Date().toISOString()}] [GraphCanvas] Filtered out ${changes.length - filteredChanges.length} remove changes`);
-    }
     
     // Call the base handler with filtered changes
     onEdgesChangeBase(filteredChanges);
@@ -222,7 +214,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Custom onNodesChange handler to detect position changes for auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] onNodesChange called (${changes.length} changes)`);
     // Call the base handler first
     onNodesChangeBase(changes);
     
@@ -1083,7 +1074,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Perform re-routing when shouldReroute flag changes (with small delay after node movement)
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC5: Perform re-routing`);
     if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
       console.log(`[${ts()}] [GraphCanvas] Re-route skipped (layout/cooldown active)`);
       return;
@@ -1948,12 +1938,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Cancel any pending scheduled updates to coalesce within the same tick
     if (bundleRaf1Ref.current) cancelAnimationFrame(bundleRaf1Ref.current);
     if (bundleRaf2Ref.current) cancelAnimationFrame(bundleRaf2Ref.current);
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] [frame=${renderFrameRef.current}] schedule bundlesDoubleRAF`, { edges: edges.length, nodes: nodes.length });
     bundleRaf1Ref.current = requestAnimationFrame(() => {
       bundleRaf2Ref.current = requestAnimationFrame(() => {
         // Recalculate bundles from current, settled edge/node data
         const updatedBundles = groupEdgesIntoBundles(edges, nodes);
-        console.log(`[${new Date().toISOString()}] [GraphCanvas] [frame=${renderFrameRef.current}] run bundlesDoubleRAF`, { bundleCount: updatedBundles.length });
         setEdgeBundles(updatedBundles);
       });
     });
@@ -2082,14 +2070,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const recomputeInProgressRef = useRef(false);
   const visualWhatIfUpdateRef = useRef(false);
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC1: What-If recompute triggered (edges=${edges.length})`);
     if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
-      console.log(`[${ts()}] [GraphCanvas] what-if recompute skipped (layout/cooldown active)`);
       return;
     }
     if (edges.length === 0) return;
     if (recomputeInProgressRef.current) {
-      console.log(`[${ts()}] [GraphCanvas] what-if recompute skipped (in progress)`);
       return;
     }
     recomputeInProgressRef.current = true;
@@ -2120,7 +2105,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           const effectiveMaxWidth = useSankeyView ? 384 : MAX_WIDTH;
           const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, effectiveMaxWidth);
           const t3 = performance.now();
-          console.log(`[${ts()}] [GraphCanvas] what-if recompute timings`, { mapMs: Math.round(t2 - t1), offsetsMs: Math.round(t3 - t2) });
           // Attach offsets to edge data for the ConversionEdge component
           return edgesWithOffsets.map(edge => ({
             ...edge,
@@ -2150,7 +2134,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         });
       } finally {
         const tEnd = performance.now();
-        console.log(`[${ts()}] [GraphCanvas] what-if recompute done`, { totalMs: Math.round(tEnd - t0) });
+        // Only log if recompute took significant time (>10ms) to avoid noise
+        const totalMs = Math.round(tEnd - t0);
+        if (totalMs > 10) {
+          console.log(`[${ts()}] [GraphCanvas] what-if recompute done`, { totalMs });
+        }
         recomputeInProgressRef.current = false;
         // Clear the visual-only flag after queue flush
         setTimeout(() => { visualWhatIfUpdateRef.current = false; }, 0);
@@ -2299,46 +2287,35 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Sync FROM ReactFlow TO graph when user makes changes in the canvas
   // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC2: Sync ReactFlow→Store triggered`);
     if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
-      console.log(`[${ts()}] [GraphCanvas] ReactFlow→Store sync skipped (layout/cooldown active)`);
       return;
     }
     if (!graph) return;
     if (visualWhatIfUpdateRef.current) {
       // Skip syncing visual-only what-if changes back to graph store
       // Prevents global rerenders and race conditions
-      console.log(`[${new Date().toISOString()}] [GraphCanvas] skip store sync (what-if visual update)`);
       return;
     }
     if (isSyncingRef.current) {
-      console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Skipped (already syncing)`);
       return;
     }
     
     // BLOCK ReactFlow→Graph sync during node dragging to prevent multiple graph updates
     if (isDraggingNodeRef.current) {
-      console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Blocked (dragging)`);
       return;
     }
     
     if (nodes.length === 0 && graph.nodes.length > 0) {
-      console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Skipped (nodes empty)`);
       return;
     }
-    
-    // DIAGNOSTIC: Log when syncing (specifically for diagnosing fromFlow data loss)
-    console.log(`[GraphCanvas] ReactFlow→Store: About to call fromFlow with ${edges.length} edges`);
     
     const updatedGraph = fromFlow(nodes, edges, graph);
     if (updatedGraph) {
       const updatedJson = JSON.stringify(updatedGraph);
       if (updatedJson === lastSyncedReactFlowRef.current) {
-        console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Skipped (no changes)`);
         return;
       }
       
-      console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: SYNCING to store`);
       isSyncingRef.current = true;
       lastSyncedReactFlowRef.current = updatedJson;
       
@@ -2349,7 +2326,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Reset sync flag
       setTimeout(() => {
         isSyncingRef.current = false;
-        console.log(`[${new Date().toISOString()}] [GraphCanvas] ReactFlow→Store: Sync flag reset`);
+        // Sync flag reset
       }, 0);
     }
   }, [nodes, edges]); // Removed 'graph' and 'setGraph' from dependencies

@@ -1252,16 +1252,13 @@ export default function ConversionEdge({
 
   // Generate ribbon-style path for Sankey mode (filled area instead of stroked path)
   const ribbonPath = React.useMemo(() => {
-    console.log('[Edge] Ribbon check:', { useSankeyView: data?.useSankeyView, strokeWidth, edgeId: id });
     if (!data?.useSankeyView || !strokeWidth) return null;
     
     // Parse the bezier path to get control points
     const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
     if (!nums || nums.length < 8) {
-      console.log('[Edge] Failed to parse bezier path');
       return null;
     }
-    console.log('[Edge] Generating ribbon path for edge:', id);
     
     const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
     

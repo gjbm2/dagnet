@@ -174,8 +174,17 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       // Smart auto-open: opens Properties on first selection (only when selection changes)
       sidebarOps.handleSelection();
     }
+    // Dispatch event for DataMenu
+    window.dispatchEvent(new CustomEvent('dagnet:nodeSelected', { detail: { nodeId } }));
+    if (!nodeId) {
+      window.dispatchEvent(new CustomEvent('dagnet:selectionCleared'));
+    }
+    // Persist to tab state
+    if (tabId) {
+      tabOps.updateTabState(tabId, { selectedNodeId: nodeId });
+    }
     prevSelectedNodeRef.current = nodeId;
-  }, [sidebarOps]);
+  }, [sidebarOps, tabId, tabOps]);
   
   const handleEdgeSelection = React.useCallback((edgeId: string | null) => {
     const changed = prevSelectedEdgeRef.current !== edgeId;
@@ -184,8 +193,17 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       // Smart auto-open: opens Properties on first selection (only when selection changes)
       sidebarOps.handleSelection();
     }
+    // Dispatch event for DataMenu
+    window.dispatchEvent(new CustomEvent('dagnet:edgeSelected', { detail: { edgeId } }));
+    if (!edgeId) {
+      window.dispatchEvent(new CustomEvent('dagnet:selectionCleared'));
+    }
+    // Persist to tab state
+    if (tabId) {
+      tabOps.updateTabState(tabId, { selectedEdgeId: edgeId });
+    }
     prevSelectedEdgeRef.current = edgeId;
-  }, [sidebarOps]);
+  }, [sidebarOps, tabId, tabOps]);
   
   // Icon bar handlers
   const handleIconClick = React.useCallback((panel: 'what-if' | 'properties' | 'tools') => {

@@ -535,6 +535,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       const contextsIndexFile = workspaceFiles.find(f => f.fileId === 'context-index');
       const casesIndexFile = workspaceFiles.find(f => f.fileId === 'case-index');
       const nodesIndexFile = workspaceFiles.find(f => f.fileId === 'node-index');
+      const eventsIndexFile = workspaceFiles.find(f => f.fileId === 'event-index');
 
       console.log(`📦 WorkspaceService: Loaded ${workspaceFiles.length} files total, ${items.length} non-index items`);
       console.log(`📦 WorkspaceService: Items by type:`, items.reduce((acc, item) => {
@@ -545,7 +546,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         parameters: parametersIndexFile?.data,
         contexts: contextsIndexFile?.data,
         cases: casesIndexFile?.data,
-        nodes: nodesIndexFile?.data
+        nodes: nodesIndexFile?.data,
+        events: eventsIndexFile?.data
       });
       
       setItems(items);
@@ -557,7 +559,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           parameters: parametersIndexFile?.data || undefined,
           contexts: contextsIndexFile?.data || undefined,
           cases: casesIndexFile?.data || undefined,
-          nodes: nodesIndexFile?.data || undefined
+          nodes: nodesIndexFile?.data || undefined,
+          events: eventsIndexFile?.data || undefined
           }
         }));
 

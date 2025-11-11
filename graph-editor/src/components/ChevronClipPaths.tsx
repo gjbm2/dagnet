@@ -14,13 +14,6 @@ interface ChevronClipPathsProps {
  * Positions are calculated dynamically from current node positions on each render.
  */
 export const ChevronClipPaths: React.FC<ChevronClipPathsProps> = ({ bundles, nodes, frameId }) => {
-  console.log('[ChevronClipPaths] Rendering with:', {
-    frameId,
-    bundleCount: bundles.length,
-    nodeCount: nodes.length,
-    bundles: bundles.map(b => ({ id: b.id, nodeId: b.nodeId, face: b.face, type: b.type }))
-  });
-
   // Cache last known node sizes to avoid transient undefined width/height frames
   const lastNodeSizeRef = React.useRef(new Map<string, { width: number; height: number }>());
   // Update cache with any measured sizes on this render
@@ -32,20 +25,6 @@ export const ChevronClipPaths: React.FC<ChevronClipPathsProps> = ({ bundles, nod
     }
   });
 
-  const computeFaceCenter = (node: Node, face: EdgeBundle['face'], height: number) => {
-    const nodeWidth = (node as any).width || 120;
-    const nodeHeight = (node as any).height || 120;
-    const nodeX = node.position.x;
-    const nodeY = node.position.y;
-    switch (face) {
-      case 'right': return { x: nodeX + nodeWidth, y: nodeY + nodeHeight / 2 };
-      case 'left': return { x: nodeX, y: nodeY + nodeHeight / 2 };
-      case 'bottom': return { x: nodeX + nodeWidth / 2, y: nodeY + nodeHeight };
-      case 'top': return { x: nodeX + nodeWidth / 2, y: nodeY };
-      default: return { x: nodeX + nodeWidth / 2, y: nodeY + nodeHeight / 2 };
-    }
-  };
-  
   const CURVE_ALLOWANCE = 30; // pixels
   
   return (
@@ -64,40 +43,12 @@ export const ChevronClipPaths: React.FC<ChevronClipPathsProps> = ({ bundles, nod
                 height: fallbackSize?.height,
               } as Node)
             : node;
-          if (needSizeFallback) {
-            console.log('[ChevronClipPaths] SIZE_FALLBACK', {
-              frameId,
-              nodeId: node.id,
-              width: (node as any).width,
-              height: (node as any).height,
-              fallbackWidth: fallbackSize?.width,
-              fallbackHeight: fallbackSize?.height,
-            });
-          }
+          // Size fallback handled silently
           const clipPathPoints = generateChevronClipPath(bundle, nodeForCalc);
-          if (idx === 0 && clipPathPoints) {
-            const center = computeFaceCenter(nodeForCalc, bundle.face, bundle.bundleWidth);
-            console.log('[ChevronClipPaths] FIRST_CHEVRON', {
-              frameId,
-              bundleId: bundle.id,
-              type: bundle.type,
-              face: bundle.face,
-              centerX: center.x,
-              centerY: center.y,
-              points: clipPathPoints
-            });
-          }
           
           if (!clipPathPoints) {
             return null; // Skip thin bundles
           }
-          
-          console.log('[ChevronClipPaths] Generated clipPath points:', {
-            bundleId: bundle.id,
-            type: bundle.type,
-            face: bundle.face,
-            points: clipPathPoints
-          });
           
           // Parse triangle points
           const points = clipPathPoints.split(' ');

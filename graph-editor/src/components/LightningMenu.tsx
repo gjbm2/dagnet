@@ -157,7 +157,7 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
       setGraph,
       paramSlot,
       conditionalIndex,
-      window: window || undefined, // Pass window if set
+      window: window ?? undefined, // Pass window if set (handle null)
       dailyMode: hasParameterFile // Only enable daily mode when fetching to file
     });
   };

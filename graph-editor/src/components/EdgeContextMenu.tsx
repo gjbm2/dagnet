@@ -17,6 +17,7 @@ import { AutomatableField } from './AutomatableField';
 import { roundTo4DP } from '../utils/rounding';
 import { Folders, TrendingUpDown, ChevronRight, Database, DatabaseZap } from 'lucide-react';
 import { fileRegistry } from '../contexts/TabContext';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 
 interface EdgeContextMenuProps {
   x: number;
@@ -41,6 +42,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
 }) => {
   const [localData, setLocalData] = useState(edgeData);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+  const { window } = useGraphStore();
   
   // Create a setGraph wrapper that calls onUpdateGraph (which updates the tab-specific graph)
   const setGraph = (updatedGraph: any) => {
@@ -51,35 +53,39 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const edge = graph?.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
   
   // Check for connected parameters from the actual edge object
-  // Check for file-based connections (parameter_id) OR direct connections (connection field)
-  const hasProbabilityParam = !!edge?.parameter_id || !!edge?.p?.connection;
+  // Check for file-based connections (parameter_id OR p.id) OR direct connections (connection field)
+  // Note: parameter_id can be top-level OR nested in p.id (transform.ts maps p.id → parameter_id for ReactFlow)
+  const parameterId = edge?.parameter_id || edge?.p?.id; // Prefer top-level, fallback to nested
+  const hasProbabilityParam = !!parameterId || !!edge?.p?.connection;
   const hasConditionalParam = edge?.conditional_p && edge.conditional_p.length > 0;
-  const hasCostGbpParam = !!edge?.cost_gbp_parameter_id || !!edge?.cost_gbp?.connection;
-  const hasCostTimeParam = !!edge?.cost_time_parameter_id || !!edge?.cost_time?.connection;
+  const costGbpParameterId = edge?.cost_gbp_parameter_id || edge?.cost_gbp?.id;
+  const hasCostGbpParam = !!costGbpParameterId || !!edge?.cost_gbp?.connection;
+  const costTimeParameterId = edge?.cost_time_parameter_id || edge?.cost_time?.id;
+  const hasCostTimeParam = !!costTimeParameterId || !!edge?.cost_time?.connection;
   const hasAnyParam = hasProbabilityParam || hasConditionalParam || hasCostGbpParam || hasCostTimeParam;
   
   // Check if we have ANY connection (direct OR file) - for "Get from Source (direct)"
   // This matches LightningMenu behavior: always show direct option if any connection exists
   const getProbabilityConnectionName = (): string | undefined => {
     if (edge?.p?.connection) return edge.p.connection;
-    if (edge?.parameter_id) {
-      const file = fileRegistry.getFile(`parameter-${edge.parameter_id}`);
+    if (parameterId) {
+      const file = fileRegistry.getFile(`parameter-${parameterId}`);
       return file?.data?.connection;
     }
     return undefined;
   };
   const getCostGbpConnectionName = (): string | undefined => {
     if (edge?.cost_gbp?.connection) return edge.cost_gbp.connection;
-    if (edge?.cost_gbp_parameter_id) {
-      const file = fileRegistry.getFile(`parameter-${edge.cost_gbp_parameter_id}`);
+    if (costGbpParameterId) {
+      const file = fileRegistry.getFile(`parameter-${costGbpParameterId}`);
       return file?.data?.connection;
     }
     return undefined;
   };
   const getCostTimeConnectionName = (): string | undefined => {
     if (edge?.cost_time?.connection) return edge.cost_time.connection;
-    if (edge?.cost_time_parameter_id) {
-      const file = fileRegistry.getFile(`parameter-${edge.cost_time_parameter_id}`);
+    if (costTimeParameterId) {
+      const file = fileRegistry.getFile(`parameter-${costTimeParameterId}`);
       return file?.data?.connection;
     }
     return undefined;
@@ -94,21 +100,21 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const hasCostTimeConnection = !!costTimeConnectionName;
   
   // Check if we have direct connections (without files) - for determining which handler to use
-  const hasProbabilityDirectConnection = !!edge?.p?.connection && !edge?.parameter_id;
-  const hasCostGbpDirectConnection = !!edge?.cost_gbp?.connection && !edge?.cost_gbp_parameter_id;
-  const hasCostTimeDirectConnection = !!edge?.cost_time?.connection && !edge?.cost_time_parameter_id;
+  const hasProbabilityDirectConnection = !!edge?.p?.connection && !parameterId;
+  const hasCostGbpDirectConnection = !!edge?.cost_gbp?.connection && !costGbpParameterId;
+  const hasCostTimeDirectConnection = !!edge?.cost_time?.connection && !costTimeParameterId;
   
   // Check if parameter files have connections (for versioned "Get from Source")
-  const hasProbabilityFileConnection = !!edge?.parameter_id && (() => {
-    const file = fileRegistry.getFile(`parameter-${edge.parameter_id}`);
+  const hasProbabilityFileConnection = !!parameterId && (() => {
+    const file = fileRegistry.getFile(`parameter-${parameterId}`);
     return !!file?.data?.connection;
   })();
-  const hasCostGbpFileConnection = !!edge?.cost_gbp_parameter_id && (() => {
-    const file = fileRegistry.getFile(`parameter-${edge.cost_gbp_parameter_id}`);
+  const hasCostGbpFileConnection = !!costGbpParameterId && (() => {
+    const file = fileRegistry.getFile(`parameter-${costGbpParameterId}`);
     return !!file?.data?.connection;
   })();
-  const hasCostTimeFileConnection = !!edge?.cost_time_parameter_id && (() => {
-    const file = fileRegistry.getFile(`parameter-${edge.cost_time_parameter_id}`);
+  const hasCostTimeFileConnection = !!costTimeParameterId && (() => {
+    const file = fileRegistry.getFile(`parameter-${costTimeParameterId}`);
     return !!file?.data?.connection;
   })();
   
@@ -138,10 +144,10 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
 
   const handleGetFromFile = (paramType: 'probability' | 'conditional' | 'cost_gbp' | 'cost_time') => {
     let paramId: string | undefined;
-    if (paramType === 'probability') paramId = edge?.parameter_id;
-    if (paramType === 'conditional') paramId = edge?.parameter_id; // Conditional uses same param file
-    if (paramType === 'cost_gbp') paramId = edge?.cost_gbp_parameter_id;
-    if (paramType === 'cost_time') paramId = edge?.cost_time_parameter_id;
+    if (paramType === 'probability') paramId = parameterId; // Use resolved parameterId (p.id or parameter_id)
+    if (paramType === 'conditional') paramId = parameterId; // Conditional uses same param file
+    if (paramType === 'cost_gbp') paramId = costGbpParameterId;
+    if (paramType === 'cost_time') paramId = costTimeParameterId;
 
     if (paramId) {
       dataOperationsService.getParameterFromFile({ 
@@ -156,10 +162,10 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
 
   const handlePutToFile = (paramType: 'probability' | 'conditional' | 'cost_gbp' | 'cost_time') => {
     let paramId: string | undefined;
-    if (paramType === 'probability') paramId = edge?.parameter_id;
-    if (paramType === 'conditional') paramId = edge?.parameter_id; // Conditional uses same param file
-    if (paramType === 'cost_gbp') paramId = edge?.cost_gbp_parameter_id;
-    if (paramType === 'cost_time') paramId = edge?.cost_time_parameter_id;
+    if (paramType === 'probability') paramId = parameterId; // Use resolved parameterId (p.id or parameter_id)
+    if (paramType === 'conditional') paramId = parameterId; // Conditional uses same param file
+    if (paramType === 'cost_gbp') paramId = costGbpParameterId;
+    if (paramType === 'cost_time') paramId = costTimeParameterId;
 
     if (paramId) {
       dataOperationsService.putParameterToFile({ 
@@ -179,9 +185,9 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     // Check if connection exists on edge OR in file
     const param = paramSlot === 'p' ? edge?.p : edge?.[paramSlot];
     let paramId: string | undefined;
-    if (paramType === 'probability') paramId = edge?.parameter_id;
-    if (paramType === 'cost_gbp') paramId = edge?.cost_gbp_parameter_id;
-    if (paramType === 'cost_time') paramId = edge?.cost_time_parameter_id;
+    if (paramType === 'probability') paramId = parameterId; // Use resolved parameterId (p.id or parameter_id)
+    if (paramType === 'cost_gbp') paramId = costGbpParameterId;
+    if (paramType === 'cost_time') paramId = costTimeParameterId;
     
     // Check for connection on edge OR in file
     const hasEdgeConnection = !!param?.connection;
@@ -205,18 +211,18 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       graph,
       setGraph,
       paramSlot, // 'p' | 'cost_gbp' | 'cost_time'
-      window: undefined, // Use default window
+      window: window || undefined, // Use window from graph store
       dailyMode: false // Direct to graph - use aggregate mode, not daily
     });
     onClose();
   };
 
   const handleGetFromSourceVersioned = (paramType: 'probability' | 'cost_gbp' | 'cost_time') => {
-    // Get parameter ID from edge
+    // Get parameter ID from edge (check both top-level and nested)
     let paramId: string | undefined;
-    if (paramType === 'probability') paramId = edge?.parameter_id;
-    if (paramType === 'cost_gbp') paramId = edge?.cost_gbp_parameter_id;
-    if (paramType === 'cost_time') paramId = edge?.cost_time_parameter_id;
+    if (paramType === 'probability') paramId = parameterId; // Use resolved parameterId (p.id or parameter_id)
+    if (paramType === 'cost_gbp') paramId = costGbpParameterId;
+    if (paramType === 'cost_time') paramId = costTimeParameterId;
 
     if (!paramId) {
       console.warn(`[EdgeContextMenu] No parameter file ID found for ${paramType}`);
@@ -234,7 +240,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       graph,
       setGraph,
       paramSlot, // 'p' | 'cost_gbp' | 'cost_time'
-      window: undefined // Use default window
+      window: window || undefined // Use window from graph store
     });
     onClose();
   };
@@ -731,7 +737,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     </div>
                   )}
                   {/* Show file operations if there's a parameter file */}
-                  {edge?.parameter_id && (
+                  {parameterId && (
                     <>
                       <div
                         onClick={() => handleGetFromFile('probability')}
@@ -966,7 +972,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     </div>
                   )}
                   {/* Show file operations if there's a parameter file */}
-                  {edge?.cost_gbp_parameter_id && (
+                  {costGbpParameterId && (
                     <>
                       <div
                         onClick={() => handleGetFromFile('cost_gbp')}
@@ -1112,7 +1118,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     </div>
                   )}
                   {/* Show file operations if there's a parameter file */}
-                  {edge?.cost_time_parameter_id && (
+                  {costTimeParameterId && (
                     <>
                       <div
                         onClick={() => handleGetFromFile('cost_time')}

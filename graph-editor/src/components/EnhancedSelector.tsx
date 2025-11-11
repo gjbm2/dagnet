@@ -214,7 +214,7 @@ export function EnhancedSelector({
   // Check connection status
   const isConnected = allItems.some((item: any) => item.id === inputValue);
   const hasFile = allItems.find((item: any) => item.id === inputValue)?.file_path || 
-                  fileRegistry.getFile(`${type}-${inputValue}.yaml`) !== null;
+                  fileRegistry.getFile(`${type}-${inputValue}`) !== null;
 
   // Validation state
   const showWarning = validationMode === 'warning' && inputValue && !isConnected;

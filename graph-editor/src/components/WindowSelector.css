@@ -2,7 +2,7 @@
   position: absolute;
   top: 16px;
   left: 16px;
-  z-index: 10000;
+  z-index: 100; /* Below menus (z-index: 1000) but above graph canvas */
   pointer-events: auto;
 }
 
@@ -79,5 +79,36 @@
 .window-selector-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.window-selector-presets {
+  display: flex;
+  gap: 4px;
+  margin-right: 4px;
+  padding-right: 8px;
+  border-right: 1px solid #e0e0e0;
+}
+
+.window-selector-preset {
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: white;
+  color: #333;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+
+.window-selector-preset:hover {
+  background: #f5f5f5;
+  border-color: #999;
+}
+
+.window-selector-preset:active {
+  background: #e0e0e0;
+  border-color: #666;
 }
 
