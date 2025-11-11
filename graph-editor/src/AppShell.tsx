@@ -6,6 +6,7 @@ import { TabProvider, useTabContext, fileRegistry } from './contexts/TabContext'
 import { NavigatorProvider, useNavigatorContext } from './contexts/NavigatorContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext';
 import { ValidationProvider } from './contexts/ValidationContext';
+import { VisibleTabsProvider, useVisibleTabs } from './contexts/VisibleTabsContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { fileOperationsService } from './services/fileOperationsService';
 import { repositoryOperationsService } from './services/repositoryOperationsService';
@@ -35,6 +36,7 @@ function AppShellContent() {
   const { tabs, activeTabId, operations: tabOperations } = useTabContext();
   const { state: navState, operations: navOperations } = useNavigatorContext();
   const dialogOps = useDialog();
+  const { updateFromLayout } = useVisibleTabs();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
   
@@ -633,20 +635,26 @@ function AppShellContent() {
         if (savedLayout && savedLayout.dockbox) {
           console.log('Loaded saved layout from IndexedDB');
           setLayout(savedLayout);
+          // Initialize visible tabs from loaded layout
+          updateFromLayout(savedLayout);
         } else {
           console.log('No saved layout, using default');
           setLayout(defaultLayout);
+          // Initialize visible tabs from default layout
+          updateFromLayout(defaultLayout);
         }
       } catch (error) {
         console.error('Failed to load layout, using default:', error);
         setLayout(defaultLayout);
+        // Initialize visible tabs from default layout
+        updateFromLayout(defaultLayout);
       } finally {
         setLayoutLoaded(true);
       }
     };
     
     loadSavedLayout();
-  }, [defaultLayout]);
+  }, [defaultLayout, updateFromLayout]);
 
   // Track previous layout to detect tab closes
   const prevLayoutRef = React.useRef<LayoutData | null>(null);
@@ -822,6 +830,9 @@ function AppShellContent() {
   const handleLayoutChange = React.useCallback((newLayout: LayoutData, currentTabId?: string) => {
     console.log(`[${new Date().toISOString()}] [AppShell] onLayoutChange called, currentTabId:`, currentTabId);
     
+    // Update visible tabs tracking (Phase 1: Visibility optimization)
+    updateFromLayout(newLayout);
+    
     // Update active tab when rc-dock changes active tab (when user clicks tabs)
     // BUT don't do this if we're in the middle of updating tabs (prevents infinite loop)
     if (currentTabId && currentTabId !== activeTabId && !isUpdatingTabsRef.current) {
@@ -875,7 +886,7 @@ function AppShellContent() {
     // Mark top-left docked panel for Navigator button padding
     // Delay slightly to let DOM update after layout change
     setTimeout(markTopLeftDockedPanel, 100);
-  }, [extractTabIds, tabOperations, activeTabId, markTopLeftDockedPanel]);
+  }, [extractTabIds, tabOperations, activeTabId, markTopLeftDockedPanel, updateFromLayout]);
   
   // Run markTopLeftDockedPanel after layout changes, nav state changes, and on resize
   React.useEffect(() => {
@@ -1298,7 +1309,9 @@ export function AppShell() {
         <ValidationProvider>
           <TabProvider>
             <NavigatorProvider>
-              <AppShellContent />
+              <VisibleTabsProvider>
+                <AppShellContent />
+              </VisibleTabsProvider>
             </NavigatorProvider>
           </TabProvider>
         </ValidationProvider>

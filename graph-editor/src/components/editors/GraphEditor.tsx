@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
 import { EditorProps, GraphData } from '../../types';
 import { useFileState, useTabContext } from '../../contexts/TabContext';
-import { GraphStoreProvider, useGraphStore } from '../../contexts/GraphStoreContext';
+import { GraphStoreProvider, useGraphStore, GraphStoreContext } from '../../contexts/GraphStoreContext';
+import { useVisibleTabs } from '../../contexts/VisibleTabsContext';
 import DockLayout, { LayoutData } from 'rc-dock';
 import './GraphEditor.css';
 import GraphCanvas from '../GraphCanvas';
@@ -54,15 +55,59 @@ export function useSelectionContext() {
 /**
  * Graph Editor Inner Component
  * Assumes it's wrapped in GraphStoreProvider
+ * 
+ * Phase 1: Memoized to prevent re-renders when other tabs change
  */
-function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<GraphData> & { tabId?: string }) {
+const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<GraphData> & { tabId?: string }) {
   const { data, isDirty, updateData } = useFileState<GraphData>(fileId);
-  const { tabs, activeTabId, operations: tabOps } = useTabContext();
   
-  // Use the specific tabId passed from AppShell
-  // This ensures multiple tabs of the same file have independent state
-  const myTab = tabs.find(t => t.id === tabId);
+  // Phase 1: Use refs to avoid subscribing to all tabs changes
+  // Only subscribe to activeTabId and operations, not the tabs array
+  const tabContext = useTabContext();
+  const activeTabId = tabContext.activeTabId;
+  const tabOps = tabContext.operations;
+  
+  // Use ref to store tabs and only update when our specific tab changes
+  const tabsRef = useRef(tabContext.tabs);
+  const myTabRef = useRef(tabContext.tabs.find(t => t.id === tabId));
+  
+  // Update refs only when tabs actually change AND our tab is affected
+  useEffect(() => {
+    const newTabs = tabContext.tabs;
+    const newMyTab = newTabs.find(t => t.id === tabId);
+    
+    // Only update if our specific tab changed
+    const myTabChanged = JSON.stringify(myTabRef.current?.editorState) !== JSON.stringify(newMyTab?.editorState);
+    
+    if (myTabChanged) {
+      tabsRef.current = newTabs;
+      myTabRef.current = newMyTab;
+    }
+  }, [tabContext.tabs, tabId]);
+  
+  const myTab = myTabRef.current;
   const tabState = myTab?.editorState || {};
+  
+  // Phase 4: Use ref for visibleTabIds to avoid re-renders when it changes
+  // Only subscribe to isTabVisible function, not the Set itself
+  const visibleTabsContext = useVisibleTabs();
+  const visibleTabIdsRef = useRef(visibleTabsContext.visibleTabIds);
+  useEffect(() => {
+    visibleTabIdsRef.current = visibleTabsContext.visibleTabIds;
+  }, [visibleTabsContext.visibleTabIds]);
+  
+  const isTabVisible = visibleTabsContext.isTabVisible;
+  
+  // Check if this tab is visible (Phase 1: Visibility optimization)
+  const isVisible = tabId ? isTabVisible(tabId) : true; // Default to visible if no tabId (shouldn't happen)
+  
+  // Debug: Log visibility status on every render
+  console.log(`[GraphEditor ${fileId}] RENDER: tabId=${tabId}, isVisible=${isVisible}, visibleTabs=[${Array.from(visibleTabIdsRef.current).join(', ')}]`);
+  
+  // Debug: Log visibility status in effect
+  useEffect(() => {
+    console.log(`[GraphEditor ${fileId}] Visibility EFFECT: tabId=${tabId}, isVisible=${isVisible}, visibleTabs=[${Array.from(visibleTabIdsRef.current).join(', ')}]`);
+  }, [fileId, tabId, isVisible]); // Removed visibleTabIds from deps - using ref instead
   
   // DEBUG: Log when tabState changes
   console.log(`[GraphEditor ${fileId}] tabState:`, tabState);
@@ -673,8 +718,28 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
   }, [myTab?.editorState?.whatIfAnalysis, myTab?.editorState?.caseOverrides, myTab?.editorState?.conditionalOverrides, fileId]);
   
   // Canvas component - recreate when edge scaling props change so GraphCanvas receives updates
+  // Phase 1: Only render GraphCanvas when tab is visible
   const CanvasHost: React.FC = () => {
     const whatIf = useWhatIfContext();
+    
+    // Gate heavy rendering based on visibility
+    // Re-read isVisible from context to ensure we have the latest value
+    const { isTabVisible: checkTabVisible } = useVisibleTabs();
+    const currentIsVisible = tabId ? checkTabVisible(tabId) : true;
+    
+    console.log(`[CanvasHost ${fileId}] Rendering: tabId=${tabId}, isVisible=${currentIsVisible}`);
+    
+    if (!currentIsVisible) {
+      // Return lightweight placeholder to maintain layout
+      console.log(`[CanvasHost ${fileId}] Returning placeholder (tab not visible)`);
+      return (
+        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontSize: '14px' }}>
+          Canvas hidden (tab not visible)
+        </div>
+      );
+    }
+    
+    console.log(`[CanvasHost ${fileId}] Rendering GraphCanvas (tab is visible)`);
     return (
       <GraphCanvas
         tabId={tabId}
@@ -693,8 +758,15 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       />
     );
   };
-  // Canvas component - no memoization, recreate every render so props are always fresh
-  const canvasComponent = <CanvasHost />;
+  
+  // Canvas component - recreate when visibility changes to force rc-dock to re-render
+  // Use visibility as part of key to ensure rc-dock sees it as a new component
+  const canvasComponent = useMemo(() => {
+    // Include visibility in the component to force re-render when it changes
+    const currentIsVisible = tabId ? isTabVisible(tabId) : true;
+    console.log(`[GraphEditor ${fileId}] Creating canvasComponent: tabId=${tabId}, isVisible=${currentIsVisible}`);
+    return <CanvasHost key={`canvas-${tabId}-${currentIsVisible}`} />;
+  }, [fileId, tabId, isTabVisible]); // Removed visibleTabIds - isTabVisible function is stable
   
   const whatIfComponent = useMemo(() => <WhatIfPanel tabId={tabId} />, [tabId]);
   
@@ -970,8 +1042,57 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     }
   }, [sidebarState.activePanel, sidebarState.mode, dockLayout]);
   
-  const store = useGraphStore();
-  const { setGraph, graph, undo, redo, canUndo, canRedo, saveHistoryState, resetHistory } = store;
+  // Phase 1: Use selective store subscription - only subscribe to graph, not window
+  // WindowSelector handles window state separately
+  const graph = useGraphStore(state => state.graph);
+  
+  // Get store hook for methods - use ref to avoid subscribing to all state changes
+  // Store hook is stable, so we can safely use it in callbacks
+  const storeHookRef = useRef(useContext(GraphStoreContext));
+  if (!storeHookRef.current) {
+    throw new Error('GraphEditorInner must be within GraphStoreProvider');
+  }
+  
+  // Phase 4: Make all store methods stable by not depending on changing values
+  // Store hook is stable per GraphStoreProvider instance, so we can use it directly
+  const getStoreState = useCallback(() => {
+    return storeHookRef.current!.getState();
+  }, []); // Empty deps - storeHookRef.current is stable per provider instance
+  
+  // Phase 4: Make undo/redo stable - call getStoreState directly instead of depending on it
+  const undo = useCallback(() => {
+    return storeHookRef.current!.getState().undo();
+  }, []); // Empty deps - storeHookRef.current is stable
+  
+  const redo = useCallback(() => {
+    return storeHookRef.current!.getState().redo();
+  }, []); // Empty deps - storeHookRef.current is stable
+  
+  const setGraph = useCallback((g: GraphData) => getStoreState().setGraph(g), [getStoreState]);
+  const saveHistoryState = useCallback((action?: string, nodeId?: string, edgeId?: string) => 
+    getStoreState().saveHistoryState(action, nodeId, edgeId), [getStoreState]);
+  const resetHistory = useCallback(() => getStoreState().resetHistory(), [getStoreState]);
+  
+  // Store reference for use in effects/callbacks - memoize to prevent recreation
+  const store = useMemo(() => ({ getState: getStoreState }), [getStoreState]);
+  
+  // Phase 1: Revalidation when tab becomes visible
+  const prevVisibleRef = useRef(isVisible);
+  useEffect(() => {
+    if (!prevVisibleRef.current && isVisible) {
+      // Tab just became visible - trigger revalidation
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Tab became visible - triggering revalidation`);
+      
+      // Force canvas redraw
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('dagnet:forceRedraw'));
+      }, 100);
+      
+      // If window changed while hidden, trigger coverage check
+      // (WindowSelector will handle this automatically when it mounts/re-renders)
+    }
+    prevVisibleRef.current = isVisible;
+  }, [isVisible, fileId]);
 
   const ts = () => new Date().toISOString();
   console.log(`[${ts()}] GraphEditor render:`, { 
@@ -1094,12 +1215,26 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     return () => window.removeEventListener('dagnet:suppressStoreToFileSync' as any, handler);
   }, []);
 
+  // Phase 4: Use refs for values only checked inside handlers to avoid unnecessary effect re-runs
+  const activeTabIdRef = useRef(activeTabId);
+  const tabIdRef = useRef(tabId);
+  const fileIdRef = useRef(fileId);
+  const tabOpsRef = useRef(tabOps);
+  
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId;
+    tabIdRef.current = tabId;
+    fileIdRef.current = fileId;
+    tabOpsRef.current = tabOps;
+  }, [activeTabId, tabId, fileId, tabOps]);
+
   // Keyboard shortcuts for undo/redo - ONLY when this tab is active
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#14: Setup keyboard shortcuts`);
     const handleKeyDown = (e: KeyboardEvent) => {
       // CRITICAL: Only process if THIS tab is the active tab
-      if (activeTabId !== tabId) {
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (activeTabIdRef.current !== tabIdRef.current) {
         return; // Not our tab, ignore all keyboard events
       }
       console.log(`[${new Date().toISOString()}] [GraphEditor] Keyboard event:`, { key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey });
@@ -1118,8 +1253,9 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       // Undo: Cmd/Ctrl+Z
       if (modifier && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
+        const { canUndo } = store.getState();
         if (canUndo) {
-          console.log(`GraphEditor[${fileId}]: Undo triggered (active tab)`, canUndo, 'historyIndex:', store.getState().historyIndex);
+          console.log(`GraphEditor[${fileIdRef.current}]: Undo triggered (active tab)`, canUndo, 'historyIndex:', store.getState().historyIndex);
           // Reset sync flag before undo so the store→file sync can happen
           syncingRef.current = false;
           undo();
@@ -1133,8 +1269,9 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       // Redo: Cmd/Ctrl+Shift+Z or Cmd/Ctrl+Y
       if ((modifier && e.shiftKey && e.key === 'z') || (modifier && e.key === 'y')) {
         e.preventDefault();
+        const { canRedo } = store.getState();
         if (canRedo) {
-          console.log(`GraphEditor[${fileId}]: Redo triggered (active tab)`, canRedo, 'historyIndex:', store.getState().historyIndex);
+          console.log(`GraphEditor[${fileIdRef.current}]: Redo triggered (active tab)`, canRedo, 'historyIndex:', store.getState().historyIndex);
           // Reset sync flag before redo so the store→file sync can happen
           syncingRef.current = false;
           redo();
@@ -1148,7 +1285,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, canUndo, canRedo, store, activeTabId, tabId, fileId]);
+  }, [undo, redo, store]); // Phase 4: Removed activeTabId, tabId, fileId - using refs instead
 
   // Listen for reset sidebar command from context menu
   useEffect(() => {
@@ -1183,7 +1320,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
 
     const handleAddNode = () => {
       // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (tabIdRef.current !== activeTabIdRef.current) return;
       
       if (addNodeRef.current) {
         addNodeRef.current();
@@ -1192,7 +1330,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
 
     const handleDeleteSelected = () => {
       // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (tabIdRef.current !== activeTabIdRef.current) return;
       
       if (deleteSelectedRef.current) {
         deleteSelectedRef.current();
@@ -1201,7 +1340,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
 
     const handleForceReroute = () => {
       // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (tabIdRef.current !== activeTabIdRef.current) return;
       
       if (forceRerouteRef.current) {
         forceRerouteRef.current();
@@ -1210,7 +1350,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
 
     const handleAutoLayout = (e: CustomEvent) => {
       // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (tabIdRef.current !== activeTabIdRef.current) return;
       
       if (autoLayoutRef.current && e.detail.direction) {
         autoLayoutRef.current(e.detail.direction);
@@ -1219,7 +1360,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
 
     const handleSankeyLayout = () => {
       // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (tabIdRef.current !== activeTabIdRef.current) return;
       
       if (sankeyLayoutRef.current) {
         sankeyLayoutRef.current();
@@ -1235,7 +1377,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
 
     const handleHideUnselected = () => {
       // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (tabIdRef.current !== activeTabIdRef.current) return;
       
       if (hideUnselectedRef.current) {
         hideUnselectedRef.current();
@@ -1244,10 +1387,11 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
 
     const handleShowAll = async () => {
       // Only handle if this is the active tab's editor
-      if (tabId !== activeTabId) return;
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (tabIdRef.current !== activeTabIdRef.current) return;
       
-      if (tabId) {
-        await tabOps.showAllNodes(tabId);
+      if (tabIdRef.current) {
+        await tabOpsRef.current.showAllNodes(tabIdRef.current);
       }
     };
 
@@ -1264,7 +1408,7 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       window.removeEventListener('dagnet:hideUnselected' as any, handleHideUnselected);
       window.removeEventListener('dagnet:showAll' as any, handleShowAll);
     };
-  }, [tabId, activeTabId, tabOps]);
+  }, []); // Phase 4: Removed tabOps, tabId, activeTabId - using refs instead
 
   if (!data) {
     console.log('GraphEditor: No data yet, showing loading...');
@@ -1297,13 +1441,8 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
     );
   }
 
-  console.log(`[${ts()}] GraphEditor: About to render GraphCanvas with ${data.nodes?.length} nodes`);
-  console.log(`[${ts()}] GraphEditor: Rendering with state:`, {
-    sidebarState: sidebarState,
-    selectedNodeId,
-    selectedEdgeId,
-    dockLayoutExists: !!dockLayout
-  });
+  // Note: GraphCanvas rendering is gated by CanvasHost visibility check
+  // Only visible tabs will actually render GraphCanvas (see CanvasHost component above)
 
   const selectionContextValue: SelectionContextType = {
     selectedNodeId,
@@ -1757,7 +1896,13 @@ function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<Graph
       </ViewPreferencesProvider>
     </SelectionContext.Provider>
   );
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison: Only re-render if fileId, tabId, or readonly changed
+  // This prevents re-renders when other tabs change
+  return prevProps.fileId === nextProps.fileId &&
+         prevProps.tabId === nextProps.tabId &&
+         prevProps.readonly === nextProps.readonly;
+});
 
 /**
  * Graph Editor
