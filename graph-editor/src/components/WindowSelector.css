@@ -15,6 +15,12 @@
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   border: 1px solid #e0e0e0;
+  transition: padding 0.2s;
+}
+
+.window-selector-compact .window-selector-content {
+  padding: 6px 10px;
+  gap: 6px;
 }
 
 .window-selector-label {
@@ -41,6 +47,30 @@
 }
 
 .window-selector-input:focus {
+  outline: none;
+  border-color: #1976d2;
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.1);
+}
+
+.window-selector-range-input {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #333;
+  background: white;
+  cursor: text;
+  transition: border-color 0.2s;
+  min-width: 200px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.window-selector-range-input:hover {
+  border-color: #999;
+}
+
+.window-selector-range-input:focus {
   outline: none;
   border-color: #1976d2;
   box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.1);

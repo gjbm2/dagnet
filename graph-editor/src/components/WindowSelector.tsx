@@ -2,19 +2,37 @@
  * WindowSelector Component
  * 
  * Graph-level date range picker for data fetching window selection.
- * Allows users to select a date range that will be used when fetching
- * data from external sources or aggregating from cached daily data.
+ * Automatically checks data coverage when window changes.
+ * Shows "Fetch data" button if data is missing for connected parameters/cases.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import type { DateRange } from '../types';
 import { dataOperationsService } from '../services/dataOperationsService';
+import { calculateIncrementalFetch } from '../services/windowAggregationService';
+import { fileRegistry } from '../contexts/TabContext';
+import { DateRangePicker } from './DateRangePicker';
 import toast from 'react-hot-toast';
 import './WindowSelector.css';
 
+interface BatchItem {
+  id: string;
+  type: 'parameter' | 'case' | 'node';
+  name: string;
+  objectId: string;
+  targetId: string;
+  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+}
+
 export function WindowSelector() {
   const { graph, window, setWindow, setGraph } = useGraphStore();
+  const [needsFetch, setNeedsFetch] = useState(false);
+  const [isCheckingCoverage, setIsCheckingCoverage] = useState(false);
+  const [isFetching, setIsFetching] = useState(false);
+  
+  // Track last aggregated window to prevent infinite loops
+  const lastAggregatedWindowRef = React.useRef<string | null>(null);
   
   // Show if graph has any edges with parameter files (for windowed aggregation)
   // This includes both external connections and file-based parameters
@@ -32,53 +50,164 @@ export function WindowSelector() {
   const startDate = window?.start || defaultStart.toISOString().split('T')[0];
   const endDate = window?.end || defaultEnd.toISOString().split('T')[0];
   
-  // Check if current window differs from what's applied to graph edges
-  const hasWindowChange = useMemo(() => {
-    if (!graph?.edges) return false;
-    
-    // Normalize dates for comparison (YYYY-MM-DD format)
-    const normalizeDate = (dateStr: string | undefined) => {
-      if (!dateStr) return null;
-      // Handle ISO 8601 or YYYY-MM-DD
-      return dateStr.split('T')[0];
+  const currentWindow: DateRange = useMemo(() => ({
+    start: startDate,
+    end: endDate,
+  }), [startDate, endDate]);
+  
+  // Check data coverage and auto-aggregate when window changes
+  useEffect(() => {
+    const checkDataCoverageAndAggregate = async () => {
+      if (!graph || !window) {
+        setNeedsFetch(false);
+        return;
+      }
+      
+      setIsCheckingCoverage(true);
+      
+      try {
+        let hasMissingData = false;
+        let hasAnyConnection = false;
+        const paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'cost_time' }> = [];
+        
+        // Normalize window dates to ISO timestamps for calculateIncrementalFetch
+        const normalizedWindow: DateRange = {
+          start: currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`,
+          end: currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`,
+        };
+        
+        // Check all parameters in graph
+        if (graph.edges) {
+          for (const edge of graph.edges) {
+            const edgeId = edge.uuid || edge.id || '';
+            
+            // Check each parameter slot
+            const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'cost_time'; param: any }> = [];
+            if (edge.p?.id) paramSlots.push({ slot: 'p', param: edge.p });
+            if (edge.cost_gbp?.id) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
+            if (edge.cost_time?.id) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
+            
+            for (const { slot, param } of paramSlots) {
+              const paramId = param.id;
+              if (!paramId) continue;
+              
+              // Check if parameter has connection (file or direct)
+              const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+              const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
+              
+              if (!hasConnection) continue; // Skip if no connection
+              
+              hasAnyConnection = true; // We have at least one connected parameter
+              
+              // Strict validation: check if data exists for this window
+              if (paramFile?.data) {
+                const incrementalResult = calculateIncrementalFetch(
+                  paramFile.data,
+                  normalizedWindow
+                );
+                
+                // Strict: if ANY days are missing, require fetch
+                if (incrementalResult.needsFetch) {
+                  console.log(`[WindowSelector] Param ${paramId} (${slot}) needs fetch:`, {
+                    window: normalizedWindow,
+                    totalDays: incrementalResult.totalDays,
+                    daysAvailable: incrementalResult.daysAvailable,
+                    daysToFetch: incrementalResult.daysToFetch,
+                    missingDates: incrementalResult.missingDates.slice(0, 5),
+                  });
+                  hasMissingData = true;
+                } else {
+                  // All data exists - add to aggregation list
+                  // Only aggregate if parameter has daily data
+                  const hasDailyData = paramFile.data.values?.some((v: any) => 
+                    v.n_daily && v.k_daily && v.dates && v.dates.length > 0
+                  );
+                  if (hasDailyData) {
+                    paramsToAggregate.push({ paramId, edgeId, slot });
+                  }
+                }
+              } else {
+                // No file exists - need to fetch
+                hasMissingData = true;
+              }
+            }
+          }
+        }
+        
+        // Check cases
+        if (graph.nodes) {
+          for (const node of graph.nodes) {
+            if (node.case?.id) {
+              const caseId = node.case.id;
+              const caseFile = fileRegistry.getFile(`case-${caseId}`);
+              const hasConnection = !!caseFile?.data?.connection || !!node.case?.connection;
+              
+              if (hasConnection) {
+                hasAnyConnection = true;
+                if (!caseFile) {
+                  // Has connection but no file - need to fetch
+                  hasMissingData = true;
+                }
+              }
+            }
+          }
+        }
+        
+        // Set needsFetch flag
+        setNeedsFetch(hasAnyConnection && hasMissingData);
+        
+        // Auto-aggregate parameters that have all data for this window
+        // But only if we haven't already aggregated for this exact window (prevents loops)
+        const windowKey = `${normalizedWindow.start}|${normalizedWindow.end}`;
+        const alreadyAggregated = lastAggregatedWindowRef.current === windowKey;
+        
+        if (paramsToAggregate.length > 0 && !hasMissingData && !alreadyAggregated) {
+          console.log(`[WindowSelector] Auto-aggregating ${paramsToAggregate.length} parameters for window:`, normalizedWindow);
+          lastAggregatedWindowRef.current = windowKey; // Mark as aggregated
+          
+          for (const { paramId, edgeId, slot } of paramsToAggregate) {
+            try {
+              await dataOperationsService.getParameterFromFile({
+                paramId,
+                edgeId,
+                graph,
+                setGraph: (g) => {
+                  if (g) setGraph(g);
+                },
+                window: normalizedWindow,
+              });
+            } catch (error) {
+              console.error(`[WindowSelector] Failed to aggregate param ${paramId}:`, error);
+            }
+          }
+        } else if (alreadyAggregated) {
+          console.log(`[WindowSelector] Skipping auto-aggregation - already aggregated for this window`);
+        }
+      } catch (error) {
+        console.error('[WindowSelector] Error checking data coverage:', error);
+        setNeedsFetch(false);
+      } finally {
+        setIsCheckingCoverage(false);
+      }
     };
     
-    const currentStart = normalizeDate(startDate);
-    const currentEnd = normalizeDate(endDate);
-    
-    // Check if any edge has evidence with different window
-    const edgesWithEvidence = graph.edges.filter((edge: any) => {
-      const evidence = edge.p?.evidence || edge.cost_gbp?.evidence || edge.cost_time?.evidence;
-      return evidence?.window_from || evidence?.window_to;
-    });
-    
-    if (edgesWithEvidence.length === 0) {
-      // No evidence on graph yet - window change is meaningful
-      return true;
-    }
-    
-    // Check if any edge has different window
-    return edgesWithEvidence.some((edge: any) => {
-      const evidence = edge.p?.evidence || edge.cost_gbp?.evidence || edge.cost_time?.evidence;
-      const evidenceStart = normalizeDate(evidence?.window_from);
-      const evidenceEnd = normalizeDate(evidence?.window_to);
-      
-      return evidenceStart !== currentStart || evidenceEnd !== currentEnd;
-    });
-  }, [graph, startDate, endDate]);
+    // Debounce coverage check
+    const timeoutId = setTimeout(checkDataCoverageAndAggregate, 300);
+    return () => clearTimeout(timeoutId);
+  }, [graph, currentWindow, window, setGraph]);
   
-  const handleStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newStart = e.target.value;
-    if (newStart && endDate && newStart <= endDate) {
-      setWindow({ start: newStart, end: endDate });
+  // Reset aggregated window when window actually changes (user changes it)
+  React.useEffect(() => {
+    if (window) {
+      const windowKey = `${currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`}|${currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`}`;
+      if (lastAggregatedWindowRef.current !== windowKey) {
+        lastAggregatedWindowRef.current = null; // Reset when window changes
+      }
     }
-  };
+  }, [currentWindow.start, currentWindow.end]);
   
-  const handleEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newEnd = e.target.value;
-    if (newEnd && startDate && newEnd >= startDate) {
-      setWindow({ start: startDate, end: newEnd });
-    }
+  const handleDateRangeChange = (start: string, end: string) => {
+    setWindow({ start, end });
   };
   
   const handlePreset = (days: number | 'today') => {
@@ -90,90 +219,197 @@ export function WindowSelector() {
       start.setHours(0, 0, 0, 0);
       end.setHours(23, 59, 59, 999);
     } else {
-      // Last N days (including today)
+      // Last N days (excluding today - end on yesterday)
+      // This ensures we only request data that's likely to be available
+      end.setDate(end.getDate() - 1); // Yesterday
       start.setDate(end.getDate() - (days - 1));
       start.setHours(0, 0, 0, 0);
       end.setHours(23, 59, 59, 999);
     }
     
+    const startStr = start.toISOString().split('T')[0];
+    const endStr = end.toISOString().split('T')[0];
+    
+    console.log(`[WindowSelector] Preset ${days} days:`, {
+      start: startStr,
+      end: endStr,
+      today: new Date().toISOString().split('T')[0],
+      includesToday: endStr === new Date().toISOString().split('T')[0],
+    });
+    
     setWindow({
-      start: start.toISOString().split('T')[0],
-      end: end.toISOString().split('T')[0],
+      start: startStr,
+      end: endStr,
     });
   };
   
-  const [isApplying, setIsApplying] = useState(false);
-  
-  const handleShow = async () => {
-    if (!graph) {
-      toast.error('No graph loaded');
-      return;
-    }
+  // Collect batch items that need fetching (have connections but missing data)
+  const batchItemsToFetch = useMemo(() => {
+    if (!graph || !needsFetch) return [];
     
-    const currentWindow: DateRange = {
-      start: startDate,
-      end: endDate,
+    const items: BatchItem[] = [];
+    const normalizedWindow: DateRange = {
+      start: currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`,
+      end: currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`,
     };
     
-    setIsApplying(true);
+    // Collect parameters that need fetching
+    if (graph.edges) {
+      for (const edge of graph.edges) {
+        const edgeId = edge.uuid || edge.id || '';
+        
+        const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'cost_time'; param: any }> = [];
+        if (edge.p?.id) paramSlots.push({ slot: 'p', param: edge.p });
+        if (edge.cost_gbp?.id) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
+        if (edge.cost_time?.id) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
+        
+        for (const { slot, param } of paramSlots) {
+          const paramId = param.id;
+          if (!paramId) continue;
+          
+          const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+          const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
+          
+          if (!hasConnection) continue;
+          
+          // Check if this parameter needs fetching for the window
+          let needsFetchForThis = false;
+          if (!paramFile?.data) {
+            needsFetchForThis = true; // No file exists
+          } else {
+            const incrementalResult = calculateIncrementalFetch(
+              paramFile.data,
+              normalizedWindow
+            );
+            needsFetchForThis = incrementalResult.needsFetch;
+          }
+          
+          if (needsFetchForThis) {
+            items.push({
+              id: `param-${paramId}-${slot}-${edgeId}`,
+              type: 'parameter',
+              name: `${slot}: ${paramId}`,
+              objectId: paramId,
+              targetId: edgeId,
+              paramSlot: slot,
+            });
+          }
+        }
+      }
+    }
+    
+    // Collect cases that need fetching
+    if (graph.nodes) {
+      for (const node of graph.nodes) {
+        if (node.case?.id) {
+          const caseId = node.case.id;
+          const caseFile = fileRegistry.getFile(`case-${caseId}`);
+          const hasConnection = !!caseFile?.data?.connection || !!node.case?.connection;
+          
+          if (hasConnection && !caseFile) {
+            items.push({
+              id: `case-${caseId}-${node.uuid || node.id}`,
+              type: 'case',
+              name: `case: ${caseId}`,
+              objectId: caseId,
+              targetId: node.uuid || node.id || '',
+            });
+          }
+        }
+      }
+    }
+    
+    return items;
+  }, [graph, needsFetch, currentWindow]);
+  
+  const handleFetchData = async () => {
+    if (!graph || batchItemsToFetch.length === 0) return;
+    
+    setIsFetching(true);
+    
+    const normalizedWindow: DateRange = {
+      start: currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`,
+      end: currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`,
+    };
+    
+    // Show progress toast
+    const progressToastId = toast.loading(
+      `Fetching 0/${batchItemsToFetch.length}...`,
+      { duration: Infinity }
+    );
+    
+    let successCount = 0;
+    let errorCount = 0;
     
     try {
-      // Import fileRegistry
-      const { fileRegistry } = await import('../contexts/TabContext');
-      
-      // Find all edges with parameter connections that have daily data
-      const edgesWithDailyData = graph.edges?.filter((edge: any) => {
-        const paramId = edge.p?.id || edge.cost_gbp?.id || edge.cost_time?.id;
-        if (!paramId) return false;
+      for (let i = 0; i < batchItemsToFetch.length; i++) {
+        const item = batchItemsToFetch[i];
         
-        // Check if parameter file has daily data
-        const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
-        if (!paramFile?.data?.values) return false;
-        
-        return paramFile.data.values.some((v: any) => v.n_daily && v.k_daily && v.dates);
-      }) || [];
-      
-      if (edgesWithDailyData.length === 0) {
-        toast('No edges with daily data found. Use "Get from Source" with daily mode to fetch time-series data.', {
-          icon: 'ℹ️',
-          duration: 4000,
-        });
-        return;
-      }
-      
-      // Aggregate window for each edge
-      let successCount = 0;
-      for (const edge of edgesWithDailyData) {
-        const paramId = edge.p?.id || edge.cost_gbp?.id || edge.cost_time?.id;
-        if (!paramId) continue;
+        // Update progress toast
+        toast.loading(
+          `Fetching ${i + 1}/${batchItemsToFetch.length}: ${item.name}`,
+          { id: progressToastId, duration: Infinity }
+        );
         
         try {
-          await dataOperationsService.getParameterFromFile({
-            paramId,
-            edgeId: edge.uuid,
-            graph,
-            setGraph: (g: any) => setGraph(g), // Wrap to handle null
-            window: currentWindow,
-          });
-          successCount++;
+          if (item.type === 'parameter') {
+            await dataOperationsService.getFromSource({
+              objectType: 'parameter',
+              objectId: item.objectId,
+              targetId: item.targetId,
+              graph,
+              setGraph: (g) => {
+                if (g) setGraph(g);
+              },
+              paramSlot: item.paramSlot,
+              window: normalizedWindow,
+            });
+            successCount++;
+          } else if (item.type === 'case') {
+            await dataOperationsService.getFromSource({
+              objectType: 'case',
+              objectId: item.objectId,
+              targetId: item.targetId,
+              graph,
+              setGraph: (g) => {
+                if (g) setGraph(g);
+              },
+            });
+            successCount++;
+          }
         } catch (error) {
-          console.error(`[WindowSelector] Failed to aggregate for edge ${edge.uuid}:`, error);
+          console.error(`[WindowSelector] Failed to fetch ${item.name}:`, error);
+          errorCount++;
         }
       }
       
+      // Dismiss progress toast
+      toast.dismiss(progressToastId);
+      
+      // Show summary
       if (successCount > 0) {
-        toast.success(`✓ Aggregated window for ${successCount} edge(s)`, { duration: 2000 });
+        toast.success(
+          `✓ Fetched ${successCount} item${successCount > 1 ? 's' : ''}${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
+          { duration: 3000 }
+        );
+      } else if (errorCount > 0) {
+        toast.error(`Failed to fetch ${errorCount} item${errorCount > 1 ? 's' : ''}`);
       }
+      
+      // Re-check coverage after fetch
+      // Trigger coverage check by updating a dependency
+      setWindow({ ...window! });
     } catch (error) {
-      console.error('[WindowSelector] Show failed:', error);
-      toast.error('Failed to apply window');
+      toast.dismiss(progressToastId);
+      console.error('[WindowSelector] Batch fetch failed:', error);
+      toast.error('Failed to fetch data');
     } finally {
-      setIsApplying(false);
+      setIsFetching(false);
     }
   };
   
   return (
-    <div className="window-selector">
+    <div className={`window-selector ${!needsFetch ? 'window-selector-compact' : ''}`}>
       <div className="window-selector-content">
         <label htmlFor="window-start" className="window-selector-label">
           Window:
@@ -212,36 +448,28 @@ export function WindowSelector() {
             90d
           </button>
         </div>
-        <input
-          id="window-start"
-          type="date"
-          value={startDate}
-          onChange={handleStartChange}
-          className="window-selector-input"
-          max={endDate}
+        <DateRangePicker
+          startDate={startDate}
+          endDate={endDate}
+          onChange={handleDateRangeChange}
+          maxDate={new Date().toISOString().split('T')[0]}
         />
-        <span className="window-selector-separator">to</span>
-        <input
-          id="window-end"
-          type="date"
-          value={endDate}
-          onChange={handleEndChange}
-          className="window-selector-input"
-          min={startDate}
-          max={new Date().toISOString().split('T')[0]}
-        />
-        <button
-          onClick={handleShow}
-          disabled={isApplying || !hasWindowChange}
-          className="window-selector-button"
-          title={
-            !hasWindowChange 
-              ? "Window matches current graph view" 
-              : "Apply window to aggregate data from cached daily values"
-          }
-        >
-          {isApplying ? 'Applying...' : 'Show'}
-        </button>
+        {needsFetch && (
+          <button
+            onClick={handleFetchData}
+            disabled={isCheckingCoverage || isFetching || batchItemsToFetch.length === 0}
+            className="window-selector-button"
+            title={
+              isCheckingCoverage
+                ? "Checking data coverage..."
+                : isFetching
+                  ? "Fetching data..."
+                  : `Fetch ${batchItemsToFetch.length} item${batchItemsToFetch.length > 1 ? 's' : ''} from external sources`
+            }
+          >
+            {isCheckingCoverage ? 'Checking...' : isFetching ? 'Fetching...' : 'Fetch data'}
+          </button>
+        )}
       </div>
     </div>
   );
