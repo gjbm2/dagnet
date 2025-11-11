@@ -335,9 +335,43 @@ export function calculateIncrementalFetch(
     allDatesInWindow.push(dateStr);
     currentDate.setDate(currentDate.getDate() + 1);
   }
-
-  // Find missing dates
+  
+  // Find missing dates (dates in requested window that don't exist)
   const missingDates = allDatesInWindow.filter(date => !existingDates.has(date));
+  
+  // Debug logging for date comparison
+  if (allDatesInWindow.length <= 7) {
+    const existingDatesArray = Array.from(existingDates).sort();
+    console.log(`[calculateIncrementalFetch] Window dates:`, {
+      normalizedWindow,
+      allDatesInWindow,
+      existingDatesArray,
+      existingDatesSize: existingDates.size,
+      missingDates,
+      // Check if dates match format
+      firstRequestedDate: allDatesInWindow[0],
+      lastRequestedDate: allDatesInWindow[allDatesInWindow.length - 1],
+      firstExistingDate: existingDatesArray[0],
+      lastExistingDate: existingDatesArray[existingDatesArray.length - 1],
+      // Check if requested dates are in existing set
+      firstRequestedInExisting: existingDates.has(allDatesInWindow[0]),
+      lastRequestedInExisting: existingDates.has(allDatesInWindow[allDatesInWindow.length - 1]),
+    });
+    
+    // Explicitly log the missing date
+    if (missingDates.length > 0) {
+      console.log(`[calculateIncrementalFetch] MISSING DATE: "${missingDates[0]}"`);
+      console.log(`[calculateIncrementalFetch] Checking if missing date exists in file:`, {
+        missingDate: missingDates[0],
+        existsInSet: existingDates.has(missingDates[0]),
+        allRequestedDates: allDatesInWindow,
+        existingDatesSample: existingDatesArray.slice(0, 10),
+      });
+    }
+  }
+
+  // Count how many of the REQUESTED dates are available (not total dates in file)
+  const daysAvailableInWindow = allDatesInWindow.filter(date => existingDates.has(date)).length;
 
   // Identify contiguous gaps (each gap requires a separate API request)
   const fetchWindows: DateRange[] = [];
@@ -392,7 +426,7 @@ export function calculateIncrementalFetch(
     fetchWindow,
     needsFetch: missingDates.length > 0,
     totalDays: allDatesInWindow.length,
-    daysAvailable: existingDates.size,
+    daysAvailable: daysAvailableInWindow, // Count of dates in requested window that exist
     daysToFetch: missingDates.length,
   };
 }

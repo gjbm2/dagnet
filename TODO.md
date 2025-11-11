@@ -28,7 +28,13 @@
    - Implement case filter injection in pre_request script
    - Test variant filtering (treatment vs control)
 
+**📝 Technical Debt Identified:**
+- UpdateManager uses external API terminology (probability/sample_size/successes) instead of schema terminology (mean/n/k)
+- This creates confusion and unnecessary translation layer in DataOperationsService
+- **TODO (Phase 5)**: Refactor UpdateManager external_to_graph mappings to use sche
+
 - global/local weights whacked (why???)
+  - edge scaling slider is broken on view menu :-/
 - fix tools panel view options (Again)
 - Scenario viewer (snapshotting)
 - Context support
