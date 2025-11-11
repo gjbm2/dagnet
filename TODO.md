@@ -134,6 +134,7 @@
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- let's change the paramster keycolour to pink and nodes from blue to...something else that isn't orange or bright blue...cyan? That will help oragne and blue for dirty/open.
 - flickering when moving nodes (chevrons render a frame later)
 - 'show travel' chevrons along edges moving at log lag speed
 - put outbound probs. left aligned in edge; arriving prob mix. right aligned in edge

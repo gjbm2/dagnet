@@ -103,7 +103,7 @@ describe('Query DSL Constants', () => {
       const functionSet = new Set(functionsCopy);
       
       expect(functionSet.has('from')).toBe(true);
-      expect(functionSet.has('invalid')).toBe(false);
+      expect(functionSet.has('invalid' as any)).toBe(false);
       expect(functionSet.size).toBe(6);
       
       const filtered = functionsCopy.filter(f => f.startsWith('c'));
@@ -170,7 +170,7 @@ describe('Query DSL Constants', () => {
       // Common pattern: QUERY_FUNCTIONS.includes(functionName)
       const functionsCopy = [...QUERY_FUNCTIONS];
       expect(functionsCopy.includes('from')).toBe(true);
-      expect(functionsCopy.includes('invalid')).toBe(false);
+      expect(functionsCopy.includes('invalid' as any)).toBe(false);
     });
 
     it('should work with map/filter operations', () => {

@@ -256,7 +256,8 @@ export function NavigatorContent() {
       credentials: [],
       settings: [],
       about: [],
-      markdown: []
+      markdown: [],
+      connections: []
     };
     
     for (const entry of filteredAndSortedEntries) {

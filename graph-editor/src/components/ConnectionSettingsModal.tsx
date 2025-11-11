@@ -111,7 +111,7 @@ export function ConnectionSettingsModal({
     }
 
     const schema = connection.connection_string_schema;
-    const required = schema.required || [];
+    const required = (schema?.required && Array.isArray(schema.required)) ? schema.required : [];
     const newErrors: Record<string, string> = {};
 
     // Check required fields
@@ -182,7 +182,8 @@ export function ConnectionSettingsModal({
   function renderField(fieldName: string, fieldSchema: any): React.ReactNode {
     const value = formData[fieldName];
     const error = errors[fieldName];
-    const isRequired = connection?.connection_string_schema?.required?.includes(fieldName);
+    const required = connection?.connection_string_schema?.required;
+    const isRequired = Array.isArray(required) && required.includes(fieldName);
 
     switch (fieldSchema.type) {
       case 'string':
@@ -334,12 +335,14 @@ export function ConnectionSettingsModal({
             <>
               {schema.description && (
                 <div className="connection-settings-schema-description">
-                  {schema.description}
+                  {schema.description as React.ReactNode}
                 </div>
               )}
-              {Object.entries(schema.properties || {}).map(([fieldName, fieldSchema]) =>
-                renderField(fieldName, fieldSchema as any)
-              )}
+              {schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)
+                ? Object.entries(schema.properties).map(([fieldName, fieldSchema]) =>
+                    renderField(fieldName, fieldSchema as any)
+                  ).filter(Boolean)
+                : null}
             </>
           )}
         </div>

@@ -61,9 +61,15 @@ export class BrowserHttpExecutor implements HttpExecutor {
       const rawBody = await response.text();
       const parsedBody = this.parseBody(rawBody, response.headers.get('content-type') ?? undefined);
 
+      // Convert Headers to plain object
+      const headersObj: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        headersObj[key] = value;
+      });
+      
       return {
         status: response.status,
-        headers: Object.fromEntries(response.headers.entries()),
+        headers: headersObj,
         body: parsedBody,
         rawBody,
       };
