@@ -1925,7 +1925,7 @@ export class UpdateManager {
               // (old condition string changed to new condition string)
               // Find the old condition in sibling that matches one of the old conditions
               const oldConditionIndex = siblingEdge.conditional_p.findIndex((existingCond: any) => {
-                const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+                  const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
                 return oldConditions.includes(normalizeConstraintString(existingStr));
               });
               
