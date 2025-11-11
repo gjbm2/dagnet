@@ -5,7 +5,6 @@ import { useWhatIfContext } from '../contexts/WhatIfContext';
 import { getConditionalColor, getConditionSignature } from '@/lib/conditionalColors';
 
 export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
-  console.log(`[${new Date().toISOString()}] [WhatIfControl] RENDER START`);
   const { graph } = useGraphStore();
   const { tabs, operations: tabOps } = useTabContext();
   const whatIfCtx = useWhatIfContext();

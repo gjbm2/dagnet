@@ -14,7 +14,6 @@ import toast from 'react-hot-toast';
 import './WindowSelector.css';
 
 export function WindowSelector() {
-  console.log('[WindowSelector] Component rendering');
   const { graph, window, setWindow, setGraph } = useGraphStore();
   
   // Show if graph has any edges with parameter files (for windowed aggregation)
@@ -32,8 +31,6 @@ export function WindowSelector() {
   
   const startDate = window?.start || defaultStart.toISOString().split('T')[0];
   const endDate = window?.end || defaultEnd.toISOString().split('T')[0];
-  
-  console.log('[WindowSelector] Rendering with dates:', { startDate, endDate, window });
   
   // Check if current window differs from what's applied to graph edges
   const hasWindowChange = useMemo(() => {
@@ -82,6 +79,27 @@ export function WindowSelector() {
     if (newEnd && startDate && newEnd >= startDate) {
       setWindow({ start: startDate, end: newEnd });
     }
+  };
+  
+  const handlePreset = (days: number | 'today') => {
+    const end = new Date();
+    const start = new Date();
+    
+    if (days === 'today') {
+      // Today only (start and end are same day)
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+    } else {
+      // Last N days (including today)
+      start.setDate(end.getDate() - (days - 1));
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+    }
+    
+    setWindow({
+      start: start.toISOString().split('T')[0],
+      end: end.toISOString().split('T')[0],
+    });
   };
   
   const [isApplying, setIsApplying] = useState(false);
@@ -160,6 +178,40 @@ export function WindowSelector() {
         <label htmlFor="window-start" className="window-selector-label">
           Window:
         </label>
+        <div className="window-selector-presets">
+          <button
+            type="button"
+            onClick={() => handlePreset('today')}
+            className="window-selector-preset"
+            title="Today only"
+          >
+            Today
+          </button>
+          <button
+            type="button"
+            onClick={() => handlePreset(7)}
+            className="window-selector-preset"
+            title="Last 7 days"
+          >
+            7d
+          </button>
+          <button
+            type="button"
+            onClick={() => handlePreset(30)}
+            className="window-selector-preset"
+            title="Last 30 days"
+          >
+            30d
+          </button>
+          <button
+            type="button"
+            onClick={() => handlePreset(90)}
+            className="window-selector-preset"
+            title="Last 90 days"
+          >
+            90d
+          </button>
+        </div>
         <input
           id="window-start"
           type="date"

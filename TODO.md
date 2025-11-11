@@ -22,11 +22,16 @@
     - Full rebuild pulls positions from graph store which has old positions
   - NEXT: Need to either (a) prevent full rebuild when only handles change, OR (b) ensure ReactFlow positions are authoritative during rebuild
 
+  **Case/Variant Filtering** (4-6 hrs)
+   - Design case property mapping schema (Statsig case → Amplitude event property)
+   - Extend event definitions with case_property_mappings
+   - Implement case filter injection in pre_request script
+   - Test variant filtering (treatment vs control)
+
 - global/local weights whacked (why???)
 - fix tools panel view options (Again)
-- Amplitude, Google sheets pull through params
-- Context support
 - Scenario viewer (snapshotting)
+- Context support
 - Latency/lag management
 - Dashboarding views
 - Bayesian modelling (...is expected?)

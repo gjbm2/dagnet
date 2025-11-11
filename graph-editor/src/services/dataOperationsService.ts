@@ -31,12 +31,47 @@ import toast from 'react-hot-toast';
 import { fileRegistry } from '../contexts/TabContext';
 import { UpdateManager } from './UpdateManager';
 import type { Graph, DateRange } from '../types';
-import { windowAggregationService, parameterToTimeSeries } from './windowAggregationService';
+import { WindowAggregationService, parameterToTimeSeries, calculateIncrementalFetch, mergeTimeSeriesIntoParameter, normalizeDate, parseDate, isDateInRange } from './windowAggregationService';
 import { statisticalEnhancementService } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
+import type { TimeSeriesPoint } from '../types';
 
 // Shared UpdateManager instance
 const updateManager = new UpdateManager();
+
+// Shared WindowAggregationService instance
+const windowAggregationService = new WindowAggregationService();
+
+/**
+ * Compute query signature (SHA-256 hash) for consistency checking
+ * Uses Web Crypto API available in modern browsers
+ */
+async function computeQuerySignature(dsl: any, connectionName?: string): Promise<string> {
+  try {
+    // Create a canonical representation of the query
+    const canonical = JSON.stringify({
+      connection: connectionName || '',
+      from: dsl.from || '',
+      to: dsl.to || '',
+      visited: (dsl.visited || []).sort(),
+      event_filters: dsl.event_filters || {},
+      context: (dsl.context || []).sort(),
+      case: (dsl.case || []).sort(),
+    });
+    
+    // Compute SHA-256 hash
+    const encoder = new TextEncoder();
+    const data = encoder.encode(canonical);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashHex;
+  } catch (error) {
+    console.warn('[DataOperationsService] Failed to compute query signature:', error);
+    // Fallback: use simple string hash
+    return `fallback-${Date.now()}`;
+  }
+}
 
 /**
  * Helper function to apply field changes to a target object
@@ -160,28 +195,156 @@ class DataOperationsService {
       // If window is provided, aggregate daily data from parameter file
       let aggregatedData = paramFile.data;
       if (window && paramFile.data?.values) {
-        // Find the latest value entry with daily data
+        // Collect ALL value entries with daily data
         const valuesWithDaily = (paramFile.data.values as ParameterValue[])
-          .filter(v => v.n_daily && v.k_daily && v.dates)
-          .sort((a, b) => {
-            // Sort by window_to descending (most recent first)
-            const aDate = a.window_to ? new Date(a.window_to).getTime() : 0;
-            const bDate = b.window_to ? new Date(b.window_to).getTime() : 0;
-            return bDate - aDate;
-          });
+          .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
         
         if (valuesWithDaily.length > 0) {
-          // Use the most recent value entry with daily data
-          const latestValue = valuesWithDaily[0];
-          
           try {
-            // Aggregate the window
-            const aggregation = windowAggregationService.aggregateFromParameter(
-              latestValue.n_daily,
-              latestValue.k_daily,
-              latestValue.dates,
-              window
-            );
+            // Validate query signature consistency
+            // Build DSL from edge to compute expected query signature
+            let expectedQuerySignature: string | undefined;
+            let querySignatureMismatch = false;
+            const mismatchedEntries: Array<{ window: string; signature: string | undefined }> = [];
+            
+            if (edgeId && graph) {
+              try {
+                // Build DSL from edge to get current query
+                const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
+                
+                // Get connection name for signature computation
+                const connectionName = targetEdge.p?.connection || 
+                                     targetEdge.cost_gbp?.connection || 
+                                     targetEdge.cost_time?.connection ||
+                                     paramFile.data.connection;
+                
+                // Get connection to extract provider
+                const { createDASRunner } = await import('../lib/das');
+                const tempRunner = createDASRunner();
+                let connectionProvider: string | undefined;
+                
+                try {
+                  const connection = connectionName ? await (tempRunner as any).connectionProvider.getConnection(connectionName) : null;
+                  connectionProvider = connection?.provider;
+                } catch (e) {
+                  console.warn('Could not load connection for provider mapping:', e);
+                }
+                
+                // Event loader that reads from IDB
+                const eventLoader = async (eventId: string) => {
+                  const fileId = `event-${eventId}`;
+                  const file = fileRegistry.getFile(fileId);
+                  
+                  if (file && file.data) {
+                    return file.data;
+                  }
+                  
+                  // Fallback: return minimal event without mapping
+                  return {
+                    id: eventId,
+                    name: eventId,
+                    provider_event_names: {}
+                  };
+                };
+                
+                // Build DSL from edge
+                const dsl = await buildDslFromEdge(
+                  targetEdge,
+                  graph,
+                  connectionProvider,
+                  eventLoader
+                );
+                
+                // Compute expected query signature
+                expectedQuerySignature = await computeQuerySignature(dsl, connectionName);
+                
+                // Check all value entries for signature consistency
+                for (const value of valuesWithDaily) {
+                  if (value.query_signature && value.query_signature !== expectedQuerySignature) {
+                    querySignatureMismatch = true;
+                    mismatchedEntries.push({
+                      window: `${normalizeDate(value.window_from || '')} to ${normalizeDate(value.window_to || '')}`,
+                      signature: value.query_signature,
+                    });
+                  }
+                }
+                
+                if (querySignatureMismatch) {
+                  console.warn('[DataOperationsService] Query signature mismatch detected:', {
+                    expectedSignature: expectedQuerySignature,
+                    mismatchedEntries,
+                    totalEntries: valuesWithDaily.length,
+                  });
+                  
+                  toast(`⚠ Aggregating data with different query signatures (${mismatchedEntries.length} entry/entries)`, {
+                    icon: '⚠️',
+                    duration: 5000,
+                  });
+                }
+              } catch (error) {
+                console.warn('[DataOperationsService] Failed to validate query signature:', error);
+                // Continue with aggregation even if signature validation fails
+              }
+            }
+            
+            // Combine all daily data from all value entries into a single time series
+            const allTimeSeries: TimeSeriesPoint[] = [];
+            
+            // Process entries in order (oldest first) so newer entries overwrite older ones
+            // If query signature validation passed, prefer entries with matching signature
+            const sortedValues = [...valuesWithDaily].sort((a, b) => {
+              // If we have an expected signature, prefer matching entries
+              if (expectedQuerySignature) {
+                const aMatches = a.query_signature === expectedQuerySignature;
+                const bMatches = b.query_signature === expectedQuerySignature;
+                if (aMatches && !bMatches) return -1;
+                if (!aMatches && bMatches) return 1;
+              }
+              // Otherwise sort by date (oldest first)
+              const aDate = a.window_from || '';
+              const bDate = b.window_from || '';
+              return aDate.localeCompare(bDate);
+            });
+            
+            for (const value of sortedValues) {
+              if (value.n_daily && value.k_daily && value.dates) {
+                for (let i = 0; i < value.dates.length; i++) {
+                  const date = normalizeDate(value.dates[i]);
+                  // Only add if date is within window and not already added (or overwrite if newer)
+                  if (isDateInRange(date, window)) {
+                    // If date already exists, overwrite with newer data (later in array = newer)
+                    const existingIndex = allTimeSeries.findIndex(p => normalizeDate(p.date) === date);
+                    if (existingIndex >= 0) {
+                      // Overwrite existing entry
+                      allTimeSeries[existingIndex] = {
+                        date: value.dates[i],
+                        n: value.n_daily[i],
+                        k: value.k_daily[i],
+                        p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
+                      };
+                    } else {
+                      // Add new entry
+                      allTimeSeries.push({
+                        date: value.dates[i],
+                        n: value.n_daily[i],
+                        k: value.k_daily[i],
+                        p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
+                      });
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Sort by date
+            allTimeSeries.sort((a, b) => {
+              const dateA = parseDate(a.date).getTime();
+              const dateB = parseDate(b.date).getTime();
+              return dateA - dateB;
+            });
+            
+            // Aggregate the combined time series
+            const aggregation = windowAggregationService.aggregateWindow(allTimeSeries, window);
             
             // Enhance with statistical methods (inverse-variance weighting by default)
             // Handle both sync (TS) and async (Python) results
@@ -189,6 +352,21 @@ class DataOperationsService {
             const enhanced = enhancedResult instanceof Promise 
               ? await enhancedResult 
               : enhancedResult;
+            
+            // Find the most recent value entry with a data_source (prefer non-manual sources)
+            // Sort by retrieved_at or window_to descending to get most recent
+            const sortedByDate = [...valuesWithDaily].sort((a, b) => {
+              const aDate = a.data_source?.retrieved_at || a.window_to || '';
+              const bDate = b.data_source?.retrieved_at || b.window_to || '';
+              return bDate.localeCompare(aDate); // Descending (newest first)
+            });
+            
+            // Prefer entries with data_source.type that's not 'manual' or 'file'
+            const latestValueWithSource = sortedByDate.find(v => 
+              v.data_source?.type && 
+              v.data_source.type !== 'manual' && 
+              v.data_source.type !== 'file'
+            ) || sortedByDate[0]; // Fallback to most recent entry
             
             // Create a new aggregated value entry
             const aggregatedValue: ParameterValue = {
@@ -199,10 +377,10 @@ class DataOperationsService {
               window_from: window.start,
               window_to: window.end,
               data_source: {
-                type: latestValue.data_source?.type || 'file',
+                type: latestValueWithSource?.data_source?.type || 'file',
                 retrieved_at: new Date().toISOString(),
-                query: latestValue.data_source?.query,
-                full_query: latestValue.data_source?.full_query,
+                query: latestValueWithSource?.data_source?.query,
+                full_query: latestValueWithSource?.data_source?.full_query,
               },
             };
             
@@ -216,12 +394,41 @@ class DataOperationsService {
               window,
               aggregation,
               aggregatedValue,
+              entriesProcessed: valuesWithDaily.length,
+              totalDays: allTimeSeries.length,
+              missingDates: aggregation.missing_dates,
+              gaps: aggregation.gaps,
+              missingAtStart: aggregation.missing_at_start,
+              missingAtEnd: aggregation.missing_at_end,
+              hasMiddleGaps: aggregation.has_middle_gaps,
             });
             
             if (aggregation.days_missing > 0) {
-              toast(`⚠ Aggregated ${aggregation.days_included} days (${aggregation.days_missing} missing)`, {
+              // Build detailed message about missing dates
+              let message = `⚠ Aggregated ${aggregation.days_included} days (${aggregation.days_missing} missing)`;
+              
+              if (aggregation.missing_at_start && aggregation.missing_at_end) {
+                message += ` - missing at start and end`;
+              } else if (aggregation.missing_at_start) {
+                message += ` - missing at start`;
+              } else if (aggregation.missing_at_end) {
+                message += ` - missing at end`;
+              }
+              
+              if (aggregation.has_middle_gaps) {
+                message += ` - gaps in middle`;
+              }
+              
+              if (aggregation.gaps.length > 0) {
+                const gapSummary = aggregation.gaps.map(g => 
+                  g.length === 1 ? g.start : `${g.start} to ${g.end} (${g.length} days)`
+                ).join(', ');
+                console.warn('[DataOperationsService] Missing date gaps:', gapSummary);
+              }
+              
+              toast(message, {
                 icon: '⚠️',
-                duration: 3000,
+                duration: 5000,
               });
             }
           } catch (error) {
@@ -997,189 +1204,302 @@ class DataOperationsService {
         }
       }
       
-      // 5. Execute DAS Runner
-      const { createDASRunner } = await import('../lib/das');
-      const runner = createDASRunner();
-      
-      // Determine window: use provided window or default to last 7 days
+      // 5. Check for incremental fetch opportunities (if dailyMode and parameter file exists)
+      // Determine default window first
       const now = new Date();
       const sevenDaysAgo = new Date(now);
       sevenDaysAgo.setDate(now.getDate() - 7);
-      const fetchWindow = window || {
+      
+      // Normalize window to ISO timestamps (handle both YYYY-MM-DD strings and ISO timestamps)
+      const normalizeWindowDate = (dateStr: string): string => {
+        // If already ISO timestamp, return as-is
+        if (dateStr.includes('T')) return dateStr;
+        // If YYYY-MM-DD format, convert to ISO timestamp at start of day
+        return new Date(dateStr + 'T00:00:00Z').toISOString();
+      };
+      
+      const requestedWindow: DateRange = window ? {
+        start: normalizeWindowDate(window.start),
+        end: normalizeWindowDate(window.end),
+      } : {
         start: sevenDaysAgo.toISOString(),
         end: now.toISOString()
       };
       
+      let actualFetchWindows: DateRange[] = [requestedWindow];
+      let querySignature: string | undefined;
+      let shouldSkipFetch = false;
+      
+      if (dailyMode && objectType === 'parameter' && objectId) {
+        const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
+        if (paramFile && paramFile.data) {
+          // Compute query signature for consistency checking
+          querySignature = await computeQuerySignature(dsl, connectionName);
+          
+          // Calculate incremental fetch
+          const incrementalResult = calculateIncrementalFetch(
+            paramFile.data,
+            requestedWindow,
+            querySignature
+          );
+          
+          console.log('[DataOperationsService] Incremental fetch analysis:', {
+            totalDays: incrementalResult.totalDays,
+            daysAvailable: incrementalResult.daysAvailable,
+            daysToFetch: incrementalResult.daysToFetch,
+            needsFetch: incrementalResult.needsFetch,
+            fetchWindows: incrementalResult.fetchWindows,
+            fetchWindow: incrementalResult.fetchWindow, // Combined window for backward compat
+          });
+          
+          if (!incrementalResult.needsFetch) {
+            // All dates already exist - skip fetching
+            shouldSkipFetch = true;
+            toast.success(`All ${incrementalResult.totalDays} days already cached`, { id: 'das-fetch' });
+            console.log('[DataOperationsService] Skipping fetch - all dates already exist');
+          } else if (incrementalResult.fetchWindows.length > 0) {
+            // We have multiple contiguous gaps - chain requests for each
+            actualFetchWindows = incrementalResult.fetchWindows;
+            const gapCount = incrementalResult.fetchWindows.length;
+            toast.loading(
+              `Fetching ${incrementalResult.daysToFetch} missing days across ${gapCount} gap${gapCount > 1 ? 's' : ''} (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`,
+              { id: 'das-fetch' }
+            );
+          } else if (incrementalResult.fetchWindow) {
+            // Fallback to combined window (shouldn't happen, but keep for safety)
+            actualFetchWindows = [incrementalResult.fetchWindow];
+            toast.loading(
+              `Fetching ${incrementalResult.daysToFetch} missing days (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`,
+              { id: 'das-fetch' }
+            );
+          } else {
+            // Fallback to requested window
+            actualFetchWindows = [requestedWindow];
+            toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}...`, { id: 'das-fetch' });
+          }
+        } else {
+          // No parameter file - use requested window
+          actualFetchWindows = [requestedWindow];
+          toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}...`, { id: 'das-fetch' });
+        }
+      } else {
+        // Not daily mode or no parameter file - use requested window
+        actualFetchWindows = [requestedWindow];
+        toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}...`, { id: 'das-fetch' });
+      }
+      
+      // If all dates are cached, skip fetching and use existing data
+      if (shouldSkipFetch && objectType === 'parameter' && objectId && targetId && graph && setGraph) {
+        // Use existing data from file
+        await this.getParameterFromFile({
+          paramId: objectId,
+          edgeId: targetId,
+          graph,
+          setGraph,
+          window: requestedWindow,
+        });
+        return;
+      }
+      
+      // 6. Execute DAS Runner - chain requests for each contiguous gap
+      const { createDASRunner } = await import('../lib/das');
+      const runner = createDASRunner();
+      
       // Set context mode: 'daily' if dailyMode is true, otherwise 'aggregate'
       const contextMode = dailyMode ? 'daily' : 'aggregate';
       
-      toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}...`, { id: 'das-fetch' });
+      // Collect all time-series data from all gaps
+      const allTimeSeriesData: Array<{ date: string; n: number; k: number; p: number }> = [];
+      let updateData: any = {};
+      
+      // Store query info for daily mode storage
+      let queryParamsForStorage: any = undefined;
+      let fullQueryForStorage: string | undefined = undefined;
       
       // Check if query uses composite operators (minus/plus for inclusion-exclusion)
       const queryString = dsl.query || '';
       const isComposite = /\.(minus|plus)\(/.test(queryString);
       
-      let updateData: any = {};
+      // Capture query info for storage (same for all gaps)
+      if (dailyMode) {
+        queryParamsForStorage = dsl;
+        fullQueryForStorage = queryString || JSON.stringify(dsl);
+      }
       
-      if (isComposite) {
-        // Composite query: use inclusion-exclusion executor
-        console.log('[DataOps] Detected composite query, using inclusion-exclusion executor');
+      // Determine data source type from connection name
+      const dataSourceType = connectionName?.includes('amplitude') ? 'amplitude' : 'api';
+      
+      // Chain requests for each contiguous gap
+      for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
+        const fetchWindow = actualFetchWindows[gapIndex];
         
-        const { executeCompositeQuery } = await import('../lib/das/compositeQueryExecutor');
-        
-        try {
-          const combined = await executeCompositeQuery(
-            queryString,
-            { ...dsl, window: fetchWindow },
-            connectionName,
-            runner
+        if (actualFetchWindows.length > 1) {
+          toast.loading(
+            `Fetching gap ${gapIndex + 1}/${actualFetchWindows.length} (${normalizeDate(fetchWindow.start)} to ${normalizeDate(fetchWindow.end)})`,
+            { id: 'das-fetch' }
           );
-          
-          // Map combined result to update format
-          updateData = {
-            probability: combined.p_mean,
-            sample_size: combined.n,
-            successes: combined.k
-          };
-          
-          toast.success(`Fetched data from source (${combined.evidence.k}/${combined.evidence.n})`, { id: 'das-fetch' });
-          console.log('Composite query result:', combined);
-          
-        } catch (error) {
-          toast.error(`Composite query failed: ${error instanceof Error ? error.message : String(error)}`, { id: 'das-fetch' });
-          return;
         }
         
-      } else {
-        // Simple query: use standard DAS runner
-        const result = await runner.execute(connectionName, dsl, {
-          connection_string: connectionString,
-          window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
-          context: { mode: contextMode }, // Pass mode to adapter (daily or aggregate)
-          edgeId: targetId || 'unknown'
-        });
-        
-        if (!result.success) {
-          // Log technical details to console
-          console.error('[DataOperationsService] DAS execution failed:', {
-            error: result.error,
-            phase: result.phase,
-            details: result.details
+        if (isComposite) {
+          // Composite query: use inclusion-exclusion executor
+          console.log('[DataOps] Detected composite query, using inclusion-exclusion executor');
+          
+          const { executeCompositeQuery } = await import('../lib/das/compositeQueryExecutor');
+          
+          try {
+            const combined = await executeCompositeQuery(
+              queryString,
+              { ...dsl, window: fetchWindow },
+              connectionName,
+              runner
+            );
+            
+            // Map combined result to update format (use latest result for non-daily mode)
+            if (!dailyMode) {
+              updateData = {
+                probability: combined.p_mean,
+                sample_size: combined.n,
+                successes: combined.k
+              };
+            }
+            
+            console.log(`[DataOperationsService] Composite query result for gap ${gapIndex + 1}:`, combined);
+            
+          } catch (error) {
+            toast.error(`Composite query failed for gap ${gapIndex + 1}: ${error instanceof Error ? error.message : String(error)}`, { id: 'das-fetch' });
+            return;
+          }
+          
+        } else {
+          // Simple query: use standard DAS runner
+          const result = await runner.execute(connectionName, dsl, {
+            connection_string: connectionString,
+            window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+            context: { mode: contextMode }, // Pass mode to adapter (daily or aggregate)
+            edgeId: targetId || 'unknown'
           });
           
-          // Show user-friendly message in toast
-          const userMessage = result.error || 'Failed to fetch data from source';
-          toast.error(userMessage, { id: 'das-fetch' });
-          return;
-        }
+          if (!result.success) {
+            // Log technical details to console
+            console.error(`[DataOperationsService] DAS execution failed for gap ${gapIndex + 1}:`, {
+              error: result.error,
+              phase: result.phase,
+              details: result.details,
+              window: fetchWindow,
+            });
+            
+            // Show user-friendly message in toast
+            const userMessage = result.error || 'Failed to fetch data from source';
+            toast.error(`${userMessage} (gap ${gapIndex + 1}/${actualFetchWindows.length})`, { id: 'das-fetch' });
+            return;
+          }
+          
+          console.log(`[DataOperationsService] DAS result for gap ${gapIndex + 1}:`, {
+            updates: result.updates.length,
+            hasTimeSeries: !!result.raw?.time_series,
+            timeSeriesLength: Array.isArray(result.raw?.time_series) ? result.raw.time_series.length : 0,
+            window: fetchWindow,
+          });
         
-        toast.success(`Fetched data from source`, { id: 'das-fetch' });
-        console.log('DAS Updates:', result.updates);
-        console.log('[DataOperationsService] DAS result.raw:', {
-          hasRaw: !!result.raw,
-          rawKeys: result.raw ? Object.keys(result.raw) : [],
-          time_series: result.raw?.time_series,
-          time_seriesLength: Array.isArray(result.raw?.time_series) ? result.raw.time_series.length : 'not array',
-          dailyMode,
-          contextMode
-        });
-      
-        // 6. Parse the updates to extract values for simple queries
-        // Map DAS field names to UpdateManager's external data field names
-        for (const update of result.updates) {
-          console.log('Processing update:', update);
-          // Parse JSON Pointer: /edges/{edgeId}/p/mean → extract field and value
-          const parts = update.target.split('/').filter(Boolean);
-          console.log('Parts:', parts);
+          // Collect time-series data if in daily mode
+          if (dailyMode && result.raw?.time_series) {
+            const timeSeries = result.raw.time_series as Array<{ date: string; n: number; k: number; p: number }>;
+            allTimeSeriesData.push(...timeSeries);
+          }
           
-          // Example: ["edges", "test-edge-123", "p", "mean"] → field = "mean"
-          // Or: ["edges", "test-edge-123", "p", "evidence", "n"] → need to extract "n"
-          const field = parts[parts.length - 1]; // Last part is the field name
-          console.log('Field:', field, 'Value:', update.value);
-          
-          // Map to UpdateManager's expected field names for external data
-          // UpdateManager expects: probability, sample_size, successes
-          // DAS provides: mean, n, k
-          if (field === 'mean') {
-            updateData.probability = typeof update.value === 'number' ? update.value : Number(update.value);
-          } else if (field === 'n') {
-            updateData.sample_size = typeof update.value === 'number' ? update.value : Number(update.value);
-          } else if (field === 'k') {
-            updateData.successes = typeof update.value === 'number' ? update.value : Number(update.value);
-          } else {
-            updateData[field] = update.value;
+          // Parse the updates to extract values for simple queries (use latest result for non-daily mode)
+          if (!dailyMode) {
+            for (const update of result.updates) {
+              const parts = update.target.split('/').filter(Boolean);
+              const field = parts[parts.length - 1];
+              
+              // Map to UpdateManager's expected field names for external data
+              if (field === 'mean') {
+                updateData.probability = typeof update.value === 'number' ? update.value : Number(update.value);
+              } else if (field === 'n') {
+                updateData.sample_size = typeof update.value === 'number' ? update.value : Number(update.value);
+              } else if (field === 'k') {
+                updateData.successes = typeof update.value === 'number' ? update.value : Number(update.value);
+              } else {
+                updateData[field] = update.value;
+              }
+            }
           }
         }
-        
-        // Add data_source metadata for direct external connections
+      }
+      
+      // Show success message after all gaps are fetched
+      if (actualFetchWindows.length > 1) {
+        toast.success(`✓ Fetched all ${actualFetchWindows.length} gaps`, { id: 'das-fetch' });
+      } else if (!dailyMode) {
+        toast.success(`Fetched data from source`, { id: 'das-fetch' });
+      }
+      
+      // Add data_source metadata for direct external connections
+      if (!dailyMode) {
         updateData.data_source = {
           type: connectionName?.includes('amplitude') ? 'amplitude' : 'api',
           retrieved_at: new Date().toISOString(),
           query: dsl,
           full_query: dsl.query || JSON.stringify(dsl),
         };
-        
-        console.log('Extracted data from DAS (mapped to external format):', updateData);
-        
-        // 6a. If dailyMode is true and we have time_series data, store it in parameter file
-        if (dailyMode && objectType === 'parameter' && result.raw?.time_series) {
-          const timeSeries = result.raw.time_series as Array<{ date: string; n: number; k: number; p: number }>;
-          
-          if (timeSeries.length > 0) {
-            try {
-              // Convert time_series to parameter file format
-              const n_daily = timeSeries.map(ts => ts.n);
-              const k_daily = timeSeries.map(ts => ts.k);
-              const dates = timeSeries.map(ts => ts.date);
+      }
+      
+      // 6a. If dailyMode is true, merge all collected time-series data
+      if (dailyMode && allTimeSeriesData.length > 0 && objectType === 'parameter' && objectId) {
+        try {
+          // Get parameter file (re-read to get latest state)
+          let paramFile = fileRegistry.getFile(`parameter-${objectId}`);
+          if (paramFile) {
+            let existingValues = (paramFile.data.values || []) as ParameterValue[];
+            
+            // Store each gap as a separate value entry
+            for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
+              const fetchWindow = actualFetchWindows[gapIndex];
               
-              // Get parameter file
-              const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
-              if (paramFile) {
-                // Create new value entry with daily data
-                const newValue: ParameterValue = {
-                  mean: updateData.probability || (updateData.sample_size > 0 ? updateData.successes / updateData.sample_size : 0),
-                  stdev: undefined, // Will be calculated if needed
-                  n: updateData.sample_size,
-                  k: updateData.successes,
-                  n_daily,
-                  k_daily,
-                  dates,
-                  window_from: fetchWindow.start,
-                  window_to: fetchWindow.end,
-                  data_source: {
-                    type: connectionName?.includes('amplitude') ? 'amplitude' : 'api',
-                    retrieved_at: new Date().toISOString(),
-                    query: dsl,
-                    full_query: dsl.query || JSON.stringify(dsl),
-                  },
-                };
+              // Filter time-series data for this specific gap
+              const gapTimeSeries = allTimeSeriesData.filter(point => {
+                const pointDate = normalizeDate(point.date);
+                return isDateInRange(pointDate, fetchWindow);
+              });
+              
+              if (gapTimeSeries.length > 0) {
+                // Append new time-series as a separate value entry for this gap
+                existingValues = mergeTimeSeriesIntoParameter(
+                  existingValues,
+                  gapTimeSeries,
+                  fetchWindow,
+                  querySignature,
+                  queryParamsForStorage,
+                  fullQueryForStorage,
+                  dataSourceType
+                );
                 
-                // Append to values array
-                const updatedFileData = structuredClone(paramFile.data);
-                if (!updatedFileData.values) {
-                  updatedFileData.values = [];
-                }
-                updatedFileData.values.push(newValue);
-                
-                // Update file
-                await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);
-                
-                console.log('[DataOperationsService] Stored daily time-series data:', {
+                console.log(`[DataOperationsService] Prepared daily time-series data for gap ${gapIndex + 1}:`, {
                   paramId: objectId,
-                  days: timeSeries.length,
-                  window: fetchWindow,
+                  newDays: gapTimeSeries.length,
+                  fetchWindow,
+                  querySignature,
                 });
-                
-                toast.success(`✓ Stored ${timeSeries.length} days of daily data`, { duration: 2000 });
-              } else {
-                console.warn('[DataOperationsService] Parameter file not found, skipping time-series storage');
               }
-            } catch (error) {
-              console.error('[DataOperationsService] Failed to store time-series data:', error);
-              // Don't fail the whole operation, just log the error
             }
+            
+            // Update file once with all new value entries
+            const updatedFileData = structuredClone(paramFile.data);
+            updatedFileData.values = existingValues;
+            
+            await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);
+            
+            toast.success(`✓ Added ${allTimeSeriesData.length} new days across ${actualFetchWindows.length} gap${actualFetchWindows.length > 1 ? 's' : ''}`, { duration: 2000 });
+          } else {
+            console.warn('[DataOperationsService] Parameter file not found, skipping time-series storage');
           }
+        } catch (error) {
+          console.error('[DataOperationsService] Failed to append time-series data:', error);
+          // Don't fail the whole operation, just log the error
         }
+      } else if (!dailyMode) {
+        console.log('Extracted data from DAS (mapped to external format):', updateData);
       }
       
       // 7. Apply directly to graph (no file update)

@@ -112,15 +112,6 @@ export function generateChevronClipPath(bundle: EdgeBundle, node: any): string |
   const centerPos = calculateBundleCenterAtNode(node, bundle.face, bundle.bundleWidth);
   const { x: centerX, y: centerY } = centerPos;
   
-  console.log(`[Chevron] Generating clipPath for ${bundle.type} bundle:`, {
-    bundleId: bundle.id,
-    nodeId: node.id,
-    nodePos: { x: node.position.x, y: node.position.y },
-    face: bundle.face,
-    centerPos: { centerX, centerY },
-    bundleWidth: bundle.bundleWidth
-  });
-  
   if (bundle.type === 'source') {
     // SOURCE: Direct triangle subtraction (creates "bite")
     return generateSourceChevronPath(centerX, centerY, width, height, bundle.face);
