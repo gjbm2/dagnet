@@ -77,9 +77,10 @@ npm install
 npm run dev
 
 # Python API (separate terminal)
+cd graph-editor
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn[standard] networkx pydantic pytest
+pip install -r requirements.txt
 python dev-server.py
 ```
 
@@ -87,14 +88,17 @@ python dev-server.py
 
 ```
 dagnet/
-├── api/                      # Serverless functions (TS + Python)
-├── graph-editor/             # Frontend React/TypeScript app
-├── lib/                      # Python graph computation libraries
-├── tests/                    # Python tests
+├── graph-editor/             # Frontend React/TypeScript app (Vercel deployment root)
+│   ├── lib/                  # Python graph computation libraries
+│   ├── tests/                # Python tests
+│   ├── api/                  # Serverless functions (TS + Python)
+│   ├── dev-server.py         # Local Python dev server
+│   ├── requirements.txt      # Python dependencies
+│   ├── pytest.ini           # Pytest configuration
+│   └── venv/                 # Python virtual environment (local dev)
 ├── PROJECT_CONNECT/          # Technical documentation
 │   ├── README.md            # Project roadmap
 │   └── CURRENT/             # Active work documentation
-├── dev-server.py            # Local Python dev server
 ├── dev-start.sh             # Quick-start script
 └── dev-stop.sh              # Stop all dev servers
 ```
@@ -176,6 +180,8 @@ Local Development:
                               │ lib/*.py    │
                               │ (NetworkX,  │
                               │  algorithms)│
+                              │ (in graph-  │
+                              │  editor/)   │
                               └─────────────┘
 
 Production (Vercel):
@@ -193,6 +199,7 @@ cd graph-editor
 npm test
 
 # Python tests
+cd graph-editor
 source venv/bin/activate
 pytest tests/ -v
 pytest tests/ --cov=lib --cov-report=html
@@ -208,9 +215,9 @@ pytest tests/ --cov=lib --cov-report=html
 cd graph-editor
 npm cache clean --force
 rm -rf node_modules package-lock.json
-cd ..
 rm -rf venv
 find . -type d -name "__pycache__" -exec rm -rf {} +
+cd ..
 ```
 
 ### Troubleshooting
@@ -245,15 +252,15 @@ If you get "port already in use" errors:
 #### Python Server Not Starting
 
 - Ensure Python 3.9+ is installed: `python3 --version`
-- Check virtual environment: `source venv/bin/activate`
-- Manually install dependencies: `pip install fastapi uvicorn networkx pydantic pytest`
+- Check virtual environment: `cd graph-editor && source venv/bin/activate`
+- Manually install dependencies: `cd graph-editor && pip install -r requirements.txt`
 
 #### Frontend Tests Skipping
 
 Some tests require Python backend running:
 - 11 integration tests will skip if Python server is not running
 - This is normal for frontend-only development
-- To run all tests: start Python server first with `python dev-server.py`
+- To run all tests: start Python server first with `cd graph-editor && python dev-server.py`
 
 #### Mock Mode for Frontend-Only Development
 

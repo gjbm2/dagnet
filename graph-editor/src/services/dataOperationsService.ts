@@ -733,7 +733,9 @@ class DataOperationsService {
         
         // Save to graph store
         // Dispatch event to suppress store→file sync (this is a programmatic update from file, not user edit)
-        globalThis.window.dispatchEvent(new CustomEvent('dagnet:suppressStoreToFileSync', { detail: { duration: 200 } }));
+        if (typeof window !== 'undefined' && window.dispatchEvent) {
+          window.dispatchEvent(new CustomEvent('dagnet:suppressStoreToFileSync', { detail: { duration: 200 } }));
+        }
         setGraph(finalGraph);
         
         const hadRebalance = finalGraph !== nextGraph;
