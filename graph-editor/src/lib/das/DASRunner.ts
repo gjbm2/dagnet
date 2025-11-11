@@ -616,7 +616,7 @@ export class DASRunner {
   }
 
   /**
-   * Sanitize data for logging (mask credentials).
+   * Sanitize data for logging (mask credentials and sensitive fields).
    */
   private sanitizeForLog(data: unknown): unknown {
     if (!data || typeof data !== 'object') {
@@ -624,15 +624,37 @@ export class DASRunner {
     }
 
     const sanitized = JSON.parse(JSON.stringify(data));
+    const SENSITIVE_KEYS = [
+      'api_key', 'secret_key', 'password', 'token', 
+      'access_token', 'bearer_token', 'basic_auth_b64',
+      'authorization', 'x-api-key', 'x-auth-token', 'cookie'
+    ];
 
-    // Mask credentials
-    if (sanitized.credentials && typeof sanitized.credentials === 'object') {
-      for (const key of Object.keys(sanitized.credentials)) {
-        sanitized.credentials[key] = '***';
+    // Recursively mask sensitive fields
+    const maskSensitive = (obj: any): any => {
+      if (!obj || typeof obj !== 'object') {
+        return obj;
       }
-    }
 
-    return sanitized;
+      if (Array.isArray(obj)) {
+        return obj.map(maskSensitive);
+      }
+
+      const masked: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        const lowerKey = key.toLowerCase();
+        if (SENSITIVE_KEYS.some(sk => lowerKey.includes(sk.toLowerCase()))) {
+          masked[key] = '***REDACTED***';
+        } else if (typeof value === 'object' && value !== null) {
+          masked[key] = maskSensitive(value);
+        } else {
+          masked[key] = value;
+        }
+      }
+      return masked;
+    };
+
+    return maskSensitive(sanitized);
   }
 
   /**

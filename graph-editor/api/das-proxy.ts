@@ -13,6 +13,50 @@ interface ProxyRequest {
   body?: string;
 }
 
+/**
+ * Mask sensitive values in headers for logging.
+ */
+function maskHeaders(headers: Record<string, string>): Record<string, string> {
+  const masked: Record<string, string> = {};
+  const SENSITIVE_HEADERS = ['authorization', 'x-api-key', 'x-auth-token', 'cookie'];
+  
+  for (const [key, value] of Object.entries(headers)) {
+    const lowerKey = key.toLowerCase();
+    if (SENSITIVE_HEADERS.some(h => lowerKey.includes(h))) {
+      masked[key] = '***REDACTED***';
+    } else {
+      masked[key] = value;
+    }
+  }
+  
+  return masked;
+}
+
+/**
+ * Mask sensitive values in URL (query params, auth tokens).
+ */
+function maskUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    // Mask auth in URL if present
+    if (urlObj.username || urlObj.password) {
+      urlObj.username = '***';
+      urlObj.password = '***';
+    }
+    // Mask sensitive query params
+    const sensitiveParams = ['token', 'api_key', 'secret', 'auth', 'password', 'key'];
+    urlObj.searchParams.forEach((value, key) => {
+      if (sensitiveParams.some(p => key.toLowerCase().includes(p))) {
+        urlObj.searchParams.set(key, '***REDACTED***');
+      }
+    });
+    return urlObj.toString();
+  } catch {
+    // If URL parsing fails, return as-is (might be relative)
+    return url;
+  }
+}
+
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse
@@ -60,7 +104,11 @@ export default async function handler(
       return;
     }
 
-    console.log(`[DAS Proxy] ${proxyRequest.method} ${proxyRequest.url}`);
+    // Log with masked sensitive data
+    console.log(`[DAS Proxy] ${proxyRequest.method} ${maskUrl(proxyRequest.url)}`);
+    if (proxyRequest.headers) {
+      console.log(`[DAS Proxy] Headers:`, maskHeaders(proxyRequest.headers));
+    }
 
     // Forward the request
     const fetchOptions: RequestInit = {

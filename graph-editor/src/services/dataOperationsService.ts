@@ -1617,11 +1617,12 @@ class DataOperationsService {
             );
             
             // Map combined result to update format (use latest result for non-daily mode)
+            // Use schema terminology: mean, n, k (not external API terminology)
             if (!dailyMode) {
               updateData = {
-                probability: combined.p_mean,
-                sample_size: combined.n,
-                successes: combined.k
+                mean: combined.p_mean,
+                n: combined.n,
+                k: combined.k
               };
             }
             
@@ -1684,18 +1685,15 @@ class DataOperationsService {
           }
           
           // Parse the updates to extract values for simple queries (use latest result for non-daily mode)
+          // UpdateManager now expects schema terminology: mean, n, k (not external API terminology)
           if (!dailyMode) {
             for (const update of result.updates) {
               const parts = update.target.split('/').filter(Boolean);
               const field = parts[parts.length - 1];
               
-              // Map to UpdateManager's expected field names for external data
-              if (field === 'mean') {
-                updateData.probability = typeof update.value === 'number' ? update.value : Number(update.value);
-              } else if (field === 'n') {
-                updateData.sample_size = typeof update.value === 'number' ? update.value : Number(update.value);
-              } else if (field === 'k') {
-                updateData.successes = typeof update.value === 'number' ? update.value : Number(update.value);
+              // Pass schema terminology directly to UpdateManager
+              if (field === 'mean' || field === 'n' || field === 'k' || field === 'stdev') {
+                updateData[field] = typeof update.value === 'number' ? update.value : Number(update.value);
               } else {
                 updateData[field] = update.value;
               }
@@ -1775,13 +1773,14 @@ class DataOperationsService {
           // Don't fail the whole operation, just log the error
         }
       } else if (!dailyMode) {
-        console.log('Extracted data from DAS (mapped to external format):', updateData);
+        console.log('Extracted data from DAS (using schema terminology):', updateData);
         
         // Calculate stdev and enhance stats if we have n and k (same codepath as file pulls)
-        if (updateData.sample_size && updateData.successes !== undefined) {
-          const n = updateData.sample_size;
-          const k = updateData.successes;
-          const p = updateData.probability ?? (k / n);
+        // Use schema terminology: mean, n, k (not external API terminology)
+        if (updateData.n && updateData.k !== undefined) {
+          const n = updateData.n;
+          const k = updateData.k;
+          const mean = updateData.mean ?? (k / n);
           
           // Create raw aggregation (same format as windowAggregationService.aggregateWindow returns)
           // For direct pulls, we have a single aggregated point (no daily time-series)
@@ -1789,8 +1788,8 @@ class DataOperationsService {
             method: 'naive' as const,
             n,
             k,
-            mean: p,
-            stdev: (p === 0 || p === 1 || n === 0) ? 0 : Math.sqrt((p * (1 - p)) / n),
+            mean,
+            stdev: (mean === 0 || mean === 1 || n === 0) ? 0 : Math.sqrt((mean * (1 - mean)) / n),
             raw_data: [], // No daily data for direct pulls
             window: window || {
               start: new Date().toISOString().split('T')[0],
@@ -1812,8 +1811,8 @@ class DataOperationsService {
             ? await enhancedResult 
             : enhancedResult;
           
-          // Update with enhanced stats (same as file pull path)
-          updateData.probability = enhanced.mean;
+          // Update with enhanced stats (same as file pull path) - use schema terminology
+          updateData.mean = enhanced.mean;
           updateData.stdev = enhanced.stdev;
           
           console.log('[DataOperationsService] Enhanced stats from external data (same codepath as file pulls):', {
@@ -1894,14 +1893,15 @@ class DataOperationsService {
             
             // AUTO-REBALANCE: If UpdateManager flagged this update as needing sibling rebalance
             // This applies to both external data (DAS) and file pulls, but NOT manual slider edits
-            // Also rebalance if probability was provided in updateData (even if value didn't change)
+            // Also rebalance if mean was provided in updateData (even if value didn't change)
+            // Use schema terminology: mean (not probability)
             let finalGraph = nextGraph;
             const shouldRebalance = (updateResult.metadata as any)?.requiresSiblingRebalance || 
-                                   (updateData.probability !== undefined && updateData.probability !== null);
+                                   (updateData.mean !== undefined && updateData.mean !== null);
             
             console.log('[DataOperationsService] Rebalance check:', {
               requiresSiblingRebalance: (updateResult.metadata as any)?.requiresSiblingRebalance,
-              hasProbability: updateData.probability !== undefined && updateData.probability !== null,
+              hasMean: updateData.mean !== undefined && updateData.mean !== null,
               shouldRebalance,
               updatedField: (updateResult.metadata as any)?.updatedField
             });
