@@ -137,6 +137,13 @@ export class UpdateManager {
     this.initializeMappings();
   }
   
+  /**
+   * Round a number to 3 decimal places to avoid floating-point precision issues
+   */
+  private roundTo3DP(value: number): number {
+    return Math.round(value * 1000) / 1000;
+  }
+  
   // ============================================================
   // LEVEL 1: DIRECTION HANDLERS (5 methods)
   // ============================================================
@@ -2149,11 +2156,21 @@ export class UpdateManager {
     };
     
     // Add case properties if provided
-    if (options?.case_id) {
-      newEdge.case_id = options.case_id;
-    }
+    // If case_variant is set but case_id is not, infer case_id from source node
     if (options?.case_variant) {
       newEdge.case_variant = options.case_variant;
+      
+      if (options?.case_id) {
+        newEdge.case_id = options.case_id;
+      } else {
+        // Infer case_id from source node if it's a case node
+        if (sourceNode?.type === 'case') {
+          newEdge.case_id = sourceNode.case?.id || sourceNode.uuid || sourceNode.id;
+        }
+      }
+    } else if (options?.case_id) {
+      // Only set case_id if case_variant is not set (shouldn't happen, but handle it)
+      newEdge.case_id = options.case_id;
     }
     
     nextGraph.edges.push(newEdge);
@@ -2174,6 +2191,92 @@ export class UpdateManager {
     });
     
     return { graph: nextGraph, edgeId };
+  }
+
+  /**
+   * Update edge properties (e.g., case_variant, case_id)
+   * 
+   * When case_variant is set, automatically sets case_id from the source node if not provided.
+   * When case_variant is cleared, also clears case_id.
+   * 
+   * @param graph - Current graph
+   * @param edgeId - Edge UUID or ID
+   * @param properties - Properties to update (case_variant, case_id, etc.)
+   * @returns Updated graph
+   */
+  updateEdgeProperty(
+    graph: any,
+    edgeId: string,
+    properties: {
+      case_variant?: string | null;
+      case_id?: string | null;
+    }
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const edge = nextGraph.edges[edgeIndex];
+    
+    // Update case_variant
+    if ('case_variant' in properties) {
+      if (properties.case_variant === null || properties.case_variant === '') {
+        // Clearing case_variant: also clear case_id
+        delete edge.case_variant;
+        delete edge.case_id;
+      } else {
+        // Setting case_variant: ensure case_id is set
+        edge.case_variant = properties.case_variant;
+        
+        // If case_id is not explicitly provided, infer it from the source node
+        if (!('case_id' in properties) || properties.case_id === null || properties.case_id === '') {
+          const sourceNode = nextGraph.nodes.find((n: any) => 
+            n.uuid === edge.from || n.id === edge.from
+          );
+          
+          if (sourceNode?.type === 'case') {
+            // Use case.id if set, otherwise fall back to node uuid or id
+            edge.case_id = sourceNode.case?.id || sourceNode.uuid || sourceNode.id;
+          } else {
+            // If source is not a case node, keep existing case_id or clear it
+            if (!edge.case_id) {
+              delete edge.case_id;
+            }
+          }
+        }
+      }
+    }
+    
+    // Update case_id (only if explicitly provided)
+    if ('case_id' in properties) {
+      if (properties.case_id === null || properties.case_id === '') {
+        delete edge.case_id;
+      } else {
+        edge.case_id = properties.case_id;
+      }
+    }
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'updateEdgeProperty',
+      details: {
+        edgeId: edgeId,
+        properties: properties,
+        inferredCaseId: edge.case_id
+      }
+    });
+    
+    return nextGraph;
   }
   
   /**
@@ -2261,6 +2364,551 @@ export class UpdateManager {
         edgeId,
         condIndex,
         color: color || 'cleared'
+      }
+    });
+    
+    return nextGraph;
+  }
+
+  /**
+   * Rebalance regular edge probabilities for siblings of an edge.
+   * When forceRebalance is true, ignores mean_overridden flags.
+   * IMPORTANT: The origin edge's value is preserved - only siblings are updated.
+   * 
+   * @param graph - The current graph
+   * @param edgeId - ID of the edge whose siblings should be rebalanced
+   * @param forceRebalance - If true, override mean_overridden flags (for explicit rebalance action)
+   * @returns Updated graph with rebalanced siblings
+   */
+  rebalanceEdgeProbabilities(
+    graph: any,
+    edgeId: string,
+    forceRebalance: boolean = false
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const currentEdge = nextGraph.edges[edgeIndex];
+    const sourceNodeId = currentEdge.from;
+    
+    // Infer case_id from source node if missing (for backward compatibility)
+    let currentCaseId = currentEdge.case_id;
+    if (!currentCaseId && currentEdge.case_variant) {
+      const sourceNode = nextGraph.nodes.find((n: any) => 
+        n.uuid === sourceNodeId || n.id === sourceNodeId
+      );
+      if (sourceNode?.type === 'case') {
+        currentCaseId = sourceNode.case?.id || sourceNode.uuid || sourceNode.id;
+      }
+    }
+    
+    // IMPORTANT: Preserve the origin edge's current value - don't change it
+    const originValue = currentEdge.p?.mean ?? 0;
+    
+    // Find all sibling edges with the same parameter subtype (p, cost_gbp, or cost_time)
+    // For case edges: only rebalance edges with the same case_variant and case_id
+    // For regular edges: rebalance all edges from same source node
+    // Use consistent ID matching like edge finding logic
+    // Note: Edges can have both conditional_p AND regular p.mean - we allow those to participate
+    const currentEdgeId = currentEdge.uuid || currentEdge.id || `${currentEdge.from}->${currentEdge.to}`;
+    const subtype = 'p'; // We're rebalancing p.mean, so subtype is 'p'
+    
+    const siblings = nextGraph.edges.filter((e: any) => {
+      const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+      if (eId === currentEdgeId) return false; // Exclude the current edge (origin)
+      if (e.from !== sourceNodeId) return false; // Must be from same source node
+      // Match on subtype: must have the same parameter slot (p.mean for this function)
+      if (subtype === 'p' && e.p?.mean === undefined) return false;
+      
+      // For case edges, only include edges with the same case_variant and case_id
+      if (currentEdge.case_variant) {
+        // Infer case_id for sibling edge if missing
+        let siblingCaseId = e.case_id;
+        if (!siblingCaseId && e.case_variant) {
+          const siblingSourceNode = nextGraph.nodes.find((n: any) => 
+            n.uuid === e.from || n.id === e.from
+          );
+          if (siblingSourceNode?.type === 'case') {
+            siblingCaseId = siblingSourceNode.case?.id || siblingSourceNode.uuid || siblingSourceNode.id;
+          }
+        }
+        
+        // Must match both case_variant and case_id
+        if (e.case_variant !== currentEdge.case_variant || siblingCaseId !== currentCaseId) {
+          return false;
+        }
+      } else {
+        // For regular edges, exclude case edges
+        if (e.case_variant) return false;
+      }
+      
+      return true;
+    });
+    
+    if (siblings.length === 0) {
+      const edgesFromSource = nextGraph.edges.filter((e: any) => e.from === sourceNodeId);
+      
+      console.warn('[UpdateManager] No siblings found for rebalance');
+      console.log('Current edge ID:', currentEdgeId);
+      console.log('Source node ID:', sourceNodeId);
+      console.log('Subtype:', subtype);
+      console.log(`Found ${edgesFromSource.length} edges from source node`);
+      
+      edgesFromSource.forEach((e: any, idx: number) => {
+        const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+        const hasConditionalP = !!e.conditional_p;
+        const hasP = !!e.p;
+        const pMean = e.p?.mean;
+        const hasSubtype = subtype === 'p' ? pMean !== undefined : false;
+        const wouldBeSibling = eId !== currentEdgeId && hasSubtype;
+        
+        console.log(`\n=== Edge ${idx + 1} ===`);
+        console.log('  UUID:', e.uuid);
+        console.log('  ID:', e.id);
+        console.log('  From->To:', `${e.from}->${e.to}`);
+        console.log('  Edge ID:', eId);
+        console.log('  Matches current:', eId === currentEdgeId);
+        console.log('  Has subtype (p.mean):', hasSubtype);
+        console.log('  Has conditional_p:', hasConditionalP);
+        console.log('  Conditional_p count:', e.conditional_p?.length || 0);
+        console.log('  Has p:', hasP);
+        console.log('  p.mean:', pMean);
+        console.log('  p.mean type:', typeof pMean);
+        console.log('  Would be sibling:', wouldBeSibling);
+        console.log('  Full p object:', e.p);
+      });
+      
+      return nextGraph;
+    }
+    
+    // Calculate remaining weight (1 - origin edge value)
+    const remainingWeight = Math.max(0, 1 - originValue);
+    
+    console.log('[UpdateManager] Rebalancing edge probabilities:', {
+      edgeId,
+      currentEdgeId,
+      originValue,
+      siblingsCount: siblings.length,
+      siblings: siblings.map((e: any) => ({
+        uuid: e.uuid,
+        id: e.id,
+        fromTo: `${e.from}->${e.to}`,
+        pMean: e.p?.mean
+      })),
+      remainingWeight
+    });
+    
+    if (forceRebalance) {
+      // Force rebalance: ignore all override flags, distribute proportionally
+      const siblingsTotal = siblings.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
+      
+      if (siblingsTotal > 0) {
+        siblings.forEach((sibling: any) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+            const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+            const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
+            return eId === sId;
+          });
+          if (siblingIndex >= 0) {
+            if (!nextGraph.edges[siblingIndex].p) {
+              nextGraph.edges[siblingIndex].p = {};
+            }
+            const siblingCurrentValue = sibling.p?.mean || 0;
+            const newSiblingValue = this.roundTo3DP((siblingCurrentValue / siblingsTotal) * remainingWeight);
+            nextGraph.edges[siblingIndex].p.mean = newSiblingValue;
+            delete nextGraph.edges[siblingIndex].p.mean_overridden;
+          }
+        });
+      } else {
+        // Equal distribution if all siblings are zero
+        const equalShare = this.roundTo3DP(remainingWeight / siblings.length);
+        siblings.forEach((sibling: any) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+            const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+            const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
+            return eId === sId;
+          });
+          if (siblingIndex >= 0) {
+            if (!nextGraph.edges[siblingIndex].p) {
+              nextGraph.edges[siblingIndex].p = {};
+            }
+            nextGraph.edges[siblingIndex].p.mean = equalShare;
+            delete nextGraph.edges[siblingIndex].p.mean_overridden;
+          }
+        });
+      }
+    } else {
+      // Normal rebalance: respect override flags
+      const overriddenEdges = siblings.filter((e: any) => e.p?.mean_overridden);
+      const nonOverriddenEdges = siblings.filter((e: any) => !e.p?.mean_overridden);
+      
+      const overriddenTotal = overriddenEdges.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
+      const remainingForNonOverridden = Math.max(0, remainingWeight - overriddenTotal);
+      
+      if (nonOverriddenEdges.length > 0) {
+        const nonOverriddenTotal = nonOverriddenEdges.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
+        
+        if (nonOverriddenTotal > 0) {
+          nonOverriddenEdges.forEach((sibling: any) => {
+            const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+              const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+              const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
+              return eId === sId;
+            });
+            if (siblingIndex >= 0) {
+              if (!nextGraph.edges[siblingIndex].p) {
+                nextGraph.edges[siblingIndex].p = {};
+              }
+              const siblingCurrentValue = sibling.p?.mean || 0;
+              const newSiblingValue = this.roundTo3DP((siblingCurrentValue / nonOverriddenTotal) * remainingForNonOverridden);
+              nextGraph.edges[siblingIndex].p.mean = newSiblingValue;
+            }
+          });
+        } else {
+          const equalShare = this.roundTo3DP(remainingForNonOverridden / nonOverriddenEdges.length);
+          nonOverriddenEdges.forEach((sibling: any) => {
+            const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+              const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+              const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
+              return eId === sId;
+            });
+            if (siblingIndex >= 0) {
+              if (!nextGraph.edges[siblingIndex].p) {
+                nextGraph.edges[siblingIndex].p = {};
+              }
+              nextGraph.edges[siblingIndex].p.mean = equalShare;
+            }
+          });
+        }
+      }
+    }
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'rebalanceEdgeProbabilities',
+      details: {
+        edgeId,
+        originValue,
+        forceRebalance,
+        siblingsRebalanced: siblings.length
+      }
+    });
+    
+    return nextGraph;
+  }
+
+  /**
+   * Rebalance conditional probabilities for siblings with the same condition.
+   * When forceRebalance is true, ignores mean_overridden flags.
+   * IMPORTANT: The origin condition's value is preserved - only siblings are updated.
+   * 
+   * @param graph - The current graph
+   * @param edgeId - ID of the edge whose conditional probability should be rebalanced
+   * @param condIndex - Index of the conditional probability to rebalance
+   * @param forceRebalance - If true, override mean_overridden flags (for explicit rebalance action)
+   * @returns Updated graph with rebalanced conditional probabilities
+   */
+  rebalanceConditionalProbabilities(
+    graph: any,
+    edgeId: string,
+    condIndex: number,
+    forceRebalance: boolean = false
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const currentEdge = nextGraph.edges[edgeIndex];
+    const sourceNodeId = currentEdge.from;
+    
+    if (!currentEdge.conditional_p || condIndex >= currentEdge.conditional_p.length) {
+      console.warn('[UpdateManager] Condition index out of range:', condIndex);
+      return graph;
+    }
+    
+    // IMPORTANT: Preserve the origin condition's current value - don't change it
+    const condition = currentEdge.conditional_p[condIndex];
+    const conditionStr = typeof condition.condition === 'string' ? condition.condition : '';
+    const originValue = condition.p?.mean ?? 0;
+    
+    if (!conditionStr) return nextGraph;
+    
+    // Find all sibling edges with the same condition string (EXCLUDE the current edge)
+    const currentEdgeId = currentEdge.uuid || currentEdge.id || `${currentEdge.from}->${currentEdge.to}`;
+    const siblings = nextGraph.edges.filter((e: any) => {
+      const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+      if (eId === currentEdgeId) return false; // Exclude the current edge (origin)
+      if (e.from !== sourceNodeId) return false;
+      if (!e.conditional_p || e.conditional_p.length === 0) return false;
+      return e.conditional_p.some((cp: any) => {
+        const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+        return cpConditionStr === conditionStr;
+      });
+    });
+    
+    // Calculate remaining weight (1 - origin condition value)
+    const remainingWeight = Math.max(0, 1 - originValue);
+    
+    if (forceRebalance) {
+      // Force rebalance: ignore all override flags
+      const siblingsTotal = siblings.reduce((sum: number, e: any) => {
+        const matchingCond = e.conditional_p?.find((cp: any) => {
+          const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+          return cpConditionStr === conditionStr;
+        });
+        return sum + (matchingCond?.p?.mean || 0);
+      }, 0);
+      
+      if (siblingsTotal > 0) {
+        siblings.forEach((sibling: any) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+            e.uuid === sibling.uuid || e.id === sibling.id || `${e.from}->${e.to}` === `${sibling.from}->${sibling.to}`
+          );
+          if (siblingIndex >= 0) {
+            const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
+              const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+              return cpConditionStr === conditionStr;
+            });
+            if (matchingCond) {
+              if (!matchingCond.p) {
+                matchingCond.p = {};
+              }
+              const siblingCurrentValue = matchingCond.p?.mean || 0;
+              const newSiblingValue = this.roundTo3DP((siblingCurrentValue / siblingsTotal) * remainingWeight);
+              matchingCond.p.mean = newSiblingValue;
+              delete matchingCond.p.mean_overridden;
+            }
+          }
+        });
+      } else {
+        const equalShare = siblings.length > 0 ? this.roundTo3DP(remainingWeight / siblings.length) : 0;
+        siblings.forEach((sibling: any) => {
+          const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+            e.uuid === sibling.uuid || e.id === sibling.id || `${e.from}->${e.to}` === `${sibling.from}->${sibling.to}`
+          );
+          if (siblingIndex >= 0) {
+            const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
+              const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+              return cpConditionStr === conditionStr;
+            });
+            if (matchingCond) {
+              if (!matchingCond.p) {
+                matchingCond.p = {};
+              }
+              matchingCond.p.mean = equalShare;
+              delete matchingCond.p.mean_overridden;
+            }
+          }
+        });
+      }
+    } else {
+      // Normal rebalance: respect override flags
+      const overriddenSiblings: any[] = [];
+      const nonOverriddenSiblings: any[] = [];
+      
+      siblings.forEach((sibling: any) => {
+        const matchingCond = sibling.conditional_p?.find((cp: any) => {
+          const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+          return cpConditionStr === conditionStr;
+        });
+        if (matchingCond?.p?.mean_overridden) {
+          overriddenSiblings.push({ sibling, matchingCond });
+        } else {
+          nonOverriddenSiblings.push({ sibling, matchingCond });
+        }
+      });
+      
+      const overriddenTotal = overriddenSiblings.reduce((sum: number, item: any) => 
+        sum + (item.matchingCond?.p?.mean || 0), 0);
+      const remainingForNonOverridden = Math.max(0, remainingWeight - overriddenTotal);
+      
+      if (nonOverriddenSiblings.length > 0) {
+        const nonOverriddenTotal = nonOverriddenSiblings.reduce((sum: number, item: any) => 
+          sum + (item.matchingCond?.p?.mean || 0), 0);
+        
+        if (nonOverriddenTotal > 0) {
+          nonOverriddenSiblings.forEach((item: any) => {
+            const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+              e.uuid === item.sibling.uuid || e.id === item.sibling.id || `${e.from}->${e.to}` === `${item.sibling.from}->${item.sibling.to}`
+            );
+            if (siblingIndex >= 0) {
+              const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
+                const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+                return cpConditionStr === conditionStr;
+              });
+              if (matchingCond) {
+                if (!matchingCond.p) {
+                  matchingCond.p = {};
+                }
+                const siblingCurrentValue = item.matchingCond?.p?.mean || 0;
+                const newSiblingValue = this.roundTo3DP((siblingCurrentValue / nonOverriddenTotal) * remainingForNonOverridden);
+                matchingCond.p.mean = newSiblingValue;
+              }
+            }
+          });
+        } else {
+          const equalShare = this.roundTo3DP(remainingForNonOverridden / nonOverriddenSiblings.length);
+          nonOverriddenSiblings.forEach((item: any) => {
+            const siblingIndex = nextGraph.edges.findIndex((e: any) => 
+              e.uuid === item.sibling.uuid || e.id === item.sibling.id || `${e.from}->${e.to}` === `${item.sibling.from}->${item.sibling.to}`
+            );
+            if (siblingIndex >= 0) {
+              const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
+                const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+                return cpConditionStr === conditionStr;
+              });
+              if (matchingCond) {
+                if (!matchingCond.p) {
+                  matchingCond.p = {};
+                }
+                matchingCond.p.mean = equalShare;
+              }
+            }
+          });
+        }
+      }
+    }
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'rebalanceConditionalProbabilities',
+      details: {
+        edgeId,
+        condIndex,
+        originValue,
+        forceRebalance,
+        condition: conditionStr,
+        siblingsRebalanced: siblings.length
+      }
+    });
+    
+    return nextGraph;
+  }
+
+  /**
+   * Rebalance case variant weights for a case node.
+   * When forceRebalance is true, ignores weight_overridden flags.
+   * IMPORTANT: The origin variant's value is preserved - only other variants are updated.
+   * 
+   * @param graph - The current graph
+   * @param nodeId - ID of the case node whose variants should be rebalanced
+   * @param variantIndex - Index of the variant whose weight is being preserved
+   * @param forceRebalance - If true, override weight_overridden flags (for explicit rebalance action)
+   * @returns Updated graph with rebalanced variant weights
+   */
+  rebalanceVariantWeights(
+    graph: any,
+    nodeId: string,
+    variantIndex: number,
+    forceRebalance: boolean = false
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+      n.uuid === nodeId || n.id === nodeId
+    );
+    
+    if (nodeIndex < 0) {
+      console.warn('[UpdateManager] Case node not found:', nodeId);
+      return graph;
+    }
+    
+    const caseNode = nextGraph.nodes[nodeIndex];
+    if (!caseNode.case || !caseNode.case.variants || variantIndex >= caseNode.case.variants.length) {
+      console.warn('[UpdateManager] Invalid variant index:', variantIndex);
+      return graph;
+    }
+    
+    // IMPORTANT: Preserve the origin variant's current value - don't change it
+    const originVariant = caseNode.case.variants[variantIndex];
+    const originValue = originVariant.weight ?? 0;
+    
+    // Calculate remaining weight (1 - origin variant value)
+    const remainingWeight = Math.max(0, 1 - originValue);
+    
+    // Get all other variants
+    const otherVariants = caseNode.case.variants.filter((_: any, idx: number) => idx !== variantIndex);
+    
+    if (otherVariants.length === 0) return nextGraph;
+    
+    if (forceRebalance) {
+      // Force rebalance: ignore all override flags, distribute proportionally
+      const otherVariantsTotal = otherVariants.reduce((sum: number, v: any) => sum + (v.weight || 0), 0);
+      
+      if (otherVariantsTotal > 0) {
+        otherVariants.forEach((variant: any) => {
+          const variantCurrentWeight = variant.weight || 0;
+          const newWeight = this.roundTo3DP((variantCurrentWeight / otherVariantsTotal) * remainingWeight);
+          variant.weight = newWeight;
+          delete variant.weight_overridden;
+        });
+      } else {
+        // Equal distribution if all other variants are zero
+        const equalShare = this.roundTo3DP(remainingWeight / otherVariants.length);
+        otherVariants.forEach((variant: any) => {
+          variant.weight = equalShare;
+          delete variant.weight_overridden;
+        });
+      }
+    } else {
+      // Normal rebalance: respect override flags
+      const overriddenVariants = otherVariants.filter((v: any) => v.weight_overridden);
+      const nonOverriddenVariants = otherVariants.filter((v: any) => !v.weight_overridden);
+      
+      const overriddenTotal = overriddenVariants.reduce((sum: number, v: any) => sum + (v.weight || 0), 0);
+      const remainingForNonOverridden = Math.max(0, remainingWeight - overriddenTotal);
+      
+      if (nonOverriddenVariants.length > 0) {
+        const nonOverriddenTotal = nonOverriddenVariants.reduce((sum: number, v: any) => sum + (v.weight || 0), 0);
+        
+        if (nonOverriddenTotal > 0) {
+          nonOverriddenVariants.forEach((variant: any) => {
+            const variantCurrentWeight = variant.weight || 0;
+            const newWeight = this.roundTo3DP((variantCurrentWeight / nonOverriddenTotal) * remainingForNonOverridden);
+            variant.weight = newWeight;
+          });
+        } else {
+          const equalShare = this.roundTo3DP(remainingForNonOverridden / nonOverriddenVariants.length);
+          nonOverriddenVariants.forEach((variant: any) => {
+            variant.weight = equalShare;
+          });
+        }
+      }
+    }
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'rebalanceVariantWeights',
+      details: {
+        nodeId,
+        variantIndex,
+        originValue,
+        forceRebalance,
+        variantsRebalanced: otherVariants.length
       }
     });
     

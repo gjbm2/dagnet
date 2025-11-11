@@ -120,6 +120,23 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         console.log(`[fromFlow] BEFORE: edge.uuid=${e.id}, originalEdge.p=${JSON.stringify(originalEdge?.p)}`);
       }
       
+      // Merge p object: preserve original fields (like mean_overridden) while applying ReactFlow updates
+      const mergedP = e.data?.p ? {
+        ...originalEdge?.p,  // Start with original p to preserve ALL fields (mean_overridden, etc.)
+        ...e.data.p,         // Override with ReactFlow data (which has updated mean, etc.)
+        // Explicitly set mean from probability field if it exists (ReactFlow uses 'probability' field)
+        mean: e.data?.probability !== undefined ? e.data.probability : (e.data.p.mean ?? originalEdge?.p?.mean ?? 0.5),
+        stdev: e.data?.stdev !== undefined ? e.data.stdev : (e.data.p.stdev ?? originalEdge?.p?.stdev),
+        locked: e.data?.locked !== undefined ? e.data.locked : (e.data.p.locked ?? originalEdge?.p?.locked),
+        // Preserve mean_overridden from original if not explicitly set in e.data.p
+        mean_overridden: e.data.p.mean_overridden !== undefined ? e.data.p.mean_overridden : originalEdge?.p?.mean_overridden,
+      } : {
+        ...originalEdge?.p,  // Preserve ALL p fields (id, distribution, evidence, mean_overridden, etc.)
+        mean: e.data?.probability ?? originalEdge?.p?.mean ?? 0.5,
+        stdev: e.data?.stdev ?? originalEdge?.p?.stdev,
+        locked: e.data?.locked ?? originalEdge?.p?.locked,
+      };
+
       const result = {
         ...originalEdge, // Preserve ALL original properties (including conditional_p, display)
         uuid: e.id,  // ReactFlow edge ID is the UUID
@@ -131,12 +148,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         to: e.target,
         fromHandle: e.sourceHandle,
         toHandle: e.targetHandle,
-        p: e.data?.p ?? { 
-          ...originalEdge?.p,  // Preserve ALL p fields (id, distribution, evidence, etc.)
-          mean: e.data?.probability ?? 0.5,
-          stdev: e.data?.stdev,
-          locked: e.data?.locked,
-        },
+        p: mergedP,
         cost_gbp: e.data?.cost_gbp ?? originalEdge?.cost_gbp, // Full cost_gbp parameter object
         cost_time: e.data?.cost_time ?? originalEdge?.cost_time, // Full cost_time parameter object
         description: e.data?.description ?? '',

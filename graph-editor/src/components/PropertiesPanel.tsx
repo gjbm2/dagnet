@@ -5,8 +5,8 @@ import { dataOperationsService } from '../services/dataOperationsService';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
+import { ParameterEditor } from './ParameterEditor';
 import VariantWeightInput from './VariantWeightInput';
-import ConditionalProbabilitiesSection from './ConditionalProbabilitiesSection';
 import CollapsibleSection from './CollapsibleSection';
 import { getNextAvailableColor } from '@/lib/conditionalColors';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
@@ -20,6 +20,7 @@ import { ParameterSection } from './ParameterSection';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff } from 'lucide-react';
 import { normalizeConstraintString } from '@/lib/queryDSL';
+import { isProbabilityMassUnbalanced, getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils';
 import './PropertiesPanel.css';
 import type { Evidence } from '../types';
 
@@ -532,13 +533,21 @@ export default function PropertiesPanel({
       if (!next.edges[edgeIndex][paramSlot]) {
         next.edges[edgeIndex][paramSlot] = {};
       }
-      Object.assign(next.edges[edgeIndex][paramSlot], changes);
+      
+      // Extract _noHistory flag before applying changes
+      const { _noHistory, ...actualChanges } = changes;
+      
+      Object.assign(next.edges[edgeIndex][paramSlot], actualChanges);
       if (next.metadata) {
         next.metadata.updated_at = new Date().toISOString();
       }
       setGraph(next);
-      const changedKeys = Object.keys(changes).join(', ');
-      saveHistoryState(`Update ${paramSlot}: ${changedKeys}`, undefined, selectedEdgeId || undefined);
+      
+      // Only save history if _noHistory is not set (for slider dragging, we skip history)
+      if (!_noHistory) {
+        const changedKeys = Object.keys(actualChanges).join(', ');
+        saveHistoryState(`Update ${paramSlot}: ${changedKeys}`, undefined, selectedEdgeId || undefined);
+      }
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
@@ -591,21 +600,38 @@ export default function PropertiesPanel({
 
   // Calculate if edge probability is unbalanced (siblings don't sum to 1)
   const isEdgeProbabilityUnbalanced = React.useMemo(() => {
-    if (!selectedEdge || !graph.edges || selectedEdge.p?.mean === undefined) return false;
+    if (!selectedEdge || !graph?.edges || selectedEdge.p?.mean === undefined) return false;
     
     const sourceNode = selectedEdge.from;
+    
+    // For case edges, only consider edges with the same case_variant and case_id
+    if (selectedEdge.case_id && selectedEdge.case_variant) {
+      const siblings = graph.edges.filter((e: any) => 
+        e.from === sourceNode && 
+        e.case_id === selectedEdge.case_id &&
+        e.case_variant === selectedEdge.case_variant &&
+        e.p?.mean !== undefined
+      );
+      return isProbabilityMassUnbalanced(siblings, (e: any) => e.p?.mean);
+    }
+    
+    // For regular edges, consider all edges from the same source (excluding conditional_p edges)
     const siblings = graph.edges.filter((e: any) => 
       e.from === sourceNode && 
       !e.conditional_p &&  // Only regular edges
+      !e.case_variant &&   // Exclude case edges
       e.p?.mean !== undefined
     );
     
-    if (siblings.length <= 1) return false;  // Need at least 2 edges to be unbalanced
-    
-    const total = siblings.reduce((sum, e) => sum + (e.p?.mean || 0), 0);
-    const diff = Math.abs(total - 1);
-    return diff > 0.01;  // Unbalanced if differs by more than 1%
-  }, [selectedEdge, graph.edges]);
+    // Use generalized function
+    return isProbabilityMassUnbalanced(siblings, (e: any) => e.p?.mean);
+  }, [selectedEdge, graph]); // Depend on entire graph to detect rebalance changes
+
+  // Calculate if conditional probabilities are unbalanced (for each condition group)
+  // Uses generalized helper function
+  const isConditionalProbabilityUnbalanced = React.useMemo(() => {
+    return getConditionalProbabilityUnbalancedMap(graph, selectedEdge, localConditionalP);
+  }, [selectedEdge, graph, localConditionalP]); // Depend on entire graph to detect rebalance changes
 
   // Helper: GET edge parameter from file
   const getEdgeParam = useCallback(async (paramSlot: 'p' | 'cost_gbp' | 'cost_time') => {
@@ -672,146 +698,50 @@ export default function PropertiesPanel({
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
   // Helper: Rebalance regular edge probability across sibling edges
-  const handleRebalanceEdgeProbability = useCallback((newValue: number) => {
+  // When called from rebalance button, forceRebalance=true to override _overridden flags
+  // IMPORTANT: Preserves the origin edge's current value - only updates siblings
+  const handleRebalanceEdgeProbability = useCallback(async (forceRebalance: boolean = true) => {
     if (!selectedEdgeId || !graph) return;
     
-    const nextGraph = structuredClone(graph);
-    const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
-      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+    const { updateManager } = await import('../services/UpdateManager');
+    const { graphMutationService } = await import('../services/graphMutationService');
+    
+    const oldGraph = graph;
+    const nextGraph = updateManager.rebalanceEdgeProbabilities(
+      graph,
+      selectedEdgeId,
+      forceRebalance
     );
     
-    if (currentEdgeIndex >= 0) {
-      const currentEdge = nextGraph.edges[currentEdgeIndex];
-      const sourceNode = currentEdge.from;
-      
-      // Update current edge's probability
-      if (!nextGraph.edges[currentEdgeIndex].p) {
-        nextGraph.edges[currentEdgeIndex].p = {};
-      }
-      nextGraph.edges[currentEdgeIndex].p!.mean = newValue;
-      
-      // Find sibling edges (same source)
-      const siblings = nextGraph.edges.filter((edge: any, idx: number) => 
-        idx !== currentEdgeIndex && 
-        edge.from === sourceNode &&
-        !edge.conditional_p  // Only regular edges, not conditional
-      );
-      
-      if (siblings.length > 0) {
-        const remainingProbability = roundTo4DP(1 - newValue);
-        const siblingsTotal = siblings.reduce((sum, sibling) => {
-          return sum + (sibling.p?.mean || 0);
-        }, 0);
-        
-        siblings.forEach((sibling) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => (e.uuid === sibling.uuid && e.uuid) || (e.id === sibling.id && e.id));
-          if (siblingIndex >= 0) {
-            const siblingCurrentValue = sibling.p?.mean || 0;
-            const newSiblingValue = siblingsTotal > 0
-              ? roundTo4DP((siblingCurrentValue / siblingsTotal) * remainingProbability)
-              : roundTo4DP(remainingProbability / siblings.length);
-            
-            if (!nextGraph.edges[siblingIndex].p) {
-              nextGraph.edges[siblingIndex].p = {};
-            }
-            nextGraph.edges[siblingIndex].p!.mean = newSiblingValue;
-          }
-        });
-      }
-      
-      if (nextGraph.metadata) {
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      setGraph(nextGraph);
-      saveHistoryState('Rebalance edge probabilities', undefined, selectedEdgeId);
-    }
+    await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+    saveHistoryState('Rebalance edge probabilities', undefined, selectedEdgeId);
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
   // Helper: Rebalance conditional probability across sibling edges
-  const rebalanceConditionalP = useCallback((condIndex: number, newValue: number) => {
+  // When called from rebalance button or CTRL+click, forceRebalance=true to override _overridden flags
+  // IMPORTANT: Preserves the origin condition's current value - only updates siblings
+  const rebalanceConditionalP = useCallback(async (condIndex: number, forceRebalance: boolean = true) => {
     if (!selectedEdgeId || !graph) return;
     
-    const nextGraph = structuredClone(graph);
-    const currentEdgeIndex = nextGraph.edges.findIndex((edge: any) => 
-      edge.id === selectedEdgeId || `${edge.from}->${edge.to}` === selectedEdgeId
+    const { updateManager } = await import('../services/UpdateManager');
+    const { graphMutationService } = await import('../services/graphMutationService');
+    
+    const oldGraph = graph;
+    const nextGraph = updateManager.rebalanceConditionalProbabilities(
+      graph,
+      selectedEdgeId,
+      condIndex,
+      forceRebalance
     );
     
-    if (currentEdgeIndex >= 0) {
-      const currentEdge = nextGraph.edges[currentEdgeIndex];
-      const sourceNode = currentEdge.from;
-      
-      if (!currentEdge.conditional_p || !currentEdge.conditional_p[condIndex]) {
-        return;
-      }
-      
-      // Update current edge's probability
-      if (!nextGraph.edges[currentEdgeIndex].conditional_p![condIndex].p) {
-        nextGraph.edges[currentEdgeIndex].conditional_p![condIndex].p = {};
-      }
-      nextGraph.edges[currentEdgeIndex].conditional_p![condIndex].p!.mean = newValue;
-      
-      // Get the condition string and normalize it for comparison
-      const currentCondition = currentEdge.conditional_p[condIndex].condition;
-      const currentConditionStr = typeof currentCondition === 'string' ? currentCondition : '';
-      const normalizedCurrent = normalizeConstraintString(currentConditionStr);
-      
-      // Find sibling edges with same condition (using normalized comparison)
-      const siblings = nextGraph.edges.filter((edge: any, idx: number) => 
-        idx !== currentEdgeIndex && 
-        edge.from === sourceNode &&
-        edge.conditional_p &&
-        edge.conditional_p.some((cond: any) => {
-          const condStr = typeof cond.condition === 'string' ? cond.condition : '';
-          return normalizeConstraintString(condStr) === normalizedCurrent;
-        })
-      );
-      
-      if (siblings.length > 0) {
-        const remainingProbability = roundTo4DP(1 - newValue);
-        
-        // Find matching condition index in each sibling
-        const siblingsWithMatchingCondition = siblings.map((sibling: any) => {
-          const matchingIndex = sibling.conditional_p.findIndex((cond: any) => {
-            const condStr = typeof cond.condition === 'string' ? cond.condition : '';
-            return normalizeConstraintString(condStr) === normalizedCurrent;
-          });
-          return { sibling, matchingIndex };
-        }).filter((item: any) => item.matchingIndex >= 0);
-        
-        const siblingsTotal = siblingsWithMatchingCondition.reduce((sum, item) => {
-          return sum + (item.sibling.conditional_p[item.matchingIndex]?.p?.mean || 0);
-        }, 0);
-        
-        siblingsWithMatchingCondition.forEach((item: any) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => 
-            (e.uuid === item.sibling.uuid && e.uuid) || (e.id === item.sibling.id && e.id)
-          );
-          
-          if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p && 
-              nextGraph.edges[siblingIndex].conditional_p[item.matchingIndex]) {
-            const siblingCurrentValue = item.sibling.conditional_p[item.matchingIndex]?.p?.mean || 0;
-            const newSiblingValue = siblingsTotal > 0
-              ? roundTo4DP((siblingCurrentValue / siblingsTotal) * remainingProbability)
-              : roundTo4DP(remainingProbability / siblingsWithMatchingCondition.length);
-            
-            if (!nextGraph.edges[siblingIndex].conditional_p![item.matchingIndex].p) {
-              nextGraph.edges[siblingIndex].conditional_p![item.matchingIndex].p = {};
-            }
-            nextGraph.edges[siblingIndex].conditional_p![item.matchingIndex].p!.mean = newSiblingValue;
-          }
-        });
-      }
-      
-      // Update local state
-      const updatedConditionalP = [...(nextGraph.edges[currentEdgeIndex].conditional_p || [])];
-      setLocalConditionalP(updatedConditionalP);
-      
-      if (nextGraph.metadata) {
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      setGraph(nextGraph);
-      saveHistoryState('Rebalance conditional probabilities', undefined, selectedEdgeId);
-    }
+    // Update local state
+    const updatedConditionalP = [...(nextGraph.edges.find((e: any) => 
+      e.uuid === selectedEdgeId || e.id === selectedEdgeId
+    )?.conditional_p || [])];
+    setLocalConditionalP(updatedConditionalP);
+    
+    await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+    saveHistoryState('Rebalance conditional probabilities', undefined, selectedEdgeId);
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
   
   // DIAGNOSTIC: Log selectedEdge lookup result
@@ -1672,44 +1602,29 @@ export default function PropertiesPanel({
                                   }
                                 }
                               }}
-                              onRebalance={(value, currentIndex, variants) => {
+                              onRebalance={async (value, currentIndex, variants) => {
                                 if (graph && selectedNodeId) {
-                                  const rebalanceGraph = structuredClone(graph);
-                                  const nodeIndex = rebalanceGraph.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                                  if (nodeIndex >= 0 && rebalanceGraph.nodes[nodeIndex].case?.variants) {
-                                    rebalanceGraph.nodes[nodeIndex].case.variants[currentIndex].weight = value;
-                                    const remainingWeight = 1 - value;
-                                    const otherVariants = variants.filter((v: any, i: number) => i !== currentIndex);
-                                    const otherVariantsTotal = otherVariants.reduce((sum, v) => sum + (v.weight || 0), 0);
-                                    
-                                    if (otherVariantsTotal > 0) {
-                                      otherVariants.forEach(v => {
-                                        const otherIdx = rebalanceGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
-                                        if (otherIdx !== undefined && otherIdx >= 0) {
-                                          const currentWeight = v.weight || 0;
-                                          const newWeight = (currentWeight / otherVariantsTotal) * remainingWeight;
-                                              // Round to 3 decimal places
-                                              rebalanceGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = Math.round(newWeight * 1000) / 1000;
-                                        }
-                                      });
-                                    } else {
-                                      const equalShare = remainingWeight / otherVariants.length;
-                                      otherVariants.forEach(v => {
-                                        const otherIdx = rebalanceGraph.nodes[nodeIndex].case!.variants!.findIndex((variant: any) => variant.name === v.name);
-                                        if (otherIdx !== undefined && otherIdx >= 0) {
-                                              // Round to 3 decimal places
-                                              rebalanceGraph.nodes[nodeIndex].case!.variants![otherIdx].weight = Math.round(equalShare * 1000) / 1000;
-                                        }
-                                      });
-                                    }
-                                    
-                                    if (rebalanceGraph.metadata) {
-                                      rebalanceGraph.metadata.updated_at = new Date().toISOString();
-                                    }
-                                    setGraph(rebalanceGraph);
-                                        setCaseData({...caseData, variants: rebalanceGraph.nodes[nodeIndex].case!.variants!});
-                                    saveHistoryState('Auto-rebalance case variant weights', selectedNodeId);
-                                  }
+                                  // Use UpdateManager for rebalancing with forceRebalance=true (override _overridden flags)
+                                  // IMPORTANT: Preserves origin variant's current value - only updates other variants
+                                  const { updateManager } = await import('../services/UpdateManager');
+                                  const { graphMutationService } = await import('../services/graphMutationService');
+                                  
+                                  const oldGraph = graph;
+                                  const nextGraph = updateManager.rebalanceVariantWeights(
+                                    graph,
+                                    selectedNodeId,
+                                    currentIndex,
+                                    true // forceRebalance: true - override _overridden flags when user clicks rebalance
+                                  );
+                                  
+                                  // Update local state
+                                  const updatedVariants = nextGraph.nodes.find((n: any) => 
+                                    n.uuid === selectedNodeId || n.id === selectedNodeId
+                                  )?.case?.variants || [];
+                                  setCaseData({...caseData, variants: updatedVariants});
+                                  
+                                  await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                                  saveHistoryState('Auto-rebalance case variant weights', selectedNodeId);
                                 }
                               }}
                               currentIndex={index}
@@ -1873,6 +1788,180 @@ export default function PropertiesPanel({
                   </div>
                 </CollapsibleSection>
 
+                {/* Case Card - for edges immediately downstream of case nodes */}
+                {selectedEdge && graph && (() => {
+                  // Check if source node is a case node
+                  const sourceNode = graph.nodes.find((n: any) => 
+                    (n.uuid === selectedEdge.from || n.id === selectedEdge.from) && n.type === 'case'
+                  );
+                  
+                  if (!sourceNode || !sourceNode.case) {
+                    return null; // Not downstream of a case node
+                  }
+                  
+                  const caseNode = sourceNode;
+                  const allVariants = caseNode.case?.variants || [];
+                  const currentVariant = selectedEdge.case_variant || '';
+                  const variantIndex = allVariants.findIndex((v: any) => v.name === currentVariant);
+                  const variant = variantIndex >= 0 ? allVariants[variantIndex] : null;
+                  const variantWeight = variant?.weight || 0;
+                  
+                  // Calculate if variant weights are unbalanced
+                  const totalVariantWeight = allVariants.reduce((sum: number, v: any) => sum + (v.weight || 0), 0);
+                  const isVariantWeightUnbalanced = Math.abs(totalVariantWeight - 1.0) > 0.001;
+                  
+                  return (
+                    <CollapsibleSection title="Case" icon={Box} defaultOpen={!!currentVariant}>
+                      {/* Variant Selector */}
+                      <div style={{ marginBottom: '16px' }}>
+                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variant</label>
+                        <select
+                          value={currentVariant}
+                          onChange={async (e) => {
+                            const newVariant = e.target.value || null;
+                            if (!graph || !selectedEdgeId) return;
+                            
+                            const { updateManager } = await import('../services/UpdateManager');
+                            const { graphMutationService } = await import('../services/graphMutationService');
+                            
+                            const oldGraph = graph;
+                            const nextGraph = updateManager.updateEdgeProperty(
+                              graph,
+                              selectedEdgeId,
+                              {
+                                case_variant: newVariant
+                                // case_id will be automatically inferred from source node by UpdateManager
+                              }
+                            );
+                            
+                            await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                            saveHistoryState(
+                              newVariant ? `Assign variant "${newVariant}" to edge` : 'Remove variant from edge',
+                              undefined,
+                              selectedEdgeId
+                            );
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '8px',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            background: 'white',
+                            boxSizing: 'border-box',
+                            fontSize: '14px'
+                          }}
+                        >
+                          <option value="">-- No variant --</option>
+                          {allVariants.map((v: any) => (
+                            <option key={v.name} value={v.name}>
+                              {v.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      
+                      {/* Variant Weight - only show if variant is selected */}
+                      {currentVariant && variant && (
+                        <div style={{ marginBottom: '16px' }}>
+                          <ParameterEditor
+                            paramType="variant_weight"
+                            value={variantWeight}
+                            overridden={variant.weight_overridden || false}
+                            isUnbalanced={isVariantWeightUnbalanced}
+                            graph={graph}
+                            objectId={caseNode.uuid || caseNode.id || ''}
+                            variantIndex={variantIndex}
+                            allVariants={allVariants}
+                            label="Variant Weight"
+                            onChange={(newWeight) => {
+                              // Update graph immediately while dragging (no history)
+                              if (!caseNode || !graph) return;
+                              const nextGraph = structuredClone(graph);
+                              const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+                                n.uuid === caseNode.uuid || n.id === caseNode.id
+                              );
+                              if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                                const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => 
+                                  v.name === variant.name
+                                );
+                                if (vIdx >= 0) {
+                                  nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = newWeight;
+                                  nextGraph.nodes[nodeIndex].case.variants[vIdx].weight_overridden = true;
+                                  if (nextGraph.metadata) {
+                                    nextGraph.metadata.updated_at = new Date().toISOString();
+                                  }
+                                  setGraph(nextGraph);
+                                }
+                              }
+                            }}
+                            onCommit={async (newWeight) => {
+                              if (!caseNode || !graph) return;
+                              const { updateManager } = await import('../services/UpdateManager');
+                              const { graphMutationService } = await import('../services/graphMutationService');
+                              
+                              const oldGraph = graph;
+                              const nextGraph = structuredClone(graph);
+                              const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+                                n.uuid === caseNode.uuid || n.id === caseNode.id
+                              );
+                              if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                                const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => 
+                                  v.name === variant.name
+                                );
+                                if (vIdx >= 0) {
+                                  nextGraph.nodes[nodeIndex].case.variants[vIdx].weight = newWeight;
+                                  nextGraph.nodes[nodeIndex].case.variants[vIdx].weight_overridden = true;
+                                  if (nextGraph.metadata) {
+                                    nextGraph.metadata.updated_at = new Date().toISOString();
+                                  }
+                                  await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                                  saveHistoryState('Update variant weight', caseNode.id);
+                                }
+                              }
+                            }}
+                            onRebalance={async () => {
+                              if (!caseNode || !graph) return;
+                              const { updateManager } = await import('../services/UpdateManager');
+                              const { graphMutationService } = await import('../services/graphMutationService');
+                              
+                              const oldGraph = graph;
+                              const nextGraph = updateManager.rebalanceVariantWeights(
+                                graph,
+                                caseNode.uuid || caseNode.id,
+                                variantIndex,
+                                true
+                              );
+                              await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                              saveHistoryState('Auto-rebalance case variant weights', caseNode.id);
+                            }}
+                            onClearOverride={() => {
+                              if (caseNode && graph) {
+                                const nextGraph = structuredClone(graph);
+                                const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+                                  n.uuid === caseNode.uuid || n.id === caseNode.id
+                                );
+                                if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                                  const vIdx = nextGraph.nodes[nodeIndex].case.variants.findIndex((v: any) => 
+                                    v.name === variant.name
+                                  );
+                                  if (vIdx >= 0) {
+                                    delete nextGraph.nodes[nodeIndex].case.variants[vIdx].weight_overridden;
+                                    if (nextGraph.metadata) {
+                                      nextGraph.metadata.updated_at = new Date().toISOString();
+                                    }
+                                    setGraph(nextGraph);
+                                    saveHistoryState('Clear variant weight override', caseNode.id);
+                                  }
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+                      )}
+                    </CollapsibleSection>
+                  );
+                })()}
+
                 {/* SECTION 2: Parameters */}
                 <CollapsibleSection title="Parameters" icon={Layers} defaultOpen={true}>
                   {/* SUB-SECTION 2.1: Probability */}
@@ -2011,6 +2100,7 @@ export default function PropertiesPanel({
                     edge={selectedEdge}
                     onUpdateParam={updateConditionalPParam}
                     onRebalanceParam={rebalanceConditionalP}
+                    isConditionalUnbalanced={isConditionalProbabilityUnbalanced}
                     onUpdateConditionColor={async (index: number, color: string | undefined) => {
                       if (!selectedEdgeId || !graph) return;
                       const oldGraph = graph;
@@ -2061,174 +2151,6 @@ export default function PropertiesPanel({
                   />
 
                 </CollapsibleSection>
-
-                {/* Case Edge Info */}
-                {selectedEdge && graph && (selectedEdge.case_id || selectedEdge.case_variant) && (() => {
-                  // Find the case node and get the variant
-                  const caseNode = graph.nodes.find((n: any) => n.case && n.case.id === selectedEdge.case_id);
-                  const variantIndex = caseNode?.case?.variants?.findIndex((v: any) => v.name === selectedEdge.case_variant) ?? -1;
-                  const variant = caseNode?.case?.variants?.[variantIndex];
-                  const variantWeight = variant?.weight || 0;
-                  const subRouteProbability = selectedEdge.p?.mean || 1.0;
-                  const effectiveProbability = variantWeight * subRouteProbability;
-                  
-                  // Get all variant weights for rebalancing
-                  const allVariants = caseNode?.case?.variants || [];
-                  
-                  return (
-                    <CollapsibleSection title="Case Edge Info" icon={Box} defaultOpen={false}>
-                      <div style={{ marginBottom: '16px' }}>
-                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Case ID</label>
-                        <div
-                          onClick={() => {
-                            if (caseNode) {
-                              // Clear edge selection and select the case node
-                    onSelectedEdgeChange(null);
-                              onSelectedNodeChange(caseNode.id);
-                            }
-                  }}
-                  style={{
-                    width: '100%',
-                            padding: '8px', 
-                            border: '1px solid #3B82F6', 
-                    borderRadius: '4px',
-                            background: '#EFF6FF',
-                            boxSizing: 'border-box',
-                            color: '#3B82F6',
-                    cursor: 'pointer',
-                    fontWeight: '500',
-                            transition: 'all 0.2s'
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = '#DBEAFE';
-                            e.currentTarget.style.borderColor = '#2563EB';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = '#EFF6FF';
-                            e.currentTarget.style.borderColor = '#3B82F6';
-                          }}
-                          title="Click to view case node properties"
-                        >
-                          {selectedEdge.case_id || ''}
-                        </div>
-                      </div>
-                      
-                      <div style={{ marginBottom: '16px' }}>
-                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variant Name</label>
-                        <input
-                          type="text"
-                          value={selectedEdge.case_variant || ''}
-                          readOnly
-                          style={{ 
-                            width: '100%', 
-                            padding: '8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            background: '#f8f9fa',
-                            boxSizing: 'border-box'
-                          }}
-                        />
-                      </div>
-                      
-                      {caseNode && variantIndex >= 0 && (
-                        <div style={{ marginBottom: '16px' }}>
-                          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variant Weight</label>
-                          <VariantWeightInput
-                            value={variantWeight}
-                            allVariants={allVariants.map((v: any) => v.weight || 0)}
-                            currentIndex={variantIndex}
-                            onChange={(newWeight) => {
-                              if (!caseNode || !graph) return;
-                              
-                              // Update the case node's variant weight
-                              const nextGraph = structuredClone(graph);
-                              const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === caseNode.uuid || n.id === caseNode.id);
-                              if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case) {
-                                nextGraph.nodes[nodeIndex].case.variants[variantIndex].weight = newWeight;
-                                if (nextGraph.metadata) {
-                                  nextGraph.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(nextGraph);
-                              }
-                            }}
-                            onCommit={() => {
-                              if (caseNode) {
-                                saveHistoryState('Update case variant weight', caseNode.id);
-                              }
-                            }}
-                            onRebalance={(newValue, currentIdx, allVars) => {
-                              if (!caseNode || !graph) return;
-                              
-                              // Calculate rebalanced weights
-                              const totalOthers = allVars.reduce((sum: number, v: any, idx: number) => 
-                                idx === currentIdx ? sum : sum + (v || 0), 0
-                              );
-                              const remaining = 1.0 - newValue;
-                              
-                              // Update all variant weights proportionally
-                              const nextGraph = structuredClone(graph);
-                              const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === caseNode.uuid || n.id === caseNode.id);
-                              if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case) {
-                                nextGraph.nodes[nodeIndex].case.variants.forEach((variant: any, idx: number) => {
-                                  if (idx === currentIdx) {
-                                    variant.weight = Math.round(newValue * 1000) / 1000;
-                                  } else if (totalOthers > 0) {
-                                    const proportion = (allVars[idx] || 0) / totalOthers;
-                                    variant.weight = Math.round(remaining * proportion * 1000) / 1000;
-                                  } else {
-                                    // If all others are 0, distribute evenly
-                                    const numOthers = allVars.length - 1;
-                                    variant.weight = numOthers > 0 ? Math.round((remaining / numOthers) * 1000) / 1000 : 0;
-                                  }
-                                });
-                                if (nextGraph.metadata) {
-                                  nextGraph.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(nextGraph);
-                                saveHistoryState('Rebalance case variants', caseNode.id);
-                              }
-                            }}
-                          />
-                        </div>
-                      )}
-                      
-                      <div style={{ marginBottom: '16px' }}>
-                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Sub-Route Probability</label>
-                        <input
-                          type="text"
-                          value={`${(subRouteProbability * 100).toFixed(1)}%`}
-                          readOnly
-                          style={{ 
-                            width: '100%', 
-                            padding: '8px', 
-                            border: '1px solid #ddd', 
-                            borderRadius: '4px',
-                            background: '#f8f9fa',
-                            boxSizing: 'border-box'
-                          }}
-                        />
-                      </div>
-                      
-                      <div style={{ 
-                        padding: '12px', 
-                        background: '#FFF9E6', 
-                        borderRadius: '4px', 
-                        border: '1px solid #FFE066',
-                        marginBottom: '8px'
-                      }}>
-                        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#997400', fontWeight: '600' }}>
-                          Effective Probability
-                        </label>
-                        <div style={{ fontSize: '14px', color: '#997400', fontWeight: '700' }}>
-                          {(effectiveProbability * 100).toFixed(1)}%
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#997400', marginTop: '4px' }}>
-                          Variant Weight ({(variantWeight * 100).toFixed(1)}%) × Sub-Route ({(subRouteProbability * 100).toFixed(1)}%)
-                        </div>
-                      </div>
-                    </CollapsibleSection>
-                  );
-                })()}
 
               </div>
             ) : (

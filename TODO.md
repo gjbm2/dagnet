@@ -1,10 +1,9 @@
 # DagNet TODO
 
+> **Recent Work:** See [WHAT_IF_DSL_REFACTOR_SUMMARY.md](./WHAT_IF_DSL_REFACTOR_SUMMARY.md) for detailed summary of the DSL-based what-if refactor completed on 2025-01-11.
+
 CRITICAL
 
-@CONDITIONAL_PROBABILITY_STATUS --- ref
-
-- query_signature isn't bringin through event_ids for the nodes -- needs to draw those in as well as node names
 - get from file isn't updating graph store... it's rendering on screen, but graph json itself isn't updating.
   ⦁	when I set param overridden in sidebar, and then 'get from file' it still updates target edges (even though should be overridden!) _and_ then tries to rebalance, creating a mess
 - download CSV built from selected funnel (or generate Google spreadsheet?)
@@ -12,16 +11,6 @@ CRITICAL
 - Remove api secrets from server logs, pls
 - node renaming, file renaming -- need to handle globally
 - systematically review that graph changes now go through UpdateManager not random code
-- whatif : conditional ps not working
-- conditonal p : rebalance manually only on click rebalance not full auto
-
-- **P-Slider Auto-Balance NOT WORKING**
-  - STATUS: Sibling edges don't auto-adjust when dragging probability slider
-  - Issue: `handleEdgeProbSlide` in PropertiesPanel.tsx (line ~650-700) should auto-adjust sibling probabilities
-  - Sibling finding logic exists and works for rebalance button
-  - But slider onChange doesn't trigger sibling updates
-  - Related: Rebalance indicator now works (fixed: added `isEdgeProbabilityUnbalanced` memo, line ~586-602)
-  - Next: Wire up slider onChange to call same sibling adjustment logic as rebalance button uses
 
   **Case/Variant Filtering** (4-6 hrs)
    - Design case property mapping schema (Statsig case → Amplitude event property)
@@ -34,9 +23,6 @@ CRITICAL
 - This creates confusion and unnecessary translation layer in DataOperationsService
 - **TODO (Phase 5)**: Refactor UpdateManager external_to_graph mappings to use sche
 
-- global/local weights whacked (why???)
-  - edge scaling slider is broken on view menu :-/
-- fix tools panel view options (Again)
 - Scenario viewer (snapshotting)
 - Context support
 - Latency/lag management
@@ -61,6 +47,8 @@ CRITICAL
   - See: Phase 0.3 discussion on flexible data handling
 
 ### Medium Priority
+- fix tools panel view options (Again)
+- Graph integrity checker report
 - Minus autocomplete not working in query/selector
 - Let's add a bool 'Force retrieve' to 'Get all data' modal, which ignores current values check and gets a new slab of dailies anyway. 
   - Also add a 'Force updates' which ignores 'overridden' flags and 

@@ -10,6 +10,9 @@ import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
 import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap } from 'lucide-react';
 import { fileRegistry } from '../contexts/TabContext';
+import VariantWeightInput from './VariantWeightInput';
+import { AutomatableField } from './AutomatableField';
+import { isProbabilityMassUnbalanced } from '../utils/rebalanceUtils';
 import toast from 'react-hot-toast';
 
 interface NodeContextMenuProps {
@@ -249,6 +252,100 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       >
         Properties
       </div>
+
+      {/* Case Variant Weights (if case node) */}
+      {isCaseNode && nodeData?.case?.variants && nodeData.case.variants.length > 0 && (
+        <>
+          <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
+          <div style={{ padding: '8px 12px', fontSize: '12px', fontWeight: '600', color: '#333' }}>
+            Variant Weights
+          </div>
+          {nodeData.case.variants.map((variant: any, index: number) => {
+            const allVariants = nodeData.case.variants || [];
+            
+            return (
+              <div key={index} style={{ marginBottom: '8px', padding: '6px 12px' }}>
+                <AutomatableField
+                  label={`${variant.name || `Variant ${index + 1}`}`}
+                  value={variant.weight || 0}
+                  overridden={variant.weight_overridden || false}
+                  onClearOverride={() => {
+                    if (graph && nodeData?.id) {
+                      const nextGraph = structuredClone(graph);
+                      const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+                        n.uuid === nodeId || n.id === nodeId || n.id === nodeData.id
+                      );
+                      if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                        delete nextGraph.nodes[nodeIndex].case.variants[index].weight_overridden;
+                        if (nextGraph.metadata) {
+                          nextGraph.metadata.updated_at = new Date().toISOString();
+                        }
+                        setGraph(nextGraph);
+                      }
+                    }
+                  }}
+                >
+                  <VariantWeightInput
+                    value={variant.weight || 0}
+                    onChange={(value) => {
+                      // Update local state immediately for real-time feedback
+                    }}
+                    onCommit={async (value) => {
+                      if (graph && nodeData?.id) {
+                        const { graphMutationService } = await import('../services/graphMutationService');
+                        const nextGraph = structuredClone(graph);
+                        const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+                          n.uuid === nodeId || n.id === nodeId || n.id === nodeData.id
+                        );
+                        if (nodeIndex >= 0 && nextGraph.nodes[nodeIndex].case?.variants) {
+                          if (!nextGraph.nodes[nodeIndex].case.variants[index]) {
+                            return;
+                          }
+                          nextGraph.nodes[nodeIndex].case.variants[index].weight = value;
+                          nextGraph.nodes[nodeIndex].case.variants[index].weight_overridden = true;
+                          if (nextGraph.metadata) {
+                            nextGraph.metadata.updated_at = new Date().toISOString();
+                          }
+                          await graphMutationService.updateGraph(graph, nextGraph, setGraph);
+                        }
+                      }
+                    }}
+                    onRebalance={async (newValue, currentIdx, allVars) => {
+                      if (!graph || !nodeData?.id) return;
+                      
+                      // Use UpdateManager for rebalancing with forceRebalance=true (override _overridden flags)
+                      // IMPORTANT: Preserves origin variant's current value - only updates other variants
+                      const { updateManager } = await import('../services/UpdateManager');
+                      const { graphMutationService } = await import('../services/graphMutationService');
+                      
+                      const nodeInGraph = graph.nodes.find((n: any) => 
+                        n.uuid === nodeId || n.id === nodeId || n.id === nodeData.id
+                      );
+                      if (!nodeInGraph) return;
+                      
+                      const oldGraph = graph;
+                      const nextGraph = updateManager.rebalanceVariantWeights(
+                        graph,
+                        nodeInGraph.uuid || nodeInGraph.id,
+                        currentIdx,
+                        true // forceRebalance: true - override _overridden flags when user clicks rebalance
+                      );
+                      
+                      await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                    }}
+                    currentIndex={index}
+                    allVariants={allVariants}
+                    autoFocus={false}
+                    autoSelect={false}
+                    showSlider={true}
+                    showBalanceButton={true}
+                  />
+                </AutomatableField>
+              </div>
+            );
+          })}
+        </>
+      )}
 
       {/* Data operations (if any files connected) */}
       {hasAnyFile && (

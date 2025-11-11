@@ -15,6 +15,7 @@
  */
 
 import { computeEffectiveEdgeProbability, WhatIfOverrides } from './whatIf';
+import { parseConstraints } from './queryDSL';
 
 export interface PruningResult {
   excludedEdges: Set<string>;
@@ -108,7 +109,19 @@ export function computeGraphPruning(
   caseImpliedNodes.forEach(nodeId => forcedNodes.add(nodeId));
   
   // From conditional overrides (what-if)
-  const conditionalImpliedNodes = getNodesImpliedByConditionalOverrides(whatIfOverrides?.conditionalOverrides || {});
+  // Handle both string (new DSL format) and Set<string> (backward compat) formats
+  const conditionalOverrides = whatIfOverrides?.conditionalOverrides || {};
+  const conditionalOverridesAsSets: Record<string, Set<string>> = {};
+  Object.entries(conditionalOverrides).forEach(([edgeId, override]) => {
+    if (override instanceof Set) {
+      conditionalOverridesAsSets[edgeId] = override;
+    } else if (typeof override === 'string') {
+      // Parse DSL string to extract visited nodes
+      const parsed = parseConstraints(override);
+      conditionalOverridesAsSets[edgeId] = new Set(parsed.visited);
+    }
+  });
+  const conditionalImpliedNodes = getNodesImpliedByConditionalOverrides(conditionalOverridesAsSets);
   conditionalImpliedNodes.forEach(nodeId => forcedNodes.add(nodeId));
   
   // From path selection (quick select), excluding start and end

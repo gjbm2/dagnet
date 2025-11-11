@@ -390,3 +390,125 @@ export function normalizeConstraintString(constraint: string): string {
   return parts.join('.');
 }
 
+/**
+ * Generate DSL string for a case variant override.
+ * 
+ * @param caseNodeId - Case node ID or UUID
+ * @param variantName - Variant name
+ * @param useCaseId - If true, use case.id; otherwise use node ID/UUID
+ * @returns DSL string like "case(case_id:treatment)" or "case(node_id:treatment)"
+ */
+export function generateCaseDSL(caseNodeId: string, variantName: string, useCaseId: boolean = true): string {
+  if (useCaseId) {
+    return `case(case_id:${variantName})`;
+  }
+  return `case(${caseNodeId}:${variantName})`;
+}
+
+/**
+ * Augment a DSL string with additional constraints.
+ * Merges visited/exclude/case/context functions intelligently.
+ * 
+ * @param existingDSL - Existing DSL string (may be empty)
+ * @param newConstraint - New constraint to add (e.g., "visited(nodea)")
+ * @returns Merged DSL string
+ */
+export function augmentDSLWithConstraint(existingDSL: string | null, newConstraint: string): string {
+  if (!existingDSL || !existingDSL.trim()) {
+    return normalizeConstraintString(newConstraint);
+  }
+  
+  // Parse both
+  const existing = parseConstraints(existingDSL);
+  const newParsed = parseConstraints(newConstraint);
+  
+  // Merge: combine arrays, deduplicate
+  const mergedVisited = [...new Set([...existing.visited, ...newParsed.visited])];
+  const mergedExclude = [...new Set([...existing.exclude, ...newParsed.exclude])];
+  const mergedContext = [...existing.context, ...newParsed.context].filter((kv, idx, arr) => 
+    arr.findIndex(kv2 => kv2.key === kv.key && kv2.value === kv.value) === idx
+  );
+  const mergedCases = [...existing.cases, ...newParsed.cases].filter((kv, idx, arr) => 
+    arr.findIndex(kv2 => kv2.key === kv.key && kv2.value === kv.value) === idx
+  );
+  const mergedVisitedAny = [...existing.visitedAny, ...newParsed.visitedAny];
+  
+  // Rebuild DSL
+  const parts: string[] = [];
+  
+  if (mergedCases.length > 0) {
+    const caseParts = mergedCases
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(({key, value}) => `case(${key}:${value})`);
+    parts.push(...caseParts);
+  }
+  if (mergedVisited.length > 0) {
+    parts.push(`visited(${mergedVisited.sort().join(', ')})`);
+  }
+  if (mergedExclude.length > 0) {
+    parts.push(`exclude(${mergedExclude.sort().join(', ')})`);
+  }
+  if (mergedContext.length > 0) {
+    const contextParts = mergedContext
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(({key, value}) => `context(${key}:${value})`);
+    parts.push(...contextParts);
+  }
+  if (mergedVisitedAny.length > 0) {
+    const visitedAnyParts = mergedVisitedAny.map(group =>
+      `visitedAny(${group.sort().join(', ')})`
+    );
+    parts.push(...visitedAnyParts);
+  }
+  
+  return parts.join('.');
+}
+
+/**
+ * Remove a constraint from a DSL string.
+ * 
+ * @param dsl - DSL string
+ * @param constraintToRemove - Constraint to remove (e.g., "visited(nodea)")
+ * @returns DSL string with constraint removed
+ */
+export function removeConstraintFromDSL(dsl: string | null, constraintToRemove: string): string {
+  if (!dsl || !dsl.trim()) return '';
+  
+  const parsed = parseConstraints(dsl);
+  const toRemove = parseConstraints(constraintToRemove);
+  
+  // Remove matching visited nodes
+  const remainingVisited = parsed.visited.filter(v => !toRemove.visited.includes(v));
+  const remainingExclude = parsed.exclude.filter(e => !toRemove.exclude.includes(e));
+  const remainingContext = parsed.context.filter(c => 
+    !toRemove.context.some(rc => rc.key === c.key && rc.value === c.value)
+  );
+  const remainingCases = parsed.cases.filter(c => 
+    !toRemove.cases.some(rc => rc.key === c.key && rc.value === c.value)
+  );
+  
+  // Rebuild DSL
+  const parts: string[] = [];
+  
+  if (remainingCases.length > 0) {
+    const caseParts = remainingCases
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(({key, value}) => `case(${key}:${value})`);
+    parts.push(...caseParts);
+  }
+  if (remainingVisited.length > 0) {
+    parts.push(`visited(${remainingVisited.sort().join(', ')})`);
+  }
+  if (remainingExclude.length > 0) {
+    parts.push(`exclude(${remainingExclude.sort().join(', ')})`);
+  }
+  if (remainingContext.length > 0) {
+    const contextParts = remainingContext
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(({key, value}) => `context(${key}:${value})`);
+    parts.push(...contextParts);
+  }
+  
+  return parts.join('.');
+}
+

@@ -106,8 +106,9 @@ export interface TabState {
     selectedEdgeId?: string | null;
     // What-if analysis state (per-tab, not per-file)
     whatIfAnalysis?: any;
-    caseOverrides?: Record<string, string>; // nodeId -> variantName
-    conditionalOverrides?: Record<string, Set<string>>; // edgeId -> forced visited nodes (hyperprior activation)
+    caseOverrides?: Record<string, string>; // nodeId -> variantName (legacy, will be converted to whatIfDSL)
+    conditionalOverrides?: Record<string, string | Set<string>>; // edgeId -> normalized condition string (legacy, will be converted to whatIfDSL)
+    whatIfDSL?: string | null; // Unified DSL string (e.g., "case(case_id:treatment).visited(nodea)") - NEW
     // Target panel for "Open in X View" placement
     targetPanel?: string;
     // Node visibility state (per-tab, not per-file)

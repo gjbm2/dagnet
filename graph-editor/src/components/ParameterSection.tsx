@@ -35,7 +35,7 @@ interface ParameterSectionProps {
   
   // Handlers
   onUpdate: (changes: Record<string, any>) => void;
-  onRebalance?: (newValue: number) => void;  // Optional rebalancing for probabilities
+  onRebalance?: () => void;  // Optional rebalancing for probabilities (no value param - uses current graph value)
   
   // Display config
   label: string;  // e.g., "Probability", "Cost (GBP)", "Cost (Time)"
@@ -212,13 +212,19 @@ export function ParameterSection({
               value={param?.mean ?? 0}
               onChange={(newValue) => {
                 // Update graph immediately while dragging (provides real-time feedback)
-                onUpdate({ mean: newValue, mean_overridden: true });
+                // NO history entry - only visual update
+                onUpdate({ mean: newValue, mean_overridden: true, _noHistory: true });
               }}
               onCommit={(newValue) => {
-                // Commit is called on mouse release (same update, just ensures consistency)
+                // Commit is called on mouse release - THIS creates the history entry
                 onUpdate({ mean: newValue, mean_overridden: true });
               }}
-              onRebalance={onRebalance}
+              onRebalance={onRebalance ? async () => {
+                // Ignore value from ProbabilityInput - handler uses current graph value
+                if (onRebalance) {
+                  await onRebalance();
+                }
+              } : undefined}
               isUnbalanced={isUnbalanced}
               showBalanceButton={showBalanceButton}
               disabled={disabled}
