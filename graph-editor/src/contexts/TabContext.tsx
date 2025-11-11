@@ -625,6 +625,22 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       await loadFromURLData();
     };
     initializeApp();
+    
+    // Listen for temporary tab creation (for log files)
+    const handleTemporaryTab = async (event: CustomEvent<{ tab: TabState }>) => {
+      const { tab } = event.detail;
+      // File already exists in fileRegistry, just create the tab
+      setTabs(prev => [...prev, tab]);
+      setActiveTabId(tab.id);
+      await db.tabs.add(tab);
+      await db.saveAppState({ activeTabId: tab.id });
+    };
+    
+    window.addEventListener('dagnet:openTemporaryTab', handleTemporaryTab as EventListener);
+    
+    return () => {
+      window.removeEventListener('dagnet:openTemporaryTab', handleTemporaryTab as EventListener);
+    };
   }, []);
 
   /**
@@ -861,6 +877,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
     // Load actual data from repository
     let data: any = {};
+    let existingFile: any = null; // Track if file already exists (for temporary files)
     
     try {
       if (item.type === 'graph') {
@@ -907,58 +924,68 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         }
       } else if (item.type === 'parameter' || item.type === 'context' || item.type === 'case' || item.type === 'node') {
         console.log(`TabContext: Loading ${item.type} ${item.name}...`);
-        const { paramRegistryService } = await import('../services/paramRegistryService');
         
-        // Get the currently selected repository from NavigatorContext by reading from IndexedDB
-        const appState = await db.appState.get('app-state');
-        const selectedRepo = appState?.navigatorState?.selectedRepo;
-        const selectedBranch = appState?.navigatorState?.selectedBranch || 'main';
-        
-        console.log(`TabContext: Loading ${item.type} from repo: ${selectedRepo}, branch: ${selectedBranch}`);
-        
-        // Load credentials to configure the service
-        const { credentialsManager } = await import('../lib/credentials');
-        const credentialsResult = await credentialsManager.loadCredentials();
-        
-        if (credentialsResult.success && credentialsResult.credentials && selectedRepo) {
-          const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
-          if (gitCreds) {
-            console.log(`TabContext: Configuring paramRegistryService with credentials for ${gitCreds.name}`);
-            paramRegistryService.setConfig({
-              source: 'git',
-              gitBasePath: gitCreds.basePath || '',
-              gitBranch: selectedBranch,
-              gitRepoOwner: gitCreds.owner,
-              gitRepoName: gitCreds.repo || gitCreds.name,
-              gitToken: gitCreds.token
-            });
-          } else {
-            console.warn(`TabContext: No git credentials found for repo: ${selectedRepo}`);
-          }
+        // Check if file already exists in fileRegistry (e.g., temporary log files)
+        existingFile = fileRegistry.getFile(fileId);
+        if (existingFile && existingFile.source?.repository === 'temporary') {
+          // Temporary file already exists - use its data (don't load from Git)
+          console.log(`TabContext: File ${fileId} is temporary, using existing data`);
+          data = existingFile.data;
         } else {
-          console.warn('TabContext: No credentials or selected repo available for paramRegistryService');
-        }
-        
-        // Load based on type
-        try {
-          if (item.type === 'parameter') {
-            data = await paramRegistryService.loadParameter(item.id);
-          } else if (item.type === 'context') {
-            data = await paramRegistryService.loadContext(item.id);
-          } else if (item.type === 'case') {
-            data = await paramRegistryService.loadCase(item.id);
-          } else if (item.type === 'node') {
-            data = await paramRegistryService.loadNode(item.id);
+          // File doesn't exist or is not temporary - load from Git
+          const { paramRegistryService } = await import('../services/paramRegistryService');
+          
+          // Get the currently selected repository from NavigatorContext by reading from IndexedDB
+          const appState = await db.appState.get('app-state');
+          const selectedRepo = appState?.navigatorState?.selectedRepo;
+          const selectedBranch = appState?.navigatorState?.selectedBranch || 'main';
+          
+          console.log(`TabContext: Loading ${item.type} from repo: ${selectedRepo}, branch: ${selectedBranch}`);
+          
+          // Load credentials to configure the service
+          const { credentialsManager } = await import('../lib/credentials');
+          const credentialsResult = await credentialsManager.loadCredentials();
+          
+          if (credentialsResult.success && credentialsResult.credentials && selectedRepo) {
+            const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
+            if (gitCreds) {
+              console.log(`TabContext: Configuring paramRegistryService with credentials for ${gitCreds.name}`);
+              paramRegistryService.setConfig({
+                source: 'git',
+                gitBasePath: gitCreds.basePath || '',
+                gitBranch: selectedBranch,
+                gitRepoOwner: gitCreds.owner,
+                gitRepoName: gitCreds.repo || gitCreds.name,
+                gitToken: gitCreds.token
+              });
+            } else {
+              console.warn(`TabContext: No git credentials found for repo: ${selectedRepo}`);
+            }
+          } else {
+            console.warn('TabContext: No credentials or selected repo available for paramRegistryService');
           }
-          console.log(`TabContext: Loaded ${item.type} data:`, data);
-        } catch (loadError) {
-          console.error(`TabContext: Failed to load ${item.type}:`, loadError);
-          // For now, use empty object with error flag
-          data = { 
-            _loadError: true,
-            _errorMessage: String(loadError),
-            _fileId: item.id
-          };
+          
+          // Load based on type
+          try {
+            if (item.type === 'parameter') {
+              data = await paramRegistryService.loadParameter(item.id);
+            } else if (item.type === 'context') {
+              data = await paramRegistryService.loadContext(item.id);
+            } else if (item.type === 'case') {
+              data = await paramRegistryService.loadCase(item.id);
+            } else if (item.type === 'node') {
+              data = await paramRegistryService.loadNode(item.id);
+            }
+            console.log(`TabContext: Loaded ${item.type} data:`, data);
+          } catch (loadError) {
+            console.error(`TabContext: Failed to load ${item.type}:`, loadError);
+            // For now, use empty object with error flag
+            data = { 
+              _loadError: true,
+              _errorMessage: String(loadError),
+              _fileId: item.id
+            };
+          }
         }
       } else if (item.type === 'credentials' || item.type === 'connections') {
         console.log(`TabContext: Loading ${item.type} ${item.name}...`);
@@ -999,7 +1026,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     const file = await fileRegistry.getOrCreateFile(
       fileId,
       item.type,
-      {
+      existingFile?.source || {
         repository: 'local',
         path: item.path,
         branch: 'main'
@@ -1100,14 +1127,21 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     
     console.log(`closeTab: Step 5 - Check if local file should be removed from navigator`);
     if (isLastView && file) {
-      // Dispatch event to let NavigatorContext check if this is a local item
-      // and remove it if needed
-      window.dispatchEvent(new CustomEvent('dagnet:lastViewClosed', { 
-        detail: { 
-          fileId: tab.fileId,
-          type: file.type
-        } 
-      }));
+      // Clean up temporary log files
+      if (file.source?.repository === 'temporary') {
+        console.log(`closeTab: Cleaning up temporary file: ${tab.fileId}`);
+        const { LogFileService } = await import('../services/logFileService');
+        await LogFileService.cleanupTemporaryFile(tab.fileId);
+      } else {
+        // Dispatch event to let NavigatorContext check if this is a local item
+        // and remove it if needed
+        window.dispatchEvent(new CustomEvent('dagnet:lastViewClosed', { 
+          detail: { 
+            fileId: tab.fileId,
+            type: file.type
+          } 
+        }));
+      }
     }
 
     console.log(`closeTab: Step 6 - Signal rc-dock to destroy tab`);

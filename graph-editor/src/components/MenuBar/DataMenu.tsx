@@ -3,8 +3,10 @@ import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
+import { BatchOperationsModal } from '../modals/BatchOperationsModal';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
+import type { BatchOperationType } from '../modals/BatchOperationsModal';
 
 /**
  * Data Menu
@@ -151,21 +153,29 @@ export function DataMenu() {
     };
   }, []);
   
-  // Batch operations (stubbed)
+  // Batch operations state
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchOperationType, setBatchOperationType] = useState<BatchOperationType | null>(null);
+  
+  // Batch operations handlers
   const handleGetAllFromFiles = () => {
-    toast('Batch "Get All from Files" - Coming soon', { icon: '🚧' });
+    setBatchOperationType('get-from-files');
+    setBatchModalOpen(true);
   };
   
   const handleGetAllFromSources = () => {
-    toast('Batch "Get All from Sources" - Coming soon', { icon: '🚧' });
+    setBatchOperationType('get-from-sources');
+    setBatchModalOpen(true);
   };
   
   const handleGetAllFromSourcesDirect = () => {
-    toast('Batch "Get All from Sources (direct)" - Coming soon', { icon: '🚧' });
+    setBatchOperationType('get-from-sources-direct');
+    setBatchModalOpen(true);
   };
   
   const handlePutAllToFiles = () => {
-    toast('Batch "Put All to Files" - Coming soon', { icon: '🚧' });
+    setBatchOperationType('put-to-files');
+    setBatchModalOpen(true);
   };
   
   // Context-dependent operations
@@ -635,22 +645,23 @@ export function DataMenu() {
   });
   
   return (
-    <Menubar.Menu key={menuContentKey}>
-      <Menubar.Trigger className="menubar-trigger" onPointerDown={() => {
-        if (isGraphTab) {
-          const editorState = activeTab?.editorState;
-          if (editorState) {
-            const nodeId = editorState.selectedNodeId || null;
-            const edgeId = editorState.selectedEdgeId || null;
-            if (nodeId !== selectedNodeIdRef.current) setSelectedNodeId(nodeId);
-            if (edgeId !== selectedEdgeIdRef.current) setSelectedEdgeId(edgeId);
+    <>
+      <Menubar.Menu key={menuContentKey}>
+        <Menubar.Trigger className="menubar-trigger" onPointerDown={() => {
+          if (isGraphTab) {
+            const editorState = activeTab?.editorState;
+            if (editorState) {
+              const nodeId = editorState.selectedNodeId || null;
+              const edgeId = editorState.selectedEdgeId || null;
+              if (nodeId !== selectedNodeIdRef.current) setSelectedNodeId(nodeId);
+              if (edgeId !== selectedEdgeIdRef.current) setSelectedEdgeId(edgeId);
+            }
           }
-        }
-      }}>
-        Data
-      </Menubar.Trigger>
-      <Menubar.Portal>
-        <Menubar.Content className="menubar-content" align="start">
+        }}>
+          Data
+        </Menubar.Trigger>
+        <Menubar.Portal>
+          <Menubar.Content className="menubar-content" align="start">
           {/* Batch operations */}
           <Menubar.Item 
             className="menubar-item" 
@@ -744,6 +755,22 @@ export function DataMenu() {
         </Menubar.Content>
       </Menubar.Portal>
     </Menubar.Menu>
+    
+    {/* Batch Operations Modal */}
+    {batchOperationType && (
+      <BatchOperationsModal
+        isOpen={batchModalOpen}
+        onClose={() => {
+          setBatchModalOpen(false);
+          setBatchOperationType(null);
+        }}
+        operationType={batchOperationType}
+        graph={graph || null}
+        setGraph={handleSetGraph}
+        window={windowState}
+      />
+    )}
+  </>
   );
 }
 

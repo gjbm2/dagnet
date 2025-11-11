@@ -518,6 +518,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           // Exclude system files (credentials) and index files
           if (file.type === 'credentials') return false;
           if (file.fileId.endsWith('-index')) return false;
+          // Exclude temporary log files (repository: 'temporary')
+          if (file.source?.repository === 'temporary') return false;
           return true;
         })
         .map(file => ({

@@ -246,7 +246,9 @@ function AppShellContent() {
       if (isInLayout && !hasBeenAdded) {
         // Tab exists in layout (placeholder from loadTab) - UPDATE with real content
         console.log(`AppShell: Updating placeholder tab ${tab.id} with real content`);
-        const objectType = tab.fileId.split('-')[0] as any;
+        // Get file type from registry (fallback to parsing fileId for backwards compatibility)
+        const file = fileRegistry.getFile(tab.fileId);
+        const objectType = (file?.type || tab.fileId.split('-')[0]) as any;
         const EditorComponent = getEditorComponent(objectType, tab.viewMode);
         const theme = getObjectTypeTheme(objectType);
         const IconComponent = theme.icon;
@@ -314,7 +316,9 @@ function AppShellContent() {
       } else if (!isInLayout && !hasBeenAdded && !recentlyClosedRef.current.has(tab.id)) {
         // New tab not in layout - ADD to rc-dock (but not if recently closed)
         console.log(`AppShell: Adding new tab ${tab.id} to rc-dock`);
-        const objectType = tab.fileId.split('-')[0] as any;
+        // Get file type from registry (fallback to parsing fileId for backwards compatibility)
+        const file = fileRegistry.getFile(tab.fileId);
+        const objectType = (file?.type || tab.fileId.split('-')[0]) as any;
         const EditorComponent = getEditorComponent(objectType, tab.viewMode);
         const theme = getObjectTypeTheme(objectType);
         const IconComponent = theme.icon;
@@ -680,7 +684,9 @@ function AppShellContent() {
         };
       }
       
-      const objectType = tab.fileId.split('-')[0] as any;
+      // Get file type from registry (fallback to parsing fileId for backwards compatibility)
+      const file = fileRegistry.getFile(tab.fileId);
+      const objectType = (file?.type || tab.fileId.split('-')[0]) as any;
       const EditorComponent = getEditorComponent(objectType, tab.viewMode);
       const theme = getObjectTypeTheme(objectType);
       const IconComponent = theme.icon;

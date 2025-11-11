@@ -232,6 +232,18 @@ export default function ConversionEdge({
     
     if (evidence.n !== undefined) evidenceParts.push(`n=${evidence.n}`);
     if (evidence.k !== undefined) evidenceParts.push(`k=${evidence.k}`);
+    
+    // Debug: Show naive p (k/n) and part pooled p
+    if (evidence.n !== undefined && evidence.k !== undefined && evidence.n > 0) {
+      const naiveP = evidence.k / evidence.n;
+      evidenceParts.push(`naive p=${(naiveP * 100).toFixed(2)}%`);
+      
+      // Part pooled p (inverse-variance weighted) - calculate if we have daily data
+      // For now, we'll show naive p. Part pooled would require daily time-series data
+      // which isn't stored on the graph edge (only in parameter files)
+      // TODO: Could fetch from parameter file if parameter_id exists
+    }
+    
     if (evidence.window_from && evidence.window_to) {
       const from = new Date(evidence.window_from).toLocaleDateString();
       const to = new Date(evidence.window_to).toLocaleDateString();
