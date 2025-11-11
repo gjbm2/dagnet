@@ -2716,8 +2716,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         targetHandle: pendingConnection.targetHandle || null
       },
       {
-        case_id: sourceNode.case.id,
         case_variant: variant.name
+        // case_id will be automatically inferred from source node by UpdateManager
       }
     );
     

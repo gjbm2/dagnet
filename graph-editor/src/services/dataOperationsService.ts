@@ -381,10 +381,10 @@ class DataOperationsService {
                       duration: 5000,
                     });
                   } else {
-                    toast(`⚠ Aggregating data with different query signatures (${mismatchedEntries.length} entry/entries)`, {
-                      icon: '⚠️',
-                      duration: 5000,
-                    });
+                  toast(`⚠ Aggregating data with different query signatures (${mismatchedEntries.length} entry/entries)`, {
+                    icon: '⚠️',
+                    duration: 5000,
+                  });
                   }
                 }
                 
@@ -715,12 +715,20 @@ class DataOperationsService {
         // This applies to file pulls (same as external data), but NOT manual slider edits
         let finalGraph = nextGraph;
         if ((result.metadata as any)?.requiresSiblingRebalance) {
-          const { rebalanceSiblingParameters } = await import('../utils/rebalanceUtils');
-          finalGraph = rebalanceSiblingParameters(
-            nextGraph,
-            (result.metadata as any).updatedEdgeId,
-            (result.metadata as any).updatedField
-          );
+          // Use UpdateManager's rebalance method
+          const { UpdateManager } = await import('./UpdateManager');
+          const updateManagerInstance = new UpdateManager();
+          const updatedEdgeId = (result.metadata as any).updatedEdgeId;
+          const updatedField = (result.metadata as any).updatedField;
+          
+          // Rebalance based on field type
+          if (updatedField === 'p.mean') {
+            finalGraph = updateManagerInstance.rebalanceEdgeProbabilities(
+              nextGraph,
+              updatedEdgeId,
+              false // Don't force rebalance - respect overrides
+            );
+          }
         }
         
         // Save to graph store
@@ -1829,12 +1837,20 @@ class DataOperationsService {
             // This applies to both external data (DAS) and file pulls, but NOT manual slider edits
             let finalGraph = nextGraph;
             if ((updateResult.metadata as any)?.requiresSiblingRebalance) {
-              const { rebalanceSiblingParameters } = await import('../utils/rebalanceUtils');
-              finalGraph = rebalanceSiblingParameters(
-                nextGraph,
-                (updateResult.metadata as any).updatedEdgeId,
-                (updateResult.metadata as any).updatedField
-              );
+              // Use UpdateManager's rebalance method
+              const { UpdateManager } = await import('./UpdateManager');
+              const updateManagerInstance = new UpdateManager();
+              const updatedEdgeId = (updateResult.metadata as any).updatedEdgeId;
+              const updatedField = (updateResult.metadata as any).updatedField;
+              
+              // Rebalance based on field type
+              if (updatedField === 'p.mean') {
+                finalGraph = updateManagerInstance.rebalanceEdgeProbabilities(
+                  nextGraph,
+                  updatedEdgeId,
+                  false // Don't force rebalance - respect overrides
+                );
+              }
             }
             
             setGraph(finalGraph);

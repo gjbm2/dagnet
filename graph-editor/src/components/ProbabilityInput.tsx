@@ -119,23 +119,29 @@ export default function ProbabilityInput({
     
     // NO onCommit here - only onChange for real-time updates
     // onCommit should only be called on mouseUp
-    
-    // Auto-rebalance if CTRL is held (but no history save)
-    if (onRebalance) {
-      scheduleRebalance(() => onRebalance(roundTo4DP(snappedValue)));
-    }
   };
   
   const handleSliderMouseUp = () => {
-    // If CTRL was held during drag, rebalance should have been scheduled
-    // Wait for it to complete before committing
+    // If CTRL was held during drag: commit FIRST, then rebalance
     if (shouldAutoRebalance()) {
-      // Rebalance is scheduled, it will call setGraph and saveHistoryState
-      // Don't call onCommit here as rebalance handles the graph update
+      // Step 1: Commit the new value
+      if (onCommit) {
+        onCommit(value);
+      }
+      // Step 2: Then rebalance (after commit/state update completes)
+      if (onRebalance) {
+        // Use requestAnimationFrame to wait for React state update to propagate
+        // This ensures the graph has been updated before rebalance reads it
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            onRebalance(value);
+          });
+        });
+      }
       return;
     }
     
-    // No CTRL held - normal commit
+    // No CTRL held - normal commit only
     if (onCommit) {
       onCommit(value);
     }
@@ -271,6 +277,7 @@ export default function ProbabilityInput({
         <button
           onClick={(e) => {
             e.stopPropagation();
+            // Call rebalance without value - handler should use current graph value
             onRebalance(value);
           }}
           style={{

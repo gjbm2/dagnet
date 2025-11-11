@@ -39,13 +39,24 @@
   padding: 4px 0;
 }
 
-.lightning-menu-item {
+.lightning-menu-submenu {
+  min-width: 200px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  padding: 4px;
+  z-index: 10001;
+}
+
+.lightning-menu-item,
+.context-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 6px 12px;
   background: transparent;
   border: none;
   text-align: left;
@@ -56,16 +67,19 @@
   white-space: nowrap;
 }
 
-.lightning-menu-item:hover:not(:disabled) {
-  background: var(--bg-hover, #f5f5f5);
+.lightning-menu-item:hover:not(:disabled),
+.context-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover, #f8f9fa);
 }
 
-.lightning-menu-item:disabled {
+.lightning-menu-item:disabled,
+.context-menu-item:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-.lightning-menu-item-pathway {
+.lightning-menu-item-pathway,
+.context-menu-item-pathway {
   display: flex;
   align-items: center;
   gap: 3px;
@@ -89,16 +103,19 @@
 
 /* Dark mode support (optional) */
 @media (prefers-color-scheme: dark) {
-  .lightning-menu-dropdown {
+  .lightning-menu-dropdown,
+  .lightning-menu-submenu {
     background: #2a2a2a;
     border-color: #444;
   }
   
-  .lightning-menu-item {
+  .lightning-menu-item,
+  .context-menu-item {
     color: #ddd;
   }
   
-  .lightning-menu-item:hover:not(:disabled) {
+  .lightning-menu-item:hover:not(:disabled),
+  .context-menu-item:hover:not(:disabled) {
     background: #333;
   }
   
