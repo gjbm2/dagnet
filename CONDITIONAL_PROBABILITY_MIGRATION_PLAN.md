@@ -774,23 +774,96 @@ export interface ConditionalProbability {
 }
 ```
 
-## Implementation Order
+## Implementation Order & Status
 
-1. ✅ **Phase 1**: Generalize DSL parser utility
-2. ✅ **Phase 2**: Fix broken files (in priority order)
-   - 2.1: whatIf.ts (CRITICAL)
-   - 2.2: runner.ts (HIGH)
-   - 2.3: conditionalReferences.ts (HIGH)
-   - 2.4: EdgeContextMenu.tsx (HIGH)
-   - 2.5: ConditionalProbabilitiesSection.tsx (MEDIUM - verify usage first)
-3. ✅ **Phase 3**: Remove backward compatibility hacks
-4. ✅ **Phase 4**: Update type system
-5. ✅ **Phase 5**: Create data migration script
-6. ✅ **Phase 6**: Testing
-7. ✅ **Phase 7**: Handle ConditionalProbabilitiesSection.tsx
-8. ✅ **Phase 8**: UpdateManager integration
-9. ✅ **Phase 9**: Edge cases and error handling
-10. ✅ **Phase 10**: Documentation
+1. ✅ **Phase 1**: Generalize DSL parser utility - **COMPLETED**
+   - ✅ Extended `queryDSL.ts` with `parseConstraints()`, `parseDSL()`, `getVisitedNodeIds()`, `evaluateConstraint()`, `normalizeConstraintString()`
+   - ✅ Updated `buildDslFromEdge.ts` to use centralized parser
+   - ✅ All functions implemented and tested
+
+2. ✅ **Phase 2**: Fix broken files (in priority order) - **COMPLETED**
+   - ✅ 2.1: whatIf.ts (CRITICAL) - Uses `parseConstraints()` and `evaluateConstraint()`
+   - ✅ 2.2: runner.ts (HIGH) - Uses `getVisitedNodeIds()` and `evaluateConstraint()`
+   - ✅ 2.3: conditionalReferences.ts (HIGH) - Uses `normalizeConstraintString()` and `parseConstraints()`, extended reference format implemented
+   - ✅ 2.4: EdgeContextMenu.tsx (HIGH) - Uses `getVisitedNodeIds()` and `normalizeConstraintString()`
+   - ⚠️ 2.5: ConditionalProbabilitiesSection.tsx (MEDIUM) - **FILE EXISTS BUT STATUS UNKNOWN** (needs verification if still used)
+
+3. ⚠️ **Phase 3**: Remove backward compatibility hacks - **MOSTLY COMPLETED**
+   - ✅ 3.1: conditionalValidation.ts - Uses `getVisitedNodeIds()` from `queryDSL.ts`
+   - ⚠️ 3.2: conditionalColors.ts - Still has old format check (warns but continues gracefully)
+   - ✅ 3.3: ConversionEdge.tsx - Uses `getVisitedNodeIds()` from `queryDSL.ts`
+   - ✅ 3.4: WhatIfAnalysisControl.tsx - Uses `getVisitedNodeIds()` and `normalizeConstraintString()`
+   - ⚠️ 3.5: ConditionalProbabilityEditor.tsx - Still has old format display handling (lines 129-130, 178, 183)
+
+4. ✅ **Phase 4**: Update type system - **COMPLETED**
+   - ✅ Updated `ConditionalProbability.condition` to `string` only (no union type)
+   - ✅ Added `color?: string` field to `ConditionalProbability` interface
+   - ✅ Updated type comments with DSL format documentation
+
+5. ⚠️ **Phase 5**: Create data migration script - **PARTIALLY COMPLETED**
+   - ✅ Migration script was created (`scripts/migrate-conditional-probabilities.ts`)
+   - ❌ Script was deleted (user requested manual migration instead)
+   - ✅ Manual migration completed for specified graph files:
+     - `param-registry/test/graphs/WA-case-conversion.json` (6 conditional probabilities migrated)
+     - Other test files verified (no old format found)
+
+6. ✅ **Phase 6**: Testing - **COMPLETED**
+   - ✅ Comprehensive unit tests in `queryDSL.test.ts`:
+     - Tests for `parseConstraints()` (15+ test cases)
+     - Tests for `evaluateConstraint()` (10+ test cases)
+     - Tests for `normalizeConstraintString()` (8+ test cases)
+     - Edge case handling tests
+   - ✅ UpdateManager tests in `UpdateManager.test.ts`:
+     - Tests for `addConditionalProbability()`
+     - Tests for `updateConditionalProbabilities()`
+     - Tests for `removeConditionalProbability()`
+     - Tests for sibling propagation logic
+
+7. ⚠️ **Phase 7**: Handle ConditionalProbabilitiesSection.tsx - **STATUS UNKNOWN**
+   - ⚠️ File exists at `graph-editor/src/components/ConditionalProbabilitiesSection.tsx`
+   - ❓ Need to verify if component is still used (grep for `<ConditionalProbabilitiesSection`)
+   - ⚠️ If unused: Should be removed or migrated
+   - ⚠️ If used: Needs same fixes as other components
+
+8. ✅ **Phase 8**: UpdateManager integration - **COMPLETED**
+   - ✅ `addConditionalProbability()` - Adds condition and propagates to siblings
+   - ✅ `updateConditionalProbabilities()` - Updates conditions and syncs siblings
+   - ✅ `removeConditionalProbability()` - Removes condition and cleans up siblings
+   - ✅ `propagateConditionalColor()` - Propagates color to matching conditions on siblings
+   - ✅ `createEdge()` - Centralized edge creation with proper ID generation
+   - ✅ All methods handle string format conditions correctly
+   - ✅ Tests written and passing
+
+9. ✅ **Phase 9**: Edge cases and error handling - **COMPLETED**
+   - ✅ Parser handles empty/null/undefined gracefully (returns empty arrays)
+   - ✅ Old format warnings in place (`conditionalColors.ts`, `ConditionalProbabilityEditor.tsx`)
+   - ✅ Invalid strings handled gracefully (no crashes)
+   - ✅ Condition comparison uses `normalizeConstraintString()` for consistency
+   - ✅ Reference format extended to support full constraint strings
+
+10. ⚠️ **Phase 10**: Documentation - **PARTIALLY COMPLETED**
+    - ✅ Code comments updated in type definitions
+    - ✅ JSDoc comments added to parser functions
+    - ⚠️ User documentation may need updates (if any exists)
+    - ⚠️ Migration guide for users not yet written
+
+## Overall Completion Status
+
+**Completed**: ~85% of planned work
+
+**Remaining Tasks**:
+1. ⚠️ **Phase 3.2 & 3.5**: Remove remaining old format handling from `conditionalColors.ts` and `ConditionalProbabilityEditor.tsx`
+2. ⚠️ **Phase 7**: Verify and handle `ConditionalProbabilitiesSection.tsx` (remove if unused, fix if used)
+3. ⚠️ **Phase 10**: Complete user-facing documentation updates
+
+**Critical Functionality**: ✅ **ALL WORKING**
+- What-if calculations: ✅ Fixed
+- Simulation runner: ✅ Fixed
+- Graph operations: ✅ Fixed
+- Edge context menu: ✅ Fixed
+- Conditional probability creation/update/delete: ✅ Working via UpdateManager
+- Color propagation: ✅ Working via UpdateManager
+- Edge creation: ✅ Working via UpdateManager
 
 ## Dependencies and Prerequisites
 
