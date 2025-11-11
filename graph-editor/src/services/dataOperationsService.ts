@@ -290,7 +290,18 @@ class DataOperationsService {
             // Combine all daily data from all value entries into a single time series
             const allTimeSeries: TimeSeriesPoint[] = [];
             
-            // Process entries in order (oldest first) so newer entries overwrite older ones
+            // Normalize window for date comparison
+            const normalizedWindow: DateRange = {
+              start: normalizeDate(window.start),
+              end: normalizeDate(window.end),
+            };
+            
+            console.log('[DataOperationsService] Aggregating window:', {
+              window: normalizedWindow,
+              entriesWithDaily: valuesWithDaily.length,
+            });
+            
+            // Process entries in order (newest last) so newer entries overwrite older ones
             // If query signature validation passed, prefer entries with matching signature
             const sortedValues = [...valuesWithDaily].sort((a, b) => {
               // If we have an expected signature, prefer matching entries
@@ -300,28 +311,35 @@ class DataOperationsService {
                 if (aMatches && !bMatches) return -1;
                 if (!aMatches && bMatches) return 1;
               }
-              // Otherwise sort by date (oldest first)
-              const aDate = a.window_from || '';
-              const bDate = b.window_from || '';
-              return aDate.localeCompare(bDate);
+              // Sort by retrieved_at or window_to (newest last) so newer entries overwrite older ones
+              const aDate = a.data_source?.retrieved_at || a.window_to || a.window_from || '';
+              const bDate = b.data_source?.retrieved_at || b.window_to || b.window_from || '';
+              return aDate.localeCompare(bDate); // Oldest first, so when we process in order, newer overwrites older
             });
             
-            for (const value of sortedValues) {
+            for (let entryIdx = 0; entryIdx < sortedValues.length; entryIdx++) {
+              const value = sortedValues[entryIdx];
               if (value.n_daily && value.k_daily && value.dates) {
+                const entryWindow = `${normalizeDate(value.window_from || '')} to ${normalizeDate(value.window_to || '')}`;
+                let entryDatesInWindow = 0;
+                
                 for (let i = 0; i < value.dates.length; i++) {
                   const date = normalizeDate(value.dates[i]);
                   // Only add if date is within window and not already added (or overwrite if newer)
-                  if (isDateInRange(date, window)) {
+                  if (isDateInRange(date, normalizedWindow)) {
+                    entryDatesInWindow++;
                     // If date already exists, overwrite with newer data (later in array = newer)
                     const existingIndex = allTimeSeries.findIndex(p => normalizeDate(p.date) === date);
                     if (existingIndex >= 0) {
                       // Overwrite existing entry
+                      const oldN = allTimeSeries[existingIndex].n;
                       allTimeSeries[existingIndex] = {
                         date: value.dates[i],
                         n: value.n_daily[i],
                         k: value.k_daily[i],
                         p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
                       };
+                      console.log(`[DataOperationsService] Entry ${entryIdx}: Overwrote ${date} (n: ${oldN} → ${value.n_daily[i]})`);
                     } else {
                       // Add new entry
                       allTimeSeries.push({
@@ -330,11 +348,29 @@ class DataOperationsService {
                         k: value.k_daily[i],
                         p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
                       });
+                      console.log(`[DataOperationsService] Entry ${entryIdx}: Added ${date} (n: ${value.n_daily[i]})`);
                     }
                   }
                 }
+                
+                console.log(`[DataOperationsService] Entry ${entryIdx}: window=${entryWindow}, datesInWindow=${entryDatesInWindow}/${value.dates.length}`);
               }
             }
+            
+            console.log('[DataOperationsService] Combined time series:', {
+              totalPoints: allTimeSeries.length,
+              dates: allTimeSeries.map(p => p.date),
+              nValues: allTimeSeries.map(p => ({ date: p.date, n: p.n, k: p.k, p: (p.k/p.n*100).toFixed(1)+'%' })),
+              totalN: allTimeSeries.reduce((sum, p) => sum + p.n, 0),
+              totalK: allTimeSeries.reduce((sum, p) => sum + p.k, 0),
+              expectedStdev: (() => {
+                const totalN = allTimeSeries.reduce((sum, p) => sum + p.n, 0);
+                const totalK = allTimeSeries.reduce((sum, p) => sum + p.k, 0);
+                if (totalN === 0) return 'N/A';
+                const p = totalK / totalN;
+                return (Math.sqrt((p * (1 - p)) / totalN) * 100).toFixed(2) + '%';
+              })(),
+            });
             
             // Sort by date
             allTimeSeries.sort((a, b) => {
@@ -344,7 +380,7 @@ class DataOperationsService {
             });
             
             // Aggregate the combined time series
-            const aggregation = windowAggregationService.aggregateWindow(allTimeSeries, window);
+            const aggregation = windowAggregationService.aggregateWindow(allTimeSeries, normalizedWindow);
             
             // Enhance with statistical methods (inverse-variance weighting by default)
             // Handle both sync (TS) and async (Python) results
@@ -392,8 +428,21 @@ class DataOperationsService {
             
             console.log('[DataOperationsService] Window aggregation result:', {
               window,
-              aggregation,
-              aggregatedValue,
+              aggregation: {
+                ...aggregation,
+                stdev: aggregation.stdev,
+                stdevPercent: (aggregation.stdev * 100).toFixed(2) + '%',
+              },
+              enhanced: {
+                ...enhanced,
+                stdev: enhanced.stdev,
+                stdevPercent: (enhanced.stdev * 100).toFixed(2) + '%',
+              },
+              aggregatedValue: {
+                ...aggregatedValue,
+                stdev: aggregatedValue.stdev,
+                stdevPercent: (aggregatedValue.stdev * 100).toFixed(2) + '%',
+              },
               entriesProcessed: valuesWithDaily.length,
               totalDays: allTimeSeries.length,
               missingDates: aggregation.missing_dates,
@@ -433,8 +482,13 @@ class DataOperationsService {
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
+            // If no data available for window, don't fall back - show error and return early
+            if (errorMsg.includes('No data available for window')) {
+              toast.error(`No data available for selected window (${window.start} to ${window.end})`);
+              return; // Don't proceed with file-to-graph update
+            }
             toast.error(`Window aggregation failed: ${errorMsg}`);
-            // Fall back to regular file-to-graph update
+            // Fall back to regular file-to-graph update only for other errors
             console.warn('[DataOperationsService] Falling back to regular update:', error);
           }
         } else {
