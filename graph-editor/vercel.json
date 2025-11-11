@@ -1,0 +1,13 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/generate-all-parameters",
+      "destination": "/api/python-api"
+    },
+    {
+      "source": "/api/stats-enhance",
+      "destination": "/api/python-api"
+    }
+  ]
+}
+
