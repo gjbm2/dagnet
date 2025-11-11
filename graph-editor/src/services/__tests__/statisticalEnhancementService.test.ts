@@ -86,16 +86,16 @@ describe('StatisticalEnhancementService', () => {
   });
 
   describe('StatisticalEnhancementService', () => {
-    it('should enhance with default "none" method (pass-through)', async () => {
+    it('should enhance with default "inverse-variance" method', async () => {
       const raw: RawAggregation = createMockRawAggregation(1000, 300);
 
       const result = await statisticalEnhancementService.enhance(raw);
 
-      expect(result.method).toBe('naive');
+      expect(result.method).toBe('inverse-variance');
       expect(result.n).toBe(1000);
       expect(result.k).toBe(300);
       expect(result.mean).toBeCloseTo(0.3, 10);
-      expect(result.metadata.enhancement_method).toBe('none');
+      expect(result.metadata.enhancement_method).toBe('inverse-variance');
     });
 
     it('should enhance with explicit "none" method', async () => {
@@ -109,14 +109,15 @@ describe('StatisticalEnhancementService', () => {
       expect(result.metadata.enhancement_method).toBe('none');
     });
 
-    it('should fallback to "none" for unknown method', async () => {
+    it('should fallback to "none" for unknown method (non-Python)', async () => {
       const raw: RawAggregation = createMockRawAggregation(1000, 300);
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      const result = await statisticalEnhancementService.enhance(raw, 'bayesian');
+      // Use a method that doesn't exist and isn't a Python method
+      const result = await statisticalEnhancementService.enhance(raw, 'unknown-method' as any);
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Unknown enhancement method: bayesian')
+        expect.stringContaining('Unknown enhancement method: unknown-method')
       );
       expect(result.method).toBe('naive');
       expect(result.n).toBe(1000);

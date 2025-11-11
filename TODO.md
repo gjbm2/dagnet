@@ -1,5 +1,7 @@
 # DagNet TODO
 
+Minus autocomplete not working in query/selector
+
 ### High Priority
 - **Conditional Probability Migration - BROKEN** ⚠️ **CRITICAL**
   - STATUS: Conditional probability format migrated from `condition: {visited: [...]}` to `condition: "visited(...)"` string format, but multiple files still use old format
