@@ -71,6 +71,16 @@ export function DataOperationsMenu({
   let connectionName: string | undefined;
   
   if (objectType === 'parameter') {
+    // Debug: log connection detection
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DataOperationsMenu] Checking connections for parameter:`, {
+        objectId,
+        targetId,
+        paramSlot,
+        conditionalIndex,
+        hasFile: !!objectId
+      });
+    }
     // Check for connection in file first (if objectId exists)
     const file = objectId ? fileRegistry.getFile(`parameter-${objectId}`) : null;
     const fileExists = !!file;
@@ -115,6 +125,18 @@ export function DataOperationsMenu({
     
     // Get connection name (prefer direct, fallback to file)
     connectionName = directConnectionName || fileConnectionName;
+    
+    // Debug: log connection detection results
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DataOperationsMenu] Connection detection results:`, {
+        hasDirectConnection,
+        hasFileConn,
+        fileExists,
+        hasConnection,
+        hasFileConnection,
+        connectionName
+      });
+    }
   } else if (objectType === 'case') {
     // Check case file for connection
     const file = objectId ? fileRegistry.getFile(`case-${objectId}`) : null;

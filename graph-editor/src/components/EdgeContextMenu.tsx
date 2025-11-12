@@ -9,7 +9,7 @@
  * - Properties & Delete options
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { ParameterEditor } from './ParameterEditor';
 import { DataOperationsMenu } from './DataOperationsMenu';
 import { ChevronRight } from 'lucide-react';
@@ -40,8 +40,43 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
 }) => {
   const [localData, setLocalData] = useState(edgeData);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+  const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { window } = useGraphStore();
   const viewPrefs = useViewPreferencesContext();
+  
+  // Helper to handle submenu open/close with delay to prevent closing when hovering over disabled items
+  const handleSubmenuEnter = (submenuName: string) => {
+    if (submenuTimeoutRef.current) {
+      clearTimeout(submenuTimeoutRef.current);
+      submenuTimeoutRef.current = null;
+    }
+    setOpenSubmenu(submenuName);
+  };
+  
+  const handleSubmenuLeave = () => {
+    // Add a small delay before closing to allow movement to submenu
+    submenuTimeoutRef.current = setTimeout(() => {
+      setOpenSubmenu(null);
+      submenuTimeoutRef.current = null;
+    }, 150);
+  };
+  
+  const handleSubmenuContentEnter = () => {
+    // Cancel close timeout when entering submenu content
+    if (submenuTimeoutRef.current) {
+      clearTimeout(submenuTimeoutRef.current);
+      submenuTimeoutRef.current = null;
+    }
+  };
+  
+  const handleSubmenuContentLeave = () => {
+    // Close immediately when leaving submenu content
+    setOpenSubmenu(null);
+    if (submenuTimeoutRef.current) {
+      clearTimeout(submenuTimeoutRef.current);
+      submenuTimeoutRef.current = null;
+    }
+  };
   
   // Create a setGraph wrapper that calls onUpdateGraph (which updates the tab-specific graph)
   const setGraph = (updatedGraph: any) => {
@@ -435,8 +470,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           {hasProbabilityParam && (
             <div
               style={{ position: 'relative' }}
-              onMouseEnter={() => setOpenSubmenu('probability')}
-              onMouseLeave={() => setOpenSubmenu(null)}
+              onMouseEnter={() => handleSubmenuEnter('probability')}
+              onMouseLeave={handleSubmenuLeave}
             >
               <div
                 style={{
@@ -463,6 +498,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     marginLeft: '4px',
                     zIndex: 10001
                   }}
+                  onMouseEnter={handleSubmenuContentEnter}
+                  onMouseLeave={handleSubmenuContentLeave}
                 >
                   <DataOperationsMenu
                     objectType="parameter"
@@ -487,8 +524,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           {hasConditionalParam && (
             <div
               style={{ position: 'relative' }}
-              onMouseEnter={() => setOpenSubmenu('conditional')}
-              onMouseLeave={() => setOpenSubmenu(null)}
+              onMouseEnter={() => handleSubmenuEnter('conditional')}
+              onMouseLeave={handleSubmenuLeave}
             >
               <div
                 style={{
@@ -515,6 +552,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     marginLeft: '4px',
                     zIndex: 10001
                   }}
+                  onMouseEnter={handleSubmenuContentEnter}
+                  onMouseLeave={handleSubmenuContentLeave}
                 >
                   <DataOperationsMenu
                     objectType="parameter"
@@ -540,8 +579,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           {hasCostGbpParam && (
             <div
               style={{ position: 'relative' }}
-              onMouseEnter={() => setOpenSubmenu('cost_gbp')}
-              onMouseLeave={() => setOpenSubmenu(null)}
+              onMouseEnter={() => handleSubmenuEnter('cost_gbp')}
+              onMouseLeave={handleSubmenuLeave}
             >
               <div
                 style={{
@@ -568,6 +607,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     marginLeft: '4px',
                     zIndex: 10001
                   }}
+                  onMouseEnter={handleSubmenuContentEnter}
+                  onMouseLeave={handleSubmenuContentLeave}
                 >
                   <DataOperationsMenu
                     objectType="parameter"
@@ -592,8 +633,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           {hasCostTimeParam && (
             <div
               style={{ position: 'relative' }}
-              onMouseEnter={() => setOpenSubmenu('cost_time')}
-              onMouseLeave={() => setOpenSubmenu(null)}
+              onMouseEnter={() => handleSubmenuEnter('cost_time')}
+              onMouseLeave={handleSubmenuLeave}
             >
               <div
                 style={{
@@ -620,6 +661,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     marginLeft: '4px',
                     zIndex: 10001
                   }}
+                  onMouseEnter={handleSubmenuContentEnter}
+                  onMouseLeave={handleSubmenuContentLeave}
                 >
                   <DataOperationsMenu
                     objectType="parameter"
@@ -635,8 +678,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
                     showSyncStatus={true}
                     onClose={() => setOpenSubmenu(null)}
                   />
-                    </div>
-                  )}
+                </div>
+              )}
             </div>
           )}
         </>
@@ -647,8 +690,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       {/* Confidence Intervals */}
       <div
         style={{ position: 'relative' }}
-        onMouseEnter={() => setOpenSubmenu('confidence')}
-        onMouseLeave={() => setOpenSubmenu(null)}
+        onMouseEnter={() => handleSubmenuEnter('confidence')}
+        onMouseLeave={handleSubmenuLeave}
       >
         <div
           style={{
@@ -680,6 +723,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               minWidth: '120px',
               zIndex: 10001
             }}
+            onMouseEnter={handleSubmenuContentEnter}
+            onMouseLeave={handleSubmenuContentLeave}
           >
             <div
               onClick={() => {

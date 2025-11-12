@@ -4,7 +4,7 @@
  * Context menu for graph nodes with data operations (Get/Put)
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
@@ -45,6 +45,41 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   onDeleteNode,
 }) => {
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+  const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Helper to handle submenu open/close with delay to prevent closing when hovering over disabled items
+  const handleSubmenuEnter = (submenuName: string) => {
+    if (submenuTimeoutRef.current) {
+      clearTimeout(submenuTimeoutRef.current);
+      submenuTimeoutRef.current = null;
+    }
+    setOpenSubmenu(submenuName);
+  };
+  
+  const handleSubmenuLeave = () => {
+    // Add a small delay before closing to allow movement to submenu
+    submenuTimeoutRef.current = setTimeout(() => {
+      setOpenSubmenu(null);
+      submenuTimeoutRef.current = null;
+    }, 150);
+  };
+  
+  const handleSubmenuContentEnter = () => {
+    // Cancel close timeout when entering submenu content
+    if (submenuTimeoutRef.current) {
+      clearTimeout(submenuTimeoutRef.current);
+      submenuTimeoutRef.current = null;
+    }
+  };
+  
+  const handleSubmenuContentLeave = () => {
+    // Close immediately when leaving submenu content
+    setOpenSubmenu(null);
+    if (submenuTimeoutRef.current) {
+      clearTimeout(submenuTimeoutRef.current);
+      submenuTimeoutRef.current = null;
+    }
+  };
   
   // Get selected nodes
   const selectedNodes = nodes.filter(n => n.selected || n.id === nodeId || n.data?.id === nodeId);
@@ -356,8 +391,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           {canPutNodeToFile && (
             <div
               style={{ position: 'relative' }}
-              onMouseEnter={() => setOpenSubmenu('node')}
-              onMouseLeave={() => setOpenSubmenu(null)}
+              onMouseEnter={() => handleSubmenuEnter('node')}
+              onMouseLeave={handleSubmenuLeave}
             >
               <div
                 style={{
@@ -391,6 +426,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                     marginLeft: '4px',
                     whiteSpace: 'nowrap'
                   }}
+                  onMouseEnter={handleSubmenuContentEnter}
+                  onMouseLeave={handleSubmenuContentLeave}
                 >
                   {hasNodeFile && (
                     <div
@@ -447,8 +484,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           {isCaseNode && hasCaseFile && (
             <div
               style={{ position: 'relative' }}
-              onMouseEnter={() => setOpenSubmenu('case')}
-              onMouseLeave={() => setOpenSubmenu(null)}
+              onMouseEnter={() => handleSubmenuEnter('case')}
+              onMouseLeave={handleSubmenuLeave}
             >
               <div
                 style={{
@@ -482,7 +519,9 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                     marginLeft: '4px',
                     whiteSpace: 'nowrap'
                   }}
-                  >
+                  onMouseEnter={handleSubmenuContentEnter}
+                  onMouseLeave={handleSubmenuContentLeave}
+                >
                   {/* Show "Get from Source (direct)" if there's ANY connection (direct OR file) */}
                   {(hasCaseConnection || hasCaseDirectConnection) && (
                     <div
