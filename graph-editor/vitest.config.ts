@@ -30,6 +30,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Replace whatwg-url with Node.js built-in URL to avoid webidl-conversions errors
+      'whatwg-url': path.resolve(__dirname, './src/test/mocks/whatwg-url.ts'),
     },
   },
   // Prevent @vercel/node from loading its dependencies during tests
