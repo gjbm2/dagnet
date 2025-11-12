@@ -22,7 +22,7 @@ export default function WhatIfPanel({ tabId }: WhatIfPanelProps) {
       {/* Scenarios Section */}
       <CollapsibleSection
         title="Scenarios"
-        isExpanded={scenariosExpanded}
+        isOpen={scenariosExpanded}
         onToggle={() => setScenariosExpanded(!scenariosExpanded)}
       >
         <ScenariosPanel tabId={tabId} />
@@ -31,7 +31,7 @@ export default function WhatIfPanel({ tabId }: WhatIfPanelProps) {
       {/* What-If Section */}
       <CollapsibleSection
         title="What-If Analysis"
-        isExpanded={whatIfExpanded}
+        isOpen={whatIfExpanded}
         onToggle={() => setWhatIfExpanded(!whatIfExpanded)}
       >
         <div className="panel-header">

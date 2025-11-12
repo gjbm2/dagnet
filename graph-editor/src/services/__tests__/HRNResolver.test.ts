@@ -14,20 +14,22 @@ import { Graph } from '../../types';
 // Mock graph data
 const mockGraph: Graph = {
   nodes: [
-    { uuid: 'node-uuid-1', id: 'checkout', name: 'Checkout Page', type: 'conversion' as const, position: { x: 0, y: 0 } },
-    { uuid: 'node-uuid-2', id: 'purchase', name: 'Purchase Complete', type: 'conversion' as const, position: { x: 100, y: 0 } },
-    { uuid: 'node-uuid-3', id: 'promo', name: 'Promo Banner', type: 'conversion' as const, position: { x: 50, y: 50 } },
+    { uuid: 'node-uuid-1', id: 'checkout', label: 'Checkout Page', position: { x: 0, y: 0 } },
+    { uuid: 'node-uuid-2', id: 'purchase', label: 'Purchase Complete', position: { x: 100, y: 0 } },
+    { uuid: 'node-uuid-3', id: 'promo', label: 'Promo Banner', position: { x: 50, y: 50 } },
   ],
   edges: [
-    { uuid: 'edge-uuid-1', id: 'checkout-to-purchase', from: 'node-uuid-1', to: 'node-uuid-2', weight: 1.0 },
-    { uuid: 'edge-uuid-2', id: 'checkout-to-promo', from: 'node-uuid-1', to: 'node-uuid-3', weight: 0.5 },
+    { uuid: 'edge-uuid-1', id: 'checkout-to-purchase', from: 'node-uuid-1', to: 'node-uuid-2' },
+    { uuid: 'edge-uuid-2', id: 'checkout-to-promo', from: 'node-uuid-1', to: 'node-uuid-3' },
   ],
-  policies: {},
+  policies: {
+    default_outcome: 'node-uuid-1'
+  },
   metadata: {
-    name: 'Test Graph',
     version: '1.0.0',
     created_at: '2025-01-01T00:00:00Z',
-    updated_at: '2025-01-01T00:00:00Z'
+    updated_at: '2025-01-01T00:00:00Z',
+    description: 'Test Graph'
   }
 };
 
@@ -63,8 +65,8 @@ describe('HRNResolver', () => {
       const graphWithParallel: Graph = {
         ...mockGraph,
         edges: [
-          { uuid: 'edge-uuid-1', id: 'checkout-to-purchase-1', from: 'node-uuid-1', to: 'node-uuid-2', weight: 1.0 },
-          { uuid: 'edge-uuid-2', id: 'checkout-to-purchase-2', from: 'node-uuid-1', to: 'node-uuid-2', weight: 0.5 },
+          { uuid: 'edge-uuid-1', id: 'checkout-to-purchase-1', from: 'node-uuid-1', to: 'node-uuid-2' },
+          { uuid: 'edge-uuid-2', id: 'checkout-to-purchase-2', from: 'node-uuid-1', to: 'node-uuid-2' },
         ]
       };
       
