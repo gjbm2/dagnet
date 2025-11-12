@@ -74,7 +74,14 @@ if (typeof global.indexedDB === 'undefined') {
         close: vi.fn(),
         onversionchange: null,
       };
-      const request = {
+      const request: {
+        result: any;
+        error: null;
+        onsuccess: ((event: any) => void) | null;
+        onerror: ((event: any) => void) | null;
+        onblocked: ((event: any) => void) | null;
+        onupgradeneeded: ((event: any) => void) | null;
+      } = {
         result: mockDB,
         error: null,
         onsuccess: null,
@@ -89,7 +96,13 @@ if (typeof global.indexedDB === 'undefined') {
       return request as any;
     }),
     deleteDatabase: vi.fn(() => {
-      const request = {
+      const request: {
+        result: any;
+        error: null;
+        onsuccess: ((event: any) => void) | null;
+        onerror: ((event: any) => void) | null;
+        onblocked: ((event: any) => void) | null;
+      } = {
         result: undefined,
         error: null,
         onsuccess: null,
