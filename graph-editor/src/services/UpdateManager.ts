@@ -2008,6 +2008,9 @@ export class UpdateManager {
             siblingEdge.conditional_p = [];
           }
           
+          // Track which old conditions have been matched/renamed to avoid duplicates
+          const matchedOldIndices = new Set<number>();
+          
           // For each new condition, find matching sibling condition and update structure
           newConditions.forEach((newCond: any) => {
             const condStr = typeof newCond.condition === 'string' ? newCond.condition : '';
@@ -2017,7 +2020,9 @@ export class UpdateManager {
             const normalizedNew = normalizeConstraintString(condStr);
             
             // Find matching condition in sibling (by normalized string)
-            const matchingIndex = siblingEdge.conditional_p.findIndex((existingCond: any) => {
+            const matchingIndex = siblingEdge.conditional_p.findIndex((existingCond: any, idx: number) => {
+              // Skip conditions that were already matched as renamed
+              if (matchedOldIndices.has(idx)) return false;
               const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
               return normalizeConstraintString(existingStr) === normalizedNew;
             });
@@ -2034,12 +2039,15 @@ export class UpdateManager {
                   ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
                 }
               };
+              matchedOldIndices.add(matchingIndex);
             } else {
               // New condition not found in sibling - check if it's a renamed condition
               // (old condition string changed to new condition string)
               // Find the old condition in sibling that matches one of the old conditions
-              const oldConditionIndex = siblingEdge.conditional_p.findIndex((existingCond: any) => {
-                  const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+              const oldConditionIndex = siblingEdge.conditional_p.findIndex((existingCond: any, idx: number) => {
+                // Skip conditions that were already matched
+                if (matchedOldIndices.has(idx)) return false;
+                const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
                 return oldConditions.includes(normalizeConstraintString(existingStr));
               });
               
@@ -2055,6 +2063,7 @@ export class UpdateManager {
                     ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
                   }
                 };
+                matchedOldIndices.add(oldConditionIndex);
               } else {
                 // Truly new condition - add it to sibling
                 siblingEdge.conditional_p.push({
