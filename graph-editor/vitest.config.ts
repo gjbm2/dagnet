@@ -51,6 +51,8 @@ export default defineConfig({
     },
     // Don't bail on unhandled errors - all tests pass, webidl-conversions error is a dependency issue
     bail: 0,
+    // Force exit after tests complete to prevent hanging on unhandled errors
+    teardownTimeout: 5000,
   },
   resolve: {
     alias: {
