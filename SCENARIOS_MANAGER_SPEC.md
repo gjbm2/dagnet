@@ -16,14 +16,15 @@ Enable users to create, view, and compare multiple “scenario” overlays of gr
 ## UX
 - Location: “Scenarios” section at the top of the What‑If panel
 - Scenario list items (stacked):
-  - Drag handles (drag and drop up/down to reorder palette; order affects render order)
-  - Color swatch (click to change color)
-  - Name (inline editable)
+  - Drag handles (drag and drop up/down to reorder palette; order affects visual render order only, not computation)
+  - Color swatch (click to change color - manual override)
+  - Name (inline editable; default: timestamp like "2025-11-12 14:30")
   - View toggle (eye icon) — visibility is per tab
   - Open (launches Monaco modal to edit YAML/JSON)
   - Delete (trash)
+  - Tooltip on hover: Shows snapshot metadata (window, What-If state, context, created timestamp)
 - Footer actions:
-  - "+ Create Snapshot" (from current state; creates new scenario with current parameters)
+  - "+ Create Snapshot" (from current state; creates new scenario with current parameters), on top of stack
   - "New" (creates blank scenario and opens Monaco modal for initial YAML/JSON entry)
 - Monaco modal (uses FormEditor component pattern, but rendered as modal overlay, not a tab):
   - Displays full scenario YAML/JSON (parameters payload)
@@ -33,13 +34,14 @@ Enable users to create, view, and compare multiple “scenario” overlays of gr
   - Users can copy/paste within Monaco; no separate copy/paste buttons needed
 
 - Special "Current" scenario:
-  - Always shown at top of list (non-draggable, or draggable? TBD)
+  - Always shown at top of list (non-draggable)
   - Represents the base/working state (not a stored snapshot)
   - Not deletable
   - Has color swatch, name (read-only "Current"), view toggle, and Open button
-  - Open button: launches Monaco modal showing current parameter state (read-only view, or editable?)
-  - When user edits "Current" params in Monaco and clicks Apply: creates a NEW scenario with those edited parameters (does not modify the base graph directly)
+  - Open button: launches Monaco modal showing current parameter state (editable)
+  - When user edits "Current" params in Monaco and clicks Apply: creates a NEW scenario with those edited parameters and makes it visible automatically
   - When visible, renders as overlay like other scenarios but uses live current parameters
+  - Auto-visibility: When graph changes (user edits), "Current" is automatically made visible if hidden (with brief toast)
 
 ## Data Model
 Scenario (stored in graph runtime; see Persistence):
@@ -87,24 +89,55 @@ type TabScenarioState = {
   - Exact neutralization is display/scene dependent; tune defaults empirically.
 
 ## Rendering Pipeline
-Base render (unchanged):
+
+**CLARIFICATION NEEDED: Layering Model**
+
+Two possible interpretations:
+
+### Option A: Independent Comparison (Parallel Model)
+- Each scenario is a complete, independent parameter snapshot.
+- Scenarios render in parallel (not stacked/layered).
+- "Current" is just one scenario among others; order doesn't affect computation.
+- Use case: Compare time periods, A/B variants, etc. Each is a full snapshot.
+- Snapshot scope: Always captures full param set (What-If is part of "current params").
+
+### Option B: Additive Layering (Stacked Model)
+- Scenarios are partial parameter overrides.
+- Render order matters: bottom layer computed first, each layer above overrides/adjusts previous.
+- "Current" is typically bottom; user can stack partial overlays (e.g., "change only probabilities").
+- Use case: Build up scenarios incrementally (base + what-if + context adjustment).
+- Snapshot scope: Can capture partial param sets (only changed params).
+
+**User's caps comment suggests Option B** ("each param pack adjusts param pack of previous layer"), but the rest of the spec describes Option A (full snapshots, parallel comparison).
+
+**PROPOSAL**: Start with Option A (simpler, clearer semantics). Add Option B layering in Phase 2 if needed.
+
+---
+
+### Rendering Pipeline (assuming Option A: Independent Comparison)
+
+Base render:
 - Edges render using current working parameters.
 - Existing confidence intervals, selections, and highlights continue to function.
 
 Scenario overlays (for each visible scenario S):
-1. Parameter injection
-   - Use S.params as the parameter surface for computation.
+1. Parameter computation
+   - Use S.params as the **complete** parameter surface for this scenario.
+   - Each scenario is computed independently (no dependency on other scenarios' order).
 2. Widths
    - Compute edge widths with the existing `calculateEdgeWidth(...)` pipeline using S.params.
 3. Sankey offsets (per scenario)
-   - Compute the same lateral source/target offsets we use today, but using S.params (flows/weights) for that scenario.
+   - Compute lateral source/target offsets using S.params (flows/weights).
    - Result: For each edge, S has its own width and its own source/target lateral offsets.
 4. Routing and geometry
-   - No need to re-route control points or topology. Scenarios use the current graph geometry (the base’s paths/control points).
-   - Apply per‑scenario source/target lateral offsets to the current geometry when constructing the path for S (as we do today for Sankey lanes).
+   - Scenarios use the current graph geometry (base's paths/control points).
+   - Apply per‑scenario source/target lateral offsets to current geometry.
 5. Drawing
-   - Render the scenario path over the base using S.color, `mix-blend-mode: multiply`, and a fixed `strokeOpacity` (per scenario, not per edge).
+   - Render scenario path using S.color, `mix-blend-mode: multiply`, fixed `strokeOpacity`.
    - Use `strokeLinecap: 'butt'`, `strokeLinejoin: 'miter'` for crisp, truncated ends.
+6. Edge coloring suppression
+   - If >1 scenario visible: suppress conditional probability and case edge coloring (render all grey).
+   - This frees edge colors for scenario overlays.
 
 Fail‑gracefully rules when graph changed since snapshot:
 - If an edge present in S.params no longer exists:
@@ -166,7 +199,7 @@ interface ScenariosContext {
 
 ## Interactions & Compatibility
 - Highlights/selection: apply to base and overlays consistently; overlays use their own colors but respect selection emphasis.
-- Confidence intervals: out of scope for scenarios in v1 (render base CI only, or disable CI when scenarios visible — see Open Questions).
+- Confidence intervals: CI can remain enabled when scenarios are visible. CI bands render on base layer only (scenario overlays render without CI for v1).
 - Edge labels: base labels remain primary; optional future: per-scenario delta badges on hover.
 
 ## Open‑In‑Monaco Modal
@@ -175,6 +208,77 @@ interface ScenariosContext {
   - YAML/JSON syntax and schema validation with error annotations.
   - On Apply, persist and bump `updatedAt` 
 - No separate Copy/Paste UI; users use Monaco’s editor commands.
+
+## User Flow Examples
+
+### Flow 1: Compare current state against historic state
+1. User starts with current graph (showing latest data)
+2. User clicks "+ Create Snapshot" → snapshot created **on top of Current** (per user's edit), visible=true
+3. Two layers now visible (Current + Snapshot), each assigned a color (e.g., Blue & Pink)
+4. User changes window (date range) → new data retrieves for Current
+5. User sees deltas: colored fringes show where Current differs from historic Snapshot
+
+**Status**: ✓ Semantics clear (Option A model works well).
+
+### Flow 2: Investigate before/after of experiment in progress
+1. User starts with current graph
+2. User applies What-If: `case1=treatment`
+3. User unchecks all options in "Create Snapshot" dropdown except "What-If" and clicks snapshot
+4. **PROBLEM**: Partial snapshots (What-If only) don't make sense in Option A (independent comparison). Snapshot would be incomplete.
+5. **RESOLUTION**: See "Snapshot Scope Semantics" below.
+
+### Flow 3: Multi-scenario comparison (time series)
+1. User loads data for Week 1, clicks snapshot → "Week 1" scenario created
+2. User changes window to Week 2, clicks snapshot → "Week 2" scenario created
+3. User changes window to Week 3, clicks snapshot → "Week 3" scenario created
+4. Three scenarios visible (all with different colors: Cyan, Magenta, Yellow)
+5. User can toggle visibility to compare any subset (e.g., Week 1 vs Week 3)
+
+**Status**: ✓ Clear use case for Option A.
+
+---
+
+## Snapshot Scope Semantics
+
+**Problem**: Partial parameter snapshots (e.g., "What-If only") don't make semantic sense in Option A (independent comparison). Each scenario must be a complete parameter set to render.
+
+**Proposal**: Rethink snapshot scope options:
+
+1. **"Parameters" (default)**: Snapshot all underlying graph parameters (probabilities, costs, lags) in their current state. **Excludes** What-If overrides.
+2. **"Parameters + What-If"**: Snapshot underlying params **with** What-If overrides applied (merged into params).
+3. ~~**"What-If only"**~~: Removed. Doesn't make sense semantically (incomplete snapshot).
+
+**Rationale**:
+- "Parameters" = base state (useful for time-series comparisons across windows)
+- "Parameters + What-If" = hypothetical state (useful for experiment comparisons)
+- Mutually exclusive makes sense; partial snapshots don't.
+
+**Updated "Create Snapshot" dropdown**:
+- ☑ Include What-If overrides (default: unchecked)
+- ~~Checkboxes for Probabilities/Costs/Lags~~: Removed (all params always included)
+
+---
+
+## Additional Clarifications
+
+### 3. Default labels for scenarios
+- **Default name**: Timestamp (e.g., "2025-11-12 14:30")
+- **Tooltip on hover**: Shows metadata about snapshot creation state:
+  - Window: `2025-11-05 to 2025-11-12`
+  - What-If: `case1=treatment` (if any)
+  - Context: `channel=mobile` (if any, future)
+  - Created: ISO timestamp
+
+### 4. What happens if "Current" is hidden?
+- **Behavior**: User edits to graph won't display visually (only stored scenarios render).
+- **Risk**: Potentially confusing.
+- **Solution**: When graph changes (user edits params), automatically make "Current" visible if it's hidden.
+- **Implementation**: On graph mutation, check if "Current" is hidden → if yes, toggle it visible and show brief toast: "Current state is now visible".
+
+### 5. Snapshot scope rethinking
+See "Snapshot Scope Semantics" above. Recommendation: Drop partial snapshots; only allow:
+- Full params (excluding What-If)
+- Full params + What-If merged
 
 ## Acceptance Criteria
 - Users can create a snapshot from current parameters; it appears in the list with an assigned color and is invisible by default or follow product choice (tunable).
@@ -187,44 +291,52 @@ interface ScenariosContext {
 ## Open Questions / Areas Needing Design
 1. **Exact blending and alpha defaults**: Best values for neutralization across a variety of base colors and background themes (empirical tuning needed).
 2. **Confidence intervals with scenarios**:
-   - Disable CI when scenarios visible, or render CI on base only, or per-scenario CI (complex)?
-   - Recommendation: Disable CI when any scenario is visible (simplest, avoids visual clutter).
+   - **Decision**: Permit user to leave CI on if they wish. No reason we cannot accommodate.
+   - CI bands render on base layer; scenario overlays render without CI (for simplicity in v1).
+   - Sankey diagram mode: No blocking issue; scenarios should work in Sankey mode.
 3. **"Current" scenario implementation**:
-   - Should it be a special pseudo-scenario object, or handled separately in rendering?
-   - How to handle color assignment for "Current" if it's visible?
-   - Should "Current" be draggable in the palette? (TBD - probably not)
-   - When "Current" is opened and edited, Apply creates a new scenario - should the new scenario be auto-selected/opened?
+   - **Revised decision** (see "Rendering Pipeline" clarification): "Current" is **not draggable**. Scenarios render independently (parallel comparison model, not stacked/layering). Order affects only visual render order, not computation.
+   - **Color assignment for "Current"**: Same as for other scenarios. If 1 visible scenario, render normally (grey). If >1 visible, assign colors to all visible scenarios including "Current" using the complementary color algorithm.
+   - **When "Current" is opened and edited, Apply**: Creates a new scenario and makes it visible automatically.
+   - **Auto-visibility on edit**: When graph changes (user edits params), automatically make "Current" visible if hidden (with brief toast notification).
 4. **Tooling/Architecture**:
    - Where to host `ScenariosContext` (new context vs extend existing ViewPreferences/Operations)?
    - Recommendation: New `ScenariosContext` for separation of concerns.
 5. **Invalid data handling**:
-   - When Apply is called with invalid JSON/YAML, should we store raw string or attempt partial parse?
-   - How to handle schema evolution gracefully?
-6. **Color conflict with conditional/case edges**:
-   - Scenarios reserve colors for edge rendering, so conditional probabilities and case node inheritance currently shown via edge colors need a new visual approach.
-   - Proposed: Move conditional/case indicators to "blobs" (small colored markers/shapes) on edges instead of coloring the entire edge stroke.
-   - Need to design blob placement, size, and interaction (hover tooltips, etc.).
+   - **Decision**: Store raw YAML/JSON string. Parse to ScenarioParams when needed (on scenario visibility change, data change, graph structure change, etc.).
+   - Parsing is lightweight: enumerate through each visible scenario layer from bottom to top, apply params sequentially, store result.
+   - Schema evolution: attempt best-effort parsing; mark scenario as invalid if parsing fails; allow user to fix in Monaco editor.
+6. **Color conflict with conditional/case edges** (PHASE 2):
+   - **Decision**: Move conditional/case indicators to "blobs" (small colored markers/shapes) on edges instead of coloring the entire edge stroke.
+   - This is PHASE 2 work (deferred from v1).
+   - Blob design (placement, size, interaction) TBD.
 7. **UI layout reorganization**:
-   - Move What-If options up next to the window (where context will also be located).
-   - Make space in current What If palette for Scenarios (and re name accordingly)
+   - **Decision**: Add a new floating panel just to the right of the date picker (WindowSelector).
+   - Panel contains:
+     - **What-If button**: Shows What-If options in a dropdown. Uses existing What-If icon (lucide icon already used to indicate What-If is applied on graph).
+     - **Context button**: Shows context dropdown (currently contains "Coming soon"). Uses same icon as used for contexts globally.
+   - Both buttons use consistent Lucide icons.
+   - Scenarios palette remains in sidebar What-If panel (renamed accordingly).
 8. **Snapshot scope**:
-   - "Create Snapshot" should capture both current parameter status AND What-If/context status (not just base parameters).
-   - This ensures scenarios are fully self-contained and reproducible.
-   - Need to define what "context status" includes (filters, selections, view state?).
-9. **Selection behavior (Photoshop layers palette pattern)**:
-   - When user selects a row in the palette, should we show only that scenario and hide others? (like Photoshop's "show only this layer")
-   - Need to design the affordance clearly:
-     - Eye icon = toggle visibility (current design)
-     - Click row/name = select (what does this do? show-only? highlight? both?)
-     - Need to distinguish between "show/hide" and "show only" actions
-   - Consider: Click row selects, double-click opens editor? Or click row shows-only, eye icon toggles?
+   - **Revised decision** (see "Snapshot Scope Semantics" section): "Create Snapshot" button has simplified affordance:
+     - Click: Copies all current parameters (excluding What-If overrides)
+     - Dropdown arrow (right side): Shows dropdown menu with single checkbox:
+       - ☑ Include What-If overrides (default: unchecked)
+   - Partial parameter snapshots (e.g., "only probabilities") removed: doesn't make semantic sense in independent comparison model.
+   - Context: TO FOLLOW (deferred).
+9. **Selection behavior (Photoshop layers palette pattern)** (PHASE 2):
+   - **Decision for v1**: Eye icon = toggle visibility. Keep this approach.
+   - "View only this layer" feature: PHASE 2 (deferred). Users can manually deselect other layers, so this is convenience, not MVP.
+   - No row-level click or double-click at this stage.
+   - Only interactions: eye icon (toggle), Open button (editor), Delete button, color swatch (picker), name (inline edit), drag handle (reorder).
 10. **Color assignment strategy**:
-    - **Auto-assignment approach**: Colors are attached only to visible scenarios. When scenarios are toggled on/off, colors are reassigned to maintain geometric neutralization among the currently visible set.
-    - **Implication**: Toggle a scenario off → it loses its color. Toggle it back on → it gets a new color (possibly different) based on current visible set.
-    - **Question**: Should users be able to manually choose which visible scenario gets which color?
-      - **Option A**: No manual override - colors are always auto-assigned for optimal neutralization.
-      - **Option B**: Allow manual color picker, but warn if it breaks neutralization (e.g., two scenarios with similar hues).
-      - **Option C**: Color swatch click opens palette, but system suggests/completes complementary colors based on visible set.
-      - **Option D**: User can "lock" a scenario's color, preventing auto-reassignment when toggling others.
-    - **Recommendation needed**: Which approach balances user control with visual harmony?
+    - **Decision**: Auto-assignment with standard color sequence.
+    - Colors assigned in standard sequence based on number of visible scenarios:
+      - 1 visible: Grey (normal mode, no overlay color)
+      - 2 visible: Blue and Pink (complementary pair)
+      - 3 visible: Cyan, Magenta, Yellow (evenly distributed)
+      - 4+ visible: Continue geometric distribution around color wheel
+    - Users can control color assignment by ordering visibility: hide all, then make visible in desired order.
+    - Color swatch click: allows manual color override (Option B approach).
+    - PHASE 2: Add advanced "Color Settings" option to allow user to specify custom color sequence.
 
