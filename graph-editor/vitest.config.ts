@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()] as any,  // Type assertion to resolve Vite version mismatch
   test: {
     globals: true,
-    environment: 'jsdom',
+    environment: 'happy-dom', // Using happy-dom instead of jsdom to avoid whatwg-url dependency conflicts
     setupFiles: ['./src/test/setup.ts'],
     include: ['**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
     exclude: ['node_modules', 'dist', '.next', '.vercel'],

@@ -50,6 +50,70 @@ if (typeof global.IntersectionObserver === 'undefined') {
   }));
 }
 
+// Mock IndexedDB for happy-dom environment
+if (typeof global.indexedDB === 'undefined') {
+  // Create a minimal IndexedDB mock
+  const mockIDBFactory = {
+    open: vi.fn(() => {
+      const mockDB = {
+        objectStoreNames: { contains: vi.fn(() => false), length: 0 },
+        transaction: vi.fn(() => ({
+          objectStore: vi.fn(() => ({
+            get: vi.fn(() => Promise.resolve(undefined)),
+            put: vi.fn(() => Promise.resolve(undefined)),
+            add: vi.fn(() => Promise.resolve(undefined)),
+            delete: vi.fn(() => Promise.resolve(undefined)),
+            getAll: vi.fn(() => Promise.resolve([])),
+            count: vi.fn(() => Promise.resolve(0)),
+          })),
+          oncomplete: null,
+          onerror: null,
+        })),
+        createObjectStore: vi.fn(),
+        deleteObjectStore: vi.fn(),
+        close: vi.fn(),
+        onversionchange: null,
+      };
+      const request = {
+        result: mockDB,
+        error: null,
+        onsuccess: null,
+        onerror: null,
+        onblocked: null,
+        onupgradeneeded: null,
+      };
+      // Simulate async success
+      setTimeout(() => {
+        if (request.onsuccess) request.onsuccess({ target: request } as any);
+      }, 0);
+      return request as any;
+    }),
+    deleteDatabase: vi.fn(() => {
+      const request = {
+        result: undefined,
+        error: null,
+        onsuccess: null,
+        onerror: null,
+        onblocked: null,
+      };
+      setTimeout(() => {
+        if (request.onsuccess) request.onsuccess({ target: request } as any);
+      }, 0);
+      return request as any;
+    }),
+    databases: vi.fn(() => Promise.resolve([])),
+    cmp: vi.fn(() => 0),
+  };
+
+  (global as any).indexedDB = mockIDBFactory;
+  (global as any).IDBKeyRange = {
+    bound: vi.fn(),
+    lowerBound: vi.fn(),
+    upperBound: vi.fn(),
+    only: vi.fn(),
+  };
+}
+
 // Mock Monaco Editor (used by QueryExpressionEditor)
 vi.mock('@monaco-editor/react', () => ({
   __esModule: true,
