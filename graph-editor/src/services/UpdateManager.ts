@@ -1937,6 +1937,12 @@ export class UpdateManager {
     const wasEmpty = !currentEdge.conditional_p || currentEdge.conditional_p.length === 0;
     const isNowEmpty = newConditions.length === 0;
     
+    // Track old conditions BEFORE updating (needed for sibling sync)
+    const oldConditions = !wasEmpty ? (currentEdge.conditional_p || []).map((cond: any) => {
+      const condStr = typeof cond.condition === 'string' ? cond.condition : '';
+      return normalizeConstraintString(condStr);
+    }) : [];
+    
     // Update current edge
     nextGraph.edges[edgeIndex].conditional_p = isNowEmpty ? undefined : newConditions.map(c => structuredClone(c));
     
@@ -1990,11 +1996,7 @@ export class UpdateManager {
     if (!wasEmpty && !isNowEmpty) {
       const siblings = getSiblingEdges(currentEdge, nextGraph);
       
-      // Track old conditions by normalized string for comparison
-      const oldConditions = (currentEdge.conditional_p || []).map((cond: any) => {
-        const condStr = typeof cond.condition === 'string' ? cond.condition : '';
-        return normalizeConstraintString(condStr);
-      });
+      // oldConditions was computed above, before updating the current edge
       
       siblings.forEach((sibling: any) => {
         const siblingIndex = nextGraph.edges.findIndex((e: any) => 
@@ -2029,14 +2031,23 @@ export class UpdateManager {
             
             if (matchingIndex >= 0) {
               // Update existing matching condition (preserve p.mean if already set, update condition string)
-              const existingP = siblingEdge.conditional_p[matchingIndex].p?.mean;
+              const existingConditionalP = siblingEdge.conditional_p[matchingIndex].p;
               siblingEdge.conditional_p[matchingIndex] = {
                 condition: condStr, // Update to new condition string
                 query: newCond.query || siblingEdge.conditional_p[matchingIndex].query || '',
                 query_overridden: newCond.query_overridden || siblingEdge.conditional_p[matchingIndex].query_overridden || false,
                 p: {
-                  mean: existingP !== undefined ? existingP : (siblingEdge.p?.mean ?? 0.5),
-                  ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
+                  // Preserve existing p.mean if it exists, otherwise use base edge mean or default
+                  mean: existingConditionalP?.mean !== undefined 
+                    ? existingConditionalP.mean 
+                    : (siblingEdge.p?.mean ?? 0.5),
+                  // Preserve existing stdev if it exists, otherwise use base edge stdev if available
+                  ...(existingConditionalP?.stdev !== undefined 
+                    ? { stdev: existingConditionalP.stdev }
+                    : (siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})),
+                  // Preserve other existing p properties (distribution, etc.)
+                  ...(existingConditionalP?.distribution ? { distribution: existingConditionalP.distribution } : {}),
+                  ...(existingConditionalP?.locked !== undefined ? { locked: existingConditionalP.locked } : {})
                 }
               };
               matchedOldIndices.add(matchingIndex);
@@ -2053,15 +2064,22 @@ export class UpdateManager {
               
               if (oldConditionIndex >= 0) {
                 // This is a renamed condition - update the old one to the new one
-                const existingP = siblingEdge.conditional_p[oldConditionIndex].p?.mean;
+                // Preserve the entire existing p object from the conditional probability
+                const oldCondition = siblingEdge.conditional_p[oldConditionIndex];
+                
+                // Preserve the entire existing p object if it exists, otherwise create a new one
+                const preservedP = oldCondition?.p 
+                  ? { ...oldCondition.p }  // Copy all properties from existing p
+                  : {
+                      mean: siblingEdge.p?.mean ?? 0.5,
+                      ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
+                    };
+                
                 siblingEdge.conditional_p[oldConditionIndex] = {
                   condition: condStr, // Update to new condition string
-                  query: newCond.query || siblingEdge.conditional_p[oldConditionIndex].query || '',
-                  query_overridden: newCond.query_overridden || siblingEdge.conditional_p[oldConditionIndex].query_overridden || false,
-                  p: {
-                    mean: existingP !== undefined ? existingP : (siblingEdge.p?.mean ?? 0.5),
-                    ...(siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})
-                  }
+                  query: newCond.query || oldCondition.query || '',
+                  query_overridden: newCond.query_overridden ?? oldCondition.query_overridden ?? false,
+                  p: preservedP  // Use the preserved p object
                 };
                 matchedOldIndices.add(oldConditionIndex);
               } else {
@@ -2080,6 +2098,7 @@ export class UpdateManager {
           });
           
           // Remove conditions from sibling that no longer exist in current edge
+          // Only keep conditions that match the new conditions (after any renames/updates)
           const newNormalized = newConditions.map((cond: any) => {
             const condStr = typeof cond.condition === 'string' ? cond.condition : '';
             return normalizeConstraintString(condStr);
@@ -2088,8 +2107,9 @@ export class UpdateManager {
           siblingEdge.conditional_p = siblingEdge.conditional_p.filter((existingCond: any) => {
             const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
             const normalizedExisting = normalizeConstraintString(existingStr);
-            // Keep if it matches a new condition OR if it's not in the old conditions (wasn't synced)
-            return newNormalized.includes(normalizedExisting) || !oldConditions.includes(normalizedExisting);
+            // Only keep if it matches one of the new conditions
+            // Conditions that were in oldConditions but not in newNormalized should be removed
+            return newNormalized.includes(normalizedExisting);
           });
         }
       });
