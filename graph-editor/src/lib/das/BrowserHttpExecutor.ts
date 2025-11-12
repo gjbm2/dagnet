@@ -68,7 +68,7 @@ export class BrowserHttpExecutor implements HttpExecutor {
       if (this.useProxy) {
         // Send request through our proxy to avoid CORS issues
         console.log(`[BrowserHttpExecutor] Proxying ${request.method} request to:`, maskUrl(request.url));
-        console.log(`[BrowserHttpExecutor] Request headers:`, maskHeaders(request.headers));
+        console.log(`[BrowserHttpExecutor] Request headers:`, maskHeaders(request.headers || {}));
         console.log(`[BrowserHttpExecutor] Request body:`, request.body?.substring(0, 200));
         
         const proxyResponse = await fetch('/api/das-proxy', {
