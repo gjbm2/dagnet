@@ -136,10 +136,15 @@ vi.mock('@monaco-editor/react', () => ({
   useMonaco: vi.fn(() => null),
 }));
 
+// Mock @vercel/node to avoid webidl-conversions/whatwg-url dependency conflicts
+// Tests don't need Vercel serverless function types
+vi.mock('@vercel/node', () => ({
+  VercelRequest: {} as any,
+  VercelResponse: {} as any,
+}));
+
 // Note: whatwg-url dependency conflict exists between jsdom@27 and @vercel/node
-// This may cause issues with integration tests. If tests fail with webidl-conversions errors,
-// try: npm install --save-dev whatwg-url@latest
-// Or use a different test environment like happy-dom
+// Mocking @vercel/node prevents the conflict from occurring during test runs
 
 // Suppress console errors in tests (optional - comment out if debugging)
 // vi.spyOn(console, 'error').mockImplementation(() => {});
