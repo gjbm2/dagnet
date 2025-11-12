@@ -32,7 +32,7 @@ jobs:
       
       - name: Run TypeScript type checking
         working-directory: ./graph-editor
-        run: npm run build -- --noEmit
+        run: npx tsc --noEmit
       
       - name: Run tests
         working-directory: ./graph-editor
