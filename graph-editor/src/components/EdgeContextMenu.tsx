@@ -14,6 +14,7 @@ import { ParameterEditor } from './ParameterEditor';
 import { DataOperationsMenu } from './DataOperationsMenu';
 import { ChevronRight } from 'lucide-react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
+import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils';
 
 interface EdgeContextMenuProps {
@@ -40,10 +41,17 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const [localData, setLocalData] = useState(edgeData);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const { window } = useGraphStore();
+  const viewPrefs = useViewPreferencesContext();
   
   // Create a setGraph wrapper that calls onUpdateGraph (which updates the tab-specific graph)
   const setGraph = (updatedGraph: any) => {
     onUpdateGraph(updatedGraph);
+  };
+  
+  const handleConfidenceIntervalChange = (level: 'none' | '80' | '90' | '95' | '99') => {
+    if (viewPrefs) {
+      viewPrefs.setConfidenceIntervalLevel(level);
+    }
   };
   
   // Find the edge in the graph - recalculate when graph changes to ensure rebalance button updates
@@ -633,6 +641,129 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           )}
         </>
       )}
+
+      <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
+
+      {/* Confidence Intervals */}
+      <div
+        style={{ position: 'relative' }}
+        onMouseEnter={() => setOpenSubmenu('confidence')}
+        onMouseLeave={() => setOpenSubmenu(null)}
+      >
+        <div
+          style={{
+            padding: '8px 12px',
+            cursor: 'pointer',
+            fontSize: '13px',
+            borderRadius: '2px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            background: openSubmenu === 'confidence' ? '#f8f9fa' : 'white'
+          }}
+        >
+          <span>Confidence Intervals</span>
+          <ChevronRight size={14} style={{ color: '#666' }} />
+        </div>
+        
+        {openSubmenu === 'confidence' && (
+          <div
+            style={{
+              position: 'absolute',
+              left: '100%',
+              top: 0,
+              marginLeft: '4px',
+              background: 'white',
+              border: '1px solid #ddd',
+              borderRadius: '4px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              minWidth: '120px',
+              zIndex: 10001
+            }}
+          >
+            <div
+              onClick={() => {
+                handleConfidenceIntervalChange('99');
+                setOpenSubmenu(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                background: viewPrefs?.confidenceIntervalLevel === '99' ? '#f0f0f0' : 'white'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === '99' ? '#f0f0f0' : 'white')}
+            >
+              {viewPrefs?.confidenceIntervalLevel === '99' ? '✓ ' : ''}99%
+            </div>
+            <div
+              onClick={() => {
+                handleConfidenceIntervalChange('95');
+                setOpenSubmenu(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                background: viewPrefs?.confidenceIntervalLevel === '95' ? '#f0f0f0' : 'white'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === '95' ? '#f0f0f0' : 'white')}
+            >
+              {viewPrefs?.confidenceIntervalLevel === '95' ? '✓ ' : ''}95%
+            </div>
+            <div
+              onClick={() => {
+                handleConfidenceIntervalChange('90');
+                setOpenSubmenu(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                background: viewPrefs?.confidenceIntervalLevel === '90' ? '#f0f0f0' : 'white'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === '90' ? '#f0f0f0' : 'white')}
+            >
+              {viewPrefs?.confidenceIntervalLevel === '90' ? '✓ ' : ''}90%
+            </div>
+            <div
+              onClick={() => {
+                handleConfidenceIntervalChange('80');
+                setOpenSubmenu(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                background: viewPrefs?.confidenceIntervalLevel === '80' ? '#f0f0f0' : 'white'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === '80' ? '#f0f0f0' : 'white')}
+            >
+              {viewPrefs?.confidenceIntervalLevel === '80' ? '✓ ' : ''}80%
+            </div>
+            <div
+              onClick={() => {
+                handleConfidenceIntervalChange('none');
+                setOpenSubmenu(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                background: viewPrefs?.confidenceIntervalLevel === 'none' ? '#f0f0f0' : 'white'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === 'none' ? '#f0f0f0' : 'white')}
+            >
+              {viewPrefs?.confidenceIntervalLevel === 'none' ? '✓ ' : ''}None
+            </div>
+          </div>
+        )}
+      </div>
 
       <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
 

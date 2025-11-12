@@ -2,10 +2,12 @@ import React, { useState, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
+import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import Tooltip from '@/components/Tooltip';
 import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
+import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -244,6 +246,7 @@ export default function ConversionEdge({
 };
   const { deleteElements, setEdges, getNodes, screenToFlowPosition } = useReactFlow();
   const { graph } = useGraphStore();
+  const viewPrefs = useViewPreferencesContext();
   
   // What-if overrides are now passed through edge.data (from tab state)
   const caseOverrides = data?.caseOverrides || {};
@@ -387,12 +390,154 @@ export default function ConversionEdge({
     return 2;
   }, [data?.scaledWidth, data?.calculateWidth, data?.probability, selected, graph, caseOverrides, conditionalOverrides]);
   
+  // Confidence interval rendering logic
+  const confidenceIntervalLevel = viewPrefs?.confidenceIntervalLevel ?? 'none';
+  const hasStdev = (fullEdge?.p?.stdev !== undefined && fullEdge.p.stdev > 0) || (data?.stdev !== undefined && data.stdev > 0);
+  const stdev = fullEdge?.p?.stdev ?? data?.stdev ?? 0;
+  const shouldShowConfidenceIntervals = 
+    confidenceIntervalLevel !== 'none' && 
+    hasStdev && 
+    !viewPrefs?.useUniformScaling && // Skip if uniform scaling is enabled
+    !data?.useSankeyView; // Skip in Sankey view
+  
+  // Helper function to convert hex to RGB (must be defined before useMemo)
+  const hexToRgb = (hex: string) => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+      r: parseInt(result[1], 16),
+      g: parseInt(result[2], 16),
+      b: parseInt(result[3], 16)
+    } : { r: 153, g: 153, b: 153 }; // fallback to gray
+  };
+  
+  // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
+  // Memoize color computation to ensure it updates when conditional_p colors change
+  const edgeColor = useMemo(() => {
+    // Selected edges: darker gray to distinguish from highlighted edges
+    if (selected) {
+      return '#222'; // very dark gray for selection
+    }
+    if (data?.isHighlighted) {
+      // Different opacity for different selection types:
+      // - Single node (isSingleNodeHighlight=true): 30% fading with depth
+      // - Multi-node topological (isSingleNodeHighlight=false): 50% solid
+      let blackIntensity: number;
+      
+      if (data.isSingleNodeHighlight) {
+        // Single node selection: Start at 30%, fade by 10% per hop
+        const depth = data.highlightDepth || 0;
+        blackIntensity = 0.3 * Math.pow(0.9, depth); // 30% × 0.9^depth
+      } else {
+        // Multi-node topological selection: 50% solid
+        blackIntensity = 0.5;
+      }
+      
+      // Get the base color for this edge type (underlying color)
+      let baseColor = '#b3b3b3'; // default gray
+      if (data?.probability === undefined || data?.probability === null) {
+        baseColor = '#ff6b6b';
+      } else if (fullEdge && isConditionalEdge(fullEdge)) {
+        // Conditional edges get their conditional color
+        baseColor = getConditionalColor(fullEdge) || '#4ade80'; // green-400 fallback
+      } else {
+        // Check if source node is a case node and inherit its color
+        // This applies to both case variant edges AND normal edges downstream
+        // source could be uuid OR human-readable id, check both
+        const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
+        if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
+          baseColor = sourceNode.layout.color;
+        }
+      }
+      
+      // Blend pure black with base color based on black intensity
+      // blackIntensity = how much black, (1 - blackIntensity) = how much base color
+      const black = { r: 0, g: 0, b: 0 }; // Pure black
+      const baseColorRgb = hexToRgb(baseColor);
+      
+      const blendedR = Math.round(black.r * blackIntensity + baseColorRgb.r * (1 - blackIntensity));
+      const blendedG = Math.round(black.g * blackIntensity + baseColorRgb.g * (1 - blackIntensity));
+      const blendedB = Math.round(black.b * blackIntensity + baseColorRgb.b * (1 - blackIntensity));
+      
+      return `rgb(${blendedR}, ${blendedG}, ${blendedB})`;
+    }
+    if (data?.probability === undefined || data?.probability === null) return '#ff6b6b';
+    
+    // Check for conditional edges and apply conditional color
+    if (fullEdge && isConditionalEdge(fullEdge)) {
+      return getConditionalColor(fullEdge) || '#4ade80'; // green-400 fallback
+    }
+    
+    // Check if source node is a case node and inherit its color
+    // This applies to both case variant edges AND normal edges downstream
+    // source could be uuid OR human-readable id, check both
+    const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
+    if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
+      return sourceNode.layout.color;
+    }
+    
+    return '#b3b3b3'; // 15% lighter gray for normal edges
+  }, [selected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.probability, fullEdge, source, graph?.nodes, graph?.metadata?.updated_at]);
+  
+  const getEdgeColor = () => edgeColor;
+
+  // Band opacity schema – experimental: very low opacities
+  // Outer: 0.1, Middle: 0.4, Inner: 0.5
+  const calculateBandOpacities = (level: '80' | '90' | '95' | '99') => {
+    const inner = 0.15;
+    const middle = 0.55;
+    // Outer could scale slightly with CI level, but keeping it simple for now
+    const outer = 0.15;
+    return { inner, middle, outer };
+  };
+
+  // Calculate confidence bounds and colors if needed
+  const confidenceData = useMemo(() => {
+    if (!shouldShowConfidenceIntervals) return null;
+    
+    const mean = effectiveProbability ?? 0;
+    if (mean <= 0) return null; // Can't calculate widths if mean is 0
+    
+    const bounds = calculateConfidenceBounds(mean, stdev, confidenceIntervalLevel as '80' | '90' | '95' | '99');
+    const opacities = calculateBandOpacities(confidenceIntervalLevel as '80' | '90' | '95' | '99');
+    
+    // Calculate stroke widths based on bounds
+    // Ensure widths are visually distinct: upper > middle > lower
+    // Use a minimum spread to ensure bands are visible even with tight intervals
+    const minSpread = 1.2; // At least 20% difference between bands
+    const upperRatio = Math.max(minSpread, bounds.upper / mean);
+    const lowerRatio = Math.max(0.5, Math.min(1 / minSpread, bounds.lower / mean));
+    
+    const widthUpper = strokeWidth * upperRatio;
+    const widthMiddle = strokeWidth;
+    const widthLower = strokeWidth * lowerRatio;
+    
+    // Debug logging (remove after testing)
+    if (id.includes('test') || id.includes('project')) {
+      console.log(`[CI ${id}] mean=${mean.toFixed(3)}, stdev=${stdev.toFixed(3)}, bounds=`, bounds, 
+        `widths=`, {upper: widthUpper.toFixed(1), middle: widthMiddle.toFixed(1), lower: widthLower.toFixed(1)},
+        `opacities=`, opacities);
+    }
+    
+    return {
+      bounds,
+      opacities,
+      widths: {
+        upper: Math.max(1, widthUpper),
+        middle: Math.max(1, widthMiddle),
+        lower: Math.max(1, widthLower)
+      }
+    };
+  }, [shouldShowConfidenceIntervals, effectiveProbability, stdev, confidenceIntervalLevel, strokeWidth, id]);
+  
   // Update stroke-width via DOM to enable CSS transitions
   React.useEffect(() => {
     if (pathRef.current) {
-      pathRef.current.style.strokeWidth = `${strokeWidth}px`;
+      const currentWidth = (shouldShowConfidenceIntervals && confidenceData)
+        ? confidenceData.widths.lower
+        : strokeWidth;
+      pathRef.current.style.strokeWidth = `${currentWidth}px`;
     }
-  }, [strokeWidth]);
+  }, [strokeWidth, shouldShowConfidenceIntervals, confidenceData?.widths.lower]);
   
   const isCaseEdge = (() => {
     // Check if edge has case_variant
@@ -1023,86 +1168,6 @@ export default function ConversionEdge({
   const finalLabelX = adjustedLabelPosition?.x ?? labelX;
   const finalLabelY = adjustedLabelPosition?.y ?? labelY;
 
-  // Helper function to convert hex to RGB (must be defined before useMemo)
-  const hexToRgb = (hex: string) => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result ? {
-      r: parseInt(result[1], 16),
-      g: parseInt(result[2], 16),
-      b: parseInt(result[3], 16)
-    } : { r: 153, g: 153, b: 153 }; // fallback to gray
-  };
-
-  // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
-  // Memoize color computation to ensure it updates when conditional_p colors change
-  const edgeColor = useMemo(() => {
-    // Selected edges: darker gray to distinguish from highlighted edges
-    if (selected) {
-      return '#222'; // very dark gray for selection
-    }
-    if (data?.isHighlighted) {
-      // Different opacity for different selection types:
-      // - Single node (isSingleNodeHighlight=true): 30% fading with depth
-      // - Multi-node topological (isSingleNodeHighlight=false): 50% solid
-      let blackIntensity: number;
-      
-      if (data.isSingleNodeHighlight) {
-        // Single node selection: Start at 30%, fade by 10% per hop
-        const depth = data.highlightDepth || 0;
-        blackIntensity = 0.3 * Math.pow(0.9, depth); // 30% × 0.9^depth
-      } else {
-        // Multi-node topological selection: 50% solid
-        blackIntensity = 0.5;
-      }
-      
-      // Get the base color for this edge type (underlying color)
-      let baseColor = '#b3b3b3'; // default gray
-      if (data?.probability === undefined || data?.probability === null) {
-        baseColor = '#ff6b6b';
-      } else if (fullEdge && isConditionalEdge(fullEdge)) {
-        // Conditional edges get their conditional color
-        baseColor = getConditionalColor(fullEdge) || '#4ade80'; // green-400 fallback
-      } else {
-        // Check if source node is a case node and inherit its color
-        // This applies to both case variant edges AND normal edges downstream
-        // source could be uuid OR human-readable id, check both
-        const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
-        if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
-          baseColor = sourceNode.layout.color;
-        }
-      }
-      
-      // Blend pure black with base color based on black intensity
-      // blackIntensity = how much black, (1 - blackIntensity) = how much base color
-      const black = { r: 0, g: 0, b: 0 }; // Pure black
-      const baseColorRgb = hexToRgb(baseColor);
-      
-      const blendedR = Math.round(black.r * blackIntensity + baseColorRgb.r * (1 - blackIntensity));
-      const blendedG = Math.round(black.g * blackIntensity + baseColorRgb.g * (1 - blackIntensity));
-      const blendedB = Math.round(black.b * blackIntensity + baseColorRgb.b * (1 - blackIntensity));
-      
-      return `rgb(${blendedR}, ${blendedG}, ${blendedB})`;
-    }
-    if (data?.probability === undefined || data?.probability === null) return '#ff6b6b';
-    
-    // Check for conditional edges and apply conditional color
-    if (fullEdge && isConditionalEdge(fullEdge)) {
-      return getConditionalColor(fullEdge) || '#4ade80'; // green-400 fallback
-    }
-    
-    // Check if source node is a case node and inherit its color
-    // This applies to both case variant edges AND normal edges downstream
-    // source could be uuid OR human-readable id, check both
-    const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
-    if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
-      return sourceNode.layout.color;
-    }
-    
-    return '#b3b3b3'; // 15% lighter gray for normal edges
-  }, [selected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.probability, fullEdge, source, graph?.nodes, graph?.metadata?.updated_at]);
-  
-  const getEdgeColor = () => edgeColor;
-
   const handleDelete = useCallback(() => {
     deleteElements({ edges: [{ id }] });
   }, [id, deleteElements]);
@@ -1440,6 +1505,75 @@ export default function ConversionEdge({
               onContextMenu={handleContextMenu}
               onDoubleClick={handleDoubleClick}
             />
+          ) : shouldShowConfidenceIntervals && confidenceData ? (
+            // Confidence interval mode: render three overlapping paths
+            <>
+              {/* Outer band (upper bound) - widest, lightest color */}
+              <path
+                key={`${id}-ci-upper`}
+                id={`${id}-ci-upper`}
+                style={{
+                  stroke: getEdgeColor(),
+                  strokeWidth: confidenceData.widths.upper,
+                  strokeOpacity: confidenceData.opacities.outer,
+                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                  fill: 'none',
+                  strokeLinecap: 'butt',
+                  strokeLinejoin: 'miter',
+                  zIndex: selected ? 1000 : 1,
+                  strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                  transition: 'stroke-width 0.3s ease-in-out',
+                }}
+                className="react-flow__edge-path"
+                d={edgePath}
+                onContextMenu={handleContextMenu}
+                onDoubleClick={handleDoubleClick}
+              />
+              {/* Middle band (mean) - normal width, base color */}
+              <path
+                key={`${id}-ci-middle`}
+                id={`${id}-ci-middle`}
+                style={{
+                  stroke: getEdgeColor(),
+                  strokeWidth: confidenceData.widths.middle,
+                  strokeOpacity: confidenceData.opacities.middle,
+                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                  fill: 'none',
+                  strokeLinecap: 'butt',
+                  strokeLinejoin: 'miter',
+                  zIndex: selected ? 1000 : 2,
+                  strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                  transition: 'stroke-width 0.3s ease-in-out',
+                }}
+                className="react-flow__edge-path"
+                d={edgePath}
+                onContextMenu={handleContextMenu}
+                onDoubleClick={handleDoubleClick}
+              />
+              {/* Inner band (lower bound) - narrowest, darkest color */}
+              <path
+                ref={pathRef}
+                key={`${id}-ci-lower`}
+                id={`${id}-ci-lower`}
+                style={{
+                  stroke: getEdgeColor(),
+                  strokeWidth: confidenceData.widths.lower,
+                  strokeOpacity: confidenceData.opacities.inner,
+                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                  fill: 'none',
+                  strokeLinecap: 'butt',
+                  strokeLinejoin: 'miter',
+                  zIndex: selected ? 1000 : 3,
+                  strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                  markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
+                  transition: 'stroke-width 0.3s ease-in-out',
+                }}
+                className="react-flow__edge-path"
+                d={edgePath}
+                onContextMenu={handleContextMenu}
+                onDoubleClick={handleDoubleClick}
+              />
+            </>
           ) : (
             // Normal mode: render as stroked path
             <path
@@ -1450,6 +1584,8 @@ export default function ConversionEdge({
                 strokeOpacity: EDGE_OPACITY,
                 mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                 fill: 'none',
+                strokeLinecap: 'butt',
+                strokeLinejoin: 'miter',
                 zIndex: selected ? 1000 : 1,
                 strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                 markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
