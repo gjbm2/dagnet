@@ -59,6 +59,11 @@ vi.mock('@monaco-editor/react', () => ({
   useMonaco: vi.fn(() => null),
 }));
 
+// Note: whatwg-url dependency conflict exists between jsdom@27 and @vercel/node
+// This may cause issues with integration tests. If tests fail with webidl-conversions errors,
+// try: npm install --save-dev whatwg-url@latest
+// Or use a different test environment like happy-dom
+
 // Suppress console errors in tests (optional - comment out if debugging)
 // vi.spyOn(console, 'error').mockImplementation(() => {});
 // vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -13,7 +13,11 @@
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest --watch"
+    "test:watch": "vitest --watch",
+    "test:integration": "vitest run \"**/*.integration.test.tsx\"",
+    "test:integration:watch": "vitest --watch \"**/*.integration.test.tsx\"",
+    "test:integration:coverage": "vitest run --coverage \"**/*.integration.test.tsx\"",
+    "test:unit": "vitest run \"**/*.test.{ts,tsx}\" --exclude \"**/*.integration.test.tsx\" --exclude \"**/*.e2e.test.tsx\""
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
