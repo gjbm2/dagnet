@@ -10,8 +10,9 @@ Enable users to create, view, and compare multiple “scenario” overlays of gr
 - Graph routing (topology/control points) is NOT re-generated per scenario; scenarios follow the current graph structure and fail gracefully if the graph has changed.
 
 ## Terminology
-- Base: The current working state (what the user actively edits).
-- Scenario: A named, colored, editable snapshot of parameters, rendered as an overlay when visible.
+- Base: Session baseline; bottom layer reference (default hidden). Flatten sets Base := Current within the session. Persisting to repo is a separate commit action.
+- Current: Live working state (in‑memory graph + What‑If); top layer; receives edits; can be hidden.
+- Scenario: A named, colored, editable overlay stored as a diff; rendered when visible.
 
 ## UX
 - Location: “Scenarios” section at the top of the What‑If panel
@@ -22,26 +23,40 @@ Enable users to create, view, and compare multiple “scenario” overlays of gr
   - View toggle (eye icon) — visibility is per tab
   - Open (launches Monaco modal to edit YAML/JSON)
   - Delete (trash)
-  - Tooltip on hover: Shows snapshot metadata (window, What-If state, context, created timestamp)
+  - Tooltip on hover: Shows snapshot metadata from `Scenario.meta` (window, context, what‑if summary, source, created timestamp)
 - Footer actions:
   - "+ Create Snapshot" (from current state; creates new scenario with current parameters), on top of stack
   - "New" (creates blank scenario and opens Monaco modal for initial YAML/JSON entry)
+  - "Flatten" (set Base := Current for this graph session; clear all overlays; does not commit to repo)
 - Monaco modal (uses FormEditor component pattern, but rendered as modal overlay, not a tab):
   - Displays full scenario YAML/JSON (parameters payload)
   - Live validation with inline diagnostics
   - Actions: Apply, Cancel
-  - Toggle: YAML/JSON (switches editor format)
+  - Syntax toggle: YAML | JSON (switches serialization)
+  - Structure toggle: Nested | Flat
+    - Default: YAML + Nested
+    - Flat representation uses dotted HRN keys (e.g., `e.checkout-to-purchase.p.mean`)
+    - Nested representation uses hierarchical objects under `e:` and `n:` keys
+    - Switching syntax/structure is lossless and round-trips to the same internal AST
+  - Export: "Copy as CSV" (Flat) — copies two-column CSV (key,value) derived from the current content
+  - Metadata panel:
+    - Readonly preview of captured metadata (`meta.window`, `meta.context`, `meta.whatIfSummary`, `meta.source`)
+    - Editable "Note" textarea bound to `meta.note`
   - Users can copy/paste within Monaco; no separate copy/paste buttons needed
 
-- Special "Current" scenario:
-  - Always shown at top of list (non-draggable)
-  - Represents the base/working state (not a stored snapshot)
-  - Not deletable
-  - Has color swatch, name (read-only "Current"), view toggle, and Open button
-  - Open button: launches Monaco modal showing current parameter state (editable)
-  - When user edits "Current" params in Monaco and clicks Apply: creates a NEW scenario with those edited parameters and makes it visible automatically
-  - When visible, renders as overlay like other scenarios but uses live current parameters
-  - Auto-visibility: When graph changes (user edits), "Current" is automatically made visible if hidden (with brief toast)
+- Base layer:
+  - Always present; pinned at the bottom of the stack (non-draggable, not deletable).
+  - Default: not visible. May be hidden or shown; used as reference even when hidden.
+  - Represents the session baseline. Flatten updates Base within the session; committing to repo is a separate action.
+  - Row shows color swatch placeholder, name (read-only "Base"), and Open button.
+  - Open button: launches Monaco modal showing Base parameter state (editable).
+  - Applying edits to Base mutates Base; “Save as Snapshot” creates an overlay from editor content.
+
+- Current layer:
+  - Pinned at the top of the stack.
+  - Represents the live working state (in‑memory graph + What‑If). Receives all edits and What‑If.
+  - Can be hidden. If the user edits params or changes What‑If while Current is hidden, auto‑unhide Current (toast: “Current shown to reflect your change”).
+  - Snapshot operations reference Current as the “from” side when computing diffs.
 
 ## Data Model
 Scenario (stored in graph runtime; see Persistence):
@@ -53,7 +68,8 @@ type Scenario = {
   createdAt: string;       // ISO
   updatedAt?: string;      // ISO
   version: number;         // schema version for params payload
-  params: ScenarioParams;  // full parameter surface snapshot
+  params: ScenarioParams;  // diff overlay payload; "All" = complete diff (covers entire surface), "Differences" = sparse diff
+  meta?: ScenarioMeta;     // optional metadata about how/when the scenario was created (window/context/what-if/etc.)
 };
 ```
 
@@ -61,13 +77,40 @@ Notes:
 - Visibility is tracked per tab, not in the Scenario object (see Persistence).
 - `ScenarioParams` uses the same schema as the What‑If parameter surface (edges, conditional ps, node weights, global multipliers/overrides), using the same rounding and determinism constraints as update flows.
 
+```ts
+// Scenario metadata describing capture context and user-authored note
+type ScenarioMeta = {
+  // Data window used at capture time (optional)
+  window?: {
+    start: string;     // ISO date/time
+    end: string;       // ISO date/time
+    label?: string;    // e.g., "Week 45", "2025-11-05 → 2025-11-12"
+  };
+  // Context key/values (optional)
+  context?: Record<string, string>;
+  // What-If at capture time
+  whatIfDSL?: string | null;  // DSL string if any (normalized)
+  whatIfSummary?: string;     // human-readable summary, e.g., "case(checkout_case:treatment)"
+  // Source and composition details for how the snapshot was generated
+  source?: {
+    type: 'all' | 'differences';
+    from: 'visible' | 'base';           // 'visible' excludes Current by definition
+    visibleExcludingCurrent?: string[]; // scenario IDs in order used as the source when from='visible'
+  };
+  createdBy?: string;          // optional user id/name
+  createdInTabId?: string;     // optional tab id
+  note?: string;               // user-editable narrative, auto-generated on creation
+};
+```
+
 ## Persistence
 - Scenarios are stored in the graph runtime and shared across tabs for the same graph session.
 - Scenarios are NOT saved into the project `.json` files.
 - Per‑tab state persists which scenario IDs are visible and the active selection:
 ```ts
 type TabScenarioState = {
-  visibleScenarioIds: string[];   // order reflects legend/render order
+  visibleScenarioIds: string[];         // order reflects legend/render order (drag handles)
+  visibleColorOrderIds: string[];       // order reflects visibility activation sequence (for color assignment)
   selectedScenarioId?: string;    // for “Open” default target, optional
 };
 ```
@@ -75,13 +118,17 @@ type TabScenarioState = {
 ## Color Strategy (Complementarity)
 - Goal: When two scenarios with identical parameters are visible, their colors visually neutralize (over the base), so no bias appears; differences show as colored fringes.
 - **Auto-assignment model** (see Open Questions #10 for manual override options):
-  - Colors are assigned only to visible scenarios. When visibility changes, colors are dynamically reassigned to maintain geometric neutralization among the currently visible set.
-  - When a scenario is toggled off: it loses its color assignment (color is freed for reassignment).
-  - When a scenario is toggled on: it receives a color computed via `assignColor()` based on the current set of visible scenarios.
+  - Colors are assigned only to visible scenarios and follow the per‑tab visibility activation sequence:
+    - When a scenario is toggled on: append its id to `visibleColorOrderIds` for that tab; assign the next color in the N‑tuple for the current visible count.
+    - When a scenario is toggled off: remove its id from `visibleColorOrderIds`; remaining visible layers keep their relative color order; colors are reassigned from the tuple accordingly.
+    - Drag reordering (legend/render order) does not change color assignment; users can influence colors by toggling visibility order (hide all, then show in desired order).
   - Color assignment algorithm:
+    - For one visible layer: render that layer in neutral grey (no palette color).
     - For two visible scenarios: assign complementary hues (≈180° apart) at equal perceived luminance/saturation.
     - For N > 2: distribute hues evenly around the wheel (maximal separation). Prefer pairwise complementaries when possible (even N).
     - Keep luminance stable to avoid bias.
+  - Base participation:
+    - If Base is visible alongside other layers, it participates in palette assignment like any other visible layer (e.g., with 3 visible layers, use a 3‑color palette: color[1] for first, color[2] for second, color[3] for Base).
   - Manual color override: TBD (see Open Questions #10 for options).
 - Blending:
   - Default: `mix-blend-mode: multiply`
@@ -90,74 +137,47 @@ type TabScenarioState = {
 
 ## Rendering Pipeline
 
-**CLARIFICATION NEEDED: Layering Model**
+Decision: Option B — Additive Layering (Stacked Model)
 
-Two possible interpretations:
+Principles:
+- Base is the background layer (always present; default hidden; can be shown; used as reference even when hidden).
+- Every overlay is a diff applied over the composition so far. “All” is just a complete diff that overwrites the entire surface; “Differences” is a sparse diff.
+- Layers are applied from bottom to top: Base → S1 → S2 → … → Sn. Each overlay overrides the composed parameters from the layers below it via deep-merge.
 
-### Option A: Independent Comparison (Parallel Model)
-- Each scenario is a complete, independent parameter snapshot.
-- Scenarios render in parallel (not stacked/layered).
-- "Current" is just one scenario among others; order doesn't affect computation.
-- Use case: Compare time periods, A/B variants, etc. Each is a full snapshot.
-- Snapshot scope: Always captures full param set (What-If is part of "current params").
-
-### Option B: Additive Layering (Stacked Model)
-- Scenarios are partial parameter overrides.
-- Render order matters: bottom layer computed first, each layer above overrides/adjusts previous.
-- "Current" is typically bottom; user can stack partial overlays (e.g., "change only probabilities").
-- Use case: Build up scenarios incrementally (base + what-if + context adjustment).
-- Snapshot scope: Can capture partial param sets (only changed params).
-
-**User's caps comment suggests Option B** ("each param pack adjusts param pack of previous layer"), but the rest of the spec describes Option A (full snapshots, parallel comparison).
-
-**PROPOSAL**: Start with Option A (simpler, clearer semantics). Add Option B layering in Phase 2 if needed.
-
----
-
-### Rendering Pipeline (assuming Option A: Independent Comparison)
-
-Base render:
-- Edges render using current working parameters.
-- Existing confidence intervals, selections, and highlights continue to function.
-
-Scenario overlays (for each visible scenario S):
-1. Parameter computation
-   - Use S.params as the **complete** parameter surface for this scenario.
-   - Each scenario is computed independently (no dependency on other scenarios' order).
-2. Widths
-   - Compute edge widths with the existing `calculateEdgeWidth(...)` pipeline using S.params.
-3. Sankey offsets (per scenario)
-   - Compute lateral source/target offsets using S.params (flows/weights).
-   - Result: For each edge, S has its own width and its own source/target lateral offsets.
-4. Routing and geometry
-   - Scenarios use the current graph geometry (base's paths/control points).
-   - Apply per‑scenario source/target lateral offsets to current geometry.
-5. Drawing
-   - Render scenario path using S.color, `mix-blend-mode: multiply`, fixed `strokeOpacity`.
-   - Use `strokeLinecap: 'butt'`, `strokeLinejoin: 'miter'` for crisp, truncated ends.
-6. Edge coloring suppression
-   - If >1 scenario visible: suppress conditional probability and case edge coloring (render all grey).
-   - This frees edge colors for scenario overlays.
+Pipeline:
+1. Start with `composedParams = Base.params` (the current working state).
+2. For each visible scenario overlay S in palette order:
+   - Merge `S.params` (diff) into `composedParams` via deterministic deep override.
+   - Geometry:
+     - Use the current graph geometry (paths/control points) for all layers.
+   - Compute edge widths and per-edge lateral offsets using `composedParams`.
+   - Draw:
+     - Render S as an overlay path using S.color, `mix-blend-mode: multiply`, fixed `strokeOpacity`.
+     - Use `strokeLinecap: 'butt'`, `strokeLinejoin: 'miter'` for crisp ends.
+3. Confidence intervals, selections, and highlights continue to function; CI bands render on Base only.
 
 Fail‑gracefully rules when graph changed since snapshot:
-- If an edge present in S.params no longer exists:
-  - Skip rendering for that edge (optionally log/debug mark).
-- If a new edge exists that S.params does not cover:
-  - Skip for that edge under S (only base shows it).
-- If node ids/edge ids map changed:
-  - Attempt matching by stable IDs; otherwise skip.
+- If an edge present in any S.params no longer exists: skip for that edge under S (optionally log/debug mark).
+- If a new edge exists that a given S.params does not cover: rendering uses whatever is in `composedParams` at that point (i.e., inherits from below).
+- If node ids/edge ids map changed: attempt matching by stable IDs; otherwise skip.
 
 Render order:
-- Scenarios render in the order of the scenarios palette (user can reorder via drag handles).
-- Reordering updates the `visibleScenarioIds` array order for the current tab.
-- "Current" scenario (if visible) renders first, then stored scenarios in palette order. 
+- Base renders first (always).
+- Overlays render in the order of the scenarios palette (user can reorder via drag handles).
+- Reordering updates the `visibleScenarioIds` array order (render order) for the current tab.
+- Color assignment order is independent and follows the `visibleColorOrderIds` activation sequence for the current tab.
 
 ## Operations (ScenariosContext API)
 ```ts
 interface ScenariosContext {
   list(): Scenario[];
   get(id: string): Scenario | undefined;
-  createFromCurrent(name?: string): Scenario; // snapshots current parameter surface + What-If/context state, assigns color when visible
+  createSnapshot(options?: { 
+    name?: string; 
+    type?: 'all' | 'differences';  // default: 'all'
+    source?: 'visible' | 'base';    // 'visible' = composition of all visible layers EXCLUDING Current; 'base' = Base only; default: 'visible'
+    diffThreshold?: number;         // optional epsilon for "Differences" extraction
+  }): Scenario; // creates snapshot from current state per options; captures ScenarioMeta; assigns color when made visible
   createBlank(name?: string): Scenario;      // creates empty scenario, opens editor
   openInEditor(id: string): void;            // launches Monaco modal for scenario
   applyContent(id: string, content: string, format: 'yaml' | 'json'): Result<Scenario, Error>; 
@@ -176,9 +196,9 @@ interface ScenariosContext {
   // Color assignment
   assignColor(scenarioId: string, existingVisibleIds: string[]): string; // computes complementary color
   
-  // "Current" scenario helpers
-  getCurrentParams(): ScenarioParams;       // returns current working state parameters
-  openCurrentInEditor(): void;              // opens "Current" in Monaco modal
+  // Base helpers
+  getBaseParams(): ScenarioParams;          // returns Base (working state) parameters
+  openBaseInEditor(): void;                 // opens Base in Monaco modal
 }
 ```
 
@@ -188,13 +208,18 @@ interface ScenariosContext {
 - On Apply with errors: persist anyway but mark scenario as "has validation errors" (visual indicator in list). 
 
 ## Performance
-- Cache per-scenario computed widths/offsets per edge, keyed by:
-  - `(scenarioId, edgeId, geometryHash, paramsHash)`
-- Batch recompute on idle or microtask after parameter changes to avoid jank.
+- No precompute required for v1. Compute on demand:
+  - Parse (YAML/JSON → AST) → resolve HRNs to IDs → deep‑merge diffs in order → compute widths/offsets per layer.
+- Memoize only lightweight steps:
+  - Parsed `ScenarioParams` per scenario content hash.
+  - HRN→ID resolution map per scenario (invalidated on id/structure changes).
+  - Optional per‑frame memo for edge width calculations keyed by `(edgeId, composedParamsHash, geometryHash)`.
+- Throttle recomputes via microtask/rAF/idle to avoid jank during rapid toggles/reorder.
+- Complexity: O(totalDiffSize + E × visibleLayers). With ≤5 visible layers and typical E, this is acceptable without heavy caching.
 - Soft cap: recommend ≤5 visible scenarios; warn/degrade gracefully beyond.
 
 ## Accessibility
-- Ensure color assignments meet minimum contrast when drawn over the base gray.
+- Ensure color assignments meet minimum contrast against the background and each other.
 - Provide tooltip/legend entries that identify scenario name/color.
 
 ## Interactions & Compatibility
@@ -211,51 +236,50 @@ interface ScenariosContext {
 
 ## User Flow Examples
 
-### Flow 1: Compare current state against historic state
-1. User starts with current graph (showing latest data)
-2. User clicks "+ Create Snapshot" → snapshot created **on top of Current** (per user's edit), visible=true
-3. Two layers now visible (Current + Snapshot), each assigned a color (e.g., Blue & Pink)
-4. User changes window (date range) → new data retrieves for Current
-5. User sees deltas: colored fringes show where Current differs from historic Snapshot
+### Flow 1: Apply What‑If, snapshot “All”, then compare
+1. User applies What‑If (e.g., `case=treatment`) to Current.
+2. User clicks Snapshot → All (copy Current as complete diff). New overlay inserted at position 2.
+3. User hides Current to compare:
+   - If Base is hidden: preview shows only the snapshot layer.
+   - If Base is shown: preview = Base + [All overlay].
+4. User tweaks a parameter while Current is hidden → auto‑unhide Current (toast), so the tweak is visible.
 
-**Status**: ✓ Semantics clear (Option A model works well).
+### Flow 2: Build a composite with stacked “Differences”
+1. Start with Base (hidden) and Current visible.
+2. User bulk‑edits on Current; Snapshot → Differences (source = visible minus Current → Base). New “Delta A” at position 2.
+3. User makes a second targeted tweak; Snapshot → Differences (source now = Base + “Delta A”). New “Delta B” at position 2.
+4. User hides Current to preview composition: Preview = Base + Delta B + Delta A (stack order).
+5. User reorders Delta A/B to test precedence; composition updates deterministically (deep‑merge of diffs).
 
-### Flow 2: Investigate before/after of experiment in progress
-1. User starts with current graph
-2. User applies What-If: `case1=treatment`
-3. User unchecks all options in "Create Snapshot" dropdown except "What-If" and clicks snapshot
-4. **PROBLEM**: Partial snapshots (What-If only) don't make sense in Option A (independent comparison). Snapshot would be incomplete.
-5. **RESOLUTION**: See "Snapshot Scope Semantics" below.
-
-### Flow 3: Multi-scenario comparison (time series)
-1. User loads data for Week 1, clicks snapshot → "Week 1" scenario created
-2. User changes window to Week 2, clicks snapshot → "Week 2" scenario created
-3. User changes window to Week 3, clicks snapshot → "Week 3" scenario created
-4. Three scenarios visible (all with different colors: Cyan, Magenta, Yellow)
-5. User can toggle visibility to compare any subset (e.g., Week 1 vs Week 3)
-
-**Status**: ✓ Clear use case for Option A.
+### Flow 3: Multi‑tab authoring and Flatten
+1. Tab A: Overlays A1, A2 visible under Current (tab‑local view state). Preview = Base + A1 + A2 (+ Current if visible).
+2. Tab B: Only B1 visible. User tweaks Current and Snapshot → Differences. Source = Base + B1 (visible minus Current in Tab B). New “B2” at position 2.
+3. Switch to Tab A: “B2” exists globally, but preview differs because visibility in Tab A is Base + A1 + A2.
+4. User chooses Flatten: Base := Current (session‑local). All overlays are cleared for this graph session. Current remains visible; tabs now show only Base (+ Current).
 
 ---
 
 ## Snapshot Scope Semantics
 
-**Problem**: Partial parameter snapshots (e.g., "What-If only") don't make semantic sense in Option A (independent comparison). Each scenario must be a complete parameter set to render.
+Two snapshot types are supported:
 
-**Proposal**: Rethink snapshot scope options:
+1. "All" (complete diff):
+   - Captures a diff that fully overrides the chosen source.
+   - By default, source = "visible": source is the composition of all visible layers EXCLUDING Current; produce a complete diff from Current to that source (include‑all; ignore epsilon).
+   - Alternative source = "base": source is Base only; produce a complete diff from Current to Base.
+   - Stored as a diff overlay; no special handling at composition time.
 
-1. **"Parameters" (default)**: Snapshot all underlying graph parameters (probabilities, costs, lags) in their current state. **Excludes** What-If overrides.
-2. **"Parameters + What-If"**: Snapshot underlying params **with** What-If overrides applied (merged into params).
-3. ~~**"What-If only"**~~: Removed. Doesn't make sense semantically (incomplete snapshot).
+2. "Differences" (sparse diff):
+   - Captures only the minimal parameter deltas between Current and the chosen source.
+   - By default, source = "visible": source is the composition of all visible layers EXCLUDING Current; compute sparse diff(Current, source) with epsilon.
+   - If no other layers are visible, the source falls back to Base.
+   - Excludes keys equal to the source (respecting an optional epsilon `diffThreshold`).
+   - Stored as a diff overlay to be layered on top of Base (and possibly other overlays).
 
-**Rationale**:
-- "Parameters" = base state (useful for time-series comparisons across windows)
-- "Parameters + What-If" = hypothetical state (useful for experiment comparisons)
-- Mutually exclusive makes sense; partial snapshots don't.
-
-**Updated "Create Snapshot" dropdown**:
-- ☑ Include What-If overrides (default: unchecked)
-- ~~Checkboxes for Probabilities/Costs/Lags~~: Removed (all params always included)
+Notes:
+- Partial parameter overlays are first-class in additive layering.
+- What‑If overrides applied at capture time are inherently included in "visible" captures; no separate What‑If checkbox is needed.
+- Users can still manually edit overlays in Monaco to adjust full or partial content.
 
 ---
 
@@ -263,30 +287,38 @@ interface ScenariosContext {
 
 ### 3. Default labels for scenarios
 - **Default name**: Timestamp (e.g., "2025-11-12 14:30")
-- **Tooltip on hover**: Shows metadata about snapshot creation state:
-  - Window: `2025-11-05 to 2025-11-12`
-  - What-If: `case1=treatment` (if any)
-  - Context: `channel=mobile` (if any, future)
+- **Tooltip on hover**: Shows `Scenario.meta` summary:
+  - Window: `2025-11-05 → 2025-11-12`
+  - Context: `channel=mobile` (if any)
+  - What‑If: `case(checkout_case:treatment)` (if any)
+  - Source: `All from visible` or `Differences vs Base`
   - Created: ISO timestamp
 
-### 4. What happens if "Current" is hidden?
-- **Behavior**: User edits to graph won't display visually (only stored scenarios render).
-- **Risk**: Potentially confusing.
-- **Solution**: When graph changes (user edits params), automatically make "Current" visible if it's hidden.
-- **Implementation**: On graph mutation, check if "Current" is hidden → if yes, toggle it visible and show brief toast: "Current state is now visible".
+### 4. Base and Current visibility
+- Base: always present; default hidden; can be shown/hidden. Used as the reference even when hidden.
+- Current: can be hidden; on any param edit or What‑If change while hidden, auto‑unhide with a brief toast.
 
-### 5. Snapshot scope rethinking
-See "Snapshot Scope Semantics" above. Recommendation: Drop partial snapshots; only allow:
-- Full params (excluding What-If)
-- Full params + What-If merged
+### 5. Snapshot insertion rules
+- All: snapshot Current (complete diff). Insert new overlay at position 2 (just beneath Current).
+- Differences: compute sparse diff(Current, source), where source = composition of visible layers excluding Current (fallback Base). Insert at position 2.
+- Overlays are stored as diffs and composed via deterministic deep‑merge; no special render handling needed.
+
+### 6. What‑If interplay
+- What‑If applies only to Current.
+- If Current is hidden, What‑If effects are muted from preview; on any What‑If change, auto‑unhide Current with a brief toast.
+- Overlays are unaffected by What‑If after capture; captures include What‑If implicitly because they diff from Current at the time of snapshot.
 
 ## Acceptance Criteria
-- Users can create a snapshot from current parameters; it appears in the list with an assigned color and is invisible by default or follow product choice (tunable).
+- Users can create a snapshot as "All" or "Differences" (from visible or Base); it appears in the list with an assigned color and is invisible by default or follow product choice (tunable).
 - Users can rename, recolor, toggle visibility (per tab), open the JSON modal, apply edits, and delete scenarios.
-- When scenarios are visible, overlays render with per-scenario widths and per-scenario Sankey offsets using current graph geometry.
+- When scenarios are visible, overlays render additively from Base upward with per-layer widths and per-layer Sankey offsets using current graph geometry.
 - If two visible scenarios are identical, their overlays produce neutral appearance over the base (no obvious color bias), subject to blending and display variance.
 - If widths differ, colored fringes appear where one scenario’s edge extends beyond another.
 - Scenarios persist in graph runtime (shared across tabs); visibility is stored per tab.
+- Current can be hidden; any param edit or What‑If change while hidden auto‑unhides Current with a toast.
+- Monaco modal supports toggling Syntax (YAML/JSON) and Structure (Flat/Nested), with lossless round-trip between representations.
+- Monaco modal provides "Copy as CSV" export of the flat representation (key,value).
+- Snapshot creation captures `Scenario.meta` with window, context, what‑if DSL/summary, and source; modal allows editing `meta.note`.
 
 ## Open Questions / Areas Needing Design
 1. **Exact blending and alpha defaults**: Best values for neutralization across a variety of base colors and background themes (empirical tuning needed).
@@ -294,11 +326,12 @@ See "Snapshot Scope Semantics" above. Recommendation: Drop partial snapshots; on
    - **Decision**: Permit user to leave CI on if they wish. No reason we cannot accommodate.
    - CI bands render on base layer; scenario overlays render without CI (for simplicity in v1).
    - Sankey diagram mode: No blocking issue; scenarios should work in Sankey mode.
-3. **"Current" scenario implementation**:
-   - **Revised decision** (see "Rendering Pipeline" clarification): "Current" is **not draggable**. Scenarios render independently (parallel comparison model, not stacked/layering). Order affects only visual render order, not computation.
-   - **Color assignment for "Current"**: Same as for other scenarios. If 1 visible scenario, render normally (grey). If >1 visible, assign colors to all visible scenarios including "Current" using the complementary color algorithm.
-   - **When "Current" is opened and edited, Apply**: Creates a new scenario and makes it visible automatically.
-   - **Auto-visibility on edit**: When graph changes (user edits params), automatically make "Current" visible if hidden (with brief toast notification).
+3. **Base layer implementation**:
+   - Base is not draggable; it can be hidden or shown (default hidden). It is the background reference layer.
+   - Color behavior: 
+     - If exactly one layer is visible (often Current), render that layer in neutral grey.
+     - If multiple layers are visible, assign a palette color to each visible layer, including Base if it is visible.
+   - Opening Base in the editor allows direct mutation of Base; a “Save as Snapshot” action creates an overlay from editor content.
 4. **Tooling/Architecture**:
    - Where to host `ScenariosContext` (new context vs extend existing ViewPreferences/Operations)?
    - Recommendation: New `ScenariosContext` for separation of concerns.
@@ -318,11 +351,12 @@ See "Snapshot Scope Semantics" above. Recommendation: Drop partial snapshots; on
    - Both buttons use consistent Lucide icons.
    - Scenarios palette remains in sidebar What-If panel (renamed accordingly).
 8. **Snapshot scope**:
-   - **Revised decision** (see "Snapshot Scope Semantics" section): "Create Snapshot" button has simplified affordance:
-     - Click: Copies all current parameters (excluding What-If overrides)
-     - Dropdown arrow (right side): Shows dropdown menu with single checkbox:
-       - ☑ Include What-If overrides (default: unchecked)
-   - Partial parameter snapshots (e.g., "only probabilities") removed: doesn't make semantic sense in independent comparison model.
+   - "Create Snapshot" affordance:
+     - Primary click: "All" with source='visible' (composition of visible layers excluding Current).
+     - Dropdown:
+       - Type: 'all' | 'differences'
+       - Source: 'visible' (excluding Current) | 'base'
+       - Optional: `diffThreshold` (epsilon for 'differences')
    - Context: TO FOLLOW (deferred).
 9. **Selection behavior (Photoshop layers palette pattern)** (PHASE 2):
    - **Decision for v1**: Eye icon = toggle visibility. Keep this approach.
@@ -340,3 +374,236 @@ See "Snapshot Scope Semantics" above. Recommendation: Drop partial snapshots; on
     - Color swatch click: allows manual color override (Option B approach).
     - PHASE 2: Add advanced "Color Settings" option to allow user to specify custom color sequence.
 
+---
+
+## Appendix A — Parameter Snapshot Schema and Graph Mapping
+
+Purpose: Clarify that scenario payloads are parameter diffs only. They are not full graph copies and exclude structure and display concerns.
+
+Inclusions (parameter surface):
+- Edges (by stable ID/UUID):
+  - Probability `p` (mean, stdev, distribution, overridden flags)
+  - Conditional probabilities `conditional_p` keyed by condition string; values are probability params
+  - Default weight `weight_default`
+  - Costs: `cost_gbp`, `cost_time` (CostParam)
+- Nodes (by stable ID/UUID):
+  - Entry weights `entry.entry_weight`
+  - Costs: `costs.monetary`, `costs.time`
+  - Case variants (if node is a case): addressed as `case(<caseId>:<variantName>).weight`
+- Optional future: global parameter multipliers/overrides (not yet implemented)
+
+Exclusions:
+- Graph structure: nodes list, edges connectivity (`from`, `to`, handles), routing/control points
+- Layout and display: positions, colors, labels, descriptions, tags, display markers
+- Metadata, policies, registry/connection details, data source queries/evidence
+- What‑If state (DSL/overrides) after capture; overlays store only resolved parameter diffs
+
+Identifier rules:
+- Human‑readable references (HRNs) are preferred for readability; UUIDs are used as a fallback.
+- On capture, include HRN keys; optionally include UUID hints for resilience when applying to changed bases.
+
+Proposed diff schema (TypeScript-ish):
+```ts
+// Sparse diff; omit keys to leave underlying values unchanged
+type ScenarioParams = {
+  edges?: {
+    [edgeId: string]: {
+      p?: ProbabilityParam;                       // replaces base p when present
+      conditional_p?: {
+        [condition: string]: ProbabilityParam | null; // set to ProbabilityParam to upsert/replace;
+                                                      // set to null to remove a conditional entry
+      } | Array<{ condition: string; p: ProbabilityParam }>; // alternatively replace full set
+      weight_default?: number;
+      cost_gbp?: CostParam;
+      cost_time?: CostParam;
+    }
+  };
+  nodes?: {
+    [nodeId: string]: {
+      entry?: { entry_weight?: number };
+      costs?: {
+        monetary?: number | { value: number; stdev?: number; distribution?: string; currency?: string };
+        time?: number | { value: number; stdev?: number; distribution?: string; units?: string };
+      }
+    }
+  };
+  // future: globals?: { ... } // global multipliers/overrides
+};
+```
+
+Example “Differences” overlay (JSON):
+```json
+{
+  "edges": {
+    "edge-uuid-1": { "p": { "mean": 0.42 } },
+    "edge-uuid-2": {
+      "conditional_p": {
+        "visited(promo)": { "mean": 0.30 },
+        "visited(old-flow)": null
+      },
+      "cost_gbp": { "mean": 1.5 }
+    }
+  },
+  "nodes": {
+    "node-uuid-A": { "entry": { "entry_weight": 0.2 } },
+    "node-uuid-B": { "costs": { "time": { "value": 3, "units": "days" } } }
+  }
+}
+```
+
+“All” overlay is simply a complete diff: it populates every relevant parameter field for all edges/nodes present at capture time, using the same schema. Composition always applies diffs via deterministic deep‑merge in stack order.
+
+### Appendix A.1 — Human‑Readable Parameter Addressing (dagCal‑style)
+
+Goal: Make param packs readable/editable by users without exposing UUIDs, while remaining deterministically applicable to Base.
+
+Addressing grammar (HRN):
+- Edges (selector precedence; resolver tries in this order):
+  1) By edge id (best): `e.<edgeId>.<path>`
+  2) By endpoints: `e.from(<fromNodeId>).to(<toNodeId>).<path>`
+  3) Fallback by UUID: `e.uuid(<edgeUuid>).<path>`
+  - If multiple edges match endpoints, do not add handle qualifiers; instead, fallback to UUID.
+  - Conditions (normalized DSL) are appended inline:
+    - `e.from(<fromNodeId>).to(<toNodeId>).visited(nodec).<path>`
+  - Preference: when an `edgeId` exists, prefer the concise `e.<edgeId>...` form even with conditions (e.g., `e.checkout-to-purchase.visited(promo).p.mean`). Redundant endpoint qualifiers are allowed but not required.
+- Nodes:
+  - By node id (preferred): `n.<nodeId>.<path>`
+  - Fallback by UUID: `n.uuid(<nodeUuid>).<path>`
+  - Case variant addressing: `n.<nodeId>.case(<caseId>:<variantName>).weight`
+
+Path suffixes map to param payload fields (see schema above). Condition strings MUST be normalized (same DSL used in graph: normalized whitespace, casing, order).
+
+Normalization/canonicalization:
+- `nodeId` and `edgeId` are human‑readable identifiers from the graph (not labels).
+- Canonical form: lowercase; trim spaces; spaces→`-`; strip surrounding quotes.
+- Condition strings are normalized using the existing query/constraint normalizer.
+
+Resolution algorithm (apply‑time):
+1) If an entry carries a UUID hint, attempt direct UUID resolution first; if found, apply and stop.
+2) For edges:
+   - Try human `edgeId` form `e.<edgeId>`; if unique, apply.
+   - Else try endpoints `e.from(<fromId>).to(<toId>)`; if multiple edges match, fallback to `e.uuid(<uuid>)`.
+   - Else if neither id nor endpoints resolve, and a UUID is provided via `e.uuid(<uuid>)`, use it.
+3) For nodes: resolve by human `nodeId`; else use `n.uuid(<uuid>)`.
+4) If resolution fails or is ambiguous:
+   - Skip applying that entry; record a validation warning with the unresolved HRN and suggested disambiguators.
+
+Where HRNs work well:
+- Stable human ids (nodes/edges) and typical edits (param tweaks, adding overlays).
+- Reading/editing param packs in code review, diffs remain legible.
+
+Edge cases/limitations:
+- Ambiguity: multiple edges between the same nodes without handles or human edge ids → use UUID fallback.
+- Renames: if human ids change after capture, HRN resolution may fail; UUID hints mitigate this.
+- Structural changes: removed edges/nodes or topology rewires will skip affected entries (warning).
+- Conditional DSL refactors: condition normalization must remain stable; otherwise treat as different keys.
+
+Recommendation:
+- Default to HRNs in saved snapshot files and UI surfaces.
+- Provide a linter in the editor that flags ambiguous HRNs and offers auto‑fix by inserting handles or switching to `e.<edgeId>`.
+
+Examples (edges):
+- By edge id:
+  - `e.checkout-to-purchase.p.mean = 0.42`
+  - `e.checkout-to-purchase.p.stdev = 0.05`
+  - `e.checkout-to-purchase.cost_gbp.mean = 1.5`
+- By endpoints:
+  - `e.from(checkout).to(purchase).p.mean = 0.42`
+  - `e.checkout-to-purchase.visited(promo).p.mean = 0.30`  // preferred concise form when edgeId exists
+  - `e.from(checkout).to(purchase).weight_default = 0.8`
+- Parallel edges (fallback to UUID for specificity):
+  - `e.uuid(1f23c9a2-...-9bd1).p.mean = 0.55`
+- By UUID (fallback):
+  - `e.uuid(1f23c9a2-...-9bd1).p.mean = 0.42`
+  - `e.uuid(1f23c9a2-...-9bd1).visited(promo).p.mean = 0.30`
+- Conditional add/remove:
+  - Add/update: `e.checkout-to-purchase.visited(promo).p.mean = 0.30`
+  - Remove:      `e.from(checkout).to(purchase).visited(old-flow).p = null`
+
+Examples (nodes):
+- By node id:
+  - `n.landing.entry.entry_weight = 0.2`
+  - `n.billing.costs.time.value = 3`
+  - `n.billing.costs.time.units = "days"`
+- By UUID (fallback):
+  - `n.uuid(ae45...c2).entry.entry_weight = 0.15`
+
+### Appendix A.2 — Examples: Variant Weights, Conditional Params, Evidence, and Flatten
+
+Variant weights (case what‑if materialization):
+- Selecting a variant at a case node can be captured by setting its weight to 1.0 and complements to 0.0.
+- Differences (HRN):
+  - `n.checkout_case.case(checkout_case:treatment).weight = 1.0`
+  - `n.checkout_case.case(checkout_case:control).weight = 0.0`
+- All: include the full variants array with explicit weights for all variants (complete diff).
+
+Conditional probabilities:
+- Update a conditional probability’s mean (sparse diff):
+  - `e.from(checkout).to(purchase).visited(promo).p.mean = 0.30`
+- Remove a conditional entry:
+  - `e.from(checkout).to(purchase).visited(old-flow).p = null`
+- Optional materialization of a conditional selection into base p (policy):
+  - Promote selected conditional into base p:
+    - `e.from(checkout).to(purchase).p.mean = 0.30`
+    - (and optionally keep conditionals unchanged)
+
+Evidence (capture and editing):
+- Probability evidence under base p:
+  - `e.checkout-to-purchase.p.evidence.k = 12345`
+  - `e.checkout-to-purchase.p.evidence.variants[0].allocation = 0.6`
+- Conditional probability evidence:
+  - `e.from(checkout).to(purchase).visited(promo).p.evidence.k = 98765`
+
+Flatten (UI and semantics):
+- UI: Footer action “Flatten” sets Base := Current for the active graph session (no repo commit).
+- Behavior:
+  - Writes the composed Current working parameters into Base.
+  - Clears all overlays for this graph session (graph‑level overlays removed).
+  - Current remains visible.
+  - What‑If effects are materialized only if reflected in parameters (e.g., case variant weights or promoted base p). Otherwise What‑If continues to exist only in Current and is not implicitly written.
+
+### Appendix A.3 — DSL and Representations (Explicit vs Implicit)
+
+Single DSL:
+- One addressing DSL for parameter packs, reusing the normalized condition/query DSL for conditional keys (e.g., `visited(promo)`).
+- HRN path grammar (edge/node selectors + param paths) + condition DSL form a single unified grammar.
+
+Two representations (same semantics):
+- Explicit (flat key/value pairs) — ideal for CSV/Google Sheets import/export.
+- Implicit (nested YAML/JSON) — easier for humans to read/edit.
+- Both map to the same internal AST and round‑trip without loss (ignoring formatting).
+
+Explicit examples (flat):
+```text
+e.checkout-to-purchase.p.mean = 0.42
+e.checkout-to-purchase.p.stdev = 0.05
+e.checkout-to-purchase.cost_gbp.mean = 1.5
+e.from(checkout).to(purchase).visited(promo).p.mean = 0.30
+n.checkout_case.case(checkout_case:treatment).weight = 1.0
+n.checkout_case.case(checkout_case:control).weight = 0.0
+```
+
+Implicit examples (nested YAML):
+```yaml
+e:
+  checkout-to-purchase:
+    p:
+      mean: 0.42
+      stdev: 0.05
+    cost_gbp:
+      mean: 1.5
+  from(checkout).to(purchase).visited(promo):
+    p:
+      mean: 0.30
+n:
+  checkout_case:
+    case(checkout_case:treatment):
+      weight: 1.0
+    case(checkout_case:control):
+      weight: 0.0
+```
+
+Import/export:
+- Flat: 1:1 `key,value` rows for spreadsheets/CSV.
+- Nested: preferred for code review/manual edits.
+- Both validate against the same schema and resolve via the HRN algorithm.
