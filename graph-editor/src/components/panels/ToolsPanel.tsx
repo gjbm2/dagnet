@@ -41,10 +41,12 @@ export default function ToolsPanel({
     massGenerosity,
     autoReroute,
     useSankeyView,
+    confidenceIntervalLevel,
     setUseUniformScaling,
     setMassGenerosity,
     setAutoReroute,
-    setUseSankeyView
+    setUseSankeyView,
+    setConfidenceIntervalLevel
   } = viewPrefs;
   return (
     <div className="tools-panel">
@@ -113,6 +115,62 @@ export default function ToolsPanel({
             onUniformScalingChange={setUseUniformScaling}
             onMassGenerosityChange={setMassGenerosity}
           />
+        </CollapsibleSection>
+        
+        {/* Confidence Intervals */}
+        <CollapsibleSection title="Confidence Intervals" defaultOpen={true} icon={Eye}>
+          <div className="confidence-intervals-control">
+            <label className="tool-radio">
+              <input
+                type="radio"
+                name="confidence-interval"
+                value="none"
+                checked={confidenceIntervalLevel === 'none'}
+                onChange={() => setConfidenceIntervalLevel('none')}
+              />
+              <span>None</span>
+            </label>
+            <label className="tool-radio">
+              <input
+                type="radio"
+                name="confidence-interval"
+                value="80"
+                checked={confidenceIntervalLevel === '80'}
+                onChange={() => setConfidenceIntervalLevel('80')}
+              />
+              <span>80%</span>
+            </label>
+            <label className="tool-radio">
+              <input
+                type="radio"
+                name="confidence-interval"
+                value="90"
+                checked={confidenceIntervalLevel === '90'}
+                onChange={() => setConfidenceIntervalLevel('90')}
+              />
+              <span>90%</span>
+            </label>
+            <label className="tool-radio">
+              <input
+                type="radio"
+                name="confidence-interval"
+                value="95"
+                checked={confidenceIntervalLevel === '95'}
+                onChange={() => setConfidenceIntervalLevel('95')}
+              />
+              <span>95%</span>
+            </label>
+            <label className="tool-radio">
+              <input
+                type="radio"
+                name="confidence-interval"
+                value="99"
+                checked={confidenceIntervalLevel === '99'}
+                onChange={() => setConfidenceIntervalLevel('99')}
+              />
+              <span>99%</span>
+            </label>
+          </div>
         </CollapsibleSection>
         
         {/* Visibility Tools */}

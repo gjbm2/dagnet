@@ -133,3 +133,35 @@
   color: #374151;
 }
 
+/* Tool Radio */
+.tool-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.tool-radio:hover {
+  background: #F9FAFB;
+}
+
+.tool-radio input[type="radio"] {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+}
+
+.tool-radio span {
+  font-size: 14px;
+  color: #374151;
+}
+
+.confidence-intervals-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
