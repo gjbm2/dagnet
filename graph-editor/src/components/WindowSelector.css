@@ -88,9 +88,9 @@
 .window-selector-button {
   padding: 4px 16px; /* Match preset button padding (4px vertical) */
   margin-left: 8px;
-  border: 1px solid #666;
+  border: 1px solid #1976d2;
   border-radius: 4px;
-  background: #666;
+  background: #1976d2;
   color: white;
   font-size: 12px; /* Match preset button font size */
   font-weight: 500;
@@ -171,13 +171,13 @@
 }
 
 .window-selector-button:hover:not(:disabled) {
-  background: #555;
-  border-color: #555;
+  background: #1565c0;
+  border-color: #1565c0;
 }
 
 .window-selector-button:active:not(:disabled) {
-  background: #444;
-  border-color: #444;
+  background: #0d47a1;
+  border-color: #0d47a1;
 }
 
 .window-selector-button:disabled {
@@ -195,10 +195,10 @@
 
 .window-selector-preset {
   padding: 4px 8px;
-  border: 1px solid #ccc;
+  border: 1px solid #1976d2;
   border-radius: 4px;
   background: white;
-  color: #333;
+  color: #1976d2;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -207,23 +207,25 @@
 }
 
 .window-selector-preset:hover {
-  background: #f5f5f5;
-  border-color: #999;
+  background: #e3f2fd;
+  border-color: #1565c0;
+  color: #1565c0;
 }
 
 .window-selector-preset:active {
-  background: #e0e0e0;
-  border-color: #666;
+  background: #bbdefb;
+  border-color: #0d47a1;
+  color: #0d47a1;
 }
 
 .window-selector-preset.active {
-  background: #666;
-  border-color: #666;
+  background: #1976d2;
+  border-color: #1976d2;
   color: white;
 }
 
 .window-selector-preset.active:hover {
-  background: #555;
-  border-color: #555;
+  background: #1565c0;
+  border-color: #1565c0;
 }
 
