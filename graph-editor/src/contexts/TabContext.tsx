@@ -1377,6 +1377,116 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     return hiddenNodes.has(nodeId);
   }, [tabs]);
 
+  /**
+   * Get scenario state for a tab
+   */
+  const getScenarioState = useCallback((tabId: string) => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return undefined;
+    
+    return tab.editorState?.scenarioState || {
+      visibleScenarioIds: [],
+      visibleColorOrderIds: [],
+      selectedScenarioId: undefined
+    };
+  }, [tabs]);
+
+  /**
+   * Set visible scenarios for a tab
+   */
+  const setVisibleScenarios = useCallback(async (tabId: string, scenarioIds: string[]): Promise<void> => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    const currentState = tab.editorState?.scenarioState || {
+      visibleScenarioIds: [],
+      visibleColorOrderIds: [],
+    };
+
+    await updateTabState(tabId, {
+      scenarioState: {
+        ...currentState,
+        visibleScenarioIds: scenarioIds
+      }
+    });
+  }, [tabs, updateTabState]);
+
+  /**
+   * Toggle scenario visibility for a tab
+   */
+  const toggleScenarioVisibility = useCallback(async (tabId: string, scenarioId: string): Promise<void> => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    const currentState = tab.editorState?.scenarioState || {
+      visibleScenarioIds: [],
+      visibleColorOrderIds: [],
+    };
+
+    const isVisible = currentState.visibleScenarioIds.includes(scenarioId);
+    
+    let newVisibleIds: string[];
+    let newColorOrderIds: string[];
+    
+    if (isVisible) {
+      // Hide scenario
+      newVisibleIds = currentState.visibleScenarioIds.filter(id => id !== scenarioId);
+      newColorOrderIds = currentState.visibleColorOrderIds.filter(id => id !== scenarioId);
+    } else {
+      // Show scenario
+      newVisibleIds = [...currentState.visibleScenarioIds, scenarioId];
+      newColorOrderIds = [...currentState.visibleColorOrderIds, scenarioId];
+    }
+
+    await updateTabState(tabId, {
+      scenarioState: {
+        ...currentState,
+        visibleScenarioIds: newVisibleIds,
+        visibleColorOrderIds: newColorOrderIds
+      }
+    });
+  }, [tabs, updateTabState]);
+
+  /**
+   * Select a scenario for a tab
+   */
+  const selectScenario = useCallback(async (tabId: string, scenarioId: string | undefined): Promise<void> => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    const currentState = tab.editorState?.scenarioState || {
+      visibleScenarioIds: [],
+      visibleColorOrderIds: [],
+    };
+
+    await updateTabState(tabId, {
+      scenarioState: {
+        ...currentState,
+        selectedScenarioId: scenarioId
+      }
+    });
+  }, [tabs, updateTabState]);
+
+  /**
+   * Reorder visible scenarios for a tab (render order only, not color order)
+   */
+  const reorderScenarios = useCallback(async (tabId: string, newOrder: string[]): Promise<void> => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    const currentState = tab.editorState?.scenarioState || {
+      visibleScenarioIds: [],
+      visibleColorOrderIds: [],
+    };
+
+    await updateTabState(tabId, {
+      scenarioState: {
+        ...currentState,
+        visibleScenarioIds: newOrder
+      }
+    });
+  }, [tabs, updateTabState]);
+
   const operations: TabOperations = {
     openTab,
     closeTab,
@@ -1393,7 +1503,12 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     unhideNode,
     hideUnselectedNodes,
     showAllNodes,
-    isNodeHidden
+    isNodeHidden,
+    getScenarioState,
+    setVisibleScenarios,
+    toggleScenarioVisibility,
+    selectScenario,
+    reorderScenarios
   };
 
   return (

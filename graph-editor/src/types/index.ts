@@ -130,6 +130,12 @@ export interface TabState {
       propertiesOpen: boolean;
       toolsOpen: boolean;
     };
+    // Scenarios state (per-tab visibility and selection)
+    scenarioState?: {
+      visibleScenarioIds: string[];        // IDs of visible scenarios (render order)
+      visibleColorOrderIds: string[];      // IDs in activation order (for color assignment)
+      selectedScenarioId?: string;         // Currently selected scenario
+    };
   };
   
   // UI state
@@ -279,6 +285,13 @@ export interface TabOperations {
   hideUnselectedNodes: (tabId: string, selectedNodeIds: string[]) => Promise<void>;
   showAllNodes: (tabId: string) => Promise<void>;
   isNodeHidden: (tabId: string, nodeId: string) => boolean;
+  
+  // Scenario operations
+  getScenarioState: (tabId: string) => { visibleScenarioIds: string[]; visibleColorOrderIds: string[]; selectedScenarioId?: string } | undefined;
+  setVisibleScenarios: (tabId: string, scenarioIds: string[]) => Promise<void>;
+  toggleScenarioVisibility: (tabId: string, scenarioId: string) => Promise<void>;
+  selectScenario: (tabId: string, scenarioId: string | undefined) => Promise<void>;
+  reorderScenarios: (tabId: string, newOrder: string[]) => Promise<void>;
 }
 
 /**
