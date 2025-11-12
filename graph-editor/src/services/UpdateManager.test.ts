@@ -602,8 +602,8 @@ describe('UpdateManager', () => {
     it('should calculate mean from n/k when probability not provided', async () => {
       // Amplitude gives us funnel counts, not probability
       const externalData = {
-        sample_size: 1000,
-        successes: 450,
+        n: 1000,
+        k: 450,
         retrieved_at: '2025-11-05T20:00:00Z',
         source: 'amplitude',
         window_from: '2025-01-01',
@@ -631,10 +631,10 @@ describe('UpdateManager', () => {
       expect(graphEdge.p.evidence.k).toBe(450);
     });
     
-    it('should use probability directly when n/k not provided', async () => {
-      // Some sources give us computed probability without raw counts
+    it('should use mean directly when n/k not provided', async () => {
+      // Some sources give us computed mean without raw counts
       const externalData = {
-        probability: 0.38,
+        mean: 0.38,
         retrieved_at: '2025-11-05T20:00:00Z',
         source: 'api'
         // No n/k - that's fine
@@ -663,7 +663,7 @@ describe('UpdateManager', () => {
     it('should handle sparse data (no windows, no n/k)', async () => {
       // Google Sheets cost data - just a value and timestamp
       const externalData = {
-        probability: 15.50,  // Actually a cost, but same field mapping
+        mean: 15.50,  // Actually a cost, but same field mapping
         retrieved_at: '2025-11-05T20:00:00Z',
         source: 'sheets'
         // No n, k, windows - that's fine
@@ -691,8 +691,8 @@ describe('UpdateManager', () => {
     it('should handle data with only n/k (no windows)', async () => {
       // Maybe an API gives us counts but no time context
       const externalData = {
-        sample_size: 500,
-        successes: 200,
+        n: 500,
+        k: 200,
         retrieved_at: '2025-11-05T20:00:00Z',
         source: 'api'
         // No windows - we'll infer later if needed
@@ -722,8 +722,8 @@ describe('UpdateManager', () => {
     it('should clamp invalid probabilities from bad n/k data', async () => {
       // Data error: k > n (shouldn't happen but...)
       const externalData = {
-        sample_size: 100,
-        successes: 150,  // More successes than trials!
+        n: 100,
+        k: 150,  // More successes than trials!
         retrieved_at: '2025-11-05T20:00:00Z',
         source: 'api'
       };
@@ -780,8 +780,8 @@ describe('UpdateManager', () => {
     it('should handle division by zero gracefully', async () => {
       // Edge case: n=0
       const externalData = {
-        sample_size: 0,
-        successes: 0,
+        n: 0,
+        k: 0,
         retrieved_at: '2025-11-05T20:00:00Z',
         source: 'api'
       };
@@ -812,7 +812,7 @@ describe('UpdateManager', () => {
       // External source with partial data
       const externalData = {
         data: {
-          probability: 0.42,
+          mean: 0.42,
           retrieved_at: '2025-11-05T20:00:00Z'
           // No stdev, n, k, windows - that's ok
         }
@@ -839,12 +839,12 @@ describe('UpdateManager', () => {
       expect(fileData.values[0].window_from).toBeUndefined();
     });
     
-    it('should prefer explicit probability over calculated when both present', async () => {
+    it('should prefer explicit mean over calculated when both present', async () => {
       // Sometimes sources give us both - trust the explicit one
       const externalData = {
-        probability: 0.45,  // Explicit (maybe adjusted)
-        sample_size: 1000,
-        successes: 440,     // Would calculate to 0.44
+        mean: 0.45,  // Explicit (maybe adjusted)
+        n: 1000,
+        k: 440,     // Would calculate to 0.44
         retrieved_at: '2025-11-05T20:00:00Z',
         source: 'api'
       };
