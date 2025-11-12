@@ -158,7 +158,7 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
     setScenarios(prev => [...prev, scenario]);
     
     // Auto-open in editor
-    setEditorOpenId(scenario.id);
+    setEditorOpenScenarioId(scenario.id);
     
     return scenario;
   }, [generateId]);

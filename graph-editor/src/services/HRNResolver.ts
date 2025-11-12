@@ -165,8 +165,8 @@ function findNodeByIdOrName(idOrName: string, graph: Graph): GraphNode | undefin
     return node;
   }
   
-  // Try name match (case-insensitive)
-  node = graph.nodes.find(n => n.name?.toLowerCase() === lowerIdOrName);
+  // Try label match (case-insensitive)
+  node = graph.nodes.find(n => n.label?.toLowerCase() === lowerIdOrName);
   if (node) {
     return node;
   }
