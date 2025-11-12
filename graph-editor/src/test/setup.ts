@@ -143,8 +143,11 @@ vi.mock('@vercel/node', () => ({
   VercelResponse: {} as any,
 }));
 
+// Note: whatwg-url is aliased in vitest.config.ts to use Node.js built-in URL
+// This prevents webidl-conversions errors
+
 // Note: whatwg-url dependency conflict exists between jsdom@27 and @vercel/node
-// Mocking @vercel/node prevents the conflict from occurring during test runs
+// Mocking both @vercel/node and whatwg-url prevents the conflict from occurring during test runs
 
 // Suppress console errors in tests (optional - comment out if debugging)
 // vi.spyOn(console, 'error').mockImplementation(() => {});
