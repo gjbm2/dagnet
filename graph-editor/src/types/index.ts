@@ -98,6 +98,7 @@ export interface TabState {
     massGenerosity?: number;
     autoReroute?: boolean;
     useSankeyView?: boolean;
+    confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';
     sidebarOpen?: boolean;
     whatIfOpen?: boolean;
     propertiesOpen?: boolean;

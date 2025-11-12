@@ -30,6 +30,7 @@ export function ViewMenu() {
   const massGenerosity = viewPrefsCtx?.massGenerosity ?? (activeTab?.editorState?.massGenerosity ?? 0.5);
   const autoReroute = viewPrefsCtx?.autoReroute ?? (activeTab?.editorState?.autoReroute ?? true);
   const useSankeyView = viewPrefsCtx?.useSankeyView ?? (activeTab?.editorState?.useSankeyView ?? false);
+  const confidenceIntervalLevel = viewPrefsCtx?.confidenceIntervalLevel ?? (activeTab?.editorState?.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99' ?? 'none');
   
   // Debug: Log when menu is checked
   React.useEffect(() => {
@@ -84,6 +85,14 @@ export function ViewMenu() {
       viewPrefsCtx.setUseSankeyView(newValue);
     } else if (activeTabId) {
       operations.updateTabState(activeTabId, { useSankeyView: newValue });
+    }
+  };
+
+  const handleConfidenceIntervalChange = (level: 'none' | '80' | '90' | '95' | '99') => {
+    if (viewPrefsCtx) {
+      viewPrefsCtx.setConfidenceIntervalLevel(level);
+    } else if (activeTabId) {
+      operations.updateTabState(activeTabId, { confidenceIntervalLevel: level });
     }
   };
 
@@ -197,6 +206,49 @@ export function ViewMenu() {
               >
                 {useSankeyView ? '✓ ' : ''}Sankey View
               </Menubar.Item>
+
+              <Menubar.Separator className="menubar-separator" />
+
+              <Menubar.Sub>
+                <Menubar.SubTrigger className="menubar-item">
+                  Confidence Intervals
+                  <div className="menubar-right-slot">›</div>
+                </Menubar.SubTrigger>
+                <Menubar.Portal>
+                  <Menubar.SubContent className="menubar-content" alignOffset={-5}>
+                    <Menubar.Item 
+                      className="menubar-item" 
+                      onSelect={() => handleConfidenceIntervalChange('99')}
+                    >
+                      {confidenceIntervalLevel === '99' ? '✓ ' : ''}99%
+                    </Menubar.Item>
+                    <Menubar.Item 
+                      className="menubar-item" 
+                      onSelect={() => handleConfidenceIntervalChange('95')}
+                    >
+                      {confidenceIntervalLevel === '95' ? '✓ ' : ''}95%
+                    </Menubar.Item>
+                    <Menubar.Item 
+                      className="menubar-item" 
+                      onSelect={() => handleConfidenceIntervalChange('90')}
+                    >
+                      {confidenceIntervalLevel === '90' ? '✓ ' : ''}90%
+                    </Menubar.Item>
+                    <Menubar.Item 
+                      className="menubar-item" 
+                      onSelect={() => handleConfidenceIntervalChange('80')}
+                    >
+                      {confidenceIntervalLevel === '80' ? '✓ ' : ''}80%
+                    </Menubar.Item>
+                    <Menubar.Item 
+                      className="menubar-item" 
+                      onSelect={() => handleConfidenceIntervalChange('none')}
+                    >
+                      {confidenceIntervalLevel === 'none' ? '✓ ' : ''}None
+                    </Menubar.Item>
+                  </Menubar.SubContent>
+                </Menubar.Portal>
+              </Menubar.Sub>
 
               <Menubar.Separator className="menubar-separator" />
 

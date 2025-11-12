@@ -6,6 +6,7 @@ export interface ViewPreferencesState {
   massGenerosity: number;
   autoReroute: boolean;
   useSankeyView: boolean;
+  confidenceIntervalLevel: 'none' | '80' | '90' | '95' | '99';
 }
 
 interface ViewPreferencesContextValue extends ViewPreferencesState {
@@ -13,6 +14,7 @@ interface ViewPreferencesContextValue extends ViewPreferencesState {
   setMassGenerosity: (value: number) => void;
   setAutoReroute: (value: boolean) => void;
   setUseSankeyView: (value: boolean) => void;
+  setConfidenceIntervalLevel: (value: 'none' | '80' | '90' | '95' | '99') => void;
 }
 
 const ViewPreferencesContext = createContext<ViewPreferencesContextValue | null>(null);
@@ -32,6 +34,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   const [massGenerosity, setMassGenerosityLocal] = useState<number>(editorState.massGenerosity ?? 0.5);
   const [autoReroute, setAutoRerouteLocal] = useState<boolean>(editorState.autoReroute ?? true);
   const [useSankeyView, setUseSankeyViewLocal] = useState<boolean>(editorState.useSankeyView ?? false);
+  const [confidenceIntervalLevel, setConfidenceIntervalLevelLocal] = useState<'none' | '80' | '90' | '95' | '99'>(
+    (editorState.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99') ?? 'none'
+  );
 
   // Sync FROM tab state when it changes externally (tab switch/restore)
   useEffect(() => {
@@ -46,6 +51,11 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   useEffect(() => {
     if (editorState.useSankeyView !== undefined) setUseSankeyViewLocal(editorState.useSankeyView);
   }, [editorState.useSankeyView]);
+  useEffect(() => {
+    if (editorState.confidenceIntervalLevel !== undefined) {
+      setConfidenceIntervalLevelLocal(editorState.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99');
+    }
+  }, [editorState.confidenceIntervalLevel]);
 
   // Setters: update local immediately, persist to tab state asynchronously
   const setUseUniformScaling = (value: boolean) => {
@@ -64,17 +74,23 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setUseSankeyViewLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { useSankeyView: value });
   };
+  const setConfidenceIntervalLevel = (value: 'none' | '80' | '90' | '95' | '99') => {
+    setConfidenceIntervalLevelLocal(value);
+    if (tabId) tabOps.updateTabState(tabId, { confidenceIntervalLevel: value });
+  };
 
   const value = useMemo<ViewPreferencesContextValue>(() => ({
     useUniformScaling,
     massGenerosity,
     autoReroute,
     useSankeyView,
+    confidenceIntervalLevel,
     setUseUniformScaling,
     setMassGenerosity,
     setAutoReroute,
-    setUseSankeyView
-  }), [useUniformScaling, massGenerosity, autoReroute, useSankeyView]);
+    setUseSankeyView,
+    setConfidenceIntervalLevel
+  }), [useUniformScaling, massGenerosity, autoReroute, useSankeyView, confidenceIntervalLevel]);
 
   return (
     <ViewPreferencesContext.Provider value={value}>
