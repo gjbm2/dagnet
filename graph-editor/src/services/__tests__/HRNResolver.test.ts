@@ -14,9 +14,9 @@ import { Graph } from '../../types';
 // Mock graph data
 const mockGraph: Graph = {
   nodes: [
-    { uuid: 'node-uuid-1', id: 'checkout', label: 'Checkout Page', position: { x: 0, y: 0 } },
-    { uuid: 'node-uuid-2', id: 'purchase', label: 'Purchase Complete', position: { x: 100, y: 0 } },
-    { uuid: 'node-uuid-3', id: 'promo', label: 'Promo Banner', position: { x: 50, y: 50 } },
+    { uuid: 'node-uuid-1', id: 'checkout', label: 'Checkout Page' },
+    { uuid: 'node-uuid-2', id: 'purchase', label: 'Purchase Complete' },
+    { uuid: 'node-uuid-3', id: 'promo', label: 'Promo Banner' },
   ],
   edges: [
     { uuid: 'edge-uuid-1', id: 'checkout-to-purchase', from: 'node-uuid-1', to: 'node-uuid-2' },
