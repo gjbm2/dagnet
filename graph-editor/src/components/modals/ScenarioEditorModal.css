@@ -1,0 +1,164 @@
+/* Scenario Editor Modal - extends Modal.css */
+
+/* Wider modal for editor */
+.scenario-editor-modal {
+  max-width: 900px;
+  width: 95%;
+  max-height: 90vh;
+}
+
+/* Metadata Panel */
+.scenario-metadata-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.metadata-row {
+  display: flex;
+  gap: 8px;
+}
+
+.metadata-row strong {
+  min-width: 80px;
+  color: #6B7280;
+  font-weight: 600;
+}
+
+.metadata-row span {
+  color: #374151;
+}
+
+.metadata-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.metadata-note label {
+  color: #6B7280;
+  font-weight: 600;
+}
+
+/* Reuse modal-textarea for note */
+.metadata-note textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #D1D5DB;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 60px;
+  box-sizing: border-box;
+}
+
+.metadata-note textarea:focus {
+  outline: none;
+  border-color: #0066cc;
+}
+
+/* Editor Controls */
+.editor-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.control-group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.control-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6B7280;
+  margin-right: 4px;
+}
+
+.control-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background-color: white;
+  border: 1px solid #D1D5DB;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.control-btn:hover {
+  background-color: #F3F4F6;
+  border-color: #9CA3AF;
+}
+
+.control-btn.active {
+  background-color: #0066cc;
+  border-color: #0066cc;
+  color: white;
+}
+
+.control-btn.active:hover {
+  background-color: #0052a3;
+}
+
+/* Validation Messages - reuse modal-error and modal-warning patterns */
+.validation-errors {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background-color: #FEE2E2;
+  border: 1px solid #EF4444;
+  border-radius: 6px;
+  color: #991B1B;
+  font-size: 13px;
+}
+
+.validation-warnings {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background-color: #FEF3C7;
+  border: 1px solid #F59E0B;
+  border-radius: 6px;
+  color: #92400E;
+  font-size: 13px;
+}
+
+.validation-errors strong,
+.validation-warnings strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.validation-errors ul,
+.validation-warnings ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+/* Editor Container */
+.scenario-editor-container {
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  overflow: hidden;
+}
+

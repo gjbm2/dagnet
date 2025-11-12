@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import WhatIfAnalysisHeader from '../WhatIfAnalysisHeader';
+import ScenariosPanel from './ScenariosPanel';
+import CollapsibleSection from '../CollapsibleSection';
 import './WhatIfPanel.css';
 
 interface WhatIfPanelProps {
@@ -9,17 +11,36 @@ interface WhatIfPanelProps {
 
 /**
  * What-If Analysis Panel
- * Wrapper for WhatIfAnalysisControl for use in rc-dock sidebar
+ * Wrapper for WhatIfAnalysisControl and ScenariosPanel for use in rc-dock sidebar
  */
 export default function WhatIfPanel({ tabId }: WhatIfPanelProps) {
+  const [scenariosExpanded, setScenariosExpanded] = useState(true);
+  const [whatIfExpanded, setWhatIfExpanded] = useState(true);
+  
   return (
     <div className="what-if-panel">
-      <div className="panel-header">
-        <WhatIfAnalysisHeader tabId={tabId} />
-      </div>
-      <div className="panel-body">
-        <WhatIfAnalysisControl tabId={tabId} />
-      </div>
+      {/* Scenarios Section */}
+      <CollapsibleSection
+        title="Scenarios"
+        isExpanded={scenariosExpanded}
+        onToggle={() => setScenariosExpanded(!scenariosExpanded)}
+      >
+        <ScenariosPanel tabId={tabId} />
+      </CollapsibleSection>
+      
+      {/* What-If Section */}
+      <CollapsibleSection
+        title="What-If Analysis"
+        isExpanded={whatIfExpanded}
+        onToggle={() => setWhatIfExpanded(!whatIfExpanded)}
+      >
+        <div className="panel-header">
+          <WhatIfAnalysisHeader tabId={tabId} />
+        </div>
+        <div className="panel-body">
+          <WhatIfAnalysisControl tabId={tabId} />
+        </div>
+      </CollapsibleSection>
     </div>
   );
 }
