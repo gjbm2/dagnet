@@ -2058,7 +2058,7 @@ export class UpdateManager {
               const oldConditionIndex = siblingEdge.conditional_p.findIndex((existingCond: any, idx: number) => {
                 // Skip conditions that were already matched
                 if (matchedOldIndices.has(idx)) return false;
-                const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
+                  const existingStr = typeof existingCond.condition === 'string' ? existingCond.condition : '';
                 return oldConditions.includes(normalizeConstraintString(existingStr));
               });
               

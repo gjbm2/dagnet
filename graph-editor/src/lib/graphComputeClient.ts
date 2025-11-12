@@ -25,7 +25,7 @@ const USE_MOCK = import.meta.env.VITE_USE_MOCK_COMPUTE === 'true';
 // ============================================================
 
 export interface QueryParseRequest {
-  query_string: string;
+  query: string;
 }
 
 export interface KeyValuePair {
@@ -138,7 +138,7 @@ export class GraphComputeClient {
     const response = await fetch(`${this.baseUrl}/api/parse-query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query_string: queryString } as QueryParseRequest),
+      body: JSON.stringify({ query: queryString } as QueryParseRequest),
     });
 
     if (!response.ok) {
@@ -146,7 +146,10 @@ export class GraphComputeClient {
       throw new Error(`Query parsing failed: ${error.detail || error.error || response.statusText}`);
     }
 
-    return response.json();
+    const data = await response.json();
+    // Python server returns nested structure: { parsed: {...}, valid: true, ... }
+    // Extract the parsed object
+    return data.parsed || data;
   }
 
   /**
