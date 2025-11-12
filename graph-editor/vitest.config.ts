@@ -53,6 +53,9 @@ export default defineConfig({
     bail: 0,
     // Force exit after tests complete to prevent hanging on unhandled errors
     teardownTimeout: 5000,
+    // Configure test timeout to prevent hanging
+    testTimeout: 10000,
+    hookTimeout: 10000,
   },
   resolve: {
     alias: {
