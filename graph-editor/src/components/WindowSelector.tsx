@@ -277,17 +277,17 @@ export function WindowSelector() {
             const edgeId = edge.uuid || edge.id || '';
             
             // Check each parameter slot
+            // Check all parameter slots (including those with direct connections but no file)
             const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'cost_time'; param: any }> = [];
-            if (edge.p?.id) paramSlots.push({ slot: 'p', param: edge.p });
-            if (edge.cost_gbp?.id) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
-            if (edge.cost_time?.id) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
+            if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
+            if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
+            if (edge.cost_time) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
             
             for (const { slot, param } of paramSlots) {
               const paramId = param.id;
-              if (!paramId) continue;
               
               // Check if parameter has connection (file or direct)
-              const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+              const paramFile = paramId ? fileRegistry.getFile(`parameter-${paramId}`) : null;
               const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
               
               if (!hasConnection) continue; // Skip if no connection
@@ -322,8 +322,15 @@ export function WindowSelector() {
                   }
                 }
               } else {
-                // No file exists - need to fetch
-                hasMissingData = true;
+                // No file exists - check if we've already fetched for this window
+                // For direct connections, we can't verify data existence, so we check
+                // if the current window matches the last aggregated window
+                const normalizedLastAggregated = lastAggregatedWindowRef.current;
+                if (!normalizedLastAggregated || !windowsMatch(normalizedWindow, normalizedLastAggregated)) {
+                  // Window doesn't match last aggregated - need to fetch
+                  hasMissingData = true;
+                }
+                // If window matches last aggregated, assume data exists (don't set hasMissingData)
               }
             }
           }
@@ -340,8 +347,13 @@ export function WindowSelector() {
               if (hasConnection) {
                 hasAnyConnection = true;
                 if (!caseFile) {
-                  // Has connection but no file - need to fetch
-                  hasMissingData = true;
+                  // Has connection but no file - check if we've already fetched for this window
+                  const normalizedLastAggregated = lastAggregatedWindowRef.current;
+                  if (!normalizedLastAggregated || !windowsMatch(normalizedWindow, normalizedLastAggregated)) {
+                    // Window doesn't match last aggregated - need to fetch
+                    hasMissingData = true;
+                  }
+                  // If window matches last aggregated, assume data exists (don't set hasMissingData)
                 }
               }
             }
@@ -536,16 +548,17 @@ export function WindowSelector() {
       for (const edge of graph.edges) {
         const edgeId = edge.uuid || edge.id || '';
         
+        // Check all parameter slots (including those with direct connections but no file)
         const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'cost_time'; param: any }> = [];
-        if (edge.p?.id) paramSlots.push({ slot: 'p', param: edge.p });
-        if (edge.cost_gbp?.id) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
-        if (edge.cost_time?.id) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
+        if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
+        if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
+        if (edge.cost_time) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
         
         for (const { slot, param } of paramSlots) {
           const paramId = param.id;
-          if (!paramId) continue;
           
-          const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+          // Check if parameter has connection (file or direct)
+          const paramFile = paramId ? fileRegistry.getFile(`parameter-${paramId}`) : null;
           const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
           
           if (!hasConnection) continue;
@@ -553,8 +566,17 @@ export function WindowSelector() {
           // Check if this parameter needs fetching for the window
           let needsFetchForThis = false;
           if (!paramFile?.data) {
-            needsFetchForThis = true; // No file exists
+            // No file exists - check if we've already fetched for this window
+            // For direct connections, we can't verify data existence, so we check
+            // if the current window matches the last aggregated window
+            const normalizedLastAggregated = lastAggregatedWindowRef.current;
+            if (!normalizedLastAggregated || !windowsMatch(normalizedWindow, normalizedLastAggregated)) {
+              // Window doesn't match last aggregated - need to fetch
+              needsFetchForThis = true;
+            }
+            // If window matches last aggregated, assume data exists (don't set needsFetchForThis)
           } else {
+            // File exists - check if data is missing for this window
             const incrementalResult = calculateIncrementalFetch(
               paramFile.data,
               normalizedWindow
@@ -563,11 +585,12 @@ export function WindowSelector() {
           }
           
           if (needsFetchForThis) {
+            // For direct connections without paramId, use edgeId as objectId
             items.push({
-              id: `param-${paramId}-${slot}-${edgeId}`,
+              id: `param-${paramId || 'direct'}-${slot}-${edgeId}`,
               type: 'parameter',
-              name: `${slot}: ${paramId}`,
-              objectId: paramId,
+              name: `${slot}: ${paramId || 'direct connection'}`,
+              objectId: paramId || '', // Empty string for direct connections
               targetId: edgeId,
               paramSlot: slot,
             });
