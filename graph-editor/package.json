@@ -17,7 +17,10 @@
     "test:integration": "vitest run \"**/*.integration.test.tsx\"",
     "test:integration:watch": "vitest --watch \"**/*.integration.test.tsx\"",
     "test:integration:coverage": "vitest run --coverage \"**/*.integration.test.tsx\"",
-    "test:unit": "vitest run \"**/*.test.{ts,tsx}\" --exclude \"**/*.integration.test.tsx\" --exclude \"**/*.e2e.test.tsx\""
+    "test:unit": "vitest run \"**/*.test.{ts,tsx}\" --exclude \"**/*.integration.test.tsx\" --exclude \"**/*.e2e.test.tsx\"",
+    "ci:check": "npm ci && npx tsc --noEmit",
+    "ci:lint": "npx tsc --noEmit",
+    "ci:test": "npm run test:run"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -73,6 +76,7 @@
     "@types/react": "^18.2.74",
     "@types/react-dom": "^18.2.24",
     "@vitejs/plugin-react": "^4.3.1",
+    "@vitest/coverage-v8": "^4.0.7",
     "@vitest/ui": "^4.0.7",
     "happy-dom": "^20.0.10",
     "jsdom": "^27.1.0",
