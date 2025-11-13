@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom';
 import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
+import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
+import { useTabContext } from '../../contexts/TabContext';
 import Tooltip from '@/components/Tooltip';
 import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
@@ -97,6 +99,13 @@ interface ConversionEdgeData {
   renderFallbackTargetArrow?: boolean;
   // Sankey view flag
   useSankeyView?: boolean;
+  // Scenario overlay data
+  scenarioOverlay?: boolean;
+  scenarioColor?: string;
+  scenarioParams?: any;
+  // Base edge rendering overrides when overlays are visible
+  suppressConditionalColors?: boolean;
+  forceBaseStrokeColor?: string;
 }
 
 export default function ConversionEdge({
@@ -112,6 +121,8 @@ export default function ConversionEdge({
   source,
   target,
 }: EdgeProps<ConversionEdgeData>) {
+  const scenariosContext = useScenariosContextOptional();
+  const { operations: tabOps } = useTabContext();
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [isDraggingSource, setIsDraggingSource] = useState(false);
   const [isDraggingTarget, setIsDraggingTarget] = useState(false);
@@ -413,6 +424,10 @@ export default function ConversionEdge({
   // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
   // Memoize color computation to ensure it updates when conditional_p colors change
   const edgeColor = useMemo(() => {
+    // If base edge requested to suppress conditional/case colors (when overlays visible), use neutral color
+    if (data?.forceBaseStrokeColor) {
+      return data.forceBaseStrokeColor as string;
+    }
     // Selected edges: darker gray to distinguish from highlighted edges
     if (selected) {
       return '#222'; // very dark gray for selection
@@ -1575,27 +1590,30 @@ export default function ConversionEdge({
               />
             </>
           ) : (
-            // Normal mode: render as stroked path
-            <path
-              ref={pathRef}
-              id={id}
-              style={{
-                stroke: getEdgeColor(),
-                strokeOpacity: EDGE_OPACITY,
-                mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
-                fill: 'none',
-                strokeLinecap: 'butt',
-                strokeLinejoin: 'miter',
-                zIndex: selected ? 1000 : 1,
-                strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
-                markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
-                transition: 'stroke-width 0.3s ease-in-out',
-              }}
-              className="react-flow__edge-path"
-              d={edgePath}
-              onContextMenu={handleContextMenu}
-              onDoubleClick={handleDoubleClick}
-            />
+            <>
+              {/* Normal mode: render as stroked path */}
+              <path
+                ref={pathRef}
+                id={id}
+                style={{
+                  stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
+                  strokeOpacity: data?.scenarioOverlay ? 0.3 : EDGE_OPACITY,
+                  mixBlendMode: 'multiply',
+                  fill: 'none',
+                  strokeLinecap: 'butt',
+                  strokeLinejoin: 'miter',
+                  zIndex: selected ? 1000 : (data?.scenarioOverlay ? -1 : 1),
+                  strokeDasharray: data?.scenarioOverlay ? 'none' : ((effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none'),
+                  markerEnd: data?.renderFallbackTargetArrow && !data?.scenarioOverlay ? `url(#arrow-fallback-${id})` : 'none',
+                  transition: 'stroke-width 0.3s ease-in-out',
+                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                }}
+                className="react-flow__edge-path"
+                d={edgePath}
+                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+              />
+            </>
           )}
           
           {/* Invisible wider path for easier selection */}

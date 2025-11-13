@@ -1,8 +1,8 @@
 /* Scenario Editor Modal - extends Modal.css */
 
-/* Wider modal for editor */
+/* Larger modal for editor */
 .scenario-editor-modal {
-  max-width: 900px;
+  max-width: 1200px;
   width: 95%;
   max-height: 90vh;
 }

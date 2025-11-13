@@ -8,7 +8,8 @@
  - Test variant filtering (treatment vs control)
 
 ## Major components
-- Scenario viewer (snapshotting)
+- Scenario viewer polishing
+- Edge ids not updating/persisting
 - Context support
 - Latency/lag management
 - Dashboarding views

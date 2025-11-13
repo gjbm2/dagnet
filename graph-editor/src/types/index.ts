@@ -1,5 +1,7 @@
 // Core Types for Tab System
 
+import type { Scenario } from './scenarios';
+
 /**
  * Object types that can be opened in tabs
  */
@@ -54,6 +56,8 @@ export interface FileState<T = any> {
   type: ObjectType;
   name?: string;               // Display name
   path?: string;               // File path in repository
+  // Scenarios associated with this file (persisted per file)
+  scenarios?: Scenario[];
   
   // Data
   data?: T;                    // Current state
@@ -96,6 +100,8 @@ export interface TabState {
     // Graph editor specific
     useUniformScaling?: boolean;
     massGenerosity?: number;
+    // ReactFlow viewport persistence (per tab)
+    rfViewport?: { x: number; y: number; zoom: number };
     autoReroute?: boolean;
     useSankeyView?: boolean;
     confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';

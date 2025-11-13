@@ -24,10 +24,11 @@
 
 /* Scenario List */
 .scenarios-list {
-  flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 8px 0;
+  /* Don't use flex: 1 - let footer appear immediately after list content */
+  max-height: calc(100vh - 200px); /* Prevent infinite growth */
 }
 
 .scenario-row {
@@ -94,20 +95,14 @@
   color: #6B7280;
 }
 
-/* Color Swatch */
+/* Color Swatch - info only, not interactive */
 .scenario-color-swatch {
   width: 20px;
   height: 20px;
   border-radius: 3px;
   border: 1px solid #D1D5DB;
-  cursor: pointer;
+  cursor: default;
   flex-shrink: 0;
-  transition: transform 0.2s;
-}
-
-.scenario-color-swatch:hover {
-  transform: scale(1.1);
-  border-color: #9CA3AF;
 }
 
 /* Name */

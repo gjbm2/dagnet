@@ -15,8 +15,8 @@ import Editor from '@monaco-editor/react';
 import * as yaml from 'js-yaml';
 import { useScenariosContext } from '../../contexts/ScenariosContext';
 import { Scenario, ScenarioContentFormat } from '../../types/scenarios';
-import { toYAML, toJSON, toCSV } from '../../services/ScenarioFormatConverter';
-import { X, FileText, Download, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { toYAML, toJSON, toCSV, fromYAML, fromJSON } from '../../services/ScenarioFormatConverter';
+import { X, FileText, Download, AlertCircle, CheckCircle2, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import './Modal.css';
 import './ScenarioEditorModal.css';
@@ -28,7 +28,7 @@ interface ScenarioEditorModalProps {
 }
 
 export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEditorModalProps) {
-  const { scenarios, getScenario, applyContent, validateContent } = useScenariosContext();
+  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot } = useScenariosContext();
   
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [editorValue, setEditorValue] = useState('');
@@ -45,23 +45,71 @@ export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEdi
   // Load scenario when modal opens
   useEffect(() => {
     if (isOpen && scenarioId) {
-      const loadedScenario = getScenario(scenarioId);
-      if (loadedScenario) {
-        setScenario(loadedScenario);
-        setEditableNote(loadedScenario.meta?.note || '');
+      // Special handling for Base and Current
+      if (scenarioId === 'base') {
+        // Load Base params
+        const pseudoScenario: Scenario = {
+          id: 'base',
+          name: 'Base',
+          color: '#808080',
+          createdAt: new Date().toISOString(),
+          version: 1,
+          params: baseParams,
+          meta: { note: 'Session baseline parameters' }
+        };
+        setScenario(pseudoScenario);
+        setEditableNote(pseudoScenario.meta?.note || '');
         
-        // Convert params to editor format
         const content = format.syntax === 'yaml'
-          ? toYAML(loadedScenario.params, format.structure)
-          : toJSON(loadedScenario.params, format.structure);
+          ? toYAML(pseudoScenario.params, format.structure)
+          : toJSON(pseudoScenario.params, format.structure);
         
         setEditorValue(content);
         setIsDirty(false);
         setValidationErrors([]);
         setValidationWarnings([]);
+      } else if (scenarioId === 'current') {
+        // Load Current params
+        const pseudoScenario: Scenario = {
+          id: 'current',
+          name: 'Current',
+          color: '#4A90E2',
+          createdAt: new Date().toISOString(),
+          version: 1,
+          params: currentParams,
+          meta: { note: 'Live working state' }
+        };
+        setScenario(pseudoScenario);
+        setEditableNote(pseudoScenario.meta?.note || '');
+        
+        const content = format.syntax === 'yaml'
+          ? toYAML(pseudoScenario.params, format.structure)
+          : toJSON(pseudoScenario.params, format.structure);
+        
+        setEditorValue(content);
+        setIsDirty(false);
+        setValidationErrors([]);
+        setValidationWarnings([]);
+      } else {
+        // Load normal scenario
+        const loadedScenario = getScenario(scenarioId);
+        if (loadedScenario) {
+          setScenario(loadedScenario);
+          setEditableNote(loadedScenario.meta?.note || '');
+          
+          // Convert params to editor format
+          const content = format.syntax === 'yaml'
+            ? toYAML(loadedScenario.params, format.structure)
+            : toJSON(loadedScenario.params, format.structure);
+          
+          setEditorValue(content);
+          setIsDirty(false);
+          setValidationErrors([]);
+          setValidationWarnings([]);
+        }
       }
     }
-  }, [isOpen, scenarioId, getScenario]);
+  }, [isOpen, scenarioId, getScenario, baseParams, currentParams, format]);
   
   // Update editor content when format changes
   useEffect(() => {
@@ -125,19 +173,34 @@ export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEdi
         setValidationWarnings(validation.warnings.map(w => `${w.path}: ${w.message}`));
       }
       
-      // Apply content
-      await applyContent(scenario.id, editorValue, {
-        format: format.syntax,
-        structure: format.structure,
-        validate: false // Already validated above
-      });
-      
-      // Update note if changed
-      // TODO: Add updateNote method to ScenariosContext
-      
-      toast.success('Scenario updated');
-      setIsDirty(false);
-      onClose();
+      // Special handling for Base and Current
+      if (scenario.id === 'base') {
+        // Apply edits to Base: mutate Base directly
+        const parsed = format.syntax === 'yaml'
+          ? fromYAML(editorValue, format.structure)
+          : fromJSON(editorValue, format.structure);
+        setBaseParams(parsed);
+        toast.success('Base updated');
+        setIsDirty(false);
+        onClose();
+      } else if (scenario.id === 'current') {
+        // Apply edits to Current: create NEW scenario (not yet implemented)
+        toast.error('Editing Current to create new scenario - not yet implemented');
+        setIsSaving(false);
+        setIsValidating(false);
+        return;
+      } else {
+        // Normal scenario: apply edits
+        await applyContent(scenario.id, editorValue, {
+          format: format.syntax,
+          structure: format.structure,
+          validate: false // Already validated above
+        });
+        
+        toast.success('Scenario updated');
+        setIsDirty(false);
+        onClose();
+      }
     } catch (error: any) {
       console.error('Failed to apply changes:', error);
       setValidationErrors([error.message || 'Failed to apply changes']);
@@ -146,7 +209,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEdi
       setIsSaving(false);
       setIsValidating(false);
     }
-  }, [scenario, editorValue, format, validateContent, applyContent, onClose]);
+  }, [scenario, editorValue, format, validateContent, applyContent, fromYAML, fromJSON, setBaseParams, onClose]);
   
   /**
    * Handle Cancel button
@@ -348,7 +411,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEdi
           {/* Monaco Editor */}
           <div className="scenario-editor-container">
             <Editor
-              height="400px"
+              height="500px"
               language={language}
               value={editorValue}
               onChange={handleEditorChange}
