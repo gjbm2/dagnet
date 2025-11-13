@@ -101,3 +101,4 @@ export function getDefaultScenarioColor(): string {
   return '#808080'; // Grey
 }
 
+

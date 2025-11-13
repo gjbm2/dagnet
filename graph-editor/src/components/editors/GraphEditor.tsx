@@ -18,7 +18,6 @@ import ToolsPanel from '../panels/ToolsPanel';
 import { useSidebarState } from '../../hooks/useSidebarState';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
-import { WhatIfProvider, useWhatIfContext } from '../../contexts/WhatIfContext';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider } from '../../contexts/ScenariosContext';
 import { Sparkles, FileText, Wrench } from 'lucide-react';
@@ -112,52 +111,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   
   // DEBUG: Log when tabState changes
   console.log(`[GraphEditor ${fileId}] tabState:`, tabState);
-  // Local What-If state for immediate UI response (persisted to tab state asynchronously)
-  const [whatIfLocal, setWhatIfLocal] = useState({
-    whatIfAnalysis: tabState.whatIfAnalysis,
-    caseOverrides: tabState.caseOverrides as Record<string, string> | undefined,
-    conditionalOverrides: tabState.conditionalOverrides as Record<string, Set<string>> | undefined,
-  });
-
-  // Keep local What-If state in sync if tab editorState changes externally (avoid loops)
-  useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#1: Sync What-If state from tab`);
-    setWhatIfLocal(prev => {
-      const same = prev.whatIfAnalysis === tabState.whatIfAnalysis &&
-        JSON.stringify(prev.caseOverrides || {}) === JSON.stringify((tabState.caseOverrides as any) || {}) &&
-        JSON.stringify(Object.fromEntries(Object.entries((tabState.conditionalOverrides as any) || {}).map(([k, v]) => [k, Array.from(v as Set<string>)]))) ===
-        JSON.stringify(Object.fromEntries(Object.entries((prev.conditionalOverrides || {})).map(([k, v]) => [k, Array.from(v as Set<string>)])));
-      if (same) {
-        console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#1: No change, skipping`);
-        return prev;
-      }
-      console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#1: Updating What-If local state`);
-      return {
-        whatIfAnalysis: tabState.whatIfAnalysis,
-        caseOverrides: tabState.caseOverrides as any,
-        conditionalOverrides: tabState.conditionalOverrides as any,
-      };
-    });
-  }, [tabState.whatIfAnalysis, tabState.caseOverrides, tabState.conditionalOverrides]);
-
-  // Debounced persist helper (disabled for What-If; ephemeral per design)
-  const PERSIST_WHATIF = false;
-  const persistTimerRef = useRef<number | null>(null);
-  const schedulePersist = useCallback((next: typeof whatIfLocal) => {
-    if (!PERSIST_WHATIF) return; // Disable persistence to avoid app-wide rerenders
-    if (!tabId) return;
-    if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
-    persistTimerRef.current = window.setTimeout(() => {
-      // Convert Sets in conditionalOverrides to Arrays
-      const serialized: any = {
-        whatIfAnalysis: next.whatIfAnalysis ?? null,
-        caseOverrides: next.caseOverrides || {},
-        conditionalOverrides: next.conditionalOverrides || {},
-      };
-      tabOps.updateTabState(tabId, serialized);
-      persistTimerRef.current = null;
-    }, 0);
-  }, [tabId, tabOps]);
+  
+  // Read whatIfDSL directly from tab state (new unified approach)
+  const whatIfDSL = tabState.whatIfDSL;
 
   
   // NEW: Sidebar state management (Phase 1)
@@ -712,17 +668,13 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // DIAGNOSTIC: Log What-If state changes
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#8: What-If state diagnostic`, {
-      whatIfAnalysis: myTab?.editorState?.whatIfAnalysis,
-      caseOverrides: myTab?.editorState?.caseOverrides,
-      conditionalOverrides: myTab?.editorState?.conditionalOverrides
+      whatIfDSL: myTab?.editorState?.whatIfDSL
     });
-  }, [myTab?.editorState?.whatIfAnalysis, myTab?.editorState?.caseOverrides, myTab?.editorState?.conditionalOverrides, fileId]);
+  }, [myTab?.editorState?.whatIfDSL, fileId]);
   
   // Canvas component - recreate when edge scaling props change so GraphCanvas receives updates
   // Phase 1: Only render GraphCanvas when tab is visible
   const CanvasHost: React.FC = () => {
-    const whatIf = useWhatIfContext();
-    
     // Gate heavy rendering based on visibility
     // Re-read isVisible from context to ensure we have the latest value
     const { isTabVisible: checkTabVisible } = useVisibleTabs();
@@ -753,9 +705,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         onSankeyLayoutRef={sankeyLayoutRef}
         onForceRerouteRef={forceRerouteRef}
         onHideUnselectedRef={hideUnselectedRef}
-        whatIfAnalysis={whatIf?.whatIfAnalysis}
-        caseOverrides={whatIf?.caseOverrides}
-        conditionalOverrides={whatIf?.conditionalOverrides}
+        whatIfDSL={whatIfDSL}
       />
     );
   };
@@ -1458,35 +1408,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     <SelectionContext.Provider value={selectionContextValue}>
       <ScenariosProvider fileId={fileId} tabId={tabId}>
       <ViewPreferencesProvider tabId={tabId}>
-      <WhatIfProvider value={{
-        whatIfAnalysis: whatIfLocal.whatIfAnalysis,
-        caseOverrides: whatIfLocal.caseOverrides,
-        conditionalOverrides: whatIfLocal.conditionalOverrides,
-        setWhatIfAnalysis: (analysis) => {
-          const next = { ...whatIfLocal, whatIfAnalysis: analysis };
-          setWhatIfLocal(next);
-          schedulePersist(next);
-        },
-        setCaseOverride: (nodeId, variantName) => {
-          const nextOverrides = { ...(whatIfLocal.caseOverrides || {}) } as Record<string, string>;
-          if (variantName === null) delete nextOverrides[nodeId]; else nextOverrides[nodeId] = variantName;
-          const next = { ...whatIfLocal, caseOverrides: nextOverrides };
-          setWhatIfLocal(next);
-          schedulePersist(next);
-        },
-        setConditionalOverride: (edgeId, value) => {
-          const nextCond = { ...(whatIfLocal.conditionalOverrides || {}) } as Record<string, Set<string>>;
-          if (value === null) delete nextCond[edgeId]; else nextCond[edgeId] = value;
-          const next = { ...whatIfLocal, conditionalOverrides: nextCond };
-          setWhatIfLocal(next);
-          schedulePersist(next);
-        },
-        clearAllOverrides: () => {
-          const next = { whatIfAnalysis: null, caseOverrides: {}, conditionalOverrides: {} as any };
-          setWhatIfLocal(next);
-          schedulePersist(next as any);
-        }
-      }}>
       <div 
         ref={containerRef}
         className="graph-editor-dock-container"
@@ -1894,7 +1815,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           />
         )}
     </div>
-      </WhatIfProvider>
       </ViewPreferencesProvider>
       </ScenariosProvider>
     </SelectionContext.Provider>
