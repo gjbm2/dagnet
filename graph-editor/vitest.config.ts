@@ -71,7 +71,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@vercel/node'],
+    exclude: ['@vercel/node', 'webidl-conversions', 'whatwg-url'],
   },
 });
 
