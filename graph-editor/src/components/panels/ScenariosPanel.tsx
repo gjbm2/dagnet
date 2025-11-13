@@ -28,7 +28,9 @@ import {
   Plus, 
   Camera,
   Layers,
-  ChevronDown
+  ChevronDown,
+  FileText,
+  Pencil
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import './ScenariosPanel.css';
@@ -280,8 +282,12 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           </div>
           <div
             className="scenario-color-swatch"
-            style={{ backgroundColor: '#4A90E2' }}
-            title="Current color"
+            style={{ 
+              backgroundColor: currentVisible 
+                ? (colorMap.get('current') || '#808080')  // Use assigned color or grey
+                : '#cccccc'  // Grey when hidden
+            }}
+            title={currentVisible ? 'Current (visible)' : 'Current (hidden)'}
           />
           <div className="scenario-name">Current</div>
           <button
@@ -301,7 +307,9 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
         {scenarios.map((scenario, index) => {
           const isVisible = visibleScenarioIds.includes(scenario.id);
           const isSelected = selectedScenarioId === scenario.id;
-          const color = colorMap.get(scenario.id) || scenario.color;
+          // Only show assigned color if visible, otherwise show grey/transparent
+          const assignedColor = colorMap.get(scenario.id) || scenario.color;
+          const displayColor = isVisible ? assignedColor : '#cccccc';
           const isEditing = editingScenarioId === scenario.id;
           const isDragging = draggedScenarioId === scenario.id;
           const isDragOver = dragOverIndex === index;
@@ -321,8 +329,8 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               </div>
               <div
                 className="scenario-color-swatch"
-                style={{ backgroundColor: color }}
-                title={`Color: ${color} (${isVisible ? 'visible' : 'hidden'})`}
+                style={{ backgroundColor: displayColor }}
+                title={`${isVisible ? `Color: ${assignedColor}` : 'Hidden'}`}
               />
               {isEditing ? (
                 <input
@@ -340,8 +348,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               ) : (
                 <div
                   className="scenario-name"
-                  onDoubleClick={() => handleStartEdit(scenario)}
-                  title={scenario.meta?.note || 'Double-click to rename'}
+                  title={scenario.meta?.note || 'Click pencil to rename'}
                 >
                   {scenario.name}
                 </div>
@@ -355,10 +362,17 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               </button>
               <button
                 className="scenario-action-btn"
+                onClick={() => handleStartEdit(scenario)}
+                title="Rename"
+              >
+                <Pencil size={14} />
+              </button>
+              <button
+                className="scenario-action-btn"
                 onClick={() => handleOpenEditor(scenario.id)}
                 title="Open in editor"
               >
-                <Edit2 size={14} />
+                <FileText size={14} />
               </button>
               <button
                 className="scenario-action-btn danger"
@@ -388,8 +402,12 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           </div>
           <div
             className="scenario-color-swatch"
-            style={{ backgroundColor: '#808080' }}
-            title="Base color"
+            style={{ 
+              backgroundColor: baseVisible 
+                ? (colorMap.get('base') || '#808080')  // Use assigned color or grey
+                : '#cccccc'  // Grey when hidden
+            }}
+            title={baseVisible ? 'Base (visible)' : 'Base (hidden)'}
           />
           <div className="scenario-name">Base</div>
           <button
@@ -402,9 +420,9 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           <button
             className="scenario-action-btn"
             onClick={() => handleOpenEditor('base')}
-            title="Edit Base"
+            title="Open Base in editor"
           >
-            <Edit2 size={14} />
+            <FileText size={14} />
           </button>
         </div>
       </div>

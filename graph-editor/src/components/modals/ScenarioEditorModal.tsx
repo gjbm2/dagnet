@@ -355,7 +355,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEdi
               onMount={(editor) => {
                 editorRef.current = editor;
               }}
-              theme="vs-dark"
+              theme="vs"
               options={{
                 minimap: { enabled: false },
                 lineNumbers: 'on',
