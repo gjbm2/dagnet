@@ -137,8 +137,11 @@ function computeEdgeRenderData(
 /**
  * Compute edge width from parameters
  * 
- * This is a simplified version. In production, this should use the same
- * logic as the main graph renderer (calculateEdgeWidth).
+ * This uses a simplified version of the GraphCanvas calculateEdgeWidth logic.
+ * For actual rendering, the GraphCanvas will use its full calculateEdgeWidth function
+ * which handles mass flow, Sankey view, and uniform scaling.
+ * 
+ * This is primarily used for pre-computing widths for the scenario renderer's internal use.
  */
 function computeEdgeWidth(edge: GraphEdge, edgeParams: any): number {
   // Default width if no params
@@ -146,9 +149,10 @@ function computeEdgeWidth(edge: GraphEdge, edgeParams: any): number {
     return edge.width || 2;
   }
   
-  // Use weight_default if available
+  // Use weight_default if available (represents mass flowing through edge)
   if (edgeParams.weight_default !== undefined) {
     // Scale weight to width (adjust scaling factor as needed)
+    // This is a simplified scaling; actual rendering uses more sophisticated logic
     return Math.max(0.5, edgeParams.weight_default * 10);
   }
   
