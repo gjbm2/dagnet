@@ -57,8 +57,11 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
   
   // Special entries: Base and Current
-  const baseVisible = true; // Always show Base in list (but can be toggled)
-  const currentVisible = true; // Always show Current in list (but can be toggled)
+  // Note: These track VISIBILITY state, not list display
+  // Base: default HIDDEN (per spec: "default hidden; can be shown/hidden")
+  // Current: default VISIBLE (live working state)
+  const baseVisible = visibleScenarioIds.includes('base');
+  const currentVisible = visibleScenarioIds.includes('current');
   
   /**
    * Toggle scenario visibility
@@ -130,7 +133,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   }, [openInEditor]);
   
   /**
-   * Create snapshot
+   * Create snapshot with timestamp as default name
    */
   const handleCreateSnapshot = useCallback(async (type: 'all' | 'differences', source: 'visible' | 'base') => {
     if (!tabId) {
@@ -138,12 +141,20 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       return;
     }
     
-    const name = prompt(`Enter name for ${type === 'all' ? 'full' : 'diff'} snapshot from ${source}:`);
-    if (!name) return;
+    // Generate timestamp name (e.g., "2025-11-12 14:30")
+    const now = new Date();
+    const timestamp = now.toLocaleString('en-CA', { 
+      year: 'numeric', 
+      month: '2-digit', 
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).replace(',', '');
     
     try {
       await createSnapshot({
-        name,
+        name: timestamp,
         type,
         source,
         diffThreshold: 1e-6
@@ -158,7 +169,8 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   }, [tabId, createSnapshot]);
   
   /**
-   * Create blank scenario
+   * Create blank scenario with timestamp as default name
+   * Opens editor automatically for immediate editing
    */
   const handleCreateBlank = useCallback(async () => {
     if (!tabId) {
@@ -166,11 +178,19 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       return;
     }
     
-    const name = prompt('Enter name for new scenario:');
-    if (!name) return;
+    // Generate timestamp name (e.g., "2025-11-12 14:30")
+    const now = new Date();
+    const timestamp = now.toLocaleString('en-CA', { 
+      year: 'numeric', 
+      month: '2-digit', 
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).replace(',', '');
     
     try {
-      await createBlank(name, tabId);
+      await createBlank(timestamp, tabId);
       toast.success('Blank scenario created');
     } catch (error) {
       console.error('Failed to create scenario:', error);
@@ -224,7 +244,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     const currentIndex = scenarios.findIndex(s => s.id === draggedScenarioId);
     if (currentIndex === -1 || currentIndex === targetIndex) return;
     
-    // Reorder scenarios
+    // Reorder scenarios in display order (same as storage order)
     const newOrder = [...scenarios.map(s => s.id)];
     newOrder.splice(currentIndex, 1);
     newOrder.splice(targetIndex, 0, draggedScenarioId);
@@ -253,34 +273,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       
       {/* Scenario List */}
       <div className="scenarios-list">
-        {/* Base (non-draggable, toggleable) */}
-        <div className="scenario-row scenario-base">
-          <div className="scenario-drag-handle disabled">
-            <GripVertical size={14} />
-          </div>
-          <div
-            className="scenario-color-swatch"
-            style={{ backgroundColor: '#808080' }}
-            title="Base color"
-          />
-          <div className="scenario-name">Base</div>
-          <button
-            className="scenario-action-btn"
-            onClick={() => handleToggleVisibility('base')}
-            title="Toggle visibility"
-          >
-            {baseVisible ? <Eye size={14} /> : <EyeOff size={14} />}
-          </button>
-          <button
-            className="scenario-action-btn"
-            onClick={() => handleOpenEditor('base')}
-            title="Edit Base"
-          >
-            <Edit2 size={14} />
-          </button>
-        </div>
-        
-        {/* Current (pinned top, non-draggable, toggleable) */}
+        {/* Current (pinned at TOP, non-draggable, toggleable) */}
         <div className="scenario-row scenario-current">
           <div className="scenario-drag-handle disabled">
             <GripVertical size={14} />
@@ -304,6 +297,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
         {scenarios.length > 0 && <div className="scenarios-divider" />}
         
         {/* User Scenarios (draggable) */}
+        {/* Scenarios are stored in display order: newest first (just below Current) */}
         {scenarios.map((scenario, index) => {
           const isVisible = visibleScenarioIds.includes(scenario.id);
           const isSelected = selectedScenarioId === scenario.id;
@@ -383,6 +377,36 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
             <p className="scenarios-empty-hint">Create a snapshot or new scenario to get started</p>
           </div>
         )}
+        
+        {/* Divider before Base */}
+        {scenarios.length > 0 && <div className="scenarios-divider" />}
+        
+        {/* Base (pinned at BOTTOM, non-draggable, toggleable) */}
+        <div className="scenario-row scenario-base">
+          <div className="scenario-drag-handle disabled">
+            <GripVertical size={14} />
+          </div>
+          <div
+            className="scenario-color-swatch"
+            style={{ backgroundColor: '#808080' }}
+            title="Base color"
+          />
+          <div className="scenario-name">Base</div>
+          <button
+            className="scenario-action-btn"
+            onClick={() => handleToggleVisibility('base')}
+            title="Toggle visibility"
+          >
+            {baseVisible ? <Eye size={14} /> : <EyeOff size={14} />}
+          </button>
+          <button
+            className="scenario-action-btn"
+            onClick={() => handleOpenEditor('base')}
+            title="Edit Base"
+          >
+            <Edit2 size={14} />
+          </button>
+        </div>
       </div>
       
       {/* Footer Actions */}

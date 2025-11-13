@@ -35,7 +35,14 @@ interface ScenariosContextValue {
   editorOpenScenarioId: string | null;
   
   // CRUD operations
-  createSnapshot: (options: CreateSnapshotOptions, tabId: string) => Promise<Scenario>;
+  createSnapshot: (
+    options: CreateSnapshotOptions, 
+    tabId: string,
+    whatIfDSL?: string | null,
+    whatIfSummary?: string,
+    window?: { start: string; end: string } | null,
+    context?: Record<string, string>
+  ) => Promise<Scenario>;
   createBlank: (name: string, tabId: string) => Promise<Scenario>;
   getScenario: (id: string) => Scenario | undefined;
   listScenarios: () => Scenario[];
@@ -86,10 +93,20 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
 
   /**
    * Create a snapshot scenario
+   * 
+   * Captures current parameter state along with metadata about:
+   * - What-If settings (if active)
+   * - Time window
+   * - Context values
+   * - Source (what was diffed against)
    */
   const createSnapshot = useCallback(async (
     options: CreateSnapshotOptions,
-    tabId: string
+    tabId: string,
+    whatIfDSL?: string | null,
+    whatIfSummary?: string,
+    window?: { start: string; end: string } | null,
+    context?: Record<string, string>
   ): Promise<Scenario> => {
     const { name, type, source = 'visible', diffThreshold = 1e-6, note } = options;
     
@@ -100,8 +117,8 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
       baseForDiff = baseParams;
     } else {
       // Diff against composed visible layers (excluding Current)
-      // TODO: Get visible scenario IDs from tab state
       // For now, compose all scenarios
+      // TODO: In future, filter to only visible scenarios for this tab
       const overlays = scenarios.map(s => s.params);
       baseForDiff = composeParams(baseParams, overlays);
     }
@@ -110,7 +127,30 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
     const diff = computeDiff(currentParams, baseForDiff, type, diffThreshold);
     
     // Generate auto note if not provided
-    const autoNote = note || `${type === 'all' ? 'Full' : 'Diff'} snapshot from ${source === 'base' ? 'Base' : 'visible layers'} on ${new Date().toLocaleString()}`;
+    let autoNote = note;
+    if (!autoNote) {
+      const parts: string[] = [];
+      parts.push(`${type === 'all' ? 'Full' : 'Diff'} snapshot`);
+      
+      if (window) {
+        const start = new Date(window.start).toLocaleDateString();
+        const end = new Date(window.end).toLocaleDateString();
+        parts.push(`for ${start} → ${end}`);
+      }
+      
+      if (whatIfSummary) {
+        parts.push(`with What-If: ${whatIfSummary}`);
+      }
+      
+      if (context && Object.keys(context).length > 0) {
+        const contextStr = Object.entries(context)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ');
+        parts.push(`(${contextStr})`);
+      }
+      
+      autoNote = parts.join(' ');
+    }
     
     const now = new Date().toISOString();
     const scenario: Scenario = {
@@ -125,11 +165,18 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
         sourceDetail: source,
         createdInTabId: tabId,
         note: autoNote,
-        // TODO: Capture window, context, whatIfDSL from tab state
+        whatIfDSL: whatIfDSL || undefined,
+        whatIfSummary: whatIfSummary || undefined,
+        window: window || undefined,
+        context: context || undefined,
       }
     };
     
-    setScenarios(prev => [...prev, scenario]);
+    // Insert new scenario at position 2 (just beneath Current)
+    // This means PREPENDING to the array: newer scenarios closer to Base in composition
+    // Array order: [newest, ..., oldest]
+    // Composition: Base + scenarios[0] + scenarios[1] + ... + Current
+    setScenarios(prev => [scenario, ...prev]);
     
     return scenario;
   }, [generateId, baseParams, currentParams, scenarios]);
@@ -155,7 +202,8 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
       }
     };
     
-    setScenarios(prev => [...prev, scenario]);
+    // Insert new scenario at position 2 (just beneath Current), same as snapshots
+    setScenarios(prev => [scenario, ...prev]);
     
     // Auto-open in editor
     setEditorOpenScenarioId(scenario.id);
@@ -320,17 +368,32 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
 
   /**
    * Flatten: merge all visible scenarios into Base and clear overlays
+   * 
+   * This operation:
+   * 1. Composes all current parameters (Base + all scenarios + Current)
+   * 2. Sets Base := composed parameters
+   * 3. Clears all scenario overlays
+   * 4. Current remains visible (now matching Base)
+   * 
+   * This is a session-local operation; persisting to repo requires a separate commit.
    */
   const flatten = useCallback(async (): Promise<void> => {
-    // TODO: Implement full flatten logic in Phase 6
-    // For now, just clear scenarios
+    // Compose all scenarios into final params
+    const overlays = scenarios.map(s => s.params);
+    const composedBase = composeParams(baseParams, overlays);
     
-    // Compose all visible params into current
-    // Set base := current
-    // Clear all scenarios
+    // Merge current params on top
+    const finalParams = composeParams(composedBase, [currentParams]);
     
+    // Set Base to the fully composed state
+    setBaseParams(finalParams);
+    
+    // Clear all scenario overlays
     setScenarios([]);
-  }, []);
+    
+    // Current params remain (now effectively matching Base)
+    // No need to change currentParams - it continues to apply on top of the new Base
+  }, [scenarios, baseParams, currentParams]);
 
   const value: ScenariosContextValue = {
     scenarios,

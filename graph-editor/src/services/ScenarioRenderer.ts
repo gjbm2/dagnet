@@ -144,25 +144,32 @@ function computeEdgeRenderData(
  * This is primarily used for pre-computing widths for the scenario renderer's internal use.
  */
 function computeEdgeWidth(edge: GraphEdge, edgeParams: any): number {
-  // Default width if no params
-  if (!edgeParams) {
-    return edge.width || 2;
+  // If we have scenario params, use them
+  if (edgeParams) {
+    // Use weight_default if available (represents mass flowing through edge)
+    if (edgeParams.weight_default !== undefined) {
+      // Scale weight to width (adjust scaling factor as needed)
+      // This is a simplified scaling; actual rendering uses more sophisticated logic
+      return Math.max(0.5, edgeParams.weight_default * 10);
+    }
+    
+    // Use probability mean if available
+    if (edgeParams.p?.mean !== undefined) {
+      return Math.max(0.5, edgeParams.p.mean * 10);
+    }
   }
   
-  // Use weight_default if available (represents mass flowing through edge)
-  if (edgeParams.weight_default !== undefined) {
-    // Scale weight to width (adjust scaling factor as needed)
-    // This is a simplified scaling; actual rendering uses more sophisticated logic
-    return Math.max(0.5, edgeParams.weight_default * 10);
+  // Fallback: try edge's own properties
+  if (edge.weight_default !== undefined) {
+    return Math.max(0.5, edge.weight_default * 10);
   }
   
-  // Use probability mean if available
-  if (edgeParams.p?.mean !== undefined) {
-    return Math.max(0.5, edgeParams.p.mean * 10);
+  if (edge.p?.mean !== undefined) {
+    return Math.max(0.5, edge.p.mean * 10);
   }
   
-  // Fallback to edge's current width
-  return edge.width || 2;
+  // Final fallback
+  return 2;
 }
 
 /**

@@ -26,6 +26,7 @@ import { sankey, sankeyLinkHorizontal, sankeyCenter, sankeyJustify } from 'd3-sa
 
 import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
+import ScenarioOverlayRenderer from './ScenarioOverlayRenderer';
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { NodeContextMenu } from './NodeContextMenu';
@@ -4888,6 +4889,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         {/* Chevron clipPath definitions */}
         <Panel position="top-left" style={{ pointerEvents: 'none' }}>
           <ChevronClipPaths bundles={edgeBundles} nodes={nodes} frameId={renderFrameRef.current} />
+        </Panel>
+        
+        {/* Scenario overlays - render visible scenarios as colored overlays */}
+        <Panel position="top-left" style={{ pointerEvents: 'none', zIndex: 5 }}>
+          <ScenarioOverlayRenderer tabId={tabId} graph={graph} />
         </Panel>
       </ReactFlow>
       
