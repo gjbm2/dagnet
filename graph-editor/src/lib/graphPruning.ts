@@ -72,11 +72,10 @@ function getNodesImpliedByConditionalOverrides(
  * 
  * @param graph - The graph data
  * @param edges - ReactFlow edges (with computed data)
- * @param whatIfOverrides - What-if overrides (case + conditional) - ALWAYS applied
+ * @param whatIfOverrides - What-if overrides containing whatIfDSL - ALWAYS applied
  * @param pathSelectedNodes - Additional nodes from quick selection (ONLY for Path Analysis panel)
  * @param pathStart - Start node of path (optional, for path analysis)
  * @param pathEnd - End node of path (optional, for path analysis)
- * @param legacyWhatIfAnalysis - Legacy what-if state
  * 
  * @returns Excluded edges and renormalization factors
  * 
@@ -91,8 +90,7 @@ export function computeGraphPruning(
   whatIfOverrides: WhatIfOverrides,
   pathSelectedNodes?: Set<string>,
   pathStart?: string,
-  pathEnd?: string,
-  legacyWhatIfAnalysis?: any
+  pathEnd?: string
 ): PruningResult {
   const excludedEdges = new Set<string>();
   const renormFactors = new Map<string, number>();
@@ -200,8 +198,7 @@ export function computeGraphPruning(
         const effectiveProb = computeEffectiveEdgeProbability(
           graph, 
           edge.id, 
-          whatIfOverrides, 
-          legacyWhatIfAnalysis
+          whatIfOverrides
         );
         
         totalEffectiveProb += effectiveProb;

@@ -65,15 +65,13 @@ interface GraphCanvasProps {
   onForceRerouteRef?: React.MutableRefObject<(() => void) | null>;
   onHideUnselectedRef?: React.MutableRefObject<(() => void) | null>;
   // What-if analysis state (from tab state, not GraphStore)
-  whatIfAnalysis?: any;
-  caseOverrides?: Record<string, string>;
-  conditionalOverrides?: Record<string, Set<string>>;
+  whatIfDSL?: string | null;
   // Tab identification for keyboard event filtering
   tabId?: string;
   activeTabId?: string | null;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides, conditionalOverrides, tabId, activeTabId }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -90,15 +88,13 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onSankeyLayoutRef={onSankeyLayoutRef}
         onForceRerouteRef={onForceRerouteRef}
         onHideUnselectedRef={onHideUnselectedRef}
-        whatIfAnalysis={whatIfAnalysis}
-        caseOverrides={caseOverrides}
-        conditionalOverrides={conditionalOverrides}
+        whatIfDSL={whatIfDSL}
       />
     </ReactFlowProvider>
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfAnalysis, caseOverrides = {}, conditionalOverrides = {}, tabId, activeTabId }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId }: GraphCanvasProps) {
   const store = useGraphStore();
   const { graph, setGraph: setGraphDirect, setAutoUpdating } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
@@ -156,9 +152,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Get the store hook for direct .getState() access
   const graphStoreHook = useGraphStore();
   
-  // Recompute edge widths when conditional what-if overrides change
-  // Create a "version" to track changes in what-if overrides (for reactivity)
-  const overridesVersion = JSON.stringify({ caseOverrides, conditionalOverrides, whatIfAnalysis });
+  // Recompute edge widths when what-if DSL changes
+  // Create a "version" to track changes in what-if state (for reactivity)
+  const overridesVersion = whatIfDSL || '';
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
@@ -248,19 +244,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Get current state from store (avoid stale closures)
     const currentGraph = graphStoreHook.getState().graph;
-    const currentOverrides = { caseOverrides, conditionalOverrides };
-    const currentWhatIfAnalysis = whatIfAnalysis;
+    
+    // Check if scenarios are visible
+    const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
+    const hasVisibleScenarios = (scenarioState?.visibleScenarioIds || []).length > 0;
 
     // UNIFIED helper: get effective probability
     // Use edge data directly if available (most current), otherwise use store
     const getEffectiveProbability = (e: any): number => {
-      // Use unified What-If engine so conditional overrides and hyperpriors are respected
+      // CRITICAL: Only apply What-If DSL to base edges when NO scenarios are visible
+      // When scenarios are visible, What-If is shown via the "current" overlay layer instead
       const edgeId = e.id || `${e.source}->${e.target}`;
+      const shouldUseWhatIf = !hasVisibleScenarios && whatIfDSL;
+      
       return computeEffectiveEdgeProbability(
         currentGraph,
         edgeId,
-        currentOverrides,
-        currentWhatIfAnalysis || null,
+        shouldUseWhatIf ? { whatIfDSL } : {},
+        null,
         undefined
       );
     };
@@ -377,7 +378,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const scaledWidth = MIN_WIDTH + (displayMass * (effectiveMaxWidth - MIN_WIDTH));
     const finalWidth = Math.max(MIN_WIDTH, Math.min(effectiveMaxWidth, scaledWidth));
     return finalWidth;
-  }, [useUniformScaling, massGenerosity, useSankeyView, caseOverrides, conditionalOverrides, whatIfAnalysis, graphStoreHook]);
+  }, [useUniformScaling, massGenerosity, useSankeyView, whatIfDSL, graphStoreHook, tabs, tabId]);
 
   // Calculate edge sort keys for curved edge stacking
   // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
@@ -1514,9 +1515,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             isLastInTargetBundle: edge.isLastInTargetBundle,
             sourceFace: edge.sourceFace,
             targetFace: edge.targetFace,
-            // Pass what-if overrides to edges
-            caseOverrides: caseOverrides,
-            conditionalOverrides: conditionalOverrides
+            // Pass what-if DSL to edges
+            whatIfDSL: whatIfDSL
           }
         }));
       });
@@ -1686,8 +1686,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               const effectiveProb = computeEffectiveEdgeProbability(
                 graph,
                 edgeId,
-                { caseOverrides, conditionalOverrides },
-                whatIfAnalysis || null,
+                { whatIfDSL },
+                null,
                 undefined
               );
               
@@ -1793,9 +1793,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       isLastInTargetBundle: edge.isLastInTargetBundle,
       sourceFace: edge.sourceFace,
       targetFace: edge.targetFace,
-      // Pass what-if overrides to edges
-      caseOverrides: caseOverrides,
-      conditionalOverrides: conditionalOverrides,
+      // Pass what-if DSL to edges
+      whatIfDSL: whatIfDSL,
       // Pass Sankey view flag to edges
       useSankeyView: useSankeyView
     }
@@ -2128,16 +2127,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         sourceClipPathId: sourceBundle && sourceBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${sourceBundle.id}` : undefined,
         targetClipPathId: targetBundle && targetBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${targetBundle.id}` : undefined,
         renderFallbackTargetArrow: !!(targetBundle && targetBundle.bundleWidth < MIN_CHEVRON_THRESHOLD),
-          // Pass what-if overrides to edges
-          caseOverrides: caseOverrides,
-          conditionalOverrides: conditionalOverrides
+          // Pass what-if DSL to edges
+          whatIfDSL: whatIfDSL
         }
     };
     });
     
     // Update edges (bundles will be automatically recalculated by separate effect after this)
     setEdges(result);
-  }, [useUniformScaling, massGenerosity, edges, nodes, calculateEdgeWidth, calculateEdgeOffsets, caseOverrides, conditionalOverrides, setEdges, setEdgeBundles]);
+  }, [useUniformScaling, massGenerosity, edges, nodes, calculateEdgeWidth, calculateEdgeOffsets, whatIfDSL, setEdges, setEdgeBundles]);
   
   // Recalculate edge widths when what-if changes (throttled to one per frame)
   const recomputeInProgressRef = useRef(false);
@@ -2199,9 +2197,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               isLastInTargetBundle: edge.isLastInTargetBundle,
               sourceFace: edge.sourceFace,
               targetFace: edge.targetFace,
-              // Pass what-if overrides to edges
-              caseOverrides: caseOverrides,
-              conditionalOverrides: conditionalOverrides
+              // Pass what-if DSL to edges
+              whatIfDSL: whatIfDSL
             }
           }));
         });
@@ -2217,7 +2214,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         setTimeout(() => { visualWhatIfUpdateRef.current = false; }, 0);
       }
     });
-  }, [overridesVersion, whatIfAnalysis, setEdges, nodes, edges.length]);
+  }, [overridesVersion, setEdges, nodes, edges.length]);
 
   useEffect(() => {
     // Log when overridesVersion propagates into canvas and compute latency
@@ -2252,7 +2249,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (!currentGraph) return;
     
     // Create a version string from what-if state to detect actual changes
-    const whatIfVersion = `${overridesVersion}-${JSON.stringify(whatIfAnalysis)}`;
+    const whatIfVersion = overridesVersion;
     if (lastWhatIfVersionRef.current === whatIfVersion) {
       return; // Skip if we already processed this what-if state
     }
@@ -2312,8 +2309,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const effectiveProb = computeEffectiveEdgeProbability(
               currentGraph,
               edgeId,
-              { caseOverrides, conditionalOverrides },
-              whatIfAnalysis || null,
+              { whatIfDSL },
+              null,
               undefined
             );
             totalMass += sourceMass * effectiveProb;
@@ -2355,7 +2352,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setTimeout(() => {
       sankeyUpdatingRef.current = false;
     }, 0);
-  }, [useSankeyView, overridesVersion, whatIfAnalysis, setNodes, caseOverrides, conditionalOverrides]);
+  }, [useSankeyView, overridesVersion, setNodes, whatIfDSL]);
   
   // Sync FROM ReactFlow TO graph when user makes changes in the canvas
   // NOTE: This should NOT depend on 'graph' to avoid syncing when graph changes externally
@@ -3286,9 +3283,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Get current state from store (avoid stale closures)
       const currentGraph = graphStoreHook.getState().graph;
-      // Use per-tab what-if state (passed as props), not global store
-      const currentOverrides = { caseOverrides, conditionalOverrides };
-      const currentWhatIfAnalysis = whatIfAnalysis;
       
       // Use pre-computed pruning if provided, otherwise no pruning
       const excludedEdges = prunedEdges || new Set<string>();
@@ -3321,7 +3315,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           // UNIFIED: Use shared what-if logic for probability
           // Pass accumulated path context so conditionals know which nodes have been visited on THIS path
-          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, currentOverrides, currentWhatIfAnalysis, edgePathContext);
+          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, null, edgePathContext);
           
           // Apply renormalization if siblings were pruned
           const renormFactor = edgeRenormalizationFactors.get(edge.id);
@@ -3386,7 +3380,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           // UNIFIED: Use shared what-if logic for probability
           // Pass accumulated path context so conditionals know which nodes have been visited on THIS path
-          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, currentOverrides, currentWhatIfAnalysis, edgePathContext);
+          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, null, edgePathContext);
           
           // Apply renormalization if siblings were pruned
           const renormFactor = edgeRenormalizationFactors.get(edge.id);
@@ -3540,12 +3534,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       // Calculate direct path (if exists) - for direct paths, cost is just the edge cost
       // UNIFIED: Use shared what-if logic for probability
-      const currentOverrides = { caseOverrides, conditionalOverrides };
-      const currentWhatIfAnalysis2 = whatIfAnalysis;
       const currentGraph2 = graphStoreHook.getState().graph;
       // Pass both nodes for graph pruning and conditional activation
       const pathContext = new Set([nodeA.id, nodeB.id]);
-      let directPathProbability = directEdge ? computeEffectiveEdgeProbability(currentGraph2, directEdge.id, currentOverrides, currentWhatIfAnalysis2, pathContext) : 0;
+      let directPathProbability = directEdge ? computeEffectiveEdgeProbability(currentGraph2, directEdge.id, { whatIfDSL }, null, pathContext) : 0;
       const directPathCosts = {
         monetary: directEdge?.data?.cost_gbp?.mean || 0,
         time: directEdge?.data?.cost_time?.mean || 0,
@@ -3601,9 +3593,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const impliedCaseOverrides = new Map<string, string>(); // case node ID → forced variant
       
       const currentGraph = graphStoreHook.getState().graph;
-      // Use per-tab what-if state (passed as props), not global store
-      const currentOverrides = { caseOverrides, conditionalOverrides };
-      const currentWhatIfAnalysis = whatIfAnalysis;
       
       // Interstitial nodes: all selected except path start and end
       const interstitialNodes = new Set(allSelectedIds.filter(id => id !== pathStart && id !== pathEnd));
@@ -3663,7 +3652,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           console.log(`  Calculating effective probs for ${key}:`);
           groupEdges.forEach(edge => {
-            const effectiveProb = computeEffectiveEdgeProbability(currentGraph, edge.id, currentOverrides, currentWhatIfAnalysis);
+            const effectiveProb = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, null);
             console.log(`    Edge ${edge.id}: effectiveProb=${effectiveProb}, target=${edge.target}, willPrune=${unselectedSiblings.includes(edge.target)}`);
             totalEffectiveProb += effectiveProb;
             
@@ -3860,7 +3849,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       totalCosts,
       probabilityConservation: Math.abs(totalIncomingProbability - totalOutgoingProbability) < 0.001
     };
-  }, [selectedNodesForAnalysis, edges, nodes, whatIfAnalysis, findStartNodes, topologicalSort, areNodesTopologicallySequential, graph, overridesVersion]);
+  }, [selectedNodesForAnalysis, edges, nodes, findStartNodes, topologicalSort, areNodesTopologicallySequential, graph, overridesVersion]);
 
   const analysis = calculateSelectionAnalysis();
 
@@ -4671,7 +4660,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       for (const scenarioId of visibleScenarioIds) {
         const scenario = scenarios.find(s => s.id === scenarioId);
         // Scenario color from palette assignment
-        const color = (colorMap.get(scenarioId) || scenario.color);
+        const color = (colorMap.get(scenarioId) || scenario?.color || '#808080');
         // Independent composition (Option A): Base + this scenario only
         let composedParams = baseParams;
         if (scenarioId === 'base') {
@@ -4688,7 +4677,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           continue;
         }
         // Resolver: prefer scenario p.mean, else base probability from edge data
+        // Special case: "current" layer uses What-If DSL logic via computeEffectiveEdgeProbability
         const probResolver = (e: Edge) => {
+          if (scenarioId === 'current' && whatIfDSL) {
+            // Use What-If engine for "current" layer to respect DSL constraints
+            const edgeId = e.id || `${e.source}->${e.target}`;
+            return computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL }, null, undefined);
+          }
           const edgeUuid = (e.data as any)?.uuid || e.id;
           const override = edgeUuid ? composedParams.edges?.[edgeUuid]?.p?.mean : undefined;
           if (typeof override === 'number') return override;
