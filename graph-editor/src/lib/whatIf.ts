@@ -217,7 +217,6 @@ export function computeEffectiveEdgeProbability(
   graph: any,
   edgeId: string,
   whatIfOverrides: WhatIfOverrides,
-  _unused?: null,
   givenVisitedNodes?: Set<string>
 ): number {
   if (!graph?.edges) return 0;
@@ -231,7 +230,7 @@ export function computeEffectiveEdgeProbability(
   if (!edge) return 0;
   
   // Parse DSL to get overrides
-  const parsed = parseWhatIfDSL(whatIfOverrides?.whatIfDSL, graph);
+  const parsed = parseWhatIfDSL(whatIfOverrides?.whatIfDSL ?? null, graph);
   const effectiveOverrides = {
     caseOverrides: parsed.caseOverrides,
     conditionalOverrides: parsed.conditionalOverrides
@@ -354,7 +353,7 @@ export function getEdgeWhatIfDisplay(
   if (!edge) return null;
   
   // Parse DSL to get overrides
-  const parsed = parseWhatIfDSL(whatIfOverrides?.whatIfDSL, graph);
+  const parsed = parseWhatIfDSL(whatIfOverrides?.whatIfDSL ?? null, graph);
   const effectiveOverrides = {
     caseOverrides: parsed.caseOverrides,
     conditionalOverrides: parsed.conditionalOverrides

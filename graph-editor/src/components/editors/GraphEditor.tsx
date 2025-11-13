@@ -19,7 +19,7 @@ import { useSidebarState } from '../../hooks/useSidebarState';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
-import { ScenariosProvider } from '../../contexts/ScenariosContext';
+import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { Sparkles, FileText, Wrench } from 'lucide-react';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
@@ -115,6 +115,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Read whatIfDSL directly from tab state (new unified approach)
   const whatIfDSL = tabState.whatIfDSL;
 
+  // Get scenarios context for managing scenario layers (optional - may be null if not in provider yet)
+  const scenariosContext = useScenariosContextOptional();
   
   // NEW: Sidebar state management (Phase 1)
   const { state: sidebarState, operations: sidebarOps } = useSidebarState(tabId);
@@ -278,6 +280,147 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     window.addEventListener('dagnet:openPropertiesPanel' as any, handler);
     return () => window.removeEventListener('dagnet:openPropertiesPanel' as any, handler);
   }, [sidebarOps]);
+  
+  // Listen for new scenario creation to add it to visible scenarios
+  useEffect(() => {
+    const handler = async (e: any) => {
+      const { tabId: eventTabId, scenarioId } = e?.detail || {};
+      console.log(`[GraphEditor ${fileId}] 📢 Received dagnet:addVisibleScenario event:`, { eventTabId, scenarioId, myTabId: tabId });
+      // Only handle events for this tab
+      if (eventTabId === tabId && scenarioId) {
+        console.log(`[GraphEditor ${fileId}] ✅ Event is for this tab, making scenario ${scenarioId} visible`);
+        
+        // CRITICAL: Clean up orphaned scenario IDs before adding the new one
+        if (scenariosContext && tabId) {
+          const currentTab = tabOps.tabs.find(t => t.id === tabId);
+          const currentState = currentTab?.editorState?.scenarioState;
+          if (currentState) {
+            const validScenarioIds = new Set(scenariosContext.scenarios.map(s => s.id));
+            validScenarioIds.add('current'); // 'current' is always valid
+            validScenarioIds.add('base'); // 'base' is always valid
+            
+            const orphanedInVisible = currentState.visibleScenarioIds.filter(id => !validScenarioIds.has(id));
+            const orphanedInColorOrder = currentState.visibleColorOrderIds.filter(id => !validScenarioIds.has(id));
+            
+            if (orphanedInVisible.length > 0 || orphanedInColorOrder.length > 0) {
+              console.warn(`[GraphEditor ${fileId}] 🧹 Found orphaned scenario IDs:`, {
+                orphanedInVisible,
+                orphanedInColorOrder,
+                validIds: Array.from(validScenarioIds)
+              });
+              
+              // Clean up orphaned IDs
+              const cleanedVisibleIds = currentState.visibleScenarioIds.filter(id => validScenarioIds.has(id));
+              const cleanedColorOrderIds = currentState.visibleColorOrderIds.filter(id => validScenarioIds.has(id));
+              
+              await tabOps.updateTabState(tabId, {
+                scenarioState: {
+                  ...currentState,
+                  visibleScenarioIds: cleanedVisibleIds,
+                  visibleColorOrderIds: cleanedColorOrderIds
+                }
+              });
+              
+              console.log(`[GraphEditor ${fileId}] ✅ Cleaned up orphaned IDs, now:`, {
+                visibleScenarioIds: cleanedVisibleIds,
+                visibleColorOrderIds: cleanedColorOrderIds
+              });
+            }
+          }
+        }
+        
+        // Now add the new scenario to visible list
+        tabOps.toggleScenarioVisibility(tabId, scenarioId);
+      } else {
+        console.log(`[GraphEditor ${fileId}] ⏭️ Event is for different tab, ignoring`);
+      }
+    };
+    window.addEventListener('dagnet:addVisibleScenario' as any, handler);
+    return () => window.removeEventListener('dagnet:addVisibleScenario' as any, handler);
+  }, [tabId, tabOps, fileId, scenariosContext]);
+  
+  // Proactively clean up orphaned scenario IDs whenever scenarios list or tab state changes
+  useEffect(() => {
+    if (!scenariosContext || !tabId) return;
+    
+    const currentTab = tabOps.tabs.find(t => t.id === tabId);
+    const currentState = currentTab?.editorState?.scenarioState;
+    if (!currentState) return;
+    
+    const validScenarioIds = new Set(scenariosContext.scenarios.map(s => s.id));
+    validScenarioIds.add('current');
+    validScenarioIds.add('base');
+    
+    const orphanedInVisible = currentState.visibleScenarioIds.filter(id => !validScenarioIds.has(id));
+    const orphanedInColorOrder = currentState.visibleColorOrderIds.filter(id => !validScenarioIds.has(id));
+    
+    if (orphanedInVisible.length > 0 || orphanedInColorOrder.length > 0) {
+      console.warn(`[GraphEditor ${fileId}] 🧹 Auto-cleanup: Found orphaned scenario IDs:`, {
+        orphanedInVisible,
+        orphanedInColorOrder
+      });
+      
+      const cleanedVisibleIds = currentState.visibleScenarioIds.filter(id => validScenarioIds.has(id));
+      const cleanedColorOrderIds = currentState.visibleColorOrderIds.filter(id => validScenarioIds.has(id));
+      
+      tabOps.updateTabState(tabId, {
+        scenarioState: {
+          ...currentState,
+          visibleScenarioIds: cleanedVisibleIds,
+          visibleColorOrderIds: cleanedColorOrderIds
+        }
+      });
+    }
+  }, [scenariosContext?.scenarios, tabId, tabOps, fileId]);
+  
+  // Listen for scenario deletion events and clean up from ALL tabs
+  // Only ONE GraphEditor instance should handle this (use the first one)
+  useEffect(() => {
+    // Only the first graph editor instance should handle cleanup
+    if (fileId !== 'graph-WA-case-conversion-test' && fileId !== tabContext.tabs[0]?.fileId) {
+      return; // Skip if not the primary instance
+    }
+    
+    const handler = async (e: any) => {
+      const { scenarioId } = e?.detail || {};
+      if (!scenarioId) return;
+      
+      console.log(`[GraphEditor ${fileId}] 🗑️ Received scenario deletion event for ${scenarioId} - cleaning up ALL tabs`);
+      
+      // Clean up this deleted scenario from ALL tabs' visibility lists
+      const currentTabs = tabContext.tabs;
+      if (!currentTabs) {
+        console.warn(`[GraphEditor ${fileId}] No tabs available for cleanup`);
+        return;
+      }
+      
+      // Process all tabs sequentially to avoid race conditions
+      for (const tab of currentTabs) {
+        const currentState = tab.editorState?.scenarioState;
+        if (!currentState) continue;
+        
+        const hasInVisible = currentState.visibleScenarioIds.includes(scenarioId);
+        const hasInColorOrder = currentState.visibleColorOrderIds.includes(scenarioId);
+        
+        if (hasInVisible || hasInColorOrder) {
+          console.log(`[GraphEditor ${fileId}] 🧹 Removing ${scenarioId} from tab ${tab.id}`);
+          
+          await tabOps.updateTabState(tab.id, {
+            scenarioState: {
+              ...currentState,
+              visibleScenarioIds: currentState.visibleScenarioIds.filter(id => id !== scenarioId),
+              visibleColorOrderIds: currentState.visibleColorOrderIds.filter(id => id !== scenarioId)
+            }
+          });
+        }
+      }
+      
+      console.log(`[GraphEditor ${fileId}] ✅ Finished cleaning up ${scenarioId} from all tabs`);
+    };
+    
+    window.addEventListener('dagnet:scenarioDeleted' as any, handler);
+    return () => window.removeEventListener('dagnet:scenarioDeleted' as any, handler);
+  }, [tabContext.tabs, tabOps, fileId]);
   
   // Removed: usePlainWhatIf overlay handler (hover preview deprecated)
   

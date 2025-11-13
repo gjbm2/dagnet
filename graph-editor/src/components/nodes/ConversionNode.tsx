@@ -3,6 +3,7 @@ import { Handle, Position, NodeProps, useReactFlow, useStore } from 'reactflow';
 import { useTabContext } from '../../contexts/TabContext';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
+import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
 
 interface ConversionNodeData {
@@ -46,9 +47,10 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const { activeTabId, operations, tabs } = useTabContext();
   const { graph } = useGraphStore();
   
-  // Get current tab's what-if analysis state
+  // Get current tab's what-if analysis state (NEW: unified DSL)
   const activeTab = tabs.find(tab => tab.id === activeTabId);
   const whatIfAnalysis = activeTab?.editorState?.whatIfAnalysis;
+  const whatIfDSL = activeTab?.editorState?.whatIfDSL;
   
   // Track hover state
   const [isHovered, setIsHovered] = useState(false);
@@ -77,6 +79,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   }, [data]);
 
   // Calculate probability mass for outgoing edges
+  // PMF validation ONLY applies to 'current' layer (live editable graph), not to snapshots
   const getProbabilityMass = useCallback(() => {
     const edges = getEdges();
     const nodes = getNodes();
@@ -84,31 +87,15 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     const outgoingEdges = edges.filter(edge => edge.source === data.uuid || edge.source === data.id);
     
     if (outgoingEdges.length === 0) return null;
+    if (!graph) return null;
     
     const totalProbability = outgoingEdges.reduce((sum, edge) => {
-      // For case edges, calculate effective probability (variant weight × sub-route probability)
-      if (edge.data?.case_id && edge.data?.case_variant) {
-        const caseNode = nodes.find((n: any) => n.data?.case?.id === edge.data.case_id);
-        if (caseNode) {
-          const variant = caseNode.data?.case?.variants?.find((v: any) => v.name === edge.data.case_variant);
-          if (variant) {
-            let variantWeight = variant.weight || 0;
-            
-            // Apply what-if analysis override
-            if (whatIfAnalysis && whatIfAnalysis.caseNodeId === caseNode.id) {
-              variantWeight = edge.data.case_variant === whatIfAnalysis.selectedVariant ? 1.0 : 0.0;
-            }
-            
-            const subRouteProbability = edge.data?.probability ?? 1.0;
-            return sum + (variantWeight * subRouteProbability);
-          }
-        }
-        return sum;
-      }
+      // Use unified What-If logic to compute effective probability
+      // This includes case variant overrides, conditional overrides, and path-based logic
+      const edgeId = edge.id || `${edge.source}->${edge.target}`;
+      const effectiveProb = computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL });
       
-      // For normal edges, use probability as-is
-      const prob = edge.data?.probability;
-      return sum + (typeof prob === 'number' ? prob : 0);
+      return sum + effectiveProb;
     }, 0);
     
     return {
@@ -117,7 +104,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       isComplete: Math.abs(totalProbability - 1.0) < 0.001,
       edgeCount: outgoingEdges.length
     };
-  }, [data.id, getEdges, getNodes, whatIfAnalysis]);
+  }, [data.id, data.uuid, getEdges, getNodes, whatIfDSL, graph]);
 
   const probabilityMass = getProbabilityMass();
   const isCaseNode = data.type === 'case';

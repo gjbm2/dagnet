@@ -1,5 +1,68 @@
 # DagNet TODO
 
+#
+
+Let's simplify & move snapshot controls:
+⦁	move so shown under 'Current' at all times
+⦁	remove 'No scenarios yet' text -- it becomes obvious where the new snapshot appears now
+⦁	Let's show inline controls:
+	+ New Scenario [opens submenu...]
+		Snapshot everything
+		Snapshot differences
+		Blank
+	Flatten all
+
+Sequence of buttons within a scenario:
+
+Left aligned:
+	[Grab handle] [swatch] Scenario name["…" if doesn't fit]
+Right aligned: 
+	[delete icon] [edit modal icon] [visibility toggle]
+
+an empty placeholder for swatch should be shown if none (because layer not visible)
+
+remove the pen icon (to edit name), instead allow user to click name to edit; while editing show a tick [commit change] and a cross [cancel change] icon on right hand side; hide all other icons.
+
+Let's rename (for user purposes) 'Base' layer to 'Original' and 'Current' to 'Live'
+
+Let's add a right-click context menu to layers which shows three additional controls:
+⦁	'Use as current' -- copies the layer in question to current, overwriting current and resetting any whatifs in place
+⦁	[if another layer is visible] 'Merge down'-- applies this layer to the next visible layer down in the stack
+⦁	'Show only' -- hides all other layers but this one
+
+Current layer (now 'Live') should have an edit modal icon, which allows user to view current live param state (with whatif applied). If edited, should apply to new layer (similar pattern to if user uses edit modal on Base)
+
+# TODO
+
+## Critical Issues
+
+### Form Field Duplicate ID Warnings
+
+**Issue:** Multiple form editors (parameters, events, etc.) open in different tabs generate identical DOM element IDs, causing browser warnings about duplicate IDs. This is a violation of HTML spec where IDs must be unique across the entire document.
+
+**Affected Components:** 
+- Parameter editor forms
+- Event editor forms  
+- Any other forms using `react-jsonschema-form`
+
+**Root Cause:** `react-jsonschema-form` generates field IDs based solely on the schema field names (e.g., `root_id`, `root_name`, etc.) without any instance-specific prefix. When multiple forms with the same schema are rendered simultaneously (in different tabs), they produce duplicate IDs.
+
+**Severity:** HIGH - While functionally working currently, this could cause:
+- Screen reader/accessibility issues
+- Form validation problems
+- JavaScript errors when trying to target elements by ID
+- Potential data corruption if form libraries cache by ID
+
+**Proposed Solution:** Add unique tab-specific prefixes to all form field IDs. Options:
+1. Fork/extend `react-jsonschema-form` to accept an ID prefix prop
+2. Use schema transformations to add prefixes dynamically
+3. Ensure only one form instance per schema is mounted at a time (hide instead of unmount inactive tabs)
+
+**Priority:** Should be fixed before production release
+
+
+
+
 ## Data project
 **Case/Variant Filtering** (4-6 hrs)
  - Design case property mapping schema (Statsig case → Amplitude event property)

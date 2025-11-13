@@ -236,7 +236,6 @@ export function calculatePathProbability(
         graph, 
         edge.id, 
         whatIfOverrides, 
-        null,
         edgePathContext
       );
       
@@ -305,7 +304,6 @@ export function calculatePathProbability(
         graph, 
         edge.id, 
         whatIfOverrides, 
-        null,
         edgePathContext
       );
       
@@ -510,7 +508,6 @@ export function calculateDirectEdgeProbability(
     graph,
     edgeId,
     whatIfOverrides,
-    null,
     pathContext
   );
 }

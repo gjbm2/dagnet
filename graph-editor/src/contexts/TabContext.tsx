@@ -1204,21 +1204,40 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     tabId: string,
     editorState: Partial<TabState['editorState']>
   ): Promise<void> => {
-    setTabs(prev => prev.map(tab => 
-      tab.id === tabId 
-        ? { ...tab, editorState: { ...tab.editorState, ...editorState } }
-        : tab
-    ));
+    let newEditorState: TabState['editorState'] | null = null;
     
-    // Persist to IndexedDB (serialize Set objects to arrays)
-    const tab = tabs.find(t => t.id === tabId);
-    if (tab) {
-      const serializedState = serializeEditorState({ ...tab.editorState, ...editorState });
+    // Update React state with functional update to get LATEST tabs
+    setTabs(prev => {
+      const currentTab = prev.find(t => t.id === tabId);
+      if (!currentTab) return prev;
+      
+      // Calculate the new state using LATEST tab data
+      newEditorState = { ...currentTab.editorState, ...editorState };
+      
+      // Debug logging for scenario state changes
+      if (editorState.scenarioState) {
+        console.log(`[TabContext] updateTabState: scenarioState changing for ${tabId}:`, {
+          oldVisible: currentTab.editorState?.scenarioState?.visibleScenarioIds,
+          newVisible: editorState.scenarioState.visibleScenarioIds,
+          stackTrace: new Error().stack?.split('\n').slice(2, 5).join('\n')
+        });
+      }
+      
+      return prev.map(tab => 
+        tab.id === tabId 
+          ? { ...tab, editorState: newEditorState! }
+          : tab
+      );
+    });
+    
+    // Persist to IndexedDB with the NEW state (serialize Set objects to arrays)
+    if (newEditorState) {
+      const serializedState = serializeEditorState(newEditorState);
       await db.tabs.update(tabId, { 
         editorState: serializedState
       });
     }
-  }, [tabs]);
+  }, []); // No dependencies - always uses functional update
 
   /**
    * Get dirty tabs
@@ -1432,6 +1451,16 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       // Hide scenario
       newVisibleIds = currentState.visibleScenarioIds.filter(id => id !== scenarioId);
       newColorOrderIds = currentState.visibleColorOrderIds.filter(id => id !== scenarioId);
+      
+      // Auto-fallback: ensure at least one layer is always visible
+      if (newVisibleIds.length === 0) {
+        // If hiding the last visible layer:
+        // - If hiding 'base', fall back to 'current'
+        // - Otherwise, fall back to 'base'
+        const fallbackId = scenarioId === 'base' ? 'current' : 'base';
+        newVisibleIds = [fallbackId];
+        newColorOrderIds = [fallbackId];
+      }
     } else {
       // Show scenario
       newVisibleIds = [...currentState.visibleScenarioIds, scenarioId];

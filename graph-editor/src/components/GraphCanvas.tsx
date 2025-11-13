@@ -261,7 +261,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         currentGraph,
         edgeId,
         shouldUseWhatIf ? { whatIfDSL } : {},
-        null,
         undefined
       );
     };
@@ -1687,7 +1686,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                 graph,
                 edgeId,
                 { whatIfDSL },
-                null,
                 undefined
               );
               
@@ -3315,7 +3313,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           // UNIFIED: Use shared what-if logic for probability
           // Pass accumulated path context so conditionals know which nodes have been visited on THIS path
-          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, null, edgePathContext);
+          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, edgePathContext);
           
           // Apply renormalization if siblings were pruned
           const renormFactor = edgeRenormalizationFactors.get(edge.id);
@@ -3380,7 +3378,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           // UNIFIED: Use shared what-if logic for probability
           // Pass accumulated path context so conditionals know which nodes have been visited on THIS path
-          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, null, edgePathContext);
+          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, edgePathContext);
           
           // Apply renormalization if siblings were pruned
           const renormFactor = edgeRenormalizationFactors.get(edge.id);
@@ -3537,7 +3535,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const currentGraph2 = graphStoreHook.getState().graph;
       // Pass both nodes for graph pruning and conditional activation
       const pathContext = new Set([nodeA.id, nodeB.id]);
-      let directPathProbability = directEdge ? computeEffectiveEdgeProbability(currentGraph2, directEdge.id, { whatIfDSL }, null, pathContext) : 0;
+      let directPathProbability = directEdge ? computeEffectiveEdgeProbability(currentGraph2, directEdge.id, { whatIfDSL }, pathContext) : 0;
       const directPathCosts = {
         monetary: directEdge?.data?.cost_gbp?.mean || 0,
         time: directEdge?.data?.cost_time?.mean || 0,
@@ -3652,7 +3650,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           console.log(`  Calculating effective probs for ${key}:`);
           groupEdges.forEach(edge => {
-            const effectiveProb = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, null);
+            const effectiveProb = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL });
             console.log(`    Edge ${edge.id}: effectiveProb=${effectiveProb}, target=${edge.target}, willPrune=${unselectedSiblings.includes(edge.target)}`);
             totalEffectiveProb += effectiveProb;
             
@@ -4576,11 +4574,31 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+  
+  // Log scenario state for debugging
+  React.useEffect(() => {
+    if (scenariosContext) {
+      console.log(`[GraphCanvas] 📊 Scenario State:`, {
+        totalScenarios: scenariosContext.scenarios.length,
+        scenarios: scenariosContext.scenarios.map(s => ({ id: s.id, name: s.name })),
+        visibleScenarioIds,
+        visibleColorOrderIds
+      });
+    }
+  }, [scenariosContext?.scenarios, visibleScenarioIds, visibleColorOrderIds, scenariosContext]);
 
   // Memoize scenario overlay edges without mutating state to avoid loops
   const overlayEdges = React.useMemo(() => {
     try {
-      if (!scenariosContext || visibleScenarioIds.length === 0) return [];
+      if (!scenariosContext) return [];
+      
+      // Always render 'current' layer (even if hidden), plus all truly visible layers
+      // 'current' will be rendered at 15% opacity when not in visibleScenarioIds
+      // Note: TabContext ensures at least one layer is always visible (auto-toggles base/current)
+      const layersToRender = visibleScenarioIds.includes('current')
+        ? visibleScenarioIds  // Current is visible, render as-is
+        : [...visibleScenarioIds, 'current'];  // Current is hidden, add it for ghost rendering
+      
       const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
       const scenarios = scenariosContext.scenarios;
       const baseParams = scenariosContext.baseParams;
@@ -4656,22 +4674,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }
         return MIN_WIDTH + displayMass * (effectiveMaxWidth - MIN_WIDTH);
       };
-      // For each visible scenario, render a cloned overlay for every base edge
-      for (const scenarioId of visibleScenarioIds) {
+      // For each scenario to render (including hidden 'current'), render a cloned overlay for every base edge
+      for (const scenarioId of layersToRender) {
         const scenario = scenarios.find(s => s.id === scenarioId);
         // Scenario color from palette assignment
         const color = (colorMap.get(scenarioId) || scenario?.color || '#808080');
-        // Independent composition (Option A): Base + this scenario only
+        // Compose params based on layer type and visibility
         let composedParams = baseParams;
         if (scenarioId === 'base') {
-          // base layer uses baseParams as-is
+          // base layer uses baseParams as-is (standalone snapshot)
           composedParams = baseParams;
         } else if (scenarioId === 'current') {
-          // current layer is base + currentParams
-          composedParams = composeParams(baseParams, [scenariosContext.currentParams]);
+          // current layer reads from live graph, does NOT compose from scenarios
+          // The probResolver handles live graph + What-If DSL directly
+          composedParams = baseParams; // Not used for current, kept for consistency
         } else if (scenario) {
-          // normal scenario layer is base + that scenario's params
-          composedParams = composeParams(baseParams, [scenario.params]);
+          // Compose from base + ALL VISIBLE layers below this one in stack
+          const currentIndex = visibleScenarioIds.indexOf(scenarioId);
+          const layersBelowIds = visibleScenarioIds.slice(0, currentIndex)
+            .filter(id => id !== 'current' && id !== 'base'); // Exclude base (already included) and current (doesn't participate in composition)
+          
+          const layersBelow = layersBelowIds
+            .map(id => scenarios.find(s => s.id === id)?.params)
+            .filter((p): p is NonNullable<typeof p> => p !== undefined);
+          
+          // Compose: base + all visible layers below this one
+          composedParams = composeParams(baseParams, layersBelow.concat([scenario.params]));
         } else {
           // Unknown id - skip
           continue;
@@ -4679,16 +4707,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         // Resolver: prefer scenario p.mean, else base probability from edge data
         // Special case: "current" layer uses What-If DSL logic via computeEffectiveEdgeProbability
         const probResolver = (e: Edge) => {
-          if (scenarioId === 'current' && whatIfDSL) {
-            // Use What-If engine for "current" layer to respect DSL constraints
+          if (scenarioId === 'current') {
+            // Use What-If engine for "current" layer (live graph + What-If DSL)
             const edgeId = e.id || `${e.source}->${e.target}`;
-            return computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL }, null, undefined);
+            return computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL });
           }
+          // For 'base' and scenario layers: ONLY use params (frozen snapshots, never read live graph)
           const edgeUuid = (e.data as any)?.uuid || e.id;
           const override = edgeUuid ? composedParams.edges?.[edgeUuid]?.p?.mean : undefined;
           if (typeof override === 'number') return override;
-          const baseProb = (e.data as any)?.probability;
-          if (typeof baseProb === 'number') return baseProb;
+          // Do NOT fall back to e.data.probability (that's live graph) for snapshots
           return 0;
         };
         const helpers = buildResidualHelpers(probResolver);
@@ -4735,16 +4763,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               ...edge.data,
               scenarioOverlay: true,
               scenarioColor: color,
+              originalEdgeId: edge.id, // Store original ID for label lookups
               suppressConditionalColors: visibleScenarioIds.length > 1 ? true : undefined,
+              // Only 'current' layer shows labels (composite label with all visible layers)
+              // All other overlay layers suppress labels to avoid duplicates
+              suppressLabel: scenarioId !== 'current',
               // Provide scenario params for this edge if available (optional)
               scenarioParams: edge.data?.uuid ? composedParams.edges?.[edge.data.uuid] : undefined,
               // Use same hook as base: provide calculateWidth function
               calculateWidth: () => preScaled,
+              // Null out all interaction handlers - overlays are read-only visuals
+              onUpdate: undefined,
+              onDelete: undefined,
+              onDoubleClick: undefined,
+              onSelect: undefined,
+              onReconnect: undefined,
             },
             style: {
               ...edge.style,
               stroke: color,
-              strokeOpacity: 0.3,
+              // Hidden 'current' rendered at 3% opacity (barely visible), visible layers at 30%
+              strokeOpacity: (scenarioId === 'current' && !visibleScenarioIds.includes('current')) ? 0.03 : 0.3,
               pointerEvents: 'none',
               strokeDasharray: 'none',
             },
@@ -4801,7 +4840,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   //   plus all scenario overlay layers visually on top.
   // - If no scenarios visible: render base graph edges normally.
   const displayEdges = React.useMemo(() => {
-    const hasOverlays = visibleScenarioIds.length > 0;
+    // Show overlays if there are ANY visible scenarios OR if we're explicitly showing base when nothing else is visible
+    const hasOverlays = overlayEdges.length > 0;
     if (hasOverlays) {
       const interactiveBaseEdges = edges.map(edge => ({
         ...edge,
@@ -4810,13 +4850,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           // Hide base stroke but keep interactive selection path
           forceBaseStrokeColor: 'transparent',
           suppressConditionalColors: true,
+          suppressLabel: true, // Don't show labels on base edges when overlays are present
         },
       }));
       // Base (for interaction) first, overlays after (visuals on top)
       return [...interactiveBaseEdges, ...overlayEdges];
     }
     return edges;
-  }, [edges, overlayEdges, visibleScenarioIds]);
+  }, [edges, overlayEdges]);
 
   // Persist and restore viewport per tab
   const rf = useReactFlow();
@@ -4845,7 +4886,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onMoveEnd={(_, viewport) => {
           if (tabId) {
             try {
-              tabOps.updateTabState(tabId, { rfViewport: viewport as any });
+              tabOperations.updateTabState(tabId, { rfViewport: viewport as any });
             } catch {}
           }
         }}

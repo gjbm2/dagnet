@@ -27,7 +27,7 @@ This document describes how edge widths are computed and rendered in the graph e
 **Summary of Required Changes:**
 1. **Compositing**: Layers must compose from base + ALL VISIBLE layers below (not just base)
 2. **Remove Legacy Parameter**: Remove `null` parameter from all `computeEffectiveEdgeProbability` calls
-3. **'Current' Hidden**: Use 5% opacity instead of VIEW ONLY mode (vastly simpler)
+3. **'Current' Hidden**: Use 3% opacity instead of VIEW ONLY mode (vastly simpler)
 4. **Snapshot Semantics**: Snapshots capture composite(live graph + What-If DSL) - what user sees
 5. **Color Assignment**: Hidden 'current' should NOT get palette color (use grey, not counted in distribution)
 6. **Edge Labels**: Show composite label from all visible layers, with special formatting for hidden current
@@ -122,7 +122,7 @@ function captureParams(graph, options) {
 ### 4. 'Current' Hidden Behavior - **ADOPTED APPROACH**
 
 When 'current' is toggled "hidden" (not in `visibleScenarioIds`):
-- Render 'current' overlay at **95% transparency** (5% opacity) instead of completely hiding it
+- Render 'current' overlay at **97% transparency** (3% opacity) instead of completely hiding it
 - Keep ALL interaction fully enabled (What-If, editing, context menus, sidebar panels, etc.)
 - No special VIEW ONLY mode, no auto-unhide logic, no cursor changes, no disabled controls
 
@@ -131,7 +131,7 @@ When 'current' is toggled "hidden" (not in `visibleScenarioIds`):
 - **User mental model**: "Hide current" means "make current nearly invisible" not "lock me out of editing"
 - **Flexibility**: User can compare historical scenarios AND still edit/What-If if needed without toggling visibility first
 - **Real-time feedback**: What-If changes update the (barely visible) 'current' overlay immediately
-- **Visual impact**: At 5% opacity with `mix-blend-mode: multiply`, current has minimal effect on color perception
+- **Visual impact**: At 3% opacity with `mix-blend-mode: multiply`, current has minimal effect on color perception
 - **Alternative exists**: Users who want pure historical comparison can open a separate tab
 
 **Implementation:**
@@ -168,7 +168,7 @@ for (let i = 0; i < visibleLayers.length; i++) {
 }
 
 // Special case: 'current' hidden (always rendered, but not in visible list)
-// When rendering 'current' overlay at 5% opacity:
+// When rendering 'current' overlay at 3% opacity:
 if (!visibleScenarioIds.includes('current')) {
   // Use neutral grey, NOT a palette color
   currentOverlayColor = '#808080';  // or derive from base edge color
@@ -352,7 +352,7 @@ Multiple layers (current hidden):
 │                                                                               │
 │    Special case: 'current' hidden (not in visibleScenarioIds)               │
 │      → 'current' does NOT get a palette color                                │
-│      → Renders at 5% opacity with grey/neutral color                         │
+│      → Renders at 3% opacity with grey/neutral color                         │
 │      → Not counted in color palette distribution                             │
 │                                                                               │
 └───────────────────────────────────────────────────────────────────────────────┘
@@ -594,7 +594,7 @@ Each segment colored by its layer's palette color, showing all visible layers le
 
 **Note on 'current' visibility:**
 - If user toggles 'current' "hidden":
-  - Pink path renders at 5% opacity (barely visible) instead of 30%
+  - Pink path renders at 3% opacity (barely visible) instead of 30%
   - 'current' does NOT get a palette color (uses grey)
   - Edge label shows current in parentheses with light grey:
     ```
@@ -648,7 +648,7 @@ User toggles 'current' visibility OFF:
   
 Visual result:
   • Three colored overlays visible (base, layer1, layer2) at 30% opacity
-  • 'current' overlay still renders but at 5% opacity (95% transparent, barely visible)
+  • 'current' overlay still renders but at 3% opacity (97% transparent, barely visible)
   • Interactive edges fully functional:
     - Hover → normal tooltips
     - Click → normal selection
@@ -756,7 +756,7 @@ const stroke = visibleScenarioIds.length > 0 ? 'transparent' : normalColor;
 const interactive = true;  // Never disabled
 
 // Visual feedback via 'current' overlay opacity
-// When 'current' not in visibleScenarioIds, overlay renders at 5% opacity
+// When 'current' not in visibleScenarioIds, overlay renders at 3% opacity
 // But interactive edges remain fully functional
 ```
 
