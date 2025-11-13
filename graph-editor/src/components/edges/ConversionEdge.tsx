@@ -10,6 +10,8 @@ import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors'
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
+import { assignColors } from '../../services/ColorAssigner';
+import { composeParams } from '../../services/CompositionService';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -102,8 +104,10 @@ interface ConversionEdgeData {
   scenarioOverlay?: boolean;
   scenarioColor?: string;
   scenarioParams?: any;
+  originalEdgeId?: string; // Original edge ID for overlay edges (used for lookups)
   // Base edge rendering overrides when overlays are visible
   suppressConditionalColors?: boolean;
+  suppressLabel?: boolean; // Suppress label rendering for overlay edges
   forceBaseStrokeColor?: string;
 }
 
@@ -121,7 +125,7 @@ export default function ConversionEdge({
   target,
 }: EdgeProps<ConversionEdgeData>) {
   const scenariosContext = useScenariosContextOptional();
-  const { operations: tabOps } = useTabContext();
+  const { operations: tabOps, tabs, activeTabId } = useTabContext();
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [isDraggingSource, setIsDraggingSource] = useState(false);
   const [isDraggingTarget, setIsDraggingTarget] = useState(false);
@@ -263,21 +267,23 @@ export default function ConversionEdge({
   
   // Get the full edge object from graph (needed for tooltips and colors)
   // Find edge in graph (check both uuid and human-readable id after Phase 0.0 migration)
+  // For overlay edges, use originalEdgeId stored in data
   // Memoize to ensure it updates when graph changes
+  const lookupId = data?.originalEdgeId || id;
   const fullEdge = useMemo(() => {
     return graph?.edges.find((e: any) => 
-      e.uuid === id ||           // ReactFlow uses UUID as edge ID
-      e.id === id ||             // Human-readable ID
-      `${e.from}->${e.to}` === id  // Fallback format
+      e.uuid === lookupId ||           // ReactFlow uses UUID as edge ID
+      e.id === lookupId ||             // Human-readable ID
+      `${e.from}->${e.to}` === lookupId  // Fallback format
     );
-  }, [graph, id, graph?.edges?.map(e => `${e.uuid}-${JSON.stringify(e.conditional_p)}`).join(',')]);
+  }, [graph, lookupId, graph?.edges?.map(e => `${e.uuid}-${JSON.stringify(e.conditional_p)}`).join(',')]);
   
   // Get variant weights string for dependency tracking (for case edges)
   // This must be calculated directly from graph, not from fullEdge, to ensure it updates
   const variantWeightsKey = useMemo(() => {
     if (!graph) return '';
     const currentEdge = graph.edges.find((e: any) => 
-      e.uuid === id || e.id === id || `${e.from}->${e.to}` === id
+      e.uuid === lookupId || e.id === lookupId || `${e.from}->${e.to}` === lookupId
     );
     if (!currentEdge?.case_variant) return '';
     
@@ -305,7 +311,7 @@ export default function ConversionEdge({
     return caseNode.case.variants.map((v: any) => `${v.name}-${v.weight}`).join(',');
   }, [
     graph, 
-    id,
+    lookupId,
     // Explicitly depend on variant weights from all case nodes to catch changes
     graph?.nodes?.filter((n: any) => n.type === 'case').map((n: any) => 
       n.case?.variants?.map((v: any) => `${v.name}-${v.weight}`).join(',') || ''
@@ -315,16 +321,16 @@ export default function ConversionEdge({
   // UNIFIED: Compute effective probability using shared logic
   const effectiveProbability = useMemo(() => {
     if (!graph) return 0;
-    return computeEffectiveEdgeProbability(graph, id, { whatIfDSL }, null);
+    return computeEffectiveEdgeProbability(graph, lookupId, { whatIfDSL });
   }, [
-    id, 
+    lookupId, 
     whatIfDSL, 
     // Depend on the entire graph object so it recalculates when variant weights change
     graph,
     // Also explicitly depend on the edge's p.mean and case_id/case_variant
-    graph?.edges?.find(e => e.uuid === id || e.id === id)?.p?.mean,
-    graph?.edges?.find(e => e.uuid === id || e.id === id)?.case_id,
-    graph?.edges?.find(e => e.uuid === id || e.id === id)?.case_variant,
+    graph?.edges?.find(e => e.uuid === lookupId || e.id === lookupId)?.p?.mean,
+    graph?.edges?.find(e => e.uuid === lookupId || e.id === lookupId)?.case_id,
+    graph?.edges?.find(e => e.uuid === lookupId || e.id === lookupId)?.case_variant,
     // Depend on variant weights for the case node (if this is a case edge)
     variantWeightsKey
   ]);
@@ -354,7 +360,7 @@ export default function ConversionEdge({
           for (const incomingEdge of incomingEdges) {
             const sourceResidual = calculateResidualProbability(incomingEdge.from, edges, startNodeUuid, startNodeId);
             // Edge lookup by uuid or id (Phase 0.0 migration)
-            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.uuid || incomingEdge.id, { whatIfDSL }, null);
+            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.uuid || incomingEdge.id, { whatIfDSL });
             totalMass += sourceResidual * edgeProb;
           }
           return totalMass;
@@ -374,8 +380,115 @@ export default function ConversionEdge({
   
   // UNIFIED: Get what-if display info using shared logic
   const whatIfDisplay = useMemo(() => {
-    return getEdgeWhatIfDisplay(graph, id, { whatIfDSL }, null);
-  }, [graph, id, whatIfDSL]);
+    return getEdgeWhatIfDisplay(graph, lookupId, { whatIfDSL }, null);
+  }, [graph, lookupId, whatIfDSL]);
+  
+  // Composite Edge Label: Build label segments for all visible layers
+  const compositeLabel = useMemo(() => {
+    if (!scenariosContext || !graph || !activeTabId) {
+      // No scenarios or no tab context: show simple label
+      return null;
+    }
+    
+    const currentTab = tabs.find(t => t.id === activeTabId);
+    const scenarioState = currentTab?.editorState?.scenarioState;
+    const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
+    const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+    
+    if (visibleScenarioIds.length === 0) {
+      // No visible layers: show simple label (current layer only)
+      return null;
+    }
+    
+    const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
+    
+    interface LabelSegment {
+      layerId: string;
+      probability: number;
+      stdev?: number;
+      color: string;
+      isHidden: boolean;
+    }
+    
+    const segments: LabelSegment[] = [];
+    
+    // Add segment for each visible layer (bottom-to-top in stack order)
+    for (const layerId of visibleScenarioIds) {
+      let prob = 0;
+      let stdev: number | undefined = undefined;
+      
+      if (layerId === 'current') {
+        // Current layer: use What-If logic
+        prob = computeEffectiveEdgeProbability(graph, lookupId, { whatIfDSL });
+        stdev = fullEdge?.p?.stdev;
+      } else if (layerId === 'base') {
+        // Base layer: ONLY use baseParams (frozen snapshot, never reads live graph)
+        const edgeUuid = fullEdge?.uuid || lookupId;
+        prob = scenariosContext.baseParams.edges?.[edgeUuid]?.p?.mean ?? 0;
+        stdev = scenariosContext.baseParams.edges?.[edgeUuid]?.p?.stdev;
+      } else {
+        // Scenario layer: look up in scenario params (with compositing)
+        const scenario = scenariosContext.scenarios.find(s => s.id === layerId);
+        if (scenario) {
+          // Get all layers below this one for compositing
+          const currentIndex = visibleScenarioIds.indexOf(layerId);
+          const layersBelowIds = visibleScenarioIds.slice(0, currentIndex)
+            .filter(lid => lid !== 'current' && lid !== 'base');
+          
+          const layersBelow = layersBelowIds
+            .map(lid => scenariosContext.scenarios.find(s => s.id === lid)?.params)
+            .filter((p): p is NonNullable<typeof p> => p !== undefined);
+          
+          // Compose params
+          const composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
+          
+          // Look up edge probability by UUID
+          const edgeUuid = fullEdge?.uuid || lookupId;
+          // Scenarios are frozen snapshots - ONLY use composed params (never read live graph)
+          prob = composedParams.edges?.[edgeUuid]?.p?.mean 
+            ?? scenariosContext.baseParams.edges?.[edgeUuid]?.p?.mean 
+            ?? 0;
+          stdev = composedParams.edges?.[edgeUuid]?.p?.stdev 
+            ?? scenariosContext.baseParams.edges?.[edgeUuid]?.p?.stdev;
+        }
+      }
+      
+      segments.push({
+        layerId,
+        probability: prob,
+        stdev,
+        color: colorMap.get(layerId) || '#808080',
+        isHidden: false
+      });
+    }
+    
+    // Add hidden 'current' if not in visible list
+    if (!visibleScenarioIds.includes('current')) {
+      const prob = computeEffectiveEdgeProbability(graph, lookupId, { whatIfDSL });
+      const stdev = fullEdge?.p?.stdev;
+      segments.push({
+        layerId: 'current',
+        probability: prob,
+        stdev,
+        color: '#cccccc', // Light grey for hidden current
+        isHidden: true
+      });
+    }
+    
+    // Debug: log first edge's composite label segments
+    if (lookupId.includes('52207d6c') && segments.length > 0) {
+      console.log(`[CompositeLabel] Edge ${lookupId.substring(0, 30)}:`, segments.map(s => ({
+        layer: s.layerId,
+        prob: s.probability,
+        color: s.color
+      })));
+    }
+    
+    return {
+      segments,
+      isSingleLayer: visibleScenarioIds.length === 1
+    };
+  }, [scenariosContext, graph, lookupId, whatIfDSL, fullEdge, tabs, activeTabId]);
   
   // Calculate stroke width using useMemo to enable CSS transitions
   const strokeWidth = useMemo(() => {
@@ -1182,41 +1295,53 @@ export default function ConversionEdge({
   }, [id, deleteElements]);
 
   const handleDoubleClick = useCallback(() => {
+    // Overlay edges are read-only, ignore interactions
+    if (data?.scenarioOverlay) return;
+    
     // First select the edge to update the properties panel
     if (data?.onSelect) {
-      data.onSelect(id);
+      data.onSelect(lookupId);
     }
     
     // Then focus the probability field
     if (data?.onDoubleClick) {
-      data.onDoubleClick(id, 'probability');
+      data.onDoubleClick(lookupId, 'probability');
     }
-  }, [id, data]);
+  }, [lookupId, data]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    // Overlay edges are read-only, ignore interactions
+    if (data?.scenarioOverlay) return;
+    
     e.preventDefault();
     setShowContextMenu(true);
-  }, []);
+  }, [data]);
 
   const handleReconnectSource = useCallback(() => {
+    // Overlay edges are read-only, ignore interactions
+    if (data?.scenarioOverlay) return;
+    
     if (data?.onReconnect) {
       const newSource = prompt('Enter new source node ID:', source);
       if (newSource && newSource !== source) {
-        data.onReconnect(id, newSource, undefined);
+        data.onReconnect(lookupId, newSource, undefined);
       }
     }
     setShowContextMenu(false);
-  }, [data, id, source]);
+  }, [data, lookupId, source]);
 
   const handleReconnectTarget = useCallback(() => {
+    // Overlay edges are read-only, ignore interactions
+    if (data?.scenarioOverlay) return;
+    
     if (data?.onReconnect) {
       const newTarget = prompt('Enter new target node ID:', target);
       if (newTarget && newTarget !== target) {
-        data.onReconnect(id, undefined, newTarget);
+        data.onReconnect(lookupId, undefined, newTarget);
       }
     }
     setShowContextMenu(false);
-  }, [data, id, target]);
+  }, [data, lookupId, target]);
 
   // Handle source handle drag
   const handleSourceMouseDown = useCallback((e: React.MouseEvent) => {
@@ -1511,8 +1636,8 @@ export default function ConversionEdge({
               }}
               className="react-flow__edge-path"
               d={ribbonPath}
-              onContextMenu={handleContextMenu}
-              onDoubleClick={handleDoubleClick}
+              onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+              onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
             />
           ) : shouldShowConfidenceIntervals && confidenceData ? (
             // Confidence interval mode: render three overlapping paths
@@ -1535,8 +1660,8 @@ export default function ConversionEdge({
                 }}
                 className="react-flow__edge-path"
                 d={edgePath}
-                onContextMenu={handleContextMenu}
-                onDoubleClick={handleDoubleClick}
+                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
               />
               {/* Middle band (mean) - normal width, base color */}
               <path
@@ -1556,8 +1681,8 @@ export default function ConversionEdge({
                 }}
                 className="react-flow__edge-path"
                 d={edgePath}
-                onContextMenu={handleContextMenu}
-                onDoubleClick={handleDoubleClick}
+                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
               />
               {/* Inner band (lower bound) - narrowest, darkest color */}
               <path
@@ -1579,8 +1704,8 @@ export default function ConversionEdge({
                 }}
                 className="react-flow__edge-path"
                 d={edgePath}
-                onContextMenu={handleContextMenu}
-                onDoubleClick={handleDoubleClick}
+                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
               />
             </>
           ) : (
@@ -1628,34 +1753,58 @@ export default function ConversionEdge({
       </g>
       
       <EdgeLabelRenderer>
-        <div
-          style={{
-            position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY}px)`,
-            background: selected ? '#000' : 'rgba(255, 255, 255, 0.85)',
-            color: selected ? '#fff' : '#333',
-            padding: '4px 8px',
-            borderRadius: '4px',
-            fontSize: '12px',
-            fontWeight: 'bold',
-            border: selected ? 'none' : '1px solid #ddd',
-          minWidth: '40px',
-          textAlign: 'center',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-          pointerEvents: 'auto',
-        }}
-          onDoubleClick={handleDoubleClick}
-          onMouseEnter={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
-            setShowTooltip(true);
+        {!data?.suppressLabel && (
+          <div
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY}px)`,
+              background: selected ? '#000' : 'rgba(255, 255, 255, 0.85)',
+              color: selected ? '#fff' : '#333',
+              padding: '4px 8px',
+              borderRadius: '4px',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              border: selected ? 'none' : '1px solid #ddd',
+            minWidth: '40px',
+            textAlign: 'center',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            pointerEvents: 'auto',
           }}
-          onMouseLeave={() => {
-            setShowTooltip(false);
-          }}
-        >
-          <div style={{ textAlign: 'center' }}>
-            {(data?.probability === undefined || data?.probability === null) ? (
+            onDoubleClick={handleDoubleClick}
+            onMouseEnter={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
+              setShowTooltip(true);
+            }}
+            onMouseLeave={() => {
+              setShowTooltip(false);
+            }}
+          >
+            <div style={{ textAlign: 'center' }}>
+            {compositeLabel && compositeLabel.segments.length > 1 ? (
+              // Composite label: Multiple layers visible
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                {compositeLabel.segments.map((segment, idx) => {
+                  const probText = segment.stdev 
+                    ? `${Math.round(segment.probability * 100)}% ± ${Math.round(segment.stdev * 100)}%`
+                    : `${Math.round(segment.probability * 100)}%`;
+                  
+                  return (
+                    <span 
+                      key={segment.layerId}
+                      style={{
+                        color: compositeLabel.isSingleLayer ? '#000' : segment.color,
+                        fontWeight: 'bold',
+                        fontSize: '11px'
+                      }}
+                    >
+                      {segment.isHidden ? `(${probText})` : probText}
+                      {idx < compositeLabel.segments.length - 1 && ' '}
+                    </span>
+                  );
+                })}
+              </div>
+            ) : (data?.probability === undefined || data?.probability === null) ? (
               <div style={{ 
                 fontWeight: 'bold', 
                 color: '#ff6b6b',
@@ -1766,7 +1915,7 @@ export default function ConversionEdge({
             )}
           </div>
         </div>
-        
+        )}
         
         {selected && (
           <>
