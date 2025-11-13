@@ -11,7 +11,7 @@
  * - Flatten operation (merge all overlays into Base)
  */
 
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { 
   Scenario, 
   ScenarioParams, 
@@ -26,6 +26,9 @@ import { getDefaultScenarioColor } from '../services/ColorAssigner';
 import { computeDiff } from '../services/DiffService';
 import { fromYAML, fromJSON } from '../services/ScenarioFormatConverter';
 import { validateScenarioParams } from '../services/ScenarioValidator';
+import { extractParamsFromGraph } from '../services/GraphParamExtractor';
+import { useGraphStore } from './GraphStoreContext';
+import { db } from '../db/appDatabase';
 
 interface ScenariosContextValue {
   // State
@@ -41,7 +44,8 @@ interface ScenariosContextValue {
     whatIfDSL?: string | null,
     whatIfSummary?: string,
     window?: { start: string; end: string } | null,
-    context?: Record<string, string>
+    context?: Record<string, string>,
+    visibleScenarioIds?: string[]
   ) => Promise<Scenario>;
   createBlank: (name: string, tabId: string) => Promise<Scenario>;
   getScenario: (id: string) => Scenario | undefined;
@@ -72,17 +76,70 @@ const ScenariosContext = createContext<ScenariosContextValue | null>(null);
 
 interface ScenariosProviderProps {
   children: React.ReactNode;
-  graph?: Graph;
+  fileId?: string;
+  tabId?: string;
 }
 
 /**
  * Scenarios Provider
+ * 
+ * Must be used within a GraphStoreProvider (inside GraphEditor)
  */
-export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
+export function ScenariosProvider({ children, fileId, tabId }: ScenariosProviderProps) {
+  // Get graph from GraphStore (available inside GraphEditor)
+  const graphStore = useGraphStore();
+  const graph = graphStore?.getState().graph || null;
+  
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [baseParams, setBaseParams] = useState<ScenarioParams>({ edges: {}, nodes: {} });
   const [currentParams, setCurrentParams] = useState<ScenarioParams>({ edges: {}, nodes: {} });
   const [editorOpenScenarioId, setEditorOpenScenarioId] = useState<string | null>(null);
+  const persistTimerRef = useRef<number | null>(null);
+
+  // Extract parameters from graph on mount and when graph changes
+  useEffect(() => {
+    if (graph) {
+      const params = extractParamsFromGraph(graph);
+      setBaseParams(params);
+      setCurrentParams(params);
+    }
+  }, [graph]);
+
+  // Load scenarios from IndexedDB (per file) on mount
+  useEffect(() => {
+    const load = async () => {
+      if (!fileId) return;
+      const file = await db.files.get(fileId);
+      if (file?.scenarios && Array.isArray(file.scenarios)) {
+        setScenarios(file.scenarios as Scenario[]);
+      }
+    };
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId]);
+
+  // Persist scenarios to IndexedDB (debounced)
+  useEffect(() => {
+    if (!fileId) return;
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(async () => {
+      try {
+        await db.files.update(fileId, { scenarios });
+      } catch (e) {
+        console.warn('Failed to persist scenarios:', e);
+      } finally {
+        persistTimerRef.current = null;
+      }
+    }, 300);
+    return () => {
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+    };
+  }, [fileId, scenarios]);
 
   /**
    * Generate a unique ID for a new scenario
@@ -106,7 +163,8 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
     whatIfDSL?: string | null,
     whatIfSummary?: string,
     window?: { start: string; end: string } | null,
-    context?: Record<string, string>
+    context?: Record<string, string>,
+    visibleScenarioIds?: string[]
   ): Promise<Scenario> => {
     const { name, type, source = 'visible', diffThreshold = 1e-6, note } = options;
     
@@ -117,9 +175,11 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
       baseForDiff = baseParams;
     } else {
       // Diff against composed visible layers (excluding Current)
-      // For now, compose all scenarios
-      // TODO: In future, filter to only visible scenarios for this tab
-      const overlays = scenarios.map(s => s.params);
+      // Filter to only visible scenarios for this tab
+      const visibleScenarios = visibleScenarioIds
+        ? scenarios.filter(s => visibleScenarioIds.includes(s.id))
+        : scenarios;
+      const overlays = visibleScenarios.map(s => s.params);
       baseForDiff = composeParams(baseParams, overlays);
     }
     
@@ -270,11 +330,13 @@ export function ScenariosProvider({ children, graph }: ScenariosProviderProps) {
       throw new Error(`Failed to parse ${format.toUpperCase()}: ${error.message}`);
     }
     
-    // Validate if requested
+    // Validate if requested (but don't block Apply)
+    // Validation warnings are shown in the modal UI, but we persist anyway
     if (validate && graph) {
       const validation = await validateContent(content, options, graph);
-      if (!validation.valid) {
-        throw new Error(`Validation failed: ${validation.errors.map(e => e.message).join(', ')}`);
+      // Log validation results but don't throw - allow saving partial/invalid data
+      if (!validation.valid || validation.warnings.length > 0) {
+        console.warn('Scenario validation issues:', validation);
       }
     }
     

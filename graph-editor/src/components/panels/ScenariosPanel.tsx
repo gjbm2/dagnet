@@ -16,6 +16,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { useScenariosContext } from '../../contexts/ScenariosContext';
 import { useTabContext } from '../../contexts/TabContext';
+import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { Scenario } from '../../types/scenarios';
 import { assignColors } from '../../services/ColorAssigner';
 import { ScenarioEditorModal } from '../modals/ScenarioEditorModal';
@@ -39,9 +40,47 @@ interface ScenariosPanelProps {
   tabId?: string;
 }
 
+/**
+ * Generate tooltip text for a scenario showing all metadata
+ */
+function getScenarioTooltip(scenario: Scenario): string {
+  const parts: string[] = [];
+  
+  if (scenario.meta?.window) {
+    const start = new Date(scenario.meta.window.start).toLocaleDateString();
+    const end = new Date(scenario.meta.window.end).toLocaleDateString();
+    parts.push(`Window: ${start} → ${end}`);
+  }
+  
+  if (scenario.meta?.whatIfSummary || scenario.meta?.whatIfDSL) {
+    parts.push(`What-If: ${scenario.meta.whatIfSummary || scenario.meta.whatIfDSL}`);
+  }
+  
+  if (scenario.meta?.context && Object.keys(scenario.meta.context).length > 0) {
+    const contextStr = Object.entries(scenario.meta.context)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(', ');
+    parts.push(`Context: ${contextStr}`);
+  }
+  
+  if (scenario.meta?.source) {
+    parts.push(`Source: ${scenario.meta.source} (${scenario.meta.sourceDetail || 'unknown'})`);
+  }
+  
+  parts.push(`Created: ${new Date(scenario.createdAt).toLocaleString()}`);
+  
+  if (scenario.meta?.note) {
+    parts.push(`Note: ${scenario.meta.note}`);
+  }
+  
+  return parts.join('\n');
+}
+
 export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   const { scenarios, listScenarios, renameScenario, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten } = useScenariosContext();
-  const { operations } = useTabContext();
+  const { operations, tabs } = useTabContext();
+  const graphStore = useGraphStore();
+  const graph = graphStore?.getState().graph || null;
   
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
@@ -155,12 +194,24 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     }).replace(',', '');
     
     try {
+      // Get window from tab state
+      const tab = tabs.find(t => t.id === tabId);
+      const window = tab?.editorState?.window || null;
+      
+      // Get What-If state from tab
+      const whatIfDSL = tab?.editorState?.whatIfDSL || null;
+      // TODO: Generate whatIfSummary from DSL
+      const whatIfSummary = whatIfDSL || undefined;
+      
+      // TODO: Get context values (not implemented yet)
+      const context = undefined;
+      
       await createSnapshot({
         name: timestamp,
         type,
         source,
         diffThreshold: 1e-6
-      }, tabId);
+      }, tabId, whatIfDSL, whatIfSummary, window, context, visibleScenarioIds);
       
       toast.success('Snapshot created');
       setShowCreateMenu(false);
@@ -168,7 +219,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       console.error('Failed to create snapshot:', error);
       toast.error('Failed to create snapshot');
     }
-  }, [tabId, createSnapshot]);
+  }, [tabId, createSnapshot, tabs]);
   
   /**
    * Create blank scenario with timestamp as default name
@@ -280,15 +331,15 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           <div className="scenario-drag-handle disabled">
             <GripVertical size={14} />
           </div>
-          <div
-            className="scenario-color-swatch"
-            style={{ 
-              backgroundColor: currentVisible 
-                ? (colorMap.get('current') || '#808080')  // Use assigned color or grey
-                : '#cccccc'  // Grey when hidden
-            }}
-            title={currentVisible ? 'Current (visible)' : 'Current (hidden)'}
-          />
+              {currentVisible && (
+                <div
+                  className="scenario-color-swatch"
+                  style={{ 
+                    backgroundColor: colorMap.get('current') || '#808080'
+                  }}
+                  title="Current (visible)"
+                />
+              )}
           <div className="scenario-name">Current</div>
           <button
             className="scenario-action-btn"
@@ -327,11 +378,13 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               <div className="scenario-drag-handle">
                 <GripVertical size={14} />
               </div>
-              <div
-                className="scenario-color-swatch"
-                style={{ backgroundColor: displayColor }}
-                title={`${isVisible ? `Color: ${assignedColor}` : 'Hidden'}`}
-              />
+              {isVisible && (
+                <div
+                  className="scenario-color-swatch"
+                  style={{ backgroundColor: assignedColor }}
+                  title={`Color: ${assignedColor}`}
+                />
+              )}
               {isEditing ? (
                 <input
                   type="text"
@@ -348,7 +401,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               ) : (
                 <div
                   className="scenario-name"
-                  title={scenario.meta?.note || 'Click pencil to rename'}
+                  title={getScenarioTooltip(scenario)}
                 >
                   {scenario.name}
                 </div>
@@ -400,15 +453,15 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           <div className="scenario-drag-handle disabled">
             <GripVertical size={14} />
           </div>
-          <div
-            className="scenario-color-swatch"
-            style={{ 
-              backgroundColor: baseVisible 
-                ? (colorMap.get('base') || '#808080')  // Use assigned color or grey
-                : '#cccccc'  // Grey when hidden
-            }}
-            title={baseVisible ? 'Base (visible)' : 'Base (hidden)'}
-          />
+          {baseVisible && (
+            <div
+              className="scenario-color-swatch"
+              style={{ 
+                backgroundColor: colorMap.get('base') || '#808080'
+              }}
+              title="Base (visible)"
+            />
+          )}
           <div className="scenario-name">Base</div>
           <button
             className="scenario-action-btn"

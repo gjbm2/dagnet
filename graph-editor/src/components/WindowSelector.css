@@ -189,8 +189,7 @@
   display: flex;
   gap: 4px;
   margin-right: 4px;
-  padding-right: 8px;
-  border-right: 1px solid #e0e0e0;
+  /* No separator between presets and date picker */
 }
 
 .window-selector-preset {
@@ -227,5 +226,73 @@
 .window-selector-preset.active:hover {
   background: #1565c0;
   border-color: #1565c0;
+}
+
+/* Visual separator line */
+.window-selector-separator-line {
+  width: 1px;
+  height: 24px;
+  background: #e0e0e0;
+  margin: 0 8px;
+  flex-shrink: 0;
+}
+
+/* Toolbar buttons (What-If, Context) */
+.window-selector-toolbar-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.window-selector-toolbar-button .window-selector-preset {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.window-selector-toolbar-button .window-selector-preset svg {
+  flex-shrink: 0;
+}
+
+/* Dropdown styling */
+.window-selector-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 320px;
+  max-width: 400px;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.window-selector-dropdown.whatif-dropdown {
+  min-width: 400px;
+}
+
+.window-selector-dropdown.context-dropdown {
+  min-width: 200px;
+}
+
+.window-selector-dropdown .dropdown-header {
+  padding: 12px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f8f8f8;
+}
+
+.window-selector-dropdown .dropdown-body {
+  padding: 12px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.window-selector-dropdown .dropdown-message {
+  padding: 20px;
+  text-align: center;
+  color: #666;
+  font-size: 14px;
 }
 

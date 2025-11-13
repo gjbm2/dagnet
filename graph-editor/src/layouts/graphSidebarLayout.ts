@@ -1,13 +1,13 @@
 import { LayoutData } from 'rc-dock';
 import React from 'react';
-import { Sparkles, FileText, Wrench } from 'lucide-react';
+import { Layers, FileText, Wrench } from 'lucide-react';
 
 /**
  * Full layout for graph editor including canvas and sidebar panels
  * 
  * Structure: 
  * - Main area (left, flex): Canvas panel
- * - Sidebar (right, 300px): What-If/Properties/Tools tabs
+ * - Sidebar (right, 300px): Scenarios/Properties/Tools tabs
  * 
  * This layout spans the entire graph editor, allowing floatbox to move freely
  */
@@ -42,7 +42,7 @@ export function getGraphEditorLayout(): LayoutData {
                 className: 'dock-tab-title',
                 style: { display: 'flex', alignItems: 'center', gap: '6px' }
               },
-                React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Layers, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -51,7 +51,7 @@ export function getGraphEditorLayout(): LayoutData {
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'
                   } 
-                }, 'What-If')
+                }, 'Scenarios')
               ),
               content: null as any, // Will be replaced with WhatIfPanel
               cached: true,
@@ -146,7 +146,7 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
                 className: 'dock-tab-title',
                 style: { display: 'flex', alignItems: 'center', gap: '6px' }
               },
-                React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Layers, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -155,7 +155,7 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'
                   } 
-                }, 'What-If')
+                }, 'Scenarios')
               ),
               content: null as any,
               cached: true,
