@@ -13,6 +13,9 @@ import { dataOperationsService } from '../services/dataOperationsService';
 import { calculateIncrementalFetch } from '../services/windowAggregationService';
 import { fileRegistry } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
+import { Sparkles, Database, Layers } from 'lucide-react';
+import WhatIfAnalysisControl from './WhatIfAnalysisControl';
+import WhatIfAnalysisHeader from './WhatIfAnalysisHeader';
 import toast from 'react-hot-toast';
 import './WindowSelector.css';
 
@@ -50,7 +53,11 @@ function getGraphHash(graph: any): string {
   return `${edgeIds}|${nodeIds}`;
 }
 
-export function WindowSelector() {
+interface WindowSelectorProps {
+  tabId?: string;
+}
+
+export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow } = useGraphStore();
   const [needsFetch, setNeedsFetch] = useState(false);
   const [isCheckingCoverage, setIsCheckingCoverage] = useState(false);
@@ -58,11 +65,47 @@ export function WindowSelector() {
   const [showButton, setShowButton] = useState(false); // Track button visibility for animations
   const [showShimmer, setShowShimmer] = useState(false); // Track shimmer animation
   
-  const isInitialMountRef = React.useRef(true);
-  const isAggregatingRef = React.useRef(false); // Track if we're currently aggregating to prevent loops
-  const lastAggregatedWindowRef = React.useRef<DateRange | null>(null); // Track lastAggregatedWindow to avoid dependency loop
-  const graphRef = React.useRef<typeof graph>(graph); // Track graph to avoid dependency loop
-  const prevWindowRef = React.useRef<string | null>(null); // Track previous window for shimmer trigger
+  // What-If and Context dropdown states
+  const [showWhatIfDropdown, setShowWhatIfDropdown] = useState(false);
+  const [showContextDropdown, setShowContextDropdown] = useState(false);
+  const whatIfButtonRef = useRef<HTMLButtonElement>(null);
+  const whatIfDropdownRef = useRef<HTMLDivElement>(null);
+  const contextButtonRef = useRef<HTMLButtonElement>(null);
+  const contextDropdownRef = useRef<HTMLDivElement>(null);
+  
+  const isInitialMountRef = useRef(true);
+  const isAggregatingRef = useRef(false); // Track if we're currently aggregating to prevent loops
+  const lastAggregatedWindowRef = useRef<DateRange | null>(null); // Track lastAggregatedWindow to avoid dependency loop
+  const graphRef = useRef<typeof graph>(graph); // Track graph to avoid dependency loop
+  const prevWindowRef = useRef<string | null>(null); // Track previous window for shimmer trigger
+  
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        showWhatIfDropdown &&
+        whatIfButtonRef.current &&
+        whatIfDropdownRef.current &&
+        !whatIfButtonRef.current.contains(event.target as Node) &&
+        !whatIfDropdownRef.current.contains(event.target as Node)
+      ) {
+        setShowWhatIfDropdown(false);
+      }
+      
+      if (
+        showContextDropdown &&
+        contextButtonRef.current &&
+        contextDropdownRef.current &&
+        !contextButtonRef.current.contains(event.target as Node) &&
+        !contextDropdownRef.current.contains(event.target as Node)
+      ) {
+        setShowContextDropdown(false);
+      }
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showWhatIfDropdown, showContextDropdown]);
   
   // Sync refs with state (separate effects to avoid triggering aggregation)
   useEffect(() => {
@@ -717,6 +760,33 @@ export function WindowSelector() {
   return (
     <div className={`window-selector ${!needsFetch ? 'window-selector-compact' : ''}`}>
       <div className="window-selector-content">
+        {/* Context Button - Far Left */}
+        <div className="window-selector-toolbar-button">
+          <button
+            ref={contextButtonRef}
+            className={`window-selector-preset ${showContextDropdown ? 'active' : ''}`}
+            onClick={() => {
+              setShowContextDropdown(!showContextDropdown);
+              setShowWhatIfDropdown(false);
+            }}
+            title="Context Selection"
+          >
+            <Database size={14} />
+            <span>Context</span>
+          </button>
+          
+          {showContextDropdown && (
+            <div ref={contextDropdownRef} className="window-selector-dropdown context-dropdown">
+              <div className="dropdown-message">
+                Coming soon
+              </div>
+            </div>
+          )}
+        </div>
+        
+        {/* Separator after Context */}
+        <div className="window-selector-separator-line"></div>
+        
         <div className="window-selector-presets">
           <button
             type="button"
@@ -773,6 +843,36 @@ export function WindowSelector() {
             {isCheckingCoverage ? 'Checking...' : isFetching ? 'Fetching...' : 'Fetch data'}
           </button>
         )}
+        
+        {/* Visual separator */}
+        <div className="window-selector-separator-line"></div>
+        
+        {/* What-If Button */}
+        <div className="window-selector-toolbar-button">
+          <button
+            ref={whatIfButtonRef}
+            className={`window-selector-preset ${showWhatIfDropdown ? 'active' : ''}`}
+            onClick={() => {
+              setShowWhatIfDropdown(!showWhatIfDropdown);
+              setShowContextDropdown(false);
+            }}
+            title="What-If Analysis"
+          >
+            <Sparkles size={14} />
+            <span>What-If</span>
+          </button>
+          
+          {showWhatIfDropdown && (
+            <div ref={whatIfDropdownRef} className="window-selector-dropdown whatif-dropdown">
+              <div className="dropdown-header">
+                <WhatIfAnalysisHeader tabId={tabId} />
+              </div>
+              <div className="dropdown-body">
+                <WhatIfAnalysisControl tabId={tabId} />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

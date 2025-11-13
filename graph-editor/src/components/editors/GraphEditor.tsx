@@ -20,6 +20,7 @@ import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } 
 import { dockGroups } from '../../layouts/defaultLayout';
 import { WhatIfProvider, useWhatIfContext } from '../../contexts/WhatIfContext';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
+import { ScenariosProvider } from '../../contexts/ScenariosContext';
 import { Sparkles, FileText, Wrench } from 'lucide-react';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
@@ -1455,6 +1456,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   const SUPPRESS_LAYOUT_HANDLERS = false; // Re-enabled: needed for restore-closed-tabs logic
   return (
     <SelectionContext.Provider value={selectionContextValue}>
+      <ScenariosProvider fileId={fileId} tabId={tabId}>
       <ViewPreferencesProvider tabId={tabId}>
       <WhatIfProvider value={{
         whatIfAnalysis: whatIfLocal.whatIfAnalysis,
@@ -1494,8 +1496,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           width: '100%',
           overflow: 'hidden'
         }}>
-        {/* Window Selector - floating at top center */}
-        <WindowSelector />
+        {/* Window Selector with integrated What-If & Context buttons */}
+        <WindowSelector tabId={tabId} />
         
         {/* Main DockLayout - spans entire graph editor */}
         {dockLayout && (
@@ -1894,6 +1896,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     </div>
       </WhatIfProvider>
       </ViewPreferencesProvider>
+      </ScenariosProvider>
     </SelectionContext.Provider>
   );
 }, (prevProps, nextProps) => {

@@ -34,6 +34,9 @@ import { EdgeContextMenu } from './EdgeContextMenu';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
+import { useScenariosContextOptional } from '../contexts/ScenariosContext';
+import { assignColors } from '../services/ColorAssigner';
+import { composeParams } from '../services/CompositionService';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
@@ -100,6 +103,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const { graph, setGraph: setGraphDirect, setAutoUpdating } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
   const viewPrefs = useViewPreferencesContext();
+  const scenariosContext = useScenariosContextOptional();
   
   // Wrapped setGraph that automatically triggers query regeneration on topology changes
   const setGraph = useCallback(async (newGraph: any, oldGraph?: any) => {
@@ -1848,7 +1852,75 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (!a.selected && b.selected) return -1; // unselected edge goes before selected
       return 0; // preserve order otherwise
     });
-    setEdges(sortedEdges);
+    
+    // Add scenario overlay edges (only if scenarios visible)
+    // Filter out any existing overlay edges first to avoid duplicates
+    const baseEdges = sortedEdges.filter(e => !e.id.startsWith('scenario-overlay-'));
+    
+    const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
+    const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
+    const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+    
+    let edgesWithScenarios = baseEdges;
+    
+    // TODO: Scenario rendering disabled for now - causes infinite loop
+    // Need to refactor to not trigger re-render on every frame
+    /*
+    if (scenariosContext && visibleScenarioIds.length > 0 && graph) {
+      const scenarios = scenariosContext.scenarios;
+      const baseParams = scenariosContext.baseParams;
+      const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
+      
+      const overlayEdges: any[] = [];
+      
+      // For each visible scenario, create overlay edges
+      for (const scenarioId of visibleScenarioIds) {
+        const scenario = scenarios.find(s => s.id === scenarioId);
+        if (!scenario) continue;
+        
+        const color = colorMap.get(scenarioId) || scenario.color;
+        
+        // Compose params up to this scenario
+        const layersUpToThis = visibleScenarioIds
+          .slice(0, visibleScenarioIds.indexOf(scenarioId) + 1)
+          .map(id => scenarios.find(s => s.id === id))
+          .filter((s): s is any => s !== undefined);
+        const overlays = layersUpToThis.map(s => s.params);
+        const composedParams = composeParams(baseParams, overlays);
+        
+        // Create overlay edge for each base edge (not graph edge)
+        baseEdges.forEach(edge => {
+          const graphEdge = graph.edges.find(ge => ge.id === edge.id || ge.uuid === edge.data?.uuid);
+          if (!graphEdge) return;
+          
+          const edgeParams = composedParams.edges?.[graphEdge.uuid];
+          if (!edgeParams) return;
+          
+          overlayEdges.push({
+            ...edge,
+            id: `scenario-overlay-${scenarioId}-${edge.id}`,
+            selectable: false,
+            data: {
+              ...edge.data,
+              scenarioOverlay: true,
+              scenarioColor: color,
+              scenarioParams: edgeParams,
+            },
+            style: {
+              stroke: color,
+              strokeOpacity: 0.3,
+              pointerEvents: 'none',
+            },
+            zIndex: -1,
+          });
+        });
+      }
+      
+      edgesWithScenarios = [...baseEdges, ...overlayEdges];
+    }
+    */
+    
+    setEdges(edgesWithScenarios);
     setEdgeBundles(bundles);
     
     // Reset syncing flag after graph->ReactFlow sync is complete
@@ -4511,16 +4583,277 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     </div>;
   }
 
+  // Scenario visibility state (for coloring/suppression decisions)
+  const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
+  const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
+  const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+
+  // Memoize scenario overlay edges without mutating state to avoid loops
+  const overlayEdges = React.useMemo(() => {
+    try {
+      if (!scenariosContext || visibleScenarioIds.length === 0) return [];
+      const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
+      const scenarios = scenariosContext.scenarios;
+      const baseParams = scenariosContext.baseParams;
+      const overlays: Edge[] = [];
+      // Setup overlay width computation using same pipeline as base, but with scenario probabilities
+      const MAX_WIDTH = 104;
+      const MIN_WIDTH = 2;
+      const effectiveMaxWidth = useSankeyView ? 384 : MAX_WIDTH;
+      const effectiveMassGenerosity = useSankeyView ? 0 : massGenerosity;
+      const rfNodes = nodes;
+      const rfEdges = edges;
+      const startNode = rfNodes.find(n => n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0);
+      const startNodeId = startNode?.id || null;
+      const buildResidualHelpers = (probResolver: (e: Edge) => number) => {
+        const outgoing: Record<string, Edge[]> = {};
+        const incoming: Record<string, Edge[]> = {};
+        rfEdges.forEach(e => {
+          (outgoing[e.source] ||= []).push(e);
+          (incoming[e.target] ||= []).push(e);
+        });
+        const residualAtNode: Record<string, number> = {};
+        const visiting = new Set<string>();
+        const dfs = (nodeId: string): number => {
+          if (residualAtNode[nodeId] !== undefined) return residualAtNode[nodeId];
+          if (visiting.has(nodeId)) return 0;
+          visiting.add(nodeId);
+          if (startNodeId && nodeId === startNodeId) {
+            residualAtNode[nodeId] = 1.0;
+            visiting.delete(nodeId);
+            return 1.0;
+          }
+          let sumIncoming = 0;
+          const inEdges = incoming[nodeId] || [];
+          for (const inE of inEdges) {
+            const pred = inE.source;
+            const massAtPred = dfs(pred);
+            if (massAtPred <= 0) continue;
+            const out = outgoing[pred] || [];
+            const denom = out.reduce((acc, oe) => acc + (probResolver(oe) || 0), 0);
+            const p = probResolver(inE) || 0;
+            if (denom > 0 && p > 0) sumIncoming += massAtPred * (p / denom);
+          }
+          residualAtNode[nodeId] = sumIncoming;
+          visiting.delete(nodeId);
+          return sumIncoming;
+        };
+        return { dfs };
+      };
+      const computeOverlayWidthRaw = (e: Edge, probResolver: (e: Edge) => number, helpers: { dfs: (nodeId: string) => number }): number => {
+        if (useUniformScaling) return 10;
+        const edgeProb = probResolver(e);
+        if (!startNodeId) {
+          const siblings = rfEdges.filter(se => se.source === e.source);
+          const denom = siblings.reduce((sum, se) => sum + (probResolver(se) || 0), 0);
+          if (denom === 0) return MIN_WIDTH;
+          const proportion = edgeProb / denom;
+          return MIN_WIDTH + proportion * (effectiveMaxWidth - MIN_WIDTH);
+        }
+        const residualAtSource = helpers.dfs(e.source);
+        if (residualAtSource === 0) return MIN_WIDTH;
+        const actualMass = residualAtSource * edgeProb;
+        let displayMass: number;
+        if (effectiveMassGenerosity === 0) {
+          displayMass = actualMass;
+        } else if (effectiveMassGenerosity === 1) {
+          const siblings = rfEdges.filter(se => se.source === e.source);
+          const denom = siblings.reduce((sum, se) => sum + (probResolver(se) || 0), 0);
+          if (denom === 0) return MIN_WIDTH;
+          displayMass = edgeProb / denom;
+        } else {
+          const power = 1 - effectiveMassGenerosity;
+          displayMass = Math.pow(actualMass, power);
+        }
+        return MIN_WIDTH + displayMass * (effectiveMaxWidth - MIN_WIDTH);
+      };
+      // For each visible scenario, render a cloned overlay for every base edge
+      for (const scenarioId of visibleScenarioIds) {
+        const scenario = scenarios.find(s => s.id === scenarioId);
+        // Scenario color from palette assignment
+        const color = (colorMap.get(scenarioId) || scenario.color);
+        // Independent composition (Option A): Base + this scenario only
+        let composedParams = baseParams;
+        if (scenarioId === 'base') {
+          // base layer uses baseParams as-is
+          composedParams = baseParams;
+        } else if (scenarioId === 'current') {
+          // current layer is base + currentParams
+          composedParams = composeParams(baseParams, [scenariosContext.currentParams]);
+        } else if (scenario) {
+          // normal scenario layer is base + that scenario's params
+          composedParams = composeParams(baseParams, [scenario.params]);
+        } else {
+          // Unknown id - skip
+          continue;
+        }
+        // Resolver: prefer scenario p.mean, else base probability from edge data
+        const probResolver = (e: Edge) => {
+          const edgeUuid = (e.data as any)?.uuid || e.id;
+          const override = edgeUuid ? composedParams.edges?.[edgeUuid]?.p?.mean : undefined;
+          if (typeof override === 'number') return override;
+          const baseProb = (e.data as any)?.probability;
+          if (typeof baseProb === 'number') return baseProb;
+          return 0;
+        };
+        const helpers = buildResidualHelpers(probResolver);
+        // Precompute raw widths for all edges for this scenario
+        const rawWidths = new Map<string, number>();
+        const sourceFaceBuckets: Record<string, Edge[]> = {};
+        const targetFaceBuckets: Record<string, Edge[]> = {};
+        edges.forEach(edge => {
+          const raw = computeOverlayWidthRaw(edge, probResolver, helpers);
+          rawWidths.set(edge.id, raw);
+          const sFace = (edge.sourceHandle || 'right-out').split('-')[0];
+          const tFace = (edge.targetHandle || 'left').split('-')[0];
+          const sKey = `source-${edge.source}-${sFace}`;
+          const tKey = `target-${edge.target}-${tFace}`;
+          (sourceFaceBuckets[sKey] ||= []).push(edge);
+          (targetFaceBuckets[tKey] ||= []).push(edge);
+        });
+        // Calculate face scale factors to not exceed effectiveMaxWidth (same as base)
+        const sourceScale: Record<string, number> = {};
+        Object.keys(sourceFaceBuckets).forEach(key => {
+          const total = sourceFaceBuckets[key].reduce((sum, e) => sum + (rawWidths.get(e.id) || MIN_WIDTH), 0);
+          sourceScale[key] = total > effectiveMaxWidth ? (effectiveMaxWidth / total) : 1.0;
+        });
+        const targetScale: Record<string, number> = {};
+        Object.keys(targetFaceBuckets).forEach(key => {
+          const total = targetFaceBuckets[key].reduce((sum, e) => sum + (rawWidths.get(e.id) || MIN_WIDTH), 0);
+          targetScale[key] = total > effectiveMaxWidth ? (effectiveMaxWidth / total) : 1.0;
+        });
+        // Build draft overlay edges with per-edge calculateWidth for offset computation
+        const draftOverlayEdges: any[] = edges.map(edge => {
+          // Compute overlay raw width scaled per face bucket (pre-scaling)
+          const sFace = (edge.sourceHandle || 'right-out').split('-')[0];
+          const tFace = (edge.targetHandle || 'left').split('-')[0];
+          const sKey = `source-${edge.source}-${sFace}`;
+          const tKey = `target-${edge.target}-${tFace}`;
+          const scale = Math.min(sourceScale[sKey] || 1.0, targetScale[tKey] || 1.0);
+          const preScaled = Math.max(MIN_WIDTH, Math.min(effectiveMaxWidth, (rawWidths.get(edge.id) || MIN_WIDTH) * scale));
+          const overlayId = `scenario-overlay__${scenarioId}__${edge.id}`;
+          return {
+            ...edge,
+            id: overlayId,
+            selectable: false,
+            data: {
+              ...edge.data,
+              scenarioOverlay: true,
+              scenarioColor: color,
+              suppressConditionalColors: visibleScenarioIds.length > 1 ? true : undefined,
+              // Provide scenario params for this edge if available (optional)
+              scenarioParams: edge.data?.uuid ? composedParams.edges?.[edge.data.uuid] : undefined,
+              // Use same hook as base: provide calculateWidth function
+              calculateWidth: () => preScaled,
+            },
+            style: {
+              ...edge.style,
+              stroke: color,
+              strokeOpacity: 0.3,
+              pointerEvents: 'none',
+              strokeDasharray: 'none',
+            },
+            zIndex: -1,
+          };
+        });
+        // Compute offsets for this scenario layer using the exact same logic as base
+        const overlayWithOffsets = calculateEdgeOffsets(draftOverlayEdges, rfNodes, effectiveMaxWidth);
+        // Attach offsets and scaledWidth into data for rendering parity with base
+        overlayWithOffsets.forEach(oe => {
+          overlays.push({
+            ...oe,
+            data: {
+              ...oe.data,
+              sourceOffsetX: oe.sourceOffsetX,
+              sourceOffsetY: oe.sourceOffsetY,
+              targetOffsetX: oe.targetOffsetX,
+              targetOffsetY: oe.targetOffsetY,
+              scaledWidth: oe.scaledWidth,
+              // Bundle metadata (optional for overlays)
+              sourceBundleWidth: oe.sourceBundleWidth,
+              targetBundleWidth: oe.targetBundleWidth,
+              sourceBundleSize: oe.sourceBundleSize,
+              targetBundleSize: oe.targetBundleSize,
+              isFirstInSourceBundle: oe.isFirstInSourceBundle,
+              isLastInSourceBundle: oe.isLastInSourceBundle,
+              isFirstInTargetBundle: oe.isFirstInTargetBundle,
+              isLastInTargetBundle: oe.isLastInTargetBundle,
+              sourceFace: oe.sourceFace,
+              targetFace: oe.targetFace,
+            },
+          } as any);
+        });
+      }
+      return overlays;
+    } catch (e) {
+      console.warn('Failed to compute scenario overlay edges:', e);
+      return [];
+    }
+  }, [
+    edges,
+    nodes,
+    visibleScenarioIds,
+    visibleColorOrderIds,
+    scenariosContext?.currentParams,
+    massGenerosity,
+    useSankeyView,
+    scenariosContext?.scenarios,
+    scenariosContext?.baseParams
+  ]);
+
+  // Combine edges for display:
+  // - If scenarios visible: render base edges as invisible-but-interactive (for selection/context menu),
+  //   plus all scenario overlay layers visually on top.
+  // - If no scenarios visible: render base graph edges normally.
+  const displayEdges = React.useMemo(() => {
+    const hasOverlays = visibleScenarioIds.length > 0;
+    if (hasOverlays) {
+      const interactiveBaseEdges = edges.map(edge => ({
+        ...edge,
+        data: {
+          ...edge.data,
+          // Hide base stroke but keep interactive selection path
+          forceBaseStrokeColor: 'transparent',
+          suppressConditionalColors: true,
+        },
+      }));
+      // Base (for interaction) first, overlays after (visuals on top)
+      return [...interactiveBaseEdges, ...overlayEdges];
+    }
+    return edges;
+  }, [edges, overlayEdges, visibleScenarioIds]);
+
+  // Persist and restore viewport per tab
+  const rf = useReactFlow();
+  useEffect(() => {
+    if (!tabId) return;
+    const myTab = tabs.find(t => t.id === tabId);
+    const vp = myTab?.editorState?.rfViewport as any;
+    if (vp && typeof vp.x === 'number' && typeof vp.y === 'number' && typeof vp.zoom === 'number') {
+      try {
+        rf.setViewport(vp, { duration: 0 });
+      } catch {}
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabId]);
+
   return (
     <div ref={reactFlowWrapperRef} style={{ height: '100%', position: 'relative' }}>
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={displayEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onReconnect={onEdgeUpdate}
         onSelectionChange={onSelectionChange}
+        onMoveEnd={(_, viewport) => {
+          if (tabId) {
+            try {
+              tabOps.updateTabState(tabId, { rfViewport: viewport as any });
+            } catch {}
+          }
+        }}
         onNodeDragStart={onNodeDragStart} 
         onNodeDragStop={onNodeDragStop}
         onNodeDoubleClick={(event, node) => {
@@ -4889,11 +5222,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         {/* Chevron clipPath definitions */}
         <Panel position="top-left" style={{ pointerEvents: 'none' }}>
           <ChevronClipPaths bundles={edgeBundles} nodes={nodes} frameId={renderFrameRef.current} />
-        </Panel>
-        
-        {/* Scenario overlays - render visible scenarios as colored overlays */}
-        <Panel position="top-left" style={{ pointerEvents: 'none', zIndex: 5 }}>
-          <ScenarioOverlayRenderer tabId={tabId} graph={graph} />
         </Panel>
       </ReactFlow>
       

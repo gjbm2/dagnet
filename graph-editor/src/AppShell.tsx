@@ -7,7 +7,6 @@ import { NavigatorProvider, useNavigatorContext } from './contexts/NavigatorCont
 import { DialogProvider, useDialog } from './contexts/DialogContext';
 import { ValidationProvider } from './contexts/ValidationContext';
 import { VisibleTabsProvider, useVisibleTabs } from './contexts/VisibleTabsContext';
-import { ScenariosProvider } from './contexts/ScenariosContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { fileOperationsService } from './services/fileOperationsService';
 import { repositoryOperationsService } from './services/repositoryOperationsService';
@@ -1311,9 +1310,7 @@ export function AppShell() {
           <TabProvider>
             <NavigatorProvider>
               <VisibleTabsProvider>
-                <ScenariosProvider>
-                  <AppShellContent />
-                </ScenariosProvider>
+                <AppShellContent />
               </VisibleTabsProvider>
             </NavigatorProvider>
           </TabProvider>
