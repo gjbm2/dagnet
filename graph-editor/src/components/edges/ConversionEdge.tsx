@@ -78,9 +78,8 @@ interface ConversionEdgeData {
   isHighlighted?: boolean;
   highlightDepth?: number;
   isSingleNodeHighlight?: boolean;
-  // What-if analysis overrides (passed from tab state)
-  caseOverrides?: Record<string, string>;
-  conditionalOverrides?: Record<string, Set<string>>;
+  // What-if DSL (passed from tab state)
+  whatIfDSL?: string | null;
   // Bundle metadata for chevron rendering
   sourceBundleWidth?: number;
   targetBundleWidth?: number;
@@ -259,9 +258,8 @@ export default function ConversionEdge({
   const { graph } = useGraphStore();
   const viewPrefs = useViewPreferencesContext();
   
-  // What-if overrides are now passed through edge.data (from tab state)
-  const caseOverrides = data?.caseOverrides || {};
-  const conditionalOverrides = data?.conditionalOverrides || {};
+  // What-if DSL is now passed through edge.data (from tab state)
+  const whatIfDSL = data?.whatIfDSL;
   
   // Get the full edge object from graph (needed for tooltips and colors)
   // Find edge in graph (check both uuid and human-readable id after Phase 0.0 migration)
@@ -317,12 +315,10 @@ export default function ConversionEdge({
   // UNIFIED: Compute effective probability using shared logic
   const effectiveProbability = useMemo(() => {
     if (!graph) return 0;
-    const whatIfOverrides = { caseOverrides, conditionalOverrides };
-    return computeEffectiveEdgeProbability(graph, id, whatIfOverrides, null);
+    return computeEffectiveEdgeProbability(graph, id, { whatIfDSL }, null);
   }, [
     id, 
-    caseOverrides, 
-    conditionalOverrides, 
+    whatIfDSL, 
     // Depend on the entire graph object so it recalculates when variant weights change
     graph,
     // Also explicitly depend on the edge's p.mean and case_id/case_variant
@@ -357,9 +353,8 @@ export default function ConversionEdge({
           let totalMass = 0;
           for (const incomingEdge of incomingEdges) {
             const sourceResidual = calculateResidualProbability(incomingEdge.from, edges, startNodeUuid, startNodeId);
-            const whatIfOverrides = { caseOverrides, conditionalOverrides };
             // Edge lookup by uuid or id (Phase 0.0 migration)
-            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.uuid || incomingEdge.id, whatIfOverrides, null);
+            const edgeProb = computeEffectiveEdgeProbability(graph, incomingEdge.uuid || incomingEdge.id, { whatIfDSL }, null);
             totalMass += sourceResidual * edgeProb;
           }
           return totalMass;
@@ -375,13 +370,12 @@ export default function ConversionEdge({
     
     // Fallback to effective probability if no flow calculation available
     return effectiveProbability;
-  }, [graph, fullEdge?.from, effectiveProbability, caseOverrides, conditionalOverrides, graph?.edges?.map(e => `${e.uuid}-${e.p?.mean}`).join(',')]);
+  }, [graph, fullEdge?.from, effectiveProbability, whatIfDSL, graph?.edges?.map(e => `${e.uuid}-${e.p?.mean}`).join(',')]);
   
   // UNIFIED: Get what-if display info using shared logic
   const whatIfDisplay = useMemo(() => {
-    const whatIfOverrides = { caseOverrides, conditionalOverrides };
-    return getEdgeWhatIfDisplay(graph, id, whatIfOverrides, null);
-  }, [graph, id, caseOverrides, conditionalOverrides]);
+    return getEdgeWhatIfDisplay(graph, id, { whatIfDSL }, null);
+  }, [graph, id, whatIfDSL]);
   
   // Calculate stroke width using useMemo to enable CSS transitions
   const strokeWidth = useMemo(() => {
@@ -399,7 +393,7 @@ export default function ConversionEdge({
     if (selected) return 3;
     if (data?.probability === undefined || data?.probability === null) return 3;
     return 2;
-  }, [data?.scaledWidth, data?.calculateWidth, data?.probability, selected, graph, caseOverrides, conditionalOverrides]);
+  }, [data?.scaledWidth, data?.calculateWidth, data?.probability, selected, graph, whatIfDSL]);
   
   // Confidence interval rendering logic
   const confidenceIntervalLevel = viewPrefs?.confidenceIntervalLevel ?? 'none';

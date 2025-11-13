@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useWhatIfContext } from '../contexts/WhatIfContext';
+import toast from 'react-hot-toast';
 import { getConditionalColor, getConditionSignature } from '@/lib/conditionalColors';
 import { 
   normalizeConstraintString, 
@@ -70,6 +71,23 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
     // Mark start of a What-If update for latency measurement
     window.dispatchEvent(new CustomEvent('dagnet:whatif-start', { detail: { t0: performance.now(), tabId } }));
     
+    // Auto-unhide Current layer if What-If is being activated and Current is hidden
+    if (dsl && dsl.trim() !== '') {
+      const scenarioState = tabOps.getScenarioState(tabId);
+      const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
+      
+      if (!visibleScenarioIds.includes('current')) {
+        // Current is hidden - auto-unhide it
+        tabOps.setVisibleScenarios(tabId, [...visibleScenarioIds, 'current']);
+        
+        // Show toast notification
+        toast.success('Current layer auto-shown (What-If requires Current to be visible)', {
+          duration: 3000,
+          icon: '👁️'
+        });
+      }
+    }
+    
     tabOps.updateTabState(tabId, { whatIfDSL: dsl });
     
     // Also update context for immediate visual feedback (convert DSL to old format temporarily)
@@ -99,7 +117,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
         });
       }
     }
-  }, [tabId, graph, whatIfCtx]);
+  }, [tabId, graph, whatIfCtx, tabOps]);
   
   // Helper to add case override to DSL
   const addCaseOverride = useCallback((nodeId: string, variantName: string) => {

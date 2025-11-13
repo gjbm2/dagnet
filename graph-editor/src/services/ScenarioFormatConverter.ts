@@ -152,3 +152,4 @@ export function detectFormat(content: string): { syntax: 'yaml' | 'json'; struct
   return { syntax, structure };
 }
 
+

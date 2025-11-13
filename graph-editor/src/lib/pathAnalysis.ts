@@ -187,7 +187,6 @@ export function areNodesTopologicallySequential(
  * @param whatIfOverrides - What-if overrides (applied to probabilities)
  * @param givenVisitedNodeIds - Nodes guaranteed to be visited (for conditional activation)
  * @param pruningResult - Pre-computed pruning (optional)
- * @param legacyWhatIfAnalysis - Legacy what-if state (optional)
  * @returns Path probability and expected costs
  */
 export function calculatePathProbability(
@@ -197,8 +196,7 @@ export function calculatePathProbability(
   endId: string,
   whatIfOverrides: WhatIfOverrides,
   givenVisitedNodeIds?: string[],
-  pruningResult?: PruningResult,
-  legacyWhatIfAnalysis?: any
+  pruningResult?: PruningResult
 ): PathResult {
   // Use pre-computed pruning if provided, otherwise no pruning
   const excludedEdges = pruningResult?.excludedEdges || new Set<string>();
@@ -238,7 +236,7 @@ export function calculatePathProbability(
         graph, 
         edge.id, 
         whatIfOverrides, 
-        legacyWhatIfAnalysis, 
+        null,
         edgePathContext
       );
       
@@ -307,7 +305,7 @@ export function calculatePathProbability(
         graph, 
         edge.id, 
         whatIfOverrides, 
-        legacyWhatIfAnalysis, 
+        null,
         edgePathContext
       );
       
@@ -457,7 +455,6 @@ export function detectSelectionMode(
  * @param pathSelectedNodes - Quick selection nodes (for pruning)
  * @param pathStart - Path start for pruning calculation
  * @param pathEnd - Path end for pruning calculation
- * @param legacyWhatIfAnalysis - Legacy what-if state
  * @returns Probability and costs
  */
 export function calculatePath(
@@ -468,8 +465,7 @@ export function calculatePath(
   whatIfOverrides: WhatIfOverrides = {},
   pathSelectedNodes?: Set<string>,
   pathStart?: string,
-  pathEnd?: string,
-  legacyWhatIfAnalysis?: any
+  pathEnd?: string
 ): PathResult {
   // Compute pruning if we have path selection
   let pruningResult: PruningResult | undefined;
@@ -481,8 +477,7 @@ export function calculatePath(
       whatIfOverrides,
       pathSelectedNodes,
       pathStart,
-      pathEnd,
-      legacyWhatIfAnalysis
+      pathEnd
     );
   }
   
@@ -497,8 +492,7 @@ export function calculatePath(
     endId,
     whatIfOverrides,
     givenVisitedNodeIds,
-    pruningResult,
-    legacyWhatIfAnalysis
+    pruningResult
   );
 }
 
@@ -510,14 +504,13 @@ export function calculateDirectEdgeProbability(
   graph: any,
   edgeId: string,
   whatIfOverrides: WhatIfOverrides,
-  pathContext: Set<string>,
-  legacyWhatIfAnalysis?: any
+  pathContext: Set<string>
 ): number {
   return computeEffectiveEdgeProbability(
     graph,
     edgeId,
     whatIfOverrides,
-    legacyWhatIfAnalysis,
+    null,
     pathContext
   );
 }
@@ -531,7 +524,6 @@ export function calculateDirectEdgeProbability(
  * @param startNode - Start node
  * @param endNodes - Array of end nodes to compare
  * @param whatIfOverrides - What-if overrides
- * @param legacyWhatIfAnalysis - Legacy what-if state
  * @returns Array of {node, probability, costs} sorted by probability
  */
 export function calculateMultiEndComparison(
@@ -539,8 +531,7 @@ export function calculateMultiEndComparison(
   edges: EdgeRef[],
   startNode: NodeRef,
   endNodes: NodeRef[],
-  whatIfOverrides: WhatIfOverrides = {},
-  legacyWhatIfAnalysis?: any
+  whatIfOverrides: WhatIfOverrides = {}
 ): Array<{ node: NodeRef; probability: number; expectedCosts: any }> {
   const results = endNodes.map(endNode => {
     const pathResult = calculatePath(
@@ -551,8 +542,7 @@ export function calculateMultiEndComparison(
       whatIfOverrides,
       undefined, // No path selection for multi-end
       undefined,
-      undefined,
-      legacyWhatIfAnalysis
+      undefined
     );
     
     return {
@@ -652,7 +642,6 @@ export function calculateGeneralStats(
  * @param edges - All edges in graph
  * @param graph - Raw graph data
  * @param whatIfOverrides - What-if overrides (tab-specific)
- * @param legacyWhatIfAnalysis - Legacy what-if state
  * @returns Analysis result with mode-specific data
  */
 export function analyzeSelection(
@@ -660,8 +649,7 @@ export function analyzeSelection(
   allNodes: NodeRef[],
   edges: EdgeRef[],
   graph: any,
-  whatIfOverrides: WhatIfOverrides = {},
-  legacyWhatIfAnalysis?: any
+  whatIfOverrides: WhatIfOverrides = {}
 ): any {
   // Detect selection mode
   const detection = detectSelectionMode(selectedNodes, allNodes, edges);
@@ -704,8 +692,7 @@ export function analyzeSelection(
         whatIfOverrides,
         new Set([startNode.id, selectedNode.id]), // Given nodes
         undefined, // No additional path selection
-        undefined,
-        legacyWhatIfAnalysis
+        undefined
       );
       
       // Calculate expected cost GIVEN that the path occurs
@@ -749,8 +736,7 @@ export function analyzeSelection(
           graph,
           directEdge.id,
           whatIfOverrides,
-          pathContext,
-          legacyWhatIfAnalysis
+          pathContext
         );
         directPathCosts = {
           monetary: directEdge.data?.cost_gbp?.mean || 0,
@@ -768,8 +754,7 @@ export function analyzeSelection(
         whatIfOverrides,
         new Set([nodeA.id, nodeB.id]), // Given nodes
         undefined, // No pruning for two-node
-        undefined,
-        legacyWhatIfAnalysis
+        undefined
       );
       
       // Use path with higher probability
@@ -821,8 +806,7 @@ export function analyzeSelection(
         edges,
         startNode,
         selectedNodes,
-        whatIfOverrides,
-        legacyWhatIfAnalysis
+        whatIfOverrides
       );
       
       const totalProbability = endNodeResults.reduce((sum, r) => sum + r.probability, 0);
@@ -851,8 +835,7 @@ export function analyzeSelection(
         whatIfOverrides,
         pathSelectedSet,
         startNode.id,
-        endNode.id,
-        legacyWhatIfAnalysis
+        endNode.id
       );
       
       // Calculate path with pruning
@@ -864,8 +847,7 @@ export function analyzeSelection(
         whatIfOverrides,
         pathSelectedSet,
         startNode.id,
-        endNode.id,
-        legacyWhatIfAnalysis
+        endNode.id
       );
       
       // Calculate expected cost GIVEN path occurs
