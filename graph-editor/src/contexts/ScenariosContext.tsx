@@ -27,6 +27,7 @@ import { computeDiff } from '../services/DiffService';
 import { fromYAML, fromJSON } from '../services/ScenarioFormatConverter';
 import { validateScenarioParams } from '../services/ScenarioValidator';
 import { extractParamsFromGraph } from '../services/GraphParamExtractor';
+import { computeEffectiveEdgeProbability } from '../lib/whatIf';
 import { useGraphStore } from './GraphStoreContext';
 import { db } from '../db/appDatabase';
 
@@ -183,8 +184,45 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       baseForDiff = composeParams(baseParams, overlays);
     }
     
-    // Compute diff
-    const diff = computeDiff(currentParams, baseForDiff, type, diffThreshold);
+    // Apply What-If to current params to get the perceived state
+    let effectiveCurrentParams = currentParams;
+    if (whatIfDSL && graphStore) {
+      const graph = graphStore.getState().graph;
+      if (graph?.edges) {
+        // Create a copy of currentParams with What-If applied to edge probabilities
+        const effectiveEdges: Record<string, any> = {};
+        
+        // Process all edges from the graph
+        graph.edges.forEach((edge: any) => {
+          const edgeId = edge.uuid || edge.id;
+          if (!edgeId) return;
+          
+          // Compute effective probability with What-If DSL applied
+          const effectiveProb = computeEffectiveEdgeProbability(
+            graph,
+            edgeId,
+            { whatIfDSL }
+          );
+          
+          // Check if probability differs from base (stored in edge.p?.mean)
+          const baseProb = edge.p?.mean ?? 0;
+          if (Math.abs(effectiveProb - baseProb) > diffThreshold) {
+            effectiveEdges[edgeId] = {
+              ...currentParams.edges?.[edgeId],
+              p: { mean: effectiveProb }
+            };
+          }
+        });
+        
+        effectiveCurrentParams = {
+          ...currentParams,
+          edges: { ...currentParams.edges, ...effectiveEdges }
+        };
+      }
+    }
+    
+    // Compute diff using effective params (with What-If applied)
+    const diff = computeDiff(effectiveCurrentParams, baseForDiff, type, diffThreshold);
     
     // Generate auto note if not provided
     let autoNote = note;
@@ -232,11 +270,29 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       }
     };
     
+    console.log(`[ScenariosContext] 🆕 Creating new scenario "${name}" (id: ${scenario.id})`);
+    console.log(`[ScenariosContext] 📋 Scenarios BEFORE creation:`, scenarios.map(s => ({ id: s.id, name: s.name })));
+    console.log(`[ScenariosContext] 👁️ Visible scenarios for tab ${tabId}:`, visibleScenarioIds);
+    
     // Insert new scenario at position 2 (just beneath Current)
     // This means PREPENDING to the array: newer scenarios closer to Base in composition
     // Array order: [newest, ..., oldest]
     // Composition: Base + scenarios[0] + scenarios[1] + ... + Current
-    setScenarios(prev => [scenario, ...prev]);
+    setScenarios(prev => {
+      const newList = [scenario, ...prev];
+      console.log(`[ScenariosContext] 📋 Scenarios AFTER creation:`, newList.map(s => ({ id: s.id, name: s.name })));
+      console.log(`[ScenariosContext] Total scenarios: ${newList.length}`);
+      return newList;
+    });
+    
+    // Make the new scenario visible by default in the tab where it was created
+    if (typeof globalThis !== 'undefined' && globalThis.window) {
+      console.log(`[ScenariosContext] 📢 Dispatching event to make scenario ${scenario.id} visible in tab ${tabId}`);
+      const event = new CustomEvent('dagnet:addVisibleScenario', { 
+        detail: { tabId, scenarioId: scenario.id } 
+      });
+      globalThis.window.dispatchEvent(event);
+    }
     
     return scenario;
   }, [generateId, baseParams, currentParams, scenarios]);
@@ -300,13 +356,44 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
    * Delete a scenario
    */
   const deleteScenario = useCallback(async (id: string): Promise<void> => {
-    setScenarios(prev => prev.filter(s => s.id !== id));
+    console.log(`[ScenariosContext] 🗑️ Deleting scenario ${id}`);
+    
+    // Clear any pending debounced persistence to prevent overwrite
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+    
+    // Compute new scenarios from current state
+    const newScenarios = scenarios.filter(s => s.id !== id);
+    
+    // Update React state
+    setScenarios(newScenarios);
+    
+    // IMMEDIATELY persist to IndexedDB (don't wait for debounce)
+    if (fileId) {
+      try {
+        await db.files.update(fileId, { scenarios: newScenarios });
+        console.log(`[ScenariosContext] ✅ Persisted deletion of ${id} to IndexedDB`);
+      } catch (e) {
+        console.error(`[ScenariosContext] ❌ Failed to persist deletion:`, e);
+      }
+    }
     
     // Close editor if this scenario was open
     if (editorOpenScenarioId === id) {
       setEditorOpenScenarioId(null);
     }
-  }, [editorOpenScenarioId]);
+    
+    // Broadcast deletion event so all tabs can clean up orphaned visibility references
+    if (typeof globalThis !== 'undefined' && globalThis.window) {
+      console.log(`[ScenariosContext] 📢 Broadcasting scenario deletion event for ${id}`);
+      const event = new CustomEvent('dagnet:scenarioDeleted', { 
+        detail: { scenarioId: id } 
+      });
+      globalThis.window.dispatchEvent(event);
+    }
+  }, [editorOpenScenarioId, scenarios, fileId]);
 
   /**
    * Apply edited content to a scenario
