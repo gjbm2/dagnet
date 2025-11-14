@@ -138,9 +138,10 @@ export interface TabState {
     };
     // Scenarios state (per-tab visibility and selection)
     scenarioState?: {
-      visibleScenarioIds: string[];        // IDs of visible scenarios (render order)
-      visibleColorOrderIds: string[];      // IDs in activation order (for color assignment)
-      selectedScenarioId?: string;         // Currently selected scenario
+      scenarioOrder?: string[];           // Full layer order (includes hidden + special layers)
+      visibleScenarioIds: string[];       // IDs of visible scenarios (render order)
+      visibleColorOrderIds: string[];     // IDs in activation order (for color assignment)
+      selectedScenarioId?: string;        // Currently selected scenario
     };
   };
   
@@ -293,7 +294,16 @@ export interface TabOperations {
   isNodeHidden: (tabId: string, nodeId: string) => boolean;
   
   // Scenario operations
-  getScenarioState: (tabId: string) => { visibleScenarioIds: string[]; visibleColorOrderIds: string[]; selectedScenarioId?: string } | undefined;
+  getScenarioState: (
+    tabId: string
+  ) =>
+    | {
+        scenarioOrder?: string[];
+        visibleScenarioIds: string[];
+        visibleColorOrderIds: string[];
+        selectedScenarioId?: string;
+      }
+    | undefined;
   setVisibleScenarios: (tabId: string, scenarioIds: string[]) => Promise<void>;
   toggleScenarioVisibility: (tabId: string, scenarioId: string) => Promise<void>;
   selectScenario: (tabId: string, scenarioId: string | undefined) => Promise<void>;

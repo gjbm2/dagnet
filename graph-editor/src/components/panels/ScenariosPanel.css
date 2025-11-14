@@ -3,23 +3,24 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: white;
+  /* Match other sidebar bodies (slightly warm grey) */
+  background: #f8f9fa;
   color: #374151;
 }
 
 /* Header */
 .scenarios-header {
-  padding: 12px 16px;
+  padding: 16px;
+  background: #F9FAFB;
   border-bottom: 1px solid #E5E7EB;
+  flex-shrink: 0;
 }
 
 .scenarios-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  margin: 0;
   font-size: 14px;
   font-weight: 600;
-  color: #111827;
+  color: #374151;
 }
 
 /* Scenario List */
@@ -30,6 +31,7 @@
   /* Don't use flex: 1 - let footer appear immediately after list content */
   max-height: calc(100vh - 200px); /* Prevent infinite growth */
   pointer-events: auto !important; /* Ensure drag events work */
+  background: transparent;
 }
 
 .scenario-row {
@@ -39,8 +41,8 @@
   padding: 8px 12px;
   margin: 2px 8px;
   border-radius: 4px;
-  background: #F9FAFB;
-  border: 1px solid transparent;
+  background: white; /* Cards on grey background */
+  border: 1px solid #E5E7EB;
   transition: all 0.2s ease;
   cursor: default;
 }
@@ -97,15 +99,21 @@
   flex-shrink: 0;
 }
 
-/* Color Swatch - info only, not interactive */
+/* Color Swatch - clickable to change color */
 .scenario-color-swatch {
   width: 20px;
   height: 20px;
   border-radius: 3px;
   border: 1px solid #D1D5DB;
-  cursor: default;
+  cursor: pointer;
   flex-shrink: 0;
-  pointer-events: none; /* Don't block drag events */
+  pointer-events: auto; /* Clickable for color picker */
+  transition: transform 0.1s ease;
+}
+
+.scenario-color-swatch:hover {
+  transform: scale(1.1);
+  border-color: #9CA3AF;
 }
 
 /* Empty placeholder for swatch when layer not visible */
