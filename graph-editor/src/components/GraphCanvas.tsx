@@ -3222,52 +3222,52 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         isSingleNodeSelection: false
       };
     }
-
-    // Calculate highlight depths for single node selection
-    const edgeDepthMap = new Map<string, number>();
     
-    if (selectedNodesForAnalysis.length === 1) {
-      const selectedId = selectedNodesForAnalysis[0].id;
+      // Calculate highlight depths for single node selection
+      const edgeDepthMap = new Map<string, number>();
       
-      // Calculate upstream depths
-      const calculateUpstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
+      if (selectedNodesForAnalysis.length === 1) {
+        const selectedId = selectedNodesForAnalysis[0].id;
         
+        // Calculate upstream depths
+        const calculateUpstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
+          if (visited.has(nodeId) || depth > 5) return;
+          visited.add(nodeId);
+          
         edges.forEach(edge => {
-          if (edge.target === nodeId) {
-            const existingDepth = edgeDepthMap.get(edge.id);
-            if (existingDepth === undefined || depth < existingDepth) {
-              edgeDepthMap.set(edge.id, depth);
+            if (edge.target === nodeId) {
+              const existingDepth = edgeDepthMap.get(edge.id);
+              if (existingDepth === undefined || depth < existingDepth) {
+                edgeDepthMap.set(edge.id, depth);
+              }
+              calculateUpstreamDepths(edge.source, depth + 1, visited);
             }
-            calculateUpstreamDepths(edge.source, depth + 1, visited);
-          }
-        });
-      };
-      
-      // Calculate downstream depths
-      const calculateDownstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
+          });
+        };
         
+        // Calculate downstream depths
+        const calculateDownstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
+          if (visited.has(nodeId) || depth > 5) return;
+          visited.add(nodeId);
+          
         edges.forEach(edge => {
-          if (edge.source === nodeId) {
-            const existingDepth = edgeDepthMap.get(edge.id);
-            if (existingDepth === undefined || depth < existingDepth) {
-              edgeDepthMap.set(edge.id, depth);
+            if (edge.source === nodeId) {
+              const existingDepth = edgeDepthMap.get(edge.id);
+              if (existingDepth === undefined || depth < existingDepth) {
+                edgeDepthMap.set(edge.id, depth);
+              }
+              calculateDownstreamDepths(edge.target, depth + 1, visited);
             }
-            calculateDownstreamDepths(edge.target, depth + 1, visited);
-          }
-        });
-      };
+          });
+        };
+        
+        calculateUpstreamDepths(selectedId, 0);
+        calculateDownstreamDepths(selectedId, 0);
+      }
       
-      calculateUpstreamDepths(selectedId, 0);
-      calculateDownstreamDepths(selectedId, 0);
-    }
-    
     const pathEdges = findPathEdges(selectedNodesForAnalysis, edges);
-    const isSingleNodeSelection = selectedNodesForAnalysis.length === 1;
-    
+      const isSingleNodeSelection = selectedNodesForAnalysis.length === 1;
+      
     return {
       highlightedEdgeIds: pathEdges,
       edgeDepthMap,
@@ -3876,6 +3876,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
     
+    // CRITICAL: Filter out snapshot overlay edges from selection
+    // Only 'current' layer edges should be selectable
+    const selectableEdges = selectedEdges.filter((e: any) => !e.data?.scenarioOverlay);
+    
+    if (selectableEdges.length !== selectedEdges.length) {
+      console.warn(`[GraphCanvas] Filtered out ${selectedEdges.length - selectableEdges.length} non-selectable overlay edges`);
+    }
+    
     // Re-sort edges so selected edges render on top
     setEdges(prevEdges => {
       const sorted = [...prevEdges].sort((a, b) => {
@@ -3891,8 +3899,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (selectedNodes.length > 0) {
       onSelectedNodeChange(selectedNodes[0].id);
       onSelectedEdgeChange(null);
-    } else if (selectedEdges.length > 0) {
-      onSelectedEdgeChange(selectedEdges[0].id);
+    } else if (selectableEdges.length > 0) {
+      const selectedEdgeId = selectableEdges[0].id;
+      console.log(`[GraphCanvas] Edge selected:`, {
+        edgeId: selectedEdgeId,
+        edgeData: selectableEdges[0].data,
+        originalEdgeId: selectableEdges[0].data?.originalEdgeId,
+        scenarioOverlay: selectableEdges[0].data?.scenarioOverlay
+      });
+      onSelectedEdgeChange(selectedEdgeId);
       onSelectedNodeChange(null);
     } else {
       onSelectedNodeChange(null);
