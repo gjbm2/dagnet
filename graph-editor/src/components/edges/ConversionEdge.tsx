@@ -10,8 +10,7 @@ import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors'
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
-import { assignColors } from '../../services/ColorAssigner';
-import { composeParams } from '../../services/CompositionService';
+import { buildCompositeLabel, renderCompositeLabel, type CompositeLabel } from './edgeLabelHelpers';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -103,6 +102,8 @@ interface ConversionEdgeData {
   // Scenario overlay data
   scenarioOverlay?: boolean;
   scenarioColor?: string;
+  strokeOpacity?: number; // Opacity for scenario overlays (0-1)
+  effectiveWeight?: number; // Effective probability for this scenario overlay (for dashed line rendering)
   scenarioParams?: any;
   originalEdgeId?: string; // Original edge ID for overlay edges (used for lookups)
   // Base edge rendering overrides when overlays are visible
@@ -383,112 +384,17 @@ export default function ConversionEdge({
     return getEdgeWhatIfDisplay(graph, lookupId, { whatIfDSL }, null);
   }, [graph, lookupId, whatIfDSL]);
   
-  // Composite Edge Label: Build label segments for all visible layers
+  // Composite Edge Label: Build label segments using unified helper
   const compositeLabel = useMemo(() => {
-    if (!scenariosContext || !graph || !activeTabId) {
-      // No scenarios or no tab context: show simple label
-      return null;
-    }
-    
-    const currentTab = tabs.find(t => t.id === activeTabId);
-    const scenarioState = currentTab?.editorState?.scenarioState;
-    const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
-    const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
-    
-    if (visibleScenarioIds.length === 0) {
-      // No visible layers: show simple label (current layer only)
-      return null;
-    }
-    
-    const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
-    
-    interface LabelSegment {
-      layerId: string;
-      probability: number;
-      stdev?: number;
-      color: string;
-      isHidden: boolean;
-    }
-    
-    const segments: LabelSegment[] = [];
-    
-    // Add segment for each visible layer (bottom-to-top in stack order)
-    for (const layerId of visibleScenarioIds) {
-      let prob = 0;
-      let stdev: number | undefined = undefined;
-      
-      if (layerId === 'current') {
-        // Current layer: use What-If logic
-        prob = computeEffectiveEdgeProbability(graph, lookupId, { whatIfDSL });
-        stdev = fullEdge?.p?.stdev;
-      } else if (layerId === 'base') {
-        // Base layer: ONLY use baseParams (frozen snapshot, never reads live graph)
-        const edgeUuid = fullEdge?.uuid || lookupId;
-        prob = scenariosContext.baseParams.edges?.[edgeUuid]?.p?.mean ?? 0;
-        stdev = scenariosContext.baseParams.edges?.[edgeUuid]?.p?.stdev;
-      } else {
-        // Scenario layer: look up in scenario params (with compositing)
-        const scenario = scenariosContext.scenarios.find(s => s.id === layerId);
-        if (scenario) {
-          // Get all layers below this one for compositing
-          const currentIndex = visibleScenarioIds.indexOf(layerId);
-          const layersBelowIds = visibleScenarioIds.slice(0, currentIndex)
-            .filter(lid => lid !== 'current' && lid !== 'base');
-          
-          const layersBelow = layersBelowIds
-            .map(lid => scenariosContext.scenarios.find(s => s.id === lid)?.params)
-            .filter((p): p is NonNullable<typeof p> => p !== undefined);
-          
-          // Compose params
-          const composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
-          
-          // Look up edge probability by UUID
-          const edgeUuid = fullEdge?.uuid || lookupId;
-          // Scenarios are frozen snapshots - ONLY use composed params (never read live graph)
-          prob = composedParams.edges?.[edgeUuid]?.p?.mean 
-            ?? scenariosContext.baseParams.edges?.[edgeUuid]?.p?.mean 
-            ?? 0;
-          stdev = composedParams.edges?.[edgeUuid]?.p?.stdev 
-            ?? scenariosContext.baseParams.edges?.[edgeUuid]?.p?.stdev;
-        }
-      }
-      
-      segments.push({
-        layerId,
-        probability: prob,
-        stdev,
-        color: colorMap.get(layerId) || '#808080',
-        isHidden: false
-      });
-    }
-    
-    // Add hidden 'current' if not in visible list
-    if (!visibleScenarioIds.includes('current')) {
-      const prob = computeEffectiveEdgeProbability(graph, lookupId, { whatIfDSL });
-      const stdev = fullEdge?.p?.stdev;
-      segments.push({
-        layerId: 'current',
-        probability: prob,
-        stdev,
-        color: '#cccccc', // Light grey for hidden current
-        isHidden: true
-      });
-    }
-    
-    // Debug: log first edge's composite label segments
-    if (lookupId.includes('52207d6c') && segments.length > 0) {
-      console.log(`[CompositeLabel] Edge ${lookupId.substring(0, 30)}:`, segments.map(s => ({
-        layer: s.layerId,
-        prob: s.probability,
-        color: s.color
-      })));
-    }
-    
-    return {
-      segments,
-      isSingleLayer: visibleScenarioIds.length === 1
-    };
-  }, [scenariosContext, graph, lookupId, whatIfDSL, fullEdge, tabs, activeTabId]);
+    return buildCompositeLabel(
+      fullEdge,
+      graph,
+      scenariosContext,
+      activeTabId,
+      tabs,
+      whatIfDSL
+    );
+  }, [fullEdge, graph, scenariosContext, activeTabId, tabs, whatIfDSL]);
   
   // Calculate stroke width using useMemo to enable CSS transitions
   const strokeWidth = useMemo(() => {
@@ -510,8 +416,9 @@ export default function ConversionEdge({
   
   // Confidence interval rendering logic
   const confidenceIntervalLevel = viewPrefs?.confidenceIntervalLevel ?? 'none';
-  const hasStdev = (fullEdge?.p?.stdev !== undefined && fullEdge.p.stdev > 0) || (data?.stdev !== undefined && data.stdev > 0);
-  const stdev = fullEdge?.p?.stdev ?? data?.stdev ?? 0;
+  // For scenario overlays, prioritize data.stdev (scenario-specific), otherwise use graph edge stdev
+  const stdev = data?.scenarioOverlay ? (data?.stdev ?? 0) : (fullEdge?.p?.stdev ?? data?.stdev ?? 0);
+  const hasStdev = stdev !== undefined && stdev > 0;
   const shouldShowConfidenceIntervals = 
     confidenceIntervalLevel !== 'none' && 
     hasStdev && 
@@ -1647,9 +1554,9 @@ export default function ConversionEdge({
                 key={`${id}-ci-upper`}
                 id={`${id}-ci-upper`}
                 style={{
-                  stroke: getEdgeColor(),
+                  stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
                   strokeWidth: confidenceData.widths.upper,
-                  strokeOpacity: confidenceData.opacities.outer,
+                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.3) / 0.8)) : confidenceData.opacities.outer,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
@@ -1668,9 +1575,9 @@ export default function ConversionEdge({
                 key={`${id}-ci-middle`}
                 id={`${id}-ci-middle`}
                 style={{
-                  stroke: getEdgeColor(),
+                  stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
                   strokeWidth: confidenceData.widths.middle,
-                  strokeOpacity: confidenceData.opacities.middle,
+                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.3) / 0.8)) : confidenceData.opacities.middle,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
@@ -1690,9 +1597,9 @@ export default function ConversionEdge({
                 key={`${id}-ci-lower`}
                 id={`${id}-ci-lower`}
                 style={{
-                  stroke: getEdgeColor(),
+                  stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
                   strokeWidth: confidenceData.widths.lower,
-                  strokeOpacity: confidenceData.opacities.inner,
+                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.3) / 0.8)) : confidenceData.opacities.inner,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
@@ -1716,14 +1623,14 @@ export default function ConversionEdge({
                 id={id}
                 style={{
                   stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
-                  strokeOpacity: data?.scenarioOverlay ? 0.3 : EDGE_OPACITY,
+                  strokeOpacity: data?.scenarioOverlay ? (data?.strokeOpacity ?? 0.3) : EDGE_OPACITY,
                   mixBlendMode: 'multiply',
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
                   zIndex: selected ? 1000 : (data?.scenarioOverlay ? -1 : 1),
-                  strokeDasharray: data?.scenarioOverlay ? 'none' : ((effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none'),
-                  markerEnd: data?.renderFallbackTargetArrow && !data?.scenarioOverlay ? `url(#arrow-fallback-${id})` : 'none',
+                  strokeDasharray: ((data?.effectiveWeight !== undefined ? data.effectiveWeight : effectiveWeight) === 0) ? '5,5' : 'none',
+                  markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                   pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                 }}
@@ -1781,30 +1688,11 @@ export default function ConversionEdge({
             }}
           >
             <div style={{ textAlign: 'center' }}>
-            {compositeLabel && compositeLabel.segments.length > 1 ? (
-              // Composite label: Multiple layers visible
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                {compositeLabel.segments.map((segment, idx) => {
-                  const probText = segment.stdev 
-                    ? `${Math.round(segment.probability * 100)}% ± ${Math.round(segment.stdev * 100)}%`
-                    : `${Math.round(segment.probability * 100)}%`;
-                  
-                  return (
-                    <span 
-                      key={segment.layerId}
-                      style={{
-                        color: compositeLabel.isSingleLayer ? '#000' : segment.color,
-                        fontWeight: 'bold',
-                        fontSize: '11px'
-                      }}
-                    >
-                      {segment.isHidden ? `(${probText})` : probText}
-                      {idx < compositeLabel.segments.length - 1 && ' '}
-                    </span>
-                  );
-                })}
-              </div>
+            {compositeLabel ? (
+              // Unified rendering via helper
+              renderCompositeLabel(compositeLabel, handleDoubleClick)
             ) : (data?.probability === undefined || data?.probability === null) ? (
+              // Error state: no probability defined
               <div style={{ 
                 fontWeight: 'bold', 
                 color: '#ff6b6b',
@@ -1816,103 +1704,7 @@ export default function ConversionEdge({
               }}>
                 ⚠️ No Probability
               </div>
-            ) : whatIfDisplay?.isOverridden ? (
-              // UNIFIED: Any what-if override (conditional or case variant)
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                <div style={{ 
-                  fontWeight: 'bold', 
-                  fontSize: '11px',
-                  color: whatIfDisplay.type === 'conditional' ? '#10b981' : '#8B5CF6',
-                  background: whatIfDisplay.type === 'conditional' ? '#f0fdf4' : '#F3F0FF',
-                  padding: '2px 4px',
-                  borderRadius: '2px'
-                }}>
-                  {Math.round((effectiveProbability || 0) * 100)}%
-                </div>
-                <div style={{ 
-                  fontWeight: 'normal', 
-                  fontSize: '9px',
-                  color: '#666'
-                }}>
-                  {whatIfDisplay.displayLabel || '🔬 What-If'}
-                </div>
-              </div>
-            ) : isCaseEdge ? (
-              // Case edge without override: show effective probability (v * p) and variant name
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                <div style={{ 
-                  fontWeight: 'bold', 
-                  fontSize: '11px',
-                  color: '#8B5CF6',
-                  background: '#F3F0FF',
-                  padding: '2px 4px',
-                  borderRadius: '2px'
-                }}>
-                  {Math.round((effectiveProbability || 0) * 100)}%
-                </div>
-                <div style={{ 
-                  fontWeight: 'bold', 
-                  fontSize: '10px',
-                  color: '#666'
-                }}>
-                  {data?.case_variant || 'variant'}
-                </div>
-              </div>
-            ) : (
-              <div style={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
-                {data?.parameter_id && (
-                  <span style={{ fontSize: '10px', opacity: 0.7 }} title={`Connected to parameter: ${data.parameter_id}`}>
-                    ⛓️
-                  </span>
-                )}
-                <span>
-                  {Math.round((effectiveProbability || 0) * 100)}%
-                  {data?.stdev && data.stdev > 0 && (
-                    <span style={{ fontSize: '10px', color: '#666', marginLeft: '4px' }}>
-                      ±{Math.round(data.stdev * 100)}%
-                    </span>
-                  )}
-                </span>
-              </div>
-            )}
-            {(data?.cost_gbp || data?.cost_time) && (
-              <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
-                {data.cost_gbp && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
-                    {(data as any).cost_gbp_parameter_id && (
-                      <span style={{ fontSize: '9px', opacity: 0.7 }} title={`Connected to parameter: ${(data as any).cost_gbp_parameter_id}`}>
-                        ⛓️
-                      </span>
-                    )}
-                    <span>
-                      £{data.cost_gbp.mean?.toFixed(2) || '0.00'}
-                      {data.cost_gbp.stdev && data.cost_gbp.stdev > 0 && (
-                        <span style={{ fontSize: '9px', opacity: 0.7, marginLeft: '2px' }}>
-                          ±{data.cost_gbp.stdev.toFixed(2)}
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                )}
-                {data.cost_time && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
-                    {(data as any).cost_time_parameter_id && (
-                      <span style={{ fontSize: '9px', opacity: 0.7 }} title={`Connected to parameter: ${(data as any).cost_time_parameter_id}`}>
-                        ⛓️
-                      </span>
-                    )}
-                    <span>
-                      {data.cost_time.mean?.toFixed(1) || '0.0'}d
-                      {data.cost_time.stdev && data.cost_time.stdev > 0 && (
-                        <span style={{ fontSize: '9px', opacity: 0.7, marginLeft: '2px' }}>
-                          ±{data.cost_time.stdev.toFixed(1)}
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
+            ) : null}
           </div>
         </div>
         )}

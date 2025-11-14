@@ -1422,10 +1422,21 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       visibleColorOrderIds: [],
     };
 
+    // Add any new visible scenarios to colorOrderIds (preserving existing order)
+    const newColorOrderIds = [...currentState.visibleColorOrderIds];
+    for (const id of scenarioIds) {
+      if (!newColorOrderIds.includes(id)) {
+        newColorOrderIds.push(id);
+      }
+    }
+    // Remove any IDs that are no longer visible
+    const finalColorOrderIds = newColorOrderIds.filter(id => scenarioIds.includes(id));
+
     await updateTabState(tabId, {
       scenarioState: {
         ...currentState,
-        visibleScenarioIds: scenarioIds
+        visibleScenarioIds: scenarioIds,
+        visibleColorOrderIds: finalColorOrderIds
       }
     });
   }, [tabs, updateTabState]);

@@ -27,7 +27,6 @@ import { computeDiff } from '../services/DiffService';
 import { fromYAML, fromJSON } from '../services/ScenarioFormatConverter';
 import { validateScenarioParams } from '../services/ScenarioValidator';
 import { extractParamsFromGraph } from '../services/GraphParamExtractor';
-import { computeEffectiveEdgeProbability } from '../lib/whatIf';
 import { useGraphStore } from './GraphStoreContext';
 import { db } from '../db/appDatabase';
 
@@ -45,8 +44,7 @@ interface ScenariosContextValue {
     whatIfDSL?: string | null,
     whatIfSummary?: string,
     window?: { start: string; end: string } | null,
-    context?: Record<string, string>,
-    visibleScenarioIds?: string[]
+    context?: Record<string, string>
   ) => Promise<Scenario>;
   createBlank: (name: string, tabId: string) => Promise<Scenario>;
   getScenario: (id: string) => Scenario | undefined;
@@ -95,52 +93,83 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   const [baseParams, setBaseParams] = useState<ScenarioParams>({ edges: {}, nodes: {} });
   const [currentParams, setCurrentParams] = useState<ScenarioParams>({ edges: {}, nodes: {} });
   const [editorOpenScenarioId, setEditorOpenScenarioId] = useState<string | null>(null);
-  const persistTimerRef = useRef<number | null>(null);
+  const lastFileIdRef = useRef<string | null>(null);
+  const [scenariosLoaded, setScenariosLoaded] = useState(false);
 
-  // Extract parameters from graph on mount and when graph changes
+  // Load scenarios from IndexedDB on mount or file change
+  useEffect(() => {
+    const loadScenarios = async () => {
+      if (!fileId) return;
+      
+      try {
+        const savedScenarios = await db.scenarios
+          .where('fileId')
+          .equals(fileId)
+          .toArray();
+        
+        console.log(`ScenariosContext: Loaded ${savedScenarios.length} scenarios for file ${fileId}`);
+        
+        // Remove fileId from scenario objects (it's just for DB indexing)
+        const scenarios = savedScenarios.map(({ fileId: _fileId, ...scenario }) => scenario as Scenario);
+        setScenarios(scenarios);
+        setScenariosLoaded(true);
+      } catch (error) {
+        console.error('Failed to load scenarios from DB:', error);
+        setScenarios([]);
+        setScenariosLoaded(true);
+      }
+    };
+    
+    loadScenarios();
+  }, [fileId]);
+
+  // Save scenarios to IndexedDB whenever they change
+  useEffect(() => {
+    if (!scenariosLoaded || !fileId) return;
+    
+    const saveScenarios = async () => {
+      try {
+        // Delete all scenarios for this file
+        await db.scenarios.where('fileId').equals(fileId).delete();
+        
+        // Add all current scenarios
+        if (scenarios.length > 0) {
+          const scenariosWithFileId = scenarios.map(scenario => ({
+            ...scenario,
+            fileId
+          }));
+          await db.scenarios.bulkAdd(scenariosWithFileId);
+          console.log(`ScenariosContext: Saved ${scenarios.length} scenarios for file ${fileId}`);
+        }
+      } catch (error) {
+        console.error('Failed to save scenarios to DB:', error);
+      }
+    };
+    
+    saveScenarios();
+  }, [scenarios, fileId, scenariosLoaded]);
+
+  // Extract parameters from graph
+  // - On FILE CHANGE: Set both baseParams and currentParams (new baseline)
+  // - On GRAPH UPDATES: Only update currentParams (base is explicitly managed)
   useEffect(() => {
     if (graph) {
       const params = extractParamsFromGraph(graph);
-      setBaseParams(params);
-      setCurrentParams(params);
+      
+      // Check if file changed (new file opened)
+      const fileChanged = lastFileIdRef.current !== fileId;
+      
+      if (fileChanged) {
+        // File changed: set both base and current (new baseline)
+        setBaseParams(params);
+        setCurrentParams(params);
+        lastFileIdRef.current = fileId || null;
+      } else {
+        // Same file, graph updated: only update current, preserve base
+        setCurrentParams(params);
+      }
     }
-  }, [graph]);
-
-  // Load scenarios from IndexedDB (per file) on mount
-  useEffect(() => {
-    const load = async () => {
-      if (!fileId) return;
-      const file = await db.files.get(fileId);
-      if (file?.scenarios && Array.isArray(file.scenarios)) {
-        setScenarios(file.scenarios as Scenario[]);
-      }
-    };
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId]);
-
-  // Persist scenarios to IndexedDB (debounced)
-  useEffect(() => {
-    if (!fileId) return;
-    if (persistTimerRef.current) {
-      window.clearTimeout(persistTimerRef.current);
-    }
-    persistTimerRef.current = window.setTimeout(async () => {
-      try {
-        await db.files.update(fileId, { scenarios });
-      } catch (e) {
-        console.warn('Failed to persist scenarios:', e);
-      } finally {
-        persistTimerRef.current = null;
-      }
-    }, 300);
-    return () => {
-      if (persistTimerRef.current) {
-        window.clearTimeout(persistTimerRef.current);
-        persistTimerRef.current = null;
-      }
-    };
-  }, [fileId, scenarios]);
+  }, [graph, fileId]);
 
   /**
    * Generate a unique ID for a new scenario
@@ -164,8 +193,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     whatIfDSL?: string | null,
     whatIfSummary?: string,
     window?: { start: string; end: string } | null,
-    context?: Record<string, string>,
-    visibleScenarioIds?: string[]
+    context?: Record<string, string>
   ): Promise<Scenario> => {
     const { name, type, source = 'visible', diffThreshold = 1e-6, note } = options;
     
@@ -176,53 +204,14 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       baseForDiff = baseParams;
     } else {
       // Diff against composed visible layers (excluding Current)
-      // Filter to only visible scenarios for this tab
-      const visibleScenarios = visibleScenarioIds
-        ? scenarios.filter(s => visibleScenarioIds.includes(s.id))
-        : scenarios;
-      const overlays = visibleScenarios.map(s => s.params);
+      // For now, compose all scenarios
+      // TODO: In future, filter to only visible scenarios for this tab
+      const overlays = scenarios.map(s => s.params);
       baseForDiff = composeParams(baseParams, overlays);
     }
     
-    // Apply What-If to current params to get the perceived state
-    let effectiveCurrentParams = currentParams;
-    if (whatIfDSL && graphStore) {
-      const graph = graphStore.getState().graph;
-      if (graph?.edges) {
-        // Create a copy of currentParams with What-If applied to edge probabilities
-        const effectiveEdges: Record<string, any> = {};
-        
-        // Process all edges from the graph
-        graph.edges.forEach((edge: any) => {
-          const edgeId = edge.uuid || edge.id;
-          if (!edgeId) return;
-          
-          // Compute effective probability with What-If DSL applied
-          const effectiveProb = computeEffectiveEdgeProbability(
-            graph,
-            edgeId,
-            { whatIfDSL }
-          );
-          
-          // Check if probability differs from base (stored in edge.p?.mean)
-          const baseProb = edge.p?.mean ?? 0;
-          if (Math.abs(effectiveProb - baseProb) > diffThreshold) {
-            effectiveEdges[edgeId] = {
-              ...currentParams.edges?.[edgeId],
-              p: { mean: effectiveProb }
-            };
-          }
-        });
-        
-        effectiveCurrentParams = {
-          ...currentParams,
-          edges: { ...currentParams.edges, ...effectiveEdges }
-        };
-      }
-    }
-    
-    // Compute diff using effective params (with What-If applied)
-    const diff = computeDiff(effectiveCurrentParams, baseForDiff, type, diffThreshold);
+    // Compute diff
+    const diff = computeDiff(currentParams, baseForDiff, type, diffThreshold);
     
     // Generate auto note if not provided
     let autoNote = note;
@@ -270,29 +259,11 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       }
     };
     
-    console.log(`[ScenariosContext] 🆕 Creating new scenario "${name}" (id: ${scenario.id})`);
-    console.log(`[ScenariosContext] 📋 Scenarios BEFORE creation:`, scenarios.map(s => ({ id: s.id, name: s.name })));
-    console.log(`[ScenariosContext] 👁️ Visible scenarios for tab ${tabId}:`, visibleScenarioIds);
-    
     // Insert new scenario at position 2 (just beneath Current)
     // This means PREPENDING to the array: newer scenarios closer to Base in composition
     // Array order: [newest, ..., oldest]
     // Composition: Base + scenarios[0] + scenarios[1] + ... + Current
-    setScenarios(prev => {
-      const newList = [scenario, ...prev];
-      console.log(`[ScenariosContext] 📋 Scenarios AFTER creation:`, newList.map(s => ({ id: s.id, name: s.name })));
-      console.log(`[ScenariosContext] Total scenarios: ${newList.length}`);
-      return newList;
-    });
-    
-    // Make the new scenario visible by default in the tab where it was created
-    if (typeof globalThis !== 'undefined' && globalThis.window) {
-      console.log(`[ScenariosContext] 📢 Dispatching event to make scenario ${scenario.id} visible in tab ${tabId}`);
-      const event = new CustomEvent('dagnet:addVisibleScenario', { 
-        detail: { tabId, scenarioId: scenario.id } 
-      });
-      globalThis.window.dispatchEvent(event);
-    }
+    setScenarios(prev => [scenario, ...prev]);
     
     return scenario;
   }, [generateId, baseParams, currentParams, scenarios]);
@@ -356,44 +327,13 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
    * Delete a scenario
    */
   const deleteScenario = useCallback(async (id: string): Promise<void> => {
-    console.log(`[ScenariosContext] 🗑️ Deleting scenario ${id}`);
-    
-    // Clear any pending debounced persistence to prevent overwrite
-    if (persistTimerRef.current) {
-      window.clearTimeout(persistTimerRef.current);
-      persistTimerRef.current = null;
-    }
-    
-    // Compute new scenarios from current state
-    const newScenarios = scenarios.filter(s => s.id !== id);
-    
-    // Update React state
-    setScenarios(newScenarios);
-    
-    // IMMEDIATELY persist to IndexedDB (don't wait for debounce)
-    if (fileId) {
-      try {
-        await db.files.update(fileId, { scenarios: newScenarios });
-        console.log(`[ScenariosContext] ✅ Persisted deletion of ${id} to IndexedDB`);
-      } catch (e) {
-        console.error(`[ScenariosContext] ❌ Failed to persist deletion:`, e);
-      }
-    }
+    setScenarios(prev => prev.filter(s => s.id !== id));
     
     // Close editor if this scenario was open
     if (editorOpenScenarioId === id) {
       setEditorOpenScenarioId(null);
     }
-    
-    // Broadcast deletion event so all tabs can clean up orphaned visibility references
-    if (typeof globalThis !== 'undefined' && globalThis.window) {
-      console.log(`[ScenariosContext] 📢 Broadcasting scenario deletion event for ${id}`);
-      const event = new CustomEvent('dagnet:scenarioDeleted', { 
-        detail: { scenarioId: id } 
-      });
-      globalThis.window.dispatchEvent(event);
-    }
-  }, [editorOpenScenarioId, scenarios, fileId]);
+  }, [editorOpenScenarioId]);
 
   /**
    * Apply edited content to a scenario
@@ -417,13 +357,11 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       throw new Error(`Failed to parse ${format.toUpperCase()}: ${error.message}`);
     }
     
-    // Validate if requested (but don't block Apply)
-    // Validation warnings are shown in the modal UI, but we persist anyway
+    // Validate if requested
     if (validate && graph) {
       const validation = await validateContent(content, options, graph);
-      // Log validation results but don't throw - allow saving partial/invalid data
-      if (!validation.valid || validation.warnings.length > 0) {
-        console.warn('Scenario validation issues:', validation);
+      if (!validation.valid) {
+        throw new Error(`Validation failed: ${validation.errors.map(e => e.message).join(', ')}`);
       }
     }
     

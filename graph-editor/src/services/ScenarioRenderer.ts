@@ -109,7 +109,9 @@ function computeEdgeRenderData(
   // For each edge, compute its width based on the composed parameters
   for (const edge of graph.edges) {
     // Get edge parameters from composed params
-    const edgeParams = params.edges?.[edge.uuid];
+    // Try edge.id first (human-readable), fall back to edge.uuid
+    const edgeKey = edge.id || edge.uuid;
+    const edgeParams = params.edges?.[edgeKey];
     
     // Compute edge width
     // TODO: This needs to use the actual edge width calculation logic from the graph renderer
@@ -198,7 +200,9 @@ function computeSankeyOffsets(
   let currentOffset = 0;
   for (const edge of edges) {
     offsets.set(edge.uuid, currentOffset);
-    const width = computeEdgeWidth(edge, params.edges?.[edge.uuid]);
+    // Try edge.id first (human-readable), fall back to edge.uuid
+    const edgeKey = edge.id || edge.uuid;
+    const width = computeEdgeWidth(edge, params.edges?.[edgeKey]);
     currentOffset += width;
   }
   

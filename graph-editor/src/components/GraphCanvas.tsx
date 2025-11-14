@@ -252,6 +252,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // UNIFIED helper: get effective probability
     // Use edge data directly if available (most current), otherwise use store
     const getEffectiveProbability = (e: any): number => {
+      // CRITICAL: Read from edge.data.probability first (updated by fast path)
+      // This ensures width calculations use the most current probability value
+      if (e.data?.probability !== undefined && e.data?.probability !== null) {
+        return e.data.probability;
+      }
+      
+      // Fallback: compute from graph store (for initial render or full recalculation)
       // CRITICAL: Only apply What-If DSL to base edges when NO scenarios are visible
       // When scenarios are visible, What-If is shown via the "current" overlay layer instead
       const edgeId = e.id || `${e.source}->${e.target}`;
@@ -1431,15 +1438,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return hasChanges;
     });
     
-    // Fast path: If only edge data/handles changed (no topology or position changes), update in place
+    // Fast path: If only edge data changed (no topology, position, or handle changes), update in place
     // CRITICAL: During drag, ALWAYS take fast path to prevent node position overwrites
     // We ignore nodePositionsChanged during drag because ReactFlow has the current drag positions
-    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && edges.length > 0 && 
-                               (isDraggingNodeRef.current || !nodePositionsChanged);
+    // Handle changes require full recalculation because they affect edge bundling, offsets, and widths
+    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged && 
+                               edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
     
     if (shouldTakeFastPath) {
       const pathReason = isDraggingNodeRef.current ? '(DRAG - ignoring position diff)' : '(positions unchanged)';
-      console.log(`  ⚡ Fast path: Topology unchanged, updating edge data/handles in place ${pathReason}`);
+      console.log(`  ⚡ Fast path: Topology and handles unchanged, updating edge data in place ${pathReason}`);
       // Topology unchanged and handles unchanged - update edge data in place to preserve component identity
       setEdges(prevEdges => {
         // First pass: update edge data without calculateWidth functions
@@ -1507,6 +1515,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             sourceBundleWidth: edge.sourceBundleWidth,
             targetBundleWidth: edge.targetBundleWidth,
             sourceBundleSize: edge.sourceBundleSize,
+            // Recalculate renderFallbackTargetArrow based on new bundle width
+            renderFallbackTargetArrow: !!(edge.targetBundleWidth && edge.targetBundleWidth < MIN_CHEVRON_THRESHOLD),
             targetBundleSize: edge.targetBundleSize,
             isFirstInSourceBundle: edge.isFirstInSourceBundle,
             isLastInSourceBundle: edge.isLastInSourceBundle,
@@ -1890,7 +1900,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           const graphEdge = graph.edges.find(ge => ge.id === edge.id || ge.uuid === edge.data?.uuid);
           if (!graphEdge) return;
           
-          const edgeParams = composedParams.edges?.[graphEdge.uuid];
+          // Use edge.id first (human-readable), fall back to uuid
+          const edgeKey = graphEdge.id || graphEdge.uuid;
+          const edgeParams = composedParams.edges?.[edgeKey];
           if (!edgeParams) return;
           
           overlayEdges.push({
@@ -2308,7 +2320,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               currentGraph,
               edgeId,
               { whatIfDSL },
-              null,
               undefined
             );
             totalMass += sourceMass * effectiveProb;
@@ -4713,9 +4724,72 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             return computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL });
           }
           // For 'base' and scenario layers: ONLY use params (frozen snapshots, never read live graph)
-          const edgeUuid = (e.data as any)?.uuid || e.id;
-          const override = edgeUuid ? composedParams.edges?.[edgeUuid]?.p?.mean : undefined;
-          if (typeof override === 'number') return override;
+          // Find the actual graph edge to get its ID/UUID for params lookup
+          const flowEdgeUuid = (e.data as any)?.uuid;
+          const graphEdge = graph.edges?.find(ge => 
+            ge.uuid === flowEdgeUuid || ge.id === e.id
+          );
+          
+          if (graphEdge) {
+            // Try human-readable ID first, fall back to UUID
+            const key = graphEdge.id || graphEdge.uuid;
+            let probability = composedParams.edges?.[key]?.p?.mean;
+            
+            // If no override in params, return 0 (don't read from live graph)
+            if (typeof probability !== 'number') {
+              return 0;
+            }
+            
+            // Apply case variant weight if this is a case edge
+            if (graphEdge.case_variant) {
+              // Infer case_id from source node if not set
+              let caseId = graphEdge.case_id;
+              if (!caseId) {
+                const sourceNode = graph.nodes?.find((n: any) => 
+                  n.uuid === graphEdge.from || n.id === graphEdge.from
+                );
+                if (sourceNode?.type === 'case') {
+                  caseId = sourceNode.case?.id || sourceNode.uuid || sourceNode.id;
+                }
+              }
+              
+              if (caseId) {
+                // Look for variant weight in composedParams first
+                const caseNodeKey = graph.nodes?.find((n: any) => 
+                  n.type === 'case' && (
+                    n.case?.id === caseId || 
+                    n.uuid === caseId || 
+                    n.id === caseId
+                  )
+                )?.id || caseId;
+                
+                // Check scenario params for variant weight
+                const variants = composedParams.nodes?.[caseNodeKey]?.case?.variants;
+                if (variants) {
+                  const variant = variants.find((v: any) => v.name === graphEdge.case_variant);
+                  const variantWeight = variant?.weight ?? 0;
+                  probability = probability * variantWeight;
+                } else {
+                  // Fall back to graph if not in params (shouldn't happen for proper snapshots)
+                  const caseNode = graph.nodes?.find((n: any) => 
+                    n.type === 'case' && (
+                      n.case?.id === caseId || 
+                      n.uuid === caseId || 
+                      n.id === caseId
+                    )
+                  );
+                  const variant = caseNode?.case?.variants?.find((v: any) => 
+                    v.name === graphEdge.case_variant
+                  );
+                  const variantWeight = variant?.weight ?? 0;
+                  probability = probability * variantWeight;
+                }
+              }
+            }
+            
+            return probability;
+          }
+          
           // Do NOT fall back to e.data.probability (that's live graph) for snapshots
           return 0;
         };
@@ -4755,6 +4829,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           const scale = Math.min(sourceScale[sKey] || 1.0, targetScale[tKey] || 1.0);
           const preScaled = Math.max(MIN_WIDTH, Math.min(effectiveMaxWidth, (rawWidths.get(edge.id) || MIN_WIDTH) * scale));
           const overlayId = `scenario-overlay__${scenarioId}__${edge.id}`;
+          // Get effectiveWeight (probability) for dashed line logic
+          const edgeProb = probResolver(edge);
+          // Find graph edge for params lookup
+          const flowEdgeUuid = edge.data?.uuid;
+          const graphEdge = graph.edges?.find(ge => 
+            ge.uuid === flowEdgeUuid || ge.id === edge.id
+          );
+          const paramsKey = graphEdge ? (graphEdge.id || graphEdge.uuid) : undefined;
+          // Get scenario-specific params for this edge
+          const edgeParams = paramsKey ? composedParams.edges?.[paramsKey] : undefined;
+          // Opacity for scenario overlays
+          // Hidden current: HIDDEN_CURRENT_OPACITY (user-adjustable, ~0.05-0.1 recommended)
+          // Visible layers: 0.3
+          const HIDDEN_CURRENT_OPACITY = 0.05; // <-- Adjust this value for hidden current edge visibility
+          const overlayOpacity = (scenarioId === 'current' && !visibleScenarioIds.includes('current')) ? HIDDEN_CURRENT_OPACITY : 0.3;
+          
           return {
             ...edge,
             id: overlayId,
@@ -4763,15 +4853,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               ...edge.data,
               scenarioOverlay: true,
               scenarioColor: color,
+              strokeOpacity: overlayOpacity, // Pass opacity to ConversionEdge
               originalEdgeId: edge.id, // Store original ID for label lookups
               suppressConditionalColors: visibleScenarioIds.length > 1 ? true : undefined,
               // Only 'current' layer shows labels (composite label with all visible layers)
               // All other overlay layers suppress labels to avoid duplicates
               suppressLabel: scenarioId !== 'current',
               // Provide scenario params for this edge if available (optional)
-              scenarioParams: edge.data?.uuid ? composedParams.edges?.[edge.data.uuid] : undefined,
+              scenarioParams: edgeParams,
+              // Override probability and stdev with scenario-specific values (not base edge's values)
+              probability: edgeParams?.p?.mean ?? edge.data?.probability ?? 0.5,
+              stdev: edgeParams?.p?.stdev ?? edge.data?.stdev,
               // Use same hook as base: provide calculateWidth function
               calculateWidth: () => preScaled,
+              // Provide effectiveWeight for dashed line rendering when probability is 0
+              effectiveWeight: edgeProb,
+              // Calculate renderFallbackTargetArrow based on THIS overlay's width, not base edge's
+              renderFallbackTargetArrow: preScaled < MIN_CHEVRON_THRESHOLD,
               // Null out all interaction handlers - overlays are read-only visuals
               onUpdate: undefined,
               onDelete: undefined,
@@ -4782,10 +4880,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             style: {
               ...edge.style,
               stroke: color,
-              // Hidden 'current' rendered at 3% opacity (barely visible), visible layers at 30%
-              strokeOpacity: (scenarioId === 'current' && !visibleScenarioIds.includes('current')) ? 0.03 : 0.3,
+              // Hidden 'current' rendered at 0.5% opacity (very faint), visible layers at 30%
+              strokeOpacity: overlayOpacity,
               pointerEvents: 'none',
-              strokeDasharray: 'none',
+              // Don't set strokeDasharray here - let ConversionEdge handle it based on effectiveWeight
             },
             zIndex: -1,
           };
