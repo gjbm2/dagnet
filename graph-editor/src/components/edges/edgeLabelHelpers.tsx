@@ -543,10 +543,13 @@ export function formatSegmentValue(segment: LabelSegment, includeFields: {
 
 /**
  * Render composite label to React nodes
+ * 
+ * @param selected - Whether the edge is selected (affects text color on dark background)
  */
 export function renderCompositeLabel(
   label: CompositeLabel,
-  onDoubleClick?: () => void
+  onDoubleClick?: () => void,
+  selected?: boolean
 ): React.ReactNode {
   const { segments, deduplication } = label;
   const visible = segments.filter(s => !s.isHidden);
@@ -560,7 +563,8 @@ export function renderCompositeLabel(
   const isCaseEdge = visible.some(s => s.variantName !== undefined);
   const variantName = isCaseEdge ? visible.find(s => s.variantName)?.variantName : undefined;
   
-  // Full deduplication: single black label
+  // Full deduplication: single label
+  // STEP 5: Use white text when selected (on black background), black text otherwise
   if (deduplication.type === 'full') {
     const value = formatSegmentValue(visible[0], {
       probability: true,
@@ -569,13 +573,14 @@ export function renderCompositeLabel(
     });
     
     return (
-      <span style={{ fontWeight: 'bold', fontSize: '11px', color: '#000' }}>
+      <span style={{ fontWeight: 'bold', fontSize: '11px', color: selected ? '#fff' : '#000' }}>
         {value}
       </span>
     );
   }
   
   // Simplified: visible identical, hidden differs
+  // STEP 5: Adapt text color when selected
   if (deduplication.type === 'simplified') {
     const visibleValue = formatSegmentValue(visible[0], {
       probability: true,
@@ -585,7 +590,7 @@ export function renderCompositeLabel(
     
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
-        <span style={{ fontWeight: 'bold', fontSize: '11px', color: '#000' }}>
+        <span style={{ fontWeight: 'bold', fontSize: '11px', color: selected ? '#fff' : '#000' }}>
           {visibleValue}
         </span>
         {hidden.map(h => {
@@ -595,7 +600,7 @@ export function renderCompositeLabel(
             cost_time: true
           });
           return (
-            <span key={h.layerId} style={{ fontWeight: 'bold', fontSize: '11px', color: '#999' }}>
+            <span key={h.layerId} style={{ fontWeight: 'bold', fontSize: '11px', color: selected ? '#ccc' : '#999' }}>
               ({hiddenValue})
             </span>
           );
@@ -611,9 +616,9 @@ export function renderCompositeLabel(
   
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
-      {/* Show variant name once in black at the start for case edges */}
+      {/* Show variant name once at the start for case edges */}
       {isCaseEdge && variantName && (
-        <span style={{ color: '#000', fontWeight: 'bold', fontSize: '11px' }}>
+        <span style={{ color: selected ? '#fff' : '#000', fontWeight: 'bold', fontSize: '11px' }}>
           {variantName}:
         </span>
       )}
@@ -689,21 +694,22 @@ export function renderCompositeLabel(
         );
       })}
       
-      {/* If partial dedup, show deduplicated fields in black at end */}
+      {/* If partial dedup, show deduplicated fields at end */}
+      {/* STEP 5: Adapt text color when selected */}
       {deduplication.type === 'partial' && visible.length > 0 && (
         <>
           {deduplication.dedupFlags?.probability && !isCaseEdge && (
-            <span style={{ color: '#000', fontWeight: 'bold', fontSize: '11px' }}>
+            <span style={{ color: selected ? '#fff' : '#000', fontWeight: 'bold', fontSize: '11px' }}>
               {formatSegmentValue(visible[0], { probability: true, cost_gbp: false, cost_time: false })}
             </span>
           )}
           {deduplication.dedupFlags?.cost_gbp && (
-            <span style={{ color: '#000', fontWeight: 'bold', fontSize: '11px' }}>
+            <span style={{ color: selected ? '#fff' : '#000', fontWeight: 'bold', fontSize: '11px' }}>
               {formatSegmentValue(visible[0], { probability: false, cost_gbp: true, cost_time: false })}
             </span>
           )}
           {deduplication.dedupFlags?.cost_time && (
-            <span style={{ color: '#000', fontWeight: 'bold', fontSize: '11px' }}>
+            <span style={{ color: selected ? '#fff' : '#000', fontWeight: 'bold', fontSize: '11px' }}>
               {formatSegmentValue(visible[0], { probability: false, cost_gbp: false, cost_time: true })}
             </span>
           )}
@@ -764,7 +770,7 @@ export function renderCompositeLabel(
           <span 
             key={segment.layerId}
             style={{
-              color: '#999',
+              color: selected ? '#ccc' : '#999',
               fontWeight: 'bold',
               fontSize: '11px'
             }}
