@@ -88,8 +88,9 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   const [draggedScenarioId, setDraggedScenarioId] = useState<string | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   
-  // Get tab's scenario state
-  const scenarioState = tabId ? operations.getScenarioState(tabId) : undefined;
+  // Get tab's scenario state - use tabs directly to ensure reactivity
+  const currentTab = tabs.find(t => t.id === tabId);
+  const scenarioState = currentTab?.editorState?.scenarioState;
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
   const selectedScenarioId = scenarioState?.selectedScenarioId;
@@ -154,17 +155,36 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   }, []);
   
   /**
-   * Delete scenario
+   * Delete scenario (no confirmation needed - it's reversible via graph history)
    */
   const handleDelete = useCallback(async (scenarioId: string) => {
     try {
       await deleteScenario(scenarioId);
+      
+      // Clean up visibility state if this scenario was visible in the current tab
+      if (tabId) {
+        const scenarioState = operations.getScenarioState(tabId);
+        if (scenarioState?.visibleScenarioIds.includes(scenarioId)) {
+          // Remove from both visible IDs and color order
+          const newVisibleIds = scenarioState.visibleScenarioIds.filter(id => id !== scenarioId);
+          const newColorOrderIds = scenarioState.visibleColorOrderIds.filter(id => id !== scenarioId);
+          
+          await operations.updateTabState(tabId, {
+            scenarioState: {
+              ...scenarioState,
+              visibleScenarioIds: newVisibleIds,
+              visibleColorOrderIds: newColorOrderIds,
+            }
+          });
+        }
+      }
+      
       toast.success('Scenario deleted');
     } catch (error) {
       console.error('Failed to delete scenario:', error);
       toast.error('Failed to delete scenario');
     }
-  }, [deleteScenario]);
+  }, [deleteScenario, tabId, operations]);
   
   /**
    * Open scenario in editor
@@ -206,12 +226,15 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       // TODO: Get context values (not implemented yet)
       const context = undefined;
       
-      await createSnapshot({
+      const newScenario = await createSnapshot({
         name: timestamp,
         type,
         source,
         diffThreshold: 1e-6
       }, tabId, whatIfDSL, whatIfSummary, window, context, visibleScenarioIds);
+      
+      // Make the new snapshot visible by default
+      await operations.toggleScenarioVisibility(tabId, newScenario.id);
       
       toast.success('Snapshot created');
       setShowCreateMenu(false);
@@ -219,7 +242,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       console.error('Failed to create snapshot:', error);
       toast.error('Failed to create snapshot');
     }
-  }, [tabId, createSnapshot, tabs]);
+  }, [tabId, createSnapshot, tabs, operations]);
   
   /**
    * Create blank scenario with timestamp as default name
@@ -243,32 +266,34 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     }).replace(',', '');
     
     try {
-      await createBlank(timestamp, tabId);
+      const newScenario = await createBlank(timestamp, tabId);
+      
+      // Make the new blank scenario visible by default
+      await operations.toggleScenarioVisibility(tabId, newScenario.id);
+      
       toast.success('Blank scenario created');
     } catch (error) {
       console.error('Failed to create scenario:', error);
       toast.error('Failed to create scenario');
     }
-  }, [tabId, createBlank]);
+  }, [tabId, createBlank, operations]);
   
   /**
-   * Flatten all overlays into Base
+   * Flatten all overlays into Base (no confirmation needed - it's reversible via graph history)
    */
   const handleFlatten = useCallback(async () => {
-    const confirmed = confirm(
-      'Flatten will merge all visible scenarios into Base and clear all overlays. This cannot be undone. Continue?'
-    );
-    
-    if (!confirmed) return;
-    
     try {
       await flatten();
-      toast.success('Flattened scenarios into Base');
+      
+      // Update tab visibility: show only Current, hide Base
+      await operations.setVisibleScenarios(tabId, ['current']);
+      
+      toast.success('Flattened: Current copied to Base, all scenarios removed');
     } catch (error) {
       console.error('Failed to flatten:', error);
       toast.error('Failed to flatten');
     }
-  }, [flatten]);
+  }, [flatten, tabId, operations]);
   
   /**
    * Drag handlers
@@ -294,16 +319,41 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     
     if (!draggedScenarioId || !tabId) return;
     
-    const currentIndex = scenarios.findIndex(s => s.id === draggedScenarioId);
-    if (currentIndex === -1 || currentIndex === targetIndex) return;
+    const currentState = operations.getScenarioState(tabId);
+    if (!currentState) return;
     
-    // Reorder scenarios in display order (same as storage order)
-    const newOrder = [...scenarios.map(s => s.id)];
-    newOrder.splice(currentIndex, 1);
-    newOrder.splice(targetIndex, 0, draggedScenarioId);
+    // Get current visible order from tab state (not scenarios array)
+    const currentVisibleOrder = currentState.visibleScenarioIds;
+    const currentIndex = currentVisibleOrder.indexOf(draggedScenarioId);
+    const targetVisibleIndex = scenarios.findIndex(s => s.id === scenarios[targetIndex]?.id);
+    
+    if (currentIndex === -1) {
+      // Dragged scenario is not visible, just reorder in panel display
+      // This only affects the panel's display order for this tab
+      return;
+    }
+    
+    // Reorder the visible scenarios for this tab's composition
+    const newVisibleOrder = [...currentVisibleOrder];
+    newVisibleOrder.splice(currentIndex, 1);
+    
+    // Find where to insert in the visible order based on target position
+    const targetScenarioId = scenarios[targetIndex]?.id;
+    const targetIndexInVisible = newVisibleOrder.indexOf(targetScenarioId);
+    const insertIndex = targetIndexInVisible >= 0 ? targetIndexInVisible : newVisibleOrder.length;
+    
+    newVisibleOrder.splice(insertIndex, 0, draggedScenarioId);
     
     try {
-      await operations.reorderScenarios(tabId, newOrder);
+      // Update ONLY the tab's visibility order - scenarios array stays the same
+      await operations.updateTabState(tabId, {
+        scenarioState: {
+          ...currentState,
+          visibleScenarioIds: newVisibleOrder,
+          // Preserve color order - colors don't change when reordering
+          visibleColorOrderIds: currentState.visibleColorOrderIds
+        }
+      });
     } catch (error) {
       console.error('Failed to reorder scenarios:', error);
       toast.error('Failed to reorder scenarios');
@@ -347,6 +397,13 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
             title="Toggle visibility"
           >
             {currentVisible ? <Eye size={14} /> : <EyeOff size={14} />}
+          </button>
+          <button
+            className="scenario-action-btn"
+            onClick={() => handleOpenEditor('current')}
+            title="Open Current in editor"
+          >
+            <FileText size={14} />
           </button>
         </div>
         
@@ -534,8 +591,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
         <button
           className="scenarios-btn scenarios-btn-flatten"
           onClick={handleFlatten}
-          disabled={scenarios.length === 0}
-          title="Flatten all visible scenarios into Base"
+          title="Copy Current to Base and remove all scenario overlays"
         >
           <Layers size={14} />
           <span>Flatten</span>
@@ -547,6 +603,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     <ScenarioEditorModal
       isOpen={editorOpenScenarioId !== null}
       scenarioId={editorOpenScenarioId}
+      tabId={tabId}
       onClose={closeEditor}
     />
   </>

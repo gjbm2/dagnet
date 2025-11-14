@@ -1,6 +1,7 @@
 import Dexie, { Table } from 'dexie';
 import { FileState, TabState, AppState, SettingsData, WorkspaceState } from '../types';
 import { CredentialsData } from '../types/credentials';
+import { Scenario } from '../types/scenarios';
 
 /**
  * IndexedDB database for persisting app state
@@ -9,6 +10,7 @@ import { CredentialsData } from '../types/credentials';
  * - workspaces: Workspace metadata (repo, branch, lastSynced)
  * - files: FileState records (single source of truth for file data)
  * - tabs: TabState records (views of files)
+ * - scenarios: Scenario records (parameter overlays, shared per file)
  * - appState: Application-level state (layout, navigator, etc.)
  * - settings: User settings (local only, not synced to git)
  * - credentials: User authentication credentials (local only, not synced to git)
@@ -18,6 +20,7 @@ export class AppDatabase extends Dexie {
   workspaces!: Table<WorkspaceState, string>;
   files!: Table<FileState, string>;
   tabs!: Table<TabState, string>;
+  scenarios!: Table<Scenario & { fileId: string }, string>;
   appState!: Table<AppState, string>;
   settings!: Table<SettingsData, string>;
   credentials!: Table<CredentialsData & { id: string; source: string; timestamp: number }, string>;
@@ -48,6 +51,20 @@ export class AppDatabase extends Dexie {
       workspaces: 'id, repository, branch, lastSynced',
       
       // Keep existing tables
+      files: 'fileId, type, isDirty, source.repository, source.branch, lastModified',
+      tabs: 'id, fileId, viewMode',
+      appState: 'id, updatedAt',
+      settings: 'id',
+      credentials: 'id, source, timestamp'
+    });
+    
+    // Version 3: Add scenarios table
+    this.version(3).stores({
+      // Add scenarios table (scenarios per file)
+      scenarios: 'id, fileId, createdAt, updatedAt',
+      
+      // Keep existing tables
+      workspaces: 'id, repository, branch, lastSynced',
       files: 'fileId, type, isDirty, source.repository, source.branch, lastModified',
       tabs: 'id, fileId, viewMode',
       appState: 'id, updatedAt',

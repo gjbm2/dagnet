@@ -1,36 +1,38 @@
-# DagNet TODO
+# TODO
 
-#
-
-Let's simplify & move snapshot controls:
-⦁	move so shown under 'Current' at all times
-⦁	remove 'No scenarios yet' text -- it becomes obvious where the new snapshot appears now
-⦁	Let's show inline controls:
-	+ New Scenario [opens submenu...]
-		Snapshot everything
-		Snapshot differences
-		Blank
-	Flatten all
-
-Sequence of buttons within a scenario:
-
-Left aligned:
-	[Grab handle] [swatch] Scenario name["…" if doesn't fit]
-Right aligned: 
-	[delete icon] [edit modal icon] [visibility toggle]
-
-an empty placeholder for swatch should be shown if none (because layer not visible)
-
-remove the pen icon (to edit name), instead allow user to click name to edit; while editing show a tick [commit change] and a cross [cancel change] icon on right hand side; hide all other icons.
-
-Let's rename (for user purposes) 'Base' layer to 'Original' and 'Current' to 'Live'
-
-Let's add a right-click context menu to layers which shows three additional controls:
-⦁	'Use as current' -- copies the layer in question to current, overwriting current and resetting any whatifs in place
-⦁	[if another layer is visible] 'Merge down'-- applies this layer to the next visible layer down in the stack
-⦁	'Show only' -- hides all other layers but this one
-
-Current layer (now 'Live') should have an edit modal icon, which allows user to view current live param state (with whatif applied). If edited, should apply to new layer (similar pattern to if user uses edit modal on Base)
+## Scenarios polishing & bugs
+- check conversion graph...scenarios are fucked on it...
+- confidence bands have gone over-wide...
+- test conditional ps.
+- "What if" not working with layers
+- Reordering scenarios isn't working. are we maintaining a separte tab context state for the order of scenarios (which should be used when compositing on that tab)?
+- we are also doing something weird with selected edges and highlighted now --
+  - we used to be sharing the edges in a thoughtful way whe nthey were selected or highlighted, but that has broken compeltely.  we need to repair that properly. 
+  - selected edge LABELS are showing black text on a black label background, which ain't great...
+- colours are funky & not quite right... maybe just let user choose them?
+-Let's simplify & move snapshot controls:
+  - move so shown under 'Current' at all times
+  - remove 'No scenarios yet' text -- it becomes obvious where the new snapshot appears now
+  - Let's show inline controls:
+	  + New Scenario [opens submenu...]
+  		Snapshot everything
+		  Snapshot differences
+		  Blank
+	  Flatten all
+  - Sequence of buttons within a scenario:
+      Left aligned:
+        [Grab handle] [swatch] Scenario name["…" if doesn't fit]
+      Right aligned: 
+        [delete icon] [edit modal icon] [visibility toggle]
+  - an empty placeholder for swatch should be shown if none (because layer not visible)
+  - an empty area same size as grab handle should be shown if none (for current and base)
+  - remove the pen icon (to edit name), instead allow user to click name to edit; while editing show a tick [commit change] and a cross [cancel change] icon on right hand side; hide all other icons.
+  - Let's rename (for user purposes) 'Base' layer to 'Original' and 'Current' to 'Live'
+- Let's add a right-click context menu to layers which shows three additional controls:
+  - 'Use as current' -- copies the layer in question to current, overwriting current and resetting any whatifs in place
+  - [if another layer is visible] 'Merge down'-- applies this layer to the next visible layer down in the stack
+  - 'Show only' -- hides all other layers but this one
+- Confidence interval rendering has been broken under scenarios
 
 # TODO
 
