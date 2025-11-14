@@ -18,6 +18,7 @@ interface BuildScenarioRenderEdgesParams {
   visibleScenarioIds: string[];
   visibleColorOrderIds: string[];
   whatIfDSL: string | null;
+  useUniformScaling: boolean;
   massGenerosity: number;
   useSankeyView: boolean;
   calculateEdgeOffsets: (edges: any[], nodes: any[], maxWidth: number) => any[];
@@ -46,6 +47,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     visibleScenarioIds,
     visibleColorOrderIds,
     whatIfDSL,
+    useUniformScaling,
     massGenerosity,
     useSankeyView,
     calculateEdgeOffsets,
@@ -150,8 +152,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     probResolver: (e: Edge) => number,
     helpers: { dfs: (nodeId: string) => number }
   ): number => {
-    if (params.useSankeyView === false && massGenerosity === undefined) {
-      // Uniform scaling mode
+    if (useUniformScaling) {
+      // Uniform scaling mode - all edges same width
       return 10;
     }
     const edgeProb = probResolver(e);
@@ -181,17 +183,12 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
   };
 
   // For each scenario to render, create overlay edges
-  for (const scenarioId of layersToRender) {
+  // Render in layer order (bottom to top of stack) for correct z-index
+  for (let layerIndex = 0; layerIndex < layersToRender.length; layerIndex++) {
+    const scenarioId = layersToRender[layerIndex];
     const scenario = scenarios.find((s: any) => s.id === scenarioId);
     const isVisible = visibleScenarioIds.includes(scenarioId);
     const color = getScenarioColor(scenarioId, isVisible);
-    
-    console.log(`[buildScenarioRenderEdges] Rendering layer ${scenarioId}:`, {
-      isVisible,
-      color,
-      isCurrent: scenarioId === 'current',
-      visibleScenarioIds
-    });
 
     // Compose params based on layer type and visibility
     let composedParams = baseParams;
@@ -410,8 +407,9 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           // 'current' is interactive; others are not
           pointerEvents: isCurrent ? 'auto' : 'none',
         },
-        // 'current' at z-index 100 (top); overlays at -1 (behind)
-        zIndex: isCurrent ? 100 : -1,
+        // Z-index based on layer order: higher layers have higher z-index
+        // But all edges are behind labels/markers (which have z-index > 100)
+        zIndex: layerIndex,
       };
     });
 
