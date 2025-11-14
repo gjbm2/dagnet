@@ -253,7 +253,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Get current state from store (avoid stale closures)
     const currentGraph = graphStoreHook.getState().graph;
-    
+
     // UNIFIED helper: get effective probability
     // Use edge data directly if available (most current), otherwise use store
     const getEffectiveProbability = (e: any): number => {
@@ -1697,12 +1697,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               // Use unified what-if engine to get effective probability
               // This handles: case node variant weights, conditional overrides, and what-if analysis
               const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
-            const effectiveProb = computeEffectiveEdgeProbability(
-              graph,
-              edgeId,
+              const effectiveProb = computeEffectiveEdgeProbability(
+                graph,
+                edgeId,
               { whatIfDSL: effectiveWhatIfDSL },
-              undefined
-            );
+                undefined
+              );
               
               console.log(`[Sankey] Edge ${edgeId}: sourceMass=${sourceMass.toFixed(3)}, effectiveProb=${effectiveProb.toFixed(3)}, contribution=${(sourceMass * effectiveProb).toFixed(3)}`);
               
