@@ -14,6 +14,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import * as yaml from 'js-yaml';
 import { useScenariosContext } from '../../contexts/ScenariosContext';
+import { useTabContext } from '../../contexts/TabContext';
 import { Scenario, ScenarioContentFormat } from '../../types/scenarios';
 import { toYAML, toJSON, toCSV, fromYAML, fromJSON } from '../../services/ScenarioFormatConverter';
 import { X, FileText, Download, AlertCircle, CheckCircle2, Save } from 'lucide-react';
@@ -24,15 +25,17 @@ import './ScenarioEditorModal.css';
 interface ScenarioEditorModalProps {
   isOpen: boolean;
   scenarioId: string | null;
+  tabId: string | null;
   onClose: () => void;
 }
 
-export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEditorModalProps) {
-  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot } = useScenariosContext();
+export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose }: ScenarioEditorModalProps) {
+  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot, createBlank } = useScenariosContext();
+  const { operations } = useTabContext();
   
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [editorValue, setEditorValue] = useState('');
-  const [format, setFormat] = useState<ScenarioContentFormat>({ syntax: 'yaml', structure: 'nested' });
+  const [format, setFormat] = useState<ScenarioContentFormat>({ syntax: 'yaml', structure: 'flat' });
   const [isDirty, setIsDirty] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -184,11 +187,30 @@ export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEdi
         setIsDirty(false);
         onClose();
       } else if (scenario.id === 'current') {
-        // Apply edits to Current: create NEW scenario (not yet implemented)
-        toast.error('Editing Current to create new scenario - not yet implemented');
-        setIsSaving(false);
-        setIsValidating(false);
-        return;
+        // Apply edits to Current: create NEW scenario with edited params
+        // Generate timestamp name
+        const now = new Date();
+        const timestamp = now.toISOString().replace('T', ' ').substring(0, 16);
+        const name = `Edited ${timestamp}`;
+        
+        // Create blank scenario
+        const newScenario = await createBlank(name, tabId);
+        
+        // Apply the edited content to it
+        await applyContent(newScenario.id, editorValue, {
+          format: format.syntax,
+          structure: format.structure,
+          validate: false // Already validated above
+        });
+        
+        // Make the new scenario visible by default
+        if (tabId) {
+          await operations.toggleScenarioVisibility(tabId, newScenario.id);
+        }
+        
+        toast.success(`Created new scenario: ${name}`);
+        setIsDirty(false);
+        onClose();
       } else {
         // Normal scenario: apply edits
         await applyContent(scenario.id, editorValue, {
@@ -209,7 +231,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEdi
       setIsSaving(false);
       setIsValidating(false);
     }
-  }, [scenario, editorValue, format, validateContent, applyContent, fromYAML, fromJSON, setBaseParams, onClose]);
+  }, [scenario, editorValue, format, validateContent, applyContent, fromYAML, fromJSON, setBaseParams, createBlank, tabId, operations, onClose]);
   
   /**
    * Handle Cancel button
@@ -355,16 +377,16 @@ export function ScenarioEditorModal({ isOpen, scenarioId, onClose }: ScenarioEdi
             <div className="control-group">
               <label>Structure:</label>
               <button
-                className={`control-btn ${format.structure === 'nested' ? 'active' : ''}`}
-                onClick={() => setFormat({ ...format, structure: 'nested' })}
-              >
-                Nested
-              </button>
-              <button
                 className={`control-btn ${format.structure === 'flat' ? 'active' : ''}`}
                 onClick={() => setFormat({ ...format, structure: 'flat' })}
               >
                 Flat
+              </button>
+              <button
+                className={`control-btn ${format.structure === 'nested' ? 'active' : ''}`}
+                onClick={() => setFormat({ ...format, structure: 'nested' })}
+              >
+                Nested
               </button>
             </div>
             

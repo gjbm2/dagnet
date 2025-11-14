@@ -1,0 +1,92 @@
+/**
+ * ScenarioLegend styles
+ * 
+ * Floating legend chips positioned below the window panel
+ */
+
+.scenario-legend {
+  position: absolute;
+  top: 80px; /* Below window panel - extra space to avoid overlap */
+  left: 20px; /* Extra margin from left edge */
+  display: flex;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: auto;
+}
+
+.scenario-legend-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 16px;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.scenario-legend-chip.invisible {
+  opacity: 0.2;
+  filter: grayscale(0.5);
+}
+
+.scenario-legend-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.scenario-legend-toggle,
+.scenario-legend-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  cursor: pointer;
+  color: white;
+  transition: background-color 0.15s ease;
+}
+
+.scenario-legend-toggle:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.scenario-legend-delete:hover {
+  background: rgba(255, 0, 0, 0.3);
+}
+
+.scenario-legend-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+  user-select: none;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .scenario-legend {
+    background: rgba(30, 30, 30, 0.95);
+  }
+  
+  .scenario-legend-toggle,
+  .scenario-legend-delete {
+    background: rgba(255, 255, 255, 0.15);
+  }
+  
+  .scenario-legend-toggle:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
+  
+  .scenario-legend-delete:hover {
+    background: rgba(255, 0, 0, 0.4);
+  }
+}
+

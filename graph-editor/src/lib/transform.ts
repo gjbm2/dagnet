@@ -48,8 +48,15 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       return null;
     }
     
+    // Edge MUST have a UUID - if missing, this is a data corruption issue
+    if (!e.uuid) {
+      console.error(`Edge missing UUID! from=${e.from}, to=${e.to}, id=${e.id}`);
+      // Don't create edges without proper UUIDs - they corrupt the scenario params
+      return null;
+    }
+    
     return {
-    id: e.uuid || `${e.from}->${e.to}`,  // ReactFlow edge ID uses the UUID
+    id: e.uuid,  // ReactFlow edge ID uses the UUID
     type: 'conversion',
     source: sourceNode.uuid,  // ReactFlow needs UUID (node.id in ReactFlow is the UUID)
     target: targetNode.uuid,  // ReactFlow needs UUID
@@ -57,7 +64,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     targetHandle: e.toHandle,
     reconnectable: true, // CSS and callback will enforce selection requirement
     data: {
-      uuid: e.uuid || `${e.from}->${e.to}`,
+      uuid: e.uuid,
       id: e.id,  // Human-readable ID (formerly "id")
       parameter_id: e.p?.id || e.parameter_id, // Probability parameter ID (prefer nested p.id, fallback to flat for backwards compat)
       cost_gbp_parameter_id: e.cost_gbp?.id || e.cost_gbp_parameter_id, // GBP cost parameter ID

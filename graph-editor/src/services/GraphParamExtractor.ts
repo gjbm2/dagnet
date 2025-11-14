@@ -26,7 +26,9 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
     for (const edge of graph.edges) {
       const edgeParams = extractEdgeParams(edge);
       if (edgeParams && Object.keys(edgeParams).length > 0) {
-        params.edges![edge.uuid] = edgeParams;
+        // Use human-readable ID if available, fallback to UUID
+        const key = edge.id || edge.uuid;
+        params.edges![key] = edgeParams;
       }
     }
   }
@@ -36,7 +38,9 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
     for (const node of graph.nodes) {
       const nodeParams = extractNodeParams(node);
       if (nodeParams && Object.keys(nodeParams).length > 0) {
-        params.nodes![node.uuid] = nodeParams;
+        // Use human-readable ID if available, fallback to UUID
+        const key = node.id || node.uuid;
+        params.nodes![key] = nodeParams;
       }
     }
   }
@@ -46,36 +50,48 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
 
 /**
  * Extract parameters from a single edge
+ * Only include defined (non-undefined) values
  */
 function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
   const params: EdgeParamDiff = {};
 
-  // Extract base probability
+  // Extract base probability (only defined fields)
   if (edge.p) {
-    params.p = {
-      mean: edge.p.mean,
-      stdev: edge.p.stdev,
-      distribution: edge.p.distribution,
-      min: edge.p.min,
-      max: edge.p.max,
-      alpha: edge.p.alpha,
-      beta: edge.p.beta,
-    };
+    const p: any = {};
+    if (edge.p.mean !== undefined) p.mean = edge.p.mean;
+    if (edge.p.stdev !== undefined) p.stdev = edge.p.stdev;
+    if (edge.p.distribution !== undefined) p.distribution = edge.p.distribution;
+    if (edge.p.min !== undefined) p.min = edge.p.min;
+    if (edge.p.max !== undefined) p.max = edge.p.max;
+    if (edge.p.alpha !== undefined) p.alpha = edge.p.alpha;
+    if (edge.p.beta !== undefined) p.beta = edge.p.beta;
+    
+    if (Object.keys(p).length > 0) {
+      params.p = p;
+    }
   }
 
-  // Extract conditional probabilities
+  // Extract conditional probabilities (only defined fields)
   if (edge.conditional_p && edge.conditional_p.length > 0) {
     params.conditional_p = {};
     for (const cond of edge.conditional_p) {
-      params.conditional_p[cond.condition] = {
-        mean: cond.p?.mean,
-        stdev: cond.p?.stdev,
-        distribution: cond.p?.distribution,
-        min: cond.p?.min,
-        max: cond.p?.max,
-        alpha: cond.p?.alpha,
-        beta: cond.p?.beta,
-      };
+      const condP: any = {};
+      if (cond.p?.mean !== undefined) condP.mean = cond.p.mean;
+      if (cond.p?.stdev !== undefined) condP.stdev = cond.p.stdev;
+      if (cond.p?.distribution !== undefined) condP.distribution = cond.p.distribution;
+      if (cond.p?.min !== undefined) condP.min = cond.p.min;
+      if (cond.p?.max !== undefined) condP.max = cond.p.max;
+      if (cond.p?.alpha !== undefined) condP.alpha = cond.p.alpha;
+      if (cond.p?.beta !== undefined) condP.beta = cond.p.beta;
+      
+      if (Object.keys(condP).length > 0) {
+        params.conditional_p[cond.condition] = condP;
+      }
+    }
+    
+    // Remove conditional_p if empty
+    if (Object.keys(params.conditional_p).length === 0) {
+      delete params.conditional_p;
     }
   }
 
@@ -84,23 +100,29 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     params.weight_default = edge.weight_default;
   }
 
-  // Extract costs
+  // Extract costs (only defined fields)
   if (edge.cost_gbp) {
-    params.cost_gbp = {
-      value: edge.cost_gbp.mean,
-      stdev: edge.cost_gbp.stdev,
-      distribution: edge.cost_gbp.distribution,
-      currency: 'GBP',
-    };
+    const costGbp: any = {};
+    if (edge.cost_gbp.mean !== undefined) costGbp.value = edge.cost_gbp.mean;
+    if (edge.cost_gbp.stdev !== undefined) costGbp.stdev = edge.cost_gbp.stdev;
+    if (edge.cost_gbp.distribution !== undefined) costGbp.distribution = edge.cost_gbp.distribution;
+    costGbp.currency = 'GBP';
+    
+    if (Object.keys(costGbp).length > 1) { // > 1 because currency is always set
+      params.cost_gbp = costGbp;
+    }
   }
 
   if (edge.cost_time) {
-    params.cost_time = {
-      value: edge.cost_time.mean,
-      stdev: edge.cost_time.stdev,
-      distribution: edge.cost_time.distribution,
-      units: 'days',
-    };
+    const costTime: any = {};
+    if (edge.cost_time.mean !== undefined) costTime.value = edge.cost_time.mean;
+    if (edge.cost_time.stdev !== undefined) costTime.stdev = edge.cost_time.stdev;
+    if (edge.cost_time.distribution !== undefined) costTime.distribution = edge.cost_time.distribution;
+    costTime.units = 'days';
+    
+    if (Object.keys(costTime).length > 1) { // > 1 because units is always set
+      params.cost_time = costTime;
+    }
   }
 
   return Object.keys(params).length > 0 ? params : null;
@@ -108,6 +130,7 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
 
 /**
  * Extract parameters from a single node
+ * Only include defined (non-undefined) values
  */
 function extractNodeParams(node: GraphNode): NodeParamDiff | null {
   const params: NodeParamDiff = {};
@@ -119,12 +142,15 @@ function extractNodeParams(node: GraphNode): NodeParamDiff | null {
     };
   }
 
-  // Extract costs
+  // Extract costs (only defined fields)
   if (node.costs) {
-    params.costs = {
-      monetary: node.costs.monetary,
-      time: node.costs.time,
-    };
+    const costs: any = {};
+    if (node.costs.monetary !== undefined) costs.monetary = node.costs.monetary;
+    if (node.costs.time !== undefined) costs.time = node.costs.time;
+    
+    if (Object.keys(costs).length > 0) {
+      params.costs = costs;
+    }
   }
 
   // Extract case variants

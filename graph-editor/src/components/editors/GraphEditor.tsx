@@ -24,6 +24,8 @@ import { Sparkles, FileText, Wrench } from 'lucide-react';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
+import { ScenarioLegend } from '../ScenarioLegend';
+import { assignColors } from '../../services/ColorAssigner';
 
 // Context to share selection state with sidebar panels
 interface SelectionContextType {
@@ -50,6 +52,73 @@ export function useSelectionContext() {
     throw new Error('useSelectionContext must be used within SelectionContext.Provider');
   }
   return context;
+}
+
+/**
+ * ScenarioLegendWrapper - wrapper component that has access to scenarios context
+ */
+function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
+  const scenariosContext = useScenariosContextOptional();
+  const { operations, tabs } = useTabContext();
+  
+  if (!scenariosContext || !tabId) {
+    return null;
+  }
+  
+  const { scenarios, deleteScenario } = scenariosContext;
+  
+  // Get tab's scenario state
+  const currentTab = tabs.find(t => t.id === tabId);
+  const scenarioState = currentTab?.editorState?.scenarioState;
+  const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
+  const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+  
+  // Assign colors
+  const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
+  
+  // Don't show if no user-created scenarios (excluding Base)
+  if (scenarios.length === 0) {
+    return null;
+  }
+  
+  const handleToggleVisibility = React.useCallback((scenarioId: string) => {
+    operations.toggleScenarioVisibility(tabId, scenarioId);
+  }, [operations, tabId]);
+  
+  const handleDelete = React.useCallback(async (scenarioId: string) => {
+    // No confirmation needed - it's reversible via graph history
+    try {
+      await deleteScenario(scenarioId);
+      
+      // Clean up visibility state if this scenario was visible
+      const scenarioState = operations.getScenarioState(tabId);
+      if (scenarioState?.visibleScenarioIds.includes(scenarioId)) {
+        const newVisibleIds = scenarioState.visibleScenarioIds.filter(id => id !== scenarioId);
+        const newColorOrderIds = scenarioState.visibleColorOrderIds.filter(id => id !== scenarioId);
+        
+        await operations.updateTabState(tabId, {
+          scenarioState: {
+            ...scenarioState,
+            visibleScenarioIds: newVisibleIds,
+            visibleColorOrderIds: newColorOrderIds,
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Failed to delete scenario:', error);
+    }
+  }, [deleteScenario, operations, tabId]);
+  
+  return (
+    <ScenarioLegend
+      scenarios={scenarios}
+      visibleScenarioIds={visibleScenarioIds}
+      colorMap={colorMap}
+      showCurrent={scenarios.length >= 1}
+      onToggleVisibility={handleToggleVisibility}
+      onDelete={handleDelete}
+    />
+  );
 }
 
 /**
@@ -1562,6 +1631,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         }}>
         {/* Window Selector with integrated What-If & Context buttons */}
         <WindowSelector tabId={tabId} />
+        
+        {/* Scenario Legend - shows when >1 scenario exists (excluding Base) */}
+        <ScenarioLegendWrapper tabId={tabId} />
         
         {/* Main DockLayout - spans entire graph editor */}
         {dockLayout && (
