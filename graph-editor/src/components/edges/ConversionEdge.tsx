@@ -106,10 +106,8 @@ interface ConversionEdgeData {
   effectiveWeight?: number; // Effective probability for this scenario overlay (for dashed line rendering)
   scenarioParams?: any;
   originalEdgeId?: string; // Original edge ID for overlay edges (used for lookups)
-  // Base edge rendering overrides when overlays are visible
-  suppressConditionalColors?: boolean;
-  suppressLabel?: boolean; // Suppress label rendering for overlay edges
-  forceBaseStrokeColor?: string;
+  // Scenario rendering flags
+  suppressLabel?: boolean; // Suppress label rendering for non-current overlay edges
 }
 
 export default function ConversionEdge({
@@ -443,10 +441,7 @@ export default function ConversionEdge({
   // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
   // Memoize color computation to ensure it updates when conditional_p colors change
   const edgeColor = useMemo(() => {
-    // If base edge requested to suppress conditional/case colors (when overlays visible), use neutral color
-    if (data?.forceBaseStrokeColor) {
-      return data.forceBaseStrokeColor as string;
-    }
+    // STEP 6: forceBaseStrokeColor removed (no base edges rendered in new pipeline)
     // Selected edges: darker gray to distinguish from highlighted edges
     if (selected) {
       return '#222'; // very dark gray for selection
@@ -1559,7 +1554,7 @@ export default function ConversionEdge({
                 key={`${id}-ci-upper`}
                 id={`${id}-ci-upper`}
                 style={{
-                  stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
+                  stroke: data?.scenarioOverlay ? data.scenarioColor : getEdgeColor(),
                   strokeWidth: confidenceData.widths.upper,
                   strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.outer,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -1580,7 +1575,7 @@ export default function ConversionEdge({
                 key={`${id}-ci-middle`}
                 id={`${id}-ci-middle`}
                 style={{
-                  stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
+                  stroke: data?.scenarioOverlay ? data.scenarioColor : getEdgeColor(),
                   strokeWidth: confidenceData.widths.middle,
                   strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.middle,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -1602,7 +1597,7 @@ export default function ConversionEdge({
                 key={`${id}-ci-lower`}
                 id={`${id}-ci-lower`}
                 style={{
-                  stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
+                  stroke: data?.scenarioOverlay ? data.scenarioColor : getEdgeColor(),
                   strokeWidth: confidenceData.widths.lower,
                   strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.inner,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -1627,7 +1622,7 @@ export default function ConversionEdge({
                 ref={pathRef}
                 id={id}
                 style={{
-                  stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
+                  stroke: data?.scenarioOverlay ? data.scenarioColor : getEdgeColor(),
                   strokeOpacity: data?.scenarioOverlay ? (data?.strokeOpacity ?? 0.8) : EDGE_OPACITY,
                   mixBlendMode: 'multiply',
                   fill: 'none',
@@ -1694,8 +1689,8 @@ export default function ConversionEdge({
           >
             <div style={{ textAlign: 'center' }}>
             {compositeLabel ? (
-              // Unified rendering via helper
-              renderCompositeLabel(compositeLabel, handleDoubleClick)
+              // STEP 5: Pass selected flag to ensure label colors adapt
+              renderCompositeLabel(compositeLabel, handleDoubleClick, selected)
             ) : (data?.probability === undefined || data?.probability === null) ? (
               // Error state: no probability defined
               <div style={{ 
