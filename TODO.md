@@ -1,13 +1,31 @@
 # TODO
 
+
+ok. we seem to have moved the zorder of current edges in front of labels; that is wrong. The simplest thing is probably to render edge zorder in the orer that layers are rendered on this tab (while making sure that layers other than current are transparent for the purposes of right & left mouse clicks)
+
+in particular, let's make sure that edges in general appear behind all other graph objcets (such as labels, conditional/variant colour markers, etc.)
+
+as for colour markers:
+- move them to the start of each edge
+- make them twice hte diamters
+
+also:
+- move all stop and play icons etc. to the top LEFT of each node, freeing up the other corners for other visual apparatus
+
+in the scenario palette, it should be possible to click swatches and change the display colour for a layer. we have an existing colour picker class in node/edge sidebar props we can re-use
+
 ## Scenarios project
+- label rendering still ugly
+- multiple 'x' showing up on edge labels
+- check conversion graph...scenarios are fucked on it...
+- confidence bands have gone over-wide...
+- test conditional ps.
+- Confidence interval rendering has been broken under scenarios
+- we've lost pmf warning flags for variant ps
+- inspect the styling of the props and tools sidebar & compare to the (white background) styling of the Scenarios panel. adapt the scenarios panel to match.
+  - you'll need to make the layers objects slightly shaded so they are viisible distinct from the panel background
 
-
-inspect the styling of the props and tools sidebar & compare to the (white background) styling of the Scenarios panel. adapt the scenarios panel to match.
-
-you'll need to make the layers objects slightly shaded so they are viisible distinct from the panel background
-
-# Current query DSL
+## Current query DSL
 
 now whatifdsl is becoming (gradually) a more powerful general statement of the current query applied to the graph.
 
@@ -26,18 +44,6 @@ If user creates a DIFF scenario rather than an ALL scenario, we can also subtrac
 
 e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and user then added window(1-Jan-25:1-Jan-25).case(experiment:treament), then when they created a diff snapshot, it would calculate window(1-Jan-25:1-Jan-25).case(experiment:treament)-window(1-Jan-25:1-Jan-25)=case(experiment:treament) (noting we need a service for this query subtraction & addition logic, not to do it inline in the scenario editor) and write "case(experiment:treament) @ 9:24am, 13-Nov-25"  as the scenario name
 
-
-
-## Scenarios polishing & bugs
-- selected edge LABELS are showing black text on a black label background, which ain't great...
-- check conversion graph...scenarios are fucked on it...
-- confidence bands have gone over-wide...
-- test conditional ps.
-- Confidence interval rendering has been broken under scenarios
-- we've lost pmf warning flags for variant ps
-
-## Critical Issues
-
 ### Data project
 **Case/Variant Filtering** (4-6 hrs)
  - Design case property mapping schema (Statsig case → Amplitude event property)
@@ -46,7 +52,6 @@ e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and
  - Test variant filtering (treatment vs control)
 
 ### Form Field Duplicate ID Warnings
-
 **Issue:** Multiple form editors (parameters, events, etc.) open in different tabs generate identical DOM element IDs, causing browser warnings about duplicate IDs. This is a violation of HTML spec where IDs must be unique across the entire document.
 
 **Affected Components:** 
@@ -68,9 +73,6 @@ e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and
 3. Ensure only one form instance per schema is mounted at a time (hide instead of unmount inactive tabs)
 
 **Priority:** Should be fixed before production release
-
-
-
 
 ## Major components
 - Edge ids not updating/persisting

@@ -60,9 +60,10 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
   // Always render 'current' layer (even if hidden), plus all truly visible layers
   // 'current' will be rendered at ~5% opacity when not in visibleScenarioIds
+  // IMPORTANT: Render 'current' LAST so it appears topmost in DOM (for pointer events)
   const layersToRender = visibleScenarioIds.includes('current')
-    ? visibleScenarioIds  // Current is visible, render as-is
-    : [...visibleScenarioIds, 'current'];  // Current is hidden, add it for ghost rendering
+    ? [...visibleScenarioIds.filter(id => id !== 'current'), 'current']  // Current last
+    : [...visibleScenarioIds, 'current'];  // Current is hidden, add it last
 
   // Calculate dynamic opacity based on number of visible layers
   const numVisibleLayers = visibleScenarioIds.length;
@@ -184,6 +185,13 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     const scenario = scenarios.find((s: any) => s.id === scenarioId);
     const isVisible = visibleScenarioIds.includes(scenarioId);
     const color = getScenarioColor(scenarioId, isVisible);
+    
+    console.log(`[buildScenarioRenderEdges] Rendering layer ${scenarioId}:`, {
+      isVisible,
+      color,
+      isCurrent: scenarioId === 'current',
+      visibleScenarioIds
+    });
 
     // Compose params based on layer type and visibility
     let composedParams = baseParams;
@@ -343,6 +351,15 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const overlayOpacity = (scenarioId === 'current' && !visibleScenarioIds.includes('current')) 
         ? HIDDEN_CURRENT_OPACITY 
         : dynamicLayerOpacity;
+      
+      if (scenarioId === 'current') {
+        console.log(`[buildScenarioRenderEdges] Current layer opacity:`, {
+          isInVisibleList: visibleScenarioIds.includes('current'),
+          computedOpacity: overlayOpacity,
+          HIDDEN_CURRENT_OPACITY,
+          dynamicLayerOpacity
+        });
+      }
 
       // STEP 2: Make 'current' edges fully interactive; others are visual-only
       const isCurrent = scenarioId === 'current';
@@ -393,8 +410,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           // 'current' is interactive; others are not
           pointerEvents: isCurrent ? 'auto' : 'none',
         },
-        // 'current' at z-index 0 (normal); others behind at -1
-        zIndex: isCurrent ? 0 : -1,
+        // 'current' at z-index 100 (top); overlays at -1 (behind)
+        zIndex: isCurrent ? 100 : -1,
       };
     });
 
