@@ -85,6 +85,15 @@ export function ScenarioOverlayRenderer({ tabId, graph }: ScenarioOverlayRendere
     return null;
   }
   
+  // Calculate dynamic opacity based on number of visible layers
+  // Formula: opacity = 1 - (1 - 0.8)^(1/n) where n = number of visible layers
+  // This ensures:
+  // - With 1 layer: opacity ≈ 0.8 (similar to before)
+  // - As more layers are added: opacity decreases to preserve overall visual intensity
+  const numVisibleLayers = overlayPaths.length;
+  const baseOpacity = 0.8;
+  const layerOpacity = 1 - Math.pow(1 - baseOpacity, 1 / numVisibleLayers);
+  
   // Render as SVG groups with blend mode
   // Note: This still needs to be inside ReactFlow's SVG viewport to work correctly
   return (
@@ -96,7 +105,7 @@ export function ScenarioOverlayRenderer({ tabId, graph }: ScenarioOverlayRendere
           data-scenario-id={scenario.scenarioId}
           style={{
             mixBlendMode: 'multiply',
-            opacity: 0.3,
+            opacity: layerOpacity,
           } as any}
         >
           {scenario.paths.map((pathData) => (

@@ -57,10 +57,11 @@ export function parseWhatIfDSL(dsl: WhatIfDSL, graph?: any): WhatIfOverrides {
       );
       
       if (caseNode) {
-        // Use node UUID or ID as the key
-        const nodeKey = caseNode.uuid || caseNode.id;
-        if (nodeKey) {
-          caseOverrides[nodeKey] = value;
+        // IMPORTANT: use the graph node ID as the key, because all later lookups
+        // (e.g. in computeEffectiveEdgeProbability / getEdgeWhatIfDisplay) use caseNode.id
+        const nodeIdKey = caseNode.id || caseNode.uuid;
+        if (nodeIdKey) {
+          caseOverrides[nodeIdKey] = value;
         }
       }
     } else {

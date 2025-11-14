@@ -1,6 +1,5 @@
 import React from 'react';
-import WhatIfAnalysisControl from './WhatIfAnalysisControl';
-import WhatIfAnalysisHeader from './WhatIfAnalysisHeader';
+import ScenariosPanel from './panels/ScenariosPanel';
 import PropertiesPanel from './PropertiesPanel';
 import './SidebarHoverPreview.css';
 
@@ -57,10 +56,10 @@ export default function SidebarHoverPreview({
         {panel === 'what-if' && (
           <div className="preview-panel">
             <div className="preview-header">
-              <WhatIfAnalysisHeader tabId={tabId} />
+              Scenarios
             </div>
             <div className="preview-body">
-              <WhatIfAnalysisControl tabId={tabId} />
+              <ScenariosPanel tabId={tabId} />
             </div>
           </div>
         )}
