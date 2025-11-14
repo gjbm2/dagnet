@@ -95,6 +95,32 @@ export function getConditionalColor(edge: GraphEdge): string | null {
 }
 
 /**
+ * Get the color for a specific conditional probability entry
+ * Priority:
+ * 1. User-set color on this specific condition (cp.color)
+ * 2. Generated color based on this condition's signature
+ * 
+ * This ensures each condition gets its own color, not shared across conditions.
+ */
+export function getConditionalProbabilityColor(cp: { condition: string; color?: string }): string {
+  // Priority 1: Use user-set color if present
+  if (cp.color) {
+    return cp.color;
+  }
+  
+  // Priority 2: Generate color from this specific condition's signature
+  const conditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+  if (conditionStr) {
+    const hash = simpleHash(conditionStr);
+    const paletteIndex = hash % CONDITIONAL_COLOR_PALETTE.length;
+    return CONDITIONAL_COLOR_PALETTE[paletteIndex];
+  }
+  
+  // Fallback: default green
+  return '#4ade80';
+}
+
+/**
  * Check if an edge is a conditional edge (has conditional probabilities)
  */
 export function isConditionalEdge(edge: GraphEdge): boolean {

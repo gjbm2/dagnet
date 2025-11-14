@@ -29,7 +29,6 @@ import {
   GripVertical, 
   Plus, 
   Camera,
-  Layers,
   ChevronDown,
   FileText,
   Check,
@@ -90,10 +89,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     return (
       <div className="scenarios-panel">
         <div className="scenarios-header">
-          <div className="scenarios-title">
-            <Layers size={16} />
-            <span>Scenarios</span>
-          </div>
+          <h3 className="scenarios-title">Scenarios</h3>
         </div>
         <div style={{ padding: '16px', color: '#9CA3AF', fontSize: '13px' }}>
           Loading scenarios...
@@ -112,7 +108,6 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [pendingBlankScenarioId, setPendingBlankScenarioId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; scenarioId: string } | null>(null);
-  const [colorPickerFor, setColorPickerFor] = useState<string | null>(null); // ID of scenario/current/base being color-picked
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   
   // Close menu on click outside
@@ -137,7 +132,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   
   // Get tab's scenario state - use tabs directly to ensure reactivity
   const currentTab = tabs.find(t => t.id === tabId);
-  const scenarioState = currentTab?.editorState?.scenarioState;
+  const scenarioState = currentTab?.editorState?.scenarioState as any;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
@@ -182,7 +177,6 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     } else {
       updateScenarioColor(scenarioId, color);
     }
-    setColorPickerFor(null);
   }, [setCurrentColor, setBaseColor, updateScenarioColor]);
   
   /**
@@ -415,7 +409,9 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       await flatten();
       
       // Update tab visibility: show only Current, hide Original
-      await operations.setVisibleScenarios(tabId, ['current']);
+      if (tabId) {
+        await operations.setVisibleScenarios(tabId, ['current']);
+      }
       
       toast.success('Flattened: Current copied to Original, all scenarios removed');
     } catch (error) {
@@ -728,12 +724,13 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       
       // Update tab state with new orders
       await operations.updateTabState(tabId, {
+        // Cast to any to align with extended TabScenarioState shape (includes scenarioOrder)
         scenarioState: {
           ...currentState,
           scenarioOrder: newScenarioOrder,
           visibleScenarioIds: newVisibleOrder,
           visibleColorOrderIds: currentState.visibleColorOrderIds
-        }
+        } as any
       });
       console.log(`[D&D] REORDER: Successfully updated tab state`);
     } catch (error) {
@@ -762,10 +759,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       <div className="scenarios-panel">
       {/* Header */}
       <div className="scenarios-header">
-        <div className="scenarios-title">
-          <Layers size={16} />
-          <span>Scenarios</span>
-        </div>
+        <h3 className="scenarios-title">Scenarios</h3>
       </div>
       
       {/* Scenario List */}
@@ -779,18 +773,16 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {currentVisible ? (
-                <div
-                  className="scenario-color-swatch"
-                  style={{ 
-                backgroundColor: getScenarioColor('current', currentVisible),
-                cursor: 'pointer'
-                  }}
-              onClick={() => setColorPickerFor('current')}
-              title="Click to change colour"
-            />
+            <div className="scenario-color-swatch-wrapper">
+              <ColorSelector
+                compact={true}
+                value={getScenarioColor('current', currentVisible)}
+                onChange={(color) => handleColorChange('current', color)}
+              />
+            </div>
           ) : (
             <div className="scenario-color-swatch-placeholder"></div>
-              )}
+          )}
           
           <div 
             className="scenario-name"
@@ -931,16 +923,17 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               </div>
               
               {/* Swatch - always show, faded if not visible, clickable to change colour */}
-                <div
-                  className="scenario-color-swatch"
-                style={{ 
-                  backgroundColor: scenarioColor,
-                  opacity: isVisible ? 1 : 0.3,
-                  cursor: 'pointer'
-                }}
-                onClick={() => setColorPickerFor(scenario.id)}
+              <div
+                className="scenario-color-swatch-wrapper"
+                style={{ opacity: isVisible ? 1 : 0.3 }}
                 title="Click to change colour"
+              >
+                <ColorSelector
+                  compact={true}
+                  value={scenarioColor}
+                  onChange={(color) => handleColorChange(scenario.id, color)}
                 />
+              </div>
               
               {/* Name - clickable to edit, or input when editing */}
               {isEditing ? (
@@ -1025,15 +1018,13 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {baseVisible ? (
-            <div
-              className="scenario-color-swatch"
-              style={{ 
-                backgroundColor: getScenarioColor('base', baseVisible),
-                cursor: 'pointer'
-              }}
-              onClick={() => setColorPickerFor('base')}
-              title="Click to change colour"
-            />
+            <div className="scenario-color-swatch-wrapper">
+              <ColorSelector
+                compact={true}
+                value={getScenarioColor('base', baseVisible)}
+                onChange={(color) => handleColorChange('base', color)}
+              />
+            </div>
           ) : (
             <div className="scenario-color-swatch-placeholder"></div>
           )}
@@ -1074,85 +1065,11 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       />
     )}
     
-    {/* Color Picker */}
-    {colorPickerFor && (
-      <div
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0,0,0,0.3)',
-          zIndex: 10000,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center'
-        }}
-        onClick={() => setColorPickerFor(null)}
-      >
-        <div
-          style={{
-            background: 'white',
-            padding: '20px',
-            borderRadius: '8px',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <h3 style={{ marginTop: 0, marginBottom: '16px', fontSize: '14px', fontWeight: 600 }}>
-            Choose colour{' '}
-            {colorPickerFor === 'current' ? 'for Current' : 
-             colorPickerFor === 'base' ? 'for Original' :
-             `for ${scenarios.find(s => s.id === colorPickerFor)?.name || 'scenario'}`}
-          </h3>
-          <ColorSelector
-            value={getScenarioColor(colorPickerFor)}
-            onChange={(color) => handleColorChange(colorPickerFor, color)}
-            label=""
-            presetColors={[
-              { name: 'Hot Pink', value: '#EC4899' },
-              { name: 'Amber', value: '#F59E0B' },
-              { name: 'Emerald', value: '#10B981' },
-              { name: 'Violet', value: '#8B5CF6' },
-              { name: 'Red', value: '#EF4444' },
-              { name: 'Cyan', value: '#06B6D4' },
-              { name: 'Orange', value: '#F97316' },
-              { name: 'Purple', value: '#A855F7' },
-              { name: 'Teal', value: '#14B8A6' },
-              { name: 'Rose', value: '#F43F5E' },
-              { name: 'Lime', value: '#84CC16' },
-              { name: 'Indigo', value: '#6366F1' },
-              { name: 'Fuchsia', value: '#D946EF' },
-              { name: 'Sky', value: '#0EA5E9' },
-              { name: 'Orange Lt', value: '#FB923C' },
-              { name: 'Green', value: '#22C55E' },
-            ]}
-          />
-        <button
-            onClick={() => setColorPickerFor(null)}
-            style={{
-              marginTop: '16px',
-              padding: '8px 16px',
-              background: '#3B82F6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              width: '100%'
-            }}
-          >
-            Done
-        </button>
-      </div>
-    </div>
-    )}
-    
     {/* Editor Modal */}
     <ScenarioEditorModal
       isOpen={editorOpenScenarioId !== null}
       scenarioId={editorOpenScenarioId}
-      tabId={tabId}
+      tabId={tabId ?? null}
       onClose={handleCloseEditor}
       onSave={handleModalSave}
     />

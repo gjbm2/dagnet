@@ -1,22 +1,8 @@
 # TODO
 
-
-ok. we seem to have moved the zorder of current edges in front of labels; that is wrong. The simplest thing is probably to render edge zorder in the orer that layers are rendered on this tab (while making sure that layers other than current are transparent for the purposes of right & left mouse clicks)
-
-in particular, let's make sure that edges in general appear behind all other graph objcets (such as labels, conditional/variant colour markers, etc.)
-
-as for colour markers:
-- move them to the start of each edge
-- make them twice hte diamters
-
-also:
-- move all stop and play icons etc. to the top LEFT of each node, freeing up the other corners for other visual apparatus
-
-in the scenario palette, it should be possible to click swatches and change the display colour for a layer. we have an existing colour picker class in node/edge sidebar props we can re-use
-
 ## Scenarios project
-- label rendering still ugly
-- multiple 'x' showing up on edge labels
+- now can finally sort labels for edges properly in lozenges along the spline. to come.
+- can't cick 'x' to delete edges (do we need? dunno; maybe not or sort when we sort label positions )
 - check conversion graph...scenarios are fucked on it...
 - confidence bands have gone over-wide...
 - test conditional ps.
@@ -24,6 +10,8 @@ in the scenario palette, it should be possible to click swatches and change the 
 - we've lost pmf warning flags for variant ps
 - inspect the styling of the props and tools sidebar & compare to the (white background) styling of the Scenarios panel. adapt the scenarios panel to match.
   - you'll need to make the layers objects slightly shaded so they are viisible distinct from the panel background
+- when to draw an arrowhead logic has broken; should be width of total edge bundle
+- clipping chevron sizing under layers is slighgtly off
 
 ## Current query DSL
 

@@ -538,12 +538,12 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         </div>
       )}
       
-      {/* End node badge - bottom-right corner */}
+      {/* End node badge - top-left corner (below start badge if both) */}
       {isTerminalNode && (
         <div style={{
           position: 'absolute',
-          bottom: '6px',
-          right: '6px',
+          top: isStartNode ? '30px' : '6px',
+          left: '6px',
           width: '18px',
           height: '18px',
           borderRadius: '50%',

@@ -6,7 +6,7 @@ import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useTabContext } from '../../contexts/TabContext';
 import Tooltip from '@/components/Tooltip';
-import { getConditionalColor, isConditionalEdge } from '@/lib/conditionalColors';
+import { getConditionalColor, getConditionalProbabilityColor, isConditionalEdge } from '@/lib/conditionalColors';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
@@ -25,6 +25,117 @@ const USE_SMOOTH_STEP = false;
 const EDGE_OPACITY = 0.8; // Adjustable transparency (0-1)
 const EDGE_BLEND_MODE = 'multiply'; // 'normal', 'multiply', 'screen', 'difference'
 const USE_GROUP_BASED_BLENDING = false; // Enable scenario-specific blending
+
+// Simple point-in-triangle test using barycentric coordinates
+function isPointInTriangle(
+  px: number,
+  py: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x3: number,
+  y3: number
+): boolean {
+  const v0x = x3 - x1;
+  const v0y = y3 - y1;
+  const v1x = x2 - x1;
+  const v1y = y2 - y1;
+  const v2x = px - x1;
+  const v2y = py - y1;
+
+  const dot00 = v0x * v0x + v0y * v0y;
+  const dot01 = v0x * v1x + v0y * v1y;
+  const dot02 = v0x * v2x + v0y * v2y;
+  const dot11 = v1x * v1x + v1y * v1y;
+  const dot12 = v1x * v2x + v1y * v2y;
+
+  const denom = dot00 * dot11 - dot01 * dot01 || 1;
+  const invDenom = 1 / denom;
+  const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+  const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+  return u >= 0 && v >= 0 && u + v <= 1;
+}
+
+/**
+ * Compute the distance along the edge path at which the edge emerges from the
+ * SOURCE chevron cutout, taking into account this edge's actual spline and
+ * lateral offset vs. the bundle centerline.
+ *
+ * We do this by:
+ * - Looking up the source clipPath triangle (chevron) in the DOM
+ * - Sampling along the edge path until it leaves that triangle
+ */
+function computeVisibleStartOffsetForEdge(
+  pathEl: SVGGeometryElement,
+  sourceClipPathId?: string
+): number {
+  if (!sourceClipPathId) return 0;
+
+  const clip = document.getElementById(sourceClipPathId) as SVGClipPathElement | null;
+  if (!clip) return 0;
+
+  const clipPath = clip.querySelector('path');
+  const d = clipPath?.getAttribute('d');
+  if (!d) return 0;
+
+  // Extract the last 3 coordinate pairs from the path data.
+  // For source chevrons, the d string is:
+  //   largeRect ... Z Mx1 y1 Lx2 y2 Lx3 y3 Z
+  // So the final 6 numbers are the triangle vertices.
+  const matches = d.match(/-?\d+(\.\d+)?/g);
+  if (!matches || matches.length < 6) return 0;
+  const nums = matches.map(Number);
+  const [x1, y1, x2, y2, x3, y3] = nums.slice(-6);
+
+  const totalLen = pathEl.getTotalLength();
+  if (!totalLen || totalLen <= 0) return 0;
+
+  // If the very start of the path is already outside the triangle, nothing to clip.
+  const startPt = pathEl.getPointAtLength(0);
+  if (!isPointInTriangle(startPt.x, startPt.y, x1, y1, x2, y2, x3, y3)) {
+    return 0;
+  }
+
+  // Coarse search: walk outwards until we leave the triangle, with a small step.
+  const maxProbe = Math.min(totalLen * 0.3, 60); // chevron is always very close to node
+  const coarseStep = 2; // px along path
+  let insideUntil = 0;
+  let foundExit = false;
+
+  for (let dLen = coarseStep; dLen <= maxProbe; dLen += coarseStep) {
+    const p = pathEl.getPointAtLength(dLen);
+    const inside = isPointInTriangle(p.x, p.y, x1, y1, x2, y2, x3, y3);
+    if (inside) {
+      insideUntil = dLen;
+    } else {
+      // Edge has exited the chevron between insideUntil and dLen
+      foundExit = true;
+      // Refine with a few iterations of binary search between inside/outside bounds
+      let lo = insideUntil;
+      let hi = dLen;
+      for (let i = 0; i < 6; i++) {
+        const mid = (lo + hi) / 2;
+        const pm = pathEl.getPointAtLength(mid);
+        if (isPointInTriangle(pm.x, pm.y, x1, y1, x2, y2, x3, y3)) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      return hi;
+    }
+  }
+
+  // If we never left the triangle in the probe window, fall back to 0
+  // rather than guessing: in practice this should not happen for well-formed chevrons.
+  if (!foundExit) {
+    return 0;
+  }
+
+  return insideUntil;
+}
 
 interface ConversionEdgeData {
   uuid: string;
@@ -1648,6 +1759,7 @@ export default function ConversionEdge({
             textAlign: 'center',
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
             pointerEvents: 'auto',
+              zIndex: 2000,  // Ensure labels are above all edges
           }}
             onDoubleClick={handleDoubleClick}
             onMouseEnter={(e) => {
@@ -1711,61 +1823,88 @@ export default function ConversionEdge({
         )}
         
         {/* Colored markers for case variants and conditional_p edges */}
-        {!data?.scenarioOverlay && (() => {
+        {!data?.scenarioOverlay && fullEdge && (() => {
           const markers: React.ReactNode[] = [];
-          let markerIndex = 0;
-          
-          // Check if this is a case variant edge
+          const pathEl = pathRef.current;
+          if (!pathEl) return null;
+
+          const pathLength = pathEl.getTotalLength();
+          if (!pathLength || pathLength <= 0) return null;
+
+          // Per-edge distance from path start to VISIBLE start (after source chevron bite),
+          // computed by intersecting this edge's spline with the source chevron clipPath triangle.
+          const visibleStartOffset = computeVisibleStartOffsetForEdge(
+            pathEl,
+            data?.sourceClipPathId
+          );
+
+          // How far from the visible start the first bead should sit
+          const CONST_MARKER_DISTANCE = 12; // px from visible edge start
+          const BEAD_SPACING = 18;          // px between beads along the spline
+
+          const baseDistance = visibleStartOffset + CONST_MARKER_DISTANCE;
+
+          // Helper to clamp distance so we stay on the path
+          const getDistanceForBead = (index: number) =>
+            Math.min(baseDistance + index * BEAD_SPACING, pathLength * 0.9);
+
+          let beadIndex = 0;
+
+          // Case variant bead (if any) – first in the string
           const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
-          if (sourceNode?.type === 'case' && sourceNode?.layout?.color && fullEdge?.case_variant) {
-            const markerX = sourceX + (targetX - sourceX) * 0.33;
-            const markerY = sourceY + (targetY - sourceY) * 0.33;
+          if (sourceNode?.type === 'case' && sourceNode?.layout?.color && fullEdge.case_variant) {
+            const d = getDistanceForBead(beadIndex++);
+            const point = pathEl.getPointAtLength(d);
+
             markers.push(
               <div
-                key={`case-marker-${markerIndex++}`}
+                key={`case-marker-${id}`}
                 style={{
                   position: 'absolute',
-                  transform: `translate(-50%, -50%) translate(${markerX}px,${markerY}px)`,
-                  width: '8px',
-                  height: '8px',
+                  transform: `translate(-50%, -50%) translate(${point.x}px,${point.y}px)`,
+                  width: '16px',
+                  height: '16px',
                   borderRadius: '50%',
                   background: sourceNode.layout.color,
-                  border: '1px solid white',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                  border: '2px solid white',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
                   pointerEvents: 'none',
-                  zIndex: 10,
+                  zIndex: 1000,
                 }}
                 title={`Case: ${fullEdge.case_variant}`}
               />
             );
           }
-          
-          // Check for conditional_p edges
-          if (fullEdge && isConditionalEdge(fullEdge)) {
-            const condColor = getConditionalColor(fullEdge) || '#4ade80';
-            const markerX = sourceX + (targetX - sourceX) * 0.33;
-            const markerY = sourceY + (targetY - sourceY) * 0.33;
-            const offsetX = markerIndex * 10; // Offset multiple markers horizontally
-            markers.push(
-              <div
-                key={`cond-marker-${markerIndex++}`}
-                style={{
-                  position: 'absolute',
-                  transform: `translate(-50%, -50%) translate(${markerX + offsetX}px,${markerY}px)`,
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: condColor,
-                  border: '1px solid white',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
-                  pointerEvents: 'none',
-                  zIndex: 10,
-                }}
-                title={`Conditional edge`}
-              />
-            );
+
+          // One bead per conditional_p entry – continue the string along the spline
+          if (isConditionalEdge(fullEdge) && fullEdge.conditional_p && fullEdge.conditional_p.length > 0) {
+            fullEdge.conditional_p.forEach((cp, idx) => {
+              // Use color specific to THIS condition, not shared across all conditions
+              const condColor = getConditionalProbabilityColor(cp);
+              const d = getDistanceForBead(beadIndex++);
+              const point = pathEl.getPointAtLength(d);
+
+              markers.push(
+                <div
+                  key={`cond-marker-${id}-${idx}`}
+                  style={{
+                    position: 'absolute',
+                    transform: `translate(-50%, -50%) translate(${point.x}px,${point.y}px)`,
+                    width: '16px',
+                    height: '16px',
+                    borderRadius: '50%',
+                    background: condColor,
+                    border: '2px solid white',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                    pointerEvents: 'none',
+                    zIndex: 1000,
+                  }}
+                  title={cp.condition ? `Condition: ${cp.condition}` : 'Conditional edge'}
+                />
+              );
+            });
           }
-          
+
           return markers.length > 0 ? <>{markers}</> : null;
         })()}
       </EdgeLabelRenderer>
