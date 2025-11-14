@@ -61,7 +61,7 @@ export function ScenarioLegend({
     } else {
       const scenario = scenarios.find(s => s.id === scenarioId);
       return scenario?.color || '#808080';
-    }
+  }
   }, [visibleScenarioIds.length, currentColor, baseColor, scenarios]);
   
   // Derive tab-specific order for user scenarios (excluding base/current)
