@@ -399,9 +399,8 @@ export function normalizeConstraintString(constraint: string): string {
  * @returns DSL string like "case(case_id:treatment)" or "case(node_id:treatment)"
  */
 export function generateCaseDSL(caseNodeId: string, variantName: string, useCaseId: boolean = true): string {
-  if (useCaseId) {
-    return `case(case_id:${variantName})`;
-  }
+  // Both formats use the same syntax: case(identifier:variant)
+  // The difference is just whether identifier is a semantic case.id or a node UUID
   return `case(${caseNodeId}:${variantName})`;
 }
 

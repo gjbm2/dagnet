@@ -16,7 +16,6 @@
 
 import React from 'react';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
-import { assignColors } from '../../services/ColorAssigner';
 import { composeParams } from '../../services/CompositionService';
 import type { ScenarioParams } from '../../types/scenarios';
 
@@ -274,7 +273,9 @@ export function buildCompositeLabel(
   scenariosContext: any,
   activeTabId: string | null,
   tabs: any[],
-  whatIfDSL?: string | null
+  whatIfDSL?: string | null,
+  currentColor?: string,
+  baseColor?: string
 ): CompositeLabel | null {
   if (!scenariosContext || !graph || !activeTabId) {
     // No scenarios context: return single segment for current layer
@@ -306,6 +307,25 @@ export function buildCompositeLabel(
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
   
+  // Get scenario color using same logic as elsewhere
+  // Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned color.
+  const getScenarioColor = (scenarioId: string, isVisible: boolean = true): string => {
+    // Single-layer grey override: ONLY apply to the visible layer when exactly 1 layer is visible
+    if (isVisible && visibleScenarioIds.length === 1) {
+      return '#808080';
+    }
+    
+    // Get stored colour (for both visible and hidden layers)
+    if (scenarioId === 'current') {
+      return currentColor || '#3B82F6';
+    } else if (scenarioId === 'base') {
+      return baseColor || '#A3A3A3';
+    } else {
+      const scenario = scenariosContext.scenarios.find((s: any) => s.id === scenarioId);
+      return scenario?.color || '#808080';
+    }
+  };
+  
   // If no visible scenarios, treat as single current segment
   if (visibleScenarioIds.length === 0) {
     const info = getEdgeInfoForLayer('current', edge, graph, scenariosContext, whatIfDSL);
@@ -320,8 +340,6 @@ export function buildCompositeLabel(
     };
   }
   
-  const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
-  
   const segments: LabelSegment[] = [];
   
   // Add segment for each visible layer (bottom-to-top in stack order)
@@ -330,7 +348,7 @@ export function buildCompositeLabel(
     segments.push({
       ...info,
       layerId,
-      color: colorMap.get(layerId) || '#808080',
+      color: getScenarioColor(layerId, true),
       isHidden: false
     });
   }

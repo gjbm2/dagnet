@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { SidebarState } from '../hooks/useSidebarState';
-import { Sparkles, FileText, Wrench } from 'lucide-react';
+import { Layers, FileText, Wrench } from 'lucide-react';
 import './SidebarIconBar.css';
 
 interface SidebarIconBarProps {
@@ -62,16 +62,16 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
   
   return (
     <div className="sidebar-icon-bar">
-      {/* What-If Icon */}
+      {/* Scenarios Icon */}
       <button
         className={getIconState('what-if').className}
         onClick={() => handleClick('what-if')}
         onMouseEnter={() => handleMouseEnter('what-if')}
         onMouseLeave={handleMouseLeave}
-        title="What-If Analysis (Ctrl/Cmd + Shift + W)"
-        aria-label="Open What-If Analysis"
+        title="Scenarios (Ctrl/Cmd + Shift + W)"
+        aria-label="Open Scenarios Panel"
       >
-        <Sparkles className="icon" size={20} strokeWidth={2} />
+        <Layers className="icon" size={20} strokeWidth={2} />
         {state.floatingPanels.includes('what-if') && (
           <span className="floating-indicator">↗</span>
         )}

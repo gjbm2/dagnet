@@ -9,8 +9,8 @@ nodes:
     event_id: household-created
     event_id_overridden: true
     layout:
-      x: -534
-      'y': 116
+      x: -551
+      'y': 81
       rank: 0
   - uuid: 52207d6c-d3e3-4fda-a727-484eb1706041
     id: b
@@ -27,17 +27,17 @@ nodes:
     absorbing: false
     type: case
     case:
-      id: ''
+      id: test
       status: active
       variants:
         - name: control
+          weight: 0.8
+        - name: treatment
           weight: 0.2
           weight_overridden: true
-        - name: treatment
-          weight: 0.8
     layout:
-      x: -102
-      'y': 313
+      x: -75
+      'y': 225
       color: '#EC4899'
   - uuid: efb60fac-b7ac-431a-8a70-6eb33b345861
     id: e
@@ -45,16 +45,16 @@ nodes:
     absorbing: true
     outcome_type: success
     layout:
-      x: 624
-      'y': 279
+      x: 463
+      'y': 245
   - uuid: 982e2577-27c6-41c5-8250-9a87aec2db20
     id: d
     label: D
     absorbing: true
     outcome_type: failure
     layout:
-      x: 472
-      'y': -72
+      x: 450
+      'y': -22
   - uuid: 3168849e-e05e-408a-8aeb-edbd7fca78e1
     id: segue-node
     label: Segue
@@ -63,14 +63,14 @@ nodes:
       x: -287
       'y': -48
   - uuid: 53a3ba50-c10c-488c-a2f0-a3c031c51108
-    id: '7'
+    id: ''
     label: Node 7
     absorbing: false
     layout:
-      x: 804
-      'y': -45
+      x: 860
+      'y': 111
 edges:
-  - uuid: e31ccca3-273a-4427-902f-137a54692964
+  - uuid: 550e8400-e29b-41d4-a716-446655440001->1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1
     id: start-to-node-3
     from: 550e8400-e29b-41d4-a716-446655440001
     to: 1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1
@@ -80,18 +80,31 @@ edges:
       mean: 0.54
     description: ''
     query: from(a).to(c)
-  - uuid: c626efe0-251c-498d-bdfd-117404812443
+  - uuid: 1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1->982e2577-27c6-41c5-8250-9a87aec2db20
     id: node-3-to-node-5
     from: 1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1
     to: 982e2577-27c6-41c5-8250-9a87aec2db20
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1
+      mean: 1
       mean_overridden: true
     description: ''
     query: from(c).to(d)
     case_variant: treatment
+  - uuid: 550e8400-e29b-41d4-a716-446655440001->52207d6c-d3e3-4fda-a727-484eb1706041
+    id: start-to-node-2
+    from: 550e8400-e29b-41d4-a716-446655440001
+    to: 52207d6c-d3e3-4fda-a727-484eb1706041
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.36000000000000004
+      id: test
+      mean_overridden: true
+    description: ''
+    query: from(a).to(b).exclude(segue-node)
+    parameter_id: test
   - uuid: segue-node-to-b
     id: segue-node-to-b
     from: 3168849e-e05e-408a-8aeb-edbd7fca78e1
@@ -103,7 +116,7 @@ edges:
     description: ''
     query: from(segue-node).to(b)
   - uuid: a-to-segue-node
-    id: start-to-segue-node
+    id: 550e8400-e29b-41d4-a716-446655440001->3168849e-e05e-408a-8aeb-edbd7fca78e1
     from: 550e8400-e29b-41d4-a716-446655440001
     to: 3168849e-e05e-408a-8aeb-edbd7fca78e1
     fromHandle: right-out
@@ -113,85 +126,15 @@ edges:
       mean_overridden: true
     query: from(a).to(segue-node)
     description: ''
-  - uuid: e5ad1efc-b9af-4cb5-8c79-7a5740c62155
-    id: node-2-to-node-4
-    from: 52207d6c-d3e3-4fda-a727-484eb1706041
-    to: efb60fac-b7ac-431a-8a70-6eb33b345861
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.4
-      mean_overridden: true
-    description: ''
-    query: from(b).to(e)
-    conditional_p:
-      - condition: visited(segue-node)
-        query: from(b).to(e).visited(segue-node)
-        query_overridden: false
-        p:
-          mean: 0.9
-  - uuid: cd4ea2a6-8176-476a-b833-9a97ac3c1af5
-    id: node-3-to-node-4
-    from: 1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1
-    to: efb60fac-b7ac-431a-8a70-6eb33b345861
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 1
-      mean_overridden: true
-    description: ''
-    query: from(c).to(e)
-    case_variant: control
-  - uuid: 560f30e5-c3c6-476e-b342-e59187df4718
-    id: e-to-7
-    from: efb60fac-b7ac-431a-8a70-6eb33b345861
-    to: 53a3ba50-c10c-488c-a2f0-a3c031c51108
-    fromHandle: top-out
-    toHandle: bottom
-    p:
-      mean: 0.2
-      mean_overridden: true
-    query: from(e).to()
-    description: ''
-  - uuid: e0f5def8-f71c-4e7d-9d74-8cdcf9a0cbc5
-    id: d-to-7
-    from: 982e2577-27c6-41c5-8250-9a87aec2db20
-    to: 53a3ba50-c10c-488c-a2f0-a3c031c51108
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.3
-      mean_overridden: true
-    query: from(d).to()
-    description: ''
-  - uuid: 409eea6e-cf9d-47ed-9936-5720fb01731a
-    id: start-to-node-2
-    from: 550e8400-e29b-41d4-a716-446655440001
-    to: 52207d6c-d3e3-4fda-a727-484eb1706041
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.36000000000000004
-      id: test
-      mean_overridden: true
-      stdev: 0.2
-      stdev_overridden: true
-    description: ''
-    query: from(a).to(b).exclude(segue-node)
-    parameter_id: test
-    cost_gbp:
-      mean: 1
-      mean_overridden: true
-  - uuid: f97f63c0-07f8-491c-86e6-9a30bab46314
+  - uuid: 52207d6c-d3e3-4fda-a727-484eb1706041->982e2577-27c6-41c5-8250-9a87aec2db20
     id: node-2-to-node-5
     from: 52207d6c-d3e3-4fda-a727-484eb1706041
     to: 982e2577-27c6-41c5-8250-9a87aec2db20
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.6
-      stdev: 0.2
-      stdev_overridden: true
+      mean: 0.8
+      mean_overridden: true
     description: ''
     query: from(b).to(d)
     conditional_p:
@@ -201,6 +144,56 @@ edges:
         p:
           mean: 0.1
           mean_overridden: true
+  - uuid: 52207d6c-d3e3-4fda-a727-484eb1706041->efb60fac-b7ac-431a-8a70-6eb33b345861
+    id: node-2-to-node-4
+    from: 52207d6c-d3e3-4fda-a727-484eb1706041
+    to: efb60fac-b7ac-431a-8a70-6eb33b345861
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.2
+      mean_overridden: true
+    description: ''
+    query: from(b).to(e)
+    conditional_p:
+      - condition: visited(segue-node)
+        query: from(b).to(e).visited(segue-node)
+        query_overridden: false
+        p:
+          mean: 0.9
+  - uuid: d-to-53a3ba50-c10c-488c-a2f0-a3c031c51108
+    id: d-to-53a3ba50-c10c-488c-a2f0-a3c031c51108
+    from: 982e2577-27c6-41c5-8250-9a87aec2db20
+    to: 53a3ba50-c10c-488c-a2f0-a3c031c51108
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 1
+      mean_overridden: true
+    query: from(d).to()
+    description: ''
+  - uuid: e-to-53a3ba50-c10c-488c-a2f0-a3c031c51108
+    id: e-to-53a3ba50-c10c-488c-a2f0-a3c031c51108
+    from: efb60fac-b7ac-431a-8a70-6eb33b345861
+    to: 53a3ba50-c10c-488c-a2f0-a3c031c51108
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.4
+      mean_overridden: true
+    query: from(e).to()
+    description: ''
+  - uuid: 1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1->efb60fac-b7ac-431a-8a70-6eb33b345861
+    id: node-3-to-node-4
+    from: 1ddd0b9e-b8f8-4af0-b07e-daf23c2defe1
+    to: efb60fac-b7ac-431a-8a70-6eb33b345861
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.9
+    description: ''
+    query: from(c).to(e)
+    case_variant: control
 policies:
   default_outcome: abandon
   overflow_policy: error
@@ -210,7 +203,7 @@ metadata:
   created_at: '2025-10-21T10:21:58.922Z'
   author: Test file
   description: Default empty graph
-  updated_at: '2025-11-14T01:50:00.137Z'
+  updated_at: '2025-11-14T16:32:35.229Z'
   name: selection-test.json
   source: git
   branch: main

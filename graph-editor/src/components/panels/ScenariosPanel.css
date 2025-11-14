@@ -29,6 +29,7 @@
   padding: 8px 0;
   /* Don't use flex: 1 - let footer appear immediately after list content */
   max-height: calc(100vh - 200px); /* Prevent infinite growth */
+  pointer-events: auto !important; /* Ensure drag events work */
 }
 
 .scenario-row {
@@ -58,19 +59,16 @@
   opacity: 0.5;
 }
 
+/* During drag, show drop indicator */
 .scenario-row.drag-over {
-  border-top: 2px solid var(--color-primary, #4A90E2);
+  border-top: 3px solid #3B82F6;
+  margin-top: -1px;
 }
 
-/* Base and Current special styling */
-.scenario-row.scenario-base {
-  background: #F3F4F6;
-  border-color: #9CA3AF;
-}
-
-.scenario-row.scenario-current {
-  background: #EFF6FF;
-  border-color: #60A5FA;
+/* Base and Current special styling - italic titles only */
+.scenario-row.scenario-base .scenario-name,
+.scenario-row.scenario-current .scenario-name {
+  font-style: italic;
 }
 
 /* Drag Handle */
@@ -80,19 +78,23 @@
   color: #9CA3AF;
   cursor: grab;
   transition: color 0.2s;
+  width: 20px;
+  flex-shrink: 0;
+  pointer-events: none; /* Don't block drag events */
 }
 
 .scenario-drag-handle:active {
   cursor: grabbing;
 }
 
-.scenario-drag-handle.disabled {
-  cursor: not-allowed;
-  opacity: 0.3;
+.scenario-row:hover .scenario-drag-handle {
+  color: #6B7280;
 }
 
-.scenario-row:hover .scenario-drag-handle:not(.disabled) {
-  color: #6B7280;
+/* Drag Handle Placeholder (for Current and Base) */
+.scenario-drag-placeholder {
+  width: 20px;
+  flex-shrink: 0;
 }
 
 /* Color Swatch - info only, not interactive */
@@ -102,6 +104,14 @@
   border-radius: 3px;
   border: 1px solid #D1D5DB;
   cursor: default;
+  flex-shrink: 0;
+  pointer-events: none; /* Don't block drag events */
+}
+
+/* Empty placeholder for swatch when layer not visible */
+.scenario-color-swatch-placeholder {
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
 }
 
@@ -114,14 +124,26 @@
   white-space: nowrap;
   cursor: default;
   user-select: none;
+  pointer-events: auto; /* Re-enable for clicking */
 }
 
-.scenario-name:hover {
-  cursor: text;
+/* Editable name - clickable to start editing */
+.scenario-name-editable {
+  cursor: pointer;
+  padding: 4px 8px;
+  margin: -4px -8px;
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+.scenario-name-editable:hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .scenario-name-input {
   flex: 1;
+  min-width: 0; /* Allow input to shrink below its content width */
+  max-width: 100%; /* Prevent pushing buttons out of view */
   background: white;
   border: 1px solid #3B82F6;
   border-radius: 3px;
@@ -146,6 +168,7 @@
   cursor: pointer;
   transition: all 0.2s;
   flex-shrink: 0;
+  pointer-events: auto; /* Re-enable for buttons (overrides parent's none) */
 }
 
 .scenario-action-btn:hover {
@@ -255,45 +278,55 @@
 
 /* Dropdown Container */
 .scenarios-dropdown-container {
-  position: relative;
   display: flex;
   gap: 2px;
   flex: 1;
+  min-width: 0; /* Allow to shrink */
 }
 
-/* Dropdown Menu */
-.scenarios-dropdown-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
+/* Inline Controls (under Current) */
+.scenarios-controls {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  padding: 4px 8px;
+  margin: 4px 8px;
+}
+
+.scenarios-control-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
   background: white;
   border: 1px solid #D1D5DB;
   border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  z-index: 1000;
-  overflow: hidden;
-}
-
-.scenarios-dropdown-menu button {
-  display: block;
-  width: 100%;
-  padding: 10px 12px;
-  background: transparent;
-  border: none;
   color: #374151;
-  font-size: 13px;
-  text-align: left;
+  font-size: 12px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0; /* Allow button to shrink */
+  overflow: hidden; /* Prevent overflow */
+  text-overflow: ellipsis; /* Add ellipsis if text is too long */
 }
 
-.scenarios-dropdown-menu button:hover {
+.scenarios-control-btn:hover:not(:disabled) {
   background: #F3F4F6;
+  border-color: #9CA3AF;
 }
 
-.scenarios-dropdown-menu button:not(:last-child) {
-  border-bottom: 1px solid #E5E7EB;
+.scenarios-control-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scenarios-control-btn-flatten {
+  flex: 0 0 auto; /* Don't grow, don't shrink, auto width */
+  width: auto;
+  min-width: 120px; /* Narrower than the other button */
 }
 
 /* Scrollbar styling */

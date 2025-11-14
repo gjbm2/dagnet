@@ -27,9 +27,10 @@ interface ScenarioEditorModalProps {
   scenarioId: string | null;
   tabId: string | null;
   onClose: () => void;
+  onSave?: () => void;
 }
 
-export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose }: ScenarioEditorModalProps) {
+export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave }: ScenarioEditorModalProps) {
   const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot, createBlank } = useScenariosContext();
   const { operations } = useTabContext();
   
@@ -210,6 +211,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose }: Scen
         
         toast.success(`Created new scenario: ${name}`);
         setIsDirty(false);
+        onSave?.(); // Notify parent that save was successful
         onClose();
       } else {
         // Normal scenario: apply edits
@@ -221,6 +223,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose }: Scen
         
         toast.success('Scenario updated');
         setIsDirty(false);
+        onSave?.(); // Notify parent that save was successful
         onClose();
       }
     } catch (error: any) {

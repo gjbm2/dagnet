@@ -126,8 +126,30 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
     if (!caseNode) return;
     
     const caseId = caseNode.case?.id || caseNode.uuid || caseNode.id;
+    
+    // First, remove any existing case override for this case node from the DSL
+    let cleanedDSL = whatIfDSL;
+    const parsed = parseConstraints(whatIfDSL || '');
+    const existingOverride = parsed.cases.find(c => {
+      const matchedNode = graph.nodes.find((n: any) => 
+        n.type === 'case' && (
+          n.case?.id === c.key || 
+          n.uuid === c.key || 
+          n.id === c.key
+        )
+      );
+      return matchedNode && (matchedNode.uuid === caseNode.uuid || matchedNode.id === caseNode.id);
+    });
+    
+    if (existingOverride) {
+      // Remove the old override first
+      const oldCaseDSL = generateCaseDSL(existingOverride.key, existingOverride.value, !!caseNode.case?.id);
+      cleanedDSL = removeConstraintFromDSL(cleanedDSL, oldCaseDSL);
+    }
+    
+    // Then add the new override
     const caseDSL = generateCaseDSL(caseId, variantName, !!caseNode.case?.id);
-    const newDSL = augmentDSLWithConstraint(whatIfDSL, caseDSL);
+    const newDSL = augmentDSLWithConstraint(cleanedDSL, caseDSL);
     setWhatIfDSL(newDSL);
   }, [graph, whatIfDSL, setWhatIfDSL]);
   
@@ -327,7 +349,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                         border: '1px solid rgba(0,0,0,0.2)',
                         flexShrink: 0
                       }} />
-                      {node.label || node.id}
+                      {node.case?.id || node.label || node.id}
                     </div>
                   <select
                       value={(() => {
