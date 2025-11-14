@@ -7,8 +7,6 @@ import DockLayout, { LayoutData } from 'rc-dock';
 import './GraphEditor.css';
 import GraphCanvas from '../GraphCanvas';
 import PropertiesPanel from '../PropertiesPanel';
-import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
-import WhatIfAnalysisHeader from '../WhatIfAnalysisHeader';
 import CollapsibleSection from '../CollapsibleSection';
 import SidebarIconBar from '../SidebarIconBar';
 import SidebarHoverPreview from '../SidebarHoverPreview';
@@ -20,12 +18,11 @@ import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } 
 import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
-import { Sparkles, FileText, Wrench } from 'lucide-react';
+import { Layers, FileText, Wrench } from 'lucide-react';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
-import { assignColors } from '../../services/ColorAssigner';
 
 // Context to share selection state with sidebar panels
 interface SelectionContextType {
@@ -65,21 +62,14 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
     return null;
   }
   
-  const { scenarios, deleteScenario } = scenariosContext;
+  const { scenarios, deleteScenario, currentColor, baseColor } = scenariosContext;
   
   // Get tab's scenario state
   const currentTab = tabs.find(t => t.id === tabId);
   const scenarioState = currentTab?.editorState?.scenarioState;
+  const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
-  
-  // Assign colors
-  const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
-  
-  // Don't show if no user-created scenarios (excluding Base)
-  if (scenarios.length === 0) {
-    return null;
-  }
   
   const handleToggleVisibility = React.useCallback((scenarioId: string) => {
     operations.toggleScenarioVisibility(tabId, scenarioId);
@@ -109,14 +99,25 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
     }
   }, [deleteScenario, operations, tabId]);
   
+  const handleNewScenario = React.useCallback(() => {
+    // Dispatch event that ScenariosPanel will listen to (creates snapshot everything)
+    window.dispatchEvent(new CustomEvent('dagnet:newScenario'));
+  }, []);
+  
+  const baseVisible = visibleScenarioIds.includes('base');
+  
   return (
     <ScenarioLegend
       scenarios={scenarios}
+      scenarioOrder={scenarioOrder}
       visibleScenarioIds={visibleScenarioIds}
-      colorMap={colorMap}
+      currentColor={currentColor}
+      baseColor={baseColor}
       showCurrent={scenarios.length >= 1}
+      showBase={baseVisible}
       onToggleVisibility={handleToggleVisibility}
       onDelete={handleDelete}
+      onNewScenario={handleNewScenario}
     />
   );
 }
@@ -136,25 +137,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   const activeTabId = tabContext.activeTabId;
   const tabOps = tabContext.operations;
   
-  // Use ref to store tabs and only update when our specific tab changes
-  const tabsRef = useRef(tabContext.tabs);
-  const myTabRef = useRef(tabContext.tabs.find(t => t.id === tabId));
-  
-  // Update refs only when tabs actually change AND our tab is affected
-  useEffect(() => {
-    const newTabs = tabContext.tabs;
-    const newMyTab = newTabs.find(t => t.id === tabId);
-    
-    // Only update if our specific tab changed
-    const myTabChanged = JSON.stringify(myTabRef.current?.editorState) !== JSON.stringify(newMyTab?.editorState);
-    
-    if (myTabChanged) {
-      tabsRef.current = newTabs;
-      myTabRef.current = newMyTab;
-    }
-  }, [tabContext.tabs, tabId]);
-  
-  const myTab = myTabRef.current;
+  // Get current tab and its state (reactive - will re-render when tab state changes)
+  const myTab = tabContext.tabs.find(t => t.id === tabId);
   const tabState = myTab?.editorState || {};
   
   // Phase 4: Use ref for visibleTabIds to avoid re-renders when it changes
@@ -348,6 +332,17 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     };
     window.addEventListener('dagnet:openPropertiesPanel' as any, handler);
     return () => window.removeEventListener('dagnet:openPropertiesPanel' as any, handler);
+  }, [sidebarOps]);
+  
+  // Listen for request to open Scenarios panel (from scenario chips)
+  useEffect(() => {
+    const handler = () => {
+      console.log(`[${new Date().toISOString()}] [GraphEditor] EVENT: dagnet:openScenariosPanel received`);
+      // Maximize sidebar to Scenarios panel (what-if tab)
+      sidebarOps.maximize('what-if');
+    };
+    window.addEventListener('dagnet:openScenariosPanel' as any, handler);
+    return () => window.removeEventListener('dagnet:openScenariosPanel' as any, handler);
   }, [sidebarOps]);
   
   // Listen for new scenario creation to add it to visible scenarios
@@ -922,14 +917,15 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     );
   };
   
-  // Canvas component - recreate when visibility changes to force rc-dock to re-render
-  // Use visibility as part of key to ensure rc-dock sees it as a new component
+  // Canvas component - recreate when visibility or whatIfDSL changes
+  // Use visibility AND whatIfDSL as part of key to force a full remount when DSL changes
   const canvasComponent = useMemo(() => {
     // Include visibility in the component to force re-render when it changes
     const currentIsVisible = tabId ? isTabVisible(tabId) : true;
     console.log(`[GraphEditor ${fileId}] Creating canvasComponent: tabId=${tabId}, isVisible=${currentIsVisible}`);
-    return <CanvasHost key={`canvas-${tabId}-${currentIsVisible}`} />;
-  }, [fileId, tabId, isTabVisible]); // Removed visibleTabIds - isTabVisible function is stable
+    const dslKey = (whatIfDSL && whatIfDSL.trim().length > 0) ? whatIfDSL : 'none';
+    return <CanvasHost key={`canvas-${tabId}-${currentIsVisible}-${dslKey}`} />;
+  }, [fileId, tabId, isTabVisible, whatIfDSL]); // Added whatIfDSL to trigger re-render
   
   const whatIfComponent = useMemo(() => <WhatIfPanel tabId={tabId} />, [tabId]);
   
@@ -1056,7 +1052,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                 className: 'dock-tab-title', 
                 style: { display: 'flex', alignItems: 'center', gap: '6px' } 
               },
-                React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Layers, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -1065,7 +1061,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                     textOverflow: 'ellipsis', 
                     whiteSpace: 'nowrap' 
                   } 
-                }, 'What-If')
+                }, 'Scenarios')
               );
             } else if (tab.id === 'properties-tab') {
               tab.content = propertiesComponent;
@@ -1817,7 +1813,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                             className: 'dock-tab-title', 
                             style: { display: 'flex', alignItems: 'center', gap: '6px' } 
                           },
-                            React.createElement(Sparkles, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement(Layers, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
                             React.createElement('span', { 
                               style: { 
                                 flex: 1, 
@@ -1826,7 +1822,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                                 textOverflow: 'ellipsis', 
                                 whiteSpace: 'nowrap' 
                               } 
-                            }, 'What-If')
+                            }, 'Scenarios')
                           ) as any;
                         } else if (tabId === 'properties-tab') {
                           component = propertiesComponent;

@@ -35,7 +35,6 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
-import { assignColors } from '../services/ColorAssigner';
 import { composeParams } from '../services/CompositionService';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
@@ -144,7 +143,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     return () => window.removeEventListener('dagnet:whatif-start', handler as any);
   }, []);
   
-  // Use prop if provided, otherwise fall back to context
+  // What-If DSL: prefer latest tab state, fall back to prop if needed.
+  // TabContext is the single source of truth; the prop is just a convenience.
+  const tabForThisCanvas = tabId ? tabs.find(t => t.id === tabId) : undefined;
+  const tabWhatIfDSL = tabForThisCanvas?.editorState?.whatIfDSL;
+  const effectiveWhatIfDSL = tabWhatIfDSL ?? whatIfDSL ?? null;
+
+  // Use prop if provided, otherwise fall back to context for active tab id
   const effectiveActiveTabId = activeTabId ?? activeTabIdContext;
   const saveHistoryState = store.saveHistoryState;
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
@@ -154,7 +159,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Recompute edge widths when what-if DSL changes
   // Create a "version" to track changes in what-if state (for reactivity)
-  const overridesVersion = whatIfDSL || '';
+  const overridesVersion = effectiveWhatIfDSL || '';
+  console.log(
+    `[${ts()}] [GraphCanvas] effectiveWhatIfDSL on render:`,
+    { tabId, propWhatIfDSL: whatIfDSL, tabWhatIfDSL, effectiveWhatIfDSL, overridesVersion }
+  );
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
@@ -245,10 +254,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Get current state from store (avoid stale closures)
     const currentGraph = graphStoreHook.getState().graph;
     
-    // Check if scenarios are visible
-    const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
-    const hasVisibleScenarios = (scenarioState?.visibleScenarioIds || []).length > 0;
-
     // UNIFIED helper: get effective probability
     // Use edge data directly if available (most current), otherwise use store
     const getEffectiveProbability = (e: any): number => {
@@ -259,15 +264,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
       
       // Fallback: compute from graph store (for initial render or full recalculation)
-      // CRITICAL: Only apply What-If DSL to base edges when NO scenarios are visible
-      // When scenarios are visible, What-If is shown via the "current" overlay layer instead
+      // Always apply What-If DSL to base edges for the current layer; scenario overlays
+      // show additional layers on top but should not suppress What-If on the base.
       const edgeId = e.id || `${e.source}->${e.target}`;
-      const shouldUseWhatIf = !hasVisibleScenarios && whatIfDSL;
+      const shouldUseWhatIf = !!effectiveWhatIfDSL;
       
       return computeEffectiveEdgeProbability(
         currentGraph,
         edgeId,
-        shouldUseWhatIf ? { whatIfDSL } : {},
+        shouldUseWhatIf ? { whatIfDSL: effectiveWhatIfDSL } : {},
         undefined
       );
     };
@@ -384,7 +389,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const scaledWidth = MIN_WIDTH + (displayMass * (effectiveMaxWidth - MIN_WIDTH));
     const finalWidth = Math.max(MIN_WIDTH, Math.min(effectiveMaxWidth, scaledWidth));
     return finalWidth;
-  }, [useUniformScaling, massGenerosity, useSankeyView, whatIfDSL, graphStoreHook, tabs, tabId]);
+  }, [useUniformScaling, massGenerosity, useSankeyView, effectiveWhatIfDSL, graphStoreHook, tabs, tabId]);
 
   // Calculate edge sort keys for curved edge stacking
   // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
@@ -1525,7 +1530,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             sourceFace: edge.sourceFace,
             targetFace: edge.targetFace,
             // Pass what-if DSL to edges
-            whatIfDSL: whatIfDSL
+            whatIfDSL: effectiveWhatIfDSL
           }
         }));
       });
@@ -1692,12 +1697,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               // Use unified what-if engine to get effective probability
               // This handles: case node variant weights, conditional overrides, and what-if analysis
               const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
-              const effectiveProb = computeEffectiveEdgeProbability(
-                graph,
-                edgeId,
-                { whatIfDSL },
-                undefined
-              );
+            const effectiveProb = computeEffectiveEdgeProbability(
+              graph,
+              edgeId,
+              { whatIfDSL: effectiveWhatIfDSL },
+              undefined
+            );
               
               console.log(`[Sankey] Edge ${edgeId}: sourceMass=${sourceMass.toFixed(3)}, effectiveProb=${effectiveProb.toFixed(3)}, contribution=${(sourceMass * effectiveProb).toFixed(3)}`);
               
@@ -1802,7 +1807,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       sourceFace: edge.sourceFace,
       targetFace: edge.targetFace,
       // Pass what-if DSL to edges
-      whatIfDSL: whatIfDSL,
+      whatIfDSL: effectiveWhatIfDSL,
       // Pass Sankey view flag to edges
       useSankeyView: useSankeyView
     }
@@ -2138,14 +2143,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         targetClipPathId: targetBundle && targetBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${targetBundle.id}` : undefined,
         renderFallbackTargetArrow: !!(targetBundle && targetBundle.bundleWidth < MIN_CHEVRON_THRESHOLD),
           // Pass what-if DSL to edges
-          whatIfDSL: whatIfDSL
+              whatIfDSL: effectiveWhatIfDSL
         }
     };
     });
     
     // Update edges (bundles will be automatically recalculated by separate effect after this)
     setEdges(result);
-  }, [useUniformScaling, massGenerosity, edges, nodes, calculateEdgeWidth, calculateEdgeOffsets, whatIfDSL, setEdges, setEdgeBundles]);
+  }, [useUniformScaling, massGenerosity, edges, nodes, calculateEdgeWidth, calculateEdgeOffsets, effectiveWhatIfDSL, setEdges, setEdgeBundles]);
   
   // Recalculate edge widths when what-if changes (throttled to one per frame)
   const recomputeInProgressRef = useRef(false);
@@ -2208,7 +2213,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               sourceFace: edge.sourceFace,
               targetFace: edge.targetFace,
               // Pass what-if DSL to edges
-              whatIfDSL: whatIfDSL
+              whatIfDSL: effectiveWhatIfDSL
             }
           }));
         });
@@ -2319,7 +2324,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const effectiveProb = computeEffectiveEdgeProbability(
               currentGraph,
               edgeId,
-              { whatIfDSL },
+              { whatIfDSL: effectiveWhatIfDSL },
               undefined
             );
             totalMass += sourceMass * effectiveProb;
@@ -3324,7 +3329,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           // UNIFIED: Use shared what-if logic for probability
           // Pass accumulated path context so conditionals know which nodes have been visited on THIS path
-          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, edgePathContext);
+          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL: effectiveWhatIfDSL }, edgePathContext);
           
           // Apply renormalization if siblings were pruned
           const renormFactor = edgeRenormalizationFactors.get(edge.id);
@@ -3389,7 +3394,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           // UNIFIED: Use shared what-if logic for probability
           // Pass accumulated path context so conditionals know which nodes have been visited on THIS path
-          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL }, edgePathContext);
+          let edgeProbability = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL: effectiveWhatIfDSL }, edgePathContext);
           
           // Apply renormalization if siblings were pruned
           const renormFactor = edgeRenormalizationFactors.get(edge.id);
@@ -3546,7 +3551,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const currentGraph2 = graphStoreHook.getState().graph;
       // Pass both nodes for graph pruning and conditional activation
       const pathContext = new Set([nodeA.id, nodeB.id]);
-      let directPathProbability = directEdge ? computeEffectiveEdgeProbability(currentGraph2, directEdge.id, { whatIfDSL }, pathContext) : 0;
+      let directPathProbability = directEdge ? computeEffectiveEdgeProbability(currentGraph2, directEdge.id, { whatIfDSL: effectiveWhatIfDSL }, pathContext) : 0;
       const directPathCosts = {
         monetary: directEdge?.data?.cost_gbp?.mean || 0,
         time: directEdge?.data?.cost_time?.mean || 0,
@@ -3661,7 +3666,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           
           console.log(`  Calculating effective probs for ${key}:`);
           groupEdges.forEach(edge => {
-            const effectiveProb = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL });
+            const effectiveProb = computeEffectiveEdgeProbability(currentGraph, edge.id, { whatIfDSL: effectiveWhatIfDSL });
             console.log(`    Edge ${edge.id}: effectiveProb=${effectiveProb}, target=${edge.target}, willPrune=${unselectedSiblings.includes(edge.target)}`);
             totalEffectiveProb += effectiveProb;
             
@@ -4610,9 +4615,40 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         ? visibleScenarioIds  // Current is visible, render as-is
         : [...visibleScenarioIds, 'current'];  // Current is hidden, add it for ghost rendering
       
-      const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
+      // Calculate dynamic opacity based on number of visible layers
+      // Formula: opacity = 1 - (1 - 0.8)^(1/n) where n = number of visible layers
+      // This ensures:
+      // - With 1 layer: opacity ≈ 0.8 (similar to pre-scenario behavior)
+      // - As more layers are added: opacity decreases to preserve overall visual intensity
+      const numVisibleLayers = visibleScenarioIds.length;
+      const baseOpacityTarget = 0.8;
+      const dynamicLayerOpacity = 1 - Math.pow(1 - baseOpacityTarget, 1 / numVisibleLayers);
+      
       const scenarios = scenariosContext.scenarios;
       const baseParams = scenariosContext.baseParams;
+      const currentColor = scenariosContext.currentColor;
+      const baseColor = scenariosContext.baseColor;
+      
+      /**
+       * Get effective colour for a scenario (with single-layer grey override)
+       * Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned color.
+       */
+      const getScenarioColor = (scenarioId: string, isVisible: boolean = true): string => {
+        // Single-layer grey override: ONLY apply to the visible layer when exactly 1 layer is visible
+        if (isVisible && visibleScenarioIds.length === 1) {
+          return '#808080';
+        }
+        
+        // Get stored colour (for both visible and hidden layers)
+        if (scenarioId === 'current') {
+          return currentColor;
+        } else if (scenarioId === 'base') {
+          return baseColor;
+        } else {
+          const scenario = scenarios.find(s => s.id === scenarioId);
+          return scenario?.color || '#808080';
+        }
+      };
       const overlays: Edge[] = [];
       // Setup overlay width computation using same pipeline as base, but with scenario probabilities
       const MAX_WIDTH = 104;
@@ -4689,7 +4725,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       for (const scenarioId of layersToRender) {
         const scenario = scenarios.find(s => s.id === scenarioId);
         // Scenario color from palette assignment
-        const color = (colorMap.get(scenarioId) || scenario?.color || '#808080');
+        const isVisible = visibleScenarioIds.includes(scenarioId);
+        const color = getScenarioColor(scenarioId, isVisible);
         // Compose params based on layer type and visibility
         let composedParams = baseParams;
         if (scenarioId === 'base') {
@@ -4721,7 +4758,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           if (scenarioId === 'current') {
             // Use What-If engine for "current" layer (live graph + What-If DSL)
             const edgeId = e.id || `${e.source}->${e.target}`;
-            return computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL });
+            return computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL: effectiveWhatIfDSL });
           }
           // For 'base' and scenario layers: ONLY use params (frozen snapshots, never read live graph)
           // Find the actual graph edge to get its ID/UUID for params lookup
@@ -4841,9 +4878,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           const edgeParams = paramsKey ? composedParams.edges?.[paramsKey] : undefined;
           // Opacity for scenario overlays
           // Hidden current: HIDDEN_CURRENT_OPACITY (user-adjustable, ~0.05-0.1 recommended)
-          // Visible layers: 0.3
+          // Visible layers: dynamicLayerOpacity (calculated above based on number of visible layers)
           const HIDDEN_CURRENT_OPACITY = 0.05; // <-- Adjust this value for hidden current edge visibility
-          const overlayOpacity = (scenarioId === 'current' && !visibleScenarioIds.includes('current')) ? HIDDEN_CURRENT_OPACITY : 0.3;
+          const overlayOpacity = (scenarioId === 'current' && !visibleScenarioIds.includes('current')) ? HIDDEN_CURRENT_OPACITY : dynamicLayerOpacity;
           
           return {
             ...edge,
@@ -4927,10 +4964,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     visibleScenarioIds,
     visibleColorOrderIds,
     scenariosContext?.currentParams,
+    scenariosContext?.scenarios,
+    scenariosContext?.baseParams,
+    scenariosContext?.currentColor,
+    scenariosContext?.baseColor,
     massGenerosity,
     useSankeyView,
-    scenariosContext?.scenarios,
-    scenariosContext?.baseParams
+    whatIfDSL,  // CRITICAL: Current layer uses What-If DSL at render time
+    graph  // Current layer reads from live graph
   ]);
 
   // Combine edges for display:

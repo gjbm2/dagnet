@@ -10,7 +10,7 @@
   left: 20px; /* Extra margin from left edge */
   display: flex;
   gap: 8px;
-  z-index: 100;
+  z-index: 50; /* Below UI controls (z-index: 100+) but above canvas */
   pointer-events: auto;
 }
 
@@ -23,12 +23,51 @@
   color: white;
   font-size: 13px;
   font-weight: 500;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition: opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  overflow: hidden;
+  animation: chipExpandIn 0.3s ease-out;
+}
+
+/* Animation for chip creation - expands from right edge, pushing other chips */
+@keyframes chipExpandIn {
+  from {
+    max-width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    opacity: 0;
+  }
+  to {
+    max-width: 300px; /* Large enough to accommodate any chip */
+    padding-left: 10px;
+    padding-right: 10px;
+    opacity: 1;
+  }
+}
+
+/* Animation for chip deletion - shrinks to left, pulling other chips */
+.scenario-legend-chip.deleting {
+  animation: chipShrinkOut 0.3s ease-in forwards;
+}
+
+@keyframes chipShrinkOut {
+  from {
+    max-width: 300px;
+    padding-left: 10px;
+    padding-right: 10px;
+    opacity: 1;
+  }
+  to {
+    max-width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    opacity: 0;
+  }
 }
 
 .scenario-legend-chip.invisible {
-  opacity: 0.2;
+  /* Opacity set via inline style */
   filter: grayscale(0.5);
 }
 
@@ -68,6 +107,47 @@
   text-overflow: ellipsis;
   max-width: 150px;
   user-select: none;
+}
+
+/* New Scenario button */
+.scenario-legend-new {
+  background: #E5E7EB !important; /* Light grey background */
+  border: none;
+  color: #374151 !important; /* Dark grey/black icon */
+  cursor: pointer !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  transition: all 0.2s ease, width 0.2s ease;
+  opacity: 1 !important; /* Always opaque */
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.scenario-legend-new:hover {
+  background: #D1D5DB !important; /* Darker grey on hover */
+  transform: translateY(-1px) !important;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+.scenario-legend-new-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  margin-left: 4px;
+  animation: slideInText 0.2s ease;
+}
+
+@keyframes slideInText {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* Dark mode support */

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
@@ -265,6 +265,9 @@ export default function ConversionEdge({
   
   // What-if DSL is now passed through edge.data (from tab state)
   const whatIfDSL = data?.whatIfDSL;
+  useEffect(() => {
+    console.log(`[ConversionEdge ${id}] render with whatIfDSL:`, whatIfDSL);
+  }, [id, whatIfDSL]);
   
   // Get the full edge object from graph (needed for tooltips and colors)
   // Find edge in graph (check both uuid and human-readable id after Phase 0.0 migration)
@@ -392,9 +395,11 @@ export default function ConversionEdge({
       scenariosContext,
       activeTabId,
       tabs,
-      whatIfDSL
+      whatIfDSL,
+      scenariosContext?.currentColor,
+      scenariosContext?.baseColor
     );
-  }, [fullEdge, graph, scenariosContext, activeTabId, tabs, whatIfDSL]);
+  }, [fullEdge, graph, scenariosContext, activeTabId, tabs, whatIfDSL, scenariosContext?.currentColor, scenariosContext?.baseColor]);
   
   // Calculate stroke width using useMemo to enable CSS transitions
   const strokeWidth = useMemo(() => {
@@ -1556,7 +1561,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
                   strokeWidth: confidenceData.widths.upper,
-                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.3) / 0.8)) : confidenceData.opacities.outer,
+                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.outer,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
@@ -1577,7 +1582,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
                   strokeWidth: confidenceData.widths.middle,
-                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.3) / 0.8)) : confidenceData.opacities.middle,
+                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.middle,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
@@ -1599,7 +1604,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
                   strokeWidth: confidenceData.widths.lower,
-                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.3) / 0.8)) : confidenceData.opacities.inner,
+                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.inner,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
@@ -1623,7 +1628,7 @@ export default function ConversionEdge({
                 id={id}
                 style={{
                   stroke: data?.scenarioOverlay ? data.scenarioColor : (data?.forceBaseStrokeColor ?? getEdgeColor()),
-                  strokeOpacity: data?.scenarioOverlay ? (data?.strokeOpacity ?? 0.3) : EDGE_OPACITY,
+                  strokeOpacity: data?.scenarioOverlay ? (data?.strokeOpacity ?? 0.8) : EDGE_OPACITY,
                   mixBlendMode: 'multiply',
                   fill: 'none',
                   strokeLinecap: 'butt',

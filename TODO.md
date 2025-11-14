@@ -1,42 +1,51 @@
 # TODO
 
+## Scenarios project
+
+
+inspect the styling of the props and tools sidebar & compare to the (white background) styling of the Scenarios panel. adapt the scenarios panel to match.
+
+you'll need to make the layers objects slightly shaded so they are viisible distinct from the panel background
+
+# Current query DSL
+
+now whatifdsl is becoming (gradually) a more powerful general statement of the current query applied to the graph.
+
+in current: some of this (e.g. window, contexts in due course) determins what data is retrieved in the first place; other parts (whatifs) determine what overlay is applied to that data before render
+
+ideally we would build a single dsl string to express all of this, such that the top control set (context/window/whatif) interact with that dsl string, but it is the string that controls the graph.
+
+is our dsl expessive enough already? we need:
+case(<case_id>:<variant).visited(noda).excludes(nodeb).visitedAny(nodec,noded).context(<context_id>:<context_value>).window(<fromdate>:<todate>)
+
+once we have ensured it is adequately expressive, we can expose the 'current query string' to the user inside the window control [we may later hide, but is useful for debugging purposes]
+
+This query string is then also a natural candidate for what to use to populate the name of newly created scenarios, poss. along with timestamp.
+
+If user creates a DIFF scenario rather than an ALL scenario, we can also subtract this query FROM what is otherwise shown (compositing layer 2 and below) to construct a helpful Human Readable name
+
+e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and user then added window(1-Jan-25:1-Jan-25).case(experiment:treament), then when they created a diff snapshot, it would calculate window(1-Jan-25:1-Jan-25).case(experiment:treament)-window(1-Jan-25:1-Jan-25)=case(experiment:treament) (noting we need a service for this query subtraction & addition logic, not to do it inline in the scenario editor) and write "case(experiment:treament) @ 9:24am, 13-Nov-25"  as the scenario name
+
+
+
 ## Scenarios polishing & bugs
-- check conversion graph...scenarios are fucked on it...
-- confidence bands have gone over-wide...
-- test conditional ps.
-- "What if" not working with layers
-- Reordering scenarios isn't working. are we maintaining a separte tab context state for the order of scenarios (which should be used when compositing on that tab)?
 - we are also doing something weird with selected edges and highlighted now --
   - we used to be sharing the edges in a thoughtful way whe nthey were selected or highlighted, but that has broken compeltely.  we need to repair that properly. 
   - selected edge LABELS are showing black text on a black label background, which ain't great...
-- colours are funky & not quite right... maybe just let user choose them?
--Let's simplify & move snapshot controls:
-  - move so shown under 'Current' at all times
-  - remove 'No scenarios yet' text -- it becomes obvious where the new snapshot appears now
-  - Let's show inline controls:
-	  + New Scenario [opens submenu...]
-  		Snapshot everything
-		  Snapshot differences
-		  Blank
-	  Flatten all
-  - Sequence of buttons within a scenario:
-      Left aligned:
-        [Grab handle] [swatch] Scenario name["…" if doesn't fit]
-      Right aligned: 
-        [delete icon] [edit modal icon] [visibility toggle]
-  - an empty placeholder for swatch should be shown if none (because layer not visible)
-  - an empty area same size as grab handle should be shown if none (for current and base)
-  - remove the pen icon (to edit name), instead allow user to click name to edit; while editing show a tick [commit change] and a cross [cancel change] icon on right hand side; hide all other icons.
-  - Let's rename (for user purposes) 'Base' layer to 'Original' and 'Current' to 'Live'
-- Let's add a right-click context menu to layers which shows three additional controls:
-  - 'Use as current' -- copies the layer in question to current, overwriting current and resetting any whatifs in place
-  - [if another layer is visible] 'Merge down'-- applies this layer to the next visible layer down in the stack
-  - 'Show only' -- hides all other layers but this one
+- check conversion graph...scenarios are fucked on it...
+- confidence bands have gone over-wide...
+- test conditional ps.
 - Confidence interval rendering has been broken under scenarios
-
-# TODO
+- we've lost pmf warning flags for variant ps
 
 ## Critical Issues
+
+### Data project
+**Case/Variant Filtering** (4-6 hrs)
+ - Design case property mapping schema (Statsig case → Amplitude event property)
+ - Extend event definitions with case_property_mappings
+ - Implement case filter injection in pre_request script
+ - Test variant filtering (treatment vs control)
 
 ### Form Field Duplicate ID Warnings
 
@@ -65,15 +74,7 @@
 
 
 
-## Data project
-**Case/Variant Filtering** (4-6 hrs)
- - Design case property mapping schema (Statsig case → Amplitude event property)
- - Extend event definitions with case_property_mappings
- - Implement case filter injection in pre_request script
- - Test variant filtering (treatment vs control)
-
 ## Major components
-- Scenario viewer polishing
 - Edge ids not updating/persisting
 - Context support
 - Latency/lag management

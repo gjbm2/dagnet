@@ -1404,6 +1404,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     if (!tab) return undefined;
     
     return tab.editorState?.scenarioState || {
+      scenarioOrder: [],
       visibleScenarioIds: [],
       visibleColorOrderIds: [],
       selectedScenarioId: undefined
@@ -1418,6 +1419,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     if (!tab) return;
 
     const currentState = tab.editorState?.scenarioState || {
+      scenarioOrder: [],
       visibleScenarioIds: [],
       visibleColorOrderIds: [],
     };
@@ -1432,9 +1434,25 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     // Remove any IDs that are no longer visible
     const finalColorOrderIds = newColorOrderIds.filter(id => scenarioIds.includes(id));
 
+    // Preserve existing scenarioOrder - only update visibility, don't reorder
+    // If scenarioOrder doesn't exist yet, ensure all scenarios are included
+    let newScenarioOrder = currentState.scenarioOrder || [];
+    if (newScenarioOrder.length === 0) {
+      // Initialise from visible order (top..bottom)
+      newScenarioOrder = [...scenarioIds];
+    } else {
+      // Keep existing order intact, just ensure any new IDs are added
+      const missingIds = scenarioIds.filter(id => !newScenarioOrder.includes(id));
+      if (missingIds.length > 0) {
+        // Add missing IDs at the top (prepend)
+        newScenarioOrder = [...missingIds, ...newScenarioOrder];
+      }
+    }
+
     await updateTabState(tabId, {
       scenarioState: {
         ...currentState,
+        scenarioOrder: newScenarioOrder,
         visibleScenarioIds: scenarioIds,
         visibleColorOrderIds: finalColorOrderIds
       }
@@ -1449,38 +1467,56 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     if (!tab) return;
 
     const currentState = tab.editorState?.scenarioState || {
+      scenarioOrder: [],
       visibleScenarioIds: [],
       visibleColorOrderIds: [],
     };
 
     const isVisible = currentState.visibleScenarioIds.includes(scenarioId);
     
+    let newScenarioOrder: string[];
     let newVisibleIds: string[];
     let newColorOrderIds: string[];
     
     if (isVisible) {
-      // Hide scenario
+      // Hide scenario - remove from visible but KEEP in scenarioOrder
+      newScenarioOrder = currentState.scenarioOrder || currentState.visibleScenarioIds;
       newVisibleIds = currentState.visibleScenarioIds.filter(id => id !== scenarioId);
       newColorOrderIds = currentState.visibleColorOrderIds.filter(id => id !== scenarioId);
       
       // Auto-fallback: ensure at least one layer is always visible
       if (newVisibleIds.length === 0) {
-        // If hiding the last visible layer:
-        // - If hiding 'base', fall back to 'current'
-        // - Otherwise, fall back to 'base'
         const fallbackId = scenarioId === 'base' ? 'current' : 'base';
+        // Add fallback to scenarioOrder if not there
+        if (!newScenarioOrder.includes(fallbackId)) {
+          newScenarioOrder = [fallbackId, ...newScenarioOrder];
+        }
         newVisibleIds = [fallbackId];
         newColorOrderIds = [fallbackId];
       }
     } else {
-      // Show scenario
-      newVisibleIds = [...currentState.visibleScenarioIds, scenarioId];
+      // Show scenario - add to visible, and to scenarioOrder if not there
+      newScenarioOrder = currentState.scenarioOrder || currentState.visibleScenarioIds;
+      
+      if (!newScenarioOrder.includes(scenarioId)) {
+        // New scenario - add at top of order
+        newScenarioOrder = [scenarioId, ...newScenarioOrder];
+      }
+      
+      // Add to visible at its position in scenarioOrder
+      // Filter scenarioOrder to only include this scenario and currently visible ones, maintaining order
+      newVisibleIds = newScenarioOrder.filter(id => 
+        id === scenarioId || currentState.visibleScenarioIds.includes(id)
+      );
+      
+      // Colors are assigned in activation order, so append to end
       newColorOrderIds = [...currentState.visibleColorOrderIds, scenarioId];
     }
 
     await updateTabState(tabId, {
       scenarioState: {
         ...currentState,
+        scenarioOrder: newScenarioOrder,
         visibleScenarioIds: newVisibleIds,
         visibleColorOrderIds: newColorOrderIds
       }
@@ -1515,14 +1551,19 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     if (!tab) return;
 
     const currentState = tab.editorState?.scenarioState || {
+      scenarioOrder: [],
       visibleScenarioIds: [],
       visibleColorOrderIds: [],
     };
 
+    // Reorder scenarioOrder, then update visibleScenarioIds to match the new order
+    const newVisibleIds = newOrder.filter(id => currentState.visibleScenarioIds.includes(id));
+
     await updateTabState(tabId, {
       scenarioState: {
         ...currentState,
-        visibleScenarioIds: newOrder
+        scenarioOrder: newOrder,
+        visibleScenarioIds: newVisibleIds
       }
     });
   }, [tabs, updateTabState]);

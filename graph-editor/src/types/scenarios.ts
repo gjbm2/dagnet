@@ -130,7 +130,10 @@ export interface Scenario {
  * Per-tab scenario visibility and selection state
  */
 export interface TabScenarioState {
-  /** IDs of visible scenarios (in render order, bottom-to-top) */
+  /** ALL scenario IDs in layer/compositing order (per tab), regardless of visibility */
+  scenarioOrder?: string[];
+  
+  /** IDs of visible scenarios (subset of scenarioOrder that are currently shown) */
   visibleScenarioIds: string[];
   
   /** IDs of scenarios in activation order (for color assignment) */
