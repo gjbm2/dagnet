@@ -123,6 +123,9 @@ export default function ConversionEdge({
   source,
   target,
 }: EdgeProps<ConversionEdgeData>) {
+  // CRITICAL: Overlays should NEVER be selected, even if ReactFlow sets selected=true
+  // Only 'current' layer edges can be selected
+  const effectiveSelected = data?.scenarioOverlay ? false : selected;
   const scenariosContext = useScenariosContextOptional();
   const { operations: tabOps, tabs, activeTabId } = useTabContext();
   const [showContextMenu, setShowContextMenu] = useState(false);
@@ -438,12 +441,11 @@ export default function ConversionEdge({
     } : { r: 153, g: 153, b: 153 }; // fallback to gray
   };
   
-  // Edge color logic: conditional colors, purple for case edges, gray for normal, highlight for connected selected nodes
-  // Memoize color computation to ensure it updates when conditional_p colors change
+  // Edge color logic: highlight/selection shading
+  // Case/conditional edge colors now shown as markers, not full edge coloring
   const edgeColor = useMemo(() => {
-    // STEP 6: forceBaseStrokeColor removed (no base edges rendered in new pipeline)
     // Selected edges: darker gray to distinguish from highlighted edges
-    if (selected) {
+    if (effectiveSelected) {
       return '#222'; // very dark gray for selection
     }
     if (data?.isHighlighted) {
@@ -461,27 +463,10 @@ export default function ConversionEdge({
         blackIntensity = 0.5;
       }
       
-      // Get the base color for this edge type (underlying color)
-      let baseColor = '#b3b3b3'; // default gray
-      if (data?.probability === undefined || data?.probability === null) {
-        baseColor = '#ff6b6b';
-      } else if (fullEdge && isConditionalEdge(fullEdge)) {
-        // Conditional edges get their conditional color
-        baseColor = getConditionalColor(fullEdge) || '#4ade80'; // green-400 fallback
-      } else {
-        // Check if source node is a case node and inherit its color
-        // This applies to both case variant edges AND normal edges downstream
-        // source could be uuid OR human-readable id, check both
-        const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
-        if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
-          baseColor = sourceNode.layout.color;
-        }
-      }
-      
-      // Blend pure black with base color based on black intensity
-      // blackIntensity = how much black, (1 - blackIntensity) = how much base color
-      const black = { r: 0, g: 0, b: 0 }; // Pure black
-      const baseColorRgb = hexToRgb(baseColor);
+      // Blend scenario color with black for highlight
+      const baseColorHex = data?.scenarioColor || '#b3b3b3';
+      const black = { r: 0, g: 0, b: 0 };
+      const baseColorRgb = hexToRgb(baseColorHex);
       
       const blendedR = Math.round(black.r * blackIntensity + baseColorRgb.r * (1 - blackIntensity));
       const blendedG = Math.round(black.g * blackIntensity + baseColorRgb.g * (1 - blackIntensity));
@@ -489,23 +474,10 @@ export default function ConversionEdge({
       
       return `rgb(${blendedR}, ${blendedG}, ${blendedB})`;
     }
-    if (data?.probability === undefined || data?.probability === null) return '#ff6b6b';
     
-    // Check for conditional edges and apply conditional color
-    if (fullEdge && isConditionalEdge(fullEdge)) {
-      return getConditionalColor(fullEdge) || '#4ade80'; // green-400 fallback
-    }
-    
-    // Check if source node is a case node and inherit its color
-    // This applies to both case variant edges AND normal edges downstream
-    // source could be uuid OR human-readable id, check both
-    const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
-    if (sourceNode?.type === 'case' && sourceNode?.layout?.color) {
-      return sourceNode.layout.color;
-    }
-    
-    return '#b3b3b3'; // 15% lighter gray for normal edges
-  }, [selected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.probability, fullEdge, source, graph?.nodes, graph?.metadata?.updated_at]);
+    // Default: use scenario color
+    return data?.scenarioColor || '#b3b3b3';
+  }, [effectiveSelected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.scenarioColor]);
   
   const getEdgeColor = () => edgeColor;
 
@@ -1554,14 +1526,14 @@ export default function ConversionEdge({
                 key={`${id}-ci-upper`}
                 id={`${id}-ci-upper`}
                 style={{
-                  stroke: data?.scenarioOverlay ? data.scenarioColor : getEdgeColor(),
+                  stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
                   strokeWidth: confidenceData.widths.upper,
                   strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.outer,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
-                  zIndex: selected ? 1000 : 1,
+                  zIndex: effectiveSelected ? 1000 : 1,
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                 }}
@@ -1575,14 +1547,14 @@ export default function ConversionEdge({
                 key={`${id}-ci-middle`}
                 id={`${id}-ci-middle`}
                 style={{
-                  stroke: data?.scenarioOverlay ? data.scenarioColor : getEdgeColor(),
+                  stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
                   strokeWidth: confidenceData.widths.middle,
                   strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.middle,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
-                  zIndex: selected ? 1000 : 2,
+                  zIndex: effectiveSelected ? 1000 : 2,
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                 }}
@@ -1597,14 +1569,14 @@ export default function ConversionEdge({
                 key={`${id}-ci-lower`}
                 id={`${id}-ci-lower`}
                 style={{
-                  stroke: data?.scenarioOverlay ? data.scenarioColor : getEdgeColor(),
+                  stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
                   strokeWidth: confidenceData.widths.lower,
                   strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.inner,
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
-                  zIndex: selected ? 1000 : 3,
+                  zIndex: effectiveSelected ? 1000 : 3,
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
@@ -1622,13 +1594,13 @@ export default function ConversionEdge({
                 ref={pathRef}
                 id={id}
                 style={{
-                  stroke: data?.scenarioOverlay ? data.scenarioColor : getEdgeColor(),
-                  strokeOpacity: data?.scenarioOverlay ? (data?.strokeOpacity ?? 0.8) : EDGE_OPACITY,
+                  stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
+                  strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
                   mixBlendMode: 'multiply',
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
-                  zIndex: selected ? 1000 : (data?.scenarioOverlay ? -1 : 1),
+                  zIndex: effectiveSelected ? 1000 : (data?.scenarioOverlay ? -1 : 1),
                   strokeDasharray: ((data?.effectiveWeight !== undefined ? data.effectiveWeight : effectiveWeight) === 0) ? '5,5' : 'none',
                   markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
@@ -1665,13 +1637,13 @@ export default function ConversionEdge({
             style={{
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY}px)`,
-              background: selected ? '#000' : 'rgba(255, 255, 255, 0.85)',
-              color: selected ? '#fff' : '#333',
+              background: effectiveSelected ? '#000' : 'rgba(255, 255, 255, 0.85)',
+              color: effectiveSelected ? '#fff' : '#333',
               padding: '4px 8px',
               borderRadius: '4px',
               fontSize: '12px',
               fontWeight: 'bold',
-              border: selected ? 'none' : '1px solid #ddd',
+              border: effectiveSelected ? 'none' : '1px solid #ddd',
             minWidth: '40px',
             textAlign: 'center',
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
@@ -1690,7 +1662,7 @@ export default function ConversionEdge({
             <div style={{ textAlign: 'center' }}>
             {compositeLabel ? (
               // STEP 5: Pass selected flag to ensure label colors adapt
-              renderCompositeLabel(compositeLabel, handleDoubleClick, selected)
+              renderCompositeLabel(compositeLabel, handleDoubleClick, effectiveSelected)
             ) : (data?.probability === undefined || data?.probability === null) ? (
               // Error state: no probability defined
               <div style={{ 
@@ -1709,7 +1681,7 @@ export default function ConversionEdge({
         </div>
         )}
         
-        {selected && (
+        {effectiveSelected && (
           <>
               {/* Delete button */}
               <div
@@ -1737,6 +1709,65 @@ export default function ConversionEdge({
             {/* ReactFlow's built-in reconnection handles will appear automatically for selected edges with reconnectable=true */}
           </>
         )}
+        
+        {/* Colored markers for case variants and conditional_p edges */}
+        {!data?.scenarioOverlay && (() => {
+          const markers: React.ReactNode[] = [];
+          let markerIndex = 0;
+          
+          // Check if this is a case variant edge
+          const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
+          if (sourceNode?.type === 'case' && sourceNode?.layout?.color && fullEdge?.case_variant) {
+            const markerX = sourceX + (targetX - sourceX) * 0.33;
+            const markerY = sourceY + (targetY - sourceY) * 0.33;
+            markers.push(
+              <div
+                key={`case-marker-${markerIndex++}`}
+                style={{
+                  position: 'absolute',
+                  transform: `translate(-50%, -50%) translate(${markerX}px,${markerY}px)`,
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: sourceNode.layout.color,
+                  border: '1px solid white',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                }}
+                title={`Case: ${fullEdge.case_variant}`}
+              />
+            );
+          }
+          
+          // Check for conditional_p edges
+          if (fullEdge && isConditionalEdge(fullEdge)) {
+            const condColor = getConditionalColor(fullEdge) || '#4ade80';
+            const markerX = sourceX + (targetX - sourceX) * 0.33;
+            const markerY = sourceY + (targetY - sourceY) * 0.33;
+            const offsetX = markerIndex * 10; // Offset multiple markers horizontally
+            markers.push(
+              <div
+                key={`cond-marker-${markerIndex++}`}
+                style={{
+                  position: 'absolute',
+                  transform: `translate(-50%, -50%) translate(${markerX + offsetX}px,${markerY}px)`,
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: condColor,
+                  border: '1px solid white',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                }}
+                title={`Conditional edge`}
+              />
+            );
+          }
+          
+          return markers.length > 0 ? <>{markers}</> : null;
+        })()}
       </EdgeLabelRenderer>
 
       {/* Edge tooltip - rendered as portal */}

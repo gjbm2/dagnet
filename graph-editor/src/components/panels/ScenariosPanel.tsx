@@ -609,7 +609,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', scenarioId); // Required for DnD in some browsers
   }, [visibleScenarioIds, scenarios]);
-
+  
   const handleDragOverRow = useCallback((e: React.DragEvent, index: number) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -627,7 +627,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       console.log(`[D&D] REORDER: Aborting - no draggedScenarioId or tabId`);
       return;
     }
-
+    
     const currentState = operations.getScenarioState(tabId);
     if (!currentState) {
       console.log(`[D&D] REORDER: No current state found`);
@@ -667,7 +667,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       );
       return;
     }
-
+    
     // Target may be hidden; if so, treat as "drop at end" of visible user subset
     let targetUserIndex = visibleUserIds.indexOf(targetScenario.id);
     if (targetUserIndex === -1) {
@@ -752,7 +752,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     } else {
       console.log(`[D&D] END: no valid dragOverIndex, not reordering`);
     }
-
+    
     setDraggedScenarioId(null);
     setDragOverIndex(null);
   }, [draggedScenarioId, dragOverIndex, performReorder]);
@@ -779,18 +779,18 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {currentVisible ? (
-            <div
-              className="scenario-color-swatch"
-              style={{ 
+                <div
+                  className="scenario-color-swatch"
+                  style={{ 
                 backgroundColor: getScenarioColor('current', currentVisible),
                 cursor: 'pointer'
-              }}
+                  }}
               onClick={() => setColorPickerFor('current')}
               title="Click to change colour"
             />
           ) : (
             <div className="scenario-color-swatch-placeholder"></div>
-          )}
+              )}
           
           <div 
             className="scenario-name"
@@ -822,7 +822,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
         {/* Snapshot controls - always shown under Current */}
         <div className="scenarios-controls">
           <div className="scenarios-dropdown-container">
-            <button
+          <button
               ref={menuButtonRef}
               className="scenarios-control-btn"
               onClick={(e) => {
@@ -837,13 +837,13 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               title={scenarios.length >= 15 ? 'Maximum scenarios reached' : 'Create new scenario'}
               disabled={scenarios.length >= 15}
               style={{ opacity: scenarios.length >= 15 ? 0.5 : 1 }}
-            >
+          >
               <Plus size={14} />
               <span>New Scenario</span>
               <ChevronDown size={12} />
-            </button>
-          </div>
-          
+          </button>
+        </div>
+        
           <button
             className="scenarios-control-btn scenarios-control-btn-flatten"
             onClick={handleFlatten}
@@ -875,12 +875,12 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           const targetPanelIndex = dragOverIndex ?? -1;
           
           return orderedScenarios.map((scenario, index) => {
-            const isVisible = visibleScenarioIds.includes(scenario.id);
-            const isSelected = selectedScenarioId === scenario.id;
+          const isVisible = visibleScenarioIds.includes(scenario.id);
+          const isSelected = selectedScenarioId === scenario.id;
             const scenarioColor = getScenarioColor(scenario.id, isVisible);
-            const isEditing = editingScenarioId === scenario.id;
-            const isDragging = draggedScenarioId === scenario.id;
-            const isDragOver = dragOverIndex === index;
+          const isEditing = editingScenarioId === scenario.id;
+          const isDragging = draggedScenarioId === scenario.id;
+          const isDragOver = dragOverIndex === index;
 
             // Default: no offset
             let transform = '';
@@ -904,11 +904,11 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
                 }
               }
             }
-            
-            return (
-              <div
-                key={scenario.id}
-                className={`scenario-row ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
+          
+          return (
+            <div
+              key={scenario.id}
+              className={`scenario-row ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
                 style={{
                   transform,
                   transition: isDragging ? 'none' : 'transform 0.15s ease'
@@ -922,17 +922,17 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
                   handleDragStart(e, scenario.id);
                 }}
                 onDragOver={(e) => handleDragOverRow(e, index)}
-                onDragEnd={handleDragEnd}
+              onDragEnd={handleDragEnd}
                 onContextMenu={(e) => handleContextMenu(e, scenario.id)}
-              >
+            >
               {/* Left-aligned: Drag handle */}
               <div className="scenario-drag-handle">
                 <GripVertical size={14} />
               </div>
               
               {/* Swatch - always show, faded if not visible, clickable to change colour */}
-              <div
-                className="scenario-color-swatch"
+                <div
+                  className="scenario-color-swatch"
                 style={{ 
                   backgroundColor: scenarioColor,
                   opacity: isVisible ? 1 : 0.3,
@@ -940,7 +940,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
                 }}
                 onClick={() => setColorPickerFor(scenario.id)}
                 title="Click to change colour"
-              />
+                />
               
               {/* Name - clickable to edit, or input when editing */}
               {isEditing ? (
@@ -969,15 +969,15 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               {isEditing ? (
                 <>
                   {/* While editing: show commit and cancel buttons */}
-                  <button
-                    className="scenario-action-btn"
+              <button
+                className="scenario-action-btn"
                     onClick={handleCancelEdit}
                     title="Cancel"
-                  >
+              >
                     <X size={14} />
-                  </button>
-                  <button
-                    className="scenario-action-btn"
+              </button>
+              <button
+                className="scenario-action-btn"
                     onClick={handleSaveEdit}
                     title="Save"
                   >
@@ -991,23 +991,23 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
                     className="scenario-action-btn danger"
                     onClick={() => handleDelete(scenario.id)}
                     title="Delete scenario"
-                  >
+              >
                     <Trash2 size={14} />
-                  </button>
-                  <button
-                    className="scenario-action-btn"
-                    onClick={() => handleOpenEditor(scenario.id)}
-                    title="Open in editor"
-                  >
+              </button>
+              <button
+                className="scenario-action-btn"
+                onClick={() => handleOpenEditor(scenario.id)}
+                title="Open in editor"
+              >
                     <Edit2 size={14} />
-                  </button>
-                  <button
+              </button>
+              <button
                     className="scenario-action-btn"
                     onClick={() => handleToggleVisibility(scenario.id)}
                     title="Toggle visibility"
-                  >
+              >
                     {isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
-                  </button>
+              </button>
                 </>
               )}
             </div>
@@ -1062,7 +1062,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           </button>
         </div>
       </div>
-    </div>
+              </div>
     
     {/* Context Menu */}
     {contextMenu && (
@@ -1129,7 +1129,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               { name: 'Green', value: '#22C55E' },
             ]}
           />
-          <button
+        <button
             onClick={() => setColorPickerFor(null)}
             style={{
               marginTop: '16px',
@@ -1143,9 +1143,9 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
             }}
           >
             Done
-          </button>
-        </div>
+        </button>
       </div>
+    </div>
     )}
     
     {/* Editor Modal */}
