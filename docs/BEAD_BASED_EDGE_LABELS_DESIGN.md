@@ -244,32 +244,38 @@ color: #000000; /* black */
 ### Expanded Bead Text Format
 
 #### Probability Bead
-- **Format (single/identical)**: `50% ± 5%` or `50%`
-- **Format (multi-scenario, differ)**: `50% 25% 50%` (colored segments)
+- **Format (single/identical)**: `50% ± 5%` or `50%` (with 🔌 prefix if `parameter_id` exists)
+- **Format (multi-scenario, differ)**: `50% 25% 50%` (colored segments, 🔌 prefix if connected)
 - **Format (with hidden current)**: `50% 25% (50%)` (grey brackets for hidden)
+- **Format (with parameter connection)**: `🔌 50%` (plug icon prefix when expanded)
 - **Stdev**: Only shown if present and > 0
 - **Precision**: 1 decimal place for percentage, 1 decimal for stdev
+- **Note**: 🔌 icon shown only when bead is expanded, not on collapsed bead
 
 #### Cost GBP Bead
-- **Format (single/identical)**: `£125.50 ± £10` or `£125.50`
-- **Format (multi-scenario, differ)**: `£100 £150 £120` (colored segments)
+- **Format (single/identical)**: `£125.50 ± £10` or `£125.50` (with 🔌 prefix if `cost_gbp_parameter_id` exists)
+- **Format (multi-scenario, differ)**: `£100 £150 £120` (colored segments, 🔌 prefix if connected)
 - **Format (with hidden current)**: `£100 £150 (£120)` (grey brackets)
+- **Format (with parameter connection)**: `🔌 £125.50` (plug icon prefix when expanded)
 - **Currency**: Always show £ symbol
 - **Precision**: 2 decimal places
+- **Note**: 🔌 icon shown only when bead is expanded, not on collapsed bead
 
 #### Cost Time Bead
-- **Format (single/identical)**: `2.5d ± 0.5d` or `2.5d`
-- **Format (multi-scenario, differ)**: `2d 3d 2.5d` (colored segments)
+- **Format (single/identical)**: `2.5d ± 0.5d` or `2.5d` (with 🔌 prefix if `cost_time_parameter_id` exists)
+- **Format (multi-scenario, differ)**: `2d 3d 2.5d` (colored segments, 🔌 prefix if connected)
 - **Format (with hidden current)**: `2d 3d (2.5d)` (grey brackets)
+- **Format (with parameter connection)**: `🔌 2.5d` (plug icon prefix when expanded)
 - **Units**: Show appropriate unit (d=days, h=hours, etc.)
 - **Precision**: 1 decimal place
+- **Note**: 🔌 icon shown only when bead is expanded, not on collapsed bead
 
 #### Case Variant Bead
 - **Format (single/identical)**: `treatment: 25%`
 - **Format (multi-scenario, differ)**: `treatment: 20% 25% 30%` (colored weights)
 - **Format (with hidden current)**: `treatment: 20% 25% (30%)` (grey brackets)
 - **Components**: Variant name + weight percentages (colored if differ)
-- **Rationale**: Matches current label format, extends to multi-scenario
+- **Rationale**: Edge probability (p) shown separately in probability bead before this, so only variant weight needed here
 
 #### Conditional Probability Bead
 - **Format (single/identical)**: `visited(promo): 30%`
@@ -494,7 +500,7 @@ interface BeadDefinition {
    - **Recommendation**: Horizontal for readability, slight angle OK
 
 2. **Bead Persistence**: Should expanded state persist across sessions?
-   - **Recommendation**: No, reset to defaults on load
+   - **Decision**: No persistence - reset to defaults on load and on edge selection change
 
 3. **Maximum Beads**: Should we limit number of visible beads?
    - **Recommendation**: No limit initially, add if performance issues
@@ -503,7 +509,7 @@ interface BeadDefinition {
    - **Recommendation**: Double-click edge (not bead) opens properties panel
 
 5. **Parameter Connections**: How to show 🔌 icon for connected parameters?
-   - **Recommendation**: Small icon overlay on collapsed bead, or prefix in expanded text
+   - **Decision**: Prefix in expanded text only (e.g., `🔌 50%`), not shown on collapsed bead
 
 ---
 
