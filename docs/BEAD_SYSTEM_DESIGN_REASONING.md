@@ -185,7 +185,7 @@ function ensureDarkColor(color: string, minLightness: number = 0.3): string {
 - **Format (multi-scenario, differ)**: `treatment: 20% 25% 30%` (colored weights)
 - **Format (multi-scenario, identical)**: `treatment: 25%` (black)
 - **Components**: Variant name + weight percentages (colored if differ)
-- **Rationale**: Matches current label format, extends to multi-scenario
+- **Rationale**: Edge probability (p) shown separately in probability bead before this, so only variant weight needed here
 
 ### Conditional Probability Bead
 - **Format (single scenario)**: `visited(promo): 30%`
@@ -389,10 +389,10 @@ function formatBeadText(
 - Virtual scrolling for bead rows
 
 ### Q3: Should expanded state persist?
-**A**: No, reset to defaults on edge selection change. Keeps UI predictable.
+**A**: No persistence - reset to defaults on load and on edge selection change. Keeps UI predictable.
 
 ### Q4: How to show parameter connections (🔌 icon)?
-**A**: Small icon overlay on collapsed bead, or prefix in expanded text: `🔌 50%`
+**A**: Prefix in expanded text only (e.g., `🔌 50%`). Not shown on collapsed bead.
 
 ### Q5: What if edge is very short?
 **A**: Beads may overlap. Solutions:

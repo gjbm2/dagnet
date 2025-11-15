@@ -22,40 +22,17 @@
 
 ## ⚠️ Issues to Clarify Before Implementation
 
-### 1. Case Variant Format
-**Question**: Should case variant beads show both variant weight AND edge probability?
+### 1. Case Variant Format ✅ **DECIDED**
+**Decision**: Show only variant weight: `treatment: 25%`
+**Rationale**: Edge probability (p) shown separately in probability bead before this, so only variant weight needed
 
-**Current Design**: `treatment: 25%` (variant weight only)
-**Label Spec**: `treatment: 25%/100%` (variant weight/edge probability)
+### 2. Parameter Connection Icon ✅ **DECIDED**
+**Decision**: Prefix in expanded text only: `🔌 50%`
+**Rationale**: Not shown on collapsed bead - only when expanded for clarity
 
-**Decision Needed**: 
-- Option A: Show only variant weight (simpler, matches current design)
-- Option B: Show both `variantWeight/edgeProb` (matches label spec, shows multiplication)
-
-**Recommendation**: Option B - matches label spec, shows effective probability calculation
-
-### 2. Parameter Connection Icon
-**Question**: How exactly to show 🔌 icon?
-
-**Options**:
-- A: Small icon overlay on collapsed bead (top-right corner)
-- B: Prefix in expanded text: `🔌 50%`
-- C: Both (icon on collapsed, prefix when expanded)
-
-**Recommendation**: Option C - icon on collapsed for quick visual, prefix when expanded for clarity
-
-### 3. Bead State Storage
-**Question**: Where to store expanded/collapsed state?
-
-**Current Design**: Component state (`useState<Map<string, BeadState>>()`)
-**Considerations**:
-- Per-edge, per-bead type
-- Resets on edge selection change
-- No persistence across sessions
-
-**Decision Needed**: Confirm component state only (no tab state persistence)
-
-**Recommendation**: Component state only, reset on edge selection change
+### 3. Bead State Storage ✅ **DECIDED**
+**Decision**: Component state only, no persistence
+**Rationale**: Reset to defaults on load and on edge selection change - keeps UI predictable
 
 ### 4. Stdev Display in Multi-Scenario
 **Question**: Show stdev for all scenarios or only when they differ?
@@ -176,15 +153,14 @@
 
 ## ⚡ Ready to Implement?
 
-**Status**: ✅ **MOSTLY READY** with minor clarifications needed
+**Status**: ✅ **READY TO IMPLEMENT** - All decisions made
 
 **Blockers**: None - can proceed with implementation
 
-**Recommendations**:
-1. Start with Phase 1 (remove labels, add basic beads)
-2. Decide on case variant format (Option B recommended - show both weights)
-3. Implement parameter connection icon (Option C recommended - both overlay and prefix)
-4. Use component state only for bead expansion (no persistence)
+**Final Decisions**:
+1. ✅ Case variant format: `treatment: 25%` (variant weight only, p shown separately)
+2. ✅ Parameter connection icon: `🔌` prefix in expanded text only (not on collapsed)
+3. ✅ Bead state: Component state only, no persistence (reset on load and edge selection change)
 
 **Estimated Effort**: 
 - Phase 1: 2-3 hours
