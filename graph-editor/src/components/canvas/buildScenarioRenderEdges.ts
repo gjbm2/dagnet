@@ -28,6 +28,7 @@ interface BuildScenarioRenderEdgesParams {
     edgeDepthMap: Map<string, number>;
     isSingleNodeSelection: boolean;
   };
+  isPanningOrZooming?: boolean;
 }
 
 const MIN_CHEVRON_THRESHOLD = 10;
@@ -52,7 +53,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     useSankeyView,
     calculateEdgeOffsets,
     tabId,
-    highlightMetadata
+    highlightMetadata,
+    isPanningOrZooming
   } = params;
 
   if (!scenariosContext || !graph) {
@@ -380,6 +382,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           scenarioColor: color,
           strokeOpacity: overlayOpacity,
           originalEdgeId: edge.id,
+          isPanningOrZooming: isPanningOrZooming,  // Pass through pan/zoom state
           // STEP 6: suppressConditionalColors removed (dead code, conditional colors handled by scenarioColor)
           suppressLabel: !isCurrent,  // Only 'current' shows labels
           scenarioParams: edgeParams,
@@ -426,6 +429,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           sourceOffsetY: oe.sourceOffsetY,
           targetOffsetX: oe.targetOffsetX,
           targetOffsetY: oe.targetOffsetY,
+          isPanningOrZooming: isPanningOrZooming,  // Pass through pan/zoom state
           scaledWidth: oe.scaledWidth,
           sourceBundleWidth: oe.sourceBundleWidth,
           targetBundleWidth: oe.targetBundleWidth,

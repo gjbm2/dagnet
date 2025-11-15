@@ -10,7 +10,7 @@ import { getConditionalColor, getConditionalProbabilityColor, isConditionalEdge 
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
-import { buildCompositeLabel, renderCompositeLabel, type CompositeLabel } from './edgeLabelHelpers';
+import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -219,6 +219,8 @@ interface ConversionEdgeData {
   originalEdgeId?: string; // Original edge ID for overlay edges (used for lookups)
   // Scenario rendering flags
   suppressLabel?: boolean; // Suppress label rendering for non-current overlay edges
+  // Pan/zoom state to disable beads during interaction
+  isPanningOrZooming?: boolean;
 }
 
 export default function ConversionEdge({
@@ -239,13 +241,19 @@ export default function ConversionEdge({
   const effectiveSelected = data?.scenarioOverlay ? false : selected;
   const scenariosContext = useScenariosContextOptional();
   const { operations: tabOps, tabs, activeTabId } = useTabContext();
+  const currentTab = tabs.find(t => t.id === activeTabId);
+  const scenarioState = currentTab?.editorState?.scenarioState;
+  const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
+  const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+  
+  // Use pan/zoom state from GraphCanvas (passed via edge data)
+  const isInteracting = data?.isPanningOrZooming ?? false;
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [isDraggingSource, setIsDraggingSource] = useState(false);
   const [isDraggingTarget, setIsDraggingTarget] = useState(false);
   const [dragPosition, setDragPosition] = useState<{ x: number; y: number } | null>(null);
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-  const [adjustedLabelPosition, setAdjustedLabelPosition] = useState<{ x: number; y: number } | null>(null);
   const pathRef = React.useRef<SVGPathElement>(null);
   const textPathRef = React.useRef<SVGPathElement>(null);
 
@@ -371,7 +379,7 @@ export default function ConversionEdge({
   
   return lines.join('\n');
 };
-  const { deleteElements, setEdges, getNodes, screenToFlowPosition } = useReactFlow();
+  const { deleteElements, setEdges, getNodes, getEdges, screenToFlowPosition } = useReactFlow();
   const { graph } = useGraphStore();
   const viewPrefs = useViewPreferencesContext();
   
@@ -499,19 +507,49 @@ export default function ConversionEdge({
     return getEdgeWhatIfDisplay(graph, lookupId, { whatIfDSL }, null);
   }, [graph, lookupId, whatIfDSL]);
   
-  // Composite Edge Label: Build label segments using unified helper
-  const compositeLabel = useMemo(() => {
-    return buildCompositeLabel(
-      fullEdge,
-      graph,
-      scenariosContext,
-      activeTabId,
-      tabs,
-      whatIfDSL,
-      scenariosContext?.currentColor,
-      scenariosContext?.baseColor
-    );
-  }, [fullEdge, graph, scenariosContext, activeTabId, tabs, whatIfDSL, scenariosContext?.currentColor, scenariosContext?.baseColor]);
+  // Get scenario colors for beads
+  const scenarioColors = useMemo(() => {
+    const colorMap = new Map<string, string>();
+    
+    // Ensure we have at least 'current' if no scenarios visible
+    const effectiveVisibleIds = visibleScenarioIds.length > 0 ? visibleScenarioIds : ['current'];
+    const effectiveColorOrderIds = visibleColorOrderIds.length > 0 ? visibleColorOrderIds : ['current'];
+    
+    if (scenariosContext) {
+      effectiveVisibleIds.forEach((id) => {
+        const orderIdx = effectiveColorOrderIds.indexOf(id);
+        if (orderIdx >= 0) {
+          // Use color from scenarios context or assign based on order
+          const scenario = scenariosContext.scenarios?.find((s: any) => s.id === id);
+          if (scenario?.color) {
+            colorMap.set(id, scenario.color);
+          } else if (id === 'current' && scenariosContext.currentColor) {
+            colorMap.set(id, scenariosContext.currentColor);
+          } else if (id === 'base' && scenariosContext.baseColor) {
+            colorMap.set(id, scenariosContext.baseColor);
+          } else {
+            // Fallback: assign color based on order
+            const colors = ['#3b82f6', '#f97316', '#8b5cf6', '#ec4899', '#10b981'];
+            colorMap.set(id, colors[orderIdx % colors.length]);
+          }
+        } else {
+          // If not in color order, use default
+          if (id === 'current') {
+            colorMap.set(id, scenariosContext.currentColor || '#000000');
+          } else {
+            colorMap.set(id, '#000000');
+          }
+        }
+      });
+    } else {
+      // No scenarios context - use defaults
+      effectiveVisibleIds.forEach((id) => {
+        colorMap.set(id, id === 'current' ? '#000000' : '#808080');
+      });
+    }
+    
+    return colorMap;
+  }, [scenariosContext, visibleScenarioIds, visibleColorOrderIds]);
   
   // Calculate stroke width using useMemo to enable CSS transitions
   const strokeWidth = useMemo(() => {
@@ -1126,159 +1164,7 @@ export default function ConversionEdge({
     }
   }, [edgePath, adjustedTargetX, adjustedTargetY]);
 
-  // Collision detection and avoidance for edge labels
-  const { getEdges } = useReactFlow();
-  
-  React.useEffect(() => {
-    // Skip collision detection for selected edges (reconnection handles are more important)
-    if (selected) {
-      setAdjustedLabelPosition(null);
-      return;
-    }
-    
-    // Debounce collision detection to avoid excessive recalculations
-    const timeoutId = setTimeout(() => {
-      const otherEdges = getEdges().filter(e => e.id !== id);
-      const nodes = getNodes();
 
-      // Extract Bézier parameters from this edge's path
-      const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
-      if (!nums || nums.length < 8) {
-        setAdjustedLabelPosition(null);
-        return;
-      }
-      const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
-
-      // Try different positions along the curve
-      const candidatePositions = [0.5, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7, 0.25, 0.75];
-      const labelWidth = 60; // Approximate label width
-      const labelHeight = 30; // Approximate label height
-      
-      // Collision weights (higher = worse)
-      const LABEL_COLLISION_WEIGHT = 100;  // Highest priority: avoid other labels
-      const NODE_COLLISION_WEIGHT = 10;    // Second priority: avoid nodes
-      const EDGE_COLLISION_WEIGHT = 1;     // Lowest priority: avoid edge paths
-      
-      // Function to check if two rectangles overlap
-      const rectanglesOverlap = (x1: number, y1: number, w1: number, h1: number,
-                                  x2: number, y2: number, w2: number, h2: number): boolean => {
-        return !(x1 + w1 / 2 < x2 - w2 / 2 || 
-                 x1 - w1 / 2 > x2 + w2 / 2 || 
-                 y1 + h1 / 2 < y2 - h2 / 2 || 
-                 y1 - h1 / 2 > y2 + h2 / 2);
-      };
-      
-      // Function to check if a label position collides with other edge labels
-      const checkLabelCollisions = (lx: number, ly: number): number => {
-        let collisions = 0;
-        for (const edge of otherEdges) {
-          // Get the label element for this edge
-          const labelElements = document.querySelectorAll(`[style*="translate(${edge.id}"]`);
-          for (const labelEl of Array.from(labelElements)) {
-            const rect = (labelEl as HTMLElement).getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-              // Convert screen coordinates to flow coordinates (approximate)
-              if (rectanglesOverlap(lx, ly, labelWidth, labelHeight, 
-                                   rect.left + rect.width / 2, rect.top + rect.height / 2, 
-                                   rect.width, rect.height)) {
-                collisions++;
-              }
-            }
-          }
-        }
-        return collisions * LABEL_COLLISION_WEIGHT;
-      };
-      
-      // Function to check if a label position collides with nodes
-      const checkNodeCollisions = (lx: number, ly: number): number => {
-        let collisions = 0;
-        for (const node of nodes) {
-          const nodeWidth = (node.data as any)?.type === 'case' ? 96 : 120;
-          const nodeHeight = (node.data as any)?.type === 'case' ? 96 : 120;
-          const nodeX = node.position.x + nodeWidth / 2;
-          const nodeY = node.position.y + nodeHeight / 2;
-          
-          if (rectanglesOverlap(lx, ly, labelWidth, labelHeight, 
-                               nodeX, nodeY, nodeWidth, nodeHeight)) {
-            collisions++;
-          }
-        }
-        return collisions * NODE_COLLISION_WEIGHT;
-      };
-      
-      // Function to check if a label position collides with an edge path
-      const checkEdgePathCollisions = (lx: number, ly: number): number => {
-        let collisions = 0;
-        for (const edge of otherEdges) {
-          const edgeElement = document.getElementById(edge.id);
-          if (edgeElement) {
-            const pathData = edgeElement.getAttribute('d');
-            if (pathData) {
-              const pathNums = pathData.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
-              if (pathNums && pathNums.length >= 8) {
-                const [esx, esy, ec1x, ec1y, ec2x, ec2y, eex, eey] = pathNums.slice(0, 8).map(Number);
-                
-                // Check multiple points along the edge for intersection with label box
-                for (let t = 0; t <= 1; t += 0.1) {
-                  const point = getBezierPoint(t, esx, esy, ec1x, ec1y, ec2x, ec2y, eex, eey);
-                  
-                  if (
-                    point.x >= lx - labelWidth / 2 &&
-                    point.x <= lx + labelWidth / 2 &&
-                    point.y >= ly - labelHeight / 2 &&
-                    point.y <= ly + labelHeight / 2
-                  ) {
-                    collisions++;
-                    break; // One collision per edge is enough
-                  }
-                }
-              }
-            }
-          }
-        }
-        return collisions * EDGE_COLLISION_WEIGHT;
-      };
-
-      // Find position with lowest collision score
-      let bestPosition = { x: labelX, y: labelY };
-      let minScore = Infinity;
-
-      for (const t of candidatePositions) {
-        const point = getBezierPoint(t, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
-        
-        // Calculate weighted collision score
-        const labelCollisions = checkLabelCollisions(point.x, point.y);
-        const nodeCollisions = checkNodeCollisions(point.x, point.y);
-        const edgeCollisions = checkEdgePathCollisions(point.x, point.y);
-        const totalScore = labelCollisions + nodeCollisions + edgeCollisions;
-        
-        if (totalScore < minScore) {
-          minScore = totalScore;
-          bestPosition = point;
-        }
-        
-        // If we found a position with no collisions, use it
-        if (totalScore === 0) break;
-      }
-
-      // Only adjust if we found a better position (score improved)
-      const defaultScore = checkLabelCollisions(labelX, labelY) + 
-                          checkNodeCollisions(labelX, labelY) + 
-                          checkEdgePathCollisions(labelX, labelY);
-      
-      if (minScore < defaultScore && (bestPosition.x !== labelX || bestPosition.y !== labelY)) {
-        setAdjustedLabelPosition(bestPosition);
-      } else {
-        setAdjustedLabelPosition(null);
-      }
-    }, 30); // 30ms debounce (reduced from 100ms for faster settling)
-
-    return () => clearTimeout(timeoutId);
-  }, [edgePath, labelX, labelY, id, getEdges, getNodes, selected]);
-
-  // Use adjusted position if available, otherwise use default
-  const finalLabelX = adjustedLabelPosition?.x ?? labelX;
-  const finalLabelY = adjustedLabelPosition?.y ?? labelY;
 
   const handleDelete = useCallback(() => {
     deleteElements({ edges: [{ id }] });
@@ -1739,175 +1625,29 @@ export default function ConversionEdge({
             d={edgePath}
             onDoubleClick={handleDoubleClick}
           />
+          
+          {/* Edge Beads - SVG elements rendered directly in edge SVG */}
+          {/* Only render beads if path ref is stable and edge data is available */}
+          {/* EdgeBeadsRenderer handles hiding during pan/zoom internally */}
+          {!data?.suppressLabel && !data?.scenarioOverlay && pathRef.current && fullEdge && scenariosContext && (
+            <EdgeBeadsRenderer
+              key={`beads-${id}-${fullEdge.uuid || fullEdge.id}`}
+              edgeId={id}
+              edge={fullEdge}
+              path={pathRef.current}
+              graph={graph}
+              visibleScenarioIds={visibleScenarioIds}
+              visibleColorOrderIds={visibleColorOrderIds}
+              scenarioColors={scenarioColors}
+              scenariosContext={scenariosContext}
+              whatIfDSL={whatIfDSL}
+              sourceClipPathId={data?.sourceClipPathId}
+              isPanningOrZooming={isInteracting}
+              onDoubleClick={handleDoubleClick}
+            />
+          )}
         </g>
       </g>
-      
-      <EdgeLabelRenderer>
-        {!data?.suppressLabel && (
-          <div
-            style={{
-              position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY}px)`,
-              background: effectiveSelected ? '#000' : 'rgba(255, 255, 255, 0.85)',
-              color: effectiveSelected ? '#fff' : '#333',
-              padding: '4px 8px',
-              borderRadius: '4px',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              border: effectiveSelected ? 'none' : '1px solid #ddd',
-            minWidth: '40px',
-            textAlign: 'center',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            pointerEvents: 'auto',
-              zIndex: 2000,  // Ensure labels are above all edges
-          }}
-            onDoubleClick={handleDoubleClick}
-            onMouseEnter={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
-              setShowTooltip(true);
-            }}
-            onMouseLeave={() => {
-              setShowTooltip(false);
-            }}
-          >
-            <div style={{ textAlign: 'center' }}>
-            {compositeLabel ? (
-              // STEP 5: Pass selected flag to ensure label colors adapt
-              renderCompositeLabel(compositeLabel, handleDoubleClick, effectiveSelected)
-            ) : (data?.probability === undefined || data?.probability === null) ? (
-              // Error state: no probability defined
-              <div style={{ 
-                fontWeight: 'bold', 
-                color: '#ff6b6b',
-                fontSize: '11px',
-                background: '#fff5f5',
-                padding: '2px 6px',
-                borderRadius: '3px',
-                border: '1px solid #ff6b6b'
-              }}>
-                ⚠️ No Probability
-              </div>
-            ) : null}
-          </div>
-        </div>
-        )}
-        
-        {effectiveSelected && (
-          <>
-              {/* Delete button */}
-              <div
-              style={{
-                position: 'absolute',
-                transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY + 20}px)`,
-                background: '#dc3545',
-                color: 'white',
-                border: 'none',
-                borderRadius: '50%',
-                width: '16px',
-                height: '16px',
-                fontSize: '10px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 1000,
-                pointerEvents: 'none',
-              }}
-              title="Delete edge (use context menu)"
-            >
-              ×
-            </div>
-            
-            {/* ReactFlow's built-in reconnection handles will appear automatically for selected edges with reconnectable=true */}
-          </>
-        )}
-        
-        {/* Colored markers for case variants and conditional_p edges */}
-        {!data?.scenarioOverlay && fullEdge && (() => {
-          const markers: React.ReactNode[] = [];
-          const pathEl = pathRef.current;
-          if (!pathEl) return null;
-
-          const pathLength = pathEl.getTotalLength();
-          if (!pathLength || pathLength <= 0) return null;
-
-          // Per-edge distance from path start to VISIBLE start (after source chevron bite),
-          // computed by intersecting this edge's spline with the source chevron clipPath triangle.
-          const visibleStartOffset = computeVisibleStartOffsetForEdge(
-            pathEl,
-            data?.sourceClipPathId
-          );
-
-          // How far from the visible start the first bead should sit
-          const CONST_MARKER_DISTANCE = 12; // px from visible edge start
-          const BEAD_SPACING = 18;          // px between beads along the spline
-
-          const baseDistance = visibleStartOffset + CONST_MARKER_DISTANCE;
-
-          // Helper to clamp distance so we stay on the path
-          const getDistanceForBead = (index: number) =>
-            Math.min(baseDistance + index * BEAD_SPACING, pathLength * 0.9);
-
-          let beadIndex = 0;
-
-          // Case variant bead (if any) – first in the string
-          const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
-          if (sourceNode?.type === 'case' && sourceNode?.layout?.color && fullEdge.case_variant) {
-            const d = getDistanceForBead(beadIndex++);
-            const point = pathEl.getPointAtLength(d);
-
-            markers.push(
-              <div
-                key={`case-marker-${id}`}
-                style={{
-                  position: 'absolute',
-                  transform: `translate(-50%, -50%) translate(${point.x}px,${point.y}px)`,
-                  width: '16px',
-                  height: '16px',
-                  borderRadius: '50%',
-                  background: sourceNode.layout.color,
-                  border: '2px solid white',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-                  pointerEvents: 'none',
-                  zIndex: 1000,
-                }}
-                title={`Case: ${fullEdge.case_variant}`}
-              />
-            );
-          }
-
-          // One bead per conditional_p entry – continue the string along the spline
-          if (isConditionalEdge(fullEdge) && fullEdge.conditional_p && fullEdge.conditional_p.length > 0) {
-            fullEdge.conditional_p.forEach((cp, idx) => {
-              // Use color specific to THIS condition, not shared across all conditions
-              const condColor = getConditionalProbabilityColor(cp);
-              const d = getDistanceForBead(beadIndex++);
-              const point = pathEl.getPointAtLength(d);
-
-              markers.push(
-                <div
-                  key={`cond-marker-${id}-${idx}`}
-                  style={{
-                    position: 'absolute',
-                    transform: `translate(-50%, -50%) translate(${point.x}px,${point.y}px)`,
-                    width: '16px',
-                    height: '16px',
-                    borderRadius: '50%',
-                    background: condColor,
-                    border: '2px solid white',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-                    pointerEvents: 'none',
-                    zIndex: 1000,
-                  }}
-                  title={cp.condition ? `Condition: ${cp.condition}` : 'Conditional edge'}
-                />
-              );
-            });
-          }
-
-          return markers.length > 0 ? <>{markers}</> : null;
-        })()}
-      </EdgeLabelRenderer>
 
       {/* Edge tooltip - rendered as portal */}
       {showTooltip && ReactDOM.createPortal(
@@ -1943,7 +1683,7 @@ export default function ConversionEdge({
         <div
           style={{
             position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${finalLabelX}px,${finalLabelY}px)`,
+            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
             background: '#fff',
             border: '1px solid #ddd',
             borderRadius: '4px',

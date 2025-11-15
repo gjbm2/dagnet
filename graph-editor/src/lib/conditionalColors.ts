@@ -1,21 +1,22 @@
 // Color palette and utilities for conditional edges
 import { Graph, GraphEdge } from '../types';
 
-// Color palette for conditional edges
+// Color palette for conditional edges (DARK - 600-700 level for better contrast)
 // Avoids blue (#007bff - reserved for selections) and purple (#C4B5FD, #8b5cf6 - reserved for cases)
+// Using darker colors to ensure contrast with pastel scenario text colors
 export const CONDITIONAL_COLOR_PALETTE = [
-  '#4ade80', // green-400
-  '#f87171', // red-400
-  '#fbbf24', // amber-400
-  '#34d399', // emerald-400
-  '#fb923c', // orange-400
-  '#60a5fa', // sky-400 (different from selection blue)
-  '#f472b6', // pink-400
-  '#a78bfa', // violet-400 (different from case purple)
-  '#facc15', // yellow-400
-  '#2dd4bf', // teal-400
-  '#fb7185', // rose-400
-  '#818cf8', // indigo-400
+  '#16a34a', // green-600 (was green-400)
+  '#dc2626', // red-600 (was red-400)
+  '#d97706', // amber-600 (was amber-400)
+  '#059669', // emerald-600 (was emerald-400)
+  '#ea580c', // orange-600 (was orange-400)
+  '#0284c7', // sky-600 (was sky-400)
+  '#db2777', // pink-600 (was pink-400)
+  '#9333ea', // violet-600 (was violet-400)
+  '#ca8a04', // yellow-600 (was yellow-400)
+  '#0d9488', // teal-600 (was teal-400)
+  '#e11d48', // rose-600 (was rose-400)
+  '#4f46e5', // indigo-600 (was indigo-400)
 ];
 
 /**
@@ -163,6 +164,114 @@ export function darkenColor(color: string, amount: number = 0.2): string {
   
   // Convert back to hex
   return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Darken a case variant color for bead background
+ * Reduces lightness by ~50% to ensure contrast with pastel scenario text colors
+ */
+export function darkenCaseColor(color: string): string {
+  // Convert hex to HSL
+  const hex = color.replace('#', '');
+  const r = parseInt(hex.substr(0, 2), 16) / 255;
+  const g = parseInt(hex.substr(2, 2), 16) / 255;
+  const b = parseInt(hex.substr(4, 2), 16) / 255;
+  
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0, s = 0, l = (max + min) / 2;
+  
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      case b: h = ((r - g) / d + 4) / 6; break;
+    }
+  }
+  
+  // Reduce lightness by 50% (minimum 15% for better contrast)
+  l = Math.max(0.15, l * 0.5);
+  
+  // Convert HSL back to RGB
+  let newR, newG, newB;
+  if (s === 0) {
+    newR = newG = newB = l;
+  } else {
+    const hue2rgb = (p: number, q: number, t: number) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    newR = hue2rgb(p, q, h + 1/3);
+    newG = hue2rgb(p, q, h);
+    newB = hue2rgb(p, q, h - 1/3);
+  }
+  
+  return `#${Math.round(newR * 255).toString(16).padStart(2, '0')}${Math.round(newG * 255).toString(16).padStart(2, '0')}${Math.round(newB * 255).toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Ensure a color is dark enough for bead background (for conditional_p user-set colors)
+ * If lightness > 20%, darken to 20% for better contrast with pastel scenario text
+ */
+export function ensureDarkBeadColor(color: string): string {
+  // Convert hex to HSL
+  const hex = color.replace('#', '');
+  const r = parseInt(hex.substr(0, 2), 16) / 255;
+  const g = parseInt(hex.substr(2, 2), 16) / 255;
+  const b = parseInt(hex.substr(4, 2), 16) / 255;
+  
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0, s = 0, l = (max + min) / 2;
+  
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      case b: h = ((r - g) / d + 4) / 6; break;
+    }
+  }
+  
+  // If lightness > 20%, darken to 20% for better contrast
+  if (l > 0.2) {
+    l = 0.2;
+  }
+  
+  // Convert HSL back to RGB
+  let newR, newG, newB;
+  if (s === 0) {
+    newR = newG = newB = l;
+  } else {
+    const hue2rgb = (p: number, q: number, t: number) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    newR = hue2rgb(p, q, h + 1/3);
+    newG = hue2rgb(p, q, h);
+    newB = hue2rgb(p, q, h - 1/3);
+  }
+  
+  return `#${Math.round(newR * 255).toString(16).padStart(2, '0')}${Math.round(newG * 255).toString(16).padStart(2, '0')}${Math.round(newB * 255).toString(16).padStart(2, '0')}`;
 }
 
 /**
