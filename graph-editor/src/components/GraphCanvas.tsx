@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, startTransition } from 'react';
+import { flushSync } from 'react-dom';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { roundTo4DP } from '@/utils/rounding';
 import ReactFlow, {
@@ -95,9 +96,36 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
 }
 
 function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId }: GraphCanvasProps) {
+  // Track if user is panning/zooming to disable beads during interaction
+  const [isPanningOrZooming, setIsPanningOrZooming] = React.useState(false);
+  const panTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const isPanningOrZoomingRef = React.useRef(false);
+  const hasMovedRef = React.useRef(false); // Track if actual movement occurred
+  const moveStartViewportRef = React.useRef<{ x: number; y: number; zoom: number } | null>(null);
+  const lastSavedViewportRef = React.useRef<{ x: number; y: number; zoom: number } | null>(null);
+  
+  // Track when isPanningOrZooming changes (for debugging - can remove later)
+  React.useEffect(() => {
+    isPanningOrZoomingRef.current = isPanningOrZooming;
+  }, [isPanningOrZooming]);
   const store = useGraphStore();
   const { graph, setGraph: setGraphDirect, setAutoUpdating } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
+  
+  // Initialize lastSavedViewportRef from tab state to avoid unnecessary saves
+  React.useEffect(() => {
+    if (tabId) {
+      const myTab = tabs.find(t => t.id === tabId);
+      const vp = myTab?.editorState?.rfViewport as any;
+      if (vp && typeof vp.x === 'number' && typeof vp.y === 'number' && typeof vp.zoom === 'number') {
+        lastSavedViewportRef.current = {
+          x: vp.x,
+          y: vp.y,
+          zoom: vp.zoom
+        };
+      }
+    }
+  }, [tabId, tabs]);
   const viewPrefs = useViewPreferencesContext();
   const scenariosContext = useScenariosContextOptional();
   
@@ -1810,7 +1838,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // Pass what-if DSL to edges
       whatIfDSL: effectiveWhatIfDSL,
       // Pass Sankey view flag to edges
-      useSankeyView: useSankeyView
+      useSankeyView: useSankeyView,
+      // Pass pan/zoom state to disable beads during interaction
+      isPanningOrZooming: isPanningOrZooming
     }
   }));
   
@@ -3214,6 +3244,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // STEP 4: Compute highlight metadata (don't mutate edges state)
   // This will be passed into buildScenarioRenderEdges to apply to 'current' layer only
+  // OPTIMIZATION: Use stable edge IDs array to avoid unnecessary recalculations
+  const edgeIdsRef = React.useRef<string>('');
+  const currentEdgeIds = edges.map(e => e.id).sort().join(',');
+  const edgesChanged = edgeIdsRef.current !== currentEdgeIds;
+  if (edgesChanged) {
+    edgeIdsRef.current = currentEdgeIds;
+  }
+  
+  // Only recalculate highlight metadata when node selection changes OR edges topology changes
+  // This prevents recalculation when only edges are selected
+  const nodeSelectionKey = selectedNodesForAnalysis.map(n => n.id).sort().join(',');
   const highlightMetadata = React.useMemo(() => {
     if (selectedNodesForAnalysis.length === 0) {
       return {
@@ -3223,57 +3264,57 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       };
     }
     
-      // Calculate highlight depths for single node selection
-      const edgeDepthMap = new Map<string, number>();
+    // Calculate highlight depths for single node selection
+    const edgeDepthMap = new Map<string, number>();
+    
+    if (selectedNodesForAnalysis.length === 1) {
+      const selectedId = selectedNodesForAnalysis[0].id;
       
-      if (selectedNodesForAnalysis.length === 1) {
-        const selectedId = selectedNodesForAnalysis[0].id;
+      // Calculate upstream depths
+      const calculateUpstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
+        if (visited.has(nodeId) || depth > 5) return;
+        visited.add(nodeId);
         
-        // Calculate upstream depths
-        const calculateUpstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
-          if (visited.has(nodeId) || depth > 5) return;
-          visited.add(nodeId);
-          
         edges.forEach(edge => {
-            if (edge.target === nodeId) {
-              const existingDepth = edgeDepthMap.get(edge.id);
-              if (existingDepth === undefined || depth < existingDepth) {
-                edgeDepthMap.set(edge.id, depth);
-              }
-              calculateUpstreamDepths(edge.source, depth + 1, visited);
+          if (edge.target === nodeId) {
+            const existingDepth = edgeDepthMap.get(edge.id);
+            if (existingDepth === undefined || depth < existingDepth) {
+              edgeDepthMap.set(edge.id, depth);
             }
-          });
-        };
-        
-        // Calculate downstream depths
-        const calculateDownstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
-          if (visited.has(nodeId) || depth > 5) return;
-          visited.add(nodeId);
-          
-        edges.forEach(edge => {
-            if (edge.source === nodeId) {
-              const existingDepth = edgeDepthMap.get(edge.id);
-              if (existingDepth === undefined || depth < existingDepth) {
-                edgeDepthMap.set(edge.id, depth);
-              }
-              calculateDownstreamDepths(edge.target, depth + 1, visited);
-            }
-          });
-        };
-        
-        calculateUpstreamDepths(selectedId, 0);
-        calculateDownstreamDepths(selectedId, 0);
-      }
+            calculateUpstreamDepths(edge.source, depth + 1, visited);
+          }
+        });
+      };
       
+      // Calculate downstream depths
+      const calculateDownstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
+        if (visited.has(nodeId) || depth > 5) return;
+        visited.add(nodeId);
+        
+        edges.forEach(edge => {
+          if (edge.source === nodeId) {
+            const existingDepth = edgeDepthMap.get(edge.id);
+            if (existingDepth === undefined || depth < existingDepth) {
+              edgeDepthMap.set(edge.id, depth);
+            }
+            calculateDownstreamDepths(edge.target, depth + 1, visited);
+          }
+        });
+      };
+      
+      calculateUpstreamDepths(selectedId, 0);
+      calculateDownstreamDepths(selectedId, 0);
+    }
+    
     const pathEdges = findPathEdges(selectedNodesForAnalysis, edges);
-      const isSingleNodeSelection = selectedNodesForAnalysis.length === 1;
-      
+    const isSingleNodeSelection = selectedNodesForAnalysis.length === 1;
+    
     return {
       highlightedEdgeIds: pathEdges,
       edgeDepthMap,
       isSingleNodeSelection
     };
-  }, [selectedNodesForAnalysis, edges, findPathEdges]); 
+  }, [selectedNodesForAnalysis, nodeSelectionKey, edges, findPathEdges, edgesChanged]); 
 
   // Calculate probability and cost for selected nodes
   const calculateSelectionAnalysis = useCallback(() => {
@@ -3884,15 +3925,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.warn(`[GraphCanvas] Filtered out ${selectedEdges.length - selectableEdges.length} non-selectable overlay edges`);
     }
     
-    // Re-sort edges so selected edges render on top
-    setEdges(prevEdges => {
-      const sorted = [...prevEdges].sort((a, b) => {
-        if (a.selected && !b.selected) return 1;
-        if (!a.selected && b.selected) return -1;
-        return 0;
-      });
-      return sorted;
-    });
+    // REMOVED: Re-sorting edges causes massive re-render cascade
+    // ReactFlow handles z-index for selected edges via CSS, so we don't need to re-sort
+    // This was causing flicker on every selection change
     
     // For multi-selection, we'll show the first selected item in the properties panel
     // but keep track of all selected items for operations like delete
@@ -3901,19 +3936,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onSelectedEdgeChange(null);
     } else if (selectableEdges.length > 0) {
       const selectedEdgeId = selectableEdges[0].id;
-      console.log(`[GraphCanvas] Edge selected:`, {
-        edgeId: selectedEdgeId,
-        edgeData: selectableEdges[0].data,
-        originalEdgeId: selectableEdges[0].data?.originalEdgeId,
-        scenarioOverlay: selectableEdges[0].data?.scenarioOverlay
-      });
       onSelectedEdgeChange(selectedEdgeId);
       onSelectedNodeChange(null);
     } else {
       onSelectedNodeChange(null);
       onSelectedEdgeChange(null);
     }
-  }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis, setEdges]);
+  }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis]);
 
   // Handle node drag start - just set flag, don't save yet
   const onNodeDragStart = useCallback(() => {
@@ -4638,7 +4667,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         useSankeyView,
         calculateEdgeOffsets,
         tabId,
-        highlightMetadata  // STEP 4: Pass highlight flags for 'current' layer
+        highlightMetadata,  // STEP 4: Pass highlight flags for 'current' layer
+        isPanningOrZooming  // Pass pan/zoom state to disable beads
       });
     } catch (e) {
       console.warn('Failed to build scenario render edges:', e);
@@ -4657,7 +4687,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     useSankeyView,
     calculateEdgeOffsets,
     tabId,
-    highlightMetadata  // Re-render when highlight changes
+    highlightMetadata,  // Re-render when highlight changes
+    isPanningOrZooming  // Re-render when pan/zoom state changes
   ]);
 
   // STEP 3: renderEdges is now the ONLY edge source; old base/overlay split removed
@@ -4687,11 +4718,75 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onConnect={onConnect}
         onReconnect={onEdgeUpdate}
         onSelectionChange={onSelectionChange}
+        onMoveStart={(_, viewport) => {
+          // Store initial viewport to detect actual movement
+          moveStartViewportRef.current = {
+            x: viewport.x,
+            y: viewport.y,
+            zoom: viewport.zoom
+          };
+          hasMovedRef.current = false;
+        }}
+        onMove={(_, viewport) => {
+          // Only set panning state if viewport actually changed
+          // This prevents clicks from hiding beads
+          if (moveStartViewportRef.current) {
+            const dx = Math.abs(viewport.x - moveStartViewportRef.current.x);
+            const dy = Math.abs(viewport.y - moveStartViewportRef.current.y);
+            const dz = Math.abs(viewport.zoom - moveStartViewportRef.current.zoom);
+            
+            // Only consider it movement if viewport changed significantly (more than 1px or 0.01 zoom)
+            if ((dx > 1 || dy > 1 || dz > 0.01) && !hasMovedRef.current) {
+              hasMovedRef.current = true;
+              // Clear any pending timeout
+              if (panTimeoutRef.current) {
+                clearTimeout(panTimeoutRef.current);
+                panTimeoutRef.current = null;
+              }
+              setIsPanningOrZooming(true);
+            }
+          }
+        }}
         onMoveEnd={(_, viewport) => {
-          if (tabId) {
-            try {
-              tabOperations.updateTabState(tabId, { rfViewport: viewport as any });
-            } catch {}
+          // Only update state if we were actually panning/zooming
+          if (hasMovedRef.current) {
+            // Only save viewport if it actually changed significantly (avoid unnecessary re-renders)
+            const shouldSaveViewport = !lastSavedViewportRef.current || 
+              Math.abs(viewport.x - lastSavedViewportRef.current.x) > 1 ||
+              Math.abs(viewport.y - lastSavedViewportRef.current.y) > 1 ||
+              Math.abs(viewport.zoom - lastSavedViewportRef.current.zoom) > 0.01;
+            
+            if (shouldSaveViewport && tabId) {
+              // Defer tab state update using startTransition to mark it as low priority
+              // This prevents the massive re-render cascade from blocking beads
+              startTransition(() => {
+                try {
+                  tabOperations.updateTabState(tabId, { rfViewport: viewport as any });
+                  lastSavedViewportRef.current = {
+                    x: viewport.x,
+                    y: viewport.y,
+                    zoom: viewport.zoom
+                  };
+                } catch {}
+              });
+            }
+            
+            // Clear any existing timeout to prevent stacking
+            if (panTimeoutRef.current) {
+              clearTimeout(panTimeoutRef.current);
+              panTimeoutRef.current = null;
+            }
+            
+            // Reset flag immediately - use single RAF for minimal delay
+            requestAnimationFrame(() => {
+              setIsPanningOrZooming(false);
+              hasMovedRef.current = false;
+              moveStartViewportRef.current = null;
+            });
+          } else {
+            // No actual movement - reset refs
+            moveStartViewportRef.current = null;
+            hasMovedRef.current = false;
           }
         }}
         onNodeDragStart={onNodeDragStart} 
