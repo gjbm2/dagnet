@@ -26,10 +26,17 @@ def analyze_profiler_data(profiler_file):
     
     if 'dataForRoots' in data:
         roots = data['dataForRoots']
+        # Newer React profiler exports use a LIST of roots, older ones used a dict
+        if isinstance(roots, dict):
+            iterable_roots = roots.items()
+        else:
+            # List form: each entry is a root object with its own "rootID"
+            iterable_roots = [(str(i), root) for i, root in enumerate(roots)]
+
         print(f"Found {len(roots)} React roots")
         print()
         
-        for root_id, root_data in roots.items():
+        for root_id, root_data in iterable_roots:
             print(f"Root: {root_id}")
             
             if 'commitData' in root_data:
@@ -44,6 +51,15 @@ def analyze_profiler_data(profiler_file):
                     print(f"\n  Commit #{i+1}:")
                     print(f"    Duration: {duration}ms")
                     print(f"    Timestamp: {timestamp}")
+
+                    # Print updaters (components whose state/props triggered this commit)
+                    updaters = commit.get('updaters') or []
+                    if updaters:
+                        print("    Updaters:")
+                        for u in updaters:
+                            name = u.get('displayName') or f"Fiber {u.get('id')}"
+                            uid = u.get('id')
+                            print(f"      - {name} (id={uid})")
                     
                     # Get fiber data
                     if 'fiberActualDurations' in commit:
@@ -53,7 +69,7 @@ def analyze_profiler_data(profiler_file):
                         # Sort by duration
                         sorted_fibers = sorted(fibers, key=lambda x: x[1] if len(x) > 1 else 0, reverse=True)
                         
-                        print(f"    Top 10 slowest components:")
+                        print(f"    Top 10 slowest components (by fiber id):")
                         for fiber_data in sorted_fibers[:10]:
                             if len(fiber_data) >= 2:
                                 fiber_id = fiber_data[0]
