@@ -1,0 +1,11 @@
+I have a React app with a very large cost in one transaction, which has a heavy GPU load and a lot of calc. The problem is that it's blowing my render budget for that frame. Is there a way I can extend the size of that frame so we don't blow the frame budget? Or are frames a fixed size in React, a fixed number of milliseconds? Can I just allow one mega frame in which everything gets done, suspend it during rapid updates, and then once the rapid updates are finished, debounce a single large render with an extra large frame which never gets blown?
+You said:
+The thing blowing the budget is lots of clipping of SVG objects, not calcs. I don't care if it all gets applied at once after a delay. What I don't want (currently happening) is the browser renders a half complete image then stops 
+You said:
+The prob isn't the partially rendered -- were that just interstitial. It's that it never completes the blown frame
+You said:
+So the reason I'm seeing half finished frame is likely because something is interrupting the process before it completes, not that the frame finishes and that is what stops the composition?
+You said:
+The half rendered state sometimes includes some partially drawn objects which are in other parts of the DOM altogether. But surprised those are being redrawn at all
+You said:
+And if the other parts of the Dom are in entirely different branches (Eg sidebar, menu components) rather than the canvas where the SVG objects are? Does that imply that something is wrongly destabilising those branches Eg  a dependency that's not memoised?

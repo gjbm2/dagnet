@@ -1844,8 +1844,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }));
   
-  // Generate edge bundles for chevron clipping (suppress in Sankey view)
-  const bundles = useSankeyView ? [] : groupEdgesIntoBundles(edgesWithOffsetData, nodesWithSelection);
+  // Generate edge bundles for chevron clipping (suppress in Sankey view or nochevrons mode)
+  const bundles = (useSankeyView || NO_CHEVRONS_MODE) ? [] : groupEdgesIntoBundles(edgesWithOffsetData, nodesWithSelection);
   
   // Add anchors and clipPath IDs to edges (suppress chevrons in Sankey view)
   const edgesWithClipPaths = useSankeyView ? edgesWithOffsetData : edgesWithOffsetData.map(edge => {
@@ -4630,6 +4630,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Scenario visibility state (for coloring/suppression decisions)
   const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
+
+  // DIAGNOSTIC: Check for nochevrons mode (?nochevrons URL parameter)
+  const urlParams = new URLSearchParams(window.location.search);
+  const NO_CHEVRONS_MODE = urlParams.has('nochevrons');
+
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
   
@@ -5155,9 +5160,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         )}
         
         {/* Chevron clipPath definitions */}
-        <Panel position="top-left" style={{ pointerEvents: 'none' }}>
-          <ChevronClipPaths bundles={edgeBundles} nodes={nodes} frameId={renderFrameRef.current} />
-        </Panel>
+        {/* DIAGNOSTIC: Skip chevrons if ?nochevrons param set */}
+        {!NO_CHEVRONS_MODE && (
+          <Panel position="top-left" style={{ pointerEvents: 'none' }}>
+            <ChevronClipPaths bundles={edgeBundles} nodes={nodes} frameId={renderFrameRef.current} />
+          </Panel>
+        )}
       </ReactFlow>
       
       {/* Context Menu */}
