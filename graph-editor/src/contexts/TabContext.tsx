@@ -538,18 +538,23 @@ class FileRegistry {
    */
   private notifyListeners(fileId: string, file: FileState): void {
     const callbacks = this.listeners.get(fileId);
-    // DIAGNOSTIC: Log file notifications that happen during decoration-restore window
+    // ATOMIC RESTORATION: Check if we're in atomic restore window
+    // If so, defer notifications to avoid triggering component re-renders during restoration
     try {
       const w = (typeof window !== 'undefined') ? (window as any) : null;
-      if (w && w.__DAGNET_DECORATION_RESTORE_ACTIVE) {
-        console.log('[CASCADE] fileRegistry.notifyListeners during decoration-restore window', {
+      if (w && w.__DAGNET_ATOMIC_RESTORE_ACTIVE) {
+        console.log('[ATOMIC GUARD] fileRegistry.notifyListeners blocked during atomic restore', {
           fileId,
-          listenerCount: callbacks ? callbacks.size : 0,
-          stack: new Error().stack?.split('\n').slice(2, 10).join('\n')
+          listenerCount: callbacks ? callbacks.size : 0
         });
+        // Defer notifications using setTimeout(0) so they fire after flushSync completes
+        setTimeout(() => {
+          this.notifyListeners(fileId, file);
+        }, 0);
+        return;
       }
     } catch {
-      // diagnostics only
+      // best-effort guards only
     }
     if (callbacks) {
       console.log(`FileRegistry: Notifying ${callbacks.size} listeners for ${fileId}`);
@@ -1217,19 +1222,24 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     tabId: string,
     editorState: Partial<TabState['editorState']>
   ): Promise<void> => {
-    // DIAGNOSTIC: If this fires during the decoration-restore window, log a detailed trace
+    // ATOMIC RESTORATION: Check if we're in atomic restore window
+    // If so, defer this update until after the window closes to avoid interference
     try {
       const w = (typeof window !== 'undefined') ? (window as any) : null;
-      if (w && w.__DAGNET_DECORATION_RESTORE_ACTIVE) {
-        console.log('[CASCADE] TabContext.updateTabState during decoration-restore window', {
+      if (w && w.__DAGNET_ATOMIC_RESTORE_ACTIVE) {
+        console.log('[ATOMIC GUARD] TabContext.updateTabState blocked during atomic restore', {
           tabId,
           editorStateKeys: Object.keys(editorState || {}),
-          payload: editorState,
-          stack: new Error().stack?.split('\n').slice(2, 10).join('\n')
+          payload: editorState
         });
+        // Defer update using setTimeout(0) so it runs after flushSync completes
+        setTimeout(() => {
+          updateTabState(tabId, editorState);
+        }, 0);
+        return;
       }
     } catch {
-      // best-effort diagnostics only
+      // best-effort guards only
     }
     let newEditorState: TabState['editorState'] | null = null;
     
@@ -1242,7 +1252,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       newEditorState = { ...currentTab.editorState, ...editorState };
       
       // Debug logging for scenario state changes
-      if (editorState.scenarioState) {
+      if (editorState?.scenarioState) {
         console.log(`[TabContext] updateTabState: scenarioState changing for ${tabId}:`, {
           oldVisible: currentTab.editorState?.scenarioState?.visibleScenarioIds,
           newVisible: editorState.scenarioState.visibleScenarioIds,

@@ -1,4 +1,4 @@
-# Atomic Decoration Restore Plan (Chevrons & Beads) – ReactFlow‑Safe Design
+b# Atomic Decoration Restore Plan (Chevrons & Beads) – ReactFlow‑Safe Design
 
 ## 1. Problem Restatement (Narrow Scope)
 
@@ -384,7 +384,63 @@ Putting the pieces together:
 
 ---
 
-## 8. Summary
+## 8. Shadow Edges for Current Layer Only
+
+You correctly noted that we do **not** need to double up *every* edge: only the **current layer** edges are intended to be interactive. All other layers are display‑only.
+
+This yields a tighter, more targeted design:
+
+- **Current layer edges**:
+  - Interactive, respond to pointer events and editing.
+  - Need a stable “shadow” representation that does **not** change when decorations change.
+- **Non‑current layers**:
+  - Decoration‑only edges (overlays, opacities, alternate scenarios).
+  - Do not need interactive handlers and can be regenerated freely.
+
+### 8.1 Roles
+
+- **Interactive current edges (shadow)**:
+  - Carried in ReactFlow’s `edges` list.
+  - No clipPaths, no chevron metadata, no beads.
+  - Own all handlers: `onMouseDown`, `onMouseEnter`, `onMouseOut`, `onEdgeDoubleClick`, selection/context menu, etc.
+  - Constructed via `useMemo` from:
+    - Graph topology
+    - Current scenario/layer selection
+    - Stable `useCallback` handlers
+  - **Never regenerated** in response to decoration toggles.
+
+- **Decoration current edges**:
+  - Used only by chevron + bead overlays.
+  - They can know about:
+    - Bundling (source/target bundles).
+    - Clip anchors and chevron geometry.
+    - Bead positions for HTML portals.
+  - They **do not** carry pointer handlers.
+
+- **Decoration non‑current edges**:
+  - Your existing scenario overlay edges.
+  - Remain decoration‑only.
+
+### 8.2 Behaviour during atomic restore
+
+When atomic restoration runs:
+
+- Interactive current edges:
+  - Their `edges` array and `edge.data` content stay **completely unchanged**.
+  - ReactFlow sees *no* prop changes on them, so CanvasInner doesn’t re‑concile their handlers.
+
+- Decoration edges:
+  - May be regenerated (bundles recalculated, clipPaths added/removed, bead overlays updated).
+  - All that work happens in the decoration pipeline/overlay, **not as prop changes on the interactive edges**.
+
+This ensures that the atomic frame’s React work is confined to:
+
+- Overlay components (chevrons, beads).
+- A minimal amount of ReactFlow work (if any) for decoration display, but **not** for handler re‑attachment to current edges.
+
+---
+
+## 9. Summary
 
 This plan is intentionally **only** about Goal #1:
 

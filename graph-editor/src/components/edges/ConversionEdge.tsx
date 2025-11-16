@@ -11,6 +11,7 @@ import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/wha
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
+import { getDecorationVisibility } from '../GraphCanvas';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -249,8 +250,10 @@ export default function ConversionEdge({
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
   
-  // Use pan/zoom state from GraphCanvas (passed via edge data)
-  const isInteracting = data?.isPanningOrZooming ?? false;
+  // ATOMIC RESTORATION: Read decoration visibility from module state (not edge.data or Context)
+  // This doesn't trigger re-renders when the flags change - edges just read current value when they render
+  const decorationVisibility = getDecorationVisibility();
+  const shouldSuppressBeads = decorationVisibility.isPanning || !decorationVisibility.beadsVisible;
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [isDraggingSource, setIsDraggingSource] = useState(false);
   const [isDraggingTarget, setIsDraggingTarget] = useState(false);
@@ -1645,7 +1648,7 @@ export default function ConversionEdge({
               scenariosContext={scenariosContext}
               whatIfDSL={whatIfDSL}
               sourceClipPathId={data?.sourceClipPathId}
-              isPanningOrZooming={isInteracting}
+              shouldSuppress={shouldSuppressBeads}
               onDoubleClick={handleDoubleClick}
             />
           )}
