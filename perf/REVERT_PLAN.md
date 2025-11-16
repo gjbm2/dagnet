@@ -46,7 +46,6 @@ M graph-editor/src/contexts/ValidationContext.tsx
 
 ---
 
-## Preserved Files (perf/ directory)
 
 ### Diagnostic Reports
 - `DIAGNOSTIC_FINDINGS.md` - Main diagnostic report (what we learned)

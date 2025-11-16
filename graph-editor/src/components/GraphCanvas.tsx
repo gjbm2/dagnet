@@ -104,10 +104,63 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const moveStartViewportRef = React.useRef<{ x: number; y: number; zoom: number } | null>(null);
   const lastSavedViewportRef = React.useRef<{ x: number; y: number; zoom: number } | null>(null);
   
+  // PERF: Decoration restoration control (chevrons + beads)
+  // Suppress decorations during pan AND during post-pan debounce to avoid blown frames
+  const [decorationsEnabled, setDecorationsEnabled] = React.useState(true);
+  const decorationRestoreTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  
+  // Combined suppression flag: hide decorations during pan OR during post-pan debounce
+  const shouldSuppressDecorations = isPanningOrZooming || !decorationsEnabled;
+  
+  // DIAGNOSTIC: Log when suppression state changes
+  React.useEffect(() => {
+    console.log(`[PERF] shouldSuppressDecorations changed:`, {
+      isPanningOrZooming,
+      decorationsEnabled,
+      shouldSuppressDecorations,
+      timestamp: new Date().toISOString()
+    });
+    
+    // If we just enabled decorations, check if this triggers other re-renders
+    if (decorationsEnabled && !isPanningOrZooming) {
+      console.log('[PERF] ⚠️  DECORATIONS JUST RESTORED - watching for cascade re-renders');
+
+      // Expose a global flag so other subsystems can log if they fire during this window
+      if (typeof window !== 'undefined') {
+        (window as any).__DAGNET_DECORATION_RESTORE_ACTIVE = true;
+        (window as any).__DAGNET_DECORATION_RESTORE_T0 = performance.now();
+      }
+      
+      // Track re-renders in next 500ms
+      const trackingStart = performance.now();
+      const checkInterval = setInterval(() => {
+        const elapsed = performance.now() - trackingStart;
+        if (elapsed > 500) {
+          clearInterval(checkInterval);
+          console.log('[PERF] Cascade tracking complete (500ms)');
+          if (typeof window !== 'undefined') {
+            (window as any).__DAGNET_DECORATION_RESTORE_ACTIVE = false;
+          }
+        }
+      }, 100);
+    }
+  }, [shouldSuppressDecorations, isPanningOrZooming, decorationsEnabled]);
+  
   // Track when isPanningOrZooming changes (for debugging - can remove later)
   React.useEffect(() => {
     isPanningOrZoomingRef.current = isPanningOrZooming;
   }, [isPanningOrZooming]);
+  
+  // Cleanup: cancel decoration restoration timeout on unmount
+  React.useEffect(() => {
+    return () => {
+      if (decorationRestoreTimeoutRef.current) {
+        clearTimeout(decorationRestoreTimeoutRef.current);
+        decorationRestoreTimeoutRef.current = null;
+      }
+    };
+  }, []);
+  
   const store = useGraphStore();
   const { graph, setGraph: setGraphDirect, setAutoUpdating } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
@@ -1839,13 +1892,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       whatIfDSL: effectiveWhatIfDSL,
       // Pass Sankey view flag to edges
       useSankeyView: useSankeyView,
-      // Pass pan/zoom state to disable beads during interaction
-      isPanningOrZooming: isPanningOrZooming
+      // PERF: Pass combined suppression flag to disable beads during pan AND debounce
+      isPanningOrZooming: shouldSuppressDecorations
     }
   }));
   
-  // Generate edge bundles for chevron clipping (suppress in Sankey view or nochevrons mode)
-  const bundles = (useSankeyView || NO_CHEVRONS_MODE) ? [] : groupEdgesIntoBundles(edgesWithOffsetData, nodesWithSelection);
+  // Generate edge bundles for chevron clipping
+  // Suppress in: Sankey view, nochevrons mode, OR during pan/debounce
+  const bundles = (useSankeyView || NO_CHEVRONS_MODE || shouldSuppressDecorations) 
+    ? [] 
+    : groupEdgesIntoBundles(edgesWithOffsetData, nodesWithSelection);
   
   // Add anchors and clipPath IDs to edges (suppress chevrons in Sankey view)
   const edgesWithClipPaths = useSankeyView ? edgesWithOffsetData : edgesWithOffsetData.map(edge => {
@@ -4631,9 +4687,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Scenario visibility state (for coloring/suppression decisions)
   const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
 
-  // DIAGNOSTIC: Check for nochevrons mode (?nochevrons URL parameter)
+  // DIAGNOSTIC URL FLAGS
   const urlParams = new URLSearchParams(window.location.search);
   const NO_CHEVRONS_MODE = urlParams.has('nochevrons');
+  const MINIMAL_MODE = urlParams.has('minimal');
 
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
@@ -4673,7 +4730,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         calculateEdgeOffsets,
         tabId,
         highlightMetadata,  // STEP 4: Pass highlight flags for 'current' layer
-        isPanningOrZooming  // Pass pan/zoom state to disable beads
+        isPanningOrZooming: shouldSuppressDecorations  // PERF: Combined suppression flag
       });
     } catch (e) {
       console.warn('Failed to build scenario render edges:', e);
@@ -4693,7 +4750,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     calculateEdgeOffsets,
     tabId,
     highlightMetadata,  // Re-render when highlight changes
-    isPanningOrZooming  // Re-render when pan/zoom state changes
+    shouldSuppressDecorations  // PERF: Re-render when suppression state changes
   ]);
 
   // STEP 3: renderEdges is now the ONLY edge source; old base/overlay split removed
@@ -4724,6 +4781,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onReconnect={onEdgeUpdate}
         onSelectionChange={onSelectionChange}
         onMoveStart={(_, viewport) => {
+          // Cancel any pending decoration restoration
+          if (decorationRestoreTimeoutRef.current) {
+            clearTimeout(decorationRestoreTimeoutRef.current);
+            decorationRestoreTimeoutRef.current = null;
+          }
+          
+          // Suppress decorations immediately (chevrons + beads)
+          setDecorationsEnabled(false);
+          
           // Store initial viewport to detect actual movement
           moveStartViewportRef.current = {
             x: viewport.x,
@@ -4755,26 +4821,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onMoveEnd={(_, viewport) => {
           // Only update state if we were actually panning/zooming
           if (hasMovedRef.current) {
-            // Only save viewport if it actually changed significantly (avoid unnecessary re-renders)
-            const shouldSaveViewport = !lastSavedViewportRef.current || 
-              Math.abs(viewport.x - lastSavedViewportRef.current.x) > 1 ||
-              Math.abs(viewport.y - lastSavedViewportRef.current.y) > 1 ||
-              Math.abs(viewport.zoom - lastSavedViewportRef.current.zoom) > 0.01;
-            
-            if (shouldSaveViewport && tabId) {
-              // Defer tab state update using startTransition to mark it as low priority
-              // This prevents the massive re-render cascade from blocking beads
-              startTransition(() => {
-                try {
-                  tabOperations.updateTabState(tabId, { rfViewport: viewport as any });
-                  lastSavedViewportRef.current = {
-                    x: viewport.x,
-                    y: viewport.y,
-                    zoom: viewport.zoom
-                  };
-                } catch {}
-              });
-            }
+            // Store viewport for later save (don't save immediately - it competes with restoration)
+            const viewportToSave = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
             
             // Clear any existing timeout to prevent stacking
             if (panTimeoutRef.current) {
@@ -4782,14 +4830,64 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               panTimeoutRef.current = null;
             }
             
-            // Reset flag immediately - use single RAF for minimal delay
-            requestAnimationFrame(() => {
-              setIsPanningOrZooming(false);
-              hasMovedRef.current = false;
-              moveStartViewportRef.current = null;
-            });
+            // Reset panning flag immediately (allows ReactFlow to settle)
+            setIsPanningOrZooming(false);
+            
+            // PERF: Debounced decoration restoration
+            // Wait for ReactFlow, layout, and other systems to settle before re-enabling decorations
+            // This prevents a blown frame immediately after pan ends
+            const DECORATION_RESTORE_DELAY = 80; // milliseconds (tunable: 50-150ms)
+            
+            decorationRestoreTimeoutRef.current = setTimeout(() => {
+              const restoreT0 = performance.now();
+              console.log(`[PERF] [${new Date().toISOString()}] Starting decoration restoration (flushSync)`, {
+                bundles: edgeBundles.length,
+                edges: edges.length,
+                nodes: nodes.length
+              });
+              
+              // CRITICAL: Use flushSync to force synchronous commit of decoration restoration
+              // This prevents React from batching with other updates or being interrupted
+              // The restoration work will complete atomically before any other renders
+              flushSync(() => {
+                setDecorationsEnabled(true);
+              });
+              
+              const restoreT1 = performance.now();
+              console.log(`[PERF] Decoration restoration (flushSync) completed in ${(restoreT1 - restoreT0).toFixed(2)}ms`);
+              
+              decorationRestoreTimeoutRef.current = null;
+              
+              // AFTER decorations restored synchronously, save viewport state
+              // IMPORTANT: In ?minimal mode we SKIP viewport persistence entirely to avoid
+              // any tab/nav cascades interfering with the restoration frame.
+              if (!MINIMAL_MODE) {
+                requestAnimationFrame(() => {
+                  const shouldSaveViewport = !lastSavedViewportRef.current || 
+                    Math.abs(viewportToSave.x - lastSavedViewportRef.current.x) > 1 ||
+                    Math.abs(viewportToSave.y - lastSavedViewportRef.current.y) > 1 ||
+                    Math.abs(viewportToSave.zoom - lastSavedViewportRef.current.zoom) > 0.01;
+                  
+                  if (shouldSaveViewport && tabId) {
+                    startTransition(() => {
+                      try {
+                        console.log('[PERF] Saving viewport AFTER decoration restoration');
+                        tabOperations.updateTabState(tabId, { rfViewport: viewportToSave as any });
+                        lastSavedViewportRef.current = viewportToSave;
+                      } catch {}
+                    });
+                  }
+                });
+              }
+            }, DECORATION_RESTORE_DELAY);
+            
+            // Reset movement tracking
+            hasMovedRef.current = false;
+            moveStartViewportRef.current = null;
           } else {
-            // No actual movement - reset refs
+            // No actual movement (just a click) - no suppression needed
+            setIsPanningOrZooming(false);
+            setDecorationsEnabled(true);  // Ensure decorations stay enabled
             moveStartViewportRef.current = null;
             hasMovedRef.current = false;
           }
@@ -5161,7 +5259,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         
         {/* Chevron clipPath definitions */}
         {/* DIAGNOSTIC: Skip chevrons if ?nochevrons param set */}
-        {!NO_CHEVRONS_MODE && (
+        {/* PERF: Suppress chevrons during pan AND during post-pan debounce */}
+        {!NO_CHEVRONS_MODE && !shouldSuppressDecorations && (
           <Panel position="top-left" style={{ pointerEvents: 'none' }}>
             <ChevronClipPaths bundles={edgeBundles} nodes={nodes} frameId={renderFrameRef.current} />
           </Panel>

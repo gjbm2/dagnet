@@ -1569,6 +1569,16 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     };
   }, []); // Phase 4: Removed tabOps, tabId, activeTabId - using refs instead
 
+  // PERF: Memoize selection context value BEFORE any conditional returns
+  // Must be unconditional to satisfy Rules of Hooks
+  const selectionContextValue: SelectionContextType = useMemo(() => ({
+    selectedNodeId,
+    selectedEdgeId,
+    onSelectedNodeChange: handleNodeSelection,
+    onSelectedEdgeChange: handleEdgeSelection,
+    openSelectorModal: (config) => setSelectorModalConfig(config)
+  }), [selectedNodeId, selectedEdgeId, handleNodeSelection, handleEdgeSelection]);
+
   if (!data) {
     console.log('GraphEditor: No data yet, showing loading...');
     return (
@@ -1602,14 +1612,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
 
   // Note: GraphCanvas rendering is gated by CanvasHost visibility check
   // Only visible tabs will actually render GraphCanvas (see CanvasHost component above)
-
-  const selectionContextValue: SelectionContextType = {
-    selectedNodeId,
-    selectedEdgeId,
-    onSelectedNodeChange: handleNodeSelection,
-    onSelectedEdgeChange: handleEdgeSelection,
-    openSelectorModal: (config) => setSelectorModalConfig(config)
-  };
 
   const SUPPRESS_LAYOUT_HANDLERS = false; // Re-enabled: needed for restore-closed-tabs logic
   return (

@@ -538,6 +538,19 @@ class FileRegistry {
    */
   private notifyListeners(fileId: string, file: FileState): void {
     const callbacks = this.listeners.get(fileId);
+    // DIAGNOSTIC: Log file notifications that happen during decoration-restore window
+    try {
+      const w = (typeof window !== 'undefined') ? (window as any) : null;
+      if (w && w.__DAGNET_DECORATION_RESTORE_ACTIVE) {
+        console.log('[CASCADE] fileRegistry.notifyListeners during decoration-restore window', {
+          fileId,
+          listenerCount: callbacks ? callbacks.size : 0,
+          stack: new Error().stack?.split('\n').slice(2, 10).join('\n')
+        });
+      }
+    } catch {
+      // diagnostics only
+    }
     if (callbacks) {
       console.log(`FileRegistry: Notifying ${callbacks.size} listeners for ${fileId}`);
       // Create COMPLETELY NEW objects to ensure React detects changes
@@ -1204,6 +1217,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     tabId: string,
     editorState: Partial<TabState['editorState']>
   ): Promise<void> => {
+    // DIAGNOSTIC: If this fires during the decoration-restore window, log a detailed trace
+    try {
+      const w = (typeof window !== 'undefined') ? (window as any) : null;
+      if (w && w.__DAGNET_DECORATION_RESTORE_ACTIVE) {
+        console.log('[CASCADE] TabContext.updateTabState during decoration-restore window', {
+          tabId,
+          editorStateKeys: Object.keys(editorState || {}),
+          payload: editorState,
+          stack: new Error().stack?.split('\n').slice(2, 10).join('\n')
+        });
+      }
+    } catch {
+      // best-effort diagnostics only
+    }
     let newEditorState: TabState['editorState'] | null = null;
     
     // Update React state with functional update to get LATEST tabs

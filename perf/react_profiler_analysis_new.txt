@@ -1,0 +1,1384 @@
+================================================================================
+REACT DEVTOOLS PROFILER ANALYSIS
+================================================================================
+
+Found 1 React roots
+
+Root: 0
+  Commits: 85
+
+  Commit #1:
+    Duration: 0.3ms
+    Timestamp: 354.7000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 143: 0.3ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+
+  Commit #2:
+    Duration: 29.8ms
+    Timestamp: 389.9000000357628
+    Updaters:
+      - CanvasInner (id=136)
+    Fibers rendered: 278
+    Top 10 slowest components (by fiber id):
+      Fiber 136: 29.8ms
+      Fiber 137: 26.1ms
+      Fiber 138: 25.8ms
+      Fiber 139: 25.1ms
+      Fiber 140: 24.9ms
+      Fiber 141: 24.8ms
+      Fiber 142: 24.6ms
+      Fiber 143: 24.5ms
+      Fiber 144: 15.2ms
+      Fiber 145: 9.1ms
+
+  Commit #3:
+    Duration: 35.2ms
+    Timestamp: 450.60000002384186
+    Updaters:
+      - EdgeRenderer (id=144)
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 147
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 35.2ms
+      Fiber 144: 34.8ms
+      Fiber 381: 2.9ms
+      Fiber 382: 2.6ms
+      Fiber 496: 2.4ms
+      Fiber 480: 2ms
+      Fiber 492: 1.9ms
+      Fiber 484: 1.7ms
+      Fiber 389: 1.6ms
+      Fiber 481: 1.5ms
+
+  Commit #4:
+    Duration: 0.7ms
+    Timestamp: 460.80000001192093
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - Controls (id=152)
+      - MiniMap (id=153)
+    Fibers rendered: 16
+    Top 10 slowest components (by fiber id):
+      Fiber 152: 0.7ms
+      Fiber 211: 0.5ms
+      Fiber 143: 0.4ms
+      Fiber 150: 0.2ms
+      Fiber 212: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 145: 0.1ms
+      Fiber 213: 0.1ms
+      Fiber 214: 0.1ms
+      Fiber 218: 0.1ms
+
+  Commit #5:
+    Duration: 0.2ms
+    Timestamp: 465.9000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 145: 0ms
+
+  Commit #6:
+    Duration: 0.2ms
+    Timestamp: 476
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+
+  Commit #7:
+    Duration: 0.2ms
+    Timestamp: 486.10000002384186
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+
+  Commit #8:
+    Duration: 0.3ms
+    Timestamp: 497.10000002384186
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 153: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 151: 0ms
+      Fiber 154: 0ms
+
+  Commit #9:
+    Duration: 0.3ms
+    Timestamp: 507.30000001192093
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.3ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+      Fiber 154: 0ms
+
+  Commit #10:
+    Duration: 0.3ms
+    Timestamp: 517.3000000119209
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.3ms
+      Fiber 145: 0.1ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #11:
+    Duration: 0.2ms
+    Timestamp: 527.1000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #12:
+    Duration: 0.3ms
+    Timestamp: 537.3000000119209
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 153: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #13:
+    Duration: 0.3ms
+    Timestamp: 551
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #14:
+    Duration: 0.3ms
+    Timestamp: 575.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0ms
+
+  Commit #15:
+    Duration: 0.2ms
+    Timestamp: 578.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+
+  Commit #16:
+    Duration: 0.4ms
+    Timestamp: 581.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.4ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.2ms
+      Fiber 151: 0ms
+
+  Commit #17:
+    Duration: 0.4ms
+    Timestamp: 590.9000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.4ms
+      Fiber 150: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 151: 0.2ms
+      Fiber 154: 0.1ms
+
+  Commit #18:
+    Duration: 0.3ms
+    Timestamp: 600
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.2ms
+      Fiber 151: 0.1ms
+
+  Commit #19:
+    Duration: 1.4ms
+    Timestamp: 676.3000000119209
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - Controls (id=152)
+      - MiniMap (id=153)
+    Fibers rendered: 16
+    Top 10 slowest components (by fiber id):
+      Fiber 152: 1.4ms
+      Fiber 211: 1.1ms
+      Fiber 143: 0.7ms
+      Fiber 153: 0.5ms
+      Fiber 145: 0.4ms
+      Fiber 150: 0.4ms
+      Fiber 212: 0.3ms
+      Fiber 216: 0.3ms
+      Fiber 213: 0.2ms
+      Fiber 214: 0.2ms
+
+  Commit #20:
+    Duration: 0.5ms
+    Timestamp: 683.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.5ms
+      Fiber 145: 0.4ms
+      Fiber 150: 0.3ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+
+  Commit #21:
+    Duration: 0.4ms
+    Timestamp: 701.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 150: 0.4ms
+      Fiber 153: 0.4ms
+      Fiber 154: 0.2ms
+      Fiber 145: 0.1ms
+      Fiber 143: 0.1ms
+      Fiber 151: 0.1ms
+
+  Commit #22:
+    Duration: 0.3ms
+    Timestamp: 707.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 150: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #23:
+    Duration: 0.4ms
+    Timestamp: 715.3000000119209
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.4ms
+      Fiber 150: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+
+  Commit #24:
+    Duration: 0.8ms
+    Timestamp: 746.1000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.8ms
+      Fiber 145: 0.7ms
+      Fiber 150: 0.3ms
+      Fiber 153: 0.2ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #25:
+    Duration: 0.3ms
+    Timestamp: 765.2000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 150: 0.3ms
+      Fiber 145: 0.1ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+
+  Commit #26:
+    Duration: 0.3ms
+    Timestamp: 776.8000000119209
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+
+  Commit #27:
+    Duration: 0.4ms
+    Timestamp: 936
+    Updaters:
+      - NodeRenderer (id=145)
+      - MiniMap (id=153)
+    Fibers rendered: 3
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.4ms
+      Fiber 153: 0.4ms
+      Fiber 154: 0.2ms
+
+  Commit #28:
+    Duration: 33.4ms
+    Timestamp: 971.8000000119209
+    Updaters:
+      - CanvasInner (id=136)
+    Fibers rendered: 278
+    Top 10 slowest components (by fiber id):
+      Fiber 136: 33.4ms
+      Fiber 137: 32.1ms
+      Fiber 138: 31.9ms
+      Fiber 139: 31.4ms
+      Fiber 140: 31.3ms
+      Fiber 142: 31.2ms
+      Fiber 141: 31.2ms
+      Fiber 143: 31ms
+      Fiber 144: 23.3ms
+      Fiber 145: 7.6ms
+
+  Commit #29:
+    Duration: 0.3ms
+    Timestamp: 980.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - MiniMap (id=153)
+    Fibers rendered: 3
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 154: 0.1ms
+
+  Commit #30:
+    Duration: 28.8ms
+    Timestamp: 1048.300000011921
+    Updaters:
+      - CanvasInner (id=136)
+    Fibers rendered: 280
+    Top 10 slowest components (by fiber id):
+      Fiber 136: 28.8ms
+      Fiber 137: 23.7ms
+      Fiber 138: 23.3ms
+      Fiber 139: 21.6ms
+      Fiber 140: 21.3ms
+      Fiber 141: 21.2ms
+      Fiber 142: 21.1ms
+      Fiber 143: 21ms
+      Fiber 144: 14.6ms
+      Fiber 145: 6.3ms
+
+  Commit #31:
+    Duration: 51ms
+    Timestamp: 1108.5
+    Updaters:
+      - EdgeRenderer (id=144)
+      - NodeRenderer (id=145)
+      - MiniMap (id=153)
+    Fibers rendered: 156
+    Top 10 slowest components (by fiber id):
+      Fiber 144: 51ms
+      Fiber 389: 5ms
+      Fiber 390: 4.4ms
+      Fiber 365: 3.6ms
+      Fiber 373: 3.6ms
+      Fiber 393: 3.6ms
+      Fiber 432: 3.5ms
+      Fiber 431: 3.5ms
+      Fiber 397: 3.4ms
+      Fiber 374: 3.3ms
+
+  Commit #32:
+    Duration: 0.2ms
+    Timestamp: 1401.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 145: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #33:
+    Duration: 17ms
+    Timestamp: 1422.6000000238419
+    Updaters:
+      - CanvasInner (id=136)
+    Fibers rendered: 278
+    Top 10 slowest components (by fiber id):
+      Fiber 136: 17ms
+      Fiber 138: 14ms
+      Fiber 137: 14ms
+      Fiber 140: 13.6ms
+      Fiber 139: 13.6ms
+      Fiber 142: 13.5ms
+      Fiber 141: 13.5ms
+      Fiber 143: 13.4ms
+      Fiber 144: 9.3ms
+      Fiber 145: 4.1ms
+
+  Commit #34:
+    Duration: 20.4ms
+    Timestamp: 1452.7000000476837
+    Updaters:
+      - EdgeRenderer (id=144)
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 147
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 20.4ms
+      Fiber 144: 20ms
+      Fiber 385: 2.1ms
+      Fiber 386: 1.9ms
+      Fiber 389: 1ms
+      Fiber 516: 0.9ms
+      Fiber 496: 0.8ms
+      Fiber 500: 0.8ms
+      Fiber 512: 0.8ms
+      Fiber 524: 0.8ms
+
+  Commit #35:
+    Duration: 0.4ms
+    Timestamp: 1461.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.4ms
+      Fiber 145: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+      Fiber 150: 0ms
+
+  Commit #36:
+    Duration: 0.3ms
+    Timestamp: 1475.9000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 150: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 154: 0ms
+
+  Commit #37:
+    Duration: 0.3ms
+    Timestamp: 1483.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+
+  Commit #38:
+    Duration: 0.3ms
+    Timestamp: 1534.800000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #39:
+    Duration: 0.2ms
+    Timestamp: 1545.2000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 150: 0.2ms
+      Fiber 145: 0.1ms
+      Fiber 143: 0.1ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+
+  Commit #40:
+    Duration: 0.3ms
+    Timestamp: 1556.1000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+
+  Commit #41:
+    Duration: 0.2ms
+    Timestamp: 1566.300000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 143: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 154: 0ms
+
+  Commit #42:
+    Duration: 0.2ms
+    Timestamp: 1576.1000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 145: 0.1ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #43:
+    Duration: 0.3ms
+    Timestamp: 1587
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #44:
+    Duration: 0.3ms
+    Timestamp: 1597.2000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+      Fiber 154: 0ms
+
+  Commit #45:
+    Duration: 0.2ms
+    Timestamp: 1608.2000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 143: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #46:
+    Duration: 0.2ms
+    Timestamp: 1617.300000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 145: 0.1ms
+      Fiber 151: 0ms
+      Fiber 154: 0ms
+      Fiber 153: 0ms
+
+  Commit #47:
+    Duration: 0.3ms
+    Timestamp: 1627.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #48:
+    Duration: 0.2ms
+    Timestamp: 1637.800000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 143: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+      Fiber 154: 0ms
+
+  Commit #49:
+    Duration: 0.5ms
+    Timestamp: 1650
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.5ms
+      Fiber 145: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 154: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #50:
+    Duration: 0.3ms
+    Timestamp: 1661
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 6
+    Top 10 slowest components (by fiber id):
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #51:
+    Duration: 0.5ms
+    Timestamp: 1670.1000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Viewport (id=143)
+      - Background (id=150)
+      - Controls (id=152)
+      - MiniMap (id=153)
+    Fibers rendered: 16
+    Top 10 slowest components (by fiber id):
+      Fiber 152: 0.5ms
+      Fiber 211: 0.4ms
+      Fiber 143: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 215: 0.1ms
+      Fiber 214: 0.1ms
+      Fiber 216: 0.1ms
+
+  Commit #52:
+    Duration: 0.3ms
+    Timestamp: 1680.6000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.3ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0ms
+      Fiber 153: 0ms
+
+  Commit #53:
+    Duration: 0.2ms
+    Timestamp: 1688.9000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 154: 0ms
+
+  Commit #54:
+    Duration: 0.2ms
+    Timestamp: 1698.9000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 154: 0ms
+
+  Commit #55:
+    Duration: 0.2ms
+    Timestamp: 1709.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+      Fiber 150: 0ms
+
+  Commit #56:
+    Duration: 0.2ms
+    Timestamp: 1719.6000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.2ms
+      Fiber 145: 0.1ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #57:
+    Duration: 0.3ms
+    Timestamp: 1731.9000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.3ms
+      Fiber 154: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+
+  Commit #58:
+    Duration: 0.2ms
+    Timestamp: 1740.9000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+
+  Commit #59:
+    Duration: 0.3ms
+    Timestamp: 1750.6000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 150: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 154: 0ms
+
+  Commit #60:
+    Duration: 0.3ms
+    Timestamp: 1761.7000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 150: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 151: 0.2ms
+      Fiber 154: 0.1ms
+
+  Commit #61:
+    Duration: 0.3ms
+    Timestamp: 1771.7000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 150: 0.3ms
+      Fiber 145: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+      Fiber 154: 0ms
+
+  Commit #62:
+    Duration: 0.3ms
+    Timestamp: 1782.800000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.3ms
+      Fiber 151: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 154: 0ms
+
+  Commit #63:
+    Duration: 0.2ms
+    Timestamp: 1791.800000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+
+  Commit #64:
+    Duration: 0.3ms
+    Timestamp: 1803.2000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.3ms
+      Fiber 154: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 151: 0.2ms
+
+  Commit #65:
+    Duration: 0.4ms
+    Timestamp: 1814.1000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.4ms
+      Fiber 153: 0.4ms
+      Fiber 150: 0.3ms
+      Fiber 154: 0.2ms
+      Fiber 151: 0ms
+
+  Commit #66:
+    Duration: 0.3ms
+    Timestamp: 1823.9000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #67:
+    Duration: 0.4ms
+    Timestamp: 1834.7000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.4ms
+      Fiber 153: 0.3ms
+      Fiber 151: 0.1ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+
+  Commit #68:
+    Duration: 0.5ms
+    Timestamp: 1844.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.5ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.2ms
+      Fiber 151: 0.1ms
+
+  Commit #69:
+    Duration: 0.2ms
+    Timestamp: 1854.300000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+
+  Commit #70:
+    Duration: 0.4ms
+    Timestamp: 1864.800000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.4ms
+      Fiber 153: 0.4ms
+      Fiber 154: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 150: 0.1ms
+
+  Commit #71:
+    Duration: 0.4ms
+    Timestamp: 1876.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.4ms
+      Fiber 153: 0.3ms
+      Fiber 151: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.1ms
+
+  Commit #72:
+    Duration: 0.3ms
+    Timestamp: 1886.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 153: 0.3ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.2ms
+      Fiber 151: 0ms
+
+  Commit #73:
+    Duration: 0.3ms
+    Timestamp: 1894.6000000238419
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.3ms
+      Fiber 154: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #74:
+    Duration: 0.3ms
+    Timestamp: 1905.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 153: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #75:
+    Duration: 0.3ms
+    Timestamp: 1916.4000000357628
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+
+  Commit #76:
+    Duration: 0.3ms
+    Timestamp: 1927.2000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 150: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 153: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 154: 0.1ms
+
+  Commit #77:
+    Duration: 0.3ms
+    Timestamp: 1936.800000011921
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.2ms
+      Fiber 154: 0.2ms
+      Fiber 151: 0.1ms
+
+  Commit #78:
+    Duration: 0.3ms
+    Timestamp: 1946.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 150: 0.2ms
+      Fiber 151: 0.1ms
+      Fiber 153: 0.1ms
+      Fiber 154: 0ms
+
+  Commit #79:
+    Duration: 0.4ms
+    Timestamp: 1956.7000000476837
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.4ms
+      Fiber 153: 0.3ms
+      Fiber 154: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #80:
+    Duration: 0.3ms
+    Timestamp: 1967.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - Background (id=150)
+      - MiniMap (id=153)
+    Fibers rendered: 5
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.3ms
+      Fiber 145: 0.2ms
+      Fiber 150: 0.1ms
+      Fiber 154: 0.1ms
+      Fiber 151: 0ms
+
+  Commit #81:
+    Duration: 0.2ms
+    Timestamp: 2121.5
+    Updaters:
+      - NodeRenderer (id=145)
+      - MiniMap (id=153)
+    Fibers rendered: 3
+    Top 10 slowest components (by fiber id):
+      Fiber 153: 0.2ms
+      Fiber 145: 0.1ms
+      Fiber 154: 0.1ms
+
+  Commit #82:
+    Duration: 19.3ms
+    Timestamp: 2143.2000000476837
+    Updaters:
+      - CanvasInner (id=136)
+    Fibers rendered: 278
+    Top 10 slowest components (by fiber id):
+      Fiber 136: 19.3ms
+      Fiber 137: 17.6ms
+      Fiber 138: 17.4ms
+      Fiber 139: 16.9ms
+      Fiber 140: 16.8ms
+      Fiber 141: 16.7ms
+      Fiber 142: 16.6ms
+      Fiber 143: 16.5ms
+      Fiber 144: 11.4ms
+      Fiber 145: 5ms
+
+  Commit #83:
+    Duration: 0.3ms
+    Timestamp: 2150.900000035763
+    Updaters:
+      - NodeRenderer (id=145)
+      - MiniMap (id=153)
+    Fibers rendered: 3
+    Top 10 slowest components (by fiber id):
+      Fiber 145: 0.3ms
+      Fiber 153: 0.2ms
+      Fiber 154: 0.1ms
+
+  Commit #84:
+    Duration: 24.2ms
+    Timestamp: 2231.2000000476837
+    Updaters:
+      - CanvasInner (id=136)
+    Fibers rendered: 280
+    Top 10 slowest components (by fiber id):
+      Fiber 136: 24.2ms
+      Fiber 137: 17.6ms
+      Fiber 138: 17.1ms
+      Fiber 139: 15.9ms
+      Fiber 140: 15.7ms
+      Fiber 141: 15.5ms
+      Fiber 142: 15.3ms
+      Fiber 143: 15ms
+      Fiber 144: 9.9ms
+      Fiber 145: 5ms
+
+  Commit #85:
+    Duration: 34.9ms
+    Timestamp: 2273.400000035763
+    Updaters:
+      - EdgeRenderer (id=144)
+      - NodeRenderer (id=145)
+      - MiniMap (id=153)
+    Fibers rendered: 156
+    Top 10 slowest components (by fiber id):
+      Fiber 144: 34.9ms
+      Fiber 381: 2.9ms
+      Fiber 389: 2.9ms
+      Fiber 390: 2.7ms
+      Fiber 382: 2.6ms
+      Fiber 361: 2.2ms
+      Fiber 393: 2.2ms
+      Fiber 373: 2.1ms
+      Fiber 394: 2.1ms
+      Fiber 362: 2ms
