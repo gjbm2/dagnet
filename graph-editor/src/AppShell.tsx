@@ -39,6 +39,10 @@ function AppShellContent() {
   const { updateFromLayout } = useVisibleTabs();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
+
+  // DIAGNOSTIC: Check for minimal mode (?minimal URL parameter)
+  // In minimal mode, render ONLY GraphEditor with no UI chrome (tabs, navigator, menu, etc.)
+  const isMinimalMode = new URLSearchParams(window.location.search).has('minimal');
   
   // Initialize services once
   useEffect(() => {
@@ -905,6 +909,50 @@ function AppShellContent() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [dockLayoutRef, markTopLeftDockedPanel, navState.isPinned]);
+
+  // DIAGNOSTIC: Minimal mode - render ONLY GraphEditor without any UI chrome
+  // Use the currently active tab (same as was loaded before adding ?minimal)
+  if (isMinimalMode) {
+    // Wait for activeTabId to be set by TabContext (happens after tabs load from IndexedDB)
+    if (!activeTabId) {
+      return (
+        <div style={{ width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ color: '#666' }}>Loading...</div>
+        </div>
+      );
+    }
+
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    
+    if (!activeTab) {
+      return (
+        <div style={{ width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ color: '#666' }}>No active tab found</div>
+        </div>
+      );
+    }
+
+    // Get file type from registry
+    const file = fileRegistry.getFile(activeTab.fileId);
+    const objectType = (file?.type || activeTab.fileId.split('-')[0]) as any;
+    
+    // Use getEditorComponent to get the appropriate editor for this tab
+    const EditorComponent = getEditorComponent(objectType, activeTab.viewMode);
+
+    return (
+      <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          <EditorComponent
+            fileId={activeTab.fileId}
+            tabId={activeTab.id}
+            readonly={false}
+            onChange={() => {}}
+            viewMode={activeTab.viewMode}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`app-shell ${navState.isPinned ? 'nav-pinned' : 'nav-unpinned'}`} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', overflow: 'hidden' }}>

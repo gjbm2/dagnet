@@ -26,6 +26,9 @@ const EDGE_OPACITY = 0.8; // Adjustable transparency (0-1)
 const EDGE_BLEND_MODE = 'multiply'; // 'normal', 'multiply', 'screen', 'difference'
 const USE_GROUP_BASED_BLENDING = false; // Enable scenario-specific blending
 
+// DIAGNOSTIC: Check for nobeads mode (?nobeads URL parameter)
+const NO_BEADS_MODE = new URLSearchParams(window.location.search).has('nobeads');
+
 // Simple point-in-triangle test using barycentric coordinates
 function isPointInTriangle(
   px: number,
@@ -1628,8 +1631,8 @@ export default function ConversionEdge({
           
           {/* Edge Beads - SVG elements rendered directly in edge SVG */}
           {/* Only render beads if path ref is stable and edge data is available */}
-          {/* EdgeBeadsRenderer handles hiding during pan/zoom internally */}
-          {!data?.suppressLabel && !data?.scenarioOverlay && pathRef.current && fullEdge && scenariosContext && (
+          {/* DIAGNOSTIC: Skip beads if ?nobeads param set */}
+          {!data?.suppressLabel && !data?.scenarioOverlay && pathRef.current && fullEdge && scenariosContext && !NO_BEADS_MODE && (
             <EdgeBeadsRenderer
               key={`beads-${id}-${fullEdge.uuid || fullEdge.id}`}
               edgeId={id}
