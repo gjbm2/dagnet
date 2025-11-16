@@ -1,0 +1,70 @@
+================================================================================
+RAW EVENT STRUCTURE DUMP
+================================================================================
+
+Total renderer events: 4434
+
+================================================================================
+SAMPLE EVENTS BY TYPE
+================================================================================
+
+Unique event names: 5
+
+
+================================================================================
+RunTask (showing 3 samples)
+================================================================================
+
+Sample 1:
+{
+  "args": {},
+  "cat": "disabled-by-default-devtools.timeline",
+  "dur": 13,
+  "name": "RunTask",
+  "ph": "X",
+  "pid": 19096,
+  "tdur": 15,
+  "tid": 11176,
+  "ts": 202006775991,
+  "tts": 35998
+}
+
+Sample 2:
+{
+  "args": {},
+  "cat": "disabled-by-default-devtools.timeline",
+  "dur": 3,
+  "name": "RunTask",
+  "ph": "X",
+  "pid": 19096,
+  "tdur": 3,
+  "tid": 11176,
+  "ts": 202006776005,
+  "tts": 36014
+}
+
+Sample 3:
+{
+  "args": {},
+  "cat": "disabled-by-default-devtools.timeline",
+  "dur": 16,
+  "name": "RunTask",
+  "ph": "X",
+  "pid": 19096,
+  "tdur": 19,
+  "tid": 11176,
+  "ts": 202006776146,
+  "tts": 36029
+}
+
+================================================================================
+ALL EVENT TYPES (sorted by frequency)
+================================================================================
+
+Traceback (most recent call last):
+  File "/home/reg/dev/dagnet/perf/raw_event_dumper.py", line 109, in <module>
+    dump_raw_events(sys.argv[1], max_events)
+  File "/home/reg/dev/dagnet/perf/raw_event_dumper.py", line 92, in dump_raw_events
+    event_counts = defaultdict(int)
+                   ^^^^^^^^^^^
+NameError: name 'defaultdict' is not defined
