@@ -1,0 +1,172 @@
+================================================================================
+DEEP CHROME PERFORMANCE TRACE ANALYSIS
+================================================================================
+
+================================================================================
+LONGEST TASK DEEP DIVE
+================================================================================
+
+Longest task: 242.43ms
+Name: RunTask
+Category: disabled-by-default-devtools.timeline
+Timestamp: 202006790329
+
+Task details:
+
+Extracting call stack from 242.43ms task...
+
+Call stack (64 entries):
+Depth  Duration     Name                                     Function/Script                                   
+------------------------------------------------------------------------------------------------------------
+0          242.43ms RunTask                                                                                    
+1          242.38ms   EvaluateScript                                                                             
+2          240.74ms     V8.StackGuard                                                                              
+3          240.74ms       V8.HandleInterrupts                                                                        
+4          240.74ms         V8.InvokeApiInterruptCallbacks                                                             
+5          240.63ms           CpuProfiler::StartProfiling                                                                
+6            1.51ms             StubScriptCatchup                                                                          
+5            1.51ms           StubScriptCatchup                                                                          
+4          240.63ms         CpuProfiler::StartProfiling                                                                
+5            1.51ms           StubScriptCatchup                                                                          
+4            1.51ms         StubScriptCatchup                                                                          
+3          240.74ms       V8.InvokeApiInterruptCallbacks                                                             
+4          240.63ms         CpuProfiler::StartProfiling                                                                
+5            1.51ms           StubScriptCatchup                                                                          
+4            1.51ms         StubScriptCatchup                                                                          
+3          240.63ms       CpuProfiler::StartProfiling                                                                
+4            1.51ms         StubScriptCatchup                                                                          
+3            1.51ms       StubScriptCatchup                                                                          
+2          240.74ms     V8.HandleInterrupts                                                                        
+3          240.74ms       V8.InvokeApiInterruptCallbacks                                                             
+4          240.63ms         CpuProfiler::StartProfiling                                                                
+5            1.51ms           StubScriptCatchup                                                                          
+4            1.51ms         StubScriptCatchup                                                                          
+3          240.63ms       CpuProfiler::StartProfiling                                                                
+4            1.51ms         StubScriptCatchup                                                                          
+3            1.51ms       StubScriptCatchup                                                                          
+2          240.74ms     V8.InvokeApiInterruptCallbacks                                                             
+3          240.63ms       CpuProfiler::StartProfiling                                                                
+4            1.51ms         StubScriptCatchup                                                                          
+3            1.51ms       StubScriptCatchup                                                                          
+
+================================================================================
+FUNCTION CALL PATTERNS (Repeated Calls)
+================================================================================
+
+Functions called most frequently:
+Function                                                               Count    Total ms     Avg ms      
+------------------------------------------------------------------------------------------------------
+dispatchContinuousEvent [unknown]                                      2036     39.18        0.02        
+ [unknown]                                                             149      102.53       0.69        
+handleMouseMove [unknown]                                              88       0.71         0.01        
+performWorkUntilDeadline [unknown]                                     61       348.51       5.71        
+Q [unknown]                                                            60       1.97         0.03        
+dispatchDiscreteEvent [unknown]                                        52       1.12         0.02        
+
+
+Functions by cumulative time (top time consumers):
+Function                                                               Count    Total ms     Avg ms      
+------------------------------------------------------------------------------------------------------
+performWorkUntilDeadline [unknown]                                     61       348.51       5.71        
+ [unknown]                                                             149      102.53       0.69        
+dispatchContinuousEvent [unknown]                                      2036     39.18        0.02        
+Q [unknown]                                                            60       1.97         0.03        
+successHandler [unknown]                                               3        1.72         0.57        
+wheelidled [unknown]                                                   2        1.23         0.61        
+dispatchDiscreteEvent [unknown]                                        52       1.12         0.02        
+
+================================================================================
+REACT COMPONENT ANALYSIS
+================================================================================
+
+No React-specific function names found in trace
+This is normal for minified/production builds
+Enable 'JavaScript Profiler' in Performance settings for detailed stacks
+
+================================================================================
+SCRIPT EXECUTION BREAKDOWN
+================================================================================
+
+JavaScript execution by script file:
+Script File                                        Calls    Total ms     Avg ms      
+----------------------------------------------------------------------------------
+chunk-FQHYCYVK.js?v=2c44b198                       2187     459.52       0.21        
+    └─ performWorkUntilDeadline: 348.51ms
+    └─ dispatchContinuousEvent: 39.18ms
+unknown                                            3        243.14       81.05       
+    └─ anonymous: 242.38ms
+reactflow.js?v=a19a82fe                            74       24.94        0.34        
+    └─ wheelidled: 1.23ms
+    └─ resetHandler: 0.04ms
+ObjectTypeSection.tsx?t=1763140713195              18       4.79         0.27        
+dexie.js?v=a7baf728                                15       4.15         0.28        
+    └─ successHandler: 1.72ms
+    └─ done: 0.86ms
+    └─ req.onsuccess: 0.79ms
+GraphCanvas.tsx?t=1763216424654                    101      2.12         0.02        
+    └─ handleMouseMove: 0.71ms
+    └─ handleMouseUp: 0.07ms
+webauthn-listeners.js                              60       1.97         0.03        
+    └─ Q: 1.97ms
+injected.js                                        8        1.30         0.16        
+    └─ onMouseDown: 0.89ms
+    └─ L: 0.01ms
+CollapsibleSection.tsx                             3        0.12         0.04        
+
+================================================================================
+ACTIVITY CLUSTERS (bursts within 50ms windows)
+================================================================================
+
+Found 76 activity clusters
+
+Top 10 clusters by total work:
+Cluster    Time (s)     Events   Total ms     Avg ms       Top Events                                        
+--------------------------------------------------------------------------------------------------------
+0          0.000        20       1448.92      72.446       RunTask(10), V8.GC_TIME_TO_SAFEPOINT(2), EvaluateS
+36         2.181        854      356.90       0.418        RunTask(165), CppGC.IncrementalMark(77), CppGC.Mar
+48         2.813        241      241.95       1.004        RunTask(53), v8.callFunction(23), FunctionCall(23)
+35         2.131        243      237.12       0.976        RunTask(65), v8.callFunction(39), FunctionCall(37)
+50         2.927        151      231.78       1.535        RunTask(48), v8.callFunction(15), FunctionCall(15)
+49         2.868        143      211.92       1.482        RunTask(47), v8.callFunction(14), FunctionCall(14)
+67         3.909        112      203.85       1.820        RunTask(37), v8.callFunction(11), FunctionCall(10)
+59         3.499        235      177.09       0.754        RasterTask(64), RunTask(52), UpdateLayer(42)      
+51         2.979        347      175.40       0.505        RasterTask(174), UpdateLayer(68), RunTask(64)     
+66         3.859        320      154.05       0.481        RunTask(99), UpdateLayer(51), v8.callFunction(32) 
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+
+📊 Key Metrics:
+  Recording duration: 6.15 seconds
+  Long tasks > 10ms: 76 (expected: 0-2 for simple pan)
+  Long tasks > 50ms: 6 (CRITICAL - guaranteed dropped frames)
+  Long tasks > 100ms: 6 (CATASTROPHIC - multi-frame freeze)
+  Total JavaScript time: 742.06ms (expected: < 20ms for pan)
+  Total rendering time: 93.77ms (expected: < 20ms)
+
+🎯 Diagnosis:
+  ❌ CRITICAL: 6 tasks took > 100ms each
+     This causes multi-frame freezes and visible jank
+     Root cause: Synchronous JavaScript blocking the main thread
+  ❌ CRITICAL: 6 tasks took > 50ms
+     Each one drops 3+ frames (60fps = 16ms per frame)
+  ⚠️  WARNING: Total JavaScript time is 742ms
+     For a simple pan, this should be < 20ms
+     Indicates unnecessary computation during interaction
+  ⚠️  WARNING: Significant rendering work (94ms)
+     May indicate layout thrashing or forced reflows
+
+💡 Likely Root Causes:
+  1. React re-renders triggered by pan event
+  2. Expensive memos (renderEdges, highlightMetadata) recomputing
+  3. Dependency instability causing cascading updates
+  4. Effect loops or synchronous state updates
+
+🔧 Recommended Actions:
+  1. Identify which dependency is changing during pan
+  2. Add dependency change tracking to renderEdges useMemo
+  3. Ensure graph/scenariosContext don't change identity during pan
+  4. Consider debouncing/throttling pan event handlers
+
+================================================================================

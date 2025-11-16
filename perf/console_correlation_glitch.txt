@@ -1,0 +1,8 @@
+================================================================================
+CONSOLE LOG CORRELATION ANALYSIS
+================================================================================
+
+Found 0 console logs and 440 RunTasks
+
+⚠️  No console logs found in trace
+   Make sure to record with 'Log' checkbox enabled in Performance tab
