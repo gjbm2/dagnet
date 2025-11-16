@@ -375,6 +375,55 @@ export function GraphStoreProvider({
         
         // Debounce persistence (500ms)
         persistDebounceTimerRef.current = window.setTimeout(async () => {
+          // ATOMIC RESTORATION: Check if we're in atomic restore window
+          // If so, defer persistence to avoid triggering tab updates during restoration
+          try {
+            const w = (typeof window !== 'undefined') ? (window as any) : null;
+            if (w && w.__DAGNET_ATOMIC_RESTORE_ACTIVE) {
+              console.log('[ATOMIC GUARD] GraphStoreProvider persistence blocked during atomic restore');
+              // Defer persistence using setTimeout so it runs after flushSync completes
+              persistDebounceTimerRef.current = window.setTimeout(async () => {
+                // Run this block again after atomic window closes
+                const finalWindow = store.getState().window;
+                const finalLastAggregatedWindow = store.getState().lastAggregatedWindow;
+                
+                const stillWindowChanged = !dateRangesEqual(finalWindow, lastPersistedWindowRef.current);
+                const stillLastAggregatedChanged = !dateRangesEqual(finalLastAggregatedWindow, lastPersistedLastAggregatedWindowRef.current);
+                
+                if (stillWindowChanged) {
+                  const fileTabs = tabs.filter(t => t.fileId === fileId);
+                  if (fileTabs.length > 0) {
+                    console.log(`GraphStoreProvider: Persisting window (deferred) for ${fileId}:`, finalWindow);
+                    lastPersistedWindowRef.current = finalWindow;
+                    await Promise.all(
+                      fileTabs.map(tab => 
+                        tabOps.updateTabState(tab.id, { window: finalWindow })
+                      )
+                    );
+                  }
+                }
+                
+                if (stillLastAggregatedChanged) {
+                  const fileTabs = tabs.filter(t => t.fileId === fileId);
+                  if (fileTabs.length > 0) {
+                    console.log(`GraphStoreProvider: Persisting lastAggregatedWindow (deferred) for ${fileId}:`, finalLastAggregatedWindow);
+                    lastPersistedLastAggregatedWindowRef.current = finalLastAggregatedWindow;
+                    await Promise.all(
+                      fileTabs.map(tab => 
+                        tabOps.updateTabState(tab.id, { lastAggregatedWindow: finalLastAggregatedWindow })
+                      )
+                    );
+                  }
+                }
+                
+                persistDebounceTimerRef.current = null;
+              }, 100);
+              return;
+            }
+          } catch {
+            // best-effort guards only
+          }
+          
           const finalWindow = store.getState().window;
           const finalLastAggregatedWindow = store.getState().lastAggregatedWindow;
           

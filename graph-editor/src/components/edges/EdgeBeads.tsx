@@ -536,11 +536,12 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
 
 // Component wrapper to avoid calling hook conditionally
 // Memoize to prevent re-renders when props haven't changed
-export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: EdgeBeadsProps & { sourceClipPathId?: string; isPanningOrZooming?: boolean }) {
-  const { sourceClipPathId, path, edgeId, isPanningOrZooming, ...restProps } = props;
+// ATOMIC RESTORATION: Now uses shouldSuppress flag (from context) instead of edge.data
+export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: EdgeBeadsProps & { sourceClipPathId?: string; shouldSuppress?: boolean }) {
+  const { sourceClipPathId, path, edgeId, shouldSuppress, ...restProps } = props;
   
-  // Hide beads during pan/zoom - early return to skip all computation
-  if (isPanningOrZooming) {
+  // Hide beads when decoration visibility is suppressed - early return to skip all computation
+  if (shouldSuppress) {
     return null;
   }
   
@@ -589,11 +590,11 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
 }, (prevProps, nextProps) => {
   // Custom comparison function to prevent re-renders when only path reference changes
   // but actual values are the same
-  // IMPORTANT: Include isPanningOrZooming so beads re-render when pan/zoom state changes
+  // ATOMIC RESTORATION: Include shouldSuppress so beads re-render when visibility changes
   return (
     prevProps.edgeId === nextProps.edgeId &&
     prevProps.sourceClipPathId === nextProps.sourceClipPathId &&
-    prevProps.isPanningOrZooming === nextProps.isPanningOrZooming &&
+    prevProps.shouldSuppress === nextProps.shouldSuppress &&
     prevProps.visibleScenarioIds?.join(',') === nextProps.visibleScenarioIds?.join(',') &&
     prevProps.visibleColorOrderIds?.join(',') === nextProps.visibleColorOrderIds?.join(',') &&
     prevProps.whatIfDSL === nextProps.whatIfDSL &&
