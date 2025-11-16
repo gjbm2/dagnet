@@ -1,0 +1,13 @@
+================================================================================
+REACT DEVTOOLS PROFILER ANALYSIS
+================================================================================
+
+Found 1 React roots
+
+Traceback (most recent call last):
+  File "/home/reg/dev/dagnet/perf/react_profiler_analyzer.py", line 98, in <module>
+    analyze_profiler_data(sys.argv[1])
+  File "/home/reg/dev/dagnet/perf/react_profiler_analyzer.py", line 32, in analyze_profiler_data
+    for root_id, root_data in roots.items():
+                              ^^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'items'

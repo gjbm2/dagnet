@@ -1,0 +1,35 @@
+================================================================================
+MANUAL CONSOLE-TRACE CORRELATION
+================================================================================
+
+Captured 14 render events from console logs
+
+Delta (ms)   Component       Event               
+--------------------------------------------------
+         0ms GraphCanvas     Frame #18           
+         9ms GraphCanvas     Frame #19           
+       544ms GraphCanvas     Frame #20           
+       591ms GraphCanvas     Frame #21           
+       718ms GraphCanvas     Frame #22           
+      1233ms GraphCanvas     Frame #23           
+      1655ms GraphCanvas     Frame #24           
+      1677ms GraphCanvas     Frame #25           
+      1716ms GraphCanvas     Frame #26           
+      1934ms GraphCanvas     Frame #27           
+      2319ms GraphCanvas     Frame #28           
+      2354ms GraphCanvas     Frame #29           
+      2358ms GraphCanvas     Frame #30           
+      2510ms GraphCanvas     Frame #31           
+
+================================================================================
+RENDER PATTERN ANALYSIS
+================================================================================
+
+Renders by component:
+  GraphCanvas           14 renders
+
+GraphCanvas render rate: 5.6 renders/second
+  (14 renders over 2.51s)
+
+Cascading render sequences:
+

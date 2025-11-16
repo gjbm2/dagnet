@@ -1,0 +1,38 @@
+================================================================================
+FRAME-BY-FRAME WORK ANALYSIS
+================================================================================
+
+================================================================================
+RUNTASK PATTERN ANALYSIS
+================================================================================
+
+Total RunTask events: 3672
+Total cumulative time: 8340.46ms
+Average duration: 2.27ms
+
+Interval statistics (time BETWEEN tasks):
+  Average: 1.68ms
+  Min: 0.00ms
+  Max: 73.98ms
+
+Intervals near 60Hz (16.67ms ±2ms): 171 (4.7%)
+Intervals near 30Hz (33.33ms ±2ms): 2 (0.1%)
+
+Duration distribution (most common):
+     0.0ms: 2486 tasks ( 67.7%)
+     0.5ms:  456 tasks ( 12.4%)
+    16.5ms:  303 tasks (  8.3%)
+     1.5ms:   79 tasks (  2.2%)
+     1.0ms:   74 tasks (  2.0%)
+    17.0ms:   45 tasks (  1.2%)
+     2.0ms:   40 tasks (  1.1%)
+     2.5ms:   31 tasks (  0.8%)
+     3.0ms:   23 tasks (  0.6%)
+     4.0ms:   15 tasks (  0.4%)
+
+================================================================================
+FUNCTION CALL ANALYSIS
+================================================================================
+
+No function calls found (trace may not have JS profiling enabled)
+

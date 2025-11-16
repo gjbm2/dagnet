@@ -1,6 +1,25 @@
 # TODO
 
+## Perf issue
+
+1. stop the tab stuff remounting at start of pan/zoom
+
+2. detailed diagnostics doc.
+
+3. summarise in detail all the positive changes we have made:
+ - [tab stuff remounting at start of pan/zoom]
+ - minimal mode switches
+ - suspend during pan/zoom
+ - incremental rendering by node
+
+4. revert all code except that in /perf back to last commit
+
+5. re-implement positive features
+
+
+
 ## Scenarios project
+- need to hide edge labels during node drags 
 - now can finally sort labels for edges properly in lozenges along the spline. to come.
 - can't cick 'x' to delete edges (do we need? dunno; maybe not or sort when we sort label positions )
 - check conversion graph...scenarios are fucked on it...

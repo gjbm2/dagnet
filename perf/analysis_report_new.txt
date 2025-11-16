@@ -1,0 +1,143 @@
+Loading trace file: Trace-20251115T200455.json
+Total events: 13331
+
+Renderer process IDs: {35128}
+Renderer events: 9501
+
+================================================================================
+LONG TASKS (> 10ms)
+================================================================================
+
+Found 23 tasks > 10ms
+
+Top 20 longest tasks:
+Duration     Category                       Name                                              
+--------------------------------------------------------------------------------------------
+    181.65ms disabled-by-default-devtools.timeline RunTask                                           
+    181.60ms disabled-by-default-devtools.timeline EvaluateScript                                    
+    180.46ms v8.execute                     V8.StackGuard                                     
+    180.46ms v8.execute                     V8.HandleInterrupts                               
+    180.46ms v8.execute                     V8.InvokeApiInterruptCallbacks                    
+    180.36ms v8                             CpuProfiler::StartProfiling                       
+     31.32ms disabled-by-default-devtools.timeline RunTask                                           
+     31.19ms v8                             v8.callFunction                                   
+     31.12ms devtools.timeline              FunctionCall                                      
+     29.48ms disabled-by-default-devtools.timeline RunTask                                           
+     26.55ms disabled-by-default-devtools.timeline RunTask                                           
+     22.10ms disabled-by-default-devtools.timeline RunTask                                           
+     22.02ms v8                             v8.callFunction                                   
+     22.01ms devtools.timeline              FunctionCall                                      
+     16.10ms disabled-by-default-devtools.timeline RunTask                                           
+     15.16ms renderer,benchmark,rail,input.scrolling WidgetBaseInputHandler::OnHandleInputEvent        
+     15.13ms input,rail                     WebFrameWidgetImpl::HandleInputEvent              
+     14.01ms disabled-by-default-devtools.timeline RunTask                                           
+     13.26ms disabled-by-default-devtools.timeline Commit                                            
+     13.24ms disabled-by-default-devtools.timeline RunTask                                           
+
+
+Long tasks by category:
+  disabled-by-default-devtools.timeline      11 tasks,   542.35ms total
+  v8.execute                                  3 tasks,   541.38ms total
+  v8                                          4 tasks,   246.55ms total
+  devtools.timeline                           3 tasks,    66.06ms total
+  renderer,benchmark,rail,input.scrolling     1 tasks,    15.16ms total
+  input,rail                                  1 tasks,    15.13ms total
+
+================================================================================
+JAVASCRIPT FUNCTION CALLS
+================================================================================
+
+Found 17 significant JavaScript executions (> 1ms)
+
+Top 20:
+Duration     Event                                              Details                                           
+----------------------------------------------------------------------------------------------------------------
+    181.60ms EvaluateScript                                                                                       
+     31.12ms FunctionCall                                       performWorkUntilDeadline                          
+     22.01ms FunctionCall                                       performWorkUntilDeadline                          
+     12.93ms FunctionCall                                       performWorkUntilDeadline                          
+      8.14ms FunctionCall                                       performWorkUntilDeadline                          
+      5.95ms FunctionCall                                                                                         
+      5.50ms FunctionCall                                       performWorkUntilDeadline                          
+      5.08ms FunctionCall                                       performWorkUntilDeadline                          
+      5.04ms FunctionCall                                       performWorkUntilDeadline                          
+      5.04ms FunctionCall                                       performWorkUntilDeadline                          
+      5.03ms FunctionCall                                       performWorkUntilDeadline                          
+      5.01ms FunctionCall                                       performWorkUntilDeadline                          
+      2.89ms FunctionCall                                                                                         
+      2.74ms FunctionCall                                                                                         
+      2.47ms FunctionCall                                                                                         
+      2.09ms FunctionCall                                                                                         
+      1.48ms FunctionCall                                       performWorkUntilDeadline                          
+
+================================================================================
+RENDERING WORK (Style, Layout, Paint)
+================================================================================
+
+Rendering operations summary:
+  UpdateLayoutTree             5 calls,     1.59ms total,   0.32ms avg,   0.68ms max
+  Layout                      10 calls,    19.84ms total,   1.98ms avg,   6.46ms max
+  Paint                       24 calls,    11.72ms total,   0.49ms avg,   1.78ms max
+
+  TOTAL RENDERING TIME         33.15ms
+
+  ⚠️  WARNING: Significant rendering work during interaction!
+     This suggests DOM changes are triggering layout/paint cycles.
+     Should be minimal for viewport-only pan operations.
+
+================================================================================
+TIMELINE ANALYSIS
+================================================================================
+
+Recording duration: 3.04 seconds
+Timestamp range: 201530056145 - 201533097121
+
+Activity by 100ms window:
+Window   Time (s)     Events   Total ms     Avg ms/event   
+-----------------------------------------------------------------
+0        0.000        195      1089.11      5.59             ⚠️
+1        0.100        627      14.94        0.02           
+2        0.200        10       0.39         0.04           
+3        0.300        633      270.01       0.43             ⚠️
+4        0.400        530      132.71       0.25             ⚠️
+5        0.500        10       0.54         0.05           
+6        0.600        351      277.73       0.79             ⚠️
+7        0.700        275      140.23       0.51             ⚠️
+8        0.800        30       9.21         0.31           
+9        0.900        441      212.16       0.48             ⚠️
+10       1.000        84       22.93        0.27           
+11       1.100        23       0.69         0.03           
+12       1.200        113      18.12        0.16           
+13       1.300        116      18.61        0.16           
+14       1.400        362      33.21        0.09           
+15       1.500        355      26.13        0.07           
+16       1.600        357      25.03        0.07           
+17       1.700        496      29.56        0.06           
+18       1.800        502      31.41        0.06           
+19       1.900        395      19.05        0.05           
+20       2.000        11       0.49         0.04           
+21       2.100        9        0.43         0.05           
+22       2.200        12       0.46         0.04           
+23       2.300        10       0.36         0.04           
+24       2.400        11       0.49         0.04           
+25       2.500        5        0.30         0.06           
+26       2.600        5        0.29         0.06           
+27       2.700        5        0.29         0.06           
+28       2.800        5        0.28         0.06           
+29       2.900        6        0.33         0.06           
+30       3.000        5        0.33         0.07           
+
+================================================================================
+ANALYSIS COMPLETE
+================================================================================
+
+Key questions to answer:
+1. How many long tasks (> 10ms)? Should be 0-2 for a simple pan
+2. What's the total rendering time? Should be < 20ms
+3. Which functions dominate the long tasks?
+4. Is there rendering work (Layout/Paint) during pan? Should be minimal
+
+Next steps:
+- Identify the top 3 bottleneck functions
+- Check if rendering work is happening (shouldn't be for pan)
+- Correlate with React Profiler data to see which components triggered the work
