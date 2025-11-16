@@ -1,11 +1,998 @@
+Skip to content
+Chat history
+
+You said:
 I have a React app with a very large cost in one transaction, which has a heavy GPU load and a lot of calc. The problem is that it's blowing my render budget for that frame. Is there a way I can extend the size of that frame so we don't blow the frame budget? Or are frames a fixed size in React, a fixed number of milliseconds? Can I just allow one mega frame in which everything gets done, suspend it during rapid updates, and then once the rapid updates are finished, debounce a single large render with an extra large frame which never gets blown?
+ChatGPT said:
+
+Thought for 33s
+Short version:
+You can’t make a “bigger frame.” The frame budget comes from the browser (≈16.7 ms at 60 fps), not from React. A single mega-frame that does all the work will still jank; you have to split or move the work, not stretch the frame.
+
+Let’s unpack that and what you can do.
+
+1. Are frames a fixed size?
+Yes, effectively:
+
+At 60 fps you get ~16.7 ms per animation frame (1000/60).
+
+At 120 fps it’s ~8.3 ms, etc.
+
+If your JS or GPU work on the main thread takes longer than that, the browser can’t paint in time → dropped frames, visible stutter.
+
+React does not control this. It can cooperate with the browser (especially with concurrent rendering), but it can’t say:
+
+“This frame is allowed 200 ms, thanks.”
+
+So:
+
+“Can I just allow one mega frame in which everything gets done… with an extra large frame which never gets blown?”
+
+No. If that mega-frame does 50–200 ms of main-thread work, you’ve already blown the frame; the browser just won’t paint until you finish.
+
+What React can do in concurrent mode is spread its work across multiple frames, yielding to the browser in between, if the work is structured so it can be split.
+
+2. Why your current approach blows the budget
+If you have:
+
+Heavy CPU calc inside render/derived state (useMemo, selectors, etc.)
+
+Heavy GPU work on the main thread triggered synchronously (Canvas/WebGL layout, etc.)
+
+Or big DOM trees committing all at once
+
+…then React’s render + commit phase becomes one long task. Browser can’t paint in the middle, so that frame is gone.
+
+Debouncing into “one big render after rapid updates” does help with frequency, but it does nothing about the length of that one render. If that one render is 80 ms, the frame is still toast — it just happens less often.
+
+3. What you actually want instead
+You basically want:
+
+Interactive, rapid updates stay snappy.
+
+Heavy work runs, but is chunked/off-thread so it doesn’t block paint.
+
+Only the final state ends up in React.
+
+Here are concrete strategies that line up with that.
+
+Strategy A – Move heavy computation off the main thread (Web Worker)
+If “a lot of calc” is CPU-heavy but not directly manipulating DOM:
+
+Put that computation into a Web Worker.
+
+React kicks off the work, paints a “working” / skeleton state.
+
+When the worker returns, you update state once with the final result.
+
+High level sketch:
+
+// heavyWorker.ts
+self.onmessage = (e) => {
+  const input = e.data;
+  const result = doReallyHeavyCalc(input); // long-running calc
+  // post result back
+  // @ts-ignore
+  self.postMessage(result);
+};
+// in React
+const worker = useMemo(() => new Worker(new URL("./heavyWorker.ts", import.meta.url)), []);
+
+useEffect(() => {
+  worker.onmessage = (e) => {
+    setResult(e.data);
+  };
+}, [worker]);
+
+const runHeavy = useCallback((input) => {
+  worker.postMessage(input);
+  setIsComputing(true);
+}, [worker]);
+Now the main thread is mostly just painting. The huge calc doesn’t block frames.
+
+Strategy B – Split GPU work / canvas work from React
+If the “heavy GPU” part is e.g. WebGL / Three.js / 2D canvas:
+
+Keep React as a controller of parameters, not the per-frame driver.
+
+Let your rendering loop run independently (e.g. requestAnimationFrame inside the canvas/WebGL code).
+
+When React state changes, you just update uniforms / props / config on the GPU side, not re-render the world via React.
+
+So instead of:
+
+State change → React render → huge canvas draw
+
+You want:
+
+State change → React passes new parameters → a non-React render loop applies them over multiple frames.
+
+Strategy C – Use concurrent rendering + transitions for “one big recalculation”
+You can isolate the “mega render” so it doesn’t block urgent stuff like typing or basic UI interactions, using startTransition:
+
+import { useTransition } from "react";
+
+const [isPending, startTransition] = useTransition();
+
+const onBigUpdate = (newFilters) => {
+  // urgent: keep responsive
+  setQuickState(newFilters.quick);
+
+  // non-urgent heavy update
+  startTransition(() => {
+    setExpensiveState(newFilters.expensive);
+  });
+};
+React will:
+
+Keep rendering urgent updates synchronously.
+
+Do the expensive tree reconciliation in the background and commit when ready, possibly over multiple frames.
+
+This does not magically give you a bigger frame, but it allows React to pause work and continue later so that each slice fits into the frame budget better. The key is that your expensive part must be “splittable” work (pure render, no huge blocking sync side effects).
+
+Strategy D – Chunk the work yourself (rAF / requestIdleCallback)
+If you have a big list or dataset to transform, you can:
+
+Break it into chunks.
+
+Process chunk-by-chunk using requestAnimationFrame or requestIdleCallback.
+
+Store partial results in a ref / external structure.
+
+Update React state in smaller, batched pieces.
+
+Sketch:
+
+function chunkedProcess(items, onChunkDone, onAllDone) {
+  let index = 0;
+  function processChunk(deadline?: IdleDeadline) {
+    while (index < items.length && (!deadline || deadline.timeRemaining() > 2)) {
+      const item = items[index++];
+      // do some portion of work
+      onChunkDone(item);
+    }
+
+    if (index < items.length) {
+      requestIdleCallback(processChunk);
+    } else {
+      onAllDone();
+    }
+  }
+
+  requestIdleCallback(processChunk);
+}
+Then React just renders when each chunk result is ready. No large single task.
+
+Strategy E – Don’t put heavy work inside render
+Common footgun: big useMemo or derived data calculating inside render path.
+
+Instead:
+
+Have a precompute step outside render (e.g. worker, or useEffect that runs after initial paint).
+
+Or at least cache aggressively and avoid recalculating on every small state change.
+
+If your heavy logic is “pure data transform” (no DOM), it probably doesn’t belong directly in the render phase.
+
+4. Answering your exact idea
+“Suspend it during rapid updates, and then once the rapid updates are finished, debounce a single large render with an extra large frame which never gets blown?”
+
+Debouncing / batching to a single large render is fine to reduce number of renders, but:
+
+You cannot get an “extra large frame.”
+
+If that single render takes 80–200 ms, the UI will visibly freeze for that long, even if it’s the only render.
+
+So yes, debounce to avoid 20 medium renders – but you still need to:
+
+Move the heavy work off-thread, or
+
+Split it across frames, or
+
+Let React’s concurrent rendering help by making the work interruptible.
+
+5. Practical recommendation for you
+Given your overall setup (you’re already GPU-oriented / backend-heavy):
+
+Move the heavy calc into a worker if at all possible. Treat React as the orchestrator, not the workhorse.
+
+Keep React renders light:
+
+No giant calculations inside render.
+
+Use memoization and windowing (react-window / react-virtualized) for big lists.
+
+For big “recompute everything” changes the user triggers:
+
+Wrap them in startTransition so the rest of the UI doesn’t freeze while React churns.
+
+For GPU/canvas/WebGL:
+
+Run your render loop outside React; React only changes parameters and triggers.
+
+If you want, you can paste the bit of code where the heavy work currently happens (render, effect, worker, etc.), and I can help rewrite it into a “chunked” or worker-based pattern that won’t blow your frame budget.
+
 You said:
 The thing blowing the budget is lots of clipping of SVG objects, not calcs. I don't care if it all gets applied at once after a delay. What I don't want (currently happening) is the browser renders a half complete image then stops 
+ChatGPT said:
+
+Thought for 31s
+You can’t make a “bigger frame” time-wise, but you can make the visual change atomic so the user never sees a half-finished SVG.
+
+Right now you’re basically doing:
+
+Change a ton of SVG + clips → browser repaints as it goes → you see an in-between state that looks half clipped.
+
+You want:
+
+Old image stays on screen → heavy SVG update happens “offstage” → once it’s done, you swap to the new version in one go.
+
+That’s absolutely doable.
+
+Key point: you can’t stretch the frame, but you can double-buffer
+Frame duration is still fixed by the browser (≈16.7 ms at 60fps).
+
+Your big SVG update will still block the main thread for however long it takes.
+
+But you don’t have to show the partially updated DOM during that time.
+
+Think of it as double buffering like in graphics:
+
+Front buffer – the SVG the user sees.
+
+Back buffer – a hidden SVG that React is free to mutate like crazy.
+
+When ready, you flip: hide the old one, show the new one.
+
+From the user’s POV: the image jumps from “old complete” → “new complete”.
+They never see the half-clipped intermediate state, even though the browser did a ton of work.
+
+Option 1 – Old SVG stays visible, build the new one hidden, then flip
+High-level React pattern:
+
+function HeavySvgDisplay({ data }) {
+  const [buffer, setBuffer] = useState<"A" | "B">("A");
+
+  // split into two buffers
+  const frontBuffer = buffer === "A" ? "A" : "B";
+  const backBuffer  = buffer === "A" ? "B" : "A";
+
+  const [dataA, setDataA] = useState(data);
+  const [dataB, setDataB] = useState(data);
+
+  useEffect(() => {
+    // When `data` changes, build the next frame in the *back* buffer
+    if (backBuffer === "A") {
+      setDataA(data);
+    } else {
+      setDataB(data);
+    }
+
+    // After React has committed the back buffer, flip buffers on the next frame
+    requestAnimationFrame(() => {
+      setBuffer(prev => (prev === "A" ? "B" : "A"));
+    });
+  }, [data, backBuffer]);
+
+  const frontData = frontBuffer === "A" ? dataA : dataB;
+  const backData  = backBuffer === "A" ? dataA : dataB;
+
+  return (
+    <>
+      {/* Front buffer: visible */}
+      <svg
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "block",
+        }}
+      >
+        <HeavySvgContent data={frontData} />
+      </svg>
+
+      {/* Back buffer: hidden while being updated */}
+      <svg
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "none", // or opacity: 0; visibility: hidden
+        }}
+      >
+        <HeavySvgContent data={backData} />
+      </svg>
+    </>
+  );
+}
+What this does:
+
+While your heavy clip changes happen, they’re happening in the hidden SVG.
+
+The user keeps seeing the previous, fully-clipped SVG.
+
+Once the hidden one finishes updating (same React commit), you flip which one is visible via a very cheap style change → effectively one atomic visual swap.
+
+You’ll still have a pause if it’s super heavy, but it’s “old frame frozen” → “new frame”, not “half-drawn mess”.
+
+Option 2 – One SVG, but hide it while updating
+If you don’t want two copies in memory:
+
+Hide the SVG (opacity: 0 or visibility: hidden) before starting the heavy update.
+
+Do all the React updates / state changes.
+
+Show it again after the commit.
+
+Basic idea:
+
+function ClippedSvg({ data }) {
+  const [hidden, setHidden] = useState(false);
+
+  const applyBigChange = (nextData: Data) => {
+    // 1. hide current SVG
+    setHidden(true);
+
+    // 2. apply heavy update (maybe batched / debounced)
+    // If this is a bunch of setStates, try to fold them into a single setState
+    setState(nextData);
+
+    // 3. re-show after commit
+    requestAnimationFrame(() => {
+      setHidden(false);
+    });
+  };
+
+  return (
+    <svg style={{ opacity: hidden ? 0 : 1, transition: "opacity 0.1s linear" }}>
+      <HeavySvgContent data={data} />
+    </svg>
+  );
+}
+This is simpler, but:
+
+You’ll see a brief “blank” period while the heavy update runs.
+
+You won’t see a half-clipped in-between state.
+
+If that’s acceptable (you said you don’t mind delay, just not half renders), this is an easy win.
+
+Option 3 – Reduce partial paint by updating fewer things
+Because it’s specifically clipping that’s expensive, you can sometimes:
+
+Apply a single clipPath at a higher level instead of changing clip on lots of individual elements.
+
+Group things in <g> elements and clip the group, not each item.
+
+Toggle visibility on big groups rather than reapplying clip to many children.
+
+That way, when you update:
+
+You change a small number of attributes / nodes, not thousands.
+
+There’s less chance for the browser to show a weird in-between state where some children are updated and some aren’t.
+
+Reality check: what this doesn’t solve
+Just to be very clear:
+
+None of this gives you a “frame with 200 ms budget.”
+
+The browser will still be blocked while the big SVG update happens.
+
+These patterns only change what the user sees during that time:
+
+Before: half-rendered mess.
+
+After: frozen old frame or a blank placeholder, then a clean new frame.
+
+Given you explicitly said you’re fine with the delay and just don’t want half-complete images, the double-buffer pattern (Option 1) is the closest to what you want: you always show a fully consistent SVG, then jump to the next fully consistent SVG when it’s done.
+
+If you’d like, you can describe roughly how your clip setup looks (e.g. “N groups with individual clipPaths” / “single global clip” / etc.), and I can sketch a more tailored version (e.g. double-buffering just the clipped layer instead of the whole SVG tree).
+
 You said:
 The prob isn't the partially rendered -- were that just interstitial. It's that it never completes the blown frame
+ChatGPT said:
+
+Thought for 43s
+Gotcha—that’s a really important clarification.
+
+What you’re seeing is essentially:
+
+You start a huge SVG/clipping update
+
+Before the browser can fully render that, more updates come in
+
+React + the browser keep restarting work, and the “big new frame” basically never wins the race, so the screen looks stuck on the old state
+
+So it’s not “half-drawn then fine”, it’s “never finishes drawing at all while things are changing”.
+
+You still can’t extend the frame, but you can control when that expensive re-render is allowed to run so it actually completes.
+
+What’s really going on
+With React 18+ and the browser event loop:
+
+Heavy updates to the SVG (lots of clipPaths etc.) are expensive GPU + layout work.
+
+If you keep sending new updates (e.g. from a slider, drag, animation), React may:
+
+Restart rendering the tree for each new state
+
+The browser may throw away in-progress paint work and start again
+
+Net effect: that heavy render is starved. While the user is interacting rapidly, the big expensive frame never fully commits.
+
+So the fix is not “give it a bigger frame”, it’s:
+
+Don’t try to do the mega-render while the updates are coming in rapidly.
+Wait for them to slow/stop, then do one big render.
+
+You were intuitively asking for that already; here’s how to implement it in React.
+
+Pattern 1: “Live” state vs “Committed heavy” state (debounce)
+Have two layers of state:
+
+liveValue: updates rapidly with user input – cheap UI only
+
+committedValue: what the heavy SVG actually uses – only updates when the user pauses for a bit
+
+function HeavySvgController() {
+  const [liveValue, setLiveValue] = useState(initialValue);
+  const [committedValue, setCommittedValue] = useState(initialValue);
+
+  // Debounce: only update the heavy value after user stops changing liveValue
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setCommittedValue(liveValue);
+    }, 150); // adjust debounce delay to taste
+
+    return () => clearTimeout(handle);
+  }, [liveValue]);
+
+  return (
+    <>
+      <Slider
+        value={liveValue}
+        onChange={setLiveValue} // fires every tiny movement
+      />
+
+      {/* This one is heavy; it only rerenders when committedValue changes */}
+      <HeavySvgView value={committedValue} />
+    </>
+  );
+}
+Effects:
+
+While the user scrubs/zooms/drags, only the cheap UI moves (liveValue).
+
+The heavy SVG doesn’t re-clamp / re-clip on each move.
+
+Once they pause for ~150ms, committedValue updates once, and you pay for a single big SVG redraw that can actually finish.
+
+This directly solves “the frame never finishes” by not even starting the heavy operation until the noise stops.
+
+Pattern 2: Same idea using useDeferredValue
+You can also let React manage the lag:
+
+import { useDeferredValue } from "react";
+
+function HeavySvgController() {
+  const [liveValue, setLiveValue] = useState(initialValue);
+
+  // React will let this lag behind when there is pressure
+  const deferredValue = useDeferredValue(liveValue, { timeoutMs: 500 });
+
+  return (
+    <>
+      <Slider value={liveValue} onChange={setLiveValue} />
+
+      {/* Heavy component uses deferredValue, not the live one */}
+      <HeavySvgView value={deferredValue} />
+    </>
+  );
+}
+liveValue updates eagerly with input.
+
+deferredValue lags; React will skip or combine intermediate values under load.
+
+The heavy SVG tree depends only on deferredValue, so it doesn’t get spammed with updates and can complete a render.
+
+This is a more “concurrent React” flavored version of the debounce.
+
+Pattern 3: Drop intermediate updates entirely
+If you have a stream of updates (e.g. animation) and only the latest matters:
+
+Keep a latestTarget ref.
+
+While “heavy render in progress”, just update the ref, don’t trigger React.
+
+When the heavy render finishes, check the ref; if it’s changed, schedule another pass – but still one at a time.
+
+Pseudo-pattern:
+
+function useSerializedHeavyUpdate(doHeavyUpdate) {
+  const latestRef = useRef(null);
+  const busyRef = useRef(false);
+
+  const schedule = useCallback((value) => {
+    latestRef.current = value;
+
+    if (busyRef.current) return;
+
+    busyRef.current = true;
+
+    requestAnimationFrame(() => {
+      const v = latestRef.current;
+      doHeavyUpdate(v);
+      busyRef.current = false;
+
+      // If new value came in while we were working, run again
+      if (latestRef.current !== v) {
+        schedule(latestRef.current);
+      }
+    });
+  }, [doHeavyUpdate]);
+
+  return schedule;
+}
+Use it so your heavy SVG update is never re-entered before it can finish.
+
+Pattern 4: Combine with the double-buffer idea (optional)
+If you also don’t want visible partial states (even after the starvation is fixed), you can:
+
+Use Pattern 1 or 2 to avoid starvation.
+
+Build the heavy SVG in a hidden “back buffer” and swap it in once ready (as in my previous answer).
+
+That doesn’t change performance; it just guarantees visual atomicity.
+
+TL;DR in your terms
+Is there a way I can extend the size of that frame so we don't blow the frame budget?
+
+No — frame time is fixed by the browser.
+
+What I don't want is the browser renders a half complete image then stops / never completes.
+
+What’s happening is not really “the browser gives up”; it’s:
+
+The heavy SVG update gets restarted or starved by continuous incoming updates.
+
+So the new frame never finishes; you’re stuck on the old one.
+
+Fix: don’t let that heavy update run on every change. Let updates accumulate, and trigger one heavy render only when:
+
+input has paused (debounce), or
+
+React’s deferred / transition logic has room to commit it, or
+
+you serialize heavy updates so they never overlap.
+
+If you want, you can tell me roughly what is changing in the SVG (e.g. “clipRects along a timeline”, “mask for a heatmap”, “zoom/pan transforms”) and I can sketch a concrete “live vs committed” state shape tailored to that.
+
 You said:
 So the reason I'm seeing half finished frame is likely because something is interrupting the process before it completes, not that the frame finishes and that is what stops the composition?
+ChatGPT said:
+
+Thought for 13s
+Exactly 👍 — what you’re seeing as a “half-finished frame” is almost certainly:
+
+Work that would finish the image never gets to complete / commit,
+
+Not “the browser painted half a frame and then bailed mid-composition.”
+
+Let me unpack how this works under the hood.
+
+How a frame actually gets drawn
+Roughly, a browser frame goes:
+
+Run JS (React render, state updates, event handlers, etc.)
+
+Recalculate styles / layout as needed
+
+Paint + composite (rasterize, send stuff to GPU, etc.)
+
+A couple of important properties:
+
+JS can be interrupted between tasks (e.g. between events, or in concurrent React, between chunks of rendering work).
+
+But once the browser is actually in the style/layout/paint phase for that frame, it generally runs that to completion. It doesn’t normally stop halfway through painting an element and say “k bye”.
+
+So there’s no “half a painted SVG” in the literal sense. There’s just “DOM/CSS only partially reflect the state you intended,” and that’s what got fully painted.
+
+Where interruption really happens: React & JS, not paint
+In React 18+ with concurrent features:
+
+React can start rendering a new tree, then decide:
+
+“Oh, a more urgent update came in”
+
+→ throw away the in-progress render work
+
+→ start again from the latest state
+
+Commit is atomic: React won’t commit a half-rendered tree; either a render finishes and commits, or it gets abandoned.
+
+So when you see a “half finished” SVG:
+
+That’s not a half-painted frame.
+
+That’s a fully painted frame of an intermediate or partial DOM state:
+
+Some earlier updates got committed,
+
+A later, heavier “finish the clipping” update keeps getting restarted or deferred by more incoming updates,
+
+So that final intended state never commits while the rapid updates continue.
+
+Combine that with SVG being expensive:
+
+Heavy clipping / masking → big layout/paint cost.
+
+If you keep feeding in new state faster than the heavy render can finish, that heavy render never wins.
+
+You end up stuck on some earlier, cheaper intermediate state that did manage to commit.
+
+That feels visually like:
+
+“The browser started drawing my new frame, got halfway through, then stopped.”
+
+But logically it’s:
+
+“The browser fully rendered the last DOM state that successfully committed; the DOM that would have finished the look never committed because React kept restarting that work.”
+
+What to do with that understanding
+Given this:
+
+You can’t stretch a frame or give paint more milliseconds.
+
+You can stop starving the “finish the SVG” update.
+
+That’s what those patterns I mentioned are for:
+
+Debounced / “committed” state separate from “live” state
+→ heavy SVG only updates once after input settles.
+
+Or useDeferredValue / startTransition
+→ React will drop or coalesce intermediate updates so a heavy one actually completes.
+
+Or serializing heavy updates
+→ don’t start another one until the last one has fully run & committed.
+
+Once you apply one of those, you should see:
+
+During rapid interaction: SVG might lag / stay at an older state.
+
+After you stop: one big heavy update that finally completes and gives you the correct fully clipped image.
+
+No more “stuck half finished forever”.
+
+If you want to sanity-check, you can tell me briefly what’s driving the updates (e.g. “dragging a handle that moves a clip rect along an SVG timeline”), and I can sketch the exact “live vs committed” state shape for that case.
+
 You said:
 The half rendered state sometimes includes some partially drawn objects which are in other parts of the DOM altogether. But surprised those are being redrawn at all
+ChatGPT said:
+
+Thought for 47s
+Yeah, your intuition is on the right track, and the “why are other bits getting redrawn?” part actually makes sense once you look at how SVG + the browser pipeline works.
+
+Let me break it into two pieces:
+
+Why you see “half-rendered” / weird intermediate visuals
+
+Why other, “unrelated” DOM bits are being redrawn at all
+
+1. Why the visuals look “half rendered”
+React itself only ever commits whole DOM updates for a given render — it doesn’t commit “half the tree” and then later the other half. But what can happen is:
+
+You update some state that causes a huge SVG change (lots of clipPath / mask / filter stuff).
+
+While React / the browser are busy recalculating and repainting that, more updates keep coming in.
+
+React throws away in-progress render work and restarts from the latest state; the browser’s paint/composite work for the “big change” also keeps getting invalidated.
+
+So you get:
+
+Old DOM → fully painted
+
+Start heavy update → never finishes because new updates keep arriving
+
+The user never sees the final intended state; they just see some committed intermediate(s) that look half-baked
+
+Visually this can look like:
+
+Some objects use new clip/mask, others still use old geometry/position.
+
+Parts of the scene feel stuck while others flicker.
+
+But the root cause isn’t the browser stopping mid-composition; it’s that the final DOM state you want never actually makes it to a committed, stable point while the rapid changes are happening.
+
+That’s why the “debounce / deferred state / serialize heavy updates” trick is so important: you want one big update that can complete, not 50 competing ones that keep resetting each other.
+
+2. Why other parts of the DOM are being redrawn
+Your surprise here is super common: you expect the browser to repaint “just the bit that changed”, but with SVG (and complex effects) the invalidation is often coarse. A few big reasons:
+
+a) SVG is often treated as a single painting unit
+If you have one big <svg> with lots of elements:
+
+Many browsers treat the entire SVG or large subtrees as a single “layer” for painting.
+
+Change something that affects clipping / masking / filters on one part of it → the browser marks a huge region (sometimes the whole SVG viewport) as dirty.
+
+Result: it re-rasterizes a lot more than “just that element”, and everything in that region is effectively “being redrawn”.
+
+So even if your DOM is structured:
+
+
+…changing something in foregroundStuff (especially a clipPath or filter) can cause backgroundStuff to get repainted as well — even if React didn’t touch that subtree.
+
+b) Shared resources: clipPath, mask, filter, defs
+If you’ve got things like:
+
+<defs>
+  <clipPath id="myClip">
+    ...
+  </clipPath>
+</defs>
+
+<g clip-path="url(#myClip)"> ... </g>
+<g clip-path="url(#myClip)"> ... </g>
+Changing anything in #myClip effectively affects every element that references it.
+
+Even elements “elsewhere in the DOM” are logically dependent on that single shared node, so the browser has to recompute all of them.
+
+Same with shared filters / masks / gradients.
+
+So from your POV: “why is that other region redrawing?”
+From the browser’s POV: “they both depend on the same clip/mask/filter resource, so I have to recompute them all.”
+
+c) Coarse invalidation rectangles
+Browsers often use big dirty rectangles, not perfect tiny ones:
+
+“Something in this big area changed → repaint this whole area.”
+
+That rectangle can easily cover objects that haven’t changed at all.
+
+So you’ll see unrelated stuff flicker or appear half-updated, because they’re inside the same repaint region and being recomposited along with the heavy changes.
+
+d) React’s reconciliation can touch more than you think
+Even if you think “only this group changed”, a few things can cause React to recreate or reorder more DOM than expected:
+
+Keys changing / being reused
+
+Moving elements around in the tree
+
+Conditional rendering that toggles entire branches
+
+That can make the browser treat larger chunks as “changed” and thus repaint them.
+
+What you can actually do about it
+Given all that, here’s how to reduce the “never completes / half-updated” feel:
+
+1. Gate the heavy SVG redraws (stop starving them)
+Use one of these patterns so the heavy update runs only after rapid changes settle:
+
+Debounce live → committed state:
+
+const [liveValue, setLiveValue] = useState(initial);
+const [committedValue, setCommittedValue] = useState(initial);
+
+useEffect(() => {
+  const h = setTimeout(() => setCommittedValue(liveValue), 150);
+  return () => clearTimeout(h);
+}, [liveValue]);
+HeavySvg depends only on committedValue, not liveValue.
+
+Or useDeferredValue:
+
+const deferred = useDeferredValue(liveValue, { timeoutMs: 500 });
+And again HeavySvg uses the deferred value.
+
+In both cases, you avoid flooding the SVG with updates it can’t finish.
+
+2. Try to isolate the heavy SVG into its own “layer”
+You can sometimes reduce collateral repaint by:
+
+Putting the heavy SVG in its own container with will-change: transform; or transform: translateZ(0); to force a separate compositing layer.
+
+Splitting very different regions into separate <svg> elements instead of one giant one, especially if they don’t share clipPaths/filters.
+
+This doesn’t fix the total cost, but it can stop “other parts of the DOM” from being invalidated.
+
+3. Avoid sharing clip/filter resources more than necessary
+If you’re using one clipPath/filter for lots of stuff, any change to it is inherently global.
+
+Sometimes it’s better to:
+
+Use separate clipPaths for groups that animate differently.
+
+Avoid changing the definition of a widely shared clipPath; instead, change local transforms or group positions.
+
+Mental model to keep
+React commit is atomic, but which DOM state makes it to commit is influenced by how often you change state.
+
+SVG is often painted as one big thing; changes in one part can invalidate a lot more.
+
+Clip/mask/filter in SVG are global resources referenced by id. Changing them can legitimately affect “unrelated” stuff.
+
+So:
+
+“The half rendered state sometimes includes partially drawn objects in other parts of the DOM”
+
+…is very likely a combination of:
+
+Coarse repaint regions or shared SVG resources, plus
+
+Your heavy update being repeatedly aborted / delayed by continuous incoming updates.
+
+If you want, you can describe (in words) how your SVG is structured — e.g. “one big svg with N layers, these use the same clipPath, this one animates when I drag X” — and I can give you a more SVG-specific refactor suggestion (e.g. “push this part into its own <svg> with its own clip, leave that bit static”, etc.).
+
 You said:
 And if the other parts of the Dom are in entirely different branches (Eg sidebar, menu components) rather than the canvas where the SVG objects are? Does that imply that something is wrongly destabilising those branches Eg  a dependency that's not memoised?
+ChatGPT said:
+
+Thought for 23s
+Great question, and now we’re in the really interesting bit: React tree vs DOM vs browser paint.
+
+Short answer:
+
+If your sidebar/menu are visibly changing or re-rendering every time the SVG work happens, yes, that usually means React is re-running those components too, often because of shared state / unstable props / context updates.
+
+If they’re just stuttering / freezing while the SVG churns, that doesn’t necessarily mean they’re being “destabilised”; it might just be the main thread being blocked by SVG work.
+
+Let’s separate those two.
+
+1. Two different things that can happen
+A. React is actually re-rendering those other branches
+You can spot this if:
+
+The sidebar/menu “flash”, re-run effects, re-run layout code, or log renders you didn’t expect.
+
+React DevTools “highlight updates” lights them up on each heavy update.
+
+That does usually mean something like:
+
+A parent component above both the canvas and sidebar re-renders whenever the SVG-related state changes.
+
+Or you’re passing new object/array/function props into the sidebar each time (no memoization), so React thinks it must re-render.
+
+Or a Context value changes on every tick, and everything under that provider re-renders, sidebar included.
+
+Common culprits:
+
+Global state in a top-level component (App) that’s used by both the heavy SVG and the sidebar.
+
+value={{ ... }} objects passed into <SomeContext.Provider> created inline (new object each render).
+
+Props like onSomething={() => …} created inline without useCallback.
+
+React.memo missing on expensive-but-static subtrees.
+
+In this case, yes:
+
+“Does that imply that something is wrongly destabilising those branches Eg a dependency that's not memoised?”
+
+Very possibly, yes.
+
+B. The sidebar/menu aren’t re-rendering; they’re just stuck / partially painted
+Other possibility:
+
+React isn’t touching those components at all.
+
+But the main thread is busy doing layout/paint for the giant SVG.
+
+So nothing else can update, including CSS transitions, hover states, etc.
+
+You see “half drawn” or frozen UI simply because frames are being dropped, not because their DOM changed.
+
+Here, the sidebar/menu are innocent bystanders. They’re not destabilised; they’re just starved of time.
+
+2. How to tell which one you have
+Use React DevTools Profiler / Highlight Updates:
+
+Turn on “Highlight updates when components render”.
+
+Trigger your heavy SVG update.
+
+If the sidebar/menu flash green on every heavy SVG change:
+
+React is re-rendering them.
+
+Time to look at state layout and memoization.
+
+If they don’t flash, but the UI still feels janky:
+
+They’re probably not re-rendering.
+
+You’re just blocking the main thread so the whole app stutters.
+
+You can also stick a console.log('Sidebar render') in the sidebar component to confirm.
+
+3. If React is re-rendering sidebar/menu needlessly
+Then yes, you’ll want to:
+
+1. Isolate state
+Keep SVG-specific state as low in the tree as possible, ideally in a component that only wraps the SVG:
+
+function App() {
+  return (
+    <>
+      <Sidebar />       {/* never needs SVG state */}
+      <CanvasWrapper /> {/* owns the heavy SVG state */}
+    </>
+  );
+}
+Don’t store the heavy, twitchy SVG-driven state in <App> and then pass it down through everything.
+
+2. Guard expensive branches with React.memo
+const Sidebar = React.memo(function Sidebar(props) {
+  // ...
+});
+And combine that with stable props:
+
+Wrap callbacks in useCallback.
+
+Wrap calculated props in useMemo if needed.
+
+Avoid inline value={{…}} for providers that change every render.
+
+3. Fix unstable context values
+This is a sneaky one:
+
+<MyContext.Provider value={{ some, props, here }}>
+  {children}
+</MyContext.Provider>
+Every render, that value is a new object → all context consumers re-render.
+
+Instead:
+
+const value = useMemo(() => ({ some, props, here }), [some, props, here]);
+
+<MyContext.Provider value={value}>
+  {children}
+</MyContext.Provider>
+Now consumers only re-render when the actual data changes, not on every SVG tick.
+
+4. Combine with your original goal: don’t starve the heavy frame
+You basically want:
+
+Rest of app (sidebar/menu):
+
+Stable, rarely re-rendered, not tied to noisy SVG state.
+
+Heavy SVG subtree:
+
+Only updates from a debounced / deferred value, not every micro change.
+
+So a good pattern looks like:
+
+function App() {
+  const [liveValue, setLiveValue] = useState(initial);
+  const committedValue = useDebounced(liveValue, 150); // or useDeferredValue
+
+  return (
+    <Layout>
+      <Sidebar /> {/* pure, memoized */}
+      <CanvasControls value={liveValue} onChange={setLiveValue} />
+      <HeavySvg value={committedValue} /> {/* only updates occasionally */}
+    </Layout>
+  );
+}
+Where:
+
+Sidebar is wrapped in React.memo and doesn’t depend on SVG stuff.
+
+HeavySvg only sees committedValue, which changes relatively rarely.
+
+liveValue drives lightweight UI / controls.
+
+That way, you avoid both:
+
+Unnecessary React work in other branches.
+
+Starving the SVG of the chance to finish a heavy render.
+
+If you want, you can paste a simplified version of your top-level component tree (just the JSX skeleton showing where the canvas and sidebar live, plus where the state/context for the SVG is stored), and I can point at exactly where memoization / state-splitting would give you the most bang for buck.
+
+
+
+
+No file chosenNo file chosen
+ChatGPT can make mistakes. Check important info. See Cookie Preferences.

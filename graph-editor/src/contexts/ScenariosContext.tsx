@@ -11,7 +11,7 @@
  * - Flatten operation (merge all overlays into Base)
  */
 
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { 
   Scenario, 
   ScenarioParams, 
@@ -626,7 +626,9 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     // No need to change currentParams - it continues to apply on top of the new Base
   }, [scenarios, baseParams, currentParams]);
 
-  const value: ScenariosContextValue = {
+  // PERF: Memoize context value to prevent cascade re-renders
+  // Creating new object on every render causes ALL consumers to re-render
+  const value: ScenariosContextValue = useMemo(() => ({
     scenarios,
     baseParams,
     currentParams,
@@ -650,7 +652,31 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     setCurrentParams,
     setCurrentColor,
     setBaseColor,
-  };
+  }), [
+    scenarios,
+    baseParams,
+    currentParams,
+    currentColor,
+    baseColor,
+    editorOpenScenarioId,
+    createSnapshot,
+    createBlank,
+    getScenario,
+    listScenarios,
+    renameScenario,
+    updateScenarioColor,
+    deleteScenario,
+    applyContent,
+    validateContent,
+    openInEditor,
+    closeEditor,
+    composeVisibleParams,
+    flatten,
+    setBaseParams,
+    setCurrentParams,
+    setCurrentColor,
+    setBaseColor,
+  ]);
 
   return (
     <ScenariosContext.Provider value={value}>
