@@ -12,6 +12,7 @@ import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 import { useDecorationVisibility } from '../GraphCanvas';
+import { EDGE_INSET, EDGE_INITIAL_OFFSET, CONVEX_DEPTH, CONCAVE_DEPTH } from '@/lib/nodeEdgeConstants';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -30,116 +31,6 @@ const USE_GROUP_BASED_BLENDING = false; // Enable scenario-specific blending
 // DIAGNOSTIC: Check for nobeads mode (?nobeads URL parameter)
 const NO_BEADS_MODE = new URLSearchParams(window.location.search).has('nobeads');
 
-// Simple point-in-triangle test using barycentric coordinates
-function isPointInTriangle(
-  px: number,
-  py: number,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-  x3: number,
-  y3: number
-): boolean {
-  const v0x = x3 - x1;
-  const v0y = y3 - y1;
-  const v1x = x2 - x1;
-  const v1y = y2 - y1;
-  const v2x = px - x1;
-  const v2y = py - y1;
-
-  const dot00 = v0x * v0x + v0y * v0y;
-  const dot01 = v0x * v1x + v0y * v1y;
-  const dot02 = v0x * v2x + v0y * v2y;
-  const dot11 = v1x * v1x + v1y * v1y;
-  const dot12 = v1x * v2x + v1y * v2y;
-
-  const denom = dot00 * dot11 - dot01 * dot01 || 1;
-  const invDenom = 1 / denom;
-  const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
-  const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
-
-  return u >= 0 && v >= 0 && u + v <= 1;
-}
-
-/**
- * Compute the distance along the edge path at which the edge emerges from the
- * SOURCE chevron cutout, taking into account this edge's actual spline and
- * lateral offset vs. the bundle centerline.
- *
- * We do this by:
- * - Looking up the source clipPath triangle (chevron) in the DOM
- * - Sampling along the edge path until it leaves that triangle
- */
-function computeVisibleStartOffsetForEdge(
-  pathEl: SVGGeometryElement,
-  sourceClipPathId?: string
-): number {
-  if (!sourceClipPathId) return 0;
-
-  const clip = document.getElementById(sourceClipPathId) as SVGClipPathElement | null;
-  if (!clip) return 0;
-
-  const clipPath = clip.querySelector('path');
-  const d = clipPath?.getAttribute('d');
-  if (!d) return 0;
-
-  // Extract the last 3 coordinate pairs from the path data.
-  // For source chevrons, the d string is:
-  //   largeRect ... Z Mx1 y1 Lx2 y2 Lx3 y3 Z
-  // So the final 6 numbers are the triangle vertices.
-  const matches = d.match(/-?\d+(\.\d+)?/g);
-  if (!matches || matches.length < 6) return 0;
-  const nums = matches.map(Number);
-  const [x1, y1, x2, y2, x3, y3] = nums.slice(-6);
-
-  const totalLen = pathEl.getTotalLength();
-  if (!totalLen || totalLen <= 0) return 0;
-
-  // If the very start of the path is already outside the triangle, nothing to clip.
-  const startPt = pathEl.getPointAtLength(0);
-  if (!isPointInTriangle(startPt.x, startPt.y, x1, y1, x2, y2, x3, y3)) {
-    return 0;
-  }
-
-  // Coarse search: walk outwards until we leave the triangle, with a small step.
-  const maxProbe = Math.min(totalLen * 0.3, 60); // chevron is always very close to node
-  const coarseStep = 2; // px along path
-  let insideUntil = 0;
-  let foundExit = false;
-
-  for (let dLen = coarseStep; dLen <= maxProbe; dLen += coarseStep) {
-    const p = pathEl.getPointAtLength(dLen);
-    const inside = isPointInTriangle(p.x, p.y, x1, y1, x2, y2, x3, y3);
-    if (inside) {
-      insideUntil = dLen;
-    } else {
-      // Edge has exited the chevron between insideUntil and dLen
-      foundExit = true;
-      // Refine with a few iterations of binary search between inside/outside bounds
-      let lo = insideUntil;
-      let hi = dLen;
-      for (let i = 0; i < 6; i++) {
-        const mid = (lo + hi) / 2;
-        const pm = pathEl.getPointAtLength(mid);
-        if (isPointInTriangle(pm.x, pm.y, x1, y1, x2, y2, x3, y3)) {
-          lo = mid;
-        } else {
-          hi = mid;
-        }
-      }
-      return hi;
-    }
-  }
-
-  // If we never left the triangle in the probe window, fall back to 0
-  // rather than guessing: in practice this should not happen for well-formed chevrons.
-  if (!foundExit) {
-    return 0;
-  }
-
-  return insideUntil;
-}
 
 interface ConversionEdgeData {
   uuid: string;
@@ -196,7 +87,7 @@ interface ConversionEdgeData {
   isSingleNodeHighlight?: boolean;
   // What-if DSL (passed from tab state)
   whatIfDSL?: string | null;
-  // Bundle metadata for chevron rendering
+  // Bundle metadata
   sourceBundleWidth?: number;
   targetBundleWidth?: number;
   sourceBundleSize?: number;
@@ -207,11 +98,6 @@ interface ConversionEdgeData {
   isLastInTargetBundle?: boolean;
   sourceFace?: string;
   targetFace?: string;
-  // Chevron clipPath IDs
-  sourceClipPathId?: string;
-  targetClipPathId?: string;
-  // Fallback arrow rendering when target chevron is below threshold
-  renderFallbackTargetArrow?: boolean;
   // Sankey view flag
   useSankeyView?: boolean;
   // Scenario overlay data
@@ -724,9 +610,10 @@ export default function ConversionEdge({
   // For concave faces we want the rendered edge start/end points further under the node,
   // BUT we don't want to move the control points under the node.
   // So:
-  // - start/end of the path are pulled INSET_DEEP inside the node,
+  // - start/end of the path are pulled under the node by halo width,
   // - control points are computed from the base (face) positions.
-  const INSET_DEEP = data?.useSankeyView ? 0 : 20; // ~20px under the face for now
+  const INSET_DEEP = data?.useSankeyView ? 0 : EDGE_INSET;
+  const INITIAL_OFFSET = data?.useSankeyView ? 0 : EDGE_INITIAL_OFFSET;
 
   let adjustedSourceX = baseSourceX;
   let adjustedSourceY = baseSourceY;
@@ -734,26 +621,28 @@ export default function ConversionEdge({
   let adjustedTargetY = baseTargetY;
 
   if (!data?.useSankeyView) {
-    // Inset source by INSET_DEEP along face normal
+    // Inset source by INSET_DEEP + INITIAL_OFFSET along face normal
+    const sourceInset = INSET_DEEP + INITIAL_OFFSET;
     if (sourcePosition === Position.Left) {
-      adjustedSourceX += INSET_DEEP;
+      adjustedSourceX += sourceInset;
     } else if (sourcePosition === Position.Right) {
-      adjustedSourceX -= INSET_DEEP;
+      adjustedSourceX -= sourceInset;
     } else if (sourcePosition === Position.Top) {
-      adjustedSourceY += INSET_DEEP;
+      adjustedSourceY += sourceInset;
     } else if (sourcePosition === Position.Bottom) {
-      adjustedSourceY -= INSET_DEEP;
+      adjustedSourceY -= sourceInset;
     }
 
-    // Inset target by INSET_DEEP along face normal
+    // Inset target by INSET_DEEP + INITIAL_OFFSET along face normal
+    const targetInset = INSET_DEEP + INITIAL_OFFSET;
     if (targetPosition === Position.Left) {
-      adjustedTargetX += INSET_DEEP;
+      adjustedTargetX += targetInset;
     } else if (targetPosition === Position.Right) {
-      adjustedTargetX -= INSET_DEEP;
+      adjustedTargetX -= targetInset;
     } else if (targetPosition === Position.Top) {
-      adjustedTargetY += INSET_DEEP;
+      adjustedTargetY += targetInset;
     } else if (targetPosition === Position.Bottom) {
-      adjustedTargetY -= INSET_DEEP;
+      adjustedTargetY -= targetInset;
     }
   }
 
@@ -780,30 +669,49 @@ export default function ConversionEdge({
       const controlDistance = distance * curvature;
 
       // Calculate control points based on edge direction, starting from the FACE positions
-      // so they remain close to the node boundary rather than being pulled under the node.
+      // Adjust control points to accommodate face curvature (convex/concave)
+      // Get source and target nodes to check face directions
+      const nodes = getNodes();
+      const sourceNode = nodes.find(n => n.id === source);
+      const targetNode = nodes.find(n => n.id === target);
+      const sourceFaceDirection = sourceNode?.data?.faceDirections?.[data?.sourceFace || ''] ?? 'flat';
+      const targetFaceDirection = targetNode?.data?.faceDirections?.[data?.targetFace || ''] ?? 'flat';
+      
+      // Base control points at nominal face positions
       let c1x = baseSourceX;
       let c1y = baseSourceY;
       let c2x = baseTargetX;
       let c2y = baseTargetY;
 
+      // Adjust source control point for face direction and curvature
       if (sourcePosition === Position.Right) {
-        c1x = baseSourceX + controlDistance;
+        // Push control point out for convex, keep at nominal for flat/concave
+        const faceOffset = sourceFaceDirection === 'convex' ? CONVEX_DEPTH : 0;
+        c1x = baseSourceX + controlDistance + faceOffset;
       } else if (sourcePosition === Position.Left) {
-        c1x = baseSourceX - controlDistance;
+        const faceOffset = sourceFaceDirection === 'convex' ? CONVEX_DEPTH : 0;
+        c1x = baseSourceX - controlDistance - faceOffset;
       } else if (sourcePosition === Position.Bottom) {
-        c1y = baseSourceY + controlDistance;
+        const faceOffset = sourceFaceDirection === 'convex' ? CONVEX_DEPTH : 0;
+        c1y = baseSourceY + controlDistance + faceOffset;
       } else if (sourcePosition === Position.Top) {
-        c1y = baseSourceY - controlDistance;
+        const faceOffset = sourceFaceDirection === 'convex' ? CONVEX_DEPTH : 0;
+        c1y = baseSourceY - controlDistance - faceOffset;
       }
 
+      // Adjust target control point for face direction and curvature
       if (targetPosition === Position.Right) {
-        c2x = baseTargetX + controlDistance;
+        const faceOffset = targetFaceDirection === 'convex' ? CONVEX_DEPTH : 0;
+        c2x = baseTargetX + controlDistance + faceOffset;
       } else if (targetPosition === Position.Left) {
-        c2x = baseTargetX - controlDistance;
+        const faceOffset = targetFaceDirection === 'convex' ? CONVEX_DEPTH : 0;
+        c2x = baseTargetX - controlDistance - faceOffset;
       } else if (targetPosition === Position.Bottom) {
-        c2y = baseTargetY + controlDistance;
+        const faceOffset = targetFaceDirection === 'convex' ? CONVEX_DEPTH : 0;
+        c2y = baseTargetY + controlDistance + faceOffset;
       } else if (targetPosition === Position.Top) {
-        c2y = baseTargetY - controlDistance;
+        const faceOffset = targetFaceDirection === 'convex' ? CONVEX_DEPTH : 0;
+        c2y = baseTargetY - controlDistance - faceOffset;
       }
 
       const path = `M ${adjustedSourceX},${adjustedSourceY} C ${c1x},${c1y} ${c2x},${c2y} ${adjustedTargetX},${adjustedTargetY}`;
@@ -1489,9 +1397,6 @@ export default function ConversionEdge({
     return `M ${topSx},${topSy} C ${topC1x},${topC1y} ${topC2x},${topC2y} ${topEx},${topEy} L ${botEx},${botEy} C ${botC2x},${botC2y} ${botC1x},${botC1y} ${botSx},${botSy} Z`;
   }, [edgePath, data?.useSankeyView, strokeWidth]);
 
-  // Build clipPath style from source and target clipPaths
-  const sourceClipStyle = data?.sourceClipPathId ? { clipPath: `url(#${data.sourceClipPathId})` } : {};
-  const targetClipStyle = data?.targetClipPathId ? { clipPath: `url(#${data.targetClipPathId})` } : {};
 
   return (
     <>
@@ -1537,9 +1442,7 @@ export default function ConversionEdge({
         )}
       </defs>
       
-      {/* Nested groups for source and target clipPaths */}
-      <g style={sourceClipStyle}>
-        <g style={targetClipStyle}>
+      {/* Edge rendering */}
           {data?.useSankeyView && ribbonPath ? (
             // Sankey mode: render as filled ribbon
             <path
@@ -1614,7 +1517,7 @@ export default function ConversionEdge({
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
-                  markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
+                  markerEnd: 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                 }}
                 className="react-flow__edge-path"
@@ -1637,7 +1540,7 @@ export default function ConversionEdge({
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
                   strokeDasharray: ((data?.effectiveWeight !== undefined ? data.effectiveWeight : effectiveWeight) === 0) ? '5,5' : 'none',
-                  markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
+                  markerEnd: 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                   pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                 }}
@@ -1666,25 +1569,80 @@ export default function ConversionEdge({
           {/* Edge Beads - SVG elements rendered directly in edge SVG */}
           {/* Only render beads if path ref is stable and edge data is available */}
           {/* DIAGNOSTIC: Skip beads if ?nobeads param set */}
-          {!data?.suppressLabel && !data?.scenarioOverlay && pathRef.current && fullEdge && scenariosContext && !NO_BEADS_MODE && (
-            <EdgeBeadsRenderer
-              key={`beads-${id}-${fullEdge.uuid || fullEdge.id}`}
-              edgeId={id}
-              edge={fullEdge}
-              path={pathRef.current}
-              graph={graph}
-              visibleScenarioIds={visibleScenarioIds}
-              visibleColorOrderIds={visibleColorOrderIds}
-              scenarioColors={scenarioColors}
-              scenariosContext={scenariosContext}
-              whatIfDSL={whatIfDSL}
-              sourceClipPathId={data?.sourceClipPathId}
-              shouldSuppress={shouldSuppressBeads}
-              onDoubleClick={handleDoubleClick}
-            />
-          )}
-        </g>
-      </g>
+          {!data?.suppressLabel && !data?.scenarioOverlay && pathRef.current && fullEdge && scenariosContext && !NO_BEADS_MODE && !shouldSuppressBeads && (() => {
+            // Don't render beads until faceDirections are computed (prevents offset flash on first draw)
+            if (!data?.useSankeyView) {
+              const nodes = getNodes();
+              const sourceNode = nodes.find(n => n.id === source);
+              if (!sourceNode?.data?.faceDirections) {
+                return null; // Wait for face directions to be computed
+              }
+            }
+            
+            // Compute visibleStartOffset based on source node face direction and edge offset
+            const totalInset = EDGE_INSET + EDGE_INITIAL_OFFSET;
+            
+            // Default for flat faces
+            let visibleStartOffset = totalInset;
+            
+            if (!data?.useSankeyView && data?.sourceFace) {
+              const nodes = getNodes();
+              const sourceNode = nodes.find(n => n.id === source);
+              const sourceFaceDirection = sourceNode?.data?.faceDirections?.[data.sourceFace] ?? 'flat';
+              
+              // Get edge offset from center (perpendicular to face)
+              const sourceOffsetX = data?.sourceOffsetX || 0;
+              const sourceOffsetY = data?.sourceOffsetY || 0;
+              
+              // Determine perpendicular offset based on face orientation
+              let perpendicularOffset = 0;
+              if (data.sourceFace === 'left' || data.sourceFace === 'right') {
+                perpendicularOffset = sourceOffsetY; // Vertical offset for vertical faces
+              } else {
+                perpendicularOffset = sourceOffsetX; // Horizontal offset for horizontal faces
+              }
+              
+              // Get node dimensions to normalize offset (approximate face length)
+              const nominalWidth = (sourceNode?.data as any)?.sankeyWidth || 100;
+              const nominalHeight = (sourceNode?.data as any)?.sankeyHeight || 100;
+              const faceLength = (data.sourceFace === 'left' || data.sourceFace === 'right') ? nominalHeight : nominalWidth;
+              
+              // Normalize offset to [-1, 1] range (center = 0, edges = ±1)
+              const normalizedOffset = perpendicularOffset / (faceLength / 2);
+              
+              // Compute base perpendicular distance based on face direction
+              let basePerpDistance = totalInset;
+              if (sourceFaceDirection === 'convex') {
+                // Convex: bulge is maximum at center, decreases toward edges
+                // Approximate as linear: CONVEX_DEPTH at center, 0 at edges
+                const bulgeAtOffset = CONVEX_DEPTH * (1 - Math.abs(normalizedOffset));
+                basePerpDistance = totalInset + bulgeAtOffset;
+              } else if (sourceFaceDirection === 'concave') {
+                // Concave: indentation is more uniform, slight variation
+                const indentAtOffset = CONCAVE_DEPTH * (1 - 0.3 * Math.abs(normalizedOffset));
+                basePerpDistance = totalInset - indentAtOffset;
+              }
+              
+              visibleStartOffset = basePerpDistance;
+            }
+            
+            return (
+              <EdgeBeadsRenderer
+                key={`beads-${id}-${fullEdge.uuid || fullEdge.id}`}
+                edgeId={id}
+                edge={fullEdge}
+                path={pathRef.current}
+                graph={graph}
+                visibleScenarioIds={visibleScenarioIds}
+                visibleColorOrderIds={visibleColorOrderIds}
+                scenarioColors={scenarioColors}
+                scenariosContext={scenariosContext}
+                whatIfDSL={whatIfDSL}
+                visibleStartOffset={visibleStartOffset}
+                onDoubleClick={handleDoubleClick}
+              />
+            );
+          })()}
 
       {/* Edge tooltip - rendered as portal */}
       {showTooltip && ReactDOM.createPortal(

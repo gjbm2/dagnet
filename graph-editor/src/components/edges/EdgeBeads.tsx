@@ -10,6 +10,7 @@ import { EdgeLabelRenderer } from 'reactflow';
 import { Plug } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
+import { BEAD_MARKER_DISTANCE, BEAD_SPACING } from '../../lib/nodeEdgeConstants';
 
 // Helper to extract text content from React node for SVG textPath
 function extractTextFromReactNode(node: React.ReactNode): string {
@@ -168,9 +169,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   const pathD = path.getAttribute('d') || '';
   
   // Spacing along the spline is cumulative per bead
-  const CONST_MARKER_DISTANCE = 12; // px from visible edge start
-  const BEAD_SPACING = 20; // px between beads along spline (reduced by 50%)
-  let currentDistance = visibleStartOffset + CONST_MARKER_DISTANCE;
+  // Use shared constants from nodeEdgeConstants.ts
+  let currentDistance = visibleStartOffset + BEAD_MARKER_DISTANCE;
   
   const svgBeads: React.ReactNode[] = [];
   const htmlBeads: React.ReactNode[] = [];
@@ -537,38 +537,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
 // Component wrapper to avoid calling hook conditionally
 // Memoize to prevent re-renders when props haven't changed
 // ATOMIC RESTORATION: Now uses shouldSuppress flag (from context) instead of edge.data
-export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: EdgeBeadsProps & { sourceClipPathId?: string; shouldSuppress?: boolean }) {
-  const { sourceClipPathId, path, edgeId, shouldSuppress, ...restProps } = props;
-  
-  // Hide beads when decoration visibility is suppressed - early return to skip all computation
-  if (shouldSuppress) {
-    return null;
-  }
-  
-  // Compute visible start offset for chevron-aware positioning
-  // Use ref to cache the result and avoid DOM queries on every render
-  const offsetRef = React.useRef<{ edgeId: string; clipPathId: string; offset: number } | null>(null);
-  
-  const visibleStartOffset = useMemo(() => {
-    if (!path || !sourceClipPathId || !edgeId) return 0;
-    
-    // Check if we can reuse cached result using stable edgeId instead of path reference
-    if (offsetRef.current && 
-        offsetRef.current.edgeId === edgeId && 
-        offsetRef.current.clipPathId === sourceClipPathId) {
-      return offsetRef.current.offset;
-    }
-    
-    try {
-      const offset = computeVisibleStartOffsetForEdge(path, sourceClipPathId);
-      // Cache the result using stable identifiers
-      offsetRef.current = { edgeId, clipPathId: sourceClipPathId, offset };
-      return offset;
-    } catch (e) {
-      // Silently fail - don't log on every render
-      return 0;
-    }
-  }, [edgeId, sourceClipPathId]); // Only depend on stable IDs, not path reference
+export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: EdgeBeadsProps & { visibleStartOffset?: number }) {
+  const { path, visibleStartOffset = 0, ...restProps } = props;
   
   // Memoize the hook result to prevent unnecessary recalculations
   const beadsResult = useEdgeBeads({
@@ -593,8 +563,6 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
   // ATOMIC RESTORATION: Include shouldSuppress so beads re-render when visibility changes
   return (
     prevProps.edgeId === nextProps.edgeId &&
-    prevProps.sourceClipPathId === nextProps.sourceClipPathId &&
-    prevProps.shouldSuppress === nextProps.shouldSuppress &&
     prevProps.visibleScenarioIds?.join(',') === nextProps.visibleScenarioIds?.join(',') &&
     prevProps.visibleColorOrderIds?.join(',') === nextProps.visibleColorOrderIds?.join(',') &&
     prevProps.whatIfDSL === nextProps.whatIfDSL &&
@@ -611,81 +579,4 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
   );
 });
 
-// Helper function to compute visible start offset (needs to be accessible)
-// This function does DOM queries which can be expensive - use caching in callers
-function computeVisibleStartOffsetForEdge(
-  pathEl: SVGPathElement,
-  sourceClipPathId?: string
-): number {
-  if (!sourceClipPathId) return 0;
-
-  // Use requestAnimationFrame to defer DOM queries if possible, but for now just do it synchronously
-  // The caller should cache results to avoid repeated calls
-  const clip = document.getElementById(sourceClipPathId) as SVGClipPathElement | null;
-  if (!clip) return 0;
-
-  const clipPath = clip.querySelector('path');
-  const d = clipPath?.getAttribute('d');
-  if (!d) return 0;
-
-  // Extract the last 3 coordinate pairs from the path data.
-  const matches = d.match(/-?\d+(\.\d+)?/g);
-  if (!matches || matches.length < 6) return 0;
-  const nums = matches.map(Number);
-  const [x1, y1, x2, y2, x3, y3] = nums.slice(-6);
-
-  const totalLen = pathEl.getTotalLength();
-  if (!totalLen || totalLen <= 0) return 0;
-
-  // If the very start of the path is already outside the triangle, nothing to clip.
-  const startPt = pathEl.getPointAtLength(0);
-  if (!isPointInTriangle(startPt.x, startPt.y, x1, y1, x2, y2, x3, y3)) {
-    return 0;
-  }
-
-  // Coarse search: walk outwards until we leave the triangle
-  // Use larger step size to reduce iterations
-  const maxProbe = Math.min(totalLen * 0.3, 60);
-  const coarseStep = 3; // Increased from 2 to reduce iterations
-  let insideUntil = 0;
-  let foundExit = false;
-
-  for (let dLen = coarseStep; dLen <= maxProbe; dLen += coarseStep) {
-    const p = pathEl.getPointAtLength(dLen);
-    const inside = isPointInTriangle(p.x, p.y, x1, y1, x2, y2, x3, y3);
-    if (inside) {
-      insideUntil = dLen;
-    } else {
-      foundExit = true;
-      // Refine with binary search (reduced iterations from 6 to 4)
-      let lo = insideUntil;
-      let hi = dLen;
-      for (let i = 0; i < 4; i++) {
-        const mid = (lo + hi) / 2;
-        const pm = pathEl.getPointAtLength(mid);
-        if (isPointInTriangle(pm.x, pm.y, x1, y1, x2, y2, x3, y3)) {
-          lo = mid;
-        } else {
-          hi = mid;
-        }
-      }
-      return hi;
-    }
-  }
-
-  return foundExit ? insideUntil : 0;
-}
-
-function isPointInTriangle(px: number, py: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): boolean {
-  const d1 = sign(px, py, x1, y1, x2, y2);
-  const d2 = sign(px, py, x2, y2, x3, y3);
-  const d3 = sign(px, py, x3, y3, x1, y1);
-  const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-  const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-  return !(hasNeg && hasPos);
-}
-
-function sign(p1x: number, p1y: number, p2x: number, p2y: number, p3x: number, p3y: number): number {
-  return (p1x - p3x) * (p2y - p3y) - (p2x - p3x) * (p1y - p3y);
-}
 

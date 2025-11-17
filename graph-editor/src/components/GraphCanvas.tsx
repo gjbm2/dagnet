@@ -54,9 +54,8 @@ import { toFlow, fromFlow } from '@/lib/transform';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
-import { groupEdgesIntoBundles, EdgeBundle, MIN_CHEVRON_THRESHOLD } from '@/lib/chevronClipping';
-import { ChevronClipPaths } from './ChevronClipPaths';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
+import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH } from '@/lib/nodeEdgeConstants';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -118,25 +117,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const lastSavedViewportRef = React.useRef<{ x: number; y: number; zoom: number } | null>(null);
   
   // ATOMIC RESTORATION: Decoration overlay state (independent of ReactFlow graph state)
-  // These flags control ONLY our overlay components (ChevronClipPaths, EdgeBeadsRenderer)
-  // They do NOT mutate ReactFlow's nodes/edges, so toggling them doesn't trigger ReactFlow re-renders
-  const [chevronsVisible, setChevronsVisible] = React.useState(true);
+  // This flag controls ONLY our overlay components (EdgeBeadsRenderer)
+  // It does NOT mutate ReactFlow's nodes/edges, so toggling it doesn't trigger ReactFlow re-renders
   const [beadsVisible, setBeadsVisible] = React.useState(true);
   const decorationRestoreTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   
   // Combined suppression flag for convenience
-  const shouldSuppressDecorations = isPanningOrZooming || !chevronsVisible || !beadsVisible;
+  const shouldSuppressDecorations = isPanningOrZooming || !beadsVisible;
   
   // DIAGNOSTIC: Log when decoration state changes
   React.useEffect(() => {
     console.log(`[PERF] Decoration state:`, {
       isPanningOrZooming,
-      chevronsVisible,
       beadsVisible,
       shouldSuppressDecorations,
       timestamp: new Date().toISOString()
     });
-  }, [isPanningOrZooming, chevronsVisible, beadsVisible, shouldSuppressDecorations]);
+  }, [isPanningOrZooming, beadsVisible, shouldSuppressDecorations]);
   
   // Track when isPanningOrZooming changes (for debugging - can remove later)
   React.useEffect(() => {
@@ -243,7 +240,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
-  const [edgeBundles, setEdgeBundles] = useState<EdgeBundle[]>([]);
   // Monotonic render frame id for correlating logs across components
   const renderFrameRef = useRef(0);
   renderFrameRef.current += 1;
@@ -319,151 +315,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [autoReroute, onNodesChangeBase]);
 
 
-  // Edge width calculation based on scaling mode
-  const MAX_WIDTH = 104; // Node height (120px) minus 2x corner radius (8px each = 16px)
-  const MIN_WIDTH = 2;
+  // Edge width/offset calculation constants
+  // Use shared constants from nodeEdgeConstants.ts
+  const MAX_WIDTH = MAX_EDGE_WIDTH;
+  const MIN_WIDTH = MIN_EDGE_WIDTH;
   
-  const calculateEdgeWidth = useCallback((edge: any, allEdges: any[], allNodes: any[]) => {
-    
-    // Get current state from store (avoid stale closures)
-    const currentGraph = graphStoreHook.getState().graph;
-
-    // UNIFIED helper: get effective probability
-    // Use edge data directly if available (most current), otherwise use store
-    const getEffectiveProbability = (e: any): number => {
-      // CRITICAL: Read from edge.data.probability first (updated by fast path)
-      // This ensures width calculations use the most current probability value
-      if (e.data?.probability !== undefined && e.data?.probability !== null) {
-        return e.data.probability;
-      }
-      
-      // Fallback: compute from graph store (for initial render or full recalculation)
-      // Always apply What-If DSL to base edges for the current layer; scenario overlays
-      // show additional layers on top but should not suppress What-If on the base.
-      const edgeId = e.id || `${e.source}->${e.target}`;
-      const shouldUseWhatIf = !!effectiveWhatIfDSL;
-      
-      return computeEffectiveEdgeProbability(
-        currentGraph,
-        edgeId,
-        shouldUseWhatIf ? { whatIfDSL: effectiveWhatIfDSL } : {},
-        undefined
-      );
-    };
-    
-    // Uniform scaling: constant width
-    if (useUniformScaling) {
-      return 10;
-    }
-    
-    // In Sankey view, use larger max width; otherwise use default
-    const effectiveMaxWidth = useSankeyView ? 384 : MAX_WIDTH;
-    
-    // In Sankey view, force global mass scaling (massGenerosity = 0)
-    const effectiveMassGenerosity = useSankeyView ? 0 : massGenerosity;
-    
-    // Find the start node for flow calculations
-      const startNode = allNodes.find(n => 
-        n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0
-      );
-      
-        const edgeProbability = getEffectiveProbability(edge);
-    
-    // If no start node, fallback to pure local mass
-      if (!startNode) {
-        const sourceEdges = allEdges.filter(e => e.source === edge.source);
-        const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
-        if (totalProbability === 0) return MIN_WIDTH;
-        const proportion = edgeProbability / totalProbability;
-        const scaledWidth = MIN_WIDTH + (proportion * (effectiveMaxWidth - MIN_WIDTH));
-        return Math.max(MIN_WIDTH, Math.min(effectiveMaxWidth, scaledWidth));
-      }
-      
-    // Helper function to calculate residual probability at a node
-    function calculateResidualProbability(targetNode: string, allEdges: any[], startNode: string): number {
-      // Build adjacency lists
-      const outgoing: { [key: string]: any[] } = {};
-      const incoming: { [key: string]: any[] } = {};
-      allEdges.forEach(e => {
-        if (!outgoing[e.source]) outgoing[e.source] = [];
-        if (!incoming[e.target]) incoming[e.target] = [];
-        outgoing[e.source].push(e);
-        incoming[e.target].push(e);
-      });
-      
-      const residualAtNode: { [key: string]: number } = {};
-      const visiting = new Set<string>();
-
-      function dfs(nodeId: string): number {
-        if (residualAtNode[nodeId] !== undefined) return residualAtNode[nodeId];
-        if (visiting.has(nodeId)) return 0; // prevent cycles
-        visiting.add(nodeId);
-
-        if (nodeId === startNode) {
-          residualAtNode[nodeId] = 1.0;
-          visiting.delete(nodeId);
-          return 1.0;
-        }
-        
-        let sumIncoming = 0;
-        const inEdges = incoming[nodeId] || [];
-        for (const inEdge of inEdges) {
-          const predId = inEdge.source;
-          const massAtPred = dfs(predId);
-          if (massAtPred <= 0) continue;
-          const outEdges = outgoing[predId] || [];
-          const denom = outEdges.reduce((acc, oe) => acc + (getEffectiveProbability(oe) || 0), 0);
-          const edgeProb = getEffectiveProbability(inEdge) || 0;
-          if (denom > 0 && edgeProb > 0) {
-            sumIncoming += massAtPred * (edgeProb / denom);
-          }
-        }
-
-        residualAtNode[nodeId] = sumIncoming;
-        visiting.delete(nodeId);
-        return sumIncoming;
-      }
-
-      return dfs(targetNode);
-    }
-    
-    // Calculate actual flow through this edge
-    const residualAtSource = calculateResidualProbability(edge.source, allEdges, startNode.id);
-    
-    if (residualAtSource === 0) return MIN_WIDTH;
-    
-    const actualMassFlowing = residualAtSource * edgeProbability;
-    
-    // Apply generosity transformation
-    // generosity = 0: pure global (actualMassFlowing^1 = actualMassFlowing)
-    // generosity = 1: pure local (actualMassFlowing^0 × local_proportion)
-    // generosity = 0.5: balanced (actualMassFlowing^0.5, compresses dynamic range)
-    
-    let displayMass: number;
-    
-    if (effectiveMassGenerosity === 0) {
-      // Pure global (Sankey): use actual mass directly
-      displayMass = actualMassFlowing;
-    } else if (effectiveMassGenerosity === 1) {
-      // Pure local: ignore upstream, just use local proportions
-      const sourceEdges = allEdges.filter(e => e.source === edge.source);
-      const totalProbability = sourceEdges.reduce((sum, e) => sum + getEffectiveProbability(e), 0);
-      if (totalProbability === 0) return MIN_WIDTH;
-      const localProportion = edgeProbability / totalProbability;
-      displayMass = localProportion;
-    } else {
-      // Blended: use power function to compress dynamic range
-      // At g=0.5, this gives sqrt(actualMassFlowing) which compresses the range
-      // while still respecting global flow
-      const power = 1 - effectiveMassGenerosity;
-      displayMass = Math.pow(actualMassFlowing, power);
-    }
-    
-    // Scale to width
-    const scaledWidth = MIN_WIDTH + (displayMass * (effectiveMaxWidth - MIN_WIDTH));
-    const finalWidth = Math.max(MIN_WIDTH, Math.min(effectiveMaxWidth, scaledWidth));
-    return finalWidth;
-  }, [useUniformScaling, massGenerosity, useSankeyView, effectiveWhatIfDSL, graphStoreHook, tabs, tabId]);
+  // NOTE: Edge width calculation moved to buildScenarioRenderEdges.ts (unified scenario pipeline)
+  // GraphCanvas only provides calculateEdgeOffsets for bundling/spacing logic
 
   // Calculate edge sort keys for curved edge stacking
   // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
@@ -537,11 +395,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
 
     // Pre-calculate scale factors per face to ensure consistency
+    // Scale factors always apply to keep bundles within MAX_WIDTH, regardless of scaling mode
     const faceScaleFactors: { [faceKey: string]: number } = {};
     
-    if (!useUniformScaling) {
-      // Calculate scale factors for each source face
-      Object.keys(edgesBySource).forEach(sourceId => {
+    // Calculate scale factors for each source face
+    Object.keys(edgesBySource).forEach(sourceId => {
         const sourceEdges = edgesBySource[sourceId];
         // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
         const sourceNode = allNodes.find(n => n.id === sourceId || n.data?.id === sourceId);
@@ -570,8 +428,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         });
       });
       
-      // Calculate scale factors for each target face
-      Object.keys(edgesByTarget).forEach(targetId => {
+    // Calculate scale factors for each target face
+    Object.keys(edgesByTarget).forEach(targetId => {
         const targetEdges = edgesByTarget[targetId];
         // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
         const targetNode = allNodes.find(n => n.id === targetId || n.data?.id === targetId);
@@ -600,9 +458,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         });
       });
       
-      // Calculate scale factors for incident faces (faces with edges from multiple sources)
-      // This handles cases where multiple source nodes connect to the same target face
-      const incidentFaces: { [faceKey: string]: any[] } = {};
+    // Calculate scale factors for incident faces (faces with edges from multiple sources)
+    // This handles cases where multiple source nodes connect to the same target face
+    const incidentFaces: { [faceKey: string]: any[] } = {};
       
       // Group all edges by target node and face
       edgesWithWidth.forEach(edge => {
@@ -625,7 +483,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         
         faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
       });
-    }
 
     // Calculate offsets for each edge (both source and target)
     const edgesWithOffsets = edgesWithWidth.map(edge => {
@@ -705,14 +562,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
             const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
             const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            // Always apply scale factors to enforce MAX_WIDTH constraint
+            const eScale = Math.min(eSourceScale, eIncidentScale);
             return sum + (width * eScale);
           }, 0);
 
           const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
           const incidentFaceKeyForThis = `incident-${edge.target}-${targetFace}`;
           const incidentScaleForThis = faceScaleFactors[incidentFaceKeyForThis] || 1.0;
-          const thisEdgeScale = !useUniformScaling ? Math.min(sourceScaleFactor, incidentScaleForThis) : 1.0;
+          // Always apply scale factors to enforce MAX_WIDTH constraint
+          const thisEdgeScale = Math.min(sourceScaleFactor, incidentScaleForThis);
           const scaledEdgeWidth = edgeWidth * thisEdgeScale;
           
           const sourceCenterInStack = sourceCumulativeWidth + (scaledEdgeWidth / 2);
@@ -728,7 +587,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
             const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
             const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            // Always apply scale factors to enforce MAX_WIDTH constraint
+            const eScale = Math.min(eSourceScale, eIncidentScale);
             return sum + (width * eScale);
           }, 0);
           
@@ -791,7 +651,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
             const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
             const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            // Always apply scale factors to enforce MAX_WIDTH constraint
+            const eScale = Math.min(eSourceScale, eIncidentScale);
             return sum + (width * eScale);
           }, 0);
 
@@ -812,7 +673,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
             const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
             const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
+            // Always apply scale factors to enforce MAX_WIDTH constraint
+            const eScale = Math.min(eSourceScale, eIncidentScale);
             return sum + (width * eScale);
           }, 0);
           
@@ -831,14 +693,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
 
       // Get the final edge width using the per-edge scale factor = min(source-face, incident target-face)
+      // Always apply scale factors to enforce MAX_WIDTH constraint
       let scaledWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-      if (!useUniformScaling) {
-        const thisIncidentScale = faceScaleFactors[`incident-${edge.target}-${targetFace}`] || 1.0;
-        const thisEdgeScale = Math.min(sourceScaleFactor, thisIncidentScale);
-        scaledWidth = scaledWidth * thisEdgeScale;
-      }
+      const thisIncidentScale = faceScaleFactors[`incident-${edge.target}-${targetFace}`] || 1.0;
+      const thisEdgeScale = Math.min(sourceScaleFactor, thisIncidentScale);
+      scaledWidth = scaledWidth * thisEdgeScale;
 
-      // Calculate bundle metadata for chevron rendering
+      // Calculate bundle metadata
       const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id);
       const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id);
       
@@ -878,7 +739,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         targetOffsetX: targetOffsetX,
         targetOffsetY: targetOffsetY,
         scaledWidth: scaledWidth,
-        // Bundle metadata for chevron rendering
+        // Bundle metadata
         sourceBundleWidth: sourceBundleWidth,
         targetBundleWidth: targetBundleWidth,
         sourceBundleSize: sortedSourceEdges.length,
@@ -1568,17 +1429,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           };
         });
         
-        // Second pass: add calculateWidth functions with updated edge data
-        const resultWithWidth = result.map(edge => ({
-          ...edge,
-          data: {
-            ...edge.data,
-            calculateWidth: () => calculateEdgeWidth(edge, result, nodes)
-          }
-        }));
-        
-        // Recalculate offsets for mass-based scaling modes
-        const edgesWithOffsets = calculateEdgeOffsets(resultWithWidth, nodes, MAX_WIDTH);
+        // Edges are updated without calculateWidth (added by buildScenarioRenderEdges)
+        const edgesWithOffsets = calculateEdgeOffsets(result, nodes, MAX_WIDTH);
         
         // Attach offsets to edge data
         return edgesWithOffsets.map(edge => ({
@@ -1590,12 +1442,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             targetOffsetX: edge.targetOffsetX,
             targetOffsetY: edge.targetOffsetY,
             scaledWidth: edge.scaledWidth,
-            // Bundle metadata for chevron rendering
+            // Bundle metadata
             sourceBundleWidth: edge.sourceBundleWidth,
             targetBundleWidth: edge.targetBundleWidth,
             sourceBundleSize: edge.sourceBundleSize,
             // Recalculate renderFallbackTargetArrow based on new bundle width
-            renderFallbackTargetArrow: !!(edge.targetBundleWidth && edge.targetBundleWidth < MIN_CHEVRON_THRESHOLD),
+            renderFallbackTargetArrow: false,
             targetBundleSize: edge.targetBundleSize,
             isFirstInSourceBundle: edge.isFirstInSourceBundle,
             isLastInSourceBundle: edge.isLastInSourceBundle,
@@ -1847,8 +1699,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
       ...edge,
       data: {
-        ...edge.data,
-        calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodesWithSelection)
+        ...edge.data
       }
     }));
     
@@ -1869,7 +1720,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       targetOffsetX: edge.targetOffsetX,
       targetOffsetY: edge.targetOffsetY,
       scaledWidth: edge.scaledWidth,
-      // Bundle metadata for chevron rendering
+      // Bundle metadata
       sourceBundleWidth: edge.sourceBundleWidth,
       targetBundleWidth: edge.targetBundleWidth,
       sourceBundleSize: edge.sourceBundleSize,
@@ -1889,30 +1740,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }));
   
-  // ATOMIC RESTORATION: Generate edge bundles independently of pan/zoom state
-  // Visibility is controlled separately by chevronsVisible flag (not by mutating edge data)
-  // NOTE: This is inside useEffect, so we can't use useMemo. We compute directly.
-  const fullBundles = (useSankeyView || NO_CHEVRONS_MODE) 
-    ? [] 
-    : groupEdgesIntoBundles(edgesWithOffsetData, nodesWithSelection);
-  
-  // Determine which bundles to actually render based on visibility state
-  const bundles = chevronsVisible ? fullBundles : [];
-  
-  // Add anchors and clipPath IDs to edges (suppress chevrons in Sankey view)
-  const edgesWithClipPaths = useSankeyView ? edgesWithOffsetData : edgesWithOffsetData.map(edge => {
-    // Find bundles for this edge
-    const sourceBundle = bundles.find(b => 
-      b.type === 'source' && b.nodeId === edge.source && b.face === edge.data.sourceFace
-    );
-    const targetBundle = bundles.find(b =>
-      b.type === 'target' && b.nodeId === edge.target && b.face === edge.data.targetFace
-    );
-    
-    // Compute anchors from node positions.
-    // EXPERIMENT: start edges ~10px "under" the node edge (inside the node box)
-    // so that when node is drawn on top, edges appear to emerge from under the node.
-    // We only do this in non-Sankey view; Sankey keeps existing behavior.
+  // Compute edge anchors (start edges under the node boundary for cleaner appearance)
+  const edgesWithAnchors = edgesWithOffsetData.map(edge => {
     const computeAnchor = (
       nodeId: string,
       face: string | undefined,
@@ -1920,25 +1749,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       offsetY: number | undefined
     ) => {
       const n: any = nodesWithSelection.find((nn: any) => nn.id === nodeId);
-      const w = n?.width ?? 120;
-      const h = n?.height ?? 120;
+      const w = n?.width ?? 100;
+      const h = n?.height ?? 100;
       const x = n?.position?.x ?? 0;
       const y = n?.position?.y ?? 0;
 
-      // Inset distance inside the node edge (pixels) for non-Sankey view
-      const INSET = useSankeyView ? 0 : 10;
-
+      // No inset - anchors at the actual edge (ReactFlow handles are there)
       if (face === 'right') {
-        return { x: x + w - INSET, y: y + h / 2 + (offsetY ?? 0) };
+        return { x: x + w, y: y + h / 2 + (offsetY ?? 0) };
       }
       if (face === 'left') {
-        return { x: x + INSET, y: y + h / 2 + (offsetY ?? 0) };
+        return { x: x, y: y + h / 2 + (offsetY ?? 0) };
       }
       if (face === 'bottom') {
-        return { x: x + w / 2 + (offsetX ?? 0), y: y + h - INSET };
+        return { x: x + w / 2 + (offsetX ?? 0), y: y + h };
       }
       // top/default
-      return { x: x + w / 2 + (offsetX ?? 0), y: y + INSET };
+      return { x: x + w / 2 + (offsetX ?? 0), y: y };
     };
     const srcAnchor = computeAnchor(edge.source, edge.data.sourceFace, edge.sourceOffsetX, edge.sourceOffsetY);
     const tgtAnchor = computeAnchor(edge.target, edge.data.targetFace, edge.targetOffsetX, edge.targetOffsetY);
@@ -1951,16 +1778,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         sourceAnchorY: srcAnchor.y,
         targetAnchorX: tgtAnchor.x,
         targetAnchorY: tgtAnchor.y,
-        sourceClipPathId: sourceBundle && sourceBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${sourceBundle.id}` : undefined,
-        targetClipPathId: targetBundle && targetBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${targetBundle.id}` : undefined,
-        renderFallbackTargetArrow: !!(targetBundle && targetBundle.bundleWidth < MIN_CHEVRON_THRESHOLD),
       }
     };
   });
     
     setNodes(nodesWithSelection);
     // Sort edges so selected edges render last (on top)
-    const sortedEdges = [...edgesWithClipPaths].sort((a, b) => {
+    const sortedEdges = [...edgesWithAnchors].sort((a, b) => {
       if (a.selected && !b.selected) return 1;  // selected edge goes after unselected
       if (!a.selected && b.selected) return -1; // unselected edge goes before selected
       return 0; // preserve order otherwise
@@ -2036,7 +1860,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     */
     
     setEdges(edgesWithScenarios);
-    setEdgeBundles(bundles);
     
     // Reset syncing flag after graph->ReactFlow sync is complete
     // Use a longer timeout to ensure all cascading updates complete
@@ -2045,6 +1868,111 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('Reset isSyncingRef to false');
     }, 100);
   }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView]);
+
+  // Compute face directions based on edge connections (for curved node outlines)
+  // Runs after edges have been auto-routed and have sourceFace/targetFace assigned
+  // Use useLayoutEffect + double-RAF for synchronous update after layout settles
+  const faceDirectionRaf1Ref = useRef<number | null>(null);
+  const faceDirectionRaf2Ref = useRef<number | null>(null);
+  
+  useLayoutEffect(() => {
+    if (useSankeyView) return; // Skip in Sankey view - nodes stay flat
+    if (edges.length === 0) return;
+    
+    // Cancel pending RAFs to coalesce updates
+    if (faceDirectionRaf1Ref.current) cancelAnimationFrame(faceDirectionRaf1Ref.current);
+    if (faceDirectionRaf2Ref.current) cancelAnimationFrame(faceDirectionRaf2Ref.current);
+    
+    faceDirectionRaf1Ref.current = requestAnimationFrame(() => {
+      faceDirectionRaf2Ref.current = requestAnimationFrame(() => {
+        // Count inbound/outbound edges per face for each node
+        const faceStatsPerNode = new Map<string, Record<string, { in: number; out: number }>>();
+    
+    edges.forEach(edge => {
+      const srcId = edge.source;
+      const tgtId = edge.target;
+      const srcFace = edge.data?.sourceFace;
+      const tgtFace = edge.data?.targetFace;
+      
+      // Initialize stats for source node
+      if (srcId && srcFace) {
+        if (!faceStatsPerNode.has(srcId)) {
+          faceStatsPerNode.set(srcId, {
+            left: { in: 0, out: 0 },
+            right: { in: 0, out: 0 },
+            top: { in: 0, out: 0 },
+            bottom: { in: 0, out: 0 },
+          });
+        }
+        faceStatsPerNode.get(srcId)![srcFace].out += 1;
+      }
+      
+      // Initialize stats for target node
+      if (tgtId && tgtFace) {
+        if (!faceStatsPerNode.has(tgtId)) {
+          faceStatsPerNode.set(tgtId, {
+            left: { in: 0, out: 0 },
+            right: { in: 0, out: 0 },
+            top: { in: 0, out: 0 },
+            bottom: { in: 0, out: 0 },
+          });
+        }
+        faceStatsPerNode.get(tgtId)![tgtFace].in += 1;
+      }
+    });
+    
+    // Classify each face direction and attach to nodes
+    setNodes(prevNodes => prevNodes.map(node => {
+      const stats = faceStatsPerNode.get(node.id);
+      if (!stats) {
+        // Node has no edges - all faces flat
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            faceDirections: {
+              left: 'flat' as const,
+              right: 'flat' as const,
+              top: 'flat' as const,
+              bottom: 'flat' as const,
+            }
+          }
+        };
+      }
+      
+      const classifyFace = (face: 'left' | 'right' | 'top' | 'bottom'): 'flat' | 'convex' | 'concave' => {
+        const s = stats[face];
+        if (!s || (s.in === 0 && s.out === 0)) return 'flat';
+        if (s.in > 0 && s.out === 0) return 'concave';
+        if (s.out > 0 && s.in === 0) return 'convex';
+        if (s.out > s.in) return 'convex';
+        if (s.in > s.out) return 'concave';
+        return 'flat'; // Tied
+      };
+      
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          faceDirections: {
+            left: classifyFace('left'),
+            right: classifyFace('right'),
+            top: classifyFace('top'),
+            bottom: classifyFace('bottom'),
+          }
+        }
+      };
+    }));
+      });
+    });
+    
+    return () => {
+      if (faceDirectionRaf1Ref.current) cancelAnimationFrame(faceDirectionRaf1Ref.current);
+      if (faceDirectionRaf2Ref.current) cancelAnimationFrame(faceDirectionRaf2Ref.current);
+      faceDirectionRaf1Ref.current = null;
+      faceDirectionRaf2Ref.current = null;
+    };
+  }, [edges, useSankeyView, setNodes]);
 
   // Force re-route when Sankey view is toggled (to re-assign faces for L/R only constraint)
   useEffect(() => {
@@ -2113,34 +2041,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [graph]);
 
-  // Update bundles whenever edges change (to keep chevrons in sync) AFTER layout settles
-  // Double-RAF coalesces interleaved updates (reroute, store sync) and avoids a transient wrong frame
-  // Skip in Sankey mode (no chevrons needed)
-  const bundleRaf1Ref = useRef<number | null>(null);
-  const bundleRaf2Ref = useRef<number | null>(null);
-  useLayoutEffect(() => {
-    if (useSankeyView) return; // No chevrons in Sankey view
-    if (edges.length === 0) return;
-    if (isDraggingNodeRef.current) return; // skip during drag; will update on next settled frame
-
-    // Cancel any pending scheduled updates to coalesce within the same tick
-    if (bundleRaf1Ref.current) cancelAnimationFrame(bundleRaf1Ref.current);
-    if (bundleRaf2Ref.current) cancelAnimationFrame(bundleRaf2Ref.current);
-    bundleRaf1Ref.current = requestAnimationFrame(() => {
-      bundleRaf2Ref.current = requestAnimationFrame(() => {
-        // Recalculate bundles from current, settled edge/node data
-        const updatedBundles = groupEdgesIntoBundles(edges, nodes);
-        setEdgeBundles(updatedBundles);
-      });
-    });
-
-    return () => {
-      if (bundleRaf1Ref.current) cancelAnimationFrame(bundleRaf1Ref.current);
-      if (bundleRaf2Ref.current) cancelAnimationFrame(bundleRaf2Ref.current);
-      bundleRaf1Ref.current = null;
-      bundleRaf2Ref.current = null;
-    };
-  }, [edges, nodes, setEdgeBundles, useSankeyView]);
   
   // Track last scaling values to detect actual changes
   const lastScalingRef = useRef({ uniform: useUniformScaling, generosity: massGenerosity });
@@ -2174,30 +2074,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }));
       
       // Second pass: add calculateWidth functions with updated edge data
-      const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
-        ...edge,
-        data: {
-          ...edge.data,
-          calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
-        }
-      }));
-      
+      // Edges are updated without calculateWidth (added by buildScenarioRenderEdges)
       // Recalculate offsets for mass-based scaling modes
-      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, MAX_WIDTH);
+      const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodes, MAX_WIDTH);
       
-    // Calculate bundles to get clipPath IDs (bundles will be synced by separate effect after edges update)
-    const tempBundles = groupEdgesIntoBundles(edgesWithOffsets, nodes);
-    
-    // Attach offsets and clipPath IDs to edge data for the ConversionEdge component
+    // Attach offsets to edge data for the ConversionEdge component
     const result = edgesWithOffsets.map(edge => {
-      // Find bundles for this edge
-      const sourceBundle = tempBundles.find(b => 
-        b.type === 'source' && b.nodeId === edge.source && b.face === edge.data?.sourceFace
-      );
-      const targetBundle = tempBundles.find(b =>
-        b.type === 'target' && b.nodeId === edge.target && b.face === edge.data?.targetFace
-      );
-      
       // Compute edge anchor positions (exact edge endpoints at node face)
       const computeAnchor = (nodeId: string, face: string | undefined, offsetX: number | undefined, offsetY: number | undefined) => {
         const n: any = nodes.find((nn: any) => nn.id === nodeId);
@@ -2223,35 +2105,31 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           targetOffsetX: edge.targetOffsetX,
           targetOffsetY: edge.targetOffsetY,
           scaledWidth: edge.scaledWidth,
-        // Anchor positions used for chevron centering from edge endpoints
-        sourceAnchorX: srcAnchor.x,
-        sourceAnchorY: srcAnchor.y,
-        targetAnchorX: tgtAnchor.x,
-        targetAnchorY: tgtAnchor.y,
-        // Bundle metadata for chevron rendering
-        sourceBundleWidth: edge.sourceBundleWidth,
-        targetBundleWidth: edge.targetBundleWidth,
-        sourceBundleSize: edge.sourceBundleSize,
-        targetBundleSize: edge.targetBundleSize,
-        isFirstInSourceBundle: edge.isFirstInSourceBundle,
-        isLastInSourceBundle: edge.isLastInSourceBundle,
-        isFirstInTargetBundle: edge.isFirstInTargetBundle,
-        isLastInTargetBundle: edge.isLastInTargetBundle,
-        sourceFace: edge.sourceFace,
-        targetFace: edge.targetFace,
-        // Chevron clipPath IDs
-        sourceClipPathId: sourceBundle && sourceBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${sourceBundle.id}` : undefined,
-        targetClipPathId: targetBundle && targetBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${targetBundle.id}` : undefined,
-        renderFallbackTargetArrow: !!(targetBundle && targetBundle.bundleWidth < MIN_CHEVRON_THRESHOLD),
+          // Anchor positions for edge endpoints
+          sourceAnchorX: srcAnchor.x,
+          sourceAnchorY: srcAnchor.y,
+          targetAnchorX: tgtAnchor.x,
+          targetAnchorY: tgtAnchor.y,
+          // Bundle metadata
+          sourceBundleWidth: edge.sourceBundleWidth,
+          targetBundleWidth: edge.targetBundleWidth,
+          sourceBundleSize: edge.sourceBundleSize,
+          targetBundleSize: edge.targetBundleSize,
+          isFirstInSourceBundle: edge.isFirstInSourceBundle,
+          isLastInSourceBundle: edge.isLastInSourceBundle,
+          isFirstInTargetBundle: edge.isFirstInTargetBundle,
+          isLastInTargetBundle: edge.isLastInTargetBundle,
+          sourceFace: edge.sourceFace,
+          targetFace: edge.targetFace,
           // Pass what-if DSL to edges
-              whatIfDSL: effectiveWhatIfDSL
+          whatIfDSL: effectiveWhatIfDSL
         }
     };
     });
     
-    // Update edges (bundles will be automatically recalculated by separate effect after this)
+    // Update edges
     setEdges(result);
-  }, [useUniformScaling, massGenerosity, edges, nodes, calculateEdgeWidth, calculateEdgeOffsets, effectiveWhatIfDSL, setEdges, setEdgeBundles]);
+  }, [useUniformScaling, massGenerosity, edges, nodes, calculateEdgeOffsets, effectiveWhatIfDSL, setEdges]);
   
   // Recalculate edge widths when what-if changes (throttled to one per frame)
   const recomputeInProgressRef = useRef(false);
@@ -2279,18 +2157,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             }
           }));
           // Second pass: add calculateWidth functions with updated edge data
-          const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
-            ...edge,
-            data: {
-              ...edge.data,
-              calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodes)
-            }
-          }));
+          // Edges are updated without calculateWidth (added by buildScenarioRenderEdges)
           const t2 = performance.now();
           // Recalculate offsets for mass-based scaling modes
           // Use effectiveMaxWidth (384 in Sankey mode, 104 otherwise)
           const effectiveMaxWidth = useSankeyView ? 384 : MAX_WIDTH;
-          const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodes, effectiveMaxWidth);
+          const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodes, effectiveMaxWidth);
           const t3 = performance.now();
           // Attach offsets to edge data for the ConversionEdge component
           return edgesWithOffsets.map(edge => ({
@@ -2302,7 +2174,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               targetOffsetX: edge.targetOffsetX,
               targetOffsetY: edge.targetOffsetY,
               scaledWidth: edge.scaledWidth,
-              // Bundle metadata for chevron rendering
+              // Bundle metadata
               sourceBundleWidth: edge.sourceBundleWidth,
               targetBundleWidth: edge.targetBundleWidth,
               sourceBundleSize: edge.sourceBundleSize,
@@ -4703,7 +4575,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // DIAGNOSTIC URL FLAGS
   const urlParams = new URLSearchParams(window.location.search);
-  const NO_CHEVRONS_MODE = urlParams.has('nochevrons');
   const MINIMAL_MODE = urlParams.has('minimal');
 
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
@@ -4810,7 +4681,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           }
           
           // ATOMIC RESTORATION: Suppress decorations immediately (overlay flags only, no graph mutation)
-          setChevronsVisible(false);
           setBeadsVisible(false);
           
           // Store initial viewport to detect actual movement
@@ -4864,7 +4734,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             decorationRestoreTimeoutRef.current = setTimeout(() => {
               const restoreT0 = performance.now();
               console.log(`[PERF] [${new Date().toISOString()}] Starting ATOMIC decoration restoration`, {
-                bundleCount: edgeBundles.length,
                 edgeCount: edges.length,
                 nodeCount: nodes.length
               });
@@ -4875,10 +4744,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               }
               
               // CRITICAL: Use flushSync to force synchronous, atomic commit
-              // This restores chevrons + beads in ONE React commit with NO interruption
+              // This restores beads in ONE React commit with NO interruption
               // ReactFlow's nodes/edges are NOT mutated, so ReactFlow doesn't re-render
               flushSync(() => {
-                setChevronsVisible(true);
                 setBeadsVisible(true);
               });
               
@@ -4920,8 +4788,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           } else {
             // No actual movement (just a click) - restore decorations immediately
             setIsPanningOrZooming(false);
-            setChevronsVisible(true);
-            setBeadsVisible(true);
+                setBeadsVisible(true);
             moveStartViewportRef.current = null;
             hasMovedRef.current = false;
           }
@@ -5291,14 +5158,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           </Panel>
         )}
         
-        {/* ATOMIC RESTORATION: Chevron clipPath definitions (overlay component) */}
-        {/* Visibility controlled by chevronsVisible flag, not by mutating graph state */}
-        {/* DIAGNOSTIC: Skip chevrons if ?nochevrons param set */}
-        {!NO_CHEVRONS_MODE && chevronsVisible && (
-          <Panel position="top-left" style={{ pointerEvents: 'none' }}>
-            <ChevronClipPaths bundles={edgeBundles} nodes={nodes} frameId={renderFrameRef.current} />
-          </Panel>
-        )}
       </ReactFlow>
       
       {/* Context Menu */}
