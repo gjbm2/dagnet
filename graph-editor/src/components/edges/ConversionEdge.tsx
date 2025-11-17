@@ -715,10 +715,47 @@ export default function ConversionEdge({
   const targetOffsetX = data?.targetOffsetX || 0;
   const targetOffsetY = data?.targetOffsetY || 0;
   
-  const adjustedSourceX = sourceX + sourceOffsetX;
-  const adjustedSourceY = sourceY + sourceOffsetY;
-  const adjustedTargetX = targetX + targetOffsetX;
-  const adjustedTargetY = targetY + targetOffsetY;
+  // Base anchor positions at the nominal node face (ReactFlow's boundary + offsets)
+  const baseSourceX = sourceX + sourceOffsetX;
+  const baseSourceY = sourceY + sourceOffsetY;
+  const baseTargetX = targetX + targetOffsetX;
+  const baseTargetY = targetY + targetOffsetY;
+
+  // For concave faces we want the rendered edge start/end points further under the node,
+  // BUT we don't want to move the control points under the node.
+  // So:
+  // - start/end of the path are pulled INSET_DEEP inside the node,
+  // - control points are computed from the base (face) positions.
+  const INSET_DEEP = data?.useSankeyView ? 0 : 20; // ~20px under the face for now
+
+  let adjustedSourceX = baseSourceX;
+  let adjustedSourceY = baseSourceY;
+  let adjustedTargetX = baseTargetX;
+  let adjustedTargetY = baseTargetY;
+
+  if (!data?.useSankeyView) {
+    // Inset source by INSET_DEEP along face normal
+    if (sourcePosition === Position.Left) {
+      adjustedSourceX += INSET_DEEP;
+    } else if (sourcePosition === Position.Right) {
+      adjustedSourceX -= INSET_DEEP;
+    } else if (sourcePosition === Position.Top) {
+      adjustedSourceY += INSET_DEEP;
+    } else if (sourcePosition === Position.Bottom) {
+      adjustedSourceY -= INSET_DEEP;
+    }
+
+    // Inset target by INSET_DEEP along face normal
+    if (targetPosition === Position.Left) {
+      adjustedTargetX += INSET_DEEP;
+    } else if (targetPosition === Position.Right) {
+      adjustedTargetX -= INSET_DEEP;
+    } else if (targetPosition === Position.Top) {
+      adjustedTargetY += INSET_DEEP;
+    } else if (targetPosition === Position.Bottom) {
+      adjustedTargetY -= INSET_DEEP;
+    }
+  }
 
   // Calculate edge path (either smooth step or custom bezier)
   const [edgePath, labelX, labelY] = React.useMemo(() => {
@@ -735,37 +772,38 @@ export default function ConversionEdge({
       });
     } else {
       // Use custom bezier path with configurable curvature
-      const dx = adjustedTargetX - adjustedSourceX;
-      const dy = adjustedTargetY - adjustedSourceY;
+      const dx = baseTargetX - baseSourceX;
+      const dy = baseTargetY - baseSourceY;
       const distance = Math.sqrt(dx * dx + dy * dy);
       // Use lower curvature in Sankey mode for less velocity at faces
       const curvature = data?.useSankeyView ? SANKEY_EDGE_CURVATURE : EDGE_CURVATURE;
       const controlDistance = distance * curvature;
 
-      // Calculate control points based on edge direction
-      let c1x = adjustedSourceX;
-      let c1y = adjustedSourceY;
-      let c2x = adjustedTargetX;
-      let c2y = adjustedTargetY;
+      // Calculate control points based on edge direction, starting from the FACE positions
+      // so they remain close to the node boundary rather than being pulled under the node.
+      let c1x = baseSourceX;
+      let c1y = baseSourceY;
+      let c2x = baseTargetX;
+      let c2y = baseTargetY;
 
       if (sourcePosition === Position.Right) {
-        c1x = adjustedSourceX + controlDistance;
+        c1x = baseSourceX + controlDistance;
       } else if (sourcePosition === Position.Left) {
-        c1x = adjustedSourceX - controlDistance;
+        c1x = baseSourceX - controlDistance;
       } else if (sourcePosition === Position.Bottom) {
-        c1y = adjustedSourceY + controlDistance;
+        c1y = baseSourceY + controlDistance;
       } else if (sourcePosition === Position.Top) {
-        c1y = adjustedSourceY - controlDistance;
+        c1y = baseSourceY - controlDistance;
       }
 
       if (targetPosition === Position.Right) {
-        c2x = adjustedTargetX + controlDistance;
+        c2x = baseTargetX + controlDistance;
       } else if (targetPosition === Position.Left) {
-        c2x = adjustedTargetX - controlDistance;
+        c2x = baseTargetX - controlDistance;
       } else if (targetPosition === Position.Bottom) {
-        c2y = adjustedTargetY + controlDistance;
+        c2y = baseTargetY + controlDistance;
       } else if (targetPosition === Position.Top) {
-        c2y = adjustedTargetY - controlDistance;
+        c2y = baseTargetY - controlDistance;
       }
 
       const path = `M ${adjustedSourceX},${adjustedSourceY} C ${c1x},${c1y} ${c2x},${c2y} ${adjustedTargetX},${adjustedTargetY}`;
@@ -1512,7 +1550,6 @@ export default function ConversionEdge({
                 fillOpacity: EDGE_OPACITY,
                 mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                 stroke: 'none',
-                zIndex: selected ? 1000 : 1,
                 transition: 'opacity 0.3s ease-in-out',
               }}
               className="react-flow__edge-path"
@@ -1535,7 +1572,6 @@ export default function ConversionEdge({
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
-                  zIndex: effectiveSelected ? 1000 : 1,
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                 }}
@@ -1556,7 +1592,6 @@ export default function ConversionEdge({
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
-                  zIndex: effectiveSelected ? 1000 : 2,
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                 }}
@@ -1578,7 +1613,6 @@ export default function ConversionEdge({
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
-                  zIndex: effectiveSelected ? 1000 : 3,
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
@@ -1602,7 +1636,6 @@ export default function ConversionEdge({
                   fill: 'none',
                   strokeLinecap: 'butt',
                   strokeLinejoin: 'miter',
-                  zIndex: effectiveSelected ? 1000 : (data?.scenarioOverlay ? -1 : 1),
                   strokeDasharray: ((data?.effectiveWeight !== undefined ? data.effectiveWeight : effectiveWeight) === 0) ? '5,5' : 'none',
                   markerEnd: data?.renderFallbackTargetArrow ? `url(#arrow-fallback-${id})` : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
@@ -1623,7 +1656,6 @@ export default function ConversionEdge({
               stroke: 'transparent',
               strokeWidth: 8,
               fill: 'none',
-              zIndex: selected ? 1000 : 1,
               transition: 'stroke-width 0.3s ease-in-out',
             }}
             className="react-flow__edge-path"
