@@ -5,6 +5,7 @@ import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
+import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH } from '@/lib/nodeEdgeConstants';
 
 interface ConversionNodeData {
   uuid: string;
@@ -37,6 +38,12 @@ interface ConversionNodeData {
   sankeyWidth?: number;
   sankeyHeight?: number;
   useSankeyView?: boolean;
+  faceDirections?: {
+    left: 'flat' | 'convex' | 'concave';
+    right: 'flat' | 'convex' | 'concave';
+    top: 'flat' | 'convex' | 'concave';
+    bottom: 'flat' | 'convex' | 'concave';
+  };
   onUpdate: (id: string, data: Partial<ConversionNodeData>) => void;
   onDelete: (id: string) => void;
   onDoubleClick?: (id: string, field: string) => void;
@@ -254,17 +261,77 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   // Determine node shape based on type
   const getNodeShape = () => {
     // Use Sankey dimensions if provided, otherwise default
-    const width = data.sankeyWidth ? `${data.sankeyWidth}px` : '100px';
-    const height = data.sankeyHeight ? `${data.sankeyHeight}px` : '100px';
+    // Keep nominal dimensions - do NOT add padding (breaks ReactFlow handle positioning)
+    const nominalWidth = data.sankeyWidth || 100;
+    const nominalHeight = data.sankeyHeight || 100;
     
     return {
       borderRadius: '0px', // Square corners for all nodes (for now)
-      width,
-      height
+      width: `${nominalWidth}px`,
+      height: `${nominalHeight}px`
     };
   };
   
   const nodeShape = getNodeShape();
+  
+  // Compute curved outline path for non-Sankey nodes
+  const outlinePathD = useMemo(() => {
+    if (data.useSankeyView) return null; // Sankey uses CSS rendering
+    
+    // Use nominal dimensions (before padding)
+    const nominalW = data.sankeyWidth || 100;
+    const nominalH = data.sankeyHeight || 100;
+    const w = nominalW;
+    const h = nominalH;
+    const faces = data.faceDirections ?? {
+      left: 'flat' as const,
+      right: 'flat' as const,
+      top: 'flat' as const,
+      bottom: 'flat' as const,
+    };
+    
+    const buildFaceSegment = (face: 'left' | 'right' | 'top' | 'bottom', direction: 'flat' | 'convex' | 'concave'): string => {
+      if (direction === 'flat') {
+        // Straight line to the next corner
+        if (face === 'left') return `L 0,${h}`; // top-left to bottom-left
+        if (face === 'bottom') return `L ${w},${h}`; // bottom-left to bottom-right
+        if (face === 'right') return `L ${w},0`; // bottom-right to top-right
+        if (face === 'top') return `L 0,0`; // top-right to top-left
+      }
+      
+      const depth = direction === 'convex' ? CONVEX_DEPTH : -CONCAVE_DEPTH;
+      
+      // Quadratic Bezier: control point is midway along the face, offset by depth perpendicular to face
+      if (face === 'left') {
+        // From (0, 0) to (0, h), control at (-depth, h/2)
+        return `Q ${-depth},${h/2} 0,${h}`;
+      }
+      if (face === 'bottom') {
+        // From (0, h) to (w, h), control at (w/2, h + depth)
+        return `Q ${w/2},${h + depth} ${w},${h}`;
+      }
+      if (face === 'right') {
+        // From (w, h) to (w, 0), control at (w + depth, h/2)
+        return `Q ${w + depth},${h/2} ${w},0`;
+      }
+      if (face === 'top') {
+        // From (w, 0) to (0, 0), control at (w/2, -depth)
+        return `Q ${w/2},${-depth} 0,0`;
+      }
+      
+      return '';
+    };
+    
+    // Build full path: start top-left, clockwise
+    let path = `M 0,0`;
+    path += ' ' + buildFaceSegment('left', faces.left);
+    path += ' ' + buildFaceSegment('bottom', faces.bottom);
+    path += ' ' + buildFaceSegment('right', faces.right);
+    path += ' ' + buildFaceSegment('top', faces.top);
+    path += ' Z';
+    
+    return path;
+  }, [data.useSankeyView, data.faceDirections, nodeShape.width, nodeShape.height]);
   
   // Get case node color (from layout, no default)
   const caseNodeColor = isCaseNode ? (data.layout?.color || null) : null;
@@ -297,17 +364,18 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       style={{
+        position: 'relative',
         padding: '8px',
-        border: selected ? '5px solid #333' : // Thick dark grey border for all selected nodes
+        border: outlinePathD ? 'none' : (selected ? '5px solid #333' : // Thick dark grey border for all selected nodes
                 ((probabilityMass && !probabilityMass.isComplete) || (conditionalValidation?.hasProbSumError)) ? '2px solid #ff6b6b' : // Red border for probability conservation errors
                 isCaseNode ? `2px solid ${caseNodeColor || '#7C3AED'}` :
-                '2px solid #ddd',
+                '2px solid #ddd'),
         ...nodeShape, // Apply shape-specific styles
-        background: isCaseNode ? (caseNodeColor || '#e5e7eb') : '#fff', // Case nodes: custom color, all others white
+        background: outlinePathD ? 'transparent' : (isCaseNode ? (caseNodeColor || '#e5e7eb') : '#fff'), // SVG handles fill if outline present
         color: isCaseNode && caseNodeColor ? '#fff' : '#333', // White text on colored case nodes for readability
         textAlign: 'center',
         cursor: 'pointer',
-        boxShadow: (() => {
+        boxShadow: outlinePathD ? 'none' : (() => {
           // Canvas background color from GraphCanvas ReactFlow style
           const canvasColor = '#f8fafc';
 
@@ -352,7 +420,117 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         boxSizing: 'border-box'
       }}
     >
+      {/* SVG overlay for curved outline (non-Sankey view only) */}
+      {outlinePathD && (() => {
+        const w = parseFloat(nodeShape.width) || 100;
+        const h = parseFloat(nodeShape.height) || 100;
+        const SHADOW_BLUR = selected ? 4 : 2;
+        const SHADOW_OFFSET = selected ? 4 : 2;
+        // Extend viewBox to accommodate convex bulges and drop shadow
+        const padding = CONVEX_DEPTH + SHADOW_BLUR + SHADOW_OFFSET;
+        const viewBoxX = -padding;
+        const viewBoxY = -padding;
+        const viewBoxW = w + 2 * padding;
+        const viewBoxH = h + 2 * padding;
+        return (
+          <svg
+            width="100%"
+            height="100%"
+            viewBox={`${viewBoxX} ${viewBoxY} ${viewBoxW} ${viewBoxH}`}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              pointerEvents: 'none',
+              zIndex: 0,
+              overflow: 'visible',
+            }}
+          >
+          <defs>
+            <filter id={`node-shadow-${data.id}`}>
+              <feDropShadow
+                dx="0"
+                dy={selected ? 4 : 2}
+                stdDeviation={selected ? 4 : 2}
+                floodColor={
+                  (probabilityMass && !probabilityMass.isComplete) || conditionalValidation?.hasProbSumError
+                    ? 'rgba(255,107,107,0.3)'
+                    : selected
+                      ? 'rgba(51,51,51,0.4)'
+                      : 'rgba(0,0,0,0.1)'
+                }
+              />
+            </filter>
+            {/* Inner glow filters for start/terminal nodes */}
+            {isStartNode && (
+              <filter id={`node-start-glow-${data.id}`}>
+                <feGaussianBlur in="SourceAlpha" stdDeviation="10" />
+                <feFlood floodColor="rgba(191, 219, 254, 0.6)" />
+                <feComposite in2="SourceAlpha" operator="in" />
+                <feMerge>
+                  <feMergeNode />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            )}
+            {isTerminalNode && (
+              <filter id={`node-terminal-glow-${data.id}`}>
+                <feGaussianBlur in="SourceAlpha" stdDeviation="10" />
+                <feFlood floodColor={
+                  data.outcome_type === 'success' ? 'rgba(187, 247, 208, 0.6)'
+                    : data.outcome_type === 'failure' ? 'rgba(254, 202, 202, 0.6)'
+                    : 'rgba(229, 231, 235, 0.6)'
+                } />
+                <feComposite in2="SourceAlpha" operator="in" />
+                <feMerge>
+                  <feMergeNode />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            )}
+          </defs>
+          
+          {/* Halo (edge masking) - drawn first as clipping mask for edges */}
+          <path
+            d={outlinePathD}
+            fill="none"
+            stroke="#f8fafc"
+            strokeWidth={HALO_WIDTH}
+          />
+          
+          {/* Shadow group: fill + border (casts shadow from the actual outline, on top of halo) */}
+          <g filter={`url(#node-shadow-${data.id})`}>
+            {/* Fill with inner glow filter if applicable */}
+            <path
+              d={outlinePathD}
+              fill={isCaseNode ? (caseNodeColor || '#e5e7eb') : '#fff'}
+              filter={
+                isStartNode ? `url(#node-start-glow-${data.id})`
+                  : isTerminalNode ? `url(#node-terminal-glow-${data.id})`
+                  : undefined
+              }
+            />
+            
+            {/* Border */}
+            <path
+              d={outlinePathD}
+              fill="none"
+              stroke={
+                selected ? '#333'
+                  : (probabilityMass && !probabilityMass.isComplete) || conditionalValidation?.hasProbSumError
+                    ? '#ff6b6b'
+                    : isCaseNode
+                      ? (caseNodeColor || '#7C3AED')
+                      : '#ddd'
+              }
+              strokeWidth={selected ? 5 : 2}
+            />
+          </g>
+          </svg>
+        );
+      })()}
+      
       {/* Input handles - all sides (or only left/right in Sankey view) */}
+      {/* Use ReactFlow's default positioning, just ensure grabbability */}
       <Handle 
         type="target" 
         position={Position.Left} 
@@ -362,7 +540,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
-          transition: 'opacity 0.2s ease'
+          transition: 'opacity 0.2s ease',
+          zIndex: 10,
+          pointerEvents: 'auto'
         }} 
       />
       {!data.useSankeyView && (
@@ -375,7 +555,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             width: '8px', 
             height: '8px',
             opacity: showHandles ? 1 : 0,
-            transition: 'opacity 0.2s ease'
+            transition: 'opacity 0.2s ease',
+            zIndex: 10,
+            pointerEvents: 'auto'
           }} 
         />
       )}
@@ -388,7 +570,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
-          transition: 'opacity 0.2s ease'
+          transition: 'opacity 0.2s ease',
+          zIndex: 10,
+          pointerEvents: 'auto'
         }} 
       />
       {!data.useSankeyView && (
@@ -401,19 +585,24 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             width: '8px', 
             height: '8px',
             opacity: showHandles ? 1 : 0,
-            transition: 'opacity 0.2s ease'
+            transition: 'opacity 0.2s ease',
+            zIndex: 10,
+            pointerEvents: 'auto'
           }} 
         />
       )}
       
       {/* Content wrapper */}
       <div style={{
+        position: 'relative',
+        zIndex: 1,
         width: '100%',
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'center',
-        alignItems: 'center'
+        alignItems: 'center',
+        pointerEvents: 'none' // Allow handles to be clickable
       }}>
         {/* Terminal state symbols */}
         
@@ -432,7 +621,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '3px'
+            gap: '3px',
+            pointerEvents: 'auto' // Re-enable pointer events for interactive content
           }}
           onDoubleClick={handleDoubleClick}
           title="Double-click to edit in properties panel"
@@ -512,7 +702,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           height: '8px',
           borderRadius: '50%',
           backgroundColor: getStatusColor(data.case.status),
-          border: '1px solid #FFFFFF'
+          border: '1px solid #FFFFFF',
+          zIndex: 15,
+          pointerEvents: 'none'
         }} title={`Status: ${data.case.status}`} />
       )}
 
@@ -523,7 +715,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           top: '4px',
           left: '4px',
           fontSize: '16px',
-          animation: 'pulse 2s infinite'
+          animation: 'pulse 2s infinite',
+          zIndex: 15,
+          pointerEvents: 'none'
         }} title={`What-If Mode: ${whatIfAnalysis.selectedVariant} @ 100%`}>
           🔬
         </div>
@@ -545,7 +739,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           fontSize: '9px',
           color: '#fff',
           fontWeight: 'bold',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+          zIndex: 15,
+          pointerEvents: 'none'
         }} title="Start Node">
           ▶
         </div>
@@ -567,13 +763,16 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           fontSize: '10px',
           color: '#fff',
           fontWeight: 'bold',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+          zIndex: 15,
+          pointerEvents: 'none'
         }} title={`End Node: ${data.outcome_type || 'unknown'}`}>
           ■
         </div>
       )}
       
       {/* Output handles - all sides (or only left/right in Sankey view) */}
+      {/* Use ReactFlow's default positioning, just ensure grabbability */}
       <Handle 
         type="source" 
         position={Position.Left} 
@@ -583,7 +782,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
-          transition: 'opacity 0.2s ease'
+          transition: 'opacity 0.2s ease',
+          zIndex: 10,
+          pointerEvents: 'auto'
         }} 
       />
       {!data.useSankeyView && (
@@ -596,7 +797,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             width: '8px', 
             height: '8px',
             opacity: showHandles ? 1 : 0,
-            transition: 'opacity 0.2s ease'
+            transition: 'opacity 0.2s ease',
+            zIndex: 10,
+            pointerEvents: 'auto'
           }} 
         />
       )}
@@ -609,7 +812,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
-          transition: 'opacity 0.2s ease'
+          transition: 'opacity 0.2s ease',
+          zIndex: 10,
+          pointerEvents: 'auto'
         }} 
       />
       {!data.useSankeyView && (
@@ -622,7 +827,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             width: '8px', 
             height: '8px',
             opacity: showHandles ? 1 : 0,
-            transition: 'opacity 0.2s ease'
+            transition: 'opacity 0.2s ease',
+            zIndex: 10,
+            pointerEvents: 'auto'
           }} 
         />
       )}
@@ -643,7 +850,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             fontSize: '12px',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center'
+            justifyContent: 'center',
+            zIndex: 20, // Above handles
+            pointerEvents: 'auto'
           }}
           onClick={handleDelete}
           title="Delete node"
