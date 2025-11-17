@@ -426,11 +426,24 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const highlightDepth = isCurrent && highlightMetadata ? (highlightMetadata.edgeDepthMap.get(edge.id) || 0) : 0;
       const isSingleNodeHighlight = isCurrent && highlightMetadata ? highlightMetadata.isSingleNodeSelection : false;
       
-      // Extract old data, but explicitly remove stale width fields
+      // Extract old data, but explicitly remove stale width fields from data
       const { scaledWidth: _oldScaledWidth, calculateWidth: _oldCalculateWidth, ...cleanEdgeData } = edge.data || {};
       
+      // CRITICAL: Also remove top-level scaledWidth from calculateEdgeOffsets (bundling width)
+      const { scaledWidth: _topLevelScaledWidth, ...cleanEdge } = edge as any;
+      
+      // Diagnostic: Log removal of stale widths
+      if (edge.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
+        console.log(`[buildScenarioRenderEdges] CLEANED EDGE ${edge.id}:`, {
+          scenarioId,
+          hadTopLevelScaledWidth: _topLevelScaledWidth,
+          hadDataScaledWidth: _oldScaledWidth,
+          preScaled,
+        });
+      }
+      
       return {
-        ...edge,
+        ...cleanEdge,
         // For 'current': reuse base edge ID (preserves ReactFlow selection/interaction)
         // For others: use prefixed ID to avoid conflicts
         id: isCurrent ? edge.id : `scenario-overlay__${scenarioId}__${edge.id}`,
@@ -523,8 +536,9 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         });
       }
       
-      renderEdges.push({
+      const finalEdge = {
         ...oe,
+        scaledWidth: correctWidth,  // CRITICAL: Override top-level scaledWidth from calculateEdgeOffsets
         data: {
           ...oe.data,
           sourceOffsetX: oe.sourceOffsetX,
@@ -544,7 +558,19 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           sourceFace: oe.sourceFace,
           targetFace: oe.targetFace,
         },
-      } as any);
+      } as any;
+      
+      // Diagnostic: Verify the final edge has correct width at both levels
+      if (oe.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
+        console.log(`[buildScenarioRenderEdges] FINAL EDGE for ${oe.id}:`, {
+          scenarioId,
+          topLevelScaledWidth: finalEdge.scaledWidth,
+          dataScaledWidth: finalEdge.data?.scaledWidth,
+          match: finalEdge.scaledWidth === finalEdge.data?.scaledWidth,
+        });
+      }
+      
+      renderEdges.push(finalEdge);
     });
   }
 
