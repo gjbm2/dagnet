@@ -12,19 +12,25 @@
 // ===== NODE GEOMETRY =====
 
 /** Depth of convex bulge on outbound node faces (pixels) */
-export const CONVEX_DEPTH = 12;
+export const CONVEX_DEPTH = 15;
 
 /** Depth of concave indentation on inbound node faces (pixels) */
-export const CONCAVE_DEPTH = 12;
+export const CONCAVE_DEPTH = 15;
 
 /** Width of halo stroke around nodes for edge masking (pixels) */
 export const HALO_WIDTH = 20;
 
 /** Default nominal node width (pixels, before any padding) */
-export const DEFAULT_NODE_WIDTH = 100;
+export const DEFAULT_NODE_WIDTH = 110;
 
 /** Default nominal node height (pixels, before any padding) */
-export const DEFAULT_NODE_HEIGHT = 100;
+export const DEFAULT_NODE_HEIGHT = 110;
+
+/** Minimum node height in Sankey view (pixels) */
+export const MIN_NODE_HEIGHT = 60;
+
+/** Maximum node height in Sankey view (pixels) */
+export const MAX_NODE_HEIGHT = 400;
 
 /** Node content padding (pixels) */
 export const NODE_PADDING = 8;
@@ -36,7 +42,7 @@ export const NODE_PADDING = 8;
  * Based on visible content area inside node padding:
  * DEFAULT_NODE_HEIGHT (100px) - 2 * NODE_PADDING (16px) = 84px
  */
-export const MAX_EDGE_WIDTH = 84;
+export const MAX_EDGE_WIDTH = 88;
 
 /** Minimum edge width (pixels) */
 export const MIN_EDGE_WIDTH = 2;
@@ -57,7 +63,7 @@ export const EDGE_INITIAL_OFFSET = 0;
  * Additional spacing between visible edge start and first bead (pixels)
  * This is added ON TOP of visibleStartOffset
  */
-export const BEAD_MARKER_DISTANCE = 0;
+export const BEAD_MARKER_DISTANCE = 5;
 
 /** Spacing between beads along the edge path (pixels) */
 export const BEAD_SPACING = 20;
@@ -65,11 +71,31 @@ export const BEAD_SPACING = 20;
 // ===== SANKEY MODE =====
 
 /** Maximum edge width in Sankey view (pixels) */
-export const SANKEY_MAX_EDGE_WIDTH = 384;
+export const SANKEY_MAX_EDGE_WIDTH = 400;
 
 /** Edge curvature for normal view (0-1, higher = more curve) */
 export const EDGE_CURVATURE = 0.5;
 
 /** Edge curvature for Sankey view (0-1, lower = more horizontal) */
 export const SANKEY_EDGE_CURVATURE = 0.3;
+
+// ===== TYPOGRAPHY =====
+
+/** Font size for node labels (pixels) */
+export const NODE_LABEL_FONT_SIZE = 10;
+
+/** Font size for node secondary text (pixels) */
+export const NODE_SECONDARY_FONT_SIZE = 8;
+
+/** Font size for node small text/badges (pixels) */
+export const NODE_SMALL_FONT_SIZE = 8;
+
+/** Font size for case node text (pixels) */
+export const CASE_NODE_FONT_SIZE = 10;
+
+/** Font size for edge tooltips and context menus (pixels) - note: edge labels are not rendered, only tooltips */
+export const EDGE_LABEL_FONT_SIZE = 12;
+
+/** Font size for edge bead text (pixels) */
+export const BEAD_FONT_SIZE = 10;
 
