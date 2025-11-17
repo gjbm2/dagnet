@@ -426,6 +426,9 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const highlightDepth = isCurrent && highlightMetadata ? (highlightMetadata.edgeDepthMap.get(edge.id) || 0) : 0;
       const isSingleNodeHighlight = isCurrent && highlightMetadata ? highlightMetadata.isSingleNodeSelection : false;
       
+      // Extract old data, but explicitly remove stale width fields
+      const { scaledWidth: _oldScaledWidth, calculateWidth: _oldCalculateWidth, ...cleanEdgeData } = edge.data || {};
+      
       return {
         ...edge,
         // For 'current': reuse base edge ID (preserves ReactFlow selection/interaction)
@@ -435,7 +438,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         selectable: isCurrent,
         reconnectable: isCurrent,  // Enable reconnection for 'current' only
         data: {
-          ...edge.data,
+          ...cleanEdgeData,  // Spread CLEAN data without old scaledWidth
           scenarioOverlay: !isCurrent,  // 'current' is NOT an overlay, it's the live layer
           scenarioColor: color,
           strokeOpacity: overlayOpacity,
@@ -446,7 +449,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           scenarioParams: edgeParams,
           probability: edgeParams?.p?.mean ?? edge.data?.probability ?? 0.5,
           stdev: edgeParams?.p?.stdev ?? edge.data?.stdev,
-          calculateWidth: () => preScaled,
+          calculateWidth: () => preScaled,  // NEW fresh width function - no old scaledWidth to conflict!
           effectiveWeight: edgeProb,
           renderFallbackTargetArrow: preScaled < MIN_CHEVRON_THRESHOLD,
           // STEP 4: Apply highlight flags to 'current' edges
@@ -474,14 +477,51 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       };
     });
 
+    // Diagnostic: Check draft edges before offset calculation
+    if (draftOverlayEdges[0] && (scenarioId === 'current' || layerIndex === 0)) {
+      const firstDraft = draftOverlayEdges[0];
+      console.log(`[buildScenarioRenderEdges] BEFORE calculateEdgeOffsets for ${firstDraft.id}:`, {
+        scenarioId,
+        hasData: !!firstDraft.data,
+        hasCalculateWidth: !!firstDraft.data?.calculateWidth,
+        dataScaledWidth: firstDraft.data?.scaledWidth,
+        topLevelScaledWidth: (firstDraft as any).scaledWidth,
+        dataKeys: firstDraft.data ? Object.keys(firstDraft.data) : [],
+      });
+    }
+    
     // Compute offsets using the same logic as base
     const overlayWithOffsets = calculateEdgeOffsets(draftOverlayEdges, rfNodes, effectiveMaxWidth);
+    
+    // Diagnostic: Check what calculateEdgeOffsets returns
+    if (overlayWithOffsets[0] && (scenarioId === 'current' || layerIndex === 0)) {
+      const firstWithOffsets = overlayWithOffsets[0];
+      console.log(`[buildScenarioRenderEdges] AFTER calculateEdgeOffsets for ${firstWithOffsets.id}:`, {
+        scenarioId,
+        hasData: !!firstWithOffsets.data,
+        hasCalculateWidth: !!firstWithOffsets.data?.calculateWidth,
+        dataScaledWidth: firstWithOffsets.data?.scaledWidth,
+        topLevelScaledWidth: (firstWithOffsets as any).scaledWidth,
+        dataKeys: firstWithOffsets.data ? Object.keys(firstWithOffsets.data) : [],
+      });
+    }
 
     // Attach offset data
     overlayWithOffsets.forEach(oe => {
       // CRITICAL: Use the width we computed from probabilities (via calculateWidth),
       // NOT the width that calculateEdgeOffsets computed (which is just for bundling geometry)
+      const hasCalculateWidth = !!oe.data?.calculateWidth;
       const correctWidth = oe.data?.calculateWidth ? oe.data.calculateWidth() : oe.scaledWidth;
+      
+      if (oe.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
+        console.log(`[buildScenarioRenderEdges] OUTPUTTING width for ${oe.id}:`, {
+          scenarioId,
+          hasCalculateWidth,
+          correctWidth,
+          oeScaledWidth: oe.scaledWidth,
+          oeDataKeys: oe.data ? Object.keys(oe.data) : [],
+        });
+      }
       
       renderEdges.push({
         ...oe,
