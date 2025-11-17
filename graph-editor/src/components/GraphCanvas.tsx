@@ -29,23 +29,18 @@ import ConversionNode from './nodes/ConversionNode';
 import ConversionEdge from './edges/ConversionEdge';
 import ScenarioOverlayRenderer from './ScenarioOverlayRenderer';
 
-// DIAGNOSTIC: Disable edge interactivity to test CanvasInner commit behavior
-// ?noninteractiveedges URL param
-const NO_INTERACTIVE_EDGES_MODE = new URLSearchParams(window.location.search).has('noninteractiveedges');
+// ATOMIC RESTORATION: Context for passing decoration visibility to edges without mutating edge.data
+interface DecorationVisibilityContextType {
+  beadsVisible: boolean;
+  isPanning: boolean;
+}
 
-// ATOMIC RESTORATION: Module-level decoration visibility state
-// This is read directly by edges WITHOUT triggering React re-renders
-// When we toggle these flags, edges will use the new values on their NEXT render,
-// but we don't force them to re-render just because the flags changed
-export const decorationVisibilityState = {
+const DecorationVisibilityContext = createContext<DecorationVisibilityContextType>({ 
   beadsVisible: true,
   isPanning: false
-};
+});
 
-// Accessor for edges to read current decoration visibility
-export function getDecorationVisibility() {
-  return decorationVisibilityState;
-}
+export const useDecorationVisibility = () => useContext(DecorationVisibilityContext);
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { NodeContextMenu } from './NodeContextMenu';
@@ -113,8 +108,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId }: GraphCanvasProps) {
-  console.log('[CanvasInner] RENDER called');
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId }: GraphCanvasProps) {
   // Track if user is panning/zooming to disable beads during interaction
   const [isPanningOrZooming, setIsPanningOrZooming] = React.useState(false);
   const panTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -129,14 +123,6 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
   const [chevronsVisible, setChevronsVisible] = React.useState(true);
   const [beadsVisible, setBeadsVisible] = React.useState(true);
   const decorationRestoreTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
-  
-  // Track decoration visibility in refs for closure access
-  const chevronsVisibleRef = React.useRef(chevronsVisible);
-  const beadsVisibleRef = React.useRef(beadsVisible);
-  React.useEffect(() => {
-    chevronsVisibleRef.current = chevronsVisible;
-    beadsVisibleRef.current = beadsVisible;
-  }, [chevronsVisible, beadsVisible]);
   
   // Combined suppression flag for convenience
   const shouldSuppressDecorations = isPanningOrZooming || !chevronsVisible || !beadsVisible;
@@ -271,23 +257,14 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
   // Keep a stable reference to nodes map for use in effects that shouldn't depend on nodes array reference
   const nodesMapRef = useRef(new Map<string, any>());
   useEffect(() => {
-    const atomicRestore = (window as any).__DAGNET_ATOMIC_RESTORE_ACTIVE;
     if (prevNodesRef.current !== nodes) {
       nodesChangeCountRef.current++;
-      console.log(`[ARRAY_CHANGE] NODES changed (count: ${nodesChangeCountRef.current})`, {
-        duringAtomicRestore: atomicRestore,
-        timestamp: new Date().toISOString()
-      });
       prevNodesRef.current = nodes;
       // Update nodes map ref
       nodesMapRef.current = new Map(nodes.map(n => [n.id, n]));
     }
     if (prevEdgesRef.current !== edges) {
       edgesChangeCountRef.current++;
-      console.log(`[ARRAY_CHANGE] EDGES changed (count: ${edgesChangeCountRef.current})`, {
-        duringAtomicRestore: atomicRestore,
-        timestamp: new Date().toISOString()
-      });
       prevEdgesRef.current = edges;
     }
   }, [nodes, edges]);
@@ -1430,12 +1407,6 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
   // Sync FROM graph TO ReactFlow when graph changes externally
   useEffect(() => {
     if (!graph) return;
-    
-    // ATOMIC RESTORATION: Skip sync during atomic restore window to avoid edge mutations
-    if ((window as any).__DAGNET_ATOMIC_RESTORE_ACTIVE) {
-      console.log('[ATOMIC GUARD] Graph→ReactFlow sync blocked during atomic restore');
-      return;
-    }
     
     // Allow Graph→ReactFlow sync during drag - the fast path will only update edge data, not positions
     
@@ -4775,9 +4746,8 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
     useSankeyView,
     calculateEdgeOffsets,
     tabId,
-    highlightMetadata  // Re-render when highlight changes
-    // ATOMIC RESTORATION: Do NOT depend on shouldSuppressDecorations
-    // Decoration visibility is now controlled via Context, not edge.data mutations
+    highlightMetadata,  // Re-render when highlight changes
+    shouldSuppressDecorations  // PERF: Re-render when suppression state changes
   ]);
 
   // STEP 3: renderEdges is now the ONLY edge source; old base/overlay split removed
@@ -4797,16 +4767,23 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabId]);
 
+  // ATOMIC RESTORATION: Memoize decoration visibility context value for stability
+  const decorationVisibilityValue = React.useMemo(
+    () => ({ beadsVisible, isPanning: isPanningOrZooming }),
+    [beadsVisible, isPanningOrZooming]
+  );
+
   return (
-    <div ref={reactFlowWrapperRef} style={{ height: '100%', position: 'relative' }}>
-      <ReactFlow
-        nodes={nodes}
-        edges={renderEdges}
+    <DecorationVisibilityContext.Provider value={decorationVisibilityValue}>
+      <div ref={reactFlowWrapperRef} style={{ height: '100%', position: 'relative' }}>
+        <ReactFlow
+          nodes={nodes}
+          edges={renderEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
-        onConnect={NO_INTERACTIVE_EDGES_MODE ? undefined : onConnect}
-        onReconnect={NO_INTERACTIVE_EDGES_MODE ? undefined : onEdgeUpdate}
-        onSelectionChange={NO_INTERACTIVE_EDGES_MODE ? undefined : onSelectionChange}
+        onConnect={onConnect}
+        onReconnect={onEdgeUpdate}
+        onSelectionChange={onSelectionChange}
         onMoveStart={(_, viewport) => {
           // Cancel any pending decoration restoration
           if (decorationRestoreTimeoutRef.current) {
@@ -4814,12 +4791,7 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
             decorationRestoreTimeoutRef.current = null;
           }
           
-          // ATOMIC RESTORATION: Suppress decorations immediately
-          // Update module-level state (doesn't trigger edge re-renders)
-          decorationVisibilityState.beadsVisible = false;
-          decorationVisibilityState.isPanning = true;
-          
-          // Update React state for ChevronClipPaths rendering
+          // ATOMIC RESTORATION: Suppress decorations immediately (overlay flags only, no graph mutation)
           setChevronsVisible(false);
           setBeadsVisible(false);
           
@@ -4884,18 +4856,13 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
                 (window as any).__DAGNET_ATOMIC_RESTORE_ACTIVE = true;
               }
               
-              // CRITICAL: Update module-level state first (no React re-renders)
-              // Then use flushSync to update React state for overlay components only
-              console.log('[PERF] About to restore decorations - updating module state first');
-              decorationVisibilityState.beadsVisible = true;
-              decorationVisibilityState.isPanning = false;
-              
-              console.log('[PERF] Now flushSync to update React overlay state');
+              // CRITICAL: Use flushSync to force synchronous, atomic commit
+              // This restores chevrons + beads in ONE React commit with NO interruption
+              // ReactFlow's nodes/edges are NOT mutated, so ReactFlow doesn't re-render
               flushSync(() => {
                 setChevronsVisible(true);
                 setBeadsVisible(true);
               });
-              console.log('[PERF] flushSync returned - decoration flags now set');
               
               // Clear atomic window flag immediately after flushSync completes
               if (typeof window !== 'undefined') {
@@ -4904,16 +4871,6 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
               
               const restoreT1 = performance.now();
               console.log(`[PERF] ATOMIC decoration restoration completed in ${(restoreT1 - restoreT0).toFixed(2)}ms`);
-              
-              // Log actual current state (using refs to avoid closure staleness)
-              console.log('[PERF] Post-restoration state check:', {
-                chevronsVisibleState: chevronsVisible,
-                beadsVisibleState: beadsVisible,
-                chevronsVisibleRef: chevronsVisibleRef.current,
-                beadsVisibleRef: beadsVisibleRef.current,
-                bundleCount: edgeBundles.length,
-                moduleState: decorationVisibilityState
-              });
               
               decorationRestoreTimeoutRef.current = null;
               
@@ -4945,44 +4902,29 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
           } else {
             // No actual movement (just a click) - restore decorations immediately
             setIsPanningOrZooming(false);
-            
-            // Update module-level state
-            decorationVisibilityState.beadsVisible = true;
-            decorationVisibilityState.isPanning = false;
-            
-            // Update React state for overlays
             setChevronsVisible(true);
             setBeadsVisible(true);
-            
             moveStartViewportRef.current = null;
             hasMovedRef.current = false;
           }
         }}
         onNodeDragStart={onNodeDragStart} 
         onNodeDragStop={onNodeDragStop}
-        onNodeDoubleClick={
-          NO_INTERACTIVE_EDGES_MODE
-            ? undefined
-            : (event, node) => {
-                event.preventDefault();
-                // Select the node first, then open Properties panel
-                onSelectedNodeChange(node.id);
-                window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
-              }
-        }
-        onEdgeDoubleClick={
-          NO_INTERACTIVE_EDGES_MODE
-            ? undefined
-            : (event, edge) => {
-                event.preventDefault();
-                // Select the edge first, then open Properties panel
-                onSelectedEdgeChange(edge.id);
-                window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
-              }
-        }
-        onPaneContextMenu={NO_INTERACTIVE_EDGES_MODE ? undefined : onPaneContextMenu}
-        onNodeContextMenu={NO_INTERACTIVE_EDGES_MODE ? undefined : onNodeContextMenu}
-        onEdgeContextMenu={NO_INTERACTIVE_EDGES_MODE ? undefined : onEdgeContextMenu}
+        onNodeDoubleClick={(event, node) => {
+          event.preventDefault();
+          // Select the node first, then open Properties panel
+          onSelectedNodeChange(node.id);
+          window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+        }}
+        onEdgeDoubleClick={(event, edge) => {
+          event.preventDefault();
+          // Select the edge first, then open Properties panel
+          onSelectedEdgeChange(edge.id);
+          window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+        }}
+        onPaneContextMenu={onPaneContextMenu}
+        onNodeContextMenu={onNodeContextMenu}
+        onEdgeContextMenu={onEdgeContextMenu}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         connectionMode={ConnectionMode.Loose}
@@ -4991,9 +4933,9 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
         selectNodesOnDrag={false}
         selectionKeyCode={['Meta', 'Ctrl']}
         panActivationKeyCode={null}
-        nodesDraggable={!NO_INTERACTIVE_EDGES_MODE}
-        nodesConnectable={!NO_INTERACTIVE_EDGES_MODE}
-        elementsSelectable={!NO_INTERACTIVE_EDGES_MODE}
+        nodesDraggable={true}
+        nodesConnectable
+        elementsSelectable
         reconnectRadius={40}
         edgeUpdaterRadius={40}
         onlyRenderVisibleElements={false}
@@ -5522,19 +5464,7 @@ const CanvasInner = React.memo(function CanvasInner({ onSelectedNodeChange, onSe
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </DecorationVisibilityContext.Provider>
   );
-}, (prevProps, nextProps) => {
-  // Custom comparison: only re-render if actual props change
-  // This prevents CanvasInner from re-rendering when the parent (GraphCanvas wrapper) re-renders
-  return (
-    prevProps.tabId === nextProps.tabId &&
-    prevProps.activeTabId === nextProps.activeTabId &&
-    prevProps.whatIfDSL === nextProps.whatIfDSL &&
-    prevProps.onSelectedNodeChange === nextProps.onSelectedNodeChange &&
-    prevProps.onSelectedEdgeChange === nextProps.onSelectedEdgeChange &&
-    prevProps.onDoubleClickNode === nextProps.onDoubleClickNode &&
-    prevProps.onDoubleClickEdge === nextProps.onDoubleClickEdge &&
-    prevProps.onSelectEdge === nextProps.onSelectEdge
-  );
-});
+}
