@@ -12,7 +12,7 @@ import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 import { useDecorationVisibility } from '../GraphCanvas';
-import { EDGE_INSET, EDGE_INITIAL_OFFSET, CONVEX_DEPTH, CONCAVE_DEPTH } from '@/lib/nodeEdgeConstants';
+import { EDGE_INSET, EDGE_INITIAL_OFFSET, CONVEX_DEPTH, CONCAVE_DEPTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, EDGE_LABEL_FONT_SIZE } from '@/lib/nodeEdgeConstants';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -137,8 +137,8 @@ export default function ConversionEdge({
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
   
   // ATOMIC RESTORATION: Read decoration visibility from context (not edge.data)
-  const { beadsVisible, isPanning } = useDecorationVisibility();
-  const shouldSuppressBeads = isPanning || !beadsVisible;
+  const { beadsVisible, isPanning, isDraggingNode } = useDecorationVisibility();
+  const shouldSuppressBeads = isPanning || isDraggingNode || !beadsVisible;
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [isDraggingSource, setIsDraggingSource] = useState(false);
   const [isDraggingTarget, setIsDraggingTarget] = useState(false);
@@ -147,6 +147,57 @@ export default function ConversionEdge({
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const pathRef = React.useRef<SVGPathElement>(null);
   const textPathRef = React.useRef<SVGPathElement>(null);
+  const tooltipTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // Handle mouse enter to show tooltip (with delay)
+  const handleTooltipMouseEnter = useCallback((e: React.MouseEvent<SVGPathElement>) => {
+    // Only show tooltips for current edges (not scenario overlays)
+    if (data?.scenarioOverlay) return;
+    
+    // Clear any existing timeout
+    if (tooltipTimeoutRef.current) {
+      clearTimeout(tooltipTimeoutRef.current);
+    }
+    
+    // Set initial position
+    setTooltipPos({ x: e.clientX, y: e.clientY });
+    
+    // Show tooltip after delay (500ms)
+    tooltipTimeoutRef.current = setTimeout(() => {
+      setShowTooltip(true);
+    }, 500);
+  }, [data?.scenarioOverlay]);
+
+  // Handle mouse move to update tooltip position
+  const handleTooltipMouseMove = useCallback((e: React.MouseEvent<SVGPathElement>) => {
+    if (data?.scenarioOverlay) return;
+    
+    // Update position immediately
+    setTooltipPos({ x: e.clientX, y: e.clientY });
+    
+    // If tooltip is already showing, keep it showing
+    // If not showing yet, the timeout will show it
+  }, [data?.scenarioOverlay]);
+
+  // Handle mouse leave to hide tooltip
+  const handleTooltipMouseLeave = useCallback(() => {
+    // Clear any pending timeout
+    if (tooltipTimeoutRef.current) {
+      clearTimeout(tooltipTimeoutRef.current);
+      tooltipTimeoutRef.current = null;
+    }
+    
+    setShowTooltip(false);
+  }, []);
+
+  // Cleanup timeout on unmount
+  React.useEffect(() => {
+    return () => {
+      if (tooltipTimeoutRef.current) {
+        clearTimeout(tooltipTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Generate tooltip content
   const getTooltipContent = () => {
@@ -1221,8 +1272,8 @@ export default function ConversionEdge({
       const targetNode = nodes.find(node => {
         const nodeX = node.position.x;
         const nodeY = node.position.y;
-        const nodeWidth = 120; // Standard node width (adjust for case nodes if needed)
-        const nodeHeight = 120; // Standard node height
+        const nodeWidth = DEFAULT_NODE_WIDTH;
+        const nodeHeight = DEFAULT_NODE_HEIGHT;
         
         return (
           flowPos.x >= nodeX &&
@@ -1236,8 +1287,8 @@ export default function ConversionEdge({
         // Calculate which face of the node we're closest to
         const nodeX = targetNode.position.x;
         const nodeY = targetNode.position.y;
-        const nodeWidth = 120;
-        const nodeHeight = 120;
+        const nodeWidth = DEFAULT_NODE_WIDTH;
+        const nodeHeight = DEFAULT_NODE_HEIGHT;
         
         // Calculate relative position within the node (0 to 1)
         const relX = (flowPos.x - nodeX) / nodeWidth;
@@ -1438,6 +1489,7 @@ export default function ConversionEdge({
             d={offsetPath}
             fill="none"
             stroke="none"
+            pointerEvents="none"
           />
         )}
       </defs>
@@ -1445,21 +1497,25 @@ export default function ConversionEdge({
       {/* Edge rendering */}
           {data?.useSankeyView && ribbonPath ? (
             // Sankey mode: render as filled ribbon
-            <path
-              ref={pathRef}
-              id={id}
-              style={{
-                fill: getEdgeColor(),
-                fillOpacity: EDGE_OPACITY,
-                mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
-                stroke: 'none',
-                transition: 'opacity 0.3s ease-in-out',
-              }}
-              className="react-flow__edge-path"
-              d={ribbonPath}
-              onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
-              onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
-            />
+              <path
+                ref={pathRef}
+                id={id}
+                style={{
+                  fill: getEdgeColor(),
+                  fillOpacity: EDGE_OPACITY,
+                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                  stroke: 'none',
+                  transition: 'opacity 0.3s ease-in-out',
+                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                }}
+                className="react-flow__edge-path"
+                d={ribbonPath}
+                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+              />
           ) : shouldShowConfidenceIntervals && confidenceData ? (
             // Confidence interval mode: render three overlapping paths
             <>
@@ -1477,11 +1533,15 @@ export default function ConversionEdge({
                   strokeLinejoin: 'miter',
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
+                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                 }}
                 className="react-flow__edge-path"
                 d={edgePath}
                 onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
                 onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
               />
               {/* Middle band (mean) - normal width, base color */}
               <path
@@ -1497,11 +1557,15 @@ export default function ConversionEdge({
                   strokeLinejoin: 'miter',
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
+                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                 }}
                 className="react-flow__edge-path"
                 d={edgePath}
                 onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
                 onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
               />
               {/* Inner band (lower bound) - narrowest, darkest color */}
               <path
@@ -1519,11 +1583,15 @@ export default function ConversionEdge({
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   markerEnd: 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
+                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                 }}
                 className="react-flow__edge-path"
                 d={edgePath}
                 onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
                 onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
               />
             </>
           ) : (
@@ -1548,23 +1616,12 @@ export default function ConversionEdge({
                 d={edgePath}
                 onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
                 onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
               />
             </>
           )}
-          
-          {/* Invisible wider path for easier selection */}
-          <path
-            id={`${id}-selection`}
-            style={{
-              stroke: 'transparent',
-              strokeWidth: 8,
-              fill: 'none',
-              transition: 'stroke-width 0.3s ease-in-out',
-            }}
-            className="react-flow__edge-path"
-            d={edgePath}
-            onDoubleClick={handleDoubleClick}
-          />
           
           {/* Edge Beads - SVG elements rendered directly in edge SVG */}
           {/* Only render beads if path ref is stable and edge data is available */}
@@ -1582,8 +1639,11 @@ export default function ConversionEdge({
             // Compute visibleStartOffset based on source node face direction and edge offset
             const totalInset = EDGE_INSET + EDGE_INITIAL_OFFSET;
             
-            // Default for flat faces
+            // Default for flat faces (edge perpendicular to face)
+            // For perpendicular edges: path distance ≈ perpendicular distance
             let visibleStartOffset = totalInset;
+            
+            console.log('[Bead offset] Initial:', { totalInset, edgeId: id });
             
             if (!data?.useSankeyView && data?.sourceFace) {
               const nodes = getNodes();
@@ -1603,27 +1663,42 @@ export default function ConversionEdge({
               }
               
               // Get node dimensions to normalize offset (approximate face length)
-              const nominalWidth = (sourceNode?.data as any)?.sankeyWidth || 100;
-              const nominalHeight = (sourceNode?.data as any)?.sankeyHeight || 100;
+              const nominalWidth = (sourceNode?.data as any)?.sankeyWidth || DEFAULT_NODE_WIDTH;
+              const nominalHeight = (sourceNode?.data as any)?.sankeyHeight || DEFAULT_NODE_HEIGHT;
               const faceLength = (data.sourceFace === 'left' || data.sourceFace === 'right') ? nominalHeight : nominalWidth;
               
               // Normalize offset to [-1, 1] range (center = 0, edges = ±1)
               const normalizedOffset = perpendicularOffset / (faceLength / 2);
               
               // Compute base perpendicular distance based on face direction
+              // For quadratic Bezier Q(t) = (1-t)²·P₀ + 2t(1-t)·P₁ + t²·P₂
+              // with control point P₁ at perpendicular depth d from the face:
+              // The actual perpendicular distance at position n ∈ [-1,1] along face is:
+              // perp(n) = (d/2) × (1 - n²)   [max depth is d/2 at center, not d]
               let basePerpDistance = totalInset;
               if (sourceFaceDirection === 'convex') {
-                // Convex: bulge is maximum at center, decreases toward edges
-                // Approximate as linear: CONVEX_DEPTH at center, 0 at edges
-                const bulgeAtOffset = CONVEX_DEPTH * (1 - Math.abs(normalizedOffset));
+                // Convex: quadratic bulge, max depth of CONVEX_DEPTH/2 at center
+                const bulgeAtOffset = (CONVEX_DEPTH / 2) * (1 - normalizedOffset * normalizedOffset);
                 basePerpDistance = totalInset + bulgeAtOffset;
               } else if (sourceFaceDirection === 'concave') {
-                // Concave: indentation is more uniform, slight variation
-                const indentAtOffset = CONCAVE_DEPTH * (1 - 0.3 * Math.abs(normalizedOffset));
+                // Concave: quadratic indentation, max depth of CONCAVE_DEPTH/2 at center
+                const indentAtOffset = (CONCAVE_DEPTH / 2) * (1 - normalizedOffset * normalizedOffset);
                 basePerpDistance = totalInset - indentAtOffset;
               }
               
+              // visibleStartOffset is perpendicular distance, but beads measure along path
+              // For now use perpendicular as approximation; correct solution requires path integration
               visibleStartOffset = basePerpDistance;
+              
+              console.log('[Bead offset] Calculated:', {
+                edgeId: id,
+                sourceFace: data.sourceFace,
+                sourceFaceDirection,
+                perpendicularOffset,
+                normalizedOffset,
+                basePerpDistance,
+                visibleStartOffset
+              });
             }
             
             return (
@@ -1657,7 +1732,7 @@ export default function ConversionEdge({
             color: '#ffffff',
             padding: '8px 12px',
             borderRadius: '6px',
-            fontSize: '12px',
+            fontSize: `${EDGE_LABEL_FONT_SIZE}px`,
             lineHeight: '1.4',
             boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
             border: '1px solid #333',
@@ -1691,7 +1766,7 @@ export default function ConversionEdge({
             style={{
               padding: '8px 12px',
               cursor: 'pointer',
-              fontSize: '12px',
+              fontSize: `${EDGE_LABEL_FONT_SIZE}px`,
               borderBottom: '1px solid #eee',
             }}
             onClick={handleReconnectSource}
@@ -1704,7 +1779,7 @@ export default function ConversionEdge({
             style={{
               padding: '8px 12px',
               cursor: 'pointer',
-              fontSize: '12px',
+              fontSize: `${EDGE_LABEL_FONT_SIZE}px`,
               borderBottom: '1px solid #eee',
             }}
             onClick={handleReconnectTarget}
@@ -1717,7 +1792,7 @@ export default function ConversionEdge({
             style={{
               padding: '8px 12px',
               cursor: 'pointer',
-              fontSize: '12px',
+              fontSize: `${EDGE_LABEL_FONT_SIZE}px`,
               color: '#dc3545',
             }}
             onClick={() => {
@@ -1752,7 +1827,7 @@ export default function ConversionEdge({
                 fill: selected ? '#000' : '#666',
                 fontStyle: 'italic',
                 fontWeight: selected ? '600' : 'normal',
-                pointerEvents: 'auto',
+                pointerEvents: 'painted', // Only capture events over painted (visible) text, not the entire path
                 cursor: 'pointer',
                 userSelect: 'none',
               }}
