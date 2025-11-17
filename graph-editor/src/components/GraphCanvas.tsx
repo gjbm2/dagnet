@@ -1909,18 +1909,36 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       b.type === 'target' && b.nodeId === edge.target && b.face === edge.data.targetFace
     );
     
-    // Compute anchors from node positions to align chevrons immediately
-    const computeAnchor = (nodeId: string, face: string | undefined, offsetX: number | undefined, offsetY: number | undefined) => {
+    // Compute anchors from node positions.
+    // EXPERIMENT: start edges ~10px "under" the node edge (inside the node box)
+    // so that when node is drawn on top, edges appear to emerge from under the node.
+    // We only do this in non-Sankey view; Sankey keeps existing behavior.
+    const computeAnchor = (
+      nodeId: string,
+      face: string | undefined,
+      offsetX: number | undefined,
+      offsetY: number | undefined
+    ) => {
       const n: any = nodesWithSelection.find((nn: any) => nn.id === nodeId);
       const w = n?.width ?? 120;
       const h = n?.height ?? 120;
       const x = n?.position?.x ?? 0;
       const y = n?.position?.y ?? 0;
-      if (face === 'right') return { x: x + w, y: y + h / 2 + (offsetY ?? 0) };
-      if (face === 'left') return { x: x, y: y + h / 2 + (offsetY ?? 0) };
-      if (face === 'bottom') return { x: x + w / 2 + (offsetX ?? 0), y: y + h };
+
+      // Inset distance inside the node edge (pixels) for non-Sankey view
+      const INSET = useSankeyView ? 0 : 10;
+
+      if (face === 'right') {
+        return { x: x + w - INSET, y: y + h / 2 + (offsetY ?? 0) };
+      }
+      if (face === 'left') {
+        return { x: x + INSET, y: y + h / 2 + (offsetY ?? 0) };
+      }
+      if (face === 'bottom') {
+        return { x: x + w / 2 + (offsetX ?? 0), y: y + h - INSET };
+      }
       // top/default
-      return { x: x + w / 2 + (offsetX ?? 0), y: y };
+      return { x: x + w / 2 + (offsetX ?? 0), y: y + INSET };
     };
     const srcAnchor = computeAnchor(edge.source, edge.data.sourceFace, edge.sourceOffsetX, edge.sourceOffsetY);
     const tgtAnchor = computeAnchor(edge.target, edge.data.targetFace, edge.targetOffsetX, edge.targetOffsetY);

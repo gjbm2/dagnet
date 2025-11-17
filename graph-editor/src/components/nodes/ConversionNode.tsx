@@ -258,7 +258,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     const height = data.sankeyHeight ? `${data.sankeyHeight}px` : '100px';
     
     return {
-      borderRadius: '0px', // Square corners for all nodes
+      borderRadius: '0px', // Square corners for all nodes (for now)
       width,
       height
     };
@@ -308,7 +308,14 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         textAlign: 'center',
         cursor: 'pointer',
         boxShadow: (() => {
-          // Base shadow
+          // Canvas background color from GraphCanvas ReactFlow style
+          const canvasColor = '#f8fafc';
+
+          // Outer "halo" in canvas color to act as a pseudo-clip for edges
+          // This renders behind the node but above edges, hiding edge segments near the node boundary.
+          const outerHalo = `0 0 0 5px ${canvasColor}`;
+
+          // Base shadow for depth
           const baseShadow = selected ? '0 4px 8px rgba(51,51,51,0.4)' : '0 2px 4px rgba(0,0,0,0.1)';
           
           // Inner border for start/end nodes with blur
@@ -327,10 +334,16 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           
           // Error shadow
           if ((probabilityMass && !probabilityMass.isComplete) || (conditionalValidation?.hasProbSumError)) {
-            return innerBorder ? `0 2px 4px rgba(255,107,107,0.3), ${innerBorder}` : '0 2px 4px rgba(255,107,107,0.3)';
+            const errorShadow = '0 2px 4px rgba(255,107,107,0.3)';
+            return innerBorder
+              ? `${outerHalo}, ${errorShadow}, ${innerBorder}`
+              : `${outerHalo}, ${errorShadow}`;
           }
           
-          return innerBorder ? `${baseShadow}, ${innerBorder}` : baseShadow;
+          // Normal case: outer halo + base + optional inner border
+          return innerBorder
+            ? `${outerHalo}, ${baseShadow}, ${innerBorder}`
+            : `${outerHalo}, ${baseShadow}`;
         })(),
         display: 'flex',
         flexDirection: 'column',
