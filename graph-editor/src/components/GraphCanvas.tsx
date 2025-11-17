@@ -755,6 +755,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         isLastInTargetBundle: targetEdgeIndex === sortedTargetEdges.length - 1,
         sourceFace: sourceFace,
         targetFace: targetFace,
+        // Preserve edge.data including calculateWidth function
+        data: {
+          ...edge.data,
+        },
       };
     });
 
