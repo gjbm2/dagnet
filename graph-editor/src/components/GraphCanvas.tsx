@@ -1741,7 +1741,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       sourceOffsetY: edge.sourceOffsetY,
       targetOffsetX: edge.targetOffsetX,
       targetOffsetY: edge.targetOffsetY,
-      scaledWidth: edge.scaledWidth,
+      // DO NOT copy scaledWidth from calculateEdgeOffsets - that's just a bundling width
+      // The real probability-based width is computed by buildScenarioRenderEdges
+      // scaledWidth: edge.scaledWidth,  // ← REMOVED - was polluting data with wrong width!
       // Bundle metadata
       sourceBundleWidth: edge.sourceBundleWidth,
       targetBundleWidth: edge.targetBundleWidth,
@@ -2215,7 +2217,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           sourceOffsetY: edge.sourceOffsetY,
           targetOffsetX: edge.targetOffsetX,
           targetOffsetY: edge.targetOffsetY,
-          scaledWidth: edge.scaledWidth,
+          // DO NOT set scaledWidth here - that's buildScenarioRenderEdges' job
+          // The edge.scaledWidth from calculateEdgeOffsets is just bundling geometry, not visual width
+          // scaledWidth: edge.scaledWidth,  // ← BUG: was copying MIN_WIDTH (2) into data
           // Anchor positions for edge endpoints
           sourceAnchorX: srcAnchor.x,
           sourceAnchorY: srcAnchor.y,
@@ -2284,7 +2288,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               sourceOffsetY: edge.sourceOffsetY,
               targetOffsetX: edge.targetOffsetX,
               targetOffsetY: edge.targetOffsetY,
-              scaledWidth: edge.scaledWidth,
+              // DO NOT set scaledWidth here - that's buildScenarioRenderEdges' job
+              // The edge.scaledWidth from calculateEdgeOffsets is just bundling geometry, not visual width
+              // scaledWidth: edge.scaledWidth,  // ← BUG #3: was copying MIN_WIDTH (2) into data
               // Bundle metadata
               sourceBundleWidth: edge.sourceBundleWidth,
               targetBundleWidth: edge.targetBundleWidth,
