@@ -42,6 +42,14 @@ const MIN_CHEVRON_THRESHOLD = 10;
  * Only 'current' layer edges are interactive (selectable, editable).
  */
 export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams): Edge[] {
+  // DIAGNOSTIC: Log what called this function
+  const callerStack = new Error().stack || '';
+  const stackLines = callerStack.split('\n');
+  // Extract caller info (skip Error line and this function's line)
+  const callerInfo = stackLines.slice(2, 5).map(line => line.trim()).join(' -> ');
+  console.log(`[buildScenarioRenderEdges] CALLED BY:`, callerInfo);
+  console.log(`[buildScenarioRenderEdges] isInSlowPathRebuild:`, params.isInSlowPathRebuild);
+  
   const {
     baseEdges,
     nodes,
@@ -155,19 +163,38 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
   const computeOverlayWidthRaw = (
     e: Edge,
     probResolver: (e: Edge) => number,
-    helpers: { dfs: (nodeId: string) => number }
+    helpers: { dfs: (nodeId: string) => number },
+    scenarioId?: string
   ): number => {
     if (useUniformScaling) {
       // Uniform scaling mode - all edges same width
       return 10;
     }
     const edgeProb = probResolver(e);
+    
+    // DIAGNOSTIC: Log inputs for first edge
+    const isFirstEdge = e.id === baseEdges[0]?.id;
+    if (isFirstEdge && scenarioId) {
+      console.log(`[computeOverlayWidthRaw] Computing for ${e.id}, scenario=${scenarioId}:`, {
+        edgeProb,
+        startNodeId,
+        hasStartNode: !!startNodeId,
+        effectiveMassGenerosity,
+        effectiveMaxWidth,
+        MIN_WIDTH
+      });
+    }
+    
     if (!startNodeId) {
       const siblings = rfEdges.filter(se => se.source === e.source);
       const denom = siblings.reduce((sum, se) => sum + (probResolver(se) || 0), 0);
       if (denom === 0) return MIN_WIDTH;
       const proportion = edgeProb / denom;
-      return MIN_WIDTH + proportion * (effectiveMaxWidth - MIN_WIDTH);
+      const result = MIN_WIDTH + proportion * (effectiveMaxWidth - MIN_WIDTH);
+      if (isFirstEdge && scenarioId) {
+        console.log(`[computeOverlayWidthRaw] No start node path:`, { proportion, result });
+      }
+      return result;
     }
     const residualAtSource = helpers.dfs(e.source);
     if (residualAtSource === 0) return MIN_WIDTH;
@@ -184,7 +211,16 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const power = 1 - effectiveMassGenerosity;
       displayMass = Math.pow(actualMass, power);
     }
-    return MIN_WIDTH + displayMass * (effectiveMaxWidth - MIN_WIDTH);
+    const result = MIN_WIDTH + displayMass * (effectiveMaxWidth - MIN_WIDTH);
+    if (isFirstEdge && scenarioId) {
+      console.log(`[computeOverlayWidthRaw] With start node:`, {
+        residualAtSource,
+        actualMass,
+        displayMass,
+        result
+      });
+    }
+    return result;
   };
 
   // For each scenario to render, create overlay edges
@@ -295,7 +331,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     const sourceFaceBuckets: Record<string, Edge[]> = {};
     const targetFaceBuckets: Record<string, Edge[]> = {};
     baseEdges.forEach(edge => {
-      const raw = computeOverlayWidthRaw(edge, probResolver, helpers);
+      const raw = computeOverlayWidthRaw(edge, probResolver, helpers, scenarioId);
       rawWidths.set(edge.id, raw);
       const sFace = (edge.sourceHandle || 'right-out').split('-')[0];
       const tFace = (edge.targetHandle || 'left').split('-')[0];
@@ -341,10 +377,9 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const freshComputed = rawWidths.get(edge.id) || MIN_WIDTH;
       const mergedWidth = edge.data?.scaledWidth as number | undefined;
       
-      // Always prefer merged scaledWidth if available (slow path merge put it there)
-      // Otherwise use fresh computation
-      // This prevents flicker during rebuilds while still accepting first-render and updates
-      const preScaled = mergedWidth ?? freshComputed;
+      // REVERTED: Use fresh computation (do NOT always use merged)
+      // We need to understand WHEN freshComputed is wrong, not mask it
+      const preScaled = freshComputed;
       
       // Diagnostic logging for first edge only
       if (edge.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
@@ -353,7 +388,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           freshComputed,
           mergedWidth,
           preScaled,
-          usedMerged: !!mergedWidth
+          mergeDelta: mergedWidth ? (freshComputed - mergedWidth) : null,
+          usingFreshComputed: true
         });
       }
       
@@ -443,6 +479,10 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
     // Attach offset data
     overlayWithOffsets.forEach(oe => {
+      // CRITICAL: Use the width we computed from probabilities (via calculateWidth),
+      // NOT the width that calculateEdgeOffsets computed (which is just for bundling geometry)
+      const correctWidth = oe.data?.calculateWidth ? oe.data.calculateWidth() : oe.scaledWidth;
+      
       renderEdges.push({
         ...oe,
         data: {
@@ -452,7 +492,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           targetOffsetX: oe.targetOffsetX,
           targetOffsetY: oe.targetOffsetY,
           isPanningOrZooming: isPanningOrZooming,  // Pass through pan/zoom state
-          scaledWidth: oe.scaledWidth,
+          scaledWidth: correctWidth,  // Use the probability-based width, not bundling width
           sourceBundleWidth: oe.sourceBundleWidth,
           targetBundleWidth: oe.targetBundleWidth,
           sourceBundleSize: oe.sourceBundleSize,
