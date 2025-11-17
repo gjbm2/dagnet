@@ -1733,17 +1733,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodesWithSelection, effectiveMaxWidth);
   
   // Attach offsets to edge data for the ConversionEdge component
-  const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
-    ...edge,
-    data: {
-      ...edge.data,
-      sourceOffsetX: edge.sourceOffsetX,
-      sourceOffsetY: edge.sourceOffsetY,
-      targetOffsetX: edge.targetOffsetX,
-      targetOffsetY: edge.targetOffsetY,
-      // DO NOT copy scaledWidth from calculateEdgeOffsets - that's just a bundling width
-      // The real probability-based width is computed by buildScenarioRenderEdges
-      // scaledWidth: edge.scaledWidth,  // ← REMOVED - was polluting data with wrong width!
+  const edgesWithOffsetData = edgesWithOffsets.map(edge => {
+    // CRITICAL: Remove top-level scaledWidth from calculateEdgeOffsets (bundling width)
+    const { scaledWidth: _bundlingWidth, ...cleanEdge } = edge as any;
+    return {
+      ...cleanEdge,
+      data: {
+        ...edge.data,
+        sourceOffsetX: edge.sourceOffsetX,
+        sourceOffsetY: edge.sourceOffsetY,
+        targetOffsetX: edge.targetOffsetX,
+        targetOffsetY: edge.targetOffsetY,
+        // DO NOT copy scaledWidth from calculateEdgeOffsets - that's just a bundling width
+        // The real probability-based width is computed by buildScenarioRenderEdges
+        // scaledWidth: edge.scaledWidth,  // ← REMOVED - was polluting data with wrong width!
       // Bundle metadata
       sourceBundleWidth: edge.sourceBundleWidth,
       targetBundleWidth: edge.targetBundleWidth,
@@ -1762,7 +1765,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // ATOMIC RESTORATION: Do NOT pass decoration visibility through edge.data
       // Beads will read beadsVisible from React Context instead
     }
-  }));
+  };
+  });
   
   // Compute edge anchors (start edges under the node boundary for cleaner appearance)
   const edgesWithAnchors = edgesWithOffsetData.map(edge => {
@@ -2209,8 +2213,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const srcAnchor = computeAnchor(edge.source, edge.data?.sourceFace, edge.sourceOffsetX, edge.sourceOffsetY);
       const tgtAnchor = computeAnchor(edge.target, edge.data?.targetFace, edge.targetOffsetX, edge.targetOffsetY);
       
+      // CRITICAL: Remove top-level scaledWidth from calculateEdgeOffsets (bundling width)
+      const { scaledWidth: _bundlingWidth, ...cleanEdge } = edge as any;
+      
       return {
-        ...edge,
+        ...cleanEdge,
         data: {
           ...edge.data,
           sourceOffsetX: edge.sourceOffsetX,
@@ -2280,17 +2287,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodes, effectiveMaxWidth);
           const t3 = performance.now();
           // Attach offsets to edge data for the ConversionEdge component
-          return edgesWithOffsets.map(edge => ({
-            ...edge,
-            data: {
-              ...edge.data,
-              sourceOffsetX: edge.sourceOffsetX,
-              sourceOffsetY: edge.sourceOffsetY,
-              targetOffsetX: edge.targetOffsetX,
-              targetOffsetY: edge.targetOffsetY,
-              // DO NOT set scaledWidth here - that's buildScenarioRenderEdges' job
-              // The edge.scaledWidth from calculateEdgeOffsets is just bundling geometry, not visual width
-              // scaledWidth: edge.scaledWidth,  // ← BUG #3: was copying MIN_WIDTH (2) into data
+          return edgesWithOffsets.map(edge => {
+            // CRITICAL: Remove top-level scaledWidth from calculateEdgeOffsets (bundling width)
+            const { scaledWidth: _bundlingWidth, ...cleanEdge } = edge as any;
+            return {
+              ...cleanEdge,
+              data: {
+                ...edge.data,
+                sourceOffsetX: edge.sourceOffsetX,
+                sourceOffsetY: edge.sourceOffsetY,
+                targetOffsetX: edge.targetOffsetX,
+                targetOffsetY: edge.targetOffsetY,
+                // DO NOT set scaledWidth here - that's buildScenarioRenderEdges' job
+                // The edge.scaledWidth from calculateEdgeOffsets is just bundling geometry, not visual width
+                // scaledWidth: edge.scaledWidth,  // ← BUG #3: was copying MIN_WIDTH (2) into data
               // Bundle metadata
               sourceBundleWidth: edge.sourceBundleWidth,
               targetBundleWidth: edge.targetBundleWidth,
@@ -2305,7 +2315,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               // Pass what-if DSL to edges
               whatIfDSL: effectiveWhatIfDSL
             }
-          }));
+          };
+          });
         });
       } finally {
         const tEnd = performance.now();
