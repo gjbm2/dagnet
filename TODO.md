@@ -1,24 +1,72 @@
 # TODO
 
-## Perf issue
 
-1. stop the tab stuff remounting at start of pan/zoom
+selected / highlighted edges when current is hidden need to make current properly visible
 
-2. detailed diagnostics doc.
 
-3. summarise in detail all the positive changes we have made:
- - [tab stuff remounting at start of pan/zoom]
- - minimal mode switches
- - suspend during pan/zoom
- - incremental rendering by node
 
-4. revert all code except that in /perf back to last commit
+control nodes should be adjusted for concave / convex faces
 
-5. re-implement positive features
+
+
+edge_id changes don't persist
+
+
+
+move play/pause etc. buttons further into node (so appears within top corner of visible node rather than on outline
+
+also the icons inside those circles are off-centre now. 
+
+
+
+bead label construction is glitched
+- all edges from start- are showing only the current layers p values (not p values by layer, as they ought to)
+- for the variant edges, I see "treatment: 25% 25%" and "control: 75% 75%" -- those should be de-duping
+
+current layer values:
+
+e.start-to-node-3.p.mean: 0.169
+e.node-3-to-node-5.p.mean: 0.1
+e.start-to-node-2.p.mean: 0.8
+e.segue-node-to-b.p.mean: 1
+e.start-to-segue.p.mean: 0.031
+e.node-2-to-node-5.p.mean: 0.6
+e.node-2-to-node-5.conditional_p.visited(segue-node).mean: 0.1
+e.node-2-to-node-4.p.mean: 0.4
+e.node-2-to-node-4.conditional_p.visited(segue-node).mean: 0.9
+e.node-3-to-node-4.p.mean: 0.9
+n.a.entry.entry_weight: 1
+n.c.case(c:control).weight: 0.75
+n.c.case(c:treatment).weight: 0.25
+
+
+snapshot layer values:
+
+e.start-to-node-3.p.mean: 0.54
+e.node-3-to-node-5.p.mean: 0.1
+e.start-to-node-2.p.mean: 0.36000000000000004
+e.segue-node-to-b.p.mean: 1
+e.start-to-segue.p.mean: 0.1
+e.node-2-to-node-5.p.mean: 0.6
+e.node-2-to-node-5.conditional_p.visited(segue-node).mean: 0.1
+e.node-2-to-node-4.p.mean: 0.4
+e.node-2-to-node-4.conditional_p.visited(segue-node).mean: 0.9
+e.node-3-to-node-4.p.mean: 0.9
+n.a.entry.entry_weight: 1
+n.c.case(c:control).weight: 0.75
+n.c.case(c:treatment).weight: 0.25
+
+
 
 
 
 ## Scenarios project
+- we're not showing layer ps when they differ...
+- playing with edges resets edge_id! 
+- clicking beads -- make hotspot larger
+- losing beads when clicking graph (set timer to restore)
+- resetting edge widths on node modes --- why? also beads have to disappear during drag (like pan/zoom)
+- restore SHIFT+DRAG functionality on sliders
 - need to hide edge labels during node drags 
 - now can finally sort labels for edges properly in lozenges along the spline. to come.
 - can't cick 'x' to delete edges (do we need? dunno; maybe not or sort when we sort label positions )
