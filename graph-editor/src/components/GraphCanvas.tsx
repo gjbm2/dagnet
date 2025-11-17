@@ -770,6 +770,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const hasInitialFitViewRef = useRef(false);
   const currentGraphIdRef = useRef<string>('');
   
+  // Track last committed RENDER edges (not base edges) for geometry field merge during slow-path rebuilds
+  const lastRenderEdgesRef = useRef<Edge[]>([]);
+  const isInSlowPathRebuildRef = useRef(false);
+  
   // Re-route feature state
   const lastNodePositionsRef = useRef<{ [nodeId: string]: { x: number; y: number } }>({});
 
@@ -1873,7 +1877,53 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     */
     
-    setEdges(edgesWithScenarios);
+    // GEOMETRY MERGE: Preserve key geometry fields (scaledWidth, offsets) from previous RENDER edges
+    // when topology hasn't changed, to avoid visual flicker during slow-path rebuilds
+    // Use lastRenderEdgesRef which tracks the final output of buildScenarioRenderEdges (with correct widths)
+    const prevById = new Map<string, any>();
+    lastRenderEdgesRef.current.forEach(prevEdge => {
+      prevById.set(prevEdge.id, prevEdge);
+    });
+    
+    const mergedEdges = edgesWithScenarios.map(newEdge => {
+      const prevEdge = prevById.get(newEdge.id);
+      if (!prevEdge) return newEdge; // New edge - use as-is
+      
+      // Check if topology changed (source, target, or handles differ)
+      const topologyChanged =
+        newEdge.source !== prevEdge.source ||
+        newEdge.target !== prevEdge.target ||
+        newEdge.sourceHandle !== prevEdge.sourceHandle ||
+        newEdge.targetHandle !== prevEdge.targetHandle;
+      
+      if (topologyChanged) {
+        return newEdge; // Topology changed - use new geometry
+      }
+      
+      // Topology unchanged - merge key geometry fields from previous RENDER edge
+      const prevData = prevEdge.data || {};
+      const newData = newEdge.data || {};
+      
+      return {
+        ...newEdge,
+        data: {
+          ...newData,
+          // Preserve geometry from previous render to avoid flicker
+          scaledWidth: prevData.scaledWidth ?? newData.scaledWidth,
+          sourceOffsetX: prevData.sourceOffsetX ?? newData.sourceOffsetX,
+          sourceOffsetY: prevData.sourceOffsetY ?? newData.sourceOffsetY,
+          targetOffsetX: prevData.targetOffsetX ?? newData.targetOffsetX,
+          targetOffsetY: prevData.targetOffsetY ?? newData.targetOffsetY,
+        },
+      };
+    });
+    
+    setEdges(mergedEdges);
+    
+    // Clear rebuild flag after a brief delay to allow scenario pipeline to settle
+    setTimeout(() => {
+      isInSlowPathRebuildRef.current = false;
+    }, 50);
     
     // Reset syncing flag after graph->ReactFlow sync is complete
     // Use a longer timeout to ensure all cascading updates complete
@@ -4639,7 +4689,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return edges;
       }
 
-      return buildScenarioRenderEdges({
+      const result = buildScenarioRenderEdges({
         baseEdges: edges,
         nodes,
         graph,
@@ -4652,10 +4702,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         useSankeyView,
         calculateEdgeOffsets,
         tabId,
-        highlightMetadata  // STEP 4: Pass highlight flags for 'current' layer
+        highlightMetadata,  // STEP 4: Pass highlight flags for 'current' layer
+        isInSlowPathRebuild: isInSlowPathRebuildRef.current
         // ATOMIC RESTORATION: Do NOT pass isPanningOrZooming through buildScenarioRenderEdges
         // This keeps edge.data stable during decoration toggle
       });
+      
+      // Track render edges (not base edges) for merge on next slow-path rebuild
+      lastRenderEdgesRef.current = result;
+      
+      return result;
     } catch (e) {
       console.warn('Failed to build scenario render edges:', e);
       return edges; // Fallback to base edges on error
