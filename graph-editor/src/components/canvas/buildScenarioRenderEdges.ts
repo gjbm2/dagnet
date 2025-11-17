@@ -9,6 +9,7 @@
 import { Edge } from 'reactflow';
 import { computeEffectiveEdgeProbability } from '../../lib/whatIf';
 import { composeParams } from '../../services/CompositionService';
+import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, SANKEY_MAX_EDGE_WIDTH } from '../../lib/nodeEdgeConstants';
 
 interface BuildScenarioRenderEdgesParams {
   baseEdges: Edge[];
@@ -101,9 +102,9 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
   };
 
   const renderEdges: Edge[] = [];
-  const MAX_WIDTH = 104;
-  const MIN_WIDTH = 2;
-  const effectiveMaxWidth = useSankeyView ? 384 : MAX_WIDTH;
+  const MAX_WIDTH = MAX_EDGE_WIDTH;
+  const MIN_WIDTH = MIN_EDGE_WIDTH;
+  const effectiveMaxWidth = useSankeyView ? SANKEY_MAX_EDGE_WIDTH : MAX_WIDTH;
   const effectiveMassGenerosity = useSankeyView ? 0 : massGenerosity;
 
   const rfNodes = nodes;

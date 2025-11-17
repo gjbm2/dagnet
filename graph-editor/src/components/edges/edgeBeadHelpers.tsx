@@ -8,6 +8,7 @@
 import React from 'react';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { composeParams } from '../../services/CompositionService';
+import { BEAD_MARKER_DISTANCE, BEAD_SPACING } from '../../lib/nodeEdgeConstants';
 import { getCaseEdgeVariantInfo } from './edgeLabelHelpers';
 import { getConditionalProbabilityColor, ensureDarkBeadColor } from '@/lib/conditionalColors';
 import { darkenCaseColor } from '@/lib/conditionalColors';
@@ -346,9 +347,8 @@ export function buildBeadDefinitions(
   const beads: BeadDefinition[] = [];
   let beadIndex = 0;
   
-  const CONST_MARKER_DISTANCE = 12; // px from visible edge start
-  const BEAD_SPACING = 9; // px between beads along spline (reduced by 50%)
-  const baseDistance = (visibleStartOffset || 0) + CONST_MARKER_DISTANCE;
+  // Use shared constants from nodeEdgeConstants.ts
+  const baseDistance = (visibleStartOffset || 0) + BEAD_MARKER_DISTANCE;
   
   // Helper to get scenario color
   const getScenarioColor = (scenarioId: string): string => {
