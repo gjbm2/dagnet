@@ -28,11 +28,12 @@
   border-color: #333 !important;
 }
 
-/* Override selection styling for edges - bring to front */
-.react-flow__edge.selected {
-  z-index: 1000 !important;
+/* Ensure nodes are always above edges in stacking order */
+.react-flow__node {
+  z-index: 2000 !important;
 }
 
+/* Selected edges should not float above nodes */
 .react-flow__edge.selected .react-flow__edge-path {
   cursor: default !important;
 }
