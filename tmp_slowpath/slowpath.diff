@@ -1,0 +1,199 @@
+--- tmp_slowpath/slowpath.paulatim.tsx	2025-11-17 21:02:02.160964633 +0000
++++ tmp_slowpath/slowpath.current.tsx	2025-11-17 21:02:10.133005148 +0000
+@@ -112,15 +112,26 @@
+     });
+     
+     // Fast path: If only edge data changed (no topology, position, or handle changes), update in place
+-    // CRITICAL: During drag, ALWAYS take fast path to prevent node position overwrites
+-    // We ignore nodePositionsChanged during drag because ReactFlow has the current drag positions
++    // CRITICAL: During drag or immediately after drag, ALWAYS take fast path to prevent node position overwrites
++    // We ignore nodePositionsChanged during/after drag because ReactFlow has the current drag positions
+     // Handle changes require full recalculation because they affect edge bundling, offsets, and widths
++    // After drag, we keep isDraggingNodeRef.current true until sync completes to force fast path
+     const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged && 
+                                edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
+     
+     if (shouldTakeFastPath) {
+       const pathReason = isDraggingNodeRef.current ? '(DRAG - ignoring position diff)' : '(positions unchanged)';
+       console.log(`  ⚡ Fast path: Topology and handles unchanged, updating edge data in place ${pathReason}`);
++      
++      // Clear drag flag after determining fast path (if it was set)
++      // This ensures we don't block future syncs unnecessarily
++      if (isDraggingNodeRef.current) {
++        // Use setTimeout to clear after this sync completes
++        setTimeout(() => {
++          isDraggingNodeRef.current = false;
++        }, 0);
++      }
++      
+       // Topology unchanged and handles unchanged - update edge data in place to preserve component identity
+       setEdges(prevEdges => {
+         // First pass: update edge data without calculateWidth functions
+@@ -162,17 +173,8 @@
+           };
+         });
+         
+-        // Second pass: add calculateWidth functions with updated edge data
+-        const resultWithWidth = result.map(edge => ({
+-          ...edge,
+-          data: {
+-            ...edge.data,
+-            calculateWidth: () => calculateEdgeWidth(edge, result, nodes)
+-          }
+-        }));
+-        
+-        // Recalculate offsets for mass-based scaling modes
+-        const edgesWithOffsets = calculateEdgeOffsets(resultWithWidth, nodes, MAX_WIDTH);
++        // Edges are updated without calculateWidth (added by buildScenarioRenderEdges)
++        const edgesWithOffsets = calculateEdgeOffsets(result, nodes, MAX_WIDTH);
+         
+         // Attach offsets to edge data
+         return edgesWithOffsets.map(edge => ({
+@@ -184,12 +186,12 @@
+             targetOffsetX: edge.targetOffsetX,
+             targetOffsetY: edge.targetOffsetY,
+             scaledWidth: edge.scaledWidth,
+-            // Bundle metadata for chevron rendering
++            // Bundle metadata
+             sourceBundleWidth: edge.sourceBundleWidth,
+             targetBundleWidth: edge.targetBundleWidth,
+             sourceBundleSize: edge.sourceBundleSize,
+             // Recalculate renderFallbackTargetArrow based on new bundle width
+-            renderFallbackTargetArrow: !!(edge.targetBundleWidth && edge.targetBundleWidth < MIN_CHEVRON_THRESHOLD),
++            renderFallbackTargetArrow: false,
+             targetBundleSize: edge.targetBundleSize,
+             isFirstInSourceBundle: edge.isFirstInSourceBundle,
+             isLastInSourceBundle: edge.isLastInSourceBundle,
+@@ -198,7 +200,7 @@
+             sourceFace: edge.sourceFace,
+             targetFace: edge.targetFace,
+             // Pass what-if DSL to edges
+-            whatIfDSL: whatIfDSL
++            whatIfDSL: effectiveWhatIfDSL
+           }
+         }));
+       });
+@@ -295,9 +297,7 @@
+     
+     // Apply Sankey view sizing if enabled
+     if (useSankeyView) {
+-      const MIN_NODE_HEIGHT = 60;
+-      const MAX_NODE_HEIGHT = 400;
+-      const NODE_WIDTH = 100; // Fixed width for Sankey view
++      const NODE_WIDTH = DEFAULT_NODE_WIDTH; // Fixed width for Sankey view
+       
+       // Calculate flow mass through each node
+       // For Sankey diagrams, we want to show the TOTAL flow passing through each node
+@@ -368,7 +368,7 @@
+               const effectiveProb = computeEffectiveEdgeProbability(
+                 graph,
+                 edgeId,
+-                { whatIfDSL },
++              { whatIfDSL: effectiveWhatIfDSL },
+                 undefined
+               );
+               
+@@ -441,8 +441,7 @@
+     const edgesWithWidthFunctions = edgesWithWidth.map(edge => ({
+       ...edge,
+       data: {
+-        ...edge.data,
+-        calculateWidth: () => calculateEdgeWidth(edge, edgesWithWidth, nodesWithSelection)
++        ...edge.data
+       }
+     }));
+     
+@@ -463,7 +462,7 @@
+       targetOffsetX: edge.targetOffsetX,
+       targetOffsetY: edge.targetOffsetY,
+       scaledWidth: edge.scaledWidth,
+-      // Bundle metadata for chevron rendering
++      // Bundle metadata
+       sourceBundleWidth: edge.sourceBundleWidth,
+       targetBundleWidth: edge.targetBundleWidth,
+       sourceBundleSize: edge.sourceBundleSize,
+@@ -475,35 +474,38 @@
+       sourceFace: edge.sourceFace,
+       targetFace: edge.targetFace,
+       // Pass what-if DSL to edges
+-      whatIfDSL: whatIfDSL,
++      whatIfDSL: effectiveWhatIfDSL,
+       // Pass Sankey view flag to edges
+       useSankeyView: useSankeyView
++      // ATOMIC RESTORATION: Do NOT pass decoration visibility through edge.data
++      // Beads will read beadsVisible from React Context instead
+     }
+   }));
+   
+-  // Generate edge bundles for chevron clipping (suppress in Sankey view)
+-  const bundles = useSankeyView ? [] : groupEdgesIntoBundles(edgesWithOffsetData, nodesWithSelection);
+-  
+-  // Add anchors and clipPath IDs to edges (suppress chevrons in Sankey view)
+-  const edgesWithClipPaths = useSankeyView ? edgesWithOffsetData : edgesWithOffsetData.map(edge => {
+-    // Find bundles for this edge
+-    const sourceBundle = bundles.find(b => 
+-      b.type === 'source' && b.nodeId === edge.source && b.face === edge.data.sourceFace
+-    );
+-    const targetBundle = bundles.find(b =>
+-      b.type === 'target' && b.nodeId === edge.target && b.face === edge.data.targetFace
+-    );
+-    
+-    // Compute anchors from node positions to align chevrons immediately
+-    const computeAnchor = (nodeId: string, face: string | undefined, offsetX: number | undefined, offsetY: number | undefined) => {
++  // Compute edge anchors (start edges under the node boundary for cleaner appearance)
++  const edgesWithAnchors = edgesWithOffsetData.map(edge => {
++    const computeAnchor = (
++      nodeId: string,
++      face: string | undefined,
++      offsetX: number | undefined,
++      offsetY: number | undefined
++    ) => {
+       const n: any = nodesWithSelection.find((nn: any) => nn.id === nodeId);
+-      const w = n?.width ?? 120;
+-      const h = n?.height ?? 120;
++      const w = n?.width ?? DEFAULT_NODE_WIDTH;
++      const h = n?.height ?? DEFAULT_NODE_HEIGHT;
+       const x = n?.position?.x ?? 0;
+       const y = n?.position?.y ?? 0;
+-      if (face === 'right') return { x: x + w, y: y + h / 2 + (offsetY ?? 0) };
+-      if (face === 'left') return { x: x, y: y + h / 2 + (offsetY ?? 0) };
+-      if (face === 'bottom') return { x: x + w / 2 + (offsetX ?? 0), y: y + h };
++
++      // No inset - anchors at the actual edge (ReactFlow handles are there)
++      if (face === 'right') {
++        return { x: x + w, y: y + h / 2 + (offsetY ?? 0) };
++      }
++      if (face === 'left') {
++        return { x: x, y: y + h / 2 + (offsetY ?? 0) };
++      }
++      if (face === 'bottom') {
++        return { x: x + w / 2 + (offsetX ?? 0), y: y + h };
++      }
+       // top/default
+       return { x: x + w / 2 + (offsetX ?? 0), y: y };
+     };
+@@ -518,16 +520,13 @@
+         sourceAnchorY: srcAnchor.y,
+         targetAnchorX: tgtAnchor.x,
+         targetAnchorY: tgtAnchor.y,
+-        sourceClipPathId: sourceBundle && sourceBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${sourceBundle.id}` : undefined,
+-        targetClipPathId: targetBundle && targetBundle.bundleWidth >= MIN_CHEVRON_THRESHOLD ? `chevron-${targetBundle.id}` : undefined,
+-        renderFallbackTargetArrow: !!(targetBundle && targetBundle.bundleWidth < MIN_CHEVRON_THRESHOLD),
+       }
+     };
+   });
+     
+     setNodes(nodesWithSelection);
+     // Sort edges so selected edges render last (on top)
+-    const sortedEdges = [...edgesWithClipPaths].sort((a, b) => {
++    const sortedEdges = [...edgesWithAnchors].sort((a, b) => {
+       if (a.selected && !b.selected) return 1;  // selected edge goes after unselected
+       if (!a.selected && b.selected) return -1; // unselected edge goes before selected
+       return 0; // preserve order otherwise
+@@ -603,6 +602,5 @@
+     */
+     
+     setEdges(edgesWithScenarios);
+-    setEdgeBundles(bundles);
+     
+     // Reset syncing flag after graph->ReactFlow sync is complete

@@ -10,7 +10,7 @@ import { EdgeLabelRenderer } from 'reactflow';
 import { Plug } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
-import { BEAD_MARKER_DISTANCE, BEAD_SPACING } from '../../lib/nodeEdgeConstants';
+import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE } from '../../lib/nodeEdgeConstants';
 
 // Helper to extract text content from React node for SVG textPath
 function extractTextFromReactNode(node: React.ReactNode): string {
@@ -118,27 +118,32 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge.case_variant, // Case variant name
     edge.conditional_p?.length, // Conditional probabilities count
     graph?.nodes?.length, // Graph structure indicator
+    // scenariosContext changes reference frequently - use stable indicators instead
+    scenariosContext?.scenarios?.map(s => s.id).join(','), // Scenario IDs (stable string)
+    JSON.stringify(scenariosContext?.baseParams?.edges?.[edge.uuid || edge.id || '']), // Edge-specific params
     visibleScenarioIds.join(','), // Visible scenarios (stable string)
     visibleColorOrderIds.join(','), // Color order (stable string)
+    Array.from(scenarioColors.entries()).join(','), // Scenario colors (stable string)
     whatIfDSL, // What-If DSL
     visibleStartOffset, // Visible start offset
   ]);
   
   // Get expansion state for a specific bead
   const getBeadExpanded = useCallback((bead: BeadDefinition): boolean => {
-    const edgeState = beadStates.get(edge.uuid || edge.id);
+    const edgeId = edge.uuid || edge.id || '';
+    const edgeState = beadStates.get(edgeId);
     if (!edgeState) {
       return bead.expanded; // Use default
     }
     const key = `${bead.type}-${bead.index}`;
     return edgeState[key] ?? bead.expanded;
-  }, [beadStates, edge]);
+  }, [beadStates, edge.uuid, edge.id]);
   
   // Toggle bead expansion
   const toggleBead = useCallback((bead: BeadDefinition) => {
     setBeadStates(prev => {
       const newMap = new Map(prev);
-      const edgeId = edge.uuid || edge.id;
+      const edgeId = edge.uuid || edge.id || '';
       const edgeState = newMap.get(edgeId) || {};
       const key = `${bead.type}-${bead.index}`;
       const newState = { ...edgeState };
@@ -146,22 +151,22 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       newMap.set(edgeId, newState);
       return newMap;
     });
-  }, [edge, getBeadExpanded]);
+  }, [edge.uuid, edge.id, getBeadExpanded]);
   
   if (!path) {
     console.log('[EdgeBeads] No path element');
-    return null;
+    return { svg: null, html: null };
   }
   
   if (beadDefinitions.length === 0) {
     console.log('[EdgeBeads] No bead definitions for edge', edge.uuid || edge.id);
-    return null;
+    return { svg: null, html: null };
   }
   
   const pathLength = path.getTotalLength();
   if (!pathLength || pathLength <= 0) {
     console.log('[EdgeBeads] Invalid path length:', pathLength);
-    return null;
+    return { svg: null, html: null };
   }
   
   // Get path ID for textPath reference (must be unique per edge)
@@ -203,7 +208,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       const LOZENGE_HEIGHT = 14; // Match collapsed bead diameter
       const LOZENGE_PADDING = 4; // Padding on each side (increased for larger text)
       // Measure text width accurately using canvas
-      const measuredTextWidth = measureTextWidth(textContent, 9, '500'); // Increased from 8px to 9px
+      const measuredTextWidth = measureTextWidth(textContent, BEAD_FONT_SIZE, '500');
       // Add space for plug icon if present (~10px)
       const plugIconWidth = hasPlug ? 10 : 0;
       // Reduce width by 20% to fix overestimation; treat this as the FULL lozenge length
@@ -381,7 +386,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       svgBeads.push(
         <g 
           key={`bead-expanded-${bead.type}-${bead.index}`}
-          style={{ cursor: 'pointer', pointerEvents: 'all' }}
+          style={{ cursor: 'pointer', pointerEvents: 'painted' }}
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -409,15 +414,17 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             opacity={bead.backgroundColor === '#000000' ? '0.6' : '0.85'} // 60% opacity for black params
             style={{
               filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))',
+              pointerEvents: 'painted', // Only capture events over painted (visible) stroke
             }}
           />
           
           {/* Text along the path - render with scenario colors using tspan */}
           <text
             style={{
-              fontSize: '9px', // Increased from 8px
+              fontSize: `${BEAD_FONT_SIZE}px`,
               fontWeight: '500',
               fill: '#FFFFFF', // Always white/bright text on dark grey or colored backgrounds
+              pointerEvents: 'painted', // Only capture events over painted (visible) text, not the entire path
             }}
             dominantBaseline="middle"
             dy="0"
@@ -483,7 +490,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       svgBeads.push(
         <g 
           key={`bead-collapsed-${bead.type}-${bead.index}`}
-          style={{ cursor: 'pointer', pointerEvents: 'all' }}
+          style={{ cursor: 'pointer', pointerEvents: 'painted' }}
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -511,6 +518,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             opacity={bead.backgroundColor === '#000000' ? '0.6' : '0.85'}
             style={{
               filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))',
+              pointerEvents: 'painted', // Only capture events over painted (visible) stroke
             }}
           />
         </g>
@@ -523,9 +531,9 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   
   return {
     svg: svgBeads.length > 0 ? (
-      <g className="edge-beads-svg" style={{ zIndex: 10000, pointerEvents: 'all' }}>
+      <g className="edge-beads-svg" style={{ zIndex: 10000 }}>
         <defs>
-          <path id={pathId} d={pathD} />
+          <path id={pathId} d={pathD} pointerEvents="none" />
         </defs>
         {svgBeads}
       </g>

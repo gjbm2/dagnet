@@ -5,7 +5,7 @@ import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
-import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH } from '@/lib/nodeEdgeConstants';
+import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE } from '@/lib/nodeEdgeConstants';
 
 interface ConversionNodeData {
   uuid: string;
@@ -262,8 +262,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const getNodeShape = () => {
     // Use Sankey dimensions if provided, otherwise default
     // Keep nominal dimensions - do NOT add padding (breaks ReactFlow handle positioning)
-    const nominalWidth = data.sankeyWidth || 100;
-    const nominalHeight = data.sankeyHeight || 100;
+    const nominalWidth = data.sankeyWidth || DEFAULT_NODE_WIDTH;
+    const nominalHeight = data.sankeyHeight || DEFAULT_NODE_HEIGHT;
     
     return {
       borderRadius: '0px', // Square corners for all nodes (for now)
@@ -279,8 +279,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     if (data.useSankeyView) return null; // Sankey uses CSS rendering
     
     // Use nominal dimensions (before padding)
-    const nominalW = data.sankeyWidth || 100;
-    const nominalH = data.sankeyHeight || 100;
+    const nominalW = data.sankeyWidth || DEFAULT_NODE_WIDTH;
+    const nominalH = data.sankeyHeight || DEFAULT_NODE_HEIGHT;
     const w = nominalW;
     const h = nominalH;
     const faces = data.faceDirections ?? {
@@ -341,7 +341,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     background: caseNodeColor || '#8B5CF6', // custom color or purple-500
     border: selected ? `2px solid ${caseNodeColor || '#7C3AED'}` : `2px solid ${caseNodeColor || '#7C3AED'}`, // purple-600
     color: '#FFFFFF', // white text
-    fontSize: '11px' // slightly smaller font
+    fontSize: `${CASE_NODE_FONT_SIZE}px`
   } : {};
 
   // Status indicator color for case nodes
@@ -422,8 +422,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     >
       {/* SVG overlay for curved outline (non-Sankey view only) */}
       {outlinePathD && (() => {
-        const w = parseFloat(nodeShape.width) || 100;
-        const h = parseFloat(nodeShape.height) || 100;
+        const w = parseFloat(nodeShape.width) || DEFAULT_NODE_WIDTH;
+        const h = parseFloat(nodeShape.height) || DEFAULT_NODE_HEIGHT;
         const SHADOW_BLUR = selected ? 4 : 2;
         const SHADOW_OFFSET = selected ? 4 : 2;
         // Extend viewBox to accommodate convex bulges and drop shadow
@@ -610,7 +610,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           style={{ 
             fontWeight: 'bold', 
             marginBottom: '4px', 
-            fontSize: '12px', 
+            fontSize: `${NODE_LABEL_FONT_SIZE}px`, 
             cursor: 'pointer',
             lineHeight: '1.2',
             wordWrap: 'break-word',
@@ -628,7 +628,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           title="Double-click to edit in properties panel"
         >
           {data.id && (
-            <span style={{ fontSize: '10px', opacity: 0.7 }} title={`Connected to node: ${data.id}`}>
+            <span style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, opacity: 0.7 }} title={`Connected to node: ${data.id}`}>
               ⛓️
             </span>
           )}
@@ -636,13 +636,13 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         </div>
         
         {data.absorbing && !isCaseNode && !data.outcome_type && (
-          <div style={{ fontSize: '10px', color: '#666', marginTop: '4px' }}>
+          <div style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, color: '#666', marginTop: '4px' }}>
             TERMINAL
           </div>
         )}
 
         {data.entry?.is_start && !isCaseNode && (
-          <div style={{ fontSize: '10px', color: '#16a34a', marginTop: '2px', fontWeight: 'bold' }}>
+          <div style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, color: '#16a34a', marginTop: '2px', fontWeight: 'bold' }}>
             START
           </div>
         )}
@@ -650,7 +650,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         {/* Case node variant info */}
         {isCaseNode && data.case && (
           <div style={{ 
-            fontSize: '9px', 
+            fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
             color: '#FFFFFF', 
             marginTop: '2px',
             opacity: 0.9
@@ -662,7 +662,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         {/* Probability mass warning */}
         {probabilityMass && !probabilityMass.isComplete && !isCaseNode && !isActiveDrag && (
           <div style={{ 
-            fontSize: '9px', 
+            fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
             color: '#ff6b6b', 
             marginTop: '2px',
             background: '#fff5f5',
@@ -678,7 +678,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         {/* Conditional probability conservation warning */}
         {conditionalValidation?.hasProbSumError && !isActiveDrag && (
           <div style={{ 
-            fontSize: '9px', 
+            fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
             color: '#ff6b6b', 
             marginTop: '2px',
             background: '#fff5f5',
@@ -736,7 +736,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: '9px',
+          fontSize: `${NODE_SMALL_FONT_SIZE}px`,
           color: '#fff',
           fontWeight: 'bold',
           boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
@@ -760,7 +760,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: '10px',
+          fontSize: `${NODE_SECONDARY_FONT_SIZE}px`,
           color: '#fff',
           fontWeight: 'bold',
           boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
@@ -847,7 +847,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             width: '20px',
             height: '20px',
             cursor: 'pointer',
-            fontSize: '12px',
+            fontSize: `${NODE_LABEL_FONT_SIZE}px`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
