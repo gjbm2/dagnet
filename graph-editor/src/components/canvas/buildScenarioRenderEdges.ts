@@ -30,6 +30,7 @@ interface BuildScenarioRenderEdgesParams {
     isSingleNodeSelection: boolean;
   };
   isPanningOrZooming?: boolean;
+  isInSlowPathRebuild?: boolean;
 }
 
 const MIN_CHEVRON_THRESHOLD = 10;
@@ -55,7 +56,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     calculateEdgeOffsets,
     tabId,
     highlightMetadata,
-    isPanningOrZooming
+    isPanningOrZooming,
+    isInSlowPathRebuild
   } = params;
 
   if (!scenariosContext || !graph) {
@@ -335,7 +337,26 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
     // Build draft overlay edges with raw widths
     const draftOverlayEdges = baseEdges.map(edge => {
-      const preScaled = rawWidths.get(edge.id) || MIN_WIDTH;
+      // Compute fresh width from probabilities
+      const freshComputed = rawWidths.get(edge.id) || MIN_WIDTH;
+      const mergedWidth = edge.data?.scaledWidth as number | undefined;
+      
+      // Always prefer merged scaledWidth if available (slow path merge put it there)
+      // Otherwise use fresh computation
+      // This prevents flicker during rebuilds while still accepting first-render and updates
+      const preScaled = mergedWidth ?? freshComputed;
+      
+      // Diagnostic logging for first edge only
+      if (edge.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
+        console.log(`[buildScenarioRenderEdges] Width calc for ${edge.id}:`, {
+          scenarioId,
+          freshComputed,
+          mergedWidth,
+          preScaled,
+          usedMerged: !!mergedWidth
+        });
+      }
+      
       const edgeProb = probResolver(edge);
 
       // Find graph edge for params lookup
