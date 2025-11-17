@@ -1880,6 +1880,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // GEOMETRY MERGE: Preserve key geometry fields (scaledWidth, offsets) from previous RENDER edges
     // when topology hasn't changed, to avoid visual flicker during slow-path rebuilds
     // Use lastRenderEdgesRef which tracks the final output of buildScenarioRenderEdges (with correct widths)
+    
+    // DIAGNOSTIC: Log what we're about to merge (first edge only)
+    if (edgesWithScenarios.length > 0) {
+      const firstEdge = edgesWithScenarios[0];
+      console.log(`[SlowPath BEFORE merge] First edge ${firstEdge.id}:`, {
+        scaledWidth: firstEdge.data?.scaledWidth,
+        hasCalculateWidth: !!firstEdge.data?.calculateWidth,
+        dataKeys: Object.keys(firstEdge.data || {})
+      });
+      const prevRender = lastRenderEdgesRef.current.find(e => e.id === firstEdge.id);
+      if (prevRender) {
+        console.log(`[SlowPath BEFORE merge] Previous render edge ${firstEdge.id}:`, {
+          scaledWidth: prevRender.data?.scaledWidth,
+          hasCalculateWidth: !!prevRender.data?.calculateWidth,
+        });
+      }
+    }
+    
     const prevById = new Map<string, any>();
     lastRenderEdgesRef.current.forEach(prevEdge => {
       prevById.set(prevEdge.id, prevEdge);
@@ -1904,6 +1922,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const prevData = prevEdge.data || {};
       const newData = newEdge.data || {};
       
+      // DIAGNOSTIC: Log merge for first edge
+      if (newEdge.id === edgesWithScenarios[0]?.id) {
+        console.log(`[SlowPath MERGE] Edge ${newEdge.id}:`, {
+          prevScaledWidth: prevData.scaledWidth,
+          newScaledWidth: newData.scaledWidth,
+          mergedScaledWidth: prevData.scaledWidth ?? newData.scaledWidth,
+        });
+      }
+      
       return {
         ...newEdge,
         data: {
@@ -1917,6 +1944,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         },
       };
     });
+    
+    // DIAGNOSTIC: Log what we're committing (first edge only)
+    if (mergedEdges.length > 0) {
+      const firstMerged = mergedEdges[0];
+      console.log(`[SlowPath AFTER merge] First edge ${firstMerged.id}:`, {
+        scaledWidth: firstMerged.data?.scaledWidth,
+        hasCalculateWidth: !!firstMerged.data?.calculateWidth,
+      });
+    }
     
     setEdges(mergedEdges);
     
