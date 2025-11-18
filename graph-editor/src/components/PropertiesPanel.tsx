@@ -265,6 +265,8 @@ export default function PropertiesPanel({
           setCaseData({
             id: '',
             status: 'active',
+            connection: undefined,
+            connection_string: undefined,
             variants: []
           });
         }
@@ -1197,8 +1199,10 @@ export default function PropertiesPanel({
                     if (checked) {
                       setNodeType('case');
                       const newCaseData = caseData.variants.length === 0 ? {
-                      id: '',  // Don't auto-generate - let user fill in
+                        id: '',  // Don't auto-generate - let user fill in
                         status: 'active' as 'active' | 'paused' | 'completed',
+                        connection: undefined,
+                        connection_string: undefined,
                         variants: [
                           { name: 'control', weight: 0.5 },
                           { name: 'treatment', weight: 0.5 }
@@ -1233,6 +1237,8 @@ export default function PropertiesPanel({
                       setCaseData({
                         id: '',
                         status: 'active',
+                        connection: undefined,
+                        connection_string: undefined,
                         variants: []
                       });
                       if (graph && selectedNodeId) {
@@ -1311,6 +1317,8 @@ export default function PropertiesPanel({
                             const newCaseData = {
                               id: caseData.id,
                               status: caseRegistryData.status || caseData.status,
+                              connection: caseRegistryData.connection || caseData.connection,
+                              connection_string: caseRegistryData.connection_string || caseData.connection_string,
                               variants: caseRegistryData.variants || caseData.variants
                             };
                             setCaseData(newCaseData);

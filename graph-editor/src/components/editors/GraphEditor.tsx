@@ -136,6 +136,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   const tabContext = useTabContext();
   const activeTabId = tabContext.activeTabId;
   const tabOps = tabContext.operations;
+  const tabs = tabContext.tabs;
   
   // Get current tab and its state (reactive - will re-render when tab state changes)
   const myTab = tabContext.tabs.find(t => t.id === tabId);
@@ -356,7 +357,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         
         // CRITICAL: Clean up orphaned scenario IDs before adding the new one
         if (scenariosContext && tabId) {
-          const currentTab = tabOps.tabs.find(t => t.id === tabId);
+          const currentTab = tabs.find(t => t.id === tabId);
           const currentState = currentTab?.editorState?.scenarioState;
           if (currentState) {
             const validScenarioIds = new Set(scenariosContext.scenarios.map(s => s.id));
@@ -394,20 +395,22 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         }
         
         // Now add the new scenario to visible list
-        tabOps.toggleScenarioVisibility(tabId, scenarioId);
+        if (tabId) {
+          tabOps.toggleScenarioVisibility(tabId, scenarioId);
+        }
       } else {
         console.log(`[GraphEditor ${fileId}] ⏭️ Event is for different tab, ignoring`);
       }
     };
     window.addEventListener('dagnet:addVisibleScenario' as any, handler);
     return () => window.removeEventListener('dagnet:addVisibleScenario' as any, handler);
-  }, [tabId, tabOps, fileId, scenariosContext]);
+  }, [tabId, tabOps, tabs, fileId, scenariosContext]);
   
   // Proactively clean up orphaned scenario IDs whenever scenarios list or tab state changes
   useEffect(() => {
     if (!scenariosContext || !tabId) return;
     
-    const currentTab = tabOps.tabs.find(t => t.id === tabId);
+    const currentTab = tabs.find(t => t.id === tabId);
     const currentState = currentTab?.editorState?.scenarioState;
     if (!currentState) return;
     
@@ -427,15 +430,17 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       const cleanedVisibleIds = currentState.visibleScenarioIds.filter(id => validScenarioIds.has(id));
       const cleanedColorOrderIds = currentState.visibleColorOrderIds.filter(id => validScenarioIds.has(id));
       
-      tabOps.updateTabState(tabId, {
-        scenarioState: {
-          ...currentState,
-          visibleScenarioIds: cleanedVisibleIds,
-          visibleColorOrderIds: cleanedColorOrderIds
-        }
-      });
+      if (tabId) {
+        tabOps.updateTabState(tabId, {
+          scenarioState: {
+            ...currentState,
+            visibleScenarioIds: cleanedVisibleIds,
+            visibleColorOrderIds: cleanedColorOrderIds
+          }
+        }).catch(err => console.error('Failed to update tab state:', err));
+      }
     }
-  }, [scenariosContext?.scenarios, tabId, tabOps, fileId]);
+  }, [scenariosContext?.scenarios, tabId, tabOps, tabs, fileId]);
   
   // Listen for scenario deletion events and clean up from ALL tabs
   // Only ONE GraphEditor instance should handle this (use the first one)
@@ -1630,7 +1635,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         <WindowSelector tabId={tabId} />
         
         {/* Scenario Legend - shows when >1 scenario exists (excluding Base) */}
-        <ScenarioLegendWrapper tabId={tabId} />
+        {tabId && <ScenarioLegendWrapper tabId={tabId} />}
         
         {/* Main DockLayout - spans entire graph editor */}
         {dockLayout && (

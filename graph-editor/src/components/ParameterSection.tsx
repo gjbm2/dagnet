@@ -22,6 +22,7 @@ interface ParameterSectionProps {
     id?: string;
     connection?: string;
     connection_string?: string;
+    connection_overridden?: boolean;
     mean?: number;
     stdev?: number;
     distribution?: string;
