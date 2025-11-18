@@ -294,18 +294,18 @@ export function DataOperationsMenu({
     <div className={menuClassName}>
       {/* Get from File → Graph - only show if file ACTUALLY exists (computed locally, not from prop) */}
       {actualFileExists && (
-        <button
-          className={itemClassName}
-          onClick={handleGetFromFile}
+      <button
+        className={itemClassName}
+        onClick={handleGetFromFile}
           title="Get data from file"
-        >
-          <span>Get data from file</span>
-          <div className={pathwayClassName}>
-            <Folders size={12} />
-            <span className="lightning-menu-pathway">→</span>
-            <TrendingUpDown size={12} />
-          </div>
-        </button>
+      >
+        <span>Get data from file</span>
+        <div className={pathwayClassName}>
+          <Folders size={12} />
+          <span className="lightning-menu-pathway">→</span>
+          <TrendingUpDown size={12} />
+        </div>
+      </button>
       )}
       
       {/* Get from Source → File + Graph (versioned) - only show if file has connection */}

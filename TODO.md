@@ -1,16 +1,9 @@
 # TODO
 
-## Sheets range resolution logic
-
-docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md
-
-## Scenarios project
-
-- add icons to collapsed beads?
-- playing with edges resets edge_id! 
-- clicking beads -- make hotspot larger
-- whatif layer: prob needs is own layer in the palette really for clarity...
-- auto-reroute still stubborn
+## Nasty glitches
+- defaulting scenarios to visibility = false on app init / load. wrong.
+- Sheets range resolution logic
+  docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md
 - what-if funky and fussy (render path...)
 
 ## Current query DSL
@@ -124,6 +117,11 @@ docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- add icons to collapsed beads?
+- playing with edges resets edge_id! 
+- clicking beads -- make hotspot larger
+- whatif layer: prob needs is own layer in the palette really for clarity...
+- auto-reroute still stubborn
 - let's change the paramster keycolour to pink and nodes from blue to...something else that isn't orange or bright blue...cyan? That will help oragne and blue for dirty/open.
 - flickering when moving nodes (chevrons render a frame later)
 - 'show travel' chevrons along edges moving at log lag speed
