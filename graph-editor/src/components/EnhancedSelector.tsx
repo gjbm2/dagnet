@@ -52,6 +52,8 @@ interface EnhancedSelectorProps {
   /** For direct parameter references without param file */
   paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
   conditionalIndex?: number;
+  /** When true, only call onChange on blur/selection (not on each keystroke) */
+  commitOnBlurOnly?: boolean;
 }
 
 /**
@@ -86,7 +88,8 @@ export function EnhancedSelector({
   onClear,
   targetInstanceUuid,
   paramSlot,
-  conditionalIndex
+  conditionalIndex,
+  commitOnBlurOnly = false
 }: EnhancedSelectorProps) {
   console.log(`[${new Date().toISOString()}] [EnhancedSelector] RENDER (type=${type}, value=${value})`);
   const { operations: navOps } = useNavigatorContext();
@@ -106,6 +109,7 @@ export function EnhancedSelector({
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const syncMenuRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const blurTimeoutRef = useRef<number | null>(null);
   
   // State for dropdown positioning
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
@@ -316,7 +320,8 @@ export function EnhancedSelector({
     setInputValue(newValue);
     setShowSuggestions(true);
     
-    if (validationMode !== 'strict') {
+    // Immediate commit only when allowed (most fields), not when caller wants commit-on-blur semantics
+    if (!commitOnBlurOnly && validationMode !== 'strict') {
       onChange(newValue);
     }
   };
@@ -380,8 +385,21 @@ export function EnhancedSelector({
   };
 
   const handleClear = () => {
+    // Cancel any pending blur commit/hide
+    if (blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current);
+      blurTimeoutRef.current = null;
+    }
+
+    // Clear the input and show suggestions so user can immediately pick a new value
     setInputValue('');
-    onChange('');
+    setShowSuggestions(true);
+
+    // For commit-on-blur fields, don't treat clear as an immediate commit;
+    // wait for blur/Enter to propagate the change.
+    if (!commitOnBlurOnly) {
+      onChange('');
+    }
     inputRef.current?.focus();
     
     // Call onClear callback for undo/redo history
@@ -398,13 +416,36 @@ export function EnhancedSelector({
   };
 
   const handleInputBlur = () => {
-    setTimeout(() => {
+    // Capture whether suggestions are open at blur time
+    const shouldCommitOnBlur =
+      commitOnBlurOnly && !showSuggestions && validationMode !== 'strict';
+
+    if (blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current);
+    }
+
+    blurTimeoutRef.current = window.setTimeout(() => {
+      blurTimeoutRef.current = null;
       setShowSuggestions(false);
       
       if (validationMode === 'strict' && inputValue && !isConnected) {
         setInputValue(value);
+      } else if (shouldCommitOnBlur && inputValue !== value) {
+        // Commit final value on blur when using commit-on-blur semantics,
+        // but only when dropdown is not open (to avoid interfering with item clicks).
+        onChange(inputValue);
       }
     }, 200);
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (commitOnBlurOnly && e.key === 'Enter') {
+      e.preventDefault();
+      if (inputValue !== value) {
+        onChange(inputValue);
+      }
+      inputRef.current?.blur();
+    }
   };
 
   const handleCreateNew = async () => {
@@ -540,6 +581,7 @@ export function EnhancedSelector({
             type="text"
             value={inputValue}
             onChange={handleInputChange}
+            onKeyDown={handleInputKeyDown}
             onFocus={handleInputFocus}
             onBlur={handleInputBlur}
             placeholder={placeholder || `Select or enter ${type} ID...`}

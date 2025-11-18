@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import toast from 'react-hot-toast';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
@@ -24,6 +25,7 @@ import { normalizeConstraintString } from '@/lib/queryDSL';
 import { isProbabilityMassUnbalanced, getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils';
 import './PropertiesPanel.css';
 import type { Evidence } from '../types';
+import { useDialog } from '../contexts/DialogContext';
 
 /**
  * Format evidence data for tooltip display
@@ -457,6 +459,8 @@ export default function PropertiesPanel({
     return () => window.removeEventListener('dagnet:focusField' as any, handleFocusField as EventListener);
   }, []);
 
+  const { showConfirm } = useDialog();
+
   const updateGraph = useCallback((path: string[], value: any) => {
     if (!graph) return;
     const next = structuredClone(graph);
@@ -836,15 +840,70 @@ export default function PropertiesPanel({
                   value={localNodeData.id || ''}
                   autoFocus={!localNodeData.id}
                   targetInstanceUuid={selectedNodeId}
-                  onChange={(newId) => {
+                  commitOnBlurOnly={true}
+                  onChange={async (newId) => {
                     console.log('PropertiesPanel: EnhancedSelector onChange:', { newId: newId, currentId: localNodeData.id });
                     
                     // Update local state immediately
                     setLocalNodeData({...localNodeData, id: newId});
                     setIdManuallyEdited(true);
                     
-                    // Update the graph with new id
-                    updateNode('id', newId);
+                    // Use UpdateManager to rename node id and update references
+                    if (!graph || !selectedNodeId) return;
+
+                    const trimmedId = (newId || '').trim();
+
+                    // Check for empty or duplicate id
+                    const isEmpty = trimmedId === '';
+                    const isDuplicate = graph.nodes.some((n: any) =>
+                      (n.uuid !== selectedNodeId && n.id === trimmedId)
+                    );
+
+                    if (isEmpty || isDuplicate) {
+                      const reason = isEmpty
+                        ? 'Node ID is empty.'
+                        : `Node ID "${trimmedId}" is already used by another node.`;
+
+                      const confirmed = await showConfirm({
+                        title: 'Unusual node ID',
+                        message:
+                          `${reason}\n\n` +
+                          'This can make queries and scenarios harder to read and reason about.\n\n' +
+                          'Are you sure you want to commit this ID?',
+                        confirmLabel: 'OK',
+                        cancelLabel: 'Cancel',
+                        // Encourage Cancel as the "safe" choice
+                        confirmVariant: 'secondary',
+                      });
+
+                      if (!confirmed) {
+                        // Revert local input and do not apply changes
+                        setLocalNodeData(prev => ({ ...prev, id: localNodeData.id || '' }));
+                        return;
+                      }
+                    }
+
+                    try {
+                      const { updateManager } = await import('../services/UpdateManager');
+                      const result = updateManager.renameNodeId(graph, selectedNodeId, trimmedId);
+                      setGraph(result.graph);
+                      saveHistoryState('Update node id', selectedNodeId);
+
+                      const totalEdgesTouched =
+                        result.edgesFromToUpdated +
+                        result.edgeIdsUpdatedFromId +
+                        result.edgeIdsUpdatedFromUuid;
+
+                      toast.success(
+                        `Updated node id to "${trimmedId}"` +
+                          (totalEdgesTouched || result.queriesUpdated || result.conditionsUpdated
+                            ? ` · edges: ${totalEdgesTouched}, queries: ${result.queriesUpdated}, conditions: ${result.conditionsUpdated}`
+                            : '')
+                      );
+                    } catch (error) {
+                      console.error('PropertiesPanel: Failed to rename node id via UpdateManager:', error);
+                      toast.error('Failed to update node id. See console for details.');
+                    }
                   }}
                   onClear={() => {
                     // No need to save history - onChange already does it via updateNode

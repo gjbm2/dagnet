@@ -105,7 +105,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
       );
 
       return {
-        uuid: n.id,  // ReactFlow node ID is the UUID
+      uuid: n.id,  // ReactFlow node ID is the UUID
         // Human-readable ID:
         // - Prefer the ReactFlow data.id when it is explicitly set
         // - Otherwise, fall back to the original graph node id (if any)
@@ -114,20 +114,20 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         // This prevents accidental loss of node.id when fromFlow runs using
         // stale ReactFlow node data that doesn't yet have the updated id.
         id: n.data.id ?? originalNode?.id ?? '',
-        label: n.data.label,
-        absorbing: n.data.absorbing ?? false,
-        outcome_type: n.data.outcome_type,
-        description: n.data.description,
-        entry: n.data.entry,
-        type: n.data.type, // Add node type (normal/case)
-        case: n.data.case, // Add case data for case nodes
-        event_id: n.data.event_id, // Add event_id for DAS queries
-        event_id_overridden: n.data.event_id_overridden, // Override flag
-        layout: {
-          ...n.data.layout, // Preserve all layout properties (including color!)
-          x: Math.round(n.position.x),
-          y: Math.round(n.position.y),
-        },
+      label: n.data.label,
+      absorbing: n.data.absorbing ?? false,
+      outcome_type: n.data.outcome_type,
+      description: n.data.description,
+      entry: n.data.entry,
+      type: n.data.type, // Add node type (normal/case)
+      case: n.data.case, // Add case data for case nodes
+      event_id: n.data.event_id, // Add event_id for DAS queries
+      event_id_overridden: n.data.event_id_overridden, // Override flag
+      layout: {
+        ...n.data.layout, // Preserve all layout properties (including color!)
+        x: Math.round(n.position.x),
+        y: Math.round(n.position.y),
+      },
       };
     }),
     edges: edges.map((e) => {
