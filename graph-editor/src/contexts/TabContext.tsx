@@ -1098,7 +1098,14 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         propertiesOpen: true,
         jsonOpen: false,
         selectedNodeId: null,
-        selectedEdgeId: null
+        selectedEdgeId: null,
+        // IMPORTANT: current layer is visible by default
+        scenarioState: {
+          scenarioOrder: ['current'],
+          visibleScenarioIds: ['current'],
+          visibleColorOrderIds: ['current'],
+          selectedScenarioId: undefined,
+        },
       } : undefined
     };
 
@@ -1435,17 +1442,26 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * Get scenario state for a tab
+   * If no state exists yet (first open), default to 'current' visible.
+   * Existing states are returned verbatim to avoid hidden "fixers".
    */
   const getScenarioState = useCallback((tabId: string) => {
     const tab = tabs.find(t => t.id === tabId);
     if (!tab) return undefined;
-    
-    return tab.editorState?.scenarioState || {
-      scenarioOrder: [],
-      visibleScenarioIds: [],
-      visibleColorOrderIds: [],
-      selectedScenarioId: undefined
-    };
+
+    const state = tab.editorState?.scenarioState;
+
+    if (!state) {
+      // Default: current layer visible in a well-formed state
+      return {
+        scenarioOrder: ['current'],
+        visibleScenarioIds: ['current'],
+        visibleColorOrderIds: ['current'],
+        selectedScenarioId: undefined,
+      };
+    }
+
+    return state;
   }, [tabs]);
 
   /**

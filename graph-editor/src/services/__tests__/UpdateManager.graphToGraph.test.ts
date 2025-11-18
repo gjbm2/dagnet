@@ -1,0 +1,801 @@
+/**
+ * UpdateManager Graph-to-Graph Update Tests
+ * 
+ * Tests for the new graph-to-graph update mechanisms:
+ * - renameNodeId() with comprehensive cascading updates
+ * - Edge ID deduplication
+ * - Query token replacement
+ * - Conditional probability token replacement
+ * - UUID-to-ID edge renaming on first ID assignment
+ * 
+ * @vitest-environment node
+ */
+
+import { describe, it, expect, beforeEach } from 'vitest';
+import { UpdateManager } from '../UpdateManager';
+
+describe('UpdateManager - Graph-to-Graph Updates', () => {
+  let updateManager: UpdateManager;
+  
+  beforeEach(() => {
+    updateManager = new UpdateManager();
+    updateManager.clearAuditLog();
+  });
+  
+  // ============================================================
+  // TEST SUITE 1: Basic Node ID Renaming
+  // ============================================================
+  
+  describe('renameNodeId - Basic Functionality', () => {
+    it('should rename node id and update label', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-uuid-1',
+            id: 'old-node',
+            label: 'Old Node',
+          },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-uuid-1', 'new-node');
+      
+      expect(result.graph.nodes[0].id).toBe('new-node');
+      expect(result.graph.nodes[0].label).toBe('New node'); // Humanized
+      expect(result.oldId).toBe('old-node');
+    });
+    
+    it('should not update label if label_overridden is true', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-uuid-1',
+            id: 'old-node',
+            label: 'Custom Label',
+            label_overridden: true,
+          },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-uuid-1', 'new-node');
+      
+      expect(result.graph.nodes[0].id).toBe('new-node');
+      expect(result.graph.nodes[0].label).toBe('Custom Label'); // Unchanged
+    });
+    
+    it('should handle renaming node by current id instead of uuid', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-uuid-1',
+            id: 'current-id',
+            label: 'Current Label',
+          },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'current-id', 'new-id');
+      
+      expect(result.graph.nodes[0].id).toBe('new-id');
+      expect(result.oldId).toBe('current-id');
+    });
+    
+    it('should handle first-time id assignment (null to id)', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-uuid-1',
+            id: null,
+            label: 'Unlabeled Node',
+          },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-uuid-1', 'first-id');
+      
+      expect(result.graph.nodes[0].id).toBe('first-id');
+      expect(result.graph.nodes[0].label).toBe('First id'); // Humanized
+      expect(result.oldId).toBeNull(); // null when node had no previous id
+    });
+    
+    it('should handle empty string id assignment', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-uuid-1',
+            id: 'old-id',
+            label: 'Old Label',
+          },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-uuid-1', '');
+      
+      expect(result.graph.nodes[0].id).toBe('');
+      expect(result.oldId).toBe('old-id');
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 2: Edge From/To Updates
+  // ============================================================
+  
+  describe('renameNodeId - Edge From/To Updates', () => {
+    it('should update edge.from when source node is renamed', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'old-node-a' },
+          { uuid: 'node-b', id: 'node-b' },
+        ],
+        edges: [
+          { id: 'edge-1', from: 'old-node-a', to: 'node-b', p: { mean: 0.5 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'new-node-a');
+      
+      expect(result.graph.edges[0].from).toBe('new-node-a');
+      expect(result.graph.edges[0].to).toBe('node-b'); // Unchanged
+      expect(result.edgesFromToUpdated).toBe(1);
+    });
+    
+    it('should update edge.to when target node is renamed', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'node-a' },
+          { uuid: 'node-b', id: 'old-node-b' },
+        ],
+        edges: [
+          { id: 'edge-1', from: 'node-a', to: 'old-node-b', p: { mean: 0.5 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-b', 'new-node-b');
+      
+      expect(result.graph.edges[0].from).toBe('node-a'); // Unchanged
+      expect(result.graph.edges[0].to).toBe('new-node-b');
+      expect(result.edgesFromToUpdated).toBe(1);
+    });
+    
+    it('should update multiple edges connected to renamed node', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'old-hub' },
+          { uuid: 'node-b', id: 'node-b' },
+          { uuid: 'node-c', id: 'node-c' },
+        ],
+        edges: [
+          { id: 'edge-1', from: 'old-hub', to: 'node-b', p: { mean: 0.5 } },
+          { id: 'edge-2', from: 'old-hub', to: 'node-c', p: { mean: 0.3 } },
+          { id: 'edge-3', from: 'node-b', to: 'old-hub', p: { mean: 0.2 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'new-hub');
+      
+      expect(result.graph.edges[0].from).toBe('new-hub');
+      expect(result.graph.edges[1].from).toBe('new-hub');
+      expect(result.graph.edges[2].to).toBe('new-hub');
+      expect(result.edgesFromToUpdated).toBe(3);
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 3: Edge ID String Replacement
+  // ============================================================
+  
+  describe('renameNodeId - Edge ID Replacement', () => {
+    it('should replace node id substring in edge ids', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'checkout' },
+          { uuid: 'node-b', id: 'payment' },
+        ],
+        edges: [
+          { id: 'checkout-to-payment', from: 'checkout', to: 'payment', p: { mean: 0.5 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'cart');
+      
+      expect(result.graph.edges[0].id).toBe('cart-to-payment');
+      expect(result.graph.edges[0].from).toBe('cart');
+      expect(result.edgeIdsUpdatedFromId).toBe(1);
+    });
+    
+    it('should use word boundaries for token replacement', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'e' },
+          { uuid: 'node-b', id: 'node-b' },
+        ],
+        edges: [
+          { id: 'e-to-node-b', from: 'e', to: 'node-b', p: { mean: 0.5 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'start');
+      
+      // Should replace 'e' only at word boundaries
+      expect(result.graph.edges[0].id).toBe('start-to-node-b');
+      expect(result.edgeIdsUpdatedFromId).toBe(1);
+    });
+    
+    it('should handle edge ids with multiple occurrences of node id', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'checkout' },
+        ],
+        edges: [
+          { id: 'checkout-start-checkout-end', from: 'checkout', to: 'payment', p: { mean: 0.5 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'cart');
+      
+      expect(result.graph.edges[0].id).toBe('cart-start-cart-end');
+    });
+    
+    it('should not replace partial word matches', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'web' },
+          { uuid: 'node-b', id: 'website' },
+        ],
+        edges: [
+          { id: 'web-to-website', from: 'web', to: 'website', p: { mean: 0.5 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'app');
+      
+      // Should replace 'web' but not 'website'
+      expect(result.graph.edges[0].id).toBe('app-to-website');
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 4: UUID-to-ID Edge Replacement
+  // ============================================================
+  
+  describe('renameNodeId - UUID to ID Replacement', () => {
+    it('should replace uuid with id on first id assignment', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'f3f83440-c341-48a2-8382-12380e08e52a', id: null },
+          { uuid: '2cdeac12-fa4b-4091-9164-8ace50ab5590', id: null },
+        ],
+        edges: [
+          {
+            id: 'f3f83440-c341-48a2-8382-12380e08e52a-to-2cdeac12-fa4b-4091-9164-8ace50ab5590',
+            from: 'f3f83440-c341-48a2-8382-12380e08e52a',
+            to: '2cdeac12-fa4b-4091-9164-8ace50ab5590',
+            p: { mean: 0.5 },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(
+        graph,
+        '2cdeac12-fa4b-4091-9164-8ace50ab5590',
+        'node-b'
+      );
+      
+      expect(result.graph.edges[0].id).toBe('f3f83440-c341-48a2-8382-12380e08e52a-to-node-b');
+      expect(result.graph.edges[0].to).toBe('node-b');
+      expect(result.edgeIdsUpdatedFromUuid).toBe(1);
+    });
+    
+    it('should not replace uuid when node already has an id', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-uuid-a', id: 'node-a' },
+          { uuid: 'node-uuid-b', id: 'old-node-b' },
+        ],
+        edges: [
+          {
+            id: 'node-a-to-old-node-b',
+            from: 'node-a',
+            to: 'old-node-b',
+            p: { mean: 0.5 },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-uuid-b', 'new-node-b');
+      
+      // Should use id-based replacement, not uuid
+      expect(result.graph.edges[0].id).toBe('node-a-to-new-node-b');
+      expect(result.edgeIdsUpdatedFromId).toBe(1);
+      expect(result.edgeIdsUpdatedFromUuid).toBe(0);
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 5: Query Token Replacement
+  // ============================================================
+  
+  describe('renameNodeId - Query Token Replacement', () => {
+    it('should replace node id in edge query strings', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'checkout' },
+          { uuid: 'node-b', id: 'payment' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            from: 'checkout',
+            to: 'payment',
+            p: {
+              mean: 0.5,
+              query: 'checkout.status == "complete"',
+            },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'cart');
+      
+      expect(result.graph.edges[0].p.query).toBe('cart.status == "complete"');
+      expect(result.queriesUpdated).toBe(1);
+    });
+    
+    it('should replace node id in node queries', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-a',
+            id: 'checkout',
+            p: {
+              mean: 0.3,
+              query: 'checkout.source == "mobile"',
+            },
+          },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'cart');
+      
+      expect(result.graph.nodes[0].p.query).toBe('cart.source == "mobile"');
+      expect(result.queriesUpdated).toBe(1);
+    });
+    
+    it('should replace node id in multiple query locations', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'user' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            from: 'start',
+            to: 'user',
+            p: { mean: 0.5, query: 'user.age > 18 && user.verified == true' },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'customer');
+      
+      expect(result.graph.edges[0].p.query).toBe('customer.age > 18 && customer.verified == true');
+    });
+    
+    it('should use word boundaries for query token replacement', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'e' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            from: 'start',
+            to: 'e',
+            p: { mean: 0.5, query: 'e.value > 0' },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'event');
+      
+      expect(result.graph.edges[0].p.query).toBe('event.value > 0');
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 6: Conditional Probability Token Replacement
+  // ============================================================
+  
+  describe('renameNodeId - Conditional Probability Replacement', () => {
+    it('should replace node id in conditional probability conditions', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'checkout' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            from: 'start',
+            to: 'checkout',
+            p: {
+              mean: 0.5,
+              conditional_probabilities: [
+                {
+                  condition: 'checkout.method == "card"',
+                  mean: 0.8,
+                },
+                {
+                  condition: 'checkout.method == "paypal"',
+                  mean: 0.6,
+                },
+              ],
+            },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'payment');
+      
+      const conditionals = result.graph.edges[0].p.conditional_probabilities;
+      expect(conditionals[0].condition).toBe('payment.method == "card"');
+      expect(conditionals[1].condition).toBe('payment.method == "paypal"');
+      expect(result.conditionsUpdated).toBe(2);
+    });
+    
+    it('should replace node id in node conditional probabilities', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-a',
+            id: 'user',
+            p: {
+              mean: 0.5,
+              conditional_probabilities: [
+                {
+                  condition: 'user.country == "US"',
+                  mean: 0.7,
+                },
+              ],
+            },
+          },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'customer');
+      
+      expect(result.graph.nodes[0].p.conditional_probabilities[0].condition).toBe(
+        'customer.country == "US"'
+      );
+      expect(result.conditionsUpdated).toBe(1);
+    });
+    
+    it('should handle multiple node id occurrences in conditions', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'order' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            from: 'start',
+            to: 'order',
+            p: {
+              mean: 0.5,
+              conditional_probabilities: [
+                {
+                  condition: 'order.value > 100 && order.status == "pending"',
+                  mean: 0.8,
+                },
+              ],
+            },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'purchase');
+      
+      expect(result.graph.edges[0].p.conditional_probabilities[0].condition).toBe(
+        'purchase.value > 100 && purchase.status == "pending"'
+      );
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 7: Edge ID Deduplication
+  // ============================================================
+  
+  describe('renameNodeId - Edge ID Deduplication', () => {
+    it('should deduplicate edge ids by appending .2, .3, etc.', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'checkout' },
+          { uuid: 'node-b', id: 'payment' },
+          { uuid: 'node-c', id: 'confirmation' },
+        ],
+        edges: [
+          { id: 'start-to-checkout', from: 'start', to: 'checkout', p: { mean: 0.5 } },
+          { id: 'start-to-payment', from: 'start', to: 'payment', p: { mean: 0.3 } },
+          { id: 'start-to-confirmation', from: 'start', to: 'confirmation', p: { mean: 0.2 } },
+        ],
+      };
+      
+      // Rename all nodes to 'node', which will cause edge id collisions
+      let result = updateManager.renameNodeId(graph, 'node-a', 'node');
+      result = updateManager.renameNodeId(result.graph, 'node-b', 'node');
+      result = updateManager.renameNodeId(result.graph, 'node-c', 'node');
+      
+      const edgeIds = result.graph.edges.map((e: any) => e.id);
+      
+      // All edge ids should be unique
+      expect(new Set(edgeIds).size).toBe(3);
+      expect(edgeIds).toContain('start-to-node');
+      
+      // Check that deduplication happened
+      expect(result.edgeIdsDeduped).toBeGreaterThan(0);
+    });
+    
+    it('should handle pre-existing duplicate edge ids', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'node-a' },
+        ],
+        edges: [
+          { id: 'duplicate-edge', from: 'start', to: 'node-a', p: { mean: 0.5 } },
+          { id: 'duplicate-edge', from: 'node-a', to: 'end', p: { mean: 0.5 } },
+          { id: 'duplicate-edge', from: 'start', to: 'end', p: { mean: 0.5 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'node-b');
+      
+      const edgeIds = result.graph.edges.map((e: any) => e.id);
+      
+      // All edge ids should be unique after deduplication
+      expect(new Set(edgeIds).size).toBe(3);
+      expect(edgeIds).toContain('duplicate-edge');
+      expect(edgeIds).toContain('duplicate-edge.2');
+      expect(edgeIds).toContain('duplicate-edge.3');
+    });
+    
+    it('should preserve unique edge ids', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'checkout' },
+          { uuid: 'node-b', id: 'payment' },
+        ],
+        edges: [
+          { id: 'checkout-to-payment', from: 'checkout', to: 'payment', p: { mean: 0.5 } },
+          { id: 'payment-to-end', from: 'payment', to: 'end', p: { mean: 0.8 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'cart');
+      
+      const edgeIds = result.graph.edges.map((e: any) => e.id);
+      
+      // Edge ids should be updated but remain unique
+      expect(edgeIds).toContain('cart-to-payment');
+      expect(edgeIds).toContain('payment-to-end');
+      expect(new Set(edgeIds).size).toBe(2);
+      expect(result.edgeIdsDeduped).toBe(0); // No deduplication needed
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 8: Complex Integration Scenarios
+  // ============================================================
+  
+  describe('renameNodeId - Complex Integration', () => {
+    it('should handle comprehensive rename with all features', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-uuid-1',
+            id: 'old-checkout',
+            label: 'Old Checkout',
+            p: {
+              mean: 0.5,
+              query: 'old-checkout.type == "express"',
+              conditional_probabilities: [
+                {
+                  condition: 'old-checkout.value > 100',
+                  mean: 0.7,
+                },
+              ],
+            },
+          },
+          { uuid: 'node-uuid-2', id: 'payment' },
+        ],
+        edges: [
+          {
+            id: 'start-to-old-checkout',
+            from: 'start',
+            to: 'old-checkout',
+            p: {
+              mean: 0.8,
+              query: 'old-checkout.source == "mobile"',
+            },
+          },
+          {
+            id: 'old-checkout-to-payment',
+            from: 'old-checkout',
+            to: 'payment',
+            p: {
+              mean: 0.6,
+              conditional_probabilities: [
+                {
+                  condition: 'old-checkout.method == "card"',
+                  mean: 0.9,
+                },
+              ],
+            },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-uuid-1', 'new-checkout');
+      
+      // Node updates
+      expect(result.graph.nodes[0].id).toBe('new-checkout');
+      expect(result.graph.nodes[0].label).toBe('New checkout'); // Humanized
+      expect(result.graph.nodes[0].p.query).toBe('new-checkout.type == "express"');
+      expect(result.graph.nodes[0].p.conditional_probabilities[0].condition).toBe(
+        'new-checkout.value > 100'
+      );
+      
+      // Edge updates
+      expect(result.graph.edges[0].id).toBe('start-to-new-checkout');
+      expect(result.graph.edges[0].to).toBe('new-checkout');
+      expect(result.graph.edges[0].p.query).toBe('new-checkout.source == "mobile"');
+      
+      expect(result.graph.edges[1].id).toBe('new-checkout-to-payment');
+      expect(result.graph.edges[1].from).toBe('new-checkout');
+      expect(result.graph.edges[1].p.conditional_probabilities[0].condition).toBe(
+        'new-checkout.method == "card"'
+      );
+      
+      // Statistics
+      expect(result.oldId).toBe('old-checkout');
+      expect(result.edgesFromToUpdated).toBe(2);
+      expect(result.edgeIdsUpdatedFromId).toBe(2);
+      expect(result.queriesUpdated).toBe(2);
+      expect(result.conditionsUpdated).toBe(2);
+    });
+    
+    it('should handle node with no edges gracefully', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'isolated-node', id: 'isolated', label: 'Isolated Node' },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'isolated-node', 'lonely');
+      
+      expect(result.graph.nodes[0].id).toBe('lonely');
+      expect(result.edgesFromToUpdated).toBe(0);
+      expect(result.edgeIdsUpdatedFromId).toBe(0);
+      expect(result.queriesUpdated).toBe(0);
+      expect(result.conditionsUpdated).toBe(0);
+    });
+    
+    it('should handle graph with missing edges array', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'old-id' },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'new-id');
+      
+      expect(result.graph.nodes[0].id).toBe('new-id');
+      expect(result.edgesFromToUpdated).toBe(0);
+    });
+    
+    it('should handle cost parameters in nodes', () => {
+      const graph = {
+        nodes: [
+          {
+            uuid: 'node-a',
+            id: 'service',
+            cost_gbp: {
+              mean: 10,
+              query: 'service.tier == "premium"',
+            },
+            cost_time: {
+              mean: 5,
+              conditional_probabilities: [
+                {
+                  condition: 'service.region == "US"',
+                  mean: 3,
+                },
+              ],
+            },
+          },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'product');
+      
+      expect(result.graph.nodes[0].cost_gbp.query).toBe('product.tier == "premium"');
+      expect(result.graph.nodes[0].cost_time.conditional_probabilities[0].condition).toBe(
+        'product.region == "US"'
+      );
+      expect(result.queriesUpdated).toBe(1);
+      expect(result.conditionsUpdated).toBe(1);
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 9: Edge Cases and Error Handling
+  // ============================================================
+  
+  describe('renameNodeId - Edge Cases', () => {
+    it('should handle node not found', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'node-a' },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'non-existent', 'new-id');
+      
+      // Should return unchanged graph
+      expect(result.graph.nodes[0].id).toBe('node-a');
+      expect(result.oldId).toBeUndefined();
+    });
+    
+    it('should handle special characters in node ids', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'special-chars-$&*' },
+        ],
+        edges: [
+          { id: 'special-chars-$&*-to-end', from: 'special-chars-$&*', to: 'end', p: { mean: 0.5 } },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'normal-id');
+      
+      expect(result.graph.nodes[0].id).toBe('normal-id');
+      expect(result.graph.edges[0].from).toBe('normal-id');
+    });
+    
+    it('should handle very long node ids', () => {
+      const longId = 'very-long-node-id-'.repeat(10);
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'short' },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', longId);
+      
+      expect(result.graph.nodes[0].id).toBe(longId);
+    });
+    
+    it('should handle nodes with minimal data', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a' }, // No id, no label
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'new-id');
+      
+      expect(result.graph.nodes[0].id).toBe('new-id');
+    });
+  });
+});
+

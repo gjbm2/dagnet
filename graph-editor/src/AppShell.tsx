@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import DockLayout, { LayoutData } from 'rc-dock';
 import YAML from 'yaml';
 import { Toaster } from 'react-hot-toast';
+import toast from 'react-hot-toast';
 import { TabProvider, useTabContext, fileRegistry } from './contexts/TabContext';
 import { NavigatorProvider, useNavigatorContext } from './contexts/NavigatorContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext';
@@ -39,6 +40,13 @@ function AppShellContent() {
   const { updateFromLayout } = useVisibleTabs();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
+
+  // Init-from-secret modal state
+  const [showInitCredsModal, setShowInitCredsModal] = useState(false);
+  const [initSecret, setInitSecret] = useState('');
+  const [initError, setInitError] = useState<string | null>(null);
+  const [isInitSubmitting, setIsInitSubmitting] = useState(false);
+  const [hasUserCredentials, setHasUserCredentials] = useState<boolean | null>(null);
 
   // DIAGNOSTIC: Check for minimal mode (?minimal URL parameter)
   // In minimal mode, render ONLY GraphEditor with no UI chrome (tabs, navigator, menu, etc.)
@@ -118,6 +126,86 @@ function AppShellContent() {
       document.body.style.cursor = '';
     };
   }, [isResizing, navWidth]);
+
+  // Detect whether user credentials have been configured
+  useEffect(() => {
+    const credentialsFile = fileRegistry.getFile('credentials-credentials');
+    const gitArray = credentialsFile?.data?.git;
+    const hasCreds = Array.isArray(gitArray) && gitArray.length > 0;
+    setHasUserCredentials(hasCreds);
+  }, [tabs.length, navState.selectedRepo, navState.selectedBranch]);
+
+  const handleInitCredentialsFromSecret = async () => {
+    if (!initSecret.trim()) {
+      setInitError('Please enter a secret.');
+      return;
+    }
+
+    setIsInitSubmitting(true);
+    setInitError(null);
+
+    try {
+      const expectedSecret = (import.meta as any).env.VITE_INIT_CREDENTIALS_SECRET as string | undefined;
+      const credentialsJson = (import.meta as any).env.VITE_INIT_CREDENTIALS_JSON as string | undefined;
+
+      if (!expectedSecret || !credentialsJson) {
+        setInitError('INIT_CREDENTIALS_SECRET / INIT_CREDENTIALS_JSON are not configured on this deployment.');
+        return;
+      }
+
+      if (initSecret.trim() !== expectedSecret) {
+        setInitError('Invalid secret. Please check your initialization secret.');
+        return;
+      }
+
+      let credentials: any;
+      try {
+        credentials = JSON.parse(credentialsJson);
+      } catch (e) {
+        console.error('Failed to parse INIT_CREDENTIALS_JSON', e);
+        setInitError('INIT_CREDENTIALS_JSON is not valid JSON.');
+        return;
+      }
+
+      if (!credentials || !credentials.git || !Array.isArray(credentials.git) || credentials.git.length === 0) {
+        setInitError('INIT_CREDENTIALS_JSON does not contain a valid git credentials array.');
+        return;
+      }
+
+      // Create or update credentials file in the workspace
+      const credentialsFileId = 'credentials-credentials';
+      const existingFile = fileRegistry.getFile(credentialsFileId);
+      const source = existingFile?.source || {
+        repository: 'local',
+        path: 'credentials.yaml',
+        branch: 'main',
+      };
+
+      if (!existingFile) {
+        await fileRegistry.getOrCreateFile(credentialsFileId, 'credentials', source, credentials);
+      } else {
+        existingFile.data = credentials;
+        existingFile.originalData = structuredClone(credentials);
+      }
+
+      await fileRegistry.markSaved(credentialsFileId);
+
+      // Reload workspace with new credentials
+      await navOperations.reloadCredentials();
+
+      setHasUserCredentials(true);
+      setShowInitCredsModal(false);
+      setInitSecret('');
+      setInitError(null);
+
+      toast.success('Credentials initialized from environment');
+    } catch (error) {
+      console.error('Failed to initialize credentials from secret', error);
+      setInitError(error instanceof Error ? error.message : 'Failed to initialize credentials');
+    } finally {
+      setIsInitSubmitting(false);
+    }
+  };
 
   // Tab context menu state
   const [contextMenu, setContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
@@ -1187,6 +1275,32 @@ function AppShellContent() {
                     greg@nous.co
                   </a> for support
                 </p>
+                <p style={{ fontSize: '10px', color: '#ccc', marginTop: '8px' }}>
+                  v{import.meta.env.VITE_APP_VERSION || '0.91b'}
+                </p>
+                {/* Init-from-secret affordance when no user credentials are configured */}
+                {hasUserCredentials === false && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInitSecret('');
+                      setInitError(null);
+                      setShowInitCredsModal(true);
+                    }}
+                    style={{
+                      marginTop: '16px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      borderRadius: 4,
+                      border: '1px solid #d1d5db',
+                      background: '#ffffff',
+                      color: '#374151',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Initialize credentials from server secret…
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -1283,6 +1397,168 @@ function AppShellContent() {
             }}
             preselectedFiles={commitModalState.preselectedFiles}
           />
+        )}
+
+        {/* Init Credentials Modal */}
+        {showInitCredsModal && (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10000,
+            }}
+            onClick={() => {
+              if (!isInitSubmitting) {
+                setShowInitCredsModal(false);
+              }
+            }}
+          >
+            <div
+              style={{
+                background: '#fff',
+                borderRadius: 8,
+                boxShadow: '0 4px 24px rgba(0, 0, 0, 0.2)',
+                maxWidth: 420,
+                width: '90%',
+                overflow: 'hidden',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                style={{
+                  padding: '20px 24px',
+                  borderBottom: '1px solid #e5e7eb',
+                }}
+              >
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: 18,
+                    fontWeight: 600,
+                    color: '#111827',
+                  }}
+                >
+                  Initialize Credentials
+                </h3>
+                <p
+                  style={{
+                    margin: '8px 0 0',
+                    fontSize: 13,
+                    color: '#4b5563',
+                    lineHeight: 1.4,
+                  }}
+                >
+                  Enter the initialization secret provided in your deployment configuration. If it matches the
+                  server&apos;s <code>INIT_CREDENTIALS_SECRET</code>, DagNet will load credentials from
+                  <code> INIT_CREDENTIALS_JSON</code> and apply them as <code>credentials.yaml</code>.
+                </p>
+              </div>
+              <div
+                style={{
+                  padding: '16px 24px 12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <label
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: '#374151',
+                    marginBottom: 4,
+                  }}
+                >
+                  Secret
+                </label>
+                <input
+                  type="password"
+                  value={initSecret}
+                  onChange={(e) => setInitSecret(e.target.value)}
+                  autoFocus
+                  style={{
+                    width: '100%',
+                    padding: '6px 8px',
+                    fontSize: 13,
+                    borderRadius: 4,
+                    border: '1px solid #d1d5db',
+                    outline: 'none',
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (!isInitSubmitting) {
+                        handleInitCredentialsFromSecret();
+                      }
+                    }
+                  }}
+                />
+                {initError && (
+                  <div
+                    style={{
+                      marginTop: 4,
+                      fontSize: 12,
+                      color: '#b91c1c',
+                    }}
+                  >
+                    {initError}
+                  </div>
+                )}
+              </div>
+              <div
+                style={{
+                  padding: '12px 24px 16px',
+                  borderTop: '1px solid #e5e7eb',
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 8,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isInitSubmitting) {
+                      setShowInitCredsModal(false);
+                    }
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: 13,
+                    borderRadius: 4,
+                    border: '1px solid #d1d5db',
+                    background: '#fff',
+                    color: '#374151',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleInitCredentialsFromSecret}
+                  disabled={isInitSubmitting}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: 13,
+                    borderRadius: 4,
+                    border: 'none',
+                    background: isInitSubmitting ? '#9ca3af' : '#2563eb',
+                    color: '#fff',
+                    cursor: isInitSubmitting ? 'default' : 'pointer',
+                  }}
+                >
+                  {isInitSubmitting ? 'Initializing…' : 'Initialize'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

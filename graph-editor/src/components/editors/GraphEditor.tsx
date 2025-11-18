@@ -101,8 +101,9 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
   
   const handleNewScenario = React.useCallback(() => {
     // Dispatch event that ScenariosPanel will listen to (creates snapshot everything)
-    window.dispatchEvent(new CustomEvent('dagnet:newScenario'));
-  }, []);
+    // Include tabId so only the matching ScenariosPanel responds
+    window.dispatchEvent(new CustomEvent('dagnet:newScenario', { detail: { tabId } }));
+  }, [tabId]);
   
   const baseVisible = visibleScenarioIds.includes('base');
   

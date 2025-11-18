@@ -96,15 +96,38 @@ class FileOperationsService {
     if (!defaultData) {
       // Create new default data
       if (type === 'graph') {
+        const now = new Date().toISOString();
+        const startUuid = crypto.randomUUID();
+
         defaultData = {
-          nodes: [],
+          nodes: [
+            {
+              uuid: startUuid,
+              id: 'start',          // human-readable id
+              label: 'Start',       // display label
+              absorbing: false,
+              entry: {
+                is_start: true,     // mark as entry/start node
+                entry_weight: 1.0,
+              },
+              layout: {
+                x: 0,
+                y: 0,
+              },
+            },
+          ],
           edges: [],
+          policies: {
+            default_outcome: 'success',
+          },
           metadata: {
             name,
             description: '',
-            created: new Date().toISOString(),
-            ...metadata
-          }
+            created_at: now,
+            updated_at: now,
+            version: '1.0.0',
+            ...metadata,
+          },
         };
       } else if (type === 'event') {
         defaultData = {
