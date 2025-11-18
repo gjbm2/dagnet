@@ -1016,7 +1016,7 @@ class DataOperationsService {
           // AUTO-REBALANCE: If UpdateManager flagged this update as needing variant rebalance
           let overriddenCount = 0;
           if ((result.metadata as any)?.requiresVariantRebalance) {
-            const variantIndex = nextGraph.nodes[nodeIndex].case.variants?.findIndex((v: any) => !v.weight_overridden) ?? 0;
+            const variantIndex = nextGraph.nodes[nodeIndex].case?.variants?.findIndex((v: any) => !v.weight_overridden) ?? 0;
             
             if (variantIndex >= 0) {
               const { updateManager } = await import('./UpdateManager');
