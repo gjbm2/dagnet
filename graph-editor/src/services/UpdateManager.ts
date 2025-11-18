@@ -600,6 +600,19 @@ export class UpdateManager {
       }
     }
     
+    // AUTO-REBALANCE: After case variant update from file, rebalance variants
+    // This applies to "Get from Source" (versioned) - if treatment weight changes from file, rebalance control weight
+    if (result.success && subDest === 'case' && !options.validateOnly) {
+      // Check if case.variants was actually updated
+      const variantsUpdated = result.changes?.some(change => change.field === 'case.variants');
+      if (variantsUpdated) {
+        result.metadata = result.metadata || {};
+        (result.metadata as any).requiresVariantRebalance = true;
+        (result.metadata as any).updatedNodeId = graphEntity.uuid || graphEntity.id;
+        (result.metadata as any).updatedField = 'case.variants';
+      }
+    }
+    
     return result;
   }
   
@@ -3174,14 +3187,14 @@ export class UpdateManager {
    * @param nodeId - ID of the case node whose variants should be rebalanced
    * @param variantIndex - Index of the variant whose weight is being preserved
    * @param forceRebalance - If true, override weight_overridden flags (for explicit rebalance action)
-   * @returns Updated graph with rebalanced variant weights
+   * @returns Object with updated graph and count of overridden variants that were skipped
    */
   rebalanceVariantWeights(
     graph: any,
     nodeId: string,
     variantIndex: number,
     forceRebalance: boolean = false
-  ): any {
+  ): { graph: any; overriddenCount: number } {
     const nextGraph = structuredClone(graph);
     const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
       n.uuid === nodeId || n.id === nodeId
@@ -3189,7 +3202,7 @@ export class UpdateManager {
     
     if (nodeIndex < 0) {
       console.warn('[UpdateManager] Case node not found:', nodeId);
-      return graph;
+      return { graph, overriddenCount: 0 };
     }
     
     const caseNode = nextGraph.nodes[nodeIndex];
@@ -3204,7 +3217,7 @@ export class UpdateManager {
         variantIndex,
         variantsLength: caseNode.case?.variants ? caseNode.case.variants.length : 0,
       });
-      return graph;
+      return { graph, overriddenCount: 0 };
     }
     
     // IMPORTANT: Preserve the origin variant's current value - don't change it
@@ -3218,7 +3231,9 @@ export class UpdateManager {
     // Get all other variants
     const otherVariants = caseNode.case.variants.filter((_: any, idx: number) => idx !== variantIndex);
     
-    if (otherVariants.length === 0) return nextGraph;
+    if (otherVariants.length === 0) return { graph: nextGraph, overriddenCount: 0 };
+    
+    let overriddenCount = 0;
     
     if (forceRebalance) {
       // Force rebalance: ignore all override flags, distribute proportionally
@@ -3239,6 +3254,8 @@ export class UpdateManager {
       // Normal rebalance: respect override flags
       const overriddenVariants = otherVariants.filter((v: any) => v.weight_overridden);
       const nonOverriddenVariants = otherVariants.filter((v: any) => !v.weight_overridden);
+      
+      overriddenCount = overriddenVariants.length;
       
       const overriddenTotal = overriddenVariants.reduce((sum: number, v: any) => sum + (v.weight || 0), 0);
       const remainingForNonOverridden = Math.max(0, remainingWeight - overriddenTotal);
@@ -3271,11 +3288,12 @@ export class UpdateManager {
         variantIndex,
         originValue,
         forceRebalance,
-        variantsRebalanced: otherVariants.length
+        variantsRebalanced: otherVariants.length,
+        overriddenCount
       }
     });
     
-    return nextGraph;
+    return { graph: nextGraph, overriddenCount };
   }
 }
 
