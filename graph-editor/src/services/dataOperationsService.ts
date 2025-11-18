@@ -1369,28 +1369,73 @@ class DataOperationsService {
                 console.warn(`[DataOperationsService] ${aggregated.coverage.message}`);
               }
               
-              // Update all nodes with this case_id
-              const updatedGraph = structuredClone(graph);
+              // Update all nodes with this case_id using UpdateManager
+              let updatedGraph = structuredClone(graph);
               let updated = false;
               
               for (const node of updatedGraph.nodes || []) {
                 if (node.type === 'case' && node.case?.id === objectId) {
-                  // Update variant weights from aggregation
-                  const existingVariants = node.case.variants || [];
-                  node.case.variants = variants.map((v: any) => {
-                    const existing = existingVariants.find((ev: any) => ev.name === v.name);
-                    return {
-                      name: v.name,
-                      weight: v.weight,
-                      description: existing?.description || '',
-                      name_overridden: existing?.name_overridden,
-                      weight_overridden: true, // Mark as overridden since we just fetched from source
-                      description_overridden: existing?.description_overridden
-                    };
+                  // Use UpdateManager to apply external data to case node
+                  // This respects weight_overridden flags and sets rebalancing metadata
+                  const updateResult = await updateManager.handleExternalToGraph(
+                    { variants },  // External data from Statsig
+                    node,          // Target case node
+                    'UPDATE',
+                    'case',
+                    { interactive: false }
+                  );
+                  
+                  console.log('[DataOperationsService] UpdateManager result for case:', {
+                    success: updateResult.success,
+                    changes: updateResult.changes,
+                    metadata: updateResult.metadata
                   });
                   
-                  updated = true;
-                  console.log(`[DataOperationsService] Updated node ${node.uuid || node.id} with case data`);
+                  if (!updateResult.success) {
+                    console.warn('[DataOperationsService] Failed to apply case updates');
+                    continue;
+                  }
+                  
+                  // Apply changes to node
+                  if (updateResult.changes && updateResult.changes.length > 0) {
+                    applyChanges(node, updateResult.changes);
+                    
+                    // AUTO-REBALANCE: If UpdateManager flagged this update as needing variant rebalance
+                    // This is parallel to parameter rebalancing logic
+                    const shouldRebalance = (updateResult.metadata as any)?.requiresVariantRebalance;
+                    
+                    console.log('[DataOperationsService] Rebalance check for case:', {
+                      requiresVariantRebalance: shouldRebalance,
+                      updatedField: (updateResult.metadata as any)?.updatedField
+                    });
+                    
+                    if (shouldRebalance) {
+                      // Find first non-overridden variant as origin for rebalancing
+                      const variantIndex = node.case.variants?.findIndex((v: any) => !v.weight_overridden) ?? 0;
+                      
+                      updatedGraph = updateManager.rebalanceVariantWeights(
+                        updatedGraph,
+                        node.uuid || node.id,
+                        variantIndex,
+                        false // Don't force - respect override flags
+                      );
+                      
+                      // Copy rebalanced variants back
+                      const rebalancedNode = updatedGraph.nodes.find((n: any) => 
+                        (n.uuid || n.id) === (node.uuid || node.id)
+                      );
+                      if (rebalancedNode) {
+                        node.case.variants = rebalancedNode.case.variants;
+                      }
+                      
+                      console.log('[DataOperationsService] Rebalanced case variants:', {
+                        nodeId: node.uuid || node.id,
+                        variants: node.case.variants
+                      });
+                    }
+                    
+                    updated = true;
+                  }
                 }
               }
               
@@ -1505,7 +1550,23 @@ class DataOperationsService {
               }
             }
           }
-          // For other types, check top-level connection
+          // For cases, check node.case.connection
+          else if (objectType === 'case') {
+            if (target.case?.connection) {
+              connectionName = target.case.connection;
+              if (target.case.connection_string) {
+                try {
+                  connectionString = typeof target.case.connection_string === 'string'
+                    ? JSON.parse(target.case.connection_string)
+                    : target.case.connection_string;
+                } catch (e) {
+                  toast.error('Invalid connection_string JSON on case');
+                  return;
+                }
+              }
+            }
+          }
+          // For nodes/events, check top-level connection
           else if (target.connection) {
             connectionName = target.connection;
             if (target.connection_string) {
@@ -1513,10 +1574,10 @@ class DataOperationsService {
                 connectionString = typeof target.connection_string === 'string'
                   ? JSON.parse(target.connection_string)
                   : target.connection_string;
-        } catch (e) {
-          toast.error('Invalid connection_string JSON');
-          return;
-        }
+              } catch (e) {
+                toast.error('Invalid connection_string JSON');
+                return;
+              }
             }
           }
         }
