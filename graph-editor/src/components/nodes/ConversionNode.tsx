@@ -418,8 +418,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         const viewBoxH = h + 2 * padding;
         return (
           <svg
-            width="100%"
-            height="100%"
+            width={`${w}px`}
+            height={`${h}px`}
             viewBox={`${viewBoxX} ${viewBoxY} ${viewBoxW} ${viewBoxH}`}
             style={{
               position: 'absolute',
