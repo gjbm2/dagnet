@@ -293,7 +293,7 @@ export function ConnectionSettingsModal({
   if (!isOpen) return null;
 
   const schema = connection?.connection_string_schema;
-  const hasSchema = schema && schema.properties && Object.keys(schema.properties).length > 0;
+  const hasSchema = !!(schema && schema.properties && Object.keys(schema.properties).length > 0);
 
   return (
     <div className="connection-settings-modal-overlay" onClick={onClose}>
@@ -367,7 +367,7 @@ export function ConnectionSettingsModal({
           <button
             className="connection-settings-button primary"
             onClick={handleSave}
-            disabled={loading || (selectedConnectionName && (!hasSchema || Object.keys(errors).length > 0))}
+            disabled={loading || !!(selectedConnectionName && (!hasSchema || Object.keys(errors).length > 0))}
           >
             Save
           </button>

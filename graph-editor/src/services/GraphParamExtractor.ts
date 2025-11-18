@@ -58,13 +58,14 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
   // Extract base probability (only defined fields)
   if (edge.p) {
     const p: any = {};
-    if (edge.p.mean !== undefined) p.mean = edge.p.mean;
-    if (edge.p.stdev !== undefined) p.stdev = edge.p.stdev;
-    if (edge.p.distribution !== undefined) p.distribution = edge.p.distribution;
-    if (edge.p.min !== undefined) p.min = edge.p.min;
-    if (edge.p.max !== undefined) p.max = edge.p.max;
-    if (edge.p.alpha !== undefined) p.alpha = edge.p.alpha;
-    if (edge.p.beta !== undefined) p.beta = edge.p.beta;
+    const pAny = edge.p as any; // Type assertion for optional properties
+    if (pAny.mean !== undefined) p.mean = pAny.mean;
+    if (pAny.stdev !== undefined) p.stdev = pAny.stdev;
+    if (pAny.distribution !== undefined) p.distribution = pAny.distribution;
+    if (pAny.min !== undefined) p.min = pAny.min;
+    if (pAny.max !== undefined) p.max = pAny.max;
+    if (pAny.alpha !== undefined) p.alpha = pAny.alpha;
+    if (pAny.beta !== undefined) p.beta = pAny.beta;
     
     if (Object.keys(p).length > 0) {
       params.p = p;
@@ -76,13 +77,14 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     params.conditional_p = {};
     for (const cond of edge.conditional_p) {
       const condP: any = {};
-      if (cond.p?.mean !== undefined) condP.mean = cond.p.mean;
-      if (cond.p?.stdev !== undefined) condP.stdev = cond.p.stdev;
-      if (cond.p?.distribution !== undefined) condP.distribution = cond.p.distribution;
-      if (cond.p?.min !== undefined) condP.min = cond.p.min;
-      if (cond.p?.max !== undefined) condP.max = cond.p.max;
-      if (cond.p?.alpha !== undefined) condP.alpha = cond.p.alpha;
-      if (cond.p?.beta !== undefined) condP.beta = cond.p.beta;
+      const condPAny = cond.p as any; // Type assertion for optional properties
+      if (condPAny?.mean !== undefined) condP.mean = condPAny.mean;
+      if (condPAny?.stdev !== undefined) condP.stdev = condPAny.stdev;
+      if (condPAny?.distribution !== undefined) condP.distribution = condPAny.distribution;
+      if (condPAny?.min !== undefined) condP.min = condPAny.min;
+      if (condPAny?.max !== undefined) condP.max = condPAny.max;
+      if (condPAny?.alpha !== undefined) condP.alpha = condPAny.alpha;
+      if (condPAny?.beta !== undefined) condP.beta = condPAny.beta;
       
       if (Object.keys(condP).length > 0) {
         params.conditional_p[cond.condition] = condP;

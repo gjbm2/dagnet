@@ -195,6 +195,10 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         const name = `Edited ${timestamp}`;
         
         // Create blank scenario
+        if (!tabId) {
+          toast.error('Cannot create scenario: tab ID is missing');
+          return;
+        }
         const newScenario = await createBlank(name, tabId);
         
         // Apply the edited content to it
