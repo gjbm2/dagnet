@@ -250,7 +250,37 @@ export class QueryRegenerationService {
         }
       }
     }
-    
+
+    // Ensure required top-level fields for backend validation
+    // -----------------------------------------------
+    // 1. policies: Python schema requires a policies object; default to sensible baseline
+    if (!('policies' in transformed) || transformed.policies == null) {
+      transformed.policies = {
+        default_outcome: 'success',  // Backend requires a string; "success" is our conventional default
+      } as any;
+    }
+
+    // 2. metadata: ensure version, created_at, updated_at exist
+    const nowIso = new Date().toISOString();
+    if (!transformed.metadata) {
+      transformed.metadata = {
+        version: '1.0.0',
+        created_at: nowIso,
+        updated_at: nowIso,
+      } as any;
+    } else {
+      if (!transformed.metadata.version) {
+        transformed.metadata.version = '1.0.0';
+      }
+      if (!transformed.metadata.created_at) {
+        // If we have an updated_at, use that as a fallback; otherwise use now
+        transformed.metadata.created_at = transformed.metadata.updated_at || nowIso;
+      }
+      if (!transformed.metadata.updated_at) {
+        transformed.metadata.updated_at = nowIso;
+      }
+    }
+
     return transformed;
   }
 
