@@ -150,7 +150,7 @@ export class DASRunner {
 
   /**
    * Execute pre-request JavaScript transformation script.
-   * Script has access to: dsl, window, connection_string, connection, context, console
+   * Script has access to: dsl, window, connection_string, connection, context, console, caseId, edgeId, nodeId
    * Script can mutate dsl object to add calculated fields.
    */
   private executePreRequestScript(script: string, context: ExecutionContext): void {
@@ -165,6 +165,9 @@ export class DASRunner {
         connection_string: context.connection_string,
         connection: context.connection,
         context: context.context,
+        caseId: context.caseId,
+        edgeId: context.edgeId,
+        nodeId: context.nodeId,
         dasHelpers: {
           resolveVariantToBool,
         },
@@ -188,6 +191,9 @@ export class DASRunner {
         'connection_string',
         'connection',
         'context',
+        'caseId',
+        'edgeId',
+        'nodeId',
         'dasHelpers',
         'console',
         script
@@ -199,6 +205,9 @@ export class DASRunner {
         scriptEnv.connection_string,
         scriptEnv.connection,
         scriptEnv.context,
+        scriptEnv.caseId,
+        scriptEnv.edgeId,
+        scriptEnv.nodeId,
         scriptEnv.dasHelpers,
         scriptEnv.console
       );
@@ -247,6 +256,33 @@ export class DASRunner {
     this.log('execute_request', `Response received with status ${response.status}`);
 
     // Phase 4: Validate response
+    // First, check for HTTP error status codes (4xx, 5xx)
+    if (response.status >= 400) {
+      // Try to extract error message from response body
+      let errorMessage = `HTTP ${response.status}`;
+      
+      if (response.body && typeof response.body === 'object') {
+        // Check for common error message fields
+        const body = response.body as any;
+        if (body.message) {
+          errorMessage = body.message;
+        } else if (body.error) {
+          errorMessage = typeof body.error === 'string' ? body.error : JSON.stringify(body.error);
+        } else if (body.error_description) {
+          errorMessage = body.error_description;
+        }
+      }
+      
+      this.log('validate_response', `Response validation failed: HTTP ${response.status}`, { errorMessage });
+      
+      throw new DASExecutionError(
+        errorMessage,
+        'http_error',
+        { status: response.status, body: response.body }
+      );
+    }
+    
+    // Then, apply custom ok_when validation if specified
     if (adapter.response.ok_when && adapter.response.ok_when.length > 0) {
       this.validateResponse(response.status, adapter.response.ok_when);
       this.log('validate_response', 'Response validation passed');
@@ -291,14 +327,16 @@ export class DASRunner {
 
   /**
    * Interpolate a Mustache template with the given context.
-   * Supports custom filters: json, url_encode.
+   * Automatically JSON-encodes transformed data objects/arrays.
    */
   private interpolateTemplate(template: string, context: ExecutionContext | Record<string, unknown>): string {
     // Flatten context for Mustache (all top-level keys available)
     const ctx = context as any;
-    const flatContext = {
-      ...ctx.dsl,
-      ...(ctx as Record<string, unknown>), // Spread all top-level keys (includes transformed data)
+    
+    // These are context objects that should NOT be JSON-encoded (they have nested properties)
+    const contextObjects = new Set(['connection', 'credentials', 'window', 'context', 'connection_string', 'dsl']);
+    
+    const flatContext: Record<string, any> = {
       connection: ctx.connection,
       credentials: ctx.credentials,
       window: ctx.window,
@@ -308,13 +346,40 @@ export class DASRunner {
       caseId: ctx.caseId,
       nodeId: ctx.nodeId,
       parameterId: ctx.parameterId,
-      ...ctx.extractedVars,
+      dsl: ctx.dsl || {},  // Keep dsl as nested object for template access
     };
+    
+    // Also add DSL fields at top level for convenience (backward compatibility)
+    if (ctx.dsl && typeof ctx.dsl === 'object') {
+      Object.assign(flatContext, ctx.dsl);
+    }
+    
+    // Add extracted/transformed variables
+    // These might be objects/arrays that need JSON encoding
+    if (ctx.extractedVars && typeof ctx.extractedVars === 'object') {
+      for (const [key, value] of Object.entries(ctx.extractedVars)) {
+        if (value !== null && typeof value === 'object') {
+          // JSON-encode objects/arrays from extracted/transformed data
+          flatContext[key] = JSON.stringify(value);
+        } else {
+          flatContext[key] = value;
+        }
+      }
+    }
+    
+    // Add any other top-level keys from context (transformed data)
+    for (const [key, value] of Object.entries(ctx as Record<string, unknown>)) {
+      if (!flatContext.hasOwnProperty(key) && !contextObjects.has(key)) {
+        if (value !== null && typeof value === 'object') {
+          // JSON-encode objects/arrays from transformed data
+          flatContext[key] = JSON.stringify(value);
+        } else {
+          flatContext[key] = value;
+        }
+      }
+    }
 
     try {
-      // Mustache doesn't have built-in filters, but we can pre-process or use a custom renderer
-      // For now, we'll render directly and handle filters manually if needed
-      // (Full filter support would require custom tags or pre-processing)
       return Mustache.render(template, flatContext);
     } catch (error) {
       throw new TemplateError(
@@ -590,6 +655,10 @@ export class DASRunner {
     }
 
     if (error instanceof DASExecutionError) {
+      // For HTTP errors, show the actual error message from the API
+      if (error.phase === 'http_error') {
+        return `API error: ${error.message}`;
+      }
       // For transform phase errors (JSONata), provide user-friendly message
       if (error.phase === 'transform') {
         return `Data transformation failed. Check console for details.`;

@@ -169,7 +169,11 @@ export async function handleProxyRequest(
 
     console.log(`[DAS Proxy] Response: ${response.status}`);
     if (!response.ok) {
-      console.log(`[DAS Proxy] Error body:`, responseBody.substring(0, 500));
+      console.log(`[DAS Proxy] Error response body:`, responseBody.substring(0, 1000));
+    } else if (responseBody.length < 500) {
+      console.log(`[DAS Proxy] Success response body:`, responseBody);
+    } else {
+      console.log(`[DAS Proxy] Success response body (truncated):`, responseBody.substring(0, 500) + '...');
     }
   } catch (error) {
     console.error('[DAS Proxy] Error:', error);
