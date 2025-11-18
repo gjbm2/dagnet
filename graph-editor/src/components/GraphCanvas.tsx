@@ -1469,10 +1469,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         }));
       });
       
-      // Also update node properties if they changed
-      if (nodePropertiesChanged) {
+      // Also update node properties if they changed, OR recalculate Sankey heights if in Sankey mode
+      if (nodePropertiesChanged || useSankeyView) {
         setNodes(prevNodes => {
-          return prevNodes.map(prevNode => {
+          let updatedNodes = prevNodes.map(prevNode => {
             const graphNode = graph.nodes.find((n: any) => n.uuid === prevNode.id || n.id === prevNode.id);
             if (!graphNode) return prevNode;
             
@@ -1493,6 +1493,147 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               }
             };
           });
+          
+          // In Sankey mode, recalculate node heights based on flow mass
+          if (useSankeyView) {
+            console.log('[Sankey Fast Path] Recalculating node heights based on edge changes');
+            
+            // Calculate flow mass through each node across all visible layers
+            const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
+            const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
+            const layersToCalculate = visibleScenarioIds.includes('current')
+              ? visibleScenarioIds
+              : [...visibleScenarioIds, 'current'];
+            
+            const maxFlowMassPerNode = new Map<string, number>();
+            let currentLayerMaxMass = 0;
+            
+            // Calculate flow mass for each layer
+            for (const layerId of layersToCalculate) {
+              const flowMass = new Map<string, number>();
+              let layerWhatIfDSL = effectiveWhatIfDSL;
+              let composedParams: any = null;
+              
+              if (layerId !== 'current' && layerId !== 'base' && scenariosContext) {
+                const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
+                if (scenario) {
+                  const allScenarios = scenariosContext.scenarios;
+                  const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
+                  const layersBelow = allScenarios
+                    .slice(0, currentIndex)
+                    .map((s: any) => s.params)
+                    .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
+                  
+                  composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
+                  layerWhatIfDSL = null;
+                }
+              }
+              
+              // Initialize start nodes
+              graph.nodes?.forEach((node: any) => {
+                if (node.entry?.is_start) {
+                  flowMass.set(node.uuid, node.entry.entry_weight || 1.0);
+                } else {
+                  flowMass.set(node.uuid, 0);
+                }
+              });
+              
+              // Build incoming edges map
+              const incomingEdges = new Map<string, Array<any>>();
+              graph.edges?.forEach((edge: any) => {
+                if (!incomingEdges.has(edge.to)) {
+                  incomingEdges.set(edge.to, []);
+                }
+                incomingEdges.get(edge.to)!.push(edge);
+              });
+              
+              // Topological sort to calculate mass
+              const processed = new Set<string>();
+              let iterations = 0;
+              const maxIterations = graph.nodes?.length * 3 || 100;
+              
+              while (processed.size < (graph.nodes?.length || 0) && iterations < maxIterations) {
+                iterations++;
+                let madeProgress = false;
+                
+                graph.nodes?.forEach((node: any) => {
+                  const nodeId = node.uuid || node.id;
+                  
+                  if (processed.has(nodeId) || node.entry?.is_start) {
+                    if (node.entry?.is_start) processed.add(nodeId);
+                    return;
+                  }
+                  
+                  const incoming = incomingEdges.get(nodeId) || [];
+                  const allIncomingProcessed = incoming.every((edge: any) => processed.has(edge.from));
+                  
+                  if (allIncomingProcessed && incoming.length > 0) {
+                    let totalMass = 0;
+                    incoming.forEach((edge: any) => {
+                      const sourceMass = flowMass.get(edge.from) || 0;
+                      const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+                      let effectiveProb = 0;
+                      
+                      if (layerId === 'current') {
+                        effectiveProb = computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL: layerWhatIfDSL }, undefined);
+                      } else if (composedParams) {
+                        const edgeKey = edge.id || edge.uuid || `${edge.from}->${edge.to}`;
+                        effectiveProb = composedParams.edges?.[edgeKey]?.p?.mean ?? edge.p?.mean ?? 0;
+                        const caseInfo = getCaseEdgeVariantInfo(edge, graph, composedParams);
+                        if (caseInfo) {
+                          effectiveProb = effectiveProb * caseInfo.variantWeight;
+                        }
+                      } else {
+                        effectiveProb = edge.p?.mean ?? 0;
+                      }
+                      
+                      totalMass += sourceMass * effectiveProb;
+                    });
+                    
+                    flowMass.set(nodeId, totalMass);
+                    processed.add(nodeId);
+                    madeProgress = true;
+                  }
+                });
+                
+                if (!madeProgress) break;
+              }
+              
+              // Update maximum mass for each node
+              flowMass.forEach((mass, nodeId) => {
+                const currentMax = maxFlowMassPerNode.get(nodeId) || 0;
+                maxFlowMassPerNode.set(nodeId, Math.max(currentMax, mass));
+              });
+              
+              if (layerId === 'current') {
+                currentLayerMaxMass = Math.max(...Array.from(flowMass.values()), 0.001);
+              }
+            }
+            
+            // Apply heights to nodes
+            updatedNodes = updatedNodes.map(node => {
+              const mass = maxFlowMassPerNode.get(node.id) || 0;
+              const normalizedMass = mass / currentLayerMaxMass;
+              const height = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, normalizedMass * MAX_NODE_HEIGHT));
+              
+              return {
+                ...node,
+                style: {
+                  ...node.style,
+                  width: DEFAULT_NODE_WIDTH,
+                  height: height
+                },
+                data: {
+                  ...node.data,
+                  sankeyHeight: height,
+                  sankeyWidth: DEFAULT_NODE_WIDTH,
+                  useSankeyView: true
+                }
+              };
+            });
+          }
+          
+          return updatedNodes;
         });
       }
       
@@ -1987,7 +2128,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       isSyncingRef.current = false;
       console.log('Reset isSyncingRef to false');
     }, 100);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView]);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView, effectiveWhatIfDSL]);
 
   // Compute face directions based on edge connections (for curved node outlines)
   // Runs after edges have been auto-routed and have sourceFace/targetFace assigned
