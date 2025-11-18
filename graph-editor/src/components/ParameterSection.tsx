@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Info, Database } from 'lucide-react';
+import { Info } from 'lucide-react';
 import { EnhancedSelector } from './EnhancedSelector';
-import { ConnectionSelector } from './ConnectionSelector';
-import { ConnectionSettingsModal } from './ConnectionSettingsModal';
+import { ConnectionControl } from './ConnectionControl';
 import ProbabilityInput from './ProbabilityInput';
 import { AutomatableField } from './AutomatableField';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
@@ -79,7 +78,7 @@ export function ParameterSection({
 }: ParameterSectionProps) {
   // Local state for immediate input feedback
   const [localQuery, setLocalQuery] = useState(param?.query || '');
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  // Note: isSettingsModalOpen state moved into ConnectionControl component
   
   // Sync local state when param changes externally
   useEffect(() => {
@@ -109,92 +108,27 @@ export function ParameterSection({
       
       {/* External Data Connection Section */}
       <div style={{ marginTop: '16px', marginBottom: '16px', paddingTop: '16px', borderTop: '1px solid #E5E7EB' }}>
-        <AutomatableField
-          label="External Data Source"
-          value={param?.connection || ''}
-          overridden={false}
-          onClearOverride={() => {
-            // Connection override not yet implemented
+        <ConnectionControl
+          connection={param?.connection}
+          connectionString={param?.connection_string}
+          overriddenFlag={param?.connection_overridden}
+          onConnectionChange={(connectionName) => {
+            onUpdate({ connection: connectionName, connection_overridden: true });
           }}
-        >
-          {/* Connection Controls Row */}
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '8px', 
-            width: '100%',
-            flex: '1 1 auto',
-            minWidth: 0
-          }}>
-            {/* Database Icon Button */}
-            <button
-              type="button"
-              onClick={() => setIsSettingsModalOpen(true)}
-              disabled={disabled}
-              title="Edit connection and settings"
-              style={{
-                padding: '6px',
-                background: 'white',
-                border: '1px solid #D1D5DB',
-                borderRadius: '6px',
-                cursor: disabled ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: param?.connection ? '#374151' : '#6B7280',
-                transition: 'all 0.2s',
-                flexShrink: 0,
-                height: '28px',
-                width: '28px',
-                margin: 0
-              }}
-              onMouseEnter={(e) => {
-                if (!disabled) {
-                  e.currentTarget.style.background = '#F9FAFB';
-                  e.currentTarget.style.borderColor = '#9CA3AF';
-                  e.currentTarget.style.color = '#374151';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!disabled) {
-                  e.currentTarget.style.background = 'white';
-                  e.currentTarget.style.borderColor = '#D1D5DB';
-                  e.currentTarget.style.color = param?.connection ? '#374151' : '#6B7280';
-                }
-              }}
-            >
-              <Database size={16} />
-            </button>
-            
-            {/* Connection Dropdown */}
-            <div style={{ flex: '1 1 0', minWidth: 0, margin: 0 }}>
-              <ConnectionSelector
-                value={param?.connection}
-                onChange={(connectionName) => {
-                  onUpdate({ connection: connectionName, connection_overridden: true });
-                }}
-                hideLabel={true}
-                disabled={disabled}
-              />
-            </div>
-          </div>
-        </AutomatableField>
+          onConnectionStringChange={(connectionString, newConnectionName) => {
+            onUpdate({ 
+              connection_string: connectionString,
+              connection: newConnectionName || param?.connection,
+              connection_overridden: true
+            });
+          }}
+          onOverriddenChange={(overridden) => {
+            onUpdate({ connection_overridden: overridden });
+          }}
+          label="External Data Source"
+          disabled={disabled}
+        />
       </div>
-      
-      {/* Connection Settings Modal */}
-      <ConnectionSettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        connectionName={param?.connection}
-        currentConnectionString={param?.connection_string}
-        onSave={(connectionString, newConnectionName) => {
-          onUpdate({ 
-            connection_string: connectionString,
-            connection: newConnectionName || param?.connection,
-            connection_overridden: true
-          });
-        }}
-      />
       
       {/* Mean Value (Probability slider OR Cost input) */}
       <div style={{ marginBottom: '20px' }}>

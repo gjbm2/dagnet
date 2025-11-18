@@ -579,27 +579,28 @@ export function EnhancedSelector({
           {(() => {
             // Show LightningMenu for parameter, case, node, and event (events only show file operations, no external connections)
             const shouldShow = !disabled && (type === 'parameter' || type === 'case' || type === 'node' || type === 'event') && graph && targetInstanceUuid;
-            // Use computed hasFile value (checks file_path or fileRegistry)
+            // Check if file actually EXISTS in fileRegistry (not just if file_path is set)
             // Note: fileRegistry.getFile expects format "parameter-{id}" not "parameter-{id}.yaml"
-            const computedHasFile = inputValue && (
-              allItems.find((item: any) => item.id === inputValue)?.file_path || 
-              fileRegistry.getFile(`${type}-${inputValue}`) !== null
-            );
+            const fileId = `${type}-${inputValue}`;
+            const fileObj = inputValue ? fileRegistry.getFile(fileId) : null;
+            const computedHasFile = fileObj !== null && fileObj !== undefined;
             console.log('[EnhancedSelector] Lightning Menu conditions:', {
               disabled,
               inputValue,
               type,
+              fileId,
+              fileObj: fileObj ? 'EXISTS' : 'NULL',
               hasGraph: !!graph,
               hasTargetId: !!targetInstanceUuid,
               shouldShow,
-              hasFile: !!computedHasFile,
+              hasFile: computedHasFile,
               currentItemHasFile: !!currentItem?.hasFile
             });
             return shouldShow ? (
             <LightningMenu
               objectType={type}
                 objectId={inputValue || ''}
-              hasFile={!!computedHasFile}
+              hasFile={computedHasFile}
               targetId={targetInstanceUuid}
               graph={graph}
               setGraph={setGraph}

@@ -88,33 +88,9 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   const allHidden = selectedNodeIds.length > 0 && selectedNodeIds.every(id => activeTabId && tabOperations.isNodeHidden(activeTabId, id));
   const isMultiSelect = selectedNodeIds.length > 1;
   
-  // Check if node has connected node file (file must actually exist for "Get from file")
-  const hasNodeFile = nodeData?.id ? !!fileRegistry.getFile(`node-${nodeData.id}`) : false;
-  
-  // Check if node can put to file (file exists OR node.id exists - can create file)
-  const canPutNodeToFile = !!nodeData?.id;
-  
-  // Check if it's a case node (node.case object exists)
-  const isCaseNode = !!nodeData?.case;
-  const hasCaseFile = !!nodeData?.case?.id; // case.id is the reference to the case file
-  
-  // Check if case file has connection (for "Get from Source")
-  const getCaseConnectionName = (): string | undefined => {
-    if (nodeData?.case?.connection) return nodeData.case.connection;
-    if (nodeData?.case?.id) {
-      const file = fileRegistry.getFile(`case-${nodeData.case.id}`);
-      return file?.data?.connection;
-    }
-    return undefined;
-  };
-  const caseConnectionName = getCaseConnectionName();
-  const hasCaseConnection = hasCaseFile && (() => {
-    const file = fileRegistry.getFile(`case-${nodeData?.case?.id}`);
-    return !!file?.data?.connection;
-  })();
-  const hasCaseDirectConnection = !!nodeData?.case?.connection && !hasCaseFile;
-  
-  const hasAnyFile = hasNodeFile || hasCaseFile || canPutNodeToFile;
+  // Get all data operation sections for this node using single source of truth
+  const dataOperationSections = getAllDataSections(nodeId, null, graph);
+  const hasAnyFile = dataOperationSections.length > 0;
 
   const handleGetNodeFromFile = () => {
     if (nodeData?.id) {
@@ -163,14 +139,26 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   };
 
   const handleGetCaseFromSourceDirect = () => {
-    if (!nodeData?.case?.connection && !hasCaseConnection) {
+    if (!caseConnectionInfo.hasAnyConnection) {
       toast.error('No connection configured for case');
       return;
     }
     
-    // For cases, getFromSourceDirect is not yet fully implemented
-    // Show a message for now
-    toast('Case "Get from Source (direct)" coming soon!', { icon: 'ℹ️', duration: 3000 });
+    if (!nodeData?.case?.id) {
+      toast.error('No case ID found');
+      return;
+    }
+    
+    // Call getFromSourceDirect - fetches and writes directly to graph (no file versioning)
+    dataOperationsService.getFromSourceDirect({
+      objectType: 'case',
+      objectId: nodeData.case.id,
+      targetId: nodeId,
+      graph,
+      setGraph,
+      dailyMode: false,
+      window: undefined
+    });
     onClose();
   };
 
@@ -480,8 +468,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             </div>
           )}
 
-          {/* Case file submenu */}
-          {isCaseNode && hasCaseFile && (
+          {/* Case data submenu - show if case node has ANY connection OR can put to file (matches node pattern) */}
+          {isCaseNode && (caseConnectionInfo.hasAnyConnection || canPutCaseToFile) && (
             <div
               style={{ position: 'relative' }}
               onMouseEnter={() => handleSubmenuEnter('case')}
@@ -499,7 +487,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                   background: openSubmenu === 'case' ? '#f8f9fa' : 'white'
                 }}
               >
-                <span>Case file</span>
+                <span>Case Data</span>
                 <ChevronRight size={14} style={{ color: '#666' }} />
               </div>
               
@@ -523,7 +511,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                   onMouseLeave={handleSubmenuContentLeave}
                 >
                   {/* Show "Get from Source (direct)" if there's ANY connection (direct OR file) */}
-                  {(hasCaseConnection || hasCaseDirectConnection) && (
+                  {caseConnectionInfo.hasAnyConnection && (
                     <div
                       onClick={handleGetCaseFromSourceDirect}
                       style={{
@@ -547,8 +535,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                       </div>
                     </div>
                   )}
-                  {/* Show "Get from Source" (versioned) if there's a case file with connection */}
-                  {hasCaseConnection && (
+                  {/* Show "Get from Source" (versioned) only if file exists AND has connection */}
+                  {caseConnectionInfo.hasFileConnection && (
                     <div
                       onClick={handleGetCaseFromSourceVersioned}
                       style={{
@@ -574,55 +562,54 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                       </div>
                     </div>
                   )}
-                  {/* Show file operations if there's a case file */}
+                  {/* Show "Get from File" only if file exists (matches node pattern) */}
                   {hasCaseFile && (
-                    <>
-                      <div
-                        onClick={handleGetCaseFromFile}
-                        style={{
-                          padding: '6px 12px',
-                          cursor: 'pointer',
-                          fontSize: '13px',
-                          borderRadius: '2px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '16px'
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                      >
-                        <span>Get data from file</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                          <Folders size={12} />
-                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                          <TrendingUpDown size={12} />
-                        </div>
+                    <div
+                      onClick={handleGetCaseFromFile}
+                      style={{
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderRadius: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                    >
+                      <span>Get data from file</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <Folders size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
                       </div>
-                      <div
-                        onClick={handlePutCaseToFile}
-                        style={{
-                          padding: '6px 12px',
-                          cursor: 'pointer',
-                          fontSize: '13px',
-                          borderRadius: '2px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '16px'
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                      >
-                        <span>Put data to file</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                          <TrendingUpDown size={12} />
-                          <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                          <Folders size={12} />
-                        </div>
-                      </div>
-                    </>
+                    </div>
                   )}
+                  {/* Show "Put to File" always (submenu already checked canPutCaseToFile - matches node pattern) */}
+                  <div
+                    onClick={handlePutCaseToFile}
+                    style={{
+                      padding: '6px 12px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      borderRadius: '2px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '16px'
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                  >
+                    <span>Put data to file</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                      <TrendingUpDown size={12} />
+                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                      <Folders size={12} />
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

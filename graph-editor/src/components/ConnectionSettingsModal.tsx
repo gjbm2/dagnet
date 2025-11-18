@@ -160,6 +160,14 @@ export function ConnectionSettingsModal({
   }
 
   function handleSave() {
+    // If "none" is selected, allow saving immediately (clear connection)
+    if (!selectedConnectionName) {
+      onSave(undefined, undefined);
+      onClose();
+      return;
+    }
+    
+    // Otherwise, validate the form
     if (!validateForm()) {
       return;
     }
@@ -321,7 +329,12 @@ export function ConnectionSettingsModal({
           {loading ? (
             <div className="connection-settings-loading">Loading connection...</div>
           ) : !selectedConnectionName ? (
-            <div className="connection-settings-empty">Select a connection to configure settings</div>
+            <div className="connection-settings-empty">
+              <p>"None" selected - no external data connection.</p>
+              <p className="connection-settings-hint">
+                Click <strong>Save</strong> to clear any existing connection configuration.
+              </p>
+            </div>
           ) : !connection ? (
             <div className="connection-settings-error">Connection not found: {selectedConnectionName}</div>
           ) : !hasSchema ? (
@@ -354,7 +367,7 @@ export function ConnectionSettingsModal({
           <button
             className="connection-settings-button primary"
             onClick={handleSave}
-            disabled={loading || !hasSchema || Object.keys(errors).length > 0}
+            disabled={loading || (selectedConnectionName && (!hasSchema || Object.keys(errors).length > 0))}
           >
             Save
           </button>

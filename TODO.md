@@ -1,5 +1,8 @@
 # TODO
 
+## Sheets range resolution logic
+
+docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md
 
 ## Scenarios project
 
