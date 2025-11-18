@@ -6,7 +6,6 @@ docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md
 
 ## Scenarios project
 
-- selected / highlighted edges when current is hidden need to make current properly visible
 - add icons to collapsed beads?
 - playing with edges resets edge_id! 
 - clicking beads -- make hotspot larger
@@ -15,32 +14,16 @@ docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md
 - what-if funky and fussy (render path...)
 
 ## Current query DSL
-
-now whatifdsl is becoming (gradually) a more powerful general statement of the current query applied to the graph.
-
-in current: some of this (e.g. window, contexts in due course) determins what data is retrieved in the first place; other parts (whatifs) determine what overlay is applied to that data before render
-
-ideally we would build a single dsl string to express all of this, such that the top control set (context/window/whatif) interact with that dsl string, but it is the string that controls the graph.
-
-is our dsl expessive enough already? we need:
-case(<case_id>:<variant).visited(noda).excludes(nodeb).visitedAny(nodec,noded).context(<context_id>:<context_value>).window(<fromdate>:<todate>)
-
-once we have ensured it is adequately expressive, we can expose the 'current query string' to the user inside the window control [we may later hide, but is useful for debugging purposes]
-
-This query string is then also a natural candidate for what to use to populate the name of newly created scenarios, poss. along with timestamp.
-
-If user creates a DIFF scenario rather than an ALL scenario, we can also subtract this query FROM what is otherwise shown (compositing layer 2 and below) to construct a helpful Human Readable name
-
-e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and user then added window(1-Jan-25:1-Jan-25).case(experiment:treament), then when they created a diff snapshot, it would calculate window(1-Jan-25:1-Jan-25).case(experiment:treament)-window(1-Jan-25:1-Jan-25)=case(experiment:treament) (noting we need a service for this query subtraction & addition logic, not to do it inline in the scenario editor) and write "case(experiment:treament) @ 9:24am, 13-Nov-25"  as the scenario name
-
-- this would allow dynamic layers / scenarios (useful for saved charts/reports)
-
-### Data project
-**Case/Variant Filtering** (4-6 hrs)
- - Design case property mapping schema (Statsig case → Amplitude event property)
- - Extend event definitions with case_property_mappings
- - Implement case filter injection in pre_request script
- - Test variant filtering (treatment vs control)
+- whatifdsl is becoming (gradually) a more powerful general statement of the current query applied to the graph.
+  - in current: some of this (e.g. window, contexts in due course) determins what data is retrieved in the first place; other parts (whatifs) determine what overlay is applied to that data before render
+- ideally we would build a single dsl string to express all of this, such that the top control set (context/window/whatif) interact with that dsl string, but it is the string that controls the graph.
+- is our dsl expessive enough already? we need:
+    case(<case_id>:<variant).visited(noda).excludes(nodeb).visitedAny(nodec,noded).context(<context_id>:<context_value>).window(<fromdate>:<todate>)
+- once we have ensured it is adequately expressive, we can expose the 'current query string' to the user inside the window control [we may later hide, but is useful for debugging purposes]
+- This query string is then also a natural candidate for what to use to populate the name of newly created scenarios, poss. along with timestamp.
+- If user creates a DIFF scenario rather than an ALL scenario, we can also subtract this query FROM what is otherwise shown (compositing layer 2 and below) to construct a helpful Human Readable name
+- e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and user then added window(1-Jan-25:1-Jan-25).case(experiment:treament), then when they created a diff snapshot, it would calculate window(1-Jan-25:1-Jan-25).case(experiment:treament)-window(1-Jan-25:1-Jan-25)=case(experiment:treament) (noting we need a service for this query subtraction & addition logic, not to do it inline in the scenario editor) and write "case(experiment:treament) @ 9:24am, 13-Nov-25"  as the scenario name
+- crucially, this would allow dynamic layers / scenarios (useful for saved charts/reports)
 
 ### Form Field Duplicate ID Warnings
 **Issue:** Multiple form editors (parameters, events, etc.) open in different tabs generate identical DOM element IDs, causing browser warnings about duplicate IDs. This is a violation of HTML spec where IDs must be unique across the entire document.
@@ -83,6 +66,7 @@ e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and
 - add moving arrow effect, speed of animation scale on log lag
 
 ### Medium Priority
+- Add UI schemas for common forms (params, cases, etc.)
 - Zap drop down menu:
   - 'Connection settings' on zap drop down menu isn't working
   - Sync status' on zap drop down should show last sync, source, etc. from files/graph
