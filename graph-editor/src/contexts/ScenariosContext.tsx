@@ -264,21 +264,32 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         const edgeKey = edge.id || edge.uuid;
         if (!edgeKey) return;
         
-        const effectiveProb = computeEffectiveEdgeProbability(
-          graph,
-          edgeKey,
-          { whatIfDSL },
-          undefined
-        );
+        // For case variant edges, store just p (not p*v)
+        // The variant weight is stored separately in the node params
+        let probToStore: number;
         
-        // Store the effective probability (this is what's visually displayed)
+        if (edge.case_variant) {
+          // For variant edges, store the base probability (p), not p*v
+          // The variant weight change is captured in the node params below
+          probToStore = edge.p?.mean ?? 0;
+        } else {
+          // For normal edges, use the effective probability (may be affected by what-if)
+          probToStore = computeEffectiveEdgeProbability(
+            graph,
+            edgeKey,
+            { whatIfDSL },
+            undefined
+          );
+        }
+        
+        // Store the probability
         // Preserve other edge params from currentParams if they exist
         const existingEdgeParams = (currentParams.edges || {})[edgeKey] || {};
         newEdges[edgeKey] = {
           ...existingEdgeParams,
           p: {
             ...(existingEdgeParams.p || {}),
-            mean: effectiveProb
+            mean: probToStore
           }
         };
       });
