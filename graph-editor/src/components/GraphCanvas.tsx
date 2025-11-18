@@ -767,6 +767,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const lastSyncedReactFlowRef = useRef<string>('');
   const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
   const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
+  const dragTimeoutRef = useRef<number | null>(null); // Failsafe to clear drag flag if it gets stuck
   const prevSankeyViewRef = useRef(useSankeyView); // Track Sankey mode changes to force slow path rebuild
   const reactFlowWrapperRef = useRef<HTMLDivElement>(null); // For lasso coordinate calculations
   const hasInitialFitViewRef = useRef(false);
@@ -1638,15 +1639,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
       
       return; // Skip full toFlow rebuild
-    }
-    
-    // CRITICAL: Block slow-path rebuilds during drag operations
-    // During drag, the store gets updated with new positions, which triggers this sync,
-    // which would cause a full rebuild and reset node positions back to their store values
-    // This causes the "flickering and reverting" behavior
-    if (isDraggingNodeRef.current) {
-      console.log('  ⚠️ Slow path BLOCKED: drag in progress, deferring rebuild');
-      return;
     }
     
     const slowPathReason = sankeyModeChanged ? 'Sankey mode changed' : 
@@ -4154,13 +4146,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis]);
 
-  // Handle node drag start - just set flag, don't save yet
+  // Handle node drag start - set flag and start failsafe timeout
   const onNodeDragStart = useCallback(() => {
     console.log(`🎯 Node drag started - blocking sync during drag [frame=${renderFrameRef.current}]`);
     
     // Block Graph→ReactFlow sync during drag to prevent interruption
     isDraggingNodeRef.current = true;
     setIsDraggingNode(true);
+
+    // Failsafe: clear drag flag if it somehow gets stuck (e.g., no edges so fast-path never runs)
+    if (dragTimeoutRef.current) {
+      clearTimeout(dragTimeoutRef.current);
+    }
+    dragTimeoutRef.current = window.setTimeout(() => {
+      if (isDraggingNodeRef.current) {
+        console.log('[GraphCanvas] Drag timeout elapsed, clearing drag flag (failsafe)');
+        isDraggingNodeRef.current = false;
+        setIsDraggingNode(false);
+      }
+      dragTimeoutRef.current = null;
+    }, 5000);
   }, []);
 
   // Handle node drag stop - save final position to history
@@ -4212,6 +4217,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       });
     });
   }, [saveHistoryState, graph, nodes, edges, setGraph]);
+
+  // Cleanup drag timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (dragTimeoutRef.current) {
+        clearTimeout(dragTimeoutRef.current);
+        dragTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   // Add new node
   const addNode = useCallback(() => {

@@ -3295,6 +3295,249 @@ export class UpdateManager {
     
     return { graph: nextGraph, overriddenCount };
   }
+
+  // ============================================================
+  // Node ID Renaming
+  // ============================================================
+
+  /**
+   * Rename a node's human-readable id and update related graph state.
+   *
+   * Responsibilities:
+   * - Update node.id
+   * - If label is not overridden, update it to a human-readable version of node.id
+   *   e.g. "website-start-browse" -> "Website start browse"
+   * - Update references to that node id in:
+   *   - edge.from / edge.to
+   *   - edge.id (both old id substrings and first-time uuid substitutions)
+   *   - edge.query strings
+   *   - conditional_p[].condition strings
+   *
+   * @param graph - Current graph
+   * @param nodeKey - Node UUID or current id
+   * @param newId - New human-readable node id
+   */
+  renameNodeId(
+    graph: any,
+    nodeKey: string,
+    newId: string
+  ): {
+    graph: any;
+    oldId?: string | null;
+    edgesFromToUpdated: number;
+    edgeIdsUpdatedFromId: number;
+    edgeIdsUpdatedFromUuid: number;
+    queriesUpdated: number;
+    conditionsUpdated: number;
+    edgeIdsDeduped: number;
+  } {
+    const nextGraph = structuredClone(graph);
+
+    const node = nextGraph.nodes.find((n: any) =>
+      n.uuid === nodeKey || n.id === nodeKey
+    );
+
+    if (!node) {
+      console.warn('[UpdateManager] renameNodeId: node not found for key:', nodeKey);
+      return { 
+        graph, 
+        oldId: undefined,
+        edgesFromToUpdated: 0,
+        edgeIdsUpdatedFromId: 0,
+        edgeIdsUpdatedFromUuid: 0,
+        queriesUpdated: 0,
+        conditionsUpdated: 0,
+        edgeIdsDeduped: 0
+      };
+    }
+
+    const oldId: string | null | undefined = node.id;
+    const nodeUuid: string = node.uuid;
+
+    // Update node id
+    node.id = newId;
+
+    // If label is not overridden, update it to a human-readable version of the new id
+    if (!node.label_overridden) {
+      node.label = this.humanizeNodeId(newId);
+    }
+
+    // Helper tokens for replacement
+    const firstTimeId = !oldId;
+    const searchTokens: string[] = [];
+    if (oldId && typeof oldId === 'string') {
+      searchTokens.push(oldId);
+    } else if (nodeUuid) {
+      // First-time id assignment: replace uuid-based references
+      searchTokens.push(nodeUuid);
+    }
+
+    // Update edges
+    let edgesFromToUpdated = 0;
+    let edgeIdsUpdatedFromId = 0;
+    let edgeIdsUpdatedFromUuid = 0;
+    let queriesUpdated = 0;
+    let conditionsUpdated = 0;
+    let edgeIdsDeduped = 0;
+
+    // Helper to update queries/conditions in a parameter object (p, cost_gbp, cost_time, etc.)
+    const updateParamQueries = (param: any) => {
+      if (!param || typeof param !== 'object') return;
+      
+      for (const token of searchTokens) {
+        // Update query strings
+        if (param.query && typeof param.query === 'string') {
+          const updated = this.replaceNodeToken(param.query, token, newId);
+          if (updated !== param.query) {
+            param.query = updated;
+            queriesUpdated++;
+          }
+        }
+        
+        // Update conditional probabilities
+        if (Array.isArray(param.conditional_probabilities)) {
+          param.conditional_probabilities.forEach((cond: any) => {
+            if (cond.condition && typeof cond.condition === 'string') {
+              const updatedCond = this.replaceNodeToken(cond.condition, token, newId);
+              if (updatedCond !== cond.condition) {
+                cond.condition = updatedCond;
+                conditionsUpdated++;
+              }
+            }
+          });
+        }
+      }
+    };
+
+    // Update node-level parameters (p, cost_gbp, cost_time, etc.)
+    if (searchTokens.length > 0) {
+      updateParamQueries(node.p);
+      updateParamQueries(node.cost_gbp);
+      updateParamQueries(node.cost_time);
+    }
+
+    if (Array.isArray(nextGraph.edges)) {
+      nextGraph.edges.forEach((edge: any) => {
+        // Update structural references in from/to that use node.id or uuid
+        if (oldId && edge.from === oldId) {
+          edge.from = newId;
+          edgesFromToUpdated++;
+        } else if (firstTimeId && edge.from === nodeUuid) {
+          edge.from = newId;
+          edgesFromToUpdated++;
+        }
+        
+        if (oldId && edge.to === oldId) {
+          edge.to = newId;
+          edgesFromToUpdated++;
+        } else if (firstTimeId && edge.to === nodeUuid) {
+          edge.to = newId;
+          edgesFromToUpdated++;
+        }
+
+        // Edge ID updates (use word boundaries for replacement)
+        if (edge.id && typeof edge.id === 'string') {
+          let edgeIdStr: string = edge.id;
+          let idChanged = false;
+
+          // Case 1: rename old id substring inside edge id (word boundaries)
+          if (oldId && oldId.length > 0) {
+            const updated = this.replaceNodeToken(edgeIdStr, oldId, newId);
+            if (updated !== edgeIdStr) {
+              edgeIdStr = updated;
+              edgeIdsUpdatedFromId++;
+              idChanged = true;
+            }
+          }
+
+          // Case 2: first-time id assignment: replace uuid token with new id in id string
+          if (firstTimeId && nodeUuid && edgeIdStr.includes(nodeUuid)) {
+            edgeIdStr = edgeIdStr.replaceAll(nodeUuid, newId);
+            edgeIdsUpdatedFromUuid++;
+            idChanged = true;
+          }
+
+          if (idChanged) {
+            edge.id = edgeIdStr;
+          }
+        }
+
+        // Update edge-level parameters
+        if (searchTokens.length > 0) {
+          updateParamQueries(edge.p);
+          updateParamQueries(edge.cost_gbp);
+          updateParamQueries(edge.cost_time);
+        }
+      });
+    }
+
+    // Ensure edge IDs are unique after all renames/replacements
+    if (Array.isArray(nextGraph.edges)) {
+      const seenIds = new Set<string>();
+      nextGraph.edges.forEach((edge: any) => {
+        if (!edge.id || typeof edge.id !== 'string') return;
+        const baseId = edge.id;
+        let candidate = baseId;
+        let counter = 2;
+        while (seenIds.has(candidate)) {
+          candidate = `${baseId}.${counter++}`;
+        }
+        if (candidate !== edge.id) {
+          edge.id = candidate;
+          edgeIdsDeduped++;
+        }
+        seenIds.add(candidate);
+      });
+    }
+
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'renameNodeId',
+      details: {
+        nodeUuid,
+        oldId,
+        newId
+      }
+    });
+
+    return {
+      graph: nextGraph,
+      oldId,
+      edgesFromToUpdated,
+      edgeIdsUpdatedFromId,
+      edgeIdsUpdatedFromUuid,
+      queriesUpdated,
+      conditionsUpdated,
+      edgeIdsDeduped
+    };
+  }
+
+  /**
+   * Convert a node id like "website-start-browse" into a human-readable label:
+   * "Website start browse".
+   */
+  private humanizeNodeId(id: string): string {
+    if (!id) return '';
+    const withSpaces = id.replace(/-/g, ' ');
+    return withSpaces.charAt(0).toUpperCase() + withSpaces.slice(1);
+  }
+
+  /**
+   * Replace node-id tokens in a DSL string using a word-boundary regex,
+   * to avoid partial replacements inside other identifiers.
+   */
+  private replaceNodeToken(input: string, oldToken: string, newToken: string): string {
+    if (!oldToken) return input;
+
+    // Escape regex special characters in oldToken
+    const escaped = oldToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`\\b${escaped}\\b`, 'g');
+    return input.replace(pattern, newToken);
+  }
 }
 
 // ============================================================

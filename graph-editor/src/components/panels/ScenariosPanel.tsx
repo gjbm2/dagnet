@@ -321,7 +321,12 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   
   // Listen for new scenario event from legend
   useEffect(() => {
-    const handleNewScenarioEvent = () => {
+    const handleNewScenarioEvent = (e: CustomEvent) => {
+      // Only respond if the event is for this tab
+      const eventTabId = (e.detail as any)?.tabId;
+      if (!tabId || eventTabId !== tabId) {
+        return;
+      }
       // Directly create snapshot everything (no menu)
       handleCreateSnapshot('all', 'visible');
     };

@@ -237,9 +237,14 @@ export class QueryRegenerationService {
       }
     }
     
-    // Transform all nodes (for case.data_source)
+    // Transform all nodes (for case.data_source and ensure valid ids)
     if (transformed.nodes) {
       for (const node of transformed.nodes) {
+        // Ensure node.id is non-empty for backend / DSL (fallback to uuid)
+        if (!node.id || (typeof node.id === 'string' && node.id.trim() === '')) {
+          node.id = node.uuid as any;
+        }
+
         const caseData = node.case as any;
         if (caseData?.data_source && 'type' in caseData.data_source && !('source_type' in caseData.data_source)) {
           caseData.data_source = {
