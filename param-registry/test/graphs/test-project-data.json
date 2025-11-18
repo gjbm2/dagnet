@@ -12,8 +12,8 @@
       "event_id": "household-created",
       "event_id_overridden": true,
       "layout": {
-        "x": -551,
-        "y": 81,
+        "x": -521,
+        "y": 189,
         "rank": 0
       }
     },
@@ -25,8 +25,8 @@
       "event_id": "delegation-completed",
       "event_id_overridden": true,
       "layout": {
-        "x": -11,
-        "y": 12
+        "x": -82,
+        "y": 97
       }
     },
     {
@@ -36,7 +36,7 @@
       "absorbing": false,
       "type": "case",
       "case": {
-        "id": "",
+        "id": "experiment-coffee-promotion2",
         "status": "active",
         "variants": [
           {
@@ -49,11 +49,14 @@
             "weight": 0.25,
             "weight_overridden": true
           }
-        ]
+        ],
+        "connection": "statsig-prod"
       },
+      "event_id": "delegation-completed",
+      "event_id_overridden": true,
       "layout": {
-        "x": -75,
-        "y": 225,
+        "x": -130,
+        "y": 385,
         "color": "#EC4899"
       }
     },
@@ -64,8 +67,8 @@
       "absorbing": true,
       "outcome_type": "success",
       "layout": {
-        "x": 463,
-        "y": 245
+        "x": 350,
+        "y": 366
       }
     },
     {
@@ -75,8 +78,8 @@
       "absorbing": true,
       "outcome_type": "failure",
       "layout": {
-        "x": 450,
-        "y": -24
+        "x": 363,
+        "y": 46
       }
     },
     {
@@ -85,8 +88,8 @@
       "label": "Segue",
       "absorbing": false,
       "layout": {
-        "x": -287,
-        "y": -48
+        "x": -307,
+        "y": 7
       }
     },
     {
@@ -95,8 +98,8 @@
       "label": "Node 7",
       "absorbing": false,
       "layout": {
-        "x": 871,
-        "y": 105
+        "x": 683,
+        "y": 175
       }
     }
   ],
@@ -109,7 +112,8 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.54
+        "mean": 0.3,
+        "mean_overridden": true
       },
       "description": "",
       "query": "from(a).to(c)"
@@ -122,7 +126,7 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.1,
+        "mean": 1,
         "mean_overridden": true
       },
       "description": "",
@@ -137,7 +141,7 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.36000000000000004,
+        "mean": 0.546,
         "id": "test",
         "mean_overridden": true
       },
@@ -166,7 +170,7 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.1,
+        "mean": 0.154,
         "mean_overridden": true
       },
       "query": "from(a).to(segue-node)",
@@ -180,10 +184,12 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.6
+        "mean": 0.6,
+        "connection_overridden": false,
+        "connection": "amplitude-prod"
       },
       "description": "",
-      "query": "from(b).to(d)",
+      "query": "",
       "conditional_p": [
         {
           "condition": "visited(segue-node)",
@@ -194,7 +200,8 @@
             "mean_overridden": true
           }
         }
-      ]
+      ],
+      "query_overridden": true
     },
     {
       "uuid": "52207d6c-d3e3-4fda-a727-484eb1706041->efb60fac-b7ac-431a-8a70-6eb33b345861",
@@ -254,7 +261,8 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.9
+        "mean": 1,
+        "mean_overridden": true
       },
       "description": "",
       "query": "from(c).to(e)",
@@ -271,7 +279,7 @@
     "created_at": "2025-10-21T10:21:58.922Z",
     "author": "Test file",
     "description": "Default empty graph",
-    "updated_at": "2025-11-11T17:25:18.340Z",
+    "updated_at": "2025-11-18T16:54:09.229Z",
     "name": "selection-test.json",
     "source": "git",
     "branch": "main"
