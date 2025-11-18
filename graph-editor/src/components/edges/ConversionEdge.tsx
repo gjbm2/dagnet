@@ -1490,6 +1490,9 @@ export default function ConversionEdge({
   }, [edgePath, data?.useSankeyView, strokeWidth]);
 
 
+  // Check if this is a hidden current layer (semi-transparent current when not visible)
+  const isHiddenCurrent = !data?.scenarioOverlay && (data?.strokeOpacity ?? 1) < 0.1;
+  
   return (
     <>
       <defs>
@@ -1522,6 +1525,19 @@ export default function ConversionEdge({
             fill={getEdgeColor()}
           />
         </marker>
+        {/* Diagonal stripe pattern for hidden current layer */}
+        {isHiddenCurrent && (
+          <pattern
+            id={`stripe-pattern-${id}`}
+            patternUnits="userSpaceOnUse"
+            width="10"
+            height="10"
+            patternTransform="rotate(45)"
+          >
+            <rect x="0" y="0" width="5" height="10" fill={getEdgeColor()} fillOpacity="0.05" />
+            <rect x="5" y="0" width="5" height="10" fill={getEdgeColor()} fillOpacity="0.2" />
+          </pattern>
+        )}
         {/* Define offset path for text to follow (parallel to edge) */}
         {data?.description && (
           <path
@@ -1542,8 +1558,10 @@ export default function ConversionEdge({
               <path
                 id={id}
                 style={{
-                  fill: getEdgeColor(),
-                  fillOpacity: EDGE_OPACITY,
+                  fill: isHiddenCurrent 
+                    ? `url(#stripe-pattern-${id})` 
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
+                  fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   stroke: 'none',
                   transition: 'opacity 0.3s ease-in-out',
@@ -1574,9 +1592,11 @@ export default function ConversionEdge({
                 key={`${id}-ci-upper`}
                 id={`${id}-ci-upper`}
                 style={{
-                  stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
+                  stroke: isHiddenCurrent 
+                    ? `url(#stripe-pattern-${id})` 
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
                   strokeWidth: confidenceData.widths.upper,
-                  strokeOpacity: confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8),
+                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'round',
@@ -1598,9 +1618,11 @@ export default function ConversionEdge({
                 key={`${id}-ci-middle`}
                 id={`${id}-ci-middle`}
                 style={{
-                  stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
+                  stroke: isHiddenCurrent 
+                    ? `url(#stripe-pattern-${id})` 
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
                   strokeWidth: confidenceData.widths.middle,
-                  strokeOpacity: confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8),
+                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'round',
@@ -1623,9 +1645,11 @@ export default function ConversionEdge({
                 key={`${id}-ci-lower`}
                 id={`${id}-ci-lower`}
                 style={{
-                  stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
+                  stroke: isHiddenCurrent 
+                    ? `url(#stripe-pattern-${id})` 
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
                   strokeWidth: confidenceData.widths.lower,
-                  strokeOpacity: confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8),
+                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'round',
@@ -1651,8 +1675,10 @@ export default function ConversionEdge({
                 ref={pathRef}
                 id={id}
                 style={{
-                  stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
-                  strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
+                  stroke: isHiddenCurrent 
+                    ? `url(#stripe-pattern-${id})` 
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
+                  strokeOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                   mixBlendMode: 'multiply',
                   fill: 'none',
                   strokeLinecap: 'round',
@@ -1693,7 +1719,7 @@ export default function ConversionEdge({
             // For perpendicular edges: path distance ≈ perpendicular distance
             let visibleStartOffset = totalInset;
             
-            console.log('[Bead offset] Initial:', { totalInset, edgeId: id });
+            // console.log('[Bead offset] Initial:', { totalInset, edgeId: id });
             
             if (!data?.useSankeyView && data?.sourceFace) {
               const nodes = getNodes();

@@ -917,15 +917,14 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     );
   };
   
-  // Canvas component - recreate when visibility or whatIfDSL changes
-  // Use visibility AND whatIfDSL as part of key to force a full remount when DSL changes
+  // Canvas component - recreate when visibility changes
+  // whatIfDSL is passed as a prop (not in key) so changes use fast path instead of full remount
   const canvasComponent = useMemo(() => {
     // Include visibility in the component to force re-render when it changes
     const currentIsVisible = tabId ? isTabVisible(tabId) : true;
     console.log(`[GraphEditor ${fileId}] Creating canvasComponent: tabId=${tabId}, isVisible=${currentIsVisible}`);
-    const dslKey = (whatIfDSL && whatIfDSL.trim().length > 0) ? whatIfDSL : 'none';
-    return <CanvasHost key={`canvas-${tabId}-${currentIsVisible}-${dslKey}`} />;
-  }, [fileId, tabId, isTabVisible, whatIfDSL]); // Added whatIfDSL to trigger re-render
+    return <CanvasHost key={`canvas-${tabId}-${currentIsVisible}`} />;
+  }, [fileId, tabId, isTabVisible]); // whatIfDSL passed as prop, not in key (use fast path for updates)
   
   const whatIfComponent = useMemo(() => <WhatIfPanel tabId={tabId} />, [tabId]);
   
