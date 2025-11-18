@@ -4,7 +4,6 @@
 ## Scenarios project
 
 - selected / highlighted edges when current is hidden need to make current properly visible
-- edge_id changes don't persist
 - add icons to collapsed beads?
 - playing with edges resets edge_id! 
 - clicking beads -- make hotspot larger
