@@ -133,6 +133,14 @@ export function QueryExpressionEditor({
   const [nodeRegistry, setNodeRegistry] = useState<any[]>([]);
   const [caseRegistry, setCaseRegistry] = useState<any[]>([]);
   const [isEditing, setIsEditing] = useState(false);
+  const isEditingRef = useRef(false); // Ref for keyboard commands to check current editing state
+  
+  // Helper to update both state and ref together
+  const updateIsEditing = (editing: boolean) => {
+    setIsEditing(editing);
+    isEditingRef.current = editing;
+  };
+  
   const [chips, setChips] = useState<ParsedQueryChip[]>([]);
   const [hoveredChipIndex, setHoveredChipIndex] = useState<number | null>(null);
   const [hoveredInnerChip, setHoveredInnerChip] = useState(false);
@@ -725,7 +733,7 @@ export function QueryExpressionEditor({
       const currentValue = editor.getValue();
       console.log('[QueryExpressionEditor] Focus gained, storing value for ESC:', currentValue);
       setValueBeforeEdit(currentValue);
-      setIsEditing(true);
+      updateIsEditing(true);
       // Trigger autocomplete immediately on focus
       setTimeout(() => {
         editor.trigger('keyboard', 'editor.action.triggerSuggest', {});
@@ -782,7 +790,7 @@ export function QueryExpressionEditor({
         willCallOnBlur: !!onBlur
       });
       
-      setIsEditing(false);
+      updateIsEditing(false);
       
       // Strip leading and trailing dots on commit
       if (currentText) {
@@ -819,6 +827,12 @@ export function QueryExpressionEditor({
     
     // Handle Tab key: accept suggestion OR move to next field
     editor.addCommand(monaco.KeyCode.Tab, () => {
+      // CRITICAL: Only handle if we're actually in editing mode
+      // Monaco's addCommand fires for ALL monaco instances, so we must check our ref
+      if (!isEditingRef.current) {
+        return; // Not editing, ignore this event - don't interfere with other editors
+      }
+      
       const suggestController = editor.getContribution('editor.contrib.suggestController') as any;
       
       // State >= 1 = suggestions widget is active (1 = loading/inside params, 2 = visible with suggestions)
@@ -858,6 +872,12 @@ export function QueryExpressionEditor({
     
     // Handle Enter key: accept suggestion OR commit and exit
     editor.addCommand(monaco.KeyCode.Enter, () => {
+      // CRITICAL: Only handle if we're actually in editing mode
+      // Monaco's addCommand fires for ALL monaco instances, so we must check our ref
+      if (!isEditingRef.current) {
+        return; // Not editing, ignore this event - don't interfere with other editors
+      }
+      
       const suggestController = editor.getContribution('editor.contrib.suggestController') as any;
       const isSuggestWidgetVisible = (suggestController?.model?.state ?? 0) >= 1;
       
@@ -874,7 +894,7 @@ export function QueryExpressionEditor({
         // Commit and exit edit mode
         console.log('[QueryExpressionEditor] Committing and exiting edit mode');
         const currentValue = editor.getValue();
-        setIsEditing(false);
+        updateIsEditing(false);
         const domNode = editor.getDomNode();
         if (domNode) {
           domNode.blur();
@@ -926,6 +946,12 @@ export function QueryExpressionEditor({
     
     // Handle ESC key: close autocomplete OR revert and exit
     editor.addCommand(monaco.KeyCode.Escape, () => {
+      // CRITICAL: Only handle if we're actually in editing mode
+      // Monaco's addCommand fires for ALL monaco instances, so we must check our ref
+      if (!isEditingRef.current) {
+        return; // Not editing, ignore this event - don't interfere with other editors
+      }
+      
       const suggestController = editor.getContribution('editor.contrib.suggestController') as any;
       const isSuggestWidgetVisible = (suggestController?.model?.state ?? 0) >= 1;
       
@@ -945,7 +971,7 @@ export function QueryExpressionEditor({
         if (valueBeforeEdit !== currentValue) {
           onChange(valueBeforeEdit);
         }
-        setIsEditing(false);
+        updateIsEditing(false);
         // Blur the editor by removing focus
         const domNode = editor.getDomNode();
         if (domNode) {
@@ -1016,7 +1042,7 @@ export function QueryExpressionEditor({
     onChange(newQuery);
     
     // Enter edit mode and position cursor at the deletion point
-    setIsEditing(true);
+    updateIsEditing(true);
     
     setTimeout(() => {
       if (editorRef.current && monacoRef.current) {
@@ -1077,7 +1103,7 @@ export function QueryExpressionEditor({
       currentValue: value 
     });
     setValueBeforeEdit(value); // Store original value for ESC revert
-    setIsEditing(true);
+    updateIsEditing(true);
     
     // Wait for editor to mount, then select the entire term
     setTimeout(() => {
@@ -1119,7 +1145,7 @@ export function QueryExpressionEditor({
       currentValue: value 
     });
     setValueBeforeEdit(value); // Store original value for ESC revert
-    setIsEditing(true);
+    updateIsEditing(true);
     
     // Wait for editor to mount, then select just the value
     setTimeout(() => {
@@ -1179,7 +1205,7 @@ export function QueryExpressionEditor({
             onClick={() => {
               if (!readonly) {
                 console.log('[QueryExpressionEditor] Empty placeholder clicked, entering edit mode');
-                setIsEditing(true);
+                updateIsEditing(true);
                 
                 // Inject a '.' and trigger autocomplete to show all functions
                 setTimeout(() => {
@@ -1223,7 +1249,7 @@ export function QueryExpressionEditor({
               if (e.target === e.currentTarget && !readonly) {
                 console.log('[QueryExpressionEditor] Empty space clicked, entering edit mode');
                 setValueBeforeEdit(value); // Store original value for ESC revert
-                setIsEditing(true);
+                updateIsEditing(true);
               
                 // Position cursor at end of text and insert '.' to trigger autocomplete
                 setTimeout(() => {
