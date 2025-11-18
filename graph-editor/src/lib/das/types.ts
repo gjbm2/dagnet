@@ -106,6 +106,7 @@ export interface ExecutionContext {
   connection_string: Record<string, unknown>;
   edgeId?: string;
   caseId?: string;
+  nodeId?: string;  // For node-level fetches (future extensibility)
   parameterId?: string;
   extractedVars?: Record<string, unknown>;
   [key: string]: unknown;
@@ -139,6 +140,7 @@ export interface RunnerExecuteOptions {
   connection_string?: string | Record<string, unknown>;
   edgeId?: string;
   caseId?: string;
+  nodeId?: string;  // For node-level fetches (future extensibility)
   parameterId?: string;
 }
 

@@ -887,7 +887,7 @@ class DataOperationsService {
   }
   
   /**
-   * Get data from case file → graph case node
+   * Get data from case file → graph case node (with optional window aggregation)
    */
   async getCaseFromFile(options: {
     caseId: string;
@@ -895,8 +895,9 @@ class DataOperationsService {
     graph: Graph | null;
     setGraph: (graph: Graph | null) => void;
     setAutoUpdating?: (updating: boolean) => void;
+    window?: DateRange; // Optional: if provided, use time-weighted aggregation for this window
   }): Promise<void> {
-    const { caseId, nodeId, graph, setGraph, setAutoUpdating } = options;
+    const { caseId, nodeId, graph, setGraph, setAutoUpdating, window } = options;
     
     // Set auto-updating flag to enable animations
     if (setAutoUpdating) {
@@ -922,61 +923,138 @@ class DataOperationsService {
         return;
       }
       
-      const result = await updateManager.handleFileToGraph(
-        caseFile.data,
-        targetNode,
-        'UPDATE',
-        'case',
-        { interactive: true }
-      );
+      // If window is provided and case file has schedules, use windowed aggregation
+      let variantsToApply: Array<{ name: string; weight: number; description?: string }> | undefined;
       
-      if (!result.success) {
-        console.error('[DataOperationsService] getCaseFromFile failed:', result);
-        const errorMsg = result.errors?.length ? result.errors.map(e => typeof e === 'string' ? e : e.message || JSON.stringify(e)).join(', ') : 'Unknown error';
-        toast.error(`Failed to update from case file: ${errorMsg}`);
-        return;
+      if (window && caseFile.data.schedules && Array.isArray(caseFile.data.schedules)) {
+        const { WindowAggregationService } = await import('./windowAggregationService');
+        const aggregationService = new WindowAggregationService();
+        
+        // Use time-weighted aggregation (Phase 2)
+        const aggregated = aggregationService.aggregateCaseSchedulesForWindow(
+          caseFile.data.schedules,
+          window
+        );
+        
+        console.log('[DataOperationsService] Window-aggregated case weights:', {
+          caseId,
+          window,
+          method: aggregated.method,
+          schedules_included: aggregated.schedules_included,
+          variants: aggregated.variants,
+          coverage: aggregated.coverage
+        });
+        
+        // Warn user if coverage is incomplete
+        if (aggregated.coverage && !aggregated.coverage.is_complete) {
+          console.warn(`[DataOperationsService] ${aggregated.coverage.message}`);
+        }
+        
+        if (aggregated.variants.length > 0) {
+          variantsToApply = aggregated.variants.map(v => ({
+            name: v.name,
+            weight: v.weight,
+            description: '' // Descriptions come from graph, not schedules
+          }));
+        }
       }
       
-      const nextGraph = structuredClone(graph);
-      const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === nodeId || n.id === nodeId);
-      
-      if (nodeIndex >= 0) {
-        // Ensure case structure exists BEFORE applying changes
-        if (caseId && !nextGraph.nodes[nodeIndex].case) {
-          nextGraph.nodes[nodeIndex].case = { id: caseId, status: 'active', variants: [] };
+      // If no windowed aggregation, use standard file-to-graph update
+      if (!variantsToApply) {
+        const result = await updateManager.handleFileToGraph(
+          caseFile.data,
+          targetNode,
+          'UPDATE',
+          'case',
+          { interactive: true }
+        );
+        
+        if (!result.success) {
+          console.error('[DataOperationsService] getCaseFromFile failed:', result);
+          const errorMsg = result.errors?.length ? result.errors.map(e => typeof e === 'string' ? e : e.message || JSON.stringify(e)).join(', ') : 'Unknown error';
+          toast.error(`Failed to update from case file: ${errorMsg}`);
+          return;
         }
         
-        // Apply changes if any (might be empty if already up to date)
-        // This will populate/merge variants from the case file
-        if (result.changes) {
-          applyChanges(nextGraph.nodes[nodeIndex], result.changes);
-        }
+        const nextGraph = structuredClone(graph);
+        const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === nodeId || n.id === nodeId);
         
-        // Ensure we do NOT lose the human-readable node id after file update
-        if (nodeId && !nextGraph.nodes[nodeIndex].id) {
-          nextGraph.nodes[nodeIndex].id = nodeId;
-          console.log('[DataOperationsService] PRESERVE node.id after update:', {
-            nodeId,
-            'node.id': nextGraph.nodes[nodeIndex].id
+        if (nodeIndex >= 0) {
+          // Ensure case structure exists BEFORE applying changes
+          if (caseId && !nextGraph.nodes[nodeIndex].case) {
+            nextGraph.nodes[nodeIndex].case = { id: caseId, status: 'active', variants: [] };
+          }
+          
+          // Apply changes if any (might be empty if already up to date)
+          // This will populate/merge variants from the case file
+          if (result.changes) {
+            applyChanges(nextGraph.nodes[nodeIndex], result.changes);
+          }
+          
+          // Ensure we do NOT lose the human-readable node id after file update
+          if (nodeId && !nextGraph.nodes[nodeIndex].id) {
+            nextGraph.nodes[nodeIndex].id = nodeId;
+            console.log('[DataOperationsService] PRESERVE node.id after update:', {
+              nodeId,
+              'node.id': nextGraph.nodes[nodeIndex].id
+            });
+          }
+          
+          // Ensure case.id is set (in case applyChanges didn't set it)
+          if (caseId && nextGraph.nodes[nodeIndex].case && !nextGraph.nodes[nodeIndex].case.id) {
+            nextGraph.nodes[nodeIndex].case.id = caseId;
+          }
+          
+          console.log('[DataOperationsService] After getCaseFromFile:', {
+            caseId,
+            'node.case.id': nextGraph.nodes[nodeIndex].case?.id,
+            'variants.length': nextGraph.nodes[nodeIndex].case?.variants?.length,
+            'variants': nextGraph.nodes[nodeIndex].case?.variants
           });
+          if (nextGraph.metadata) {
+            nextGraph.metadata.updated_at = new Date().toISOString();
+          }
+          setGraph(nextGraph);
+          toast.success(`✓ Updated from ${caseId}.yaml`, { duration: 2000 });
         }
+      } else {
+        // Apply windowed aggregation results
+        const nextGraph = structuredClone(graph);
+        const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === nodeId || n.id === nodeId);
         
-        // Ensure case.id is set (in case applyChanges didn't set it)
-        if (caseId && nextGraph.nodes[nodeIndex].case && !nextGraph.nodes[nodeIndex].case.id) {
-          nextGraph.nodes[nodeIndex].case.id = caseId;
+        if (nodeIndex >= 0) {
+          // Ensure case structure exists
+          if (!nextGraph.nodes[nodeIndex].case) {
+            nextGraph.nodes[nodeIndex].case = { id: caseId, status: 'active', variants: [] };
+          }
+          
+          // Update variant weights from aggregation
+          // Preserve existing descriptions and override flags
+          const existingVariants = nextGraph.nodes[nodeIndex].case.variants || [];
+          nextGraph.nodes[nodeIndex].case.variants = variantsToApply.map(v => {
+            const existing = existingVariants.find((ev: any) => ev.name === v.name);
+            return {
+              name: v.name,
+              weight: v.weight,
+              description: existing?.description || '',
+              weight_overridden: true, // Mark as overridden since from file
+              name_overridden: existing?.name_overridden,
+              description_overridden: existing?.description_overridden
+            };
+          });
+          
+          console.log('[DataOperationsService] Applied windowed case weights:', {
+            caseId,
+            window,
+            variants: nextGraph.nodes[nodeIndex].case.variants
+          });
+          
+          if (nextGraph.metadata) {
+            nextGraph.metadata.updated_at = new Date().toISOString();
+          }
+          setGraph(nextGraph);
+          toast.success(`✓ Updated from ${caseId}.yaml (windowed)`, { duration: 2000 });
         }
-        
-        console.log('[DataOperationsService] After getCaseFromFile:', {
-          caseId,
-          'node.case.id': nextGraph.nodes[nodeIndex].case?.id,
-          'variants.length': nextGraph.nodes[nodeIndex].case?.variants?.length,
-          'variants': nextGraph.nodes[nodeIndex].case?.variants
-        });
-        if (nextGraph.metadata) {
-          nextGraph.metadata.updated_at = new Date().toISOString();
-        }
-        setGraph(nextGraph);
-        toast.success(`✓ Updated from ${caseId}.yaml`, { duration: 2000 });
       }
     } catch (error) {
       console.error('[DataOperationsService] Failed to get case from file:', error);
@@ -1192,40 +1270,147 @@ class DataOperationsService {
   }): Promise<void> {
     const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, bustCache } = options;
     
-    // For now, only parameters support versioned fetching
-    if (objectType !== 'parameter') {
-      toast.error('Versioned fetching only supported for parameters');
-      return;
-    }
-    
     try {
-      // 1. Fetch from source using getFromSourceDirect with dailyMode=true
-      // This will fetch data and store it in the parameter file
-      await this.getFromSourceDirect({
-        objectType: 'parameter',
-        objectId, // Parameter file ID
-        targetId,
-        graph,
-        setGraph,
-        paramSlot,
-        conditionalIndex,
-        window,
-        dailyMode: true, // Always use daily mode for versioned fetching
-        bustCache // Pass through bust cache flag
-      });
-      
-      // 2. Update graph from file (standard file-to-graph flow)
-      if (targetId && graph && setGraph) {
-        await this.getParameterFromFile({
-          paramId: objectId,
-          edgeId: targetId,
+      if (objectType === 'parameter') {
+        // Parameters: fetch daily data, append to values[], update graph
+        // 1. Fetch from source using getFromSourceDirect with dailyMode=true
+        // This will fetch data and store it in the parameter file
+        await this.getFromSourceDirect({
+          objectType: 'parameter',
+          objectId, // Parameter file ID
+          targetId,
           graph,
           setGraph,
-          window // Use same window for aggregation
+          paramSlot,
+          conditionalIndex,
+          window,
+          dailyMode: true, // Always use daily mode for versioned fetching
+          bustCache // Pass through bust cache flag
         });
+        
+        // 2. Update graph from file (standard file-to-graph flow)
+        if (targetId && graph && setGraph) {
+          await this.getParameterFromFile({
+            paramId: objectId,
+            edgeId: targetId,
+            graph,
+            setGraph,
+            window // Use same window for aggregation
+          });
+        }
+        
+        toast.success('Fetched from source and updated graph from file');
+        
+      } else if (objectType === 'case') {
+        // Cases: fetch gate config, append to schedules[], update graph nodes
+        console.log(`[DataOperationsService] getFromSource for case: ${objectId}`);
+        
+        // 1. Fetch from source (adapter will append to case file schedules[])
+        await this.getFromSourceDirect({
+          objectType,
+          objectId,
+          targetId,
+          graph,
+          setGraph,
+          window,
+          dailyMode: false, // Cases don't use daily mode (single schedule entry)
+          bustCache: false
+        });
+        
+        // 2. Update graph nodes from case file (with windowed aggregation)
+        // Find all nodes with this case_id and update their variant weights from file
+        if (graph && setGraph && targetId) {
+          // Find the first case node with this case_id to update from file
+          const caseNode = graph.nodes?.find((n: any) => 
+            n.type === 'case' && n.case?.id === objectId
+          );
+          
+          if (caseNode) {
+            const nodeId = caseNode.uuid || caseNode.id;
+            
+            // Use getCaseFromFile with window for time-weighted aggregation
+            await this.getCaseFromFile({
+              caseId: objectId,
+              nodeId,
+              graph,
+              setGraph,
+              window // Pass window for time-weighted aggregation (Component 5)
+            });
+          } else {
+            console.warn(`[DataOperationsService] No case node found with case_id="${objectId}"`);
+          }
+        } else if (graph && setGraph && !targetId) {
+          // No targetId provided - update all nodes with this case_id
+          // This is the batch update path (less common)
+          const caseFileId = `case-${objectId}`;
+          const caseFile = fileRegistry.getFile(caseFileId);
+          
+          if (caseFile && caseFile.data) {
+            const { WindowAggregationService } = await import('./windowAggregationService');
+            const aggregationService = new WindowAggregationService();
+            
+            // Get windowed aggregation (or latest if no window)
+            const aggregated = window 
+              ? aggregationService.aggregateCaseSchedulesForWindow(caseFile.data.schedules || [], window)
+              : aggregationService.getCaseWeightsForWindow(caseFile.data.schedules || []);
+            
+            const variants = aggregated.variants || [];
+            
+            if (variants.length > 0) {
+              console.log(`[DataOperationsService] Aggregated case variants:`, {
+                method: aggregated.method,
+                schedules_included: aggregated.schedules_included,
+                variants,
+                coverage: aggregated.coverage
+              });
+              
+              // Warn user if coverage is incomplete
+              if (aggregated.coverage && !aggregated.coverage.is_complete) {
+                console.warn(`[DataOperationsService] ${aggregated.coverage.message}`);
+              }
+              
+              // Update all nodes with this case_id
+              const updatedGraph = structuredClone(graph);
+              let updated = false;
+              
+              for (const node of updatedGraph.nodes || []) {
+                if (node.type === 'case' && node.case?.id === objectId) {
+                  // Update variant weights from aggregation
+                  const existingVariants = node.case.variants || [];
+                  node.case.variants = variants.map((v: any) => {
+                    const existing = existingVariants.find((ev: any) => ev.name === v.name);
+                    return {
+                      name: v.name,
+                      weight: v.weight,
+                      description: existing?.description || '',
+                      name_overridden: existing?.name_overridden,
+                      weight_overridden: true, // Mark as overridden since we just fetched from source
+                      description_overridden: existing?.description_overridden
+                    };
+                  });
+                  
+                  updated = true;
+                  console.log(`[DataOperationsService] Updated node ${node.uuid || node.id} with case data`);
+                }
+              }
+              
+              if (updated) {
+                if (updatedGraph.metadata) {
+                  updatedGraph.metadata.updated_at = new Date().toISOString();
+                }
+                setGraph(updatedGraph);
+              }
+            }
+          }
+        }
+        
+        toast.success('Fetched from source and updated graph from file');
+        
+      } else {
+        toast.error(`Versioned fetching not yet supported for ${objectType}`);
+        return;
       }
       
-      toast.success('Fetched from source and updated graph from file');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toast.error(`Error fetching from source: ${message}`);
@@ -1347,8 +1532,14 @@ class DataOperationsService {
       let dsl: any = {};
       let connectionProvider: string | undefined;
       
-      if (targetId && graph) {
-        // Find the target edge
+      if (objectType === 'case') {
+        // Cases don't need DSL building
+        // Statsig adapter only needs caseId (passed via context below)
+        console.log('[DataOperationsService] Skipping DSL build for case (caseId passed via context)');
+        dsl = {};  // Empty DSL is fine
+        
+      } else if (targetId && graph) {
+        // Parameters: build DSL from edge query
         const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
         
         if (targetEdge && targetEdge.query) {
@@ -1639,7 +1830,9 @@ class DataOperationsService {
             connection_string: connectionString,
             window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
             context: { mode: contextMode }, // Pass mode to adapter (daily or aggregate)
-            edgeId: targetId || 'unknown'
+            edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
+            caseId: objectType === 'case' ? objectId : undefined,  // Pass caseId for cases
+            nodeId: objectType === 'node' ? (targetId || objectId) : undefined  // Pass nodeId for nodes (future)
           });
           
           if (!result.success) {

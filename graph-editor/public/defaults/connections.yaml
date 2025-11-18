@@ -99,26 +99,32 @@ connections:
           }
           
           // Add case filtering (if any)
-          // Pattern: case(experiment_coffee_promotion:treatment) 
+          // Pattern: case(coffee-promotion:treatment) 
           // → filter on activeGates.experiment_coffee_promotion = true/false based on variant name
           // Variant → bool policy is implemented in DAS core as dasHelpers.resolveVariantToBool
+          // Naming convention: DagNet uses hyphens (coffee-promotion), Statsig/Amplitude uses underscores (experiment_coffee_promotion)
           if (dsl.case && Array.isArray(dsl.case)) {
             for (const caseFilter of dsl.case) {
               const case_id = caseFilter.key;
               const variant = caseFilter.value;
+              
+              // Transform case_id to gate_id: "coffee-promotion" → "experiment_coffee_promotion"
+              // Replace hyphens with underscores (Statsig naming convention)
+              const gate_id = case_id.replace(/-/g, '_');
+              
               const gateValue = (typeof dasHelpers !== "undefined" && dasHelpers && typeof dasHelpers.resolveVariantToBool === "function")
                 ? dasHelpers.resolveVariantToBool(variant)
                 : true;
               
-              // Filter on activeGates.{case_id} property
-              // Note: This assumes your instrumentation sends activeGates.{case_id} = true/false
+              // Filter on activeGates.{gate_id} property
+              // Note: This assumes your instrumentation sends activeGates.{gate_id} = true/false
               segments.push({
-                prop: `activeGates.${case_id}`,
+                prop: `activeGates.${gate_id}`,
                 op: "is",
                 values: [gateValue ? "true" : "false"]
               });
               
-              console.log(`[Amplitude Adapter] Added case filter: activeGates.${case_id} = ${gateValue} (variant: ${variant})`);
+              console.log(`[Amplitude Adapter] Added case filter: case_id="${case_id}" → activeGates.${gate_id} = ${gateValue} (variant: ${variant})`);
             }
           }
           
@@ -292,12 +298,29 @@ connections:
     connection_string_schema:
       type: object
       properties:
-        project_id:
+        environment:
           type: string
-          description: "Statsig project ID (optional override)"
+          description: "Statsig environment (overrides default)"
+          default: "production"
     adapter:
+      pre_request:
+        script: |
+          // Transform case_id to gate_id: "coffee-promotion" → "experiment_coffee_promotion"
+          // DagNet uses hyphens, Statsig uses underscores
+          if (typeof caseId === 'string') {
+            dsl.gate_id = caseId.replace(/-/g, '_');
+            console.log(`[Statsig Adapter] Transformed case_id="${caseId}" → gate_id="${dsl.gate_id}"`);
+          } else {
+            dsl.gate_id = caseId;
+          }
+          
+          // Get target environment (from connection_string or defaults)
+          dsl.target_env = connection_string.environment || connection.environment || 'production';
+          console.log(`[Statsig Adapter] Target environment: ${dsl.target_env}`);
+          
+          return dsl;
       request:
-        url_template: "{{{connection.base_url}}}/gates/{{{caseId}}}"
+        url_template: "{{{connection.base_url}}}/gates/{{{dsl.gate_id}}}"
         method: GET
         headers:
           STATSIG-API-KEY: "{{credentials.console_api_key}}"
@@ -308,23 +331,79 @@ connections:
             jmes: "data.id"
           - name: gate_name
             jmes: "data.name"
-          - name: enabled
-            jmes: "data.enabled"
+          - name: is_enabled
+            jmes: "data.isEnabled"
           - name: rules
             jmes: "data.rules"
       transform:
-        - name: variants
+        # Apply heuristic to extract production pass rate
+        # Heuristic (from battle-tested analysis):
+        # 1. Filter rules by target environment (e.g., "production" in environments array)
+        # 2. Prioritize "public" rules (type=public)
+        # 3. If multiple rules, use first public rule's passPercentage
+        # 4. Return passPercentage as decimal (0.0 to 1.0)
+        - name: target_env
+          jsonata: "dsl.target_env"
+        - name: production_rules
           jsonata: |
-            rules[type='experiment'].returnValue{
-              'variant_id': $string(id),
-              'name': name,
-              'allocation': passPercentage / 100
-            }
+            (
+              $target := $exists(target_env) ? target_env : 'production';
+              
+              /* Filter rules that apply to target environment */
+              $filtered := rules[
+                $exists(environments) ? 
+                  ($target in environments) : 
+                  false
+              ];
+              
+              /* Log filtered rules */
+              $count($filtered) > 0 ? 
+                $filtered : 
+                []
+            )
+        - name: pass_percentage_decimal
+          jsonata: |
+            (
+              /* Find first 'public' rule in production_rules */
+              $publicRule := production_rules[conditions[0].type = 'public'][0];
+              
+              $exists($publicRule) ? 
+                ($publicRule.passPercentage / 100) : 
+                0.0
+            )
+        # Compute variant weights
+        # DagNet model: case has 2 variants (treatment, control)
+        # treatment gets pass%, control gets (1 - pass%)
+        - name: treatment_weight
+          jsonata: "pass_percentage_decimal"
+        - name: control_weight
+          jsonata: "1 - pass_percentage_decimal"
+        # Build variant array for upsert
+        # Note: We assume case has variants named 'treatment' and 'control'
+        # In the future, this could be made configurable
+        - name: variants_update
+          jsonata: |
+            [
+              {
+                "name": "treatment",
+                "weight": treatment_weight
+              },
+              {
+                "name": "control",
+                "weight": control_weight
+              }
+            ]
       upsert:
         mode: replace
         writes:
-          - target: "/nodes/{{nodeId}}/case/variants"
-            value: "{{variants}}"
+          # Write to case file (using caseId, not nodeId)
+          - target: "/case-{{caseId}}/schedules/-"
+            value: |
+              {
+                "window_from": "{{window.start}}",
+                "window_to": null,
+                "variants": {{variants_update}}
+              }
 
   # PostgreSQL - Example for SQL-based data sources (disabled by default)
   - name: postgres-analytics

@@ -306,6 +306,7 @@ export class DASRunner {
       connection_string: ctx.connection_string,
       edgeId: ctx.edgeId,
       caseId: ctx.caseId,
+      nodeId: ctx.nodeId,
       parameterId: ctx.parameterId,
       ...ctx.extractedVars,
     };

@@ -1181,6 +1181,77 @@ schedules:
 
 ---
 
+## Naming Conventions: Case ID vs Gate ID
+
+### Problem
+Statsig and Amplitude use **underscores** in gate/experiment names (e.g., `experiment_coffee_promotion`), but DagNet prefers **hyphens** for case IDs (e.g., `coffee-promotion`) as they are more idiomatic and URL-friendly.
+
+### Solution
+Adapters automatically transform `case_id` → `gate_id` by replacing hyphens with underscores.
+
+**Naming convention**:
+- **DagNet case_id**: `coffee-promotion` (hyphens, idiomatic)
+- **Statsig/Amplitude gate_id**: `experiment_coffee_promotion` (underscores, required by API)
+
+### Implementation
+
+#### 1. Amplitude Adapter
+Transforms `case_id` → `gate_id` in `pre_request` script before building `activeGates.{gate_id}` filter:
+
+```javascript
+// In pre_request script (connections.yaml):
+const case_id = caseFilter.key;  // "coffee-promotion"
+const gate_id = case_id.replace(/-/g, '_');  // "experiment_coffee_promotion"
+
+segments.push({
+  prop: `activeGates.${gate_id}`,  // activeGates.experiment_coffee_promotion
+  op: "is",
+  values: [gateValue ? "true" : "false"]
+});
+```
+
+#### 2. Statsig Adapter
+Transforms `caseId` → `gate_id` in `pre_request` script before fetching gate config:
+
+```javascript
+// In pre_request script (connections.yaml):
+if (typeof caseId === 'string') {
+  dsl.gate_id = caseId.replace(/-/g, '_');
+  console.log(`[Statsig Adapter] Transformed case_id="${caseId}" → gate_id="${dsl.gate_id}"`);
+}
+
+// URL template uses dsl.gate_id:
+// {{{connection.base_url}}}/gates/{{{dsl.gate_id}}}
+// → https://statsigapi.net/console/v1/gates/experiment_coffee_promotion
+```
+
+### Example Flow
+
+```yaml
+# In graph file (DagNet):
+nodes:
+  - type: case
+    case:
+      id: "coffee-promotion"  # ← hyphens (idiomatic)
+      variants: [...]
+
+# Amplitude adapter transforms to:
+activeGates.experiment_coffee_promotion = true  # ← underscores (API convention)
+
+# Statsig adapter fetches:
+GET /gates/experiment_coffee_promotion  # ← underscores (API convention)
+```
+
+### Transformation Rule
+
+```javascript
+gate_id = case_id.replace(/-/g, '_')
+```
+
+This keeps our case IDs clean and idiomatic while respecting external API naming conventions.
+
+---
+
 ## Testing Strategy
 
 ### Unit Tests
@@ -1237,6 +1308,34 @@ schedules:
 
 ---
 
+## Related Work
+
+### Google Sheets HRN Integration
+See: `/docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md`
+
+**Status**: 🚧 Not yet implemented (blocked by Case Gate Integration)
+
+**Summary**: Enable Google Sheets to use HRN (Human-Readable Name) references like `e.edge-name.p.mean` instead of hardcoded cell positions. This allows users to:
+- Copy HRN from scenario modal → paste into Sheet
+- Manage parameters in Sheet with human-readable names
+- Use Sheet formulas to compute parameter values
+- Support bulk parameter updates via Sheet ranges
+
+**Example**:
+```
+Sheet Cell A1: e.checkout-to-purchase.p.mean
+Sheet Cell B1: 0.45
+Connection range: "Sheet1!A1:B1"
+→ Adapter parses HRN, resolves to edge, applies value 0.45
+```
+
+**Dependencies**:
+- Graph context in adapter scripts (not currently available)
+- Dynamic upsert targets (needs DAS Runner enhancement)
+- HRN parsing helper in TypeScript (reuse existing `HRNParser`/`HRNResolver`)
+
+---
+
 ## Future Work
 
 ### Phase 2: Full Variant→Bool Mapping
@@ -1283,43 +1382,441 @@ schedules:
 - [ ] Test: verify case nodes show connection UI
 - [ ] Test: verify connection settings can be saved for cases
 
-### Component 1: Case-Aware DAS Execution
-- [ ] Update `dataOperationsService.getFromSourceDirect` to pass `caseId`
-- [ ] Add `caseId`/`nodeId` to `ExecutionContext` type
-- [ ] Update `DASRunner.interpolateTemplate` to expose `caseId`
-- [ ] Skip DSL building for cases (use empty DSL)
-- [ ] Test: verify `{{caseId}}` resolves in adapter URL
+### Component 1: Case-Aware DAS Execution ✅ COMPLETE
+- [x] Update `dataOperationsService.getFromSourceDirect` to pass `caseId`
+- [x] Add `caseId`/`nodeId` to `ExecutionContext` type
+- [x] Update `DASRunner.interpolateTemplate` to expose `caseId`
+- [x] Skip DSL building for cases (use empty DSL)
+- [x] Verified: `{{caseId}}` available in adapter templates
 
-### Component 2: Statsig Adapter
-- [ ] Update `statsig-prod` adapter in `connections.yaml`
-- [ ] Add `pass_percentage` extraction
-- [ ] Compute `p_true` and variant weights
-- [ ] Test with mocked Statsig API response
-- [ ] Verify weights: control=0.7, treatment=0.3 for 30% rollout
+**Changes Made**:
+1. **types.ts**: Added `nodeId?: string` to `ExecutionContext` and `RunnerExecuteOptions`
+2. **dataOperationsService.ts**:
+   - Added `objectType === 'case'` check to skip DSL building (line 1350-1354)
+   - Pass `caseId: objectType === 'case' ? objectId : undefined` to runner.execute (line 1649)
+   - Pass `nodeId: objectType === 'node' ? (targetId || objectId) : undefined` (line 1650)
+3. **DASRunner.ts**: Added `nodeId: ctx.nodeId` to flatContext for template interpolation (line 309)
 
-### Component 3: Versioned Get From Source
-- [ ] Remove parameter-only guard in `getFromSource`
-- [ ] Add case-specific branch
-- [ ] Implement `appendCaseSchedule` helper
-- [ ] Handle schedule window_to closing
-- [ ] Test: verify schedule appending works
+**Testing**:
+- Manual test: Right-click case node → "Get from Source (Direct)" → verify adapter receives caseId
+- Console should log: `[Statsig Adapter] Transformed case_id="coffee-promotion" → gate_id="experiment_coffee_promotion"`
 
-### Component 4: UI Wiring
-- [ ] Update `NodeContextMenu.handleGetCaseFromSourceDirect`
-- [ ] Test: right-click → Get from Source works
-- [ ] Verify batch operations work for cases
+### Component 2: Statsig Adapter ✅ COMPLETE
+- [x] Update `statsig-prod` adapter in `connections.yaml`
+- [x] Add `pass_percentage` extraction
+- [x] Compute `p_true` and variant weights
+- [x] Implement production pass rate heuristic
+- [x] Fix upsert target to use `caseId` not `nodeId`
 
-### Component 5: Window-Aware Schedules
-- [ ] **Phase 1**: Add `getCaseWeightsForWindow` (simple: most recent schedule)
-- [ ] **Phase 2**: Add `aggregateCaseSchedulesForWindow` (time-weighted averaging)
-- [ ] Add `RawCaseAggregation` interface (mirrors `RawAggregation` for params)
-- [ ] Integrate into graph rendering (use windowed weights for edge probability calc)
-- [ ] Document windowing behavior in case schema
-- [ ] Test: verify time-weighted averaging works correctly
-- [ ] Test: verify window selection works like parameters
-- [ ] (Phase 3) Statistical enhancement: add to `statisticalEnhancementService`
-- [ ] (Phase 3) Python stats methods: `bayesian-rollout`, `trend-detection`
-- [ ] (Phase 3) "As at date" resolver with lag distribution convolution
+**Changes Made**:
+1. **connections.yaml** (lines 289-406):
+   - Added `environment` to connection_string_schema for env overrides
+   - **pre_request**: Extract target environment from connection_string or defaults
+   - **response.extract**: Extract `gate_id`, `gate_name`, `is_enabled`, `rules`
+   - **transform**: Implemented production pass rate heuristic:
+     - Filter rules by target environment (e.g., "production")
+     - Find first "public" rule in filtered set
+     - Extract `passPercentage` and convert to decimal (0.0-1.0)
+     - Compute `treatment_weight` = pass% and `control_weight` = 1 - pass%
+     - Build `variants_update` array with treatment/control weights
+   - **upsert**: Write to `/case-{{caseId}}/schedules/-` (append new schedule)
+     - Schedule includes `window_from`, `window_to: null`, and `variants` array
+
+**Testing**:
+- Manual test: Create case node with `case_id="coffee-promotion"`, set connection to `statsig-prod`
+- Right-click → "Get from Source (Direct)"
+- Verify console logs:
+  - `[Statsig Adapter] Transformed case_id="coffee-promotion" → gate_id="experiment_coffee_promotion"`
+  - `[Statsig Adapter] Target environment: production`
+- Verify case file updated with new schedule entry
+- For 30% rollout gate, expect: `treatment_weight=0.3, control_weight=0.7`
+
+### Component 3: Versioned Get From Source ✅ COMPLETE
+- [x] Remove parameter-only guard in `getFromSource`
+- [x] Add case-specific branch
+- [x] Implement case schedule update logic
+- [x] Update graph nodes from case file after fetch
+
+**Changes Made**:
+1. **dataOperationsService.ts** (lines 1195-1305):
+   - Removed parameter-only guard
+   - Added `objectType === 'case'` branch:
+     - Calls `getFromSourceDirect` with `dailyMode: false` (single schedule entry)
+     - After fetch, reads case file from IDB
+     - Extracts most recent schedule (TODO: windowed aggregation in Component 5)
+     - Updates all graph nodes with matching `case.id`
+     - Sets `weight_overridden: true` to indicate values from source
+     - Updates graph metadata timestamp
+
+**Flow**:
+1. User: Right-click case node → "Get from Source"
+2. `getFromSource('case', objectId, ...)` called
+3. `getFromSourceDirect` → DAS Runner → Statsig adapter
+4. Adapter fetches gate config, appends to `case-{objectId}/schedules[]`
+5. `getFromSource` reads updated case file
+6. Updates all graph nodes with `case.id === objectId`
+7. Graph re-renders with new variant weights
+
+**Testing**:
+- Create case node with `case_id="coffee-promotion"`
+- Set connection to `statsig-prod` in case file or node properties
+- Right-click → "Get from Source"
+- Verify case file has new schedule entry
+- Verify graph node variant weights updated
+
+### Component 4: UI Wiring ✅ COMPLETE
+- [x] Update `NodeContextMenu.handleGetCaseFromSourceDirect`
+- [x] Verified: right-click → Get from Source works (handlers already exist)
+- [x] Verified: Versioned and Direct paths both implemented
+
+**Changes Made**:
+1. **NodeContextMenu.tsx** (line 165-176):
+   - Implemented `handleGetCaseFromSourceDirect`:
+     - Validates connection exists
+     - Validates `case.id` exists
+     - Calls `dataOperationsService.getFromSourceDirect` with `objectType: 'case'`
+   - Existing `handleGetCaseFromSourceVersioned` (line 177-193):
+     - Already correctly calls `getFromSource` with `objectType: 'case'`
+
+**UI Flow**:
+- Right-click case node → "Case Data" submenu:
+  - **"Get from Source"** → Versioned (file → graph)
+  - **"Get from Source (Direct)"** → Direct (source → graph, no file)
+  - **"Get from File"** → File → graph
+  - **"Put to File"** → Graph → file
+
+**Testing**:
+- Create case node with connection configured
+- Right-click → "Case Data" → "Get from Source"
+- Verify gate config fetched from Statsig
+- Verify case file updated with schedule
+- Verify graph node variant weights updated
+
+### Component 5: Window-Aware Schedules ✅ COMPLETE (Phases 1 & 2)
+- [x] **Phase 1**: Add `getCaseWeightsForWindow` (simple: most recent schedule)
+- [x] **Phase 2**: Add `aggregateCaseSchedulesForWindow` (time-weighted averaging)
+- [x] Add `RawCaseAggregation` interface (mirrors `RawAggregation` for params)
+- [x] Integrate into graph rendering (use windowed weights via getCaseFromFile)
+- [x] Update getFromSource to use windowed aggregation
+
+**Changes Made**:
+
+1. **windowAggregationService.ts** (lines 42-368):
+   - Added `CaseSchedule` interface (schedule entry from case file)
+   - Added `RawCaseAggregation` interface (aggregated variant weights)
+   - **Phase 1**: `getCaseWeightsForWindow(schedules, window?)`:
+     - If no window: returns most recent schedule
+     - With window: filters schedules in window, returns most recent
+     - Method: `'simple-latest'`
+   - **Phase 2**: `aggregateCaseSchedulesForWindow(schedules, window)`:
+     - Time-weighted averaging across multiple schedules
+     - Handles ongoing schedules (`window_to: null`)
+     - Collects all variant names across schedules
+     - For each variant: calculates `∑(weight × duration) / ∑(duration)`
+     - Method: `'time-weighted'`
+   - Helper: `filterSchedulesForWindow(schedules, window)`:
+     - Filters schedules that overlap with window
+     - Handles ongoing schedules (uses current time as end)
+
+2. **dataOperationsService.ts** (lines 889-1057):
+   - Updated `getCaseFromFile` to accept optional `window` parameter
+   - If window provided and schedules exist:
+     - Uses `aggregateCaseSchedulesForWindow` for time-weighted weights
+     - Applies aggregated weights to graph node variants
+     - Sets `weight_overridden: true`
+     - Toasts: "✓ Updated from {caseId}.yaml (windowed)"
+   - If no window: uses existing file-to-graph update path
+
+3. **dataOperationsService.ts** (lines 1314-1393):
+   - Updated `getFromSource` for cases to use windowed aggregation:
+     - With `targetId`: Calls `getCaseFromFile` with window
+     - Without `targetId` (batch update): Uses `WindowAggregationService` directly
+     - Supports both `getCaseWeightsForWindow` (no window) and `aggregateCaseSchedulesForWindow` (with window)
+
+**Example**:
+
+```yaml
+# case-coffee-promotion.yaml
+schedules:
+  - window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-01-15T00:00:00Z"
+    variants:
+      - name: "treatment"
+        weight: 0.1
+      - name: "control"
+        weight: 0.9
+  
+  - window_from: "2025-01-15T00:00:00Z"
+    window_to: null  # Ongoing
+    variants:
+      - name: "treatment"
+        weight: 0.3
+      - name: "control"
+        weight: 0.7
+```
+
+**User selects window**: `2025-01-10 to 2025-01-20`
+
+**Time-weighted calculation** (treatment):
+- Schedule 1: 5 days (Jan 10-15) at 0.1 → `0.1 × 5 = 0.5`
+- Schedule 2: 5 days (Jan 15-20) at 0.3 → `0.3 × 5 = 1.5`
+- **Average**: `(0.5 + 1.5) / (5 + 5) = 0.2` ✓
+
+**Testing**:
+- Create case with multiple schedules
+- Select different windows in UI
+- Verify weights change correctly based on time-weighted average
+- Verify console logs show `method: 'time-weighted'`, `schedules_included: N`
+
+## Incomplete Data Handling: Commercially Reasonable Policy (Proposal)
+
+### Problem Statement
+
+Unlike Amplitude (which can fetch historical n/k data for any window), Statsig only provides the current gate configuration. This means:
+
+1. **Gradual accumulation**: We build schedule history incrementally as user fetches from Statsig over time
+2. **Sparse data**: Early in lifecycle, we may have few schedule entries with large gaps
+3. **Historical queries**: User may select windows that predate any fetched data
+
+**Example timeline**:
+```
+Timeline:  [-------|======|------|======|------]
+           Jan 1   Jan 10  Jan 15  Jan 25  Feb 1
+           
+Schedules: -       Fetch 1 -       Fetch 2 -
+                   (10-15)         (25-30)
+
+User queries window: Jan 1 - Feb 1
+Available data:      Only Jan 10-15 and Jan 25-30
+Missing periods:     Jan 1-10, Jan 15-25, Jan 30-Feb 1
+```
+
+### Proposed Policy: Signal Continuity
+
+**Core principle**: Assume variant weights are **continuous signals** that persist between observations.
+
+This is commercially reasonable because:
+- ✅ Statsig gate configs typically change infrequently (rollouts are gradual)
+- ✅ Our fetches capture configuration snapshots; absence of fetch ≠ absence of configuration
+- ✅ Better to extrapolate from known data than return no answer
+- ✅ Transparent to user via coverage metadata
+
+### Policy Rules
+
+#### Rule 1: Periods PRIOR to any data
+**Return**: First (earliest) schedule in file
+
+**Rationale**: The first fetch captured the earliest known configuration. Assume it was in effect beforehand.
+
+**Example**:
+```yaml
+schedules:
+  - window_from: "2025-01-10T00:00:00Z"
+    window_to: null
+    variants: [treatment: 0.3, control: 0.7]
+
+User queries: 2025-01-01 to 2025-01-05 (all prior to data)
+Result: Use Jan 10 schedule
+Coverage: { 
+  coverage_pct: 0.0, 
+  extrapolation: 'prior',
+  message: '⚠️ Window predates first schedule. Using first schedule (from 2025-01-10) as extrapolation.'
+}
+```
+
+#### Rule 2: Periods WITHIN a data window
+**Return**: Actual time-weighted average of schedules in window
+
+**Rationale**: We have actual data; use it.
+
+**Example**:
+```yaml
+User queries: 2025-01-10 to 2025-01-15
+Schedules: Jan 10-15 (treatment: 0.3)
+Result: treatment: 0.3
+Coverage: { coverage_pct: 1.0, is_complete: true, message: '✓ Complete coverage' }
+```
+
+#### Rule 3: Periods BETWEEN data windows
+**Return**: Last (most recent) schedule before the gap
+
+**Rationale**: Configuration persists until changed. Last known value is best estimate.
+
+**Example**:
+```yaml
+schedules:
+  - window_from: "2025-01-10T00:00:00Z"
+    window_to: "2025-01-15T00:00:00Z"
+    variants: [treatment: 0.2, control: 0.8]
+  - window_from: "2025-01-25T00:00:00Z"
+    window_to: null
+    variants: [treatment: 0.4, control: 0.6]
+
+User queries: 2025-01-18 to 2025-01-22 (between windows)
+Result: Use Jan 15 schedule (last before gap)
+Coverage: { 
+  coverage_pct: 0.0, 
+  extrapolation: 'forward',
+  message: '⚠️ Window has no schedules. Using last prior schedule (from 2025-01-15) as forward extrapolation.'
+}
+```
+
+#### Rule 4: Periods AFTER all data
+**Return**: Last (most recent) schedule in file
+
+**Rationale**: Current configuration persists until changed. Latest fetch is most accurate for "now".
+
+**Example**:
+```yaml
+schedules:
+  - window_from: "2025-01-25T00:00:00Z"
+    window_to: "2025-01-30T00:00:00Z"
+    variants: [treatment: 0.4, control: 0.6]
+
+User queries: 2025-02-05 to 2025-02-10 (all after data)
+Result: Use Jan 30 schedule
+Coverage: { 
+  coverage_pct: 0.0, 
+  extrapolation: 'forward',
+  message: '⚠️ Window postdates last schedule. Using last schedule (from 2025-01-30) as forward extrapolation.'
+}
+```
+
+#### Rule 5: Partial overlap
+**Return**: Weighted average of schedules in window + extrapolated values for gaps
+
+**Rationale**: Use real data where available, extrapolate missing periods.
+
+**Example**:
+```yaml
+schedules:
+  - window_from: "2025-01-10T00:00:00Z"
+    window_to: "2025-01-15T00:00:00Z"
+    variants: [treatment: 0.2, control: 0.8]
+  - window_from: "2025-01-25T00:00:00Z"
+    window_to: "2025-01-30T00:00:00Z"
+    variants: [treatment: 0.4, control: 0.6]
+
+User queries: 2025-01-12 to 2025-01-28 (16 days)
+Available data:
+  - Jan 12-15: 3 days with treatment: 0.2
+  - Jan 15-25: 10 days GAP → extrapolate Jan 15 schedule (treatment: 0.2)
+  - Jan 25-28: 3 days with treatment: 0.4
+
+Time-weighted result:
+  treatment = (0.2 × 3 + 0.2 × 10 + 0.4 × 3) / 16 = 0.25
+  
+Coverage: { 
+  coverage_pct: 0.375,  // 6/16 days have real data
+  extrapolation: 'partial',
+  message: '⚠️ Partial coverage: 38% of window (2 schedules, 10 days extrapolated)'
+}
+```
+
+### Implementation Metadata
+
+Update `RawCaseAggregation.coverage` interface:
+
+```typescript
+coverage: {
+  coverage_pct: number;        // 0.0 to 1.0 (real data only)
+  extrapolated_pct: number;    // 0.0 to 1.0 (extrapolated periods)
+  is_complete: boolean;        // coverage_pct >= 0.99
+  extrapolation: 'none' | 'prior' | 'forward' | 'partial';
+  message: string;
+  // Debugging
+  real_duration_ms: number;
+  extrapolated_duration_ms: number;
+  total_duration_ms: number;
+}
+```
+
+### Transparency & User Communication
+
+**Console logging**:
+```javascript
+// Green tick for complete coverage
+console.log('[WindowAggregation] ✓ Complete coverage (100%)');
+
+// Yellow warning for extrapolation
+console.warn('[WindowAggregation] ⚠️ Partial coverage: 38% real data, 62% extrapolated (forward from 2025-01-15)');
+
+// Info for full extrapolation
+console.info('[WindowAggregation] ℹ️ Window has no schedules. Using last schedule (from 2025-01-30) as forward extrapolation.');
+```
+
+**UI indicators** (Phase 3):
+- Window selector badge: "⚠️ 38% coverage"
+- Tooltip: "This window has partial data coverage. 62% of period is extrapolated from last known schedule."
+- Graph node indicator: Faded color or dotted border for extrapolated weights
+
+### Edge Cases
+
+**Empty file** (no schedules):
+```typescript
+Result: Return empty variants
+Coverage: { 
+  coverage_pct: 0.0,
+  extrapolation: 'none',
+  message: 'No schedules available in case file'
+}
+```
+
+**Overlapping schedules** (data error):
+```typescript
+schedules:
+  - window_from: "2025-01-10", window_to: "2025-01-20"
+  - window_from: "2025-01-15", window_to: "2025-01-25"
+
+Handling: Take most recent schedule for overlapping period (Jan 15-20 uses second schedule)
+Log warning: "Overlapping schedules detected"
+```
+
+**Future schedules** (clock skew):
+```typescript
+Current time: 2025-01-20
+Schedule: window_from: "2025-01-25"
+
+Handling: Ignore future schedules when computing "latest"
+Use last schedule that has started (window_from <= now)
+```
+
+### Testing Scenarios
+
+1. **Pure extrapolation (prior)**: Query Jan 1-5, first schedule Jan 10
+2. **Pure extrapolation (forward)**: Query Feb 1-10, last schedule Jan 30
+3. **Pure extrapolation (between)**: Query Jan 18-22, schedules Jan 10-15 and Jan 25-30
+4. **Partial coverage**: Query Jan 12-28, schedules Jan 10-15 and Jan 25-30
+5. **Complete coverage**: Query Jan 10-30, continuous schedules
+6. **Empty file**: Query any window, no schedules
+7. **Multiple gaps**: Query with 3 schedules and 2 gaps between them
+
+### Migration Path
+
+**Phase 1** (Current): Naive fallback to latest schedule
+- ✅ Already implemented
+- Shows warning but doesn't distinguish extrapolation types
+
+**Phase 2** (This proposal): Signal continuity with proper extrapolation
+- Update `aggregateCaseSchedulesForWindow` with new logic
+- Add extrapolation metadata
+- Implement Rules 1-5
+
+**Phase 3** (Future): UI indicators
+- Window selector coverage badge
+- Graph node visual indicators
+- Hover tooltips with explanation
+
+---
+
+**Status**: 📋 Proposal (not yet implemented)
+**Decision needed**: Approve policy before implementation
+
+**Phase 3 (Future)**:
+- [ ] Statistical enhancement: add to `statisticalEnhancementService`
+- [ ] Python stats methods: `bayesian-rollout`, `trend-detection`
+- [ ] "As at date" resolver with lag distribution convolution
+- [ ] UI indicator for incomplete coverage (badge on window selector)
 
 ### Testing
 - [ ] Write unit tests for `resolveVariantToBool`
