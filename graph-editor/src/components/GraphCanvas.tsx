@@ -755,10 +755,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         isLastInTargetBundle: targetEdgeIndex === sortedTargetEdges.length - 1,
         sourceFace: sourceFace,
         targetFace: targetFace,
-        // Preserve edge.data including calculateWidth function
-        data: {
-          ...edge.data,
-        },
       };
     });
 
@@ -1105,8 +1101,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setGraph(nextGraph);
   }, [graph, setGraph, getAllExistingIds]);
 
-  const handleDeleteNode = useCallback((id: string) => {
-    console.log('=== DELETING NODE ===', id);
+  const handleDeleteNode = useCallback(async (nodeUuid: string) => {
+    console.log('=== DELETING NODE ===', nodeUuid);
     
     if (!graph) {
       console.log('No graph, aborting delete');
@@ -1120,19 +1116,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       hasMetadata: !!graph.metadata
     });
     
-    const oldGraph = graph;
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== id);
-    nextGraph.edges = nextGraph.edges.filter(e => e.from !== id && e.to !== id);
-    
-    // Ensure metadata exists and update it
-    if (!nextGraph.metadata) {
-      nextGraph.metadata = {
-        version: "1.0.0",
-        created_at: new Date().toISOString()
-      };
-    }
-    nextGraph.metadata.updated_at = new Date().toISOString();
+    // Use UpdateManager to delete node and clean up edges
+    const { updateManager } = await import('../services/UpdateManager');
+    const nextGraph = updateManager.deleteNode(graph, nodeUuid);
     
     console.log('AFTER DELETE:', {
       nodes: nextGraph.nodes.length,
@@ -1147,7 +1133,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setGraph(nextGraph);
     
     // Save history state for node deletion
-    saveHistoryState('Delete node', id);
+    saveHistoryState('Delete node', nodeUuid);
     
     // Clear selection when node is deleted
     onSelectedNodeChange(null);
@@ -1178,25 +1164,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setGraph(nextGraph);
   }, [graph, setGraph, getAllExistingIds]);
 
-  const handleDeleteEdge = useCallback((id: string) => {
-    console.log('=== DELETING EDGE ===', id);
+  const handleDeleteEdge = useCallback(async (edgeUuid: string) => {
+    console.log('=== DELETING EDGE ===', edgeUuid);
     
     if (!graph) {
       console.log('No graph, aborting delete');
       return;
     }
     
-    const nextGraph = structuredClone(graph);
-    nextGraph.edges = nextGraph.edges.filter(e => e.id !== id);
-    
-    // Ensure metadata exists and update it
-    if (!nextGraph.metadata) {
-      nextGraph.metadata = {
-        version: "1.0.0",
-        created_at: new Date().toISOString()
-      };
-    }
-    nextGraph.metadata.updated_at = new Date().toISOString();
+    // Use UpdateManager to delete edge
+    const { updateManager } = await import('../services/UpdateManager');
+    const nextGraph = updateManager.deleteEdge(graph, edgeUuid);
     
     // Clear the sync flag to allow graph->ReactFlow sync
     isSyncingRef.current = false;
@@ -1211,7 +1189,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [graph, setGraph, onSelectedEdgeChange]);
 
   // Delete selected elements
-  const deleteSelected = useCallback(() => {
+  const deleteSelected = useCallback(async () => {
     if (!graph) return;
     
     const selectedNodes = nodes.filter(n => n.selected);
@@ -1230,28 +1208,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       saveHistoryState('Delete node', selectedNodes[0].id);
     }
     
-    // Do all deletions in a single graph update
-    const nextGraph = structuredClone(graph);
+    // Use UpdateManager for deletions
+    const { updateManager } = await import('../services/UpdateManager');
+    let nextGraph = graph;
     
-    // Delete selected nodes and their connected edges
-    // Build set of both UUIDs and human-readable IDs for checking edge.from/to
-    const selectedNodeUUIDs = new Set(selectedNodes.map(n => n.id)); // ReactFlow IDs are UUIDs
-    const selectedNodeHumanIds = new Set(selectedNodes.map(n => n.data?.id).filter(Boolean));
-    const allSelectedIds = new Set([...selectedNodeUUIDs, ...selectedNodeHumanIds]);
-    
-    nextGraph.nodes = nextGraph.nodes.filter(n => !selectedNodeUUIDs.has(n.uuid));
-    nextGraph.edges = nextGraph.edges.filter(e => 
-      // edge.from/to can be EITHER uuid OR human-readable ID
-      !allSelectedIds.has(e.from) && !allSelectedIds.has(e.to)
-    );
+    // Delete selected nodes (this will also delete their connected edges via UpdateManager)
+    const selectedNodeUUIDs = selectedNodes.map(n => n.id); // ReactFlow IDs are UUIDs
+    for (const nodeUuid of selectedNodeUUIDs) {
+      nextGraph = updateManager.deleteNode(nextGraph, nodeUuid);
+    }
     
     // Delete selected edges (that weren't already deleted with nodes)
-    const selectedEdgeIds = new Set(selectedEdges.map(e => e.id));
-    nextGraph.edges = nextGraph.edges.filter(e => !selectedEdgeIds.has(e.uuid));
-    
-    // Update metadata
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
+    const selectedEdgeUUIDs = selectedEdges.map(e => e.id); // ReactFlow IDs are UUIDs
+    for (const edgeUuid of selectedEdgeUUIDs) {
+      // Check if edge still exists (might have been deleted with a node)
+      const edgeExists = nextGraph.edges.some((e: any) => e.uuid === edgeUuid);
+      if (edgeExists) {
+        nextGraph = updateManager.deleteEdge(nextGraph, edgeUuid);
+      }
     }
     
     // Single graph update for all deletions
@@ -1733,20 +1707,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidthFunctions, nodesWithSelection, effectiveMaxWidth);
   
   // Attach offsets to edge data for the ConversionEdge component
-  const edgesWithOffsetData = edgesWithOffsets.map(edge => {
-    // CRITICAL: Remove top-level scaledWidth from calculateEdgeOffsets (bundling width)
-    const { scaledWidth: _bundlingWidth, ...cleanEdge } = edge as any;
-    return {
-      ...cleanEdge,
-      data: {
-        ...edge.data,
-        sourceOffsetX: edge.sourceOffsetX,
-        sourceOffsetY: edge.sourceOffsetY,
-        targetOffsetX: edge.targetOffsetX,
-        targetOffsetY: edge.targetOffsetY,
-        // DO NOT copy scaledWidth from calculateEdgeOffsets - that's just a bundling width
-        // The real probability-based width is computed by buildScenarioRenderEdges
-        // scaledWidth: edge.scaledWidth,  // ← REMOVED - was polluting data with wrong width!
+  const edgesWithOffsetData = edgesWithOffsets.map(edge => ({
+    ...edge,
+    data: {
+      ...edge.data,
+      sourceOffsetX: edge.sourceOffsetX,
+      sourceOffsetY: edge.sourceOffsetY,
+      targetOffsetX: edge.targetOffsetX,
+      targetOffsetY: edge.targetOffsetY,
+      scaledWidth: edge.scaledWidth,
       // Bundle metadata
       sourceBundleWidth: edge.sourceBundleWidth,
       targetBundleWidth: edge.targetBundleWidth,
@@ -1765,8 +1734,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       // ATOMIC RESTORATION: Do NOT pass decoration visibility through edge.data
       // Beads will read beadsVisible from React Context instead
     }
-  };
-  });
+  }));
   
   // Compute edge anchors (start edges under the node boundary for cleaner appearance)
   const edgesWithAnchors = edgesWithOffsetData.map(edge => {
@@ -1890,24 +1858,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // GEOMETRY MERGE: Preserve key geometry fields (scaledWidth, offsets) from previous RENDER edges
     // when topology hasn't changed, to avoid visual flicker during slow-path rebuilds
     // Use lastRenderEdgesRef which tracks the final output of buildScenarioRenderEdges (with correct widths)
-    
-    // DIAGNOSTIC: Log what we're about to merge (first edge only)
-    if (edgesWithScenarios.length > 0) {
-      const firstEdge = edgesWithScenarios[0];
-      console.log(`[SlowPath BEFORE merge] First edge ${firstEdge.id}:`, {
-        scaledWidth: firstEdge.data?.scaledWidth,
-        hasCalculateWidth: !!firstEdge.data?.calculateWidth,
-        dataKeys: Object.keys(firstEdge.data || {})
-      });
-      const prevRender = lastRenderEdgesRef.current.find(e => e.id === firstEdge.id);
-      if (prevRender) {
-        console.log(`[SlowPath BEFORE merge] Previous render edge ${firstEdge.id}:`, {
-          scaledWidth: prevRender.data?.scaledWidth,
-          hasCalculateWidth: !!prevRender.data?.calculateWidth,
-        });
-      }
-    }
-    
     const prevById = new Map<string, any>();
     lastRenderEdgesRef.current.forEach(prevEdge => {
       prevById.set(prevEdge.id, prevEdge);
@@ -1932,15 +1882,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const prevData = prevEdge.data || {};
       const newData = newEdge.data || {};
       
-      // DIAGNOSTIC: Log merge for first edge
-      if (newEdge.id === edgesWithScenarios[0]?.id) {
-        console.log(`[SlowPath MERGE] Edge ${newEdge.id}:`, {
-          prevScaledWidth: prevData.scaledWidth,
-          newScaledWidth: newData.scaledWidth,
-          mergedScaledWidth: prevData.scaledWidth ?? newData.scaledWidth,
-        });
-      }
-      
       return {
         ...newEdge,
         data: {
@@ -1954,15 +1895,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         },
       };
     });
-    
-    // DIAGNOSTIC: Log what we're committing (first edge only)
-    if (mergedEdges.length > 0) {
-      const firstMerged = mergedEdges[0];
-      console.log(`[SlowPath AFTER merge] First edge ${firstMerged.id}:`, {
-        scaledWidth: firstMerged.data?.scaledWidth,
-        hasCalculateWidth: !!firstMerged.data?.calculateWidth,
-      });
-    }
     
     setEdges(mergedEdges);
     
@@ -2213,20 +2145,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const srcAnchor = computeAnchor(edge.source, edge.data?.sourceFace, edge.sourceOffsetX, edge.sourceOffsetY);
       const tgtAnchor = computeAnchor(edge.target, edge.data?.targetFace, edge.targetOffsetX, edge.targetOffsetY);
       
-      // CRITICAL: Remove top-level scaledWidth from calculateEdgeOffsets (bundling width)
-      const { scaledWidth: _bundlingWidth, ...cleanEdge } = edge as any;
-      
       return {
-        ...cleanEdge,
+        ...edge,
         data: {
           ...edge.data,
           sourceOffsetX: edge.sourceOffsetX,
           sourceOffsetY: edge.sourceOffsetY,
           targetOffsetX: edge.targetOffsetX,
           targetOffsetY: edge.targetOffsetY,
-          // DO NOT set scaledWidth here - that's buildScenarioRenderEdges' job
-          // The edge.scaledWidth from calculateEdgeOffsets is just bundling geometry, not visual width
-          // scaledWidth: edge.scaledWidth,  // ← BUG: was copying MIN_WIDTH (2) into data
+          scaledWidth: edge.scaledWidth,
           // Anchor positions for edge endpoints
           sourceAnchorX: srcAnchor.x,
           sourceAnchorY: srcAnchor.y,
@@ -2287,20 +2214,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           const edgesWithOffsets = calculateEdgeOffsets(edgesWithWidth, nodes, effectiveMaxWidth);
           const t3 = performance.now();
           // Attach offsets to edge data for the ConversionEdge component
-          return edgesWithOffsets.map(edge => {
-            // CRITICAL: Remove top-level scaledWidth from calculateEdgeOffsets (bundling width)
-            const { scaledWidth: _bundlingWidth, ...cleanEdge } = edge as any;
-            return {
-              ...cleanEdge,
-              data: {
-                ...edge.data,
-                sourceOffsetX: edge.sourceOffsetX,
-                sourceOffsetY: edge.sourceOffsetY,
-                targetOffsetX: edge.targetOffsetX,
-                targetOffsetY: edge.targetOffsetY,
-                // DO NOT set scaledWidth here - that's buildScenarioRenderEdges' job
-                // The edge.scaledWidth from calculateEdgeOffsets is just bundling geometry, not visual width
-                // scaledWidth: edge.scaledWidth,  // ← BUG #3: was copying MIN_WIDTH (2) into data
+          return edgesWithOffsets.map(edge => ({
+            ...edge,
+            data: {
+              ...edge.data,
+              sourceOffsetX: edge.sourceOffsetX,
+              sourceOffsetY: edge.sourceOffsetY,
+              targetOffsetX: edge.targetOffsetX,
+              targetOffsetY: edge.targetOffsetY,
+              scaledWidth: edge.scaledWidth,
               // Bundle metadata
               sourceBundleWidth: edge.sourceBundleWidth,
               targetBundleWidth: edge.targetBundleWidth,
@@ -2315,8 +2237,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               // Pass what-if DSL to edges
               whatIfDSL: effectiveWhatIfDSL
             }
-          };
-          });
+          }));
         });
       } finally {
         const tEnd = performance.now();
@@ -2650,7 +2571,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const nodesChanged = oldEdge.source !== newConnection.source || oldEdge.target !== newConnection.target;
     if (nodesChanged) {
       const reactFlowEdges = graph.edges
-        .filter(e => e.id !== oldEdge.id)
+        .filter(e => e.uuid !== oldEdge.id) // oldEdge.id from ReactFlow is the edge UUID
         .map(e => ({ source: e.from, target: e.to }));
       if (wouldCreateCycle(newConnection.source, newConnection.target, reactFlowEdges)) {
         console.log('❌ REJECTED: Would create cycle');
@@ -4660,49 +4581,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
   }, [graph, onSelectedEdgeChange]);
 
-  // Delete specific node
   // Delete specific node (called from context menu)
-  // Note: This receives a React Flow node ID (UUID), but needs to look up by human-readable ID
-  const deleteNode = useCallback((reactFlowNodeId: string) => {
+  // Note: This receives a React Flow node ID (which is the UUID)
+  const deleteNode = useCallback(async (nodeUuid: string) => {
     if (!graph) return;
     
-    // Find the node by React Flow ID (UUID) to get its human-readable ID
-    const node = nodes.find(n => n.id === reactFlowNodeId);
-    if (!node?.data?.id) {
-      console.error('Could not find node to delete:', reactFlowNodeId);
-      return;
-    }
-    
-    const humanReadableId = node.data.id;
-    
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes = nextGraph.nodes.filter(n => n.id !== humanReadableId);
-    nextGraph.edges = nextGraph.edges.filter(e => e.from !== humanReadableId && e.to !== humanReadableId);
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
+    // Use UpdateManager to delete node and clean up edges
+    const { updateManager } = await import('../services/UpdateManager');
+    const nextGraph = updateManager.deleteNode(graph, nodeUuid);
     
     setGraph(nextGraph);
     setNodeContextMenu(null);
     
     // Save history state for context menu deletion
-    saveHistoryState('Delete node', humanReadableId);
+    saveHistoryState('Delete node', nodeUuid);
     
     // Clear selection when node is deleted
     onSelectedNodeChange(null);
-  }, [graph, nodes, setGraph, saveHistoryState, onSelectedNodeChange]);
+  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange]);
 
-  // Delete specific edge
-  const deleteEdge = useCallback((edgeId: string) => {
+  // Delete specific edge (called from context menu)
+  const deleteEdge = useCallback(async (edgeUuid: string) => {
     if (!graph) return;
     
-    const nextGraph = structuredClone(graph);
-    nextGraph.edges = nextGraph.edges.filter(e => e.id !== edgeId);
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
+    // Use UpdateManager to delete edge
+    const { updateManager } = await import('../services/UpdateManager');
+    const nextGraph = updateManager.deleteEdge(graph, edgeUuid);
     
     setGraph(nextGraph);
     // Note: History saving is handled by PropertiesPanel for keyboard/button deletes

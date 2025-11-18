@@ -51,6 +51,7 @@ interface EdgeBeadsProps {
   edge: GraphEdge;
   path: SVGPathElement | null;
   graph: Graph | null;
+  scenarioOrder: string[];
   visibleScenarioIds: string[];
   visibleColorOrderIds: string[];
   scenarioColors: Map<string, string>;
@@ -70,6 +71,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge,
     path,
     graph,
+    scenarioOrder,
     visibleScenarioIds,
     visibleColorOrderIds,
     scenarioColors,
@@ -101,6 +103,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       edge,
       graph,
       scenariosContext,
+      scenarioOrder,
       effectiveVisibleIds,
       visibleColorOrderIds.length > 0 ? visibleColorOrderIds : ['current'],
       scenarioColors,
@@ -121,6 +124,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     // scenariosContext changes reference frequently - use stable indicators instead
     scenariosContext?.scenarios?.map(s => s.id).join(','), // Scenario IDs (stable string)
     JSON.stringify(scenariosContext?.baseParams?.edges?.[edge.uuid || edge.id || '']), // Edge-specific params
+    scenarioOrder.join(','), // Scenario order (stable string)
     visibleScenarioIds.join(','), // Visible scenarios (stable string)
     visibleColorOrderIds.join(','), // Color order (stable string)
     Array.from(scenarioColors.entries()).join(','), // Scenario colors (stable string)

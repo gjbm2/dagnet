@@ -164,34 +164,33 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     e: Edge,
     probResolver: (e: Edge) => number,
     helpers: { dfs: (nodeId: string) => number },
-    scenarioId?: string
+    currentScenarioId: string
   ): number => {
+    // DIAGNOSTIC: Log inputs for first edge only (avoid spam)
+    const isFirstEdge = e.id === baseEdges[0]?.id;
+    if (isFirstEdge) {
+      console.log(`[computeOverlayWidthRaw] Computing for ${e.id}, scenario=${currentScenarioId}:`, {
+        edgeProb: probResolver(e),
+        startNodeId: startNodeId,
+        hasStartNode: !!startNodeId,
+        effectiveMassGenerosity,
+        effectiveMaxWidth,
+        useUniformScaling
+      });
+    }
+    
     if (useUniformScaling) {
       // Uniform scaling mode - all edges same width
       return 10;
     }
     const edgeProb = probResolver(e);
-    
-    // DIAGNOSTIC: Log inputs for first edge
-    const isFirstEdge = e.id === baseEdges[0]?.id;
-    if (isFirstEdge && scenarioId) {
-      console.log(`[computeOverlayWidthRaw] Computing for ${e.id}, scenario=${scenarioId}:`, {
-        edgeProb,
-        startNodeId,
-        hasStartNode: !!startNodeId,
-        effectiveMassGenerosity,
-        effectiveMaxWidth,
-        MIN_WIDTH
-      });
-    }
-    
     if (!startNodeId) {
       const siblings = rfEdges.filter(se => se.source === e.source);
       const denom = siblings.reduce((sum, se) => sum + (probResolver(se) || 0), 0);
       if (denom === 0) return MIN_WIDTH;
       const proportion = edgeProb / denom;
       const result = MIN_WIDTH + proportion * (effectiveMaxWidth - MIN_WIDTH);
-      if (isFirstEdge && scenarioId) {
+      if (isFirstEdge) {
         console.log(`[computeOverlayWidthRaw] No start node path:`, { proportion, result });
       }
       return result;
@@ -212,8 +211,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       displayMass = Math.pow(actualMass, power);
     }
     const result = MIN_WIDTH + displayMass * (effectiveMaxWidth - MIN_WIDTH);
-    if (isFirstEdge && scenarioId) {
-      console.log(`[computeOverlayWidthRaw] With start node:`, {
+    if (isFirstEdge) {
+      console.log(`[computeOverlayWidthRaw] Start node path:`, {
         residualAtSource,
         actualMass,
         displayMass,
@@ -377,19 +376,20 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const freshComputed = rawWidths.get(edge.id) || MIN_WIDTH;
       const mergedWidth = edge.data?.scaledWidth as number | undefined;
       
-      // REVERTED: Use fresh computation (do NOT always use merged)
-      // We need to understand WHEN freshComputed is wrong, not mask it
+      // REVERTED: Now always use fresh computation to see when it's wrong
+      // Previously: const preScaled = mergedWidth ?? freshComputed;
       const preScaled = freshComputed;
       
       // Diagnostic logging for first edge only
       if (edge.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
+        const mergeDelta = mergedWidth ? Math.abs(freshComputed - mergedWidth) : 0;
         console.log(`[buildScenarioRenderEdges] Width calc for ${edge.id}:`, {
           scenarioId,
           freshComputed,
           mergedWidth,
           preScaled,
-          mergeDelta: mergedWidth ? (freshComputed - mergedWidth) : null,
-          usingFreshComputed: true
+          mergeDelta,
+          usingFresh: true
         });
       }
       
@@ -426,24 +426,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const highlightDepth = isCurrent && highlightMetadata ? (highlightMetadata.edgeDepthMap.get(edge.id) || 0) : 0;
       const isSingleNodeHighlight = isCurrent && highlightMetadata ? highlightMetadata.isSingleNodeSelection : false;
       
-      // Extract old data, but explicitly remove stale width fields from data
-      const { scaledWidth: _oldScaledWidth, calculateWidth: _oldCalculateWidth, ...cleanEdgeData } = edge.data || {};
-      
-      // CRITICAL: Also remove top-level scaledWidth from calculateEdgeOffsets (bundling width)
-      const { scaledWidth: _topLevelScaledWidth, ...cleanEdge } = edge as any;
-      
-      // Diagnostic: Log removal of stale widths
-      if (edge.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
-        console.log(`[buildScenarioRenderEdges] CLEANED EDGE ${edge.id}:`, {
-          scenarioId,
-          hadTopLevelScaledWidth: _topLevelScaledWidth,
-          hadDataScaledWidth: _oldScaledWidth,
-          preScaled,
-        });
-      }
-      
       return {
-        ...cleanEdge,
+        ...edge,
         // For 'current': reuse base edge ID (preserves ReactFlow selection/interaction)
         // For others: use prefixed ID to avoid conflicts
         id: isCurrent ? edge.id : `scenario-overlay__${scenarioId}__${edge.id}`,
@@ -451,7 +435,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         selectable: isCurrent,
         reconnectable: isCurrent,  // Enable reconnection for 'current' only
         data: {
-          ...cleanEdgeData,  // Spread CLEAN data without old scaledWidth
+          ...edge.data,
           scenarioOverlay: !isCurrent,  // 'current' is NOT an overlay, it's the live layer
           scenarioColor: color,
           strokeOpacity: overlayOpacity,
@@ -462,7 +446,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           scenarioParams: edgeParams,
           probability: edgeParams?.p?.mean ?? edge.data?.probability ?? 0.5,
           stdev: edgeParams?.p?.stdev ?? edge.data?.stdev,
-          calculateWidth: () => preScaled,  // NEW fresh width function - no old scaledWidth to conflict!
+          calculateWidth: () => preScaled,
           effectiveWeight: edgeProb,
           renderFallbackTargetArrow: preScaled < MIN_CHEVRON_THRESHOLD,
           // STEP 4: Apply highlight flags to 'current' edges
@@ -490,55 +474,13 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       };
     });
 
-    // Diagnostic: Check draft edges before offset calculation
-    if (draftOverlayEdges[0] && (scenarioId === 'current' || layerIndex === 0)) {
-      const firstDraft = draftOverlayEdges[0];
-      console.log(`[buildScenarioRenderEdges] BEFORE calculateEdgeOffsets for ${firstDraft.id}:`, {
-        scenarioId,
-        hasData: !!firstDraft.data,
-        hasCalculateWidth: !!firstDraft.data?.calculateWidth,
-        dataScaledWidth: firstDraft.data?.scaledWidth,
-        topLevelScaledWidth: (firstDraft as any).scaledWidth,
-        dataKeys: firstDraft.data ? Object.keys(firstDraft.data) : [],
-      });
-    }
-    
     // Compute offsets using the same logic as base
     const overlayWithOffsets = calculateEdgeOffsets(draftOverlayEdges, rfNodes, effectiveMaxWidth);
-    
-    // Diagnostic: Check what calculateEdgeOffsets returns
-    if (overlayWithOffsets[0] && (scenarioId === 'current' || layerIndex === 0)) {
-      const firstWithOffsets = overlayWithOffsets[0];
-      console.log(`[buildScenarioRenderEdges] AFTER calculateEdgeOffsets for ${firstWithOffsets.id}:`, {
-        scenarioId,
-        hasData: !!firstWithOffsets.data,
-        hasCalculateWidth: !!firstWithOffsets.data?.calculateWidth,
-        dataScaledWidth: firstWithOffsets.data?.scaledWidth,
-        topLevelScaledWidth: (firstWithOffsets as any).scaledWidth,
-        dataKeys: firstWithOffsets.data ? Object.keys(firstWithOffsets.data) : [],
-      });
-    }
 
     // Attach offset data
     overlayWithOffsets.forEach(oe => {
-      // CRITICAL: Use the width we computed from probabilities (via calculateWidth),
-      // NOT the width that calculateEdgeOffsets computed (which is just for bundling geometry)
-      const hasCalculateWidth = !!oe.data?.calculateWidth;
-      const correctWidth = oe.data?.calculateWidth ? oe.data.calculateWidth() : oe.scaledWidth;
-      
-      if (oe.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
-        console.log(`[buildScenarioRenderEdges] OUTPUTTING width for ${oe.id}:`, {
-          scenarioId,
-          hasCalculateWidth,
-          correctWidth,
-          oeScaledWidth: oe.scaledWidth,
-          oeDataKeys: oe.data ? Object.keys(oe.data) : [],
-        });
-      }
-      
-      const finalEdge = {
+      renderEdges.push({
         ...oe,
-        scaledWidth: correctWidth,  // CRITICAL: Override top-level scaledWidth from calculateEdgeOffsets
         data: {
           ...oe.data,
           sourceOffsetX: oe.sourceOffsetX,
@@ -546,7 +488,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           targetOffsetX: oe.targetOffsetX,
           targetOffsetY: oe.targetOffsetY,
           isPanningOrZooming: isPanningOrZooming,  // Pass through pan/zoom state
-          scaledWidth: correctWidth,  // Use the probability-based width, not bundling width
+          scaledWidth: oe.scaledWidth,
           sourceBundleWidth: oe.sourceBundleWidth,
           targetBundleWidth: oe.targetBundleWidth,
           sourceBundleSize: oe.sourceBundleSize,
@@ -558,19 +500,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           sourceFace: oe.sourceFace,
           targetFace: oe.targetFace,
         },
-      } as any;
-      
-      // Diagnostic: Verify the final edge has correct width at both levels
-      if (oe.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
-        console.log(`[buildScenarioRenderEdges] FINAL EDGE for ${oe.id}:`, {
-          scenarioId,
-          topLevelScaledWidth: finalEdge.scaledWidth,
-          dataScaledWidth: finalEdge.data?.scaledWidth,
-          match: finalEdge.scaledWidth === finalEdge.data?.scaledWidth,
-        });
-      }
-      
-      renderEdges.push(finalEdge);
+      } as any);
     });
   }
 
