@@ -118,6 +118,70 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const isStartNode = data.entry?.is_start || false;
   const isTerminalNode = data.absorbing || false;
   
+  // For case nodes, check PMF for each variant
+  const getCaseVariantProbabilityMass = useCallback(() => {
+    if (!isCaseNode || !data.case) return null;
+    
+    const outgoingEdges = getEdges().filter(edge => 
+      edge.source === data.id || edge.source === data.uuid
+    );
+    
+    if (outgoingEdges.length === 0) return null;
+    if (!graph) return null;
+    
+    // Group edges by variant
+    const variantEdges = new Map<string, any[]>();
+    data.case.variants.forEach(variant => {
+      variantEdges.set(variant.name, []);
+    });
+    
+    outgoingEdges.forEach(edge => {
+      const edgeData = graph.edges?.find((e: any) => 
+        (e.id && e.id === edge.id) || 
+        (e.uuid && e.uuid === edge.id) ||
+        `${e.from}->${e.to}` === edge.id
+      );
+      
+      const variantName = edgeData?.case_variant;
+      if (variantName && variantEdges.has(variantName)) {
+        variantEdges.get(variantName)!.push(edge);
+      }
+    });
+    
+    // Calculate PMF for each variant
+    const variantResults: Array<{
+      variantName: string;
+      total: number;
+      missing: number;
+      isComplete: boolean;
+      edgeCount: number;
+    }> = [];
+    
+    data.case.variants.forEach(variant => {
+      const edges = variantEdges.get(variant.name) || [];
+      const totalProbability = edges.reduce((sum, edge) => {
+        const edgeId = edge.id || `${edge.source}->${edge.target}`;
+        const effectiveProb = computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL });
+        return sum + effectiveProb;
+      }, 0);
+      
+      variantResults.push({
+        variantName: variant.name,
+        total: totalProbability,
+        missing: 1.0 - totalProbability,
+        isComplete: Math.abs(totalProbability - 1.0) < 0.001,
+        edgeCount: edges.length
+      });
+    });
+    
+    return {
+      variants: variantResults,
+      hasAnyIncomplete: variantResults.some(v => !v.isComplete && v.edgeCount > 0)
+    };
+  }, [isCaseNode, data.case, data.id, data.uuid, getEdges, graph, whatIfDSL]);
+  
+  const caseVariantProbabilityMass = getCaseVariantProbabilityMass();
+  
   // Check for conditional probability conservation errors with debouncing to prevent flashing during CTRL+drag
   const [debouncedValidation, setDebouncedValidation] = useState<any>(null);
   const [isActiveDrag, setIsActiveDrag] = useState(false);
@@ -674,6 +738,29 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             fontWeight: 'bold'
           }}>
             ⚠️ Missing {Math.round(probabilityMass.missing * 100)}%
+          </div>
+        )}
+        
+        {/* Case node variant PMF warnings */}
+        {isCaseNode && caseVariantProbabilityMass?.hasAnyIncomplete && !isActiveDrag && (
+          <div style={{ 
+            fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
+            color: '#ff6b6b', 
+            marginTop: '2px',
+            background: '#fff5f5',
+            padding: '2px 4px',
+            borderRadius: '3px',
+            border: '1px solid #ff6b6b',
+            fontWeight: 'bold'
+          }}>
+            {caseVariantProbabilityMass.variants
+              .filter(v => !v.isComplete && v.edgeCount > 0)
+              .map((v, idx, arr) => (
+                <div key={v.variantName}>
+                  ⚠️ {v.variantName}: Missing {Math.round(v.missing * 100)}%
+                </div>
+              ))
+            }
           </div>
         )}
         
