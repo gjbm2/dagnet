@@ -57,6 +57,7 @@ import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
+import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
 
 const nodeTypes: NodeTypes = {
@@ -1673,12 +1674,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                   );
                 } else if (composedParams) {
                   // Use composed params for scenario layer
-                  const edgeKey = edge.id || `${edge.from}->${edge.to}`;
+                  const edgeKey = edge.id || edge.uuid || `${edge.from}->${edge.to}`;
                   effectiveProb = composedParams.edges?.[edgeKey]?.p?.mean 
                     ?? edge.p?.mean ?? 0;
                   
                   // Apply case variant weight if applicable
-                  // (simplified - full case handling would require more logic)
+                  const caseInfo = getCaseEdgeVariantInfo(edge, graph, composedParams);
+                  if (caseInfo) {
+                    effectiveProb = effectiveProb * caseInfo.variantWeight;
+                  }
                 } else {
                   // Fallback
                   effectiveProb = edge.p?.mean ?? 0;
@@ -1709,10 +1713,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           currentLayerMaxMass = Math.max(...Array.from(flowMass.values()), 0.001);
         }
         
-        console.log(`[Sankey] Layer ${layerId} flow mass:`, Array.from(flowMass.entries()).slice(0, 5));
+        console.log(`[Sankey] Layer ${layerId} flow mass (ALL nodes):`, 
+          Array.from(flowMass.entries()).map(([id, mass]) => {
+            const node = graph.nodes?.find((n: any) => n.uuid === id || n.id === id);
+            return { label: node?.label || id, id, mass: mass.toFixed(3) };
+          }));
       }
       
-      console.log('[Sankey] Maximum flow mass per node (across all layers):', Array.from(maxFlowMassPerNode.entries()));
+      console.log('[Sankey] Maximum flow mass per node (across all layers):', 
+        Array.from(maxFlowMassPerNode.entries()).map(([id, mass]) => {
+          const node = graph.nodes?.find((n: any) => n.uuid === id || n.id === id);
+          return { label: node?.label || id, maxMass: mass.toFixed(3) };
+        }));
       
       // Normalize using current layer's max mass only
       console.log('[Sankey] Normalization max mass (current layer only):', currentLayerMaxMass);
