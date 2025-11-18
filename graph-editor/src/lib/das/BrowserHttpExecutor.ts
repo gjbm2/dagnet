@@ -85,9 +85,11 @@ export class BrowserHttpExecutor implements HttpExecutor {
           signal: controller.signal,
         });
         
+        // Note: The proxy forwards the actual API status code (e.g., 404 from Statsig)
+        // We pass through all responses (including errors) to DASRunner for proper error handling
+        // DASRunner will parse error messages from the response body and show them to the user
         if (!proxyResponse.ok) {
-          const errorData = await proxyResponse.json().catch(() => ({}));
-          throw new Error(errorData.error || `Proxy request failed with status ${proxyResponse.status}`);
+          console.log(`[BrowserHttpExecutor] Received ${proxyResponse.status} response from proxy (forwarded from API)`);
         }
         
         response = proxyResponse;

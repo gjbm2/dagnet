@@ -402,7 +402,7 @@ connections:
               {
                 "window_from": "{{window.start}}",
                 "window_to": null,
-                "variants": {{variants_update}}
+                "variants": {{{variants_update}}}
               }
 
   # PostgreSQL - Example for SQL-based data sources (disabled by default)

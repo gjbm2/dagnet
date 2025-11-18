@@ -631,6 +631,19 @@ export class UpdateManager {
       }
     }
     
+    // AUTO-REBALANCE: After case variant update from external source, rebalance variants
+    // This applies to Statsig - if treatment weight changes, rebalance control weight
+    if (result.success && subDest === 'case' && !options.validateOnly) {
+      // Check if case.variants was actually updated
+      const variantsUpdated = result.changes?.some(change => change.field === 'case.variants');
+      if (variantsUpdated) {
+        result.metadata = result.metadata || {};
+        (result.metadata as any).requiresVariantRebalance = true;
+        (result.metadata as any).updatedNodeId = graphEntity.uuid || graphEntity.id;
+        (result.metadata as any).updatedField = 'case.variants';
+      }
+    }
+    
     return result;
   }
   
@@ -1617,11 +1630,16 @@ export class UpdateManager {
         targetField: 'case.variants',
         transform: (externalVariants, source, target) => {
           // Merge external weights with existing case structure
+          // Respect weight_overridden flags (don't update overridden variants)
           return target.case.variants.map((v: any) => {
             const externalVariant = externalVariants.find((ev: any) => ev.name === v.name);
+            
+            // Only update weight if NOT overridden (same logic as parameters)
+            const shouldUpdate = !v.weight_overridden && externalVariant;
+            
             return {
               ...v,
-              weight: externalVariant?.weight ?? v.weight
+              weight: shouldUpdate ? externalVariant.weight : v.weight
             };
           });
         }
