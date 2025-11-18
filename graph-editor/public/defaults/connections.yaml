@@ -85,16 +85,46 @@ connections:
           const startDate = formatDate(window.start);
           const endDate = formatDate(window.end);
           
-          // Build segmentation parameter for cohort exclusions
-          // Amplitude API expects: s=[{"prop":"userdata_cohort","op":"is not","values":["cohortId"]}]
-          let segmentParam = '';
+          // Build segmentation parameter for cohort exclusions AND case filtering
+          // Amplitude API expects: s=[{"prop":"...", "op":"...", "values":[...]}]
+          const segments = [];
+          
+          // Add cohort exclusions (if any)
           if (connection.excluded_cohorts && connection.excluded_cohorts.length > 0) {
-            const segments = connection.excluded_cohorts.map(cohortId => ({
+            segments.push(...connection.excluded_cohorts.map(cohortId => ({
               prop: "userdata_cohort",
               op: "is not",  // "is not" for exclude
               values: [cohortId]
-            }));
-            // s parameter should be a JSON array, not an object with a segments property
+            })));
+          }
+          
+          // Add case filtering (if any)
+          // Pattern: case(experiment_coffee_promotion:treatment) 
+          // → filter on activeGates.experiment_coffee_promotion = true/false based on variant name
+          // Variant → bool policy is implemented in DAS core as dasHelpers.resolveVariantToBool
+          if (dsl.case && Array.isArray(dsl.case)) {
+            for (const caseFilter of dsl.case) {
+              const case_id = caseFilter.key;
+              const variant = caseFilter.value;
+              const gateValue = (typeof dasHelpers !== "undefined" && dasHelpers && typeof dasHelpers.resolveVariantToBool === "function")
+                ? dasHelpers.resolveVariantToBool(variant)
+                : true;
+              
+              // Filter on activeGates.{case_id} property
+              // Note: This assumes your instrumentation sends activeGates.{case_id} = true/false
+              segments.push({
+                prop: `activeGates.${case_id}`,
+                op: "is",
+                values: [gateValue ? "true" : "false"]
+              });
+              
+              console.log(`[Amplitude Adapter] Added case filter: activeGates.${case_id} = ${gateValue} (variant: ${variant})`);
+            }
+          }
+          
+          // Build s parameter if we have any segments
+          let segmentParam = '';
+          if (segments.length > 0) {
             segmentParam = 's=' + encodeURIComponent(JSON.stringify(segments));
           }
           
@@ -120,7 +150,8 @@ connections:
             query_params: dsl.query_params,
             from_index: dsl.from_step_index,
             to_index: dsl.to_step_index,
-            excluded_cohorts: connection.excluded_cohorts || []
+            excluded_cohorts: connection.excluded_cohorts || [],
+            case_filters: dsl.case || []
           });
           
           return dsl;

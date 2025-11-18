@@ -15,6 +15,7 @@ import type {
   UpsertSpec,
   DASUpdate,
 } from './types';
+import { resolveVariantToBool } from './caseVariantHelpers';
 import { DASExecutionError, CredentialsError, TemplateError, ExtractionError } from './errors';
 
 interface LogEntry {
@@ -164,6 +165,9 @@ export class DASRunner {
         connection_string: context.connection_string,
         connection: context.connection,
         context: context.context,
+        dasHelpers: {
+          resolveVariantToBool,
+        },
         // Provide safe console for debugging
         console: {
           log: (...args: unknown[]) => this.log('pre_request_script', 'Script log', args),
@@ -184,6 +188,7 @@ export class DASRunner {
         'connection_string',
         'connection',
         'context',
+        'dasHelpers',
         'console',
         script
       );
@@ -194,6 +199,7 @@ export class DASRunner {
         scriptEnv.connection_string,
         scriptEnv.connection,
         scriptEnv.context,
+        scriptEnv.dasHelpers,
         scriptEnv.console
       );
       
