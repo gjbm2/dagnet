@@ -521,7 +521,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onPutToFile={handleSectionPutToFile}
               onGetFromSource={handleSectionGetFromSource}
               onGetFromSourceDirect={handleSectionGetFromSourceDirect}
-            />
+                  />
           ))}
         </>
       )}

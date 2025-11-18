@@ -125,6 +125,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge.case_variant, // Case variant name
     edge.conditional_p?.length, // Conditional probabilities count
     graph?.nodes?.length, // Graph structure indicator
+    graph?.metadata?.updated_at, // Bump when graph data (e.g. case variants) changes
     // scenariosContext changes reference frequently - use stable indicators instead
     scenariosContext?.scenarios?.map(s => s.id).join(','), // Scenario IDs (stable string)
     JSON.stringify(scenariosContext?.baseParams?.edges?.[edge.uuid || edge.id || '']), // Edge-specific params

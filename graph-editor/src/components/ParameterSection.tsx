@@ -113,21 +113,21 @@ export function ParameterSection({
           connectionString={param?.connection_string}
           overriddenFlag={param?.connection_overridden}
           onConnectionChange={(connectionName) => {
-            onUpdate({ connection: connectionName, connection_overridden: true });
-          }}
+                  onUpdate({ connection: connectionName, connection_overridden: true });
+                }}
           onConnectionStringChange={(connectionString, newConnectionName) => {
-            onUpdate({ 
-              connection_string: connectionString,
-              connection: newConnectionName || param?.connection,
-              connection_overridden: true
-            });
-          }}
+          onUpdate({ 
+            connection_string: connectionString,
+            connection: newConnectionName || param?.connection,
+            connection_overridden: true
+          });
+        }}
           onOverriddenChange={(overridden) => {
             onUpdate({ connection_overridden: overridden });
           }}
           label="External Data Source"
           disabled={disabled}
-        />
+      />
       </div>
       
       {/* Mean Value (Probability slider OR Cost input) */}

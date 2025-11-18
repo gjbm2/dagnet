@@ -743,8 +743,20 @@ export class UpdateManager {
     
     for (const mapping of mappings) {
       try {
+        // Get values first for logging
+        const sourceValue = this.getNestedValue(source, mapping.sourceField);
+        
+        console.log('[UpdateManager.applyMappings] Processing mapping:', {
+          sourceField: mapping.sourceField,
+          targetField: mapping.targetField,
+          sourceValue,
+          hasCondition: !!mapping.condition,
+          hasOverrideFlag: !!mapping.overrideFlag
+        });
+        
         // Check condition
         if (mapping.condition && !mapping.condition(source, target)) {
+          console.log('[UpdateManager.applyMappings] SKIPPED - condition failed');
           continue;
         }
         
@@ -752,18 +764,17 @@ export class UpdateManager {
         if (mapping.overrideFlag) {
           const isOverridden = this.getNestedValue(target, mapping.overrideFlag);
           if (isOverridden) {
+            console.log('[UpdateManager.applyMappings] SKIPPED - overridden flag set');
             result.conflicts!.push({
               field: mapping.targetField,
               currentValue: this.getNestedValue(target, mapping.targetField),
-              newValue: this.getNestedValue(source, mapping.sourceField),
+              newValue: sourceValue,
               reason: 'overridden'
             });
             continue; // Skip overridden fields
           }
         }
         
-        // Get values
-        const sourceValue = this.getNestedValue(source, mapping.sourceField);
         const currentValue = this.getNestedValue(target, mapping.targetField);
         
         // Transform if needed
@@ -773,11 +784,18 @@ export class UpdateManager {
         
         // Skip if no usable data (undefined means "can't calculate, don't update")
         if (newValue === undefined) {
+          console.log('[UpdateManager.applyMappings] SKIPPED - newValue is undefined');
           continue;
         }
         
         // Check for changes
         if (newValue !== currentValue) {
+          console.log('[UpdateManager.applyMappings] APPLYING change:', {
+            targetField: mapping.targetField,
+            oldValue: currentValue,
+            newValue
+          });
+          
           if (!options.validateOnly) {
             this.setNestedValue(target, mapping.targetField, newValue);
           }
@@ -789,8 +807,17 @@ export class UpdateManager {
             source: 'auto',
             overridden: false
           });
+        } else {
+          console.log('[UpdateManager.applyMappings] SKIPPED - no change (same value)');
         }
       } catch (error) {
+        console.error('[UpdateManager.applyMappings] ERROR:', {
+          sourceField: mapping.sourceField,
+          targetField: mapping.targetField,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined
+        });
+        
         result.errors!.push({
           code: 'MAPPING_ERROR',
           message: `Failed to map ${mapping.sourceField} → ${mapping.targetField}: ${error}`,
@@ -806,6 +833,14 @@ export class UpdateManager {
     }
     
     result.success = result.errors!.length === 0;
+    
+    console.log('[UpdateManager.applyMappings] FINAL RESULT:', {
+      success: result.success,
+      changesCount: result.changes?.length,
+      errorsCount: result.errors?.length,
+      errors: result.errors
+    });
+    
     return result;
   }
   
@@ -1145,9 +1180,9 @@ export class UpdateManager {
       { sourceField: 'case.variants', targetField: 'variants' }
     ]);
     
-    // Flow C.UPDATE: Graph → File/Case (UPDATE current variant weights)
+    // Flow C.UPDATE: Graph → File/Case (UPDATE current case metadata + variant weights)
     // Note: This updates case.variants array with current weights from graph
-    // This is NOT metadata - it's the current state of variant allocation
+    // and also syncs connection settings from graph node to case file (under case.*).
     this.addMapping('graph_to_file', 'UPDATE', 'case', [
       {
         sourceField: 'case.variants',
@@ -1155,6 +1190,15 @@ export class UpdateManager {
         transform: (graphVariants, source, target) => {
           // Update weights in case file from graph node
           // Preserve all other variant properties from file
+          
+          // If file doesn't have case.variants yet, just return graph variants
+          if (!target.case?.variants || !Array.isArray(target.case.variants)) {
+            return graphVariants.map((gv: any) => ({
+              name: gv.name,
+              weight: gv.weight,
+              description: gv.description
+            }));
+          }
           
           // 1. Update existing file variants with graph data
           const updated = target.case.variants.map((fileVariant: any) => {
@@ -1182,6 +1226,17 @@ export class UpdateManager {
           
           return [...updated, ...newVariants];
         }
+      },
+      // Connection settings: always sync from graph case node to case file (nested under case.* per case-parameter-schema)
+      {
+        sourceField: 'case.connection',
+        targetField: 'case.connection',
+        condition: (source) => !!source.case?.connection
+      },
+      {
+        sourceField: 'case.connection_string',
+        targetField: 'case.connection_string',
+        condition: (source) => !!source.case?.connection_string
       }
     ]);
     
@@ -1643,6 +1698,10 @@ export class UpdateManager {
             };
           });
         }
+      },
+      {
+        sourceField: 'data_source',
+        targetField: 'case.data_source'
       }
     ]);
     
@@ -3134,8 +3193,17 @@ export class UpdateManager {
     }
     
     const caseNode = nextGraph.nodes[nodeIndex];
-    if (!caseNode.case || !caseNode.case.variants || variantIndex >= caseNode.case.variants.length) {
-      console.warn('[UpdateManager] Invalid variant index:', variantIndex);
+    if (
+      !caseNode.case ||
+      !caseNode.case.variants ||
+      variantIndex < 0 ||
+      variantIndex >= caseNode.case.variants.length
+    ) {
+      console.warn('[UpdateManager] Invalid variant index for rebalanceVariantWeights:', {
+        nodeId,
+        variantIndex,
+        variantsLength: caseNode.case?.variants ? caseNode.case.variants.length : 0,
+      });
       return graph;
     }
     
