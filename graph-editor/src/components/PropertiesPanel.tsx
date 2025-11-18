@@ -17,6 +17,7 @@ import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
 import { ParameterSection } from './ParameterSection';
+import { ConnectionControl } from './ConnectionControl';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff } from 'lucide-react';
 import { normalizeConstraintString } from '@/lib/queryDSL';
@@ -89,6 +90,8 @@ export default function PropertiesPanel({
   const [caseData, setCaseData] = useState({
     id: '',
     status: 'active' as 'active' | 'paused' | 'completed',
+    connection: undefined as string | undefined,
+    connection_string: undefined as string | undefined,
     variants: [] as Array<{ 
       name: string; 
       name_overridden?: boolean;
@@ -189,6 +192,8 @@ export default function PropertiesPanel({
             setCaseData({
               id: node.case.id || '',
               status: node.case.status || 'active',
+              connection: node.case.connection,
+              connection_string: node.case.connection_string,
               variants: node.case.variants || []
             });
           } else {
@@ -197,6 +202,8 @@ export default function PropertiesPanel({
             setCaseData({
               id: '',
               status: 'active',
+              connection: undefined,
+              connection_string: undefined,
               variants: []
             });
           }
@@ -249,6 +256,8 @@ export default function PropertiesPanel({
           setCaseData({
             id: node.case.id || '',
             status: node.case.status || 'active',
+            connection: node.case.connection,
+            connection_string: node.case.connection_string,
             variants: node.case.variants || []
           });
         } else {
@@ -1330,6 +1339,69 @@ export default function PropertiesPanel({
                       label="Case ID"
                       placeholder="Select or enter case ID..."
                     />
+
+                    {/* Data Connection Section */}
+                    <div style={{ marginTop: '16px', marginBottom: '16px' }}>
+                      <ConnectionControl
+                        connection={caseData.connection}
+                        connectionString={caseData.connection_string}
+                        hideOverride={true}
+                        onConnectionChange={(connectionName) => {
+                          setCaseData({...caseData, connection: connectionName});
+                          if (graph && selectedNodeId) {
+                            const next = structuredClone(graph);
+                            const nodeIndex = next.nodes.findIndex((n: any) => 
+                              n.uuid === selectedNodeId || n.id === selectedNodeId
+                            );
+                            if (nodeIndex >= 0) {
+                              if (!next.nodes[nodeIndex].case) {
+                                next.nodes[nodeIndex].case = { 
+                                  id: caseData.id,
+                                  status: caseData.status,
+                                  variants: caseData.variants 
+                                };
+                              }
+                              next.nodes[nodeIndex].case.connection = connectionName;
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                              saveHistoryState('Update case connection', selectedNodeId || undefined);
+                            }
+                          }
+                        }}
+                        onConnectionStringChange={(connectionString, newConnectionName) => {
+                          setCaseData({
+                            ...caseData,
+                            connection: newConnectionName || caseData.connection,
+                            connection_string: connectionString
+                          });
+                          if (graph && selectedNodeId) {
+                            const next = structuredClone(graph);
+                            const nodeIndex = next.nodes.findIndex((n: any) => 
+                              n.uuid === selectedNodeId || n.id === selectedNodeId
+                            );
+                            if (nodeIndex >= 0) {
+                              if (!next.nodes[nodeIndex].case) {
+                                next.nodes[nodeIndex].case = { 
+                                  id: caseData.id,
+                                  status: caseData.status,
+                                  variants: caseData.variants 
+                                };
+                              }
+                              next.nodes[nodeIndex].case.connection = newConnectionName || caseData.connection;
+                              next.nodes[nodeIndex].case.connection_string = connectionString;
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                              saveHistoryState('Update case connection settings', selectedNodeId || undefined);
+                            }
+                          }
+                        }}
+                        label="Data Connection"
+                      />
+                    </div>
 
                     {/* Case Status */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>

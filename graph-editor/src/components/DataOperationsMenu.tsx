@@ -69,6 +69,7 @@ export function DataOperationsMenu({
   let hasConnection = false; // Any connection (direct OR file) - for "Get from Source (direct)"
   let hasFileConnection = false; // File exists AND has connection - for "Get from Source" (versioned)
   let connectionName: string | undefined;
+  let actualFileExists = false; // ACTUALLY check if file exists (don't trust prop)
   
   if (objectType === 'parameter') {
     // Debug: log connection detection
@@ -84,6 +85,7 @@ export function DataOperationsMenu({
     // Check for connection in file first (if objectId exists)
     const file = objectId ? fileRegistry.getFile(`parameter-${objectId}`) : null;
     const fileExists = !!file;
+    actualFileExists = fileExists; // Set top-level variable
     const hasFileConn = !!file?.data?.connection;
     const fileConnectionName = file?.data?.connection;
     
@@ -138,8 +140,10 @@ export function DataOperationsMenu({
       });
     }
   } else if (objectType === 'case') {
-    // Check case file for connection
+    // Check case file for connection (file exists AND has connection field)
     const file = objectId ? fileRegistry.getFile(`case-${objectId}`) : null;
+    const fileExists = !!file;
+    actualFileExists = fileExists; // Set top-level variable
     const hasFileConn = !!file?.data?.connection;
     const fileConnectionName = file?.data?.connection;
     
@@ -148,8 +152,8 @@ export function DataOperationsMenu({
     let directConnectionName: string | undefined;
     if (targetId && graph) {
       const node = graph?.nodes?.find((n: any) => n.uuid === targetId || n.id === targetId);
-      // Direct connection exists if node has case.connection AND no case file (case.id doesn't exist)
-      hasDirectConnection = !!node?.case?.connection && !node?.case?.id;
+      // Direct connection exists if node has case.connection (regardless of file)
+      hasDirectConnection = !!node?.case?.connection;
       directConnectionName = node?.case?.connection;
     }
     
@@ -157,11 +161,14 @@ export function DataOperationsMenu({
     hasConnection = hasDirectConnection || hasFileConn;
     
     // "Get from Source" (versioned) only shows if file exists AND has connection
-    const fileExists = !!file;
     hasFileConnection = fileExists && hasFileConn;
     
     // Get connection name (prefer direct, fallback to file)
     connectionName = directConnectionName || fileConnectionName;
+  } else if (objectType === 'node' || objectType === 'event') {
+    // For nodes and events, just check if file exists
+    const file = objectId ? fileRegistry.getFile(`${objectType}-${objectId}`) : null;
+    actualFileExists = !!file;
   }
   
   // Handlers (same as LightningMenu)
@@ -285,20 +292,21 @@ export function DataOperationsMenu({
   
   return (
     <div className={menuClassName}>
-      {/* Get from File → Graph */}
-      <button
-        className={itemClassName}
-        onClick={handleGetFromFile}
-        disabled={!hasFile}
-        title={hasFile ? "Get data from file" : "No file connected"}
-      >
-        <span>Get data from file</span>
-        <div className={pathwayClassName}>
-          <Folders size={12} />
-          <span className="lightning-menu-pathway">→</span>
-          <TrendingUpDown size={12} />
-        </div>
-      </button>
+      {/* Get from File → Graph - only show if file ACTUALLY exists (computed locally, not from prop) */}
+      {actualFileExists && (
+        <button
+          className={itemClassName}
+          onClick={handleGetFromFile}
+          title="Get data from file"
+        >
+          <span>Get data from file</span>
+          <div className={pathwayClassName}>
+            <Folders size={12} />
+            <span className="lightning-menu-pathway">→</span>
+            <TrendingUpDown size={12} />
+          </div>
+        </button>
+      )}
       
       {/* Get from Source → File + Graph (versioned) - only show if file has connection */}
       {hasFileConnection && (
@@ -338,8 +346,8 @@ export function DataOperationsMenu({
       <button
         className={itemClassName}
         onClick={handlePutToFile}
-        disabled={!hasFile}
-        title={hasFile ? "Put data to file" : "No file connected"}
+        disabled={!objectId || objectId.trim() === ''}
+        title={objectId && objectId.trim() !== '' ? "Put data to file" : "No ID specified (cannot create file)"}
       >
         <span>Put data to file</span>
         <div className={pathwayClassName}>
@@ -357,8 +365,8 @@ export function DataOperationsMenu({
         <button
           className={itemClassName}
           onClick={handleConnectionSettings}
-          disabled={!hasFile}
-          title={hasFile ? "Edit connection settings" : "No file connected"}
+          disabled={!actualFileExists}
+          title={actualFileExists ? "Edit connection settings" : "No file connected"}
         >
           <span>Connection settings...</span>
         </button>

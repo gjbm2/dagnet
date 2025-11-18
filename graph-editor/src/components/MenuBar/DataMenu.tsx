@@ -329,6 +329,7 @@ export function DataMenu() {
     }
     
     if (selectedEdgeId) {
+      // Handle edge (parameter) direct connection
       const edge = graph.edges?.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId);
       if (!edge) {
         toast.error('Selected edge not found');
@@ -355,8 +356,34 @@ export function DataMenu() {
       } catch (error) {
         toast.error(`Failed to get data from source (direct): ${error instanceof Error ? error.message : String(error)}`);
       }
+    } else if (selectedNodeId) {
+      // Handle node (case) direct connection
+      const node = graph.nodes?.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+      if (!node) {
+        toast.error('Selected node not found');
+        return;
+      }
+      
+      if (!node.case?.connection) {
+        toast.error('No direct connection on selected node');
+        return;
+      }
+      
+      try {
+        await dataOperationsService.getFromSourceDirect({
+          objectType: 'case',
+          objectId: '', // Direct connection, no file
+          targetId: selectedNodeId,
+          graph,
+          setGraph: handleSetGraph,
+          window: windowState || undefined,
+          dailyMode: false,
+        });
+      } catch (error) {
+        toast.error(`Failed to get case from source (direct): ${error instanceof Error ? error.message : String(error)}`);
+      }
     } else {
-      toast.error('No edge selected (direct connections only available for edges)');
+      toast.error('No edge or node selected');
     }
   };
   
@@ -561,8 +588,8 @@ export function DataMenu() {
         }
       }
       
-      // Check for direct case connection (connection but no file)
-      if (node.case?.connection && !caseId) {
+      // Check for direct case connection (regardless of file existence - matches parameter pattern)
+      if (node.case?.connection) {
         console.log('[DataMenu] Direct case connection found');
         hasDirectConnection = true;
         hasAnyConnection = true;
@@ -715,13 +742,13 @@ export function DataMenu() {
           </Menubar.Item>
           
           <Menubar.Item 
-            key={`get-from-source-direct-${hasEdgeSelection}-${hasAnyConnection}`}
+            key={`get-from-source-direct-${hasSelection}-${hasAnyConnection}`}
             className="menubar-item" 
             onSelect={handleGetFromSourceDirect}
-            disabled={!isGraphTab || !hasEdgeSelection || !hasAnyConnection}
+            disabled={!isGraphTab || !hasSelection || !hasAnyConnection}
           >
             Get data from source (direct)...
-            {!hasEdgeSelection && <div className="menubar-right-slot">(select edge)</div>}
+            {!hasSelection && <div className="menubar-right-slot">(select edge/node)</div>}
           </Menubar.Item>
           
           <Menubar.Item 

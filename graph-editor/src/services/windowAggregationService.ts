@@ -40,6 +40,50 @@ export interface RawAggregation {
 }
 
 /**
+ * Case schedule entry (from case file schema)
+ */
+export interface CaseSchedule {
+  window_from: string;  // ISO timestamp or YYYY-MM-DD
+  window_to?: string | null;  // ISO timestamp or YYYY-MM-DD, or null if ongoing
+  variants: Array<{
+    name: string;
+    weight: number;
+    description?: string;
+  }>;
+}
+
+/**
+ * Aggregated case variant weights for a window
+ * Similar to RawAggregation but for case schedules
+ */
+export interface RawCaseAggregation {
+  method: 'time-weighted' | 'simple-latest' | 'latest-fallback';
+  variants: Array<{
+    name: string;
+    weight: number;
+  }>;
+  window: DateRange;
+  schedules_included: number;
+  /** Original schedules that contributed to this aggregation */
+  raw_schedules: CaseSchedule[];
+  /** Coverage information (for incomplete data warnings) */
+  coverage?: {
+    /** Percentage of window covered by schedules (0.0 to 1.0) */
+    coverage_pct: number;
+    /** Milliseconds of window covered by schedules */
+    covered_duration_ms: number;
+    /** Total window duration in milliseconds */
+    total_duration_ms: number;
+    /** Whether window has complete coverage */
+    is_complete: boolean;
+    /** Whether we fell back to latest schedule (no schedules in window) */
+    used_fallback: boolean;
+    /** Human-readable message about coverage */
+    message: string;
+  };
+}
+
+/**
  * Result of incremental fetch calculation
  */
 export interface IncrementalFetchResult {
@@ -140,6 +184,280 @@ function calculateStdev(n: number, k: number): number {
  * Aggregate time-series data for a given window
  */
 export class WindowAggregationService {
+  /**
+   * Get case variant weights for a window (Phase 1: Simple - most recent schedule)
+   * 
+   * @param schedules Array of case schedules from case file
+   * @param window Date range (optional - if not provided, returns latest)
+   * @returns Aggregated variant weights
+   */
+  getCaseWeightsForWindow(
+    schedules: CaseSchedule[],
+    window?: DateRange
+  ): RawCaseAggregation {
+    if (!schedules || schedules.length === 0) {
+      return {
+        method: 'simple-latest',
+        variants: [],
+        window: window || { start: '', end: '' },
+        schedules_included: 0,
+        raw_schedules: []
+      };
+    }
+
+    // If no window specified, return most recent schedule
+    if (!window) {
+      const latest = schedules[schedules.length - 1];
+      return {
+        method: 'simple-latest',
+        variants: latest.variants.map(v => ({ name: v.name, weight: v.weight })),
+        window: {
+          start: latest.window_from,
+          end: latest.window_to || new Date().toISOString()
+        },
+        schedules_included: 1,
+        raw_schedules: [latest]
+      };
+    }
+
+    // Filter schedules that overlap with the requested window
+    const relevantSchedules = this.filterSchedulesForWindow(schedules, window);
+
+    if (relevantSchedules.length === 0) {
+      // No schedules in window, return empty
+      return {
+        method: 'simple-latest',
+        variants: [],
+        window,
+        schedules_included: 0,
+        raw_schedules: []
+      };
+    }
+
+    // Phase 1: Return most recent schedule in window
+    const latest = relevantSchedules[relevantSchedules.length - 1];
+    return {
+      method: 'simple-latest',
+      variants: latest.variants.map(v => ({ name: v.name, weight: v.weight })),
+      window,
+      schedules_included: relevantSchedules.length,
+      raw_schedules: relevantSchedules
+    };
+  }
+
+  /**
+   * Aggregate case schedules for a window (Phase 2: Time-weighted averaging)
+   * 
+   * Handles incomplete data gracefully:
+   * - If window has no schedules but file has schedules: fall back to latest schedule with warning
+   * - If window has partial coverage: show coverage percentage
+   * 
+   * @param schedules Array of case schedules from case file
+   * @param window Date range to aggregate
+   * @returns Time-weighted average of variant weights with coverage metadata
+   */
+  aggregateCaseSchedulesForWindow(
+    schedules: CaseSchedule[],
+    window: DateRange
+  ): RawCaseAggregation {
+    if (!schedules || schedules.length === 0) {
+      return {
+        method: 'time-weighted',
+        variants: [],
+        window,
+        schedules_included: 0,
+        raw_schedules: [],
+        coverage: {
+          coverage_pct: 0,
+          covered_duration_ms: 0,
+          total_duration_ms: 0,
+          is_complete: false,
+          used_fallback: false,
+          message: 'No schedules available'
+        }
+      };
+    }
+
+    const relevantSchedules = this.filterSchedulesForWindow(schedules, window);
+
+    // Fall back to latest schedule if window has no data
+    if (relevantSchedules.length === 0) {
+      const latest = schedules[schedules.length - 1];
+      const windowStart = parseDate(window.start);
+      const windowEnd = parseDate(window.end);
+      const totalDurationMs = windowEnd.getTime() - windowStart.getTime();
+      
+      return {
+        method: 'latest-fallback',
+        variants: latest.variants.map(v => ({ name: v.name, weight: v.weight })),
+        window,
+        schedules_included: 0,
+        raw_schedules: [latest],
+        coverage: {
+          coverage_pct: 0,
+          covered_duration_ms: 0,
+          total_duration_ms: totalDurationMs,
+          is_complete: false,
+          used_fallback: true,
+          message: `⚠️ No schedules in window. Using latest schedule (from ${latest.window_from}) as fallback.`
+        }
+      };
+    }
+
+    // Calculate window duration and coverage
+    const windowStart = parseDate(window.start);
+    const windowEnd = parseDate(window.end);
+    const windowDurationMs = windowEnd.getTime() - windowStart.getTime();
+    
+    // If only one schedule, no need for time-weighting
+    if (relevantSchedules.length === 1) {
+      const schedule = relevantSchedules[0];
+      
+      // Calculate coverage for this single schedule
+      const scheduleStart = Math.max(
+        parseDate(schedule.window_from).getTime(),
+        windowStart.getTime()
+      );
+      let scheduleEnd: number;
+      if (schedule.window_to && schedule.window_to !== null) {
+        scheduleEnd = Math.min(
+          parseDate(schedule.window_to).getTime(),
+          windowEnd.getTime()
+        );
+      } else {
+        scheduleEnd = windowEnd.getTime();
+      }
+      const coveredDurationMs = Math.max(0, scheduleEnd - scheduleStart);
+      const coveragePct = windowDurationMs > 0 ? coveredDurationMs / windowDurationMs : 0;
+      const isComplete = coveragePct >= 0.99; // Consider >99% as complete (rounding tolerance)
+      
+      return {
+        method: 'time-weighted',
+        variants: schedule.variants.map(v => ({ name: v.name, weight: v.weight })),
+        window,
+        schedules_included: 1,
+        raw_schedules: relevantSchedules,
+        coverage: {
+          coverage_pct: coveragePct,
+          covered_duration_ms: coveredDurationMs,
+          total_duration_ms: windowDurationMs,
+          is_complete: isComplete,
+          used_fallback: false,
+          message: isComplete 
+            ? '✓ Complete coverage'
+            : `⚠️ Partial coverage: ${(coveragePct * 100).toFixed(0)}% of window`
+        }
+      };
+    }
+
+    // Collect all variant names
+    const variantNames = new Set<string>();
+    relevantSchedules.forEach(schedule => {
+      schedule.variants.forEach(v => variantNames.add(v.name));
+    });
+
+    // Calculate time-weighted average for each variant AND track coverage
+    let totalCoveredDuration = 0;
+    
+    const aggregatedVariants = Array.from(variantNames).map(variantName => {
+      let totalWeight = 0;
+      let totalDuration = 0;
+
+      relevantSchedules.forEach((schedule, index) => {
+        // Determine the effective start/end for this schedule within the window
+        const scheduleStart = Math.max(
+          parseDate(schedule.window_from).getTime(),
+          windowStart.getTime()
+        );
+
+        let scheduleEnd: number;
+        if (schedule.window_to && schedule.window_to !== null) {
+          scheduleEnd = Math.min(
+            parseDate(schedule.window_to).getTime(),
+            windowEnd.getTime()
+          );
+        } else {
+          // Schedule is ongoing - use next schedule's start or window end
+          if (index < relevantSchedules.length - 1) {
+            scheduleEnd = Math.min(
+              parseDate(relevantSchedules[index + 1].window_from).getTime(),
+              windowEnd.getTime()
+            );
+          } else {
+            scheduleEnd = windowEnd.getTime();
+          }
+        }
+
+        const duration = scheduleEnd - scheduleStart;
+        if (duration > 0) {
+          const variant = schedule.variants.find(v => v.name === variantName);
+          const weight = variant?.weight || 0;
+          
+          totalWeight += weight * duration;
+          totalDuration += duration;
+        }
+      });
+
+      // Track total covered duration (only count once, not per variant)
+      if (variantNames.size > 0 && variantNames.values().next().value === variantName) {
+        totalCoveredDuration = totalDuration;
+      }
+
+      const avgWeight = totalDuration > 0 ? totalWeight / totalDuration : 0;
+      return { name: variantName, weight: avgWeight };
+    });
+
+    // Calculate coverage
+    const coveragePct = windowDurationMs > 0 ? totalCoveredDuration / windowDurationMs : 0;
+    const isComplete = coveragePct >= 0.99; // Consider >99% as complete (rounding tolerance)
+
+    return {
+      method: 'time-weighted',
+      variants: aggregatedVariants,
+      window,
+      schedules_included: relevantSchedules.length,
+      raw_schedules: relevantSchedules,
+      coverage: {
+        coverage_pct: coveragePct,
+        covered_duration_ms: totalCoveredDuration,
+        total_duration_ms: windowDurationMs,
+        is_complete: isComplete,
+        used_fallback: false,
+        message: isComplete 
+          ? '✓ Complete coverage'
+          : `⚠️ Partial coverage: ${(coveragePct * 100).toFixed(0)}% of window (${relevantSchedules.length} schedule${relevantSchedules.length > 1 ? 's' : ''})`
+      }
+    };
+  }
+
+  /**
+   * Filter schedules that overlap with a given window
+   */
+  private filterSchedulesForWindow(
+    schedules: CaseSchedule[],
+    window: DateRange
+  ): CaseSchedule[] {
+    const windowStart = parseDate(window.start);
+    const windowEnd = parseDate(window.end);
+
+    return schedules.filter(schedule => {
+      const scheduleStart = parseDate(schedule.window_from);
+      
+      // Determine schedule end
+      let scheduleEnd: Date;
+      if (schedule.window_to && schedule.window_to !== null) {
+        scheduleEnd = parseDate(schedule.window_to);
+      } else {
+        // Ongoing schedule - use current time
+        scheduleEnd = new Date();
+      }
+
+      // Check for overlap: schedule overlaps window if:
+      // scheduleStart <= windowEnd AND scheduleEnd >= windowStart
+      return scheduleStart <= windowEnd && scheduleEnd >= windowStart;
+    });
+  }
+
   /**
    * Aggregate daily data for a date window
    * 
