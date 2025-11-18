@@ -17,6 +17,15 @@ export const CONVEX_DEPTH = 15;
 /** Depth of concave indentation on inbound node faces (pixels) */
 export const CONCAVE_DEPTH = 15;
 
+/** Multiplier for handle offset on convex faces (0 = no offset, 1 = full depth) */
+export const CONVEX_HANDLE_OFFSET_MULTIPLIER = 0.25;
+
+/** Multiplier for handle offset on concave faces (0 = no offset, 1 = full depth) */
+export const CONCAVE_HANDLE_OFFSET_MULTIPLIER = 0.5;
+
+/** Multiplier for handle offset on flat faces (relative to convex depth) */
+export const FLAT_HANDLE_OFFSET_MULTIPLIER = 0.25;
+
 /** Width of halo stroke around nodes for edge masking (pixels) */
 export const HALO_WIDTH = 20;
 

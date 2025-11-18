@@ -2432,6 +2432,115 @@ export class UpdateManager {
   }
   
   /**
+   * Delete a node from the graph and clean up associated edges.
+   * 
+   * @param graph - Current graph
+   * @param nodeUuid - UUID of the node to delete
+   * @returns Updated graph with node and associated edges removed
+   */
+  deleteNode(graph: any, nodeUuid: string): any {
+    const nextGraph = structuredClone(graph);
+    
+    // Find the node to verify it exists
+    const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === nodeUuid);
+    if (nodeIndex < 0) {
+      console.warn('[UpdateManager] deleteNode: Node not found:', nodeUuid);
+      return graph;
+    }
+    
+    const node = nextGraph.nodes[nodeIndex];
+    const humanId = node.id;
+    
+    console.log('[UpdateManager] Deleting node:', {
+      uuid: nodeUuid,
+      humanId: humanId,
+      label: node.label
+    });
+    
+    // Remove the node
+    nextGraph.nodes = nextGraph.nodes.filter((n: any) => n.uuid !== nodeUuid);
+    
+    // Remove all edges connected to this node
+    // Edge.from and Edge.to can be EITHER uuid OR human-readable ID
+    const edgesBefore = nextGraph.edges.length;
+    nextGraph.edges = nextGraph.edges.filter((e: any) => 
+      e.from !== nodeUuid && e.to !== nodeUuid &&
+      e.from !== humanId && e.to !== humanId
+    );
+    const edgesAfter = nextGraph.edges.length;
+    const edgesRemoved = edgesBefore - edgesAfter;
+    
+    console.log('[UpdateManager] Deleted node:', {
+      uuid: nodeUuid,
+      edgesRemoved: edgesRemoved
+    });
+    
+    // Update metadata
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Log audit trail
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'deleteNode',
+      details: {
+        nodeUuid: nodeUuid,
+        humanId: humanId,
+        edgesRemoved: edgesRemoved
+      }
+    });
+    
+    return nextGraph;
+  }
+
+  /**
+   * Delete an edge from the graph.
+   * 
+   * @param graph - Current graph
+   * @param edgeUuid - UUID of the edge to delete
+   * @returns Updated graph with edge removed
+   */
+  deleteEdge(graph: any, edgeUuid: string): any {
+    const nextGraph = structuredClone(graph);
+    
+    // Find the edge to verify it exists
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeUuid);
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] deleteEdge: Edge not found:', edgeUuid);
+      return graph;
+    }
+    
+    const edge = nextGraph.edges[edgeIndex];
+    console.log('[UpdateManager] Deleting edge:', {
+      uuid: edgeUuid,
+      from: edge.from,
+      to: edge.to
+    });
+    
+    // Remove the edge
+    nextGraph.edges = nextGraph.edges.filter((e: any) => e.uuid !== edgeUuid);
+    
+    // Update metadata
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Log audit trail
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'deleteEdge',
+      details: {
+        edgeUuid: edgeUuid,
+        from: edge.from,
+        to: edge.to
+      }
+    });
+    
+    return nextGraph;
+  }
+
+  /**
    * Propagate condition-level color to matching conditions on sibling edges.
    * Colors are stored per condition, not per edge.
    * 

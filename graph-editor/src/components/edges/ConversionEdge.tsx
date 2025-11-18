@@ -133,6 +133,7 @@ export default function ConversionEdge({
   const { operations: tabOps, tabs, activeTabId } = useTabContext();
   const currentTab = tabs.find(t => t.id === activeTabId);
   const scenarioState = currentTab?.editorState?.scenarioState;
+  const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
   
@@ -513,8 +514,11 @@ export default function ConversionEdge({
   
   // Confidence interval rendering logic
   const confidenceIntervalLevel = viewPrefs?.confidenceIntervalLevel ?? 'none';
-  // For scenario overlays, prioritize data.stdev (scenario-specific), otherwise use graph edge stdev
-  const stdev = data?.scenarioOverlay ? (data?.stdev ?? 0) : (fullEdge?.p?.stdev ?? data?.stdev ?? 0);
+  // For scenario overlays, use scenario-specific stdev, fallback to base edge stdev
+  // For current layer, use edge stdev directly
+  const stdev = data?.scenarioOverlay 
+    ? (data?.stdev ?? fullEdge?.p?.stdev ?? 0) 
+    : (fullEdge?.p?.stdev ?? data?.stdev ?? 0);
   const hasStdev = stdev !== undefined && stdev > 0;
   const shouldShowConfidenceIntervals = 
     confidenceIntervalLevel !== 'none' && 
@@ -593,10 +597,10 @@ export default function ConversionEdge({
     const opacities = calculateBandOpacities(confidenceIntervalLevel as '80' | '90' | '95' | '99');
     
     // Calculate stroke widths based on bounds
-    // Ensure widths are visually distinct: upper > middle > lower
-    // Use a minimum spread to ensure bands are visible even with tight intervals
-    const minSpread = 1.2; // At least 20% difference between bands
-    const upperRatio = Math.max(minSpread, bounds.upper / mean);
+    // The width should directly reflect the probability bounds for upper
+    // For lower, use a minimum spread to prevent it from being too narrow
+    const minSpread = 1.2; // At least 20% difference for lower bound visibility
+    const upperRatio = bounds.upper / mean;
     const lowerRatio = Math.max(0.5, Math.min(1 / minSpread, bounds.lower / mean));
     
     const widthUpper = strokeWidth * upperRatio;
@@ -1526,7 +1530,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
                   strokeWidth: confidenceData.widths.upper,
-                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.outer,
+                  strokeOpacity: confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
@@ -1550,7 +1554,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
                   strokeWidth: confidenceData.widths.middle,
-                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.middle,
+                  strokeOpacity: confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'butt',
@@ -1708,6 +1712,7 @@ export default function ConversionEdge({
                 edge={fullEdge}
                 path={pathRef.current}
                 graph={graph}
+                scenarioOrder={scenarioOrder}
                 visibleScenarioIds={visibleScenarioIds}
                 visibleColorOrderIds={visibleColorOrderIds}
                 scenarioColors={scenarioColors}
