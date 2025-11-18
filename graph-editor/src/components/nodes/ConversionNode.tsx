@@ -698,8 +698,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       {isCaseNode && data.case && (
         <div style={{ 
           position: 'absolute',
-          top: '20px',
-          right: '20px',
+          top: data.useSankeyView ? '10px' : '20px',
+          right: data.useSankeyView ? '10px' : '20px',
           width: '8px',
           height: '8px',
           borderRadius: '50%',
@@ -714,8 +714,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       {isCaseNode && whatIfAnalysis && whatIfAnalysis.caseNodeId === data.id && (
         <div style={{
           position: 'absolute',
-          top: '20px',
-          left: '20px',
+          top: data.useSankeyView ? '10px' : '20px',
+          left: data.useSankeyView ? '10px' : '20px',
           fontSize: '16px',
           animation: 'pulse 2s infinite',
           zIndex: 15,
@@ -729,8 +729,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       {isStartNode && (
         <div style={{
           position: 'absolute',
-          top: '20px',
-          left: '20px',
+          top: data.useSankeyView ? '10px' : '20px',
+          left: data.useSankeyView ? '10px' : '20px',
           width: '18px',
           height: '18px',
           borderRadius: '50%',
@@ -754,8 +754,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       {isTerminalNode && (
         <div style={{
           position: 'absolute',
-          top: isStartNode ? '44px' : '20px',
-          left: '20px',
+          top: isStartNode ? (data.useSankeyView ? '34px' : '44px') : (data.useSankeyView ? '10px' : '20px'),
+          left: data.useSankeyView ? '10px' : '20px',
           width: '18px',
           height: '18px',
           borderRadius: '50%',

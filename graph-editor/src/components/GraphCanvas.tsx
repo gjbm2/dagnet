@@ -766,6 +766,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const lastSyncedReactFlowRef = useRef<string>('');
   const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
   const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
+  const prevSankeyViewRef = useRef(useSankeyView); // Track Sankey mode changes to force slow path rebuild
   const reactFlowWrapperRef = useRef<HTMLDivElement>(null); // For lasso coordinate calculations
   const hasInitialFitViewRef = useRef(false);
   const currentGraphIdRef = useRef<string>('');
@@ -1365,13 +1366,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return hasChanges;
     });
     
+    // Check if Sankey mode changed (requires full rebuild for node sizing and edge routing)
+    const sankeyModeChanged = prevSankeyViewRef.current !== useSankeyView;
+    if (sankeyModeChanged) {
+      console.log('  🎨 Sankey mode changed:', prevSankeyViewRef.current, '->', useSankeyView);
+      prevSankeyViewRef.current = useSankeyView;
+    }
+    
     // Fast path: If only edge data changed (no topology, position, or handle changes), update in place
     // CRITICAL: During drag or immediately after drag, ALWAYS take fast path to prevent node position overwrites
     // We ignore nodePositionsChanged during/after drag because ReactFlow has the current drag positions
     // Handle changes require full recalculation because they affect edge bundling, offsets, and widths
     // After drag, we keep isDraggingNodeRef.current true until sync completes to force fast path
+    // Sankey mode changes require slow path because node sizes change, affecting edge routing
     const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged && 
-                               edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
+                               !sankeyModeChanged && edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
     
     if (shouldTakeFastPath) {
       const pathReason = isDraggingNodeRef.current ? '(DRAG - ignoring position diff)' : '(positions unchanged)';
@@ -1498,7 +1507,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return;
     }
     
-    console.log('  🔨 Slow path: Topology changed, doing full rebuild');
+    const slowPathReason = sankeyModeChanged ? 'Sankey mode changed' : 
+                           edgeCountChanged ? 'Edge count changed' :
+                           nodeCountChanged ? 'Node count changed' :
+                           edgeIdsChanged ? 'Edge IDs changed' :
+                           edgeHandlesChanged ? 'Edge handles changed' :
+                           nodePositionsChanged ? 'Node positions changed' : 'Unknown';
+    console.log(`  🔨 Slow path: ${slowPathReason}, doing full rebuild`);
     
     // Topology changed - do full rebuild
     // Preserve current selection state
@@ -1553,12 +1568,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (useSankeyView) {
       const NODE_WIDTH = DEFAULT_NODE_WIDTH; // Fixed width for Sankey view
       
-      // Calculate flow mass through each node ACROSS ALL VISIBLE LAYERS
-      // For Sankey diagrams, we want to size nodes based on max(inbound probability) across all visible scenarios
+      // Calculate flow mass through each node across all visible layers
+      // For Sankey diagrams:
+      // - Each node is sized by the MAX mass it receives across all layers
+      // - Normalization is based ONLY on the current layer's max mass
       console.log('[Sankey] Graph nodes:', graph.nodes?.map((n: any) => ({ uuid: n.uuid, id: n.id, label: n.label, isStart: n.entry?.is_start })));
       console.log('[Sankey] Graph edges:', graph.edges?.map((e: any) => ({ from: e.from, to: e.to, prob: e.p?.mean })));
       
-      // Determine which layers to calculate mass for
+      // Determine which layers to calculate mass for (all visible layers)
       const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
       const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
       const layersToCalculate = visibleScenarioIds.includes('current')
@@ -1568,7 +1585,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('[Sankey] Calculating mass for layers:', layersToCalculate);
       
       // Track maximum mass for each node across all layers
-      const maxFlowMass = new Map<string, number>();
+      const maxFlowMassPerNode = new Map<string, number>();
+      // Track current layer mass separately for normalization
+      let currentLayerMaxMass = 0;
       
       // Calculate flow mass for each layer
       for (const layerId of layersToCalculate) {
@@ -1679,26 +1698,30 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           }
         }
         
-        // Update maximum mass for each node
+        // Update maximum mass for each node across all layers
         flowMass.forEach((mass, nodeId) => {
-          const currentMax = maxFlowMass.get(nodeId) || 0;
-          maxFlowMass.set(nodeId, Math.max(currentMax, mass));
+          const currentMax = maxFlowMassPerNode.get(nodeId) || 0;
+          maxFlowMassPerNode.set(nodeId, Math.max(currentMax, mass));
         });
+        
+        // If this is the current layer, capture its max mass for normalization
+        if (layerId === 'current') {
+          currentLayerMaxMass = Math.max(...Array.from(flowMass.values()), 0.001);
+        }
         
         console.log(`[Sankey] Layer ${layerId} flow mass:`, Array.from(flowMass.entries()).slice(0, 5));
       }
       
-      console.log('[Sankey] Maximum flow mass across all layers:', Array.from(maxFlowMass.entries()));
+      console.log('[Sankey] Maximum flow mass per node (across all layers):', Array.from(maxFlowMassPerNode.entries()));
       
-      // Find max mass to normalize heights
-      const maxMass = Math.max(...Array.from(maxFlowMass.values()), 0.001); // Avoid division by zero
-      console.log('[Sankey] Max mass across all layers:', maxMass);
+      // Normalize using current layer's max mass only
+      console.log('[Sankey] Normalization max mass (current layer only):', currentLayerMaxMass);
       
-      // Apply heights to nodes using maximum mass across all layers
+      // Apply heights to nodes using MAX mass across layers, normalized by current layer max
       console.log('[Sankey] ReactFlow nodes to size:', nodesWithSelection.map(n => ({ id: n.id, label: n.data?.label })));
       nodesWithSelection = nodesWithSelection.map(node => {
-        const mass = maxFlowMass.get(node.id) || 0;
-        const normalizedMass = mass / maxMass;
+        const mass = maxFlowMassPerNode.get(node.id) || 0;
+        const normalizedMass = mass / currentLayerMaxMass;
         const height = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, normalizedMass * MAX_NODE_HEIGHT));
         
         console.log(`[Sankey] Node ${node.data?.label} (reactflow id: ${node.id}): mass=${mass.toFixed(3)}, normalized=${normalizedMass.toFixed(3)}, height=${height.toFixed(0)}`);
