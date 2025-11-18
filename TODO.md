@@ -8,8 +8,9 @@
 - add icons to collapsed beads?
 - playing with edges resets edge_id! 
 - clicking beads -- make hotspot larger
-- we've lost pmf warning flags for variant ps (have red outline only)
 - whatif layer: prob needs is own layer in the palette really for clarity...
+- auto-reroute still stubborn
+- what-if funky and fussy (render path...)
 
 ## Current query DSL
 
