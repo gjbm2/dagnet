@@ -1462,28 +1462,31 @@ export default function ConversionEdge({
     
     const halfWidth = strokeWidth / 2;
     
-    // Top edge: offset upward
-    const topSx = sx + perpX1 * halfWidth;
-    const topSy = sy + perpY1 * halfWidth;
-    const topC1x = c1x + perpX1 * halfWidth;
-    const topC1y = c1y + perpY1 * halfWidth;
-    const topC2x = c2x + perpX2 * halfWidth;
-    const topC2y = c2y + perpY2 * halfWidth;
-    const topEx = ex + perpX2 * halfWidth;
-    const topEy = ey + perpY2 * halfWidth;
+    // Visual top edge: offset upward (negative perpendicular in screen coordinates)
+    const topSx = sx - perpX1 * halfWidth;
+    const topSy = sy - perpY1 * halfWidth;
+    const topC1x = c1x - perpX1 * halfWidth;
+    const topC1y = c1y - perpY1 * halfWidth;
+    const topC2x = c2x - perpX2 * halfWidth;
+    const topC2y = c2y - perpY2 * halfWidth;
+    const topEx = ex - perpX2 * halfWidth;
+    const topEy = ey - perpY2 * halfWidth;
     
-    // Bottom edge: offset downward (reverse direction for closed path)
-    const botEx = ex - perpX2 * halfWidth;
-    const botEy = ey - perpY2 * halfWidth;
-    const botC2x = c2x - perpX2 * halfWidth;
-    const botC2y = c2y - perpY2 * halfWidth;
-    const botC1x = c1x - perpX1 * halfWidth;
-    const botC1y = c1y - perpY1 * halfWidth;
-    const botSx = sx - perpX1 * halfWidth;
-    const botSy = sy - perpY1 * halfWidth;
+    // Visual bottom edge: offset downward (positive perpendicular in screen coordinates)
+    const botEx = ex + perpX2 * halfWidth;
+    const botEy = ey + perpY2 * halfWidth;
+    const botC2x = c2x + perpX2 * halfWidth;
+    const botC2y = c2y + perpY2 * halfWidth;
+    const botC1x = c1x + perpX1 * halfWidth;
+    const botC1y = c1y + perpY1 * halfWidth;
+    const botSx = sx + perpX1 * halfWidth;
+    const botSy = sy + perpY1 * halfWidth;
     
     // Create closed path: top curve forward, then bottom curve backward
-    return `M ${topSx},${topSy} C ${topC1x},${topC1y} ${topC2x},${topC2y} ${topEx},${topEy} L ${botEx},${botEy} C ${botC2x},${botC2y} ${botC1x},${botC1y} ${botSx},${botSy} Z`;
+    return {
+      ribbon: `M ${topSx},${topSy} C ${topC1x},${topC1y} ${topC2x},${topC2y} ${topEx},${topEy} L ${botEx},${botEy} C ${botC2x},${botC2y} ${botC1x},${botC1y} ${botSx},${botSy} Z`,
+      topEdge: `M ${topSx},${topSy} C ${topC1x},${topC1y} ${topC2x},${topC2y} ${topEx},${topEy}`
+    };
   }, [edgePath, data?.useSankeyView, strokeWidth]);
 
 
@@ -1535,8 +1538,8 @@ export default function ConversionEdge({
       {/* Edge rendering */}
           {data?.useSankeyView && ribbonPath ? (
             // Sankey mode: render as filled ribbon
+            <>
               <path
-                ref={pathRef}
                 id={id}
                 style={{
                   fill: getEdgeColor(),
@@ -1547,13 +1550,22 @@ export default function ConversionEdge({
                   pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                 }}
                 className="react-flow__edge-path"
-                d={ribbonPath}
+                d={ribbonPath.ribbon}
                 onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
                 onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
               />
+              {/* Hidden path for beads - follows the top edge of the ribbon */}
+              <path
+                ref={pathRef}
+                id={`${id}-top-edge`}
+                d={ribbonPath.topEdge}
+                style={{ display: 'none' }}
+                pointerEvents="none"
+              />
+            </>
           ) : shouldShowConfidenceIntervals && confidenceData ? (
             // Confidence interval mode: render three overlapping paths
             <>
@@ -1754,6 +1766,8 @@ export default function ConversionEdge({
                 whatIfDSL={whatIfDSL}
                 visibleStartOffset={visibleStartOffset}
                 onDoubleClick={handleDoubleClick}
+                useSankeyView={data?.useSankeyView}
+                edgeWidth={strokeWidth}
               />
             );
           })()}

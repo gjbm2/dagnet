@@ -59,6 +59,8 @@ interface EdgeBeadsProps {
   whatIfDSL?: string | null;
   visibleStartOffset?: number;
   onDoubleClick?: () => void;
+  useSankeyView?: boolean;
+  edgeWidth?: number;
 }
 
 interface BeadState {
@@ -78,7 +80,9 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     scenariosContext,
     whatIfDSL,
     visibleStartOffset = 0,
-    onDoubleClick
+    onDoubleClick,
+    useSankeyView = false,
+    edgeWidth = 0
   } = props;
   
   // Bead expansion state (per-edge, per-bead type)
@@ -177,6 +181,17 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   const pathId = `bead-path-${edge.uuid || edge.id}`;
   const pathD = path.getAttribute('d') || '';
   
+  // In Sankey view, beads follow the top edge spline of the ribbon
+  // Apply a small inward offset to position beads just below the top line
+  const BEAD_HEIGHT = 14; // Match LOZENGE_HEIGHT
+  const VERTICAL_PADDING = 8; // Margin below the top edge
+  let sankeyVerticalOffset = 0;
+  
+  if (useSankeyView && edgeWidth > 0) {
+    // Offset beads inward from top edge: min(bead_height + vertical_padding, edge_width) / 2
+    sankeyVerticalOffset = Math.min(BEAD_HEIGHT + VERTICAL_PADDING, edgeWidth) / 2;
+  }
+  
   // Spacing along the spline is cumulative per bead
   // Use shared constants from nodeEdgeConstants.ts
   let currentDistance = visibleStartOffset + BEAD_MARKER_DISTANCE;
@@ -194,6 +209,33 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     if (!point || isNaN(point.x) || isNaN(point.y)) {
       console.warn('[EdgeBeads] Invalid point at distance', distance, 'for bead', bead.type);
       return;
+    }
+    
+    // Calculate perpendicular offset for Sankey view
+    let transformOffset = '';
+    if (sankeyVerticalOffset !== 0) {
+      // Calculate tangent direction at this point
+      const delta = 1;
+      const prevDist = Math.max(0, distance - delta);
+      const nextDist = Math.min(pathLength, distance + delta);
+      const prevPoint = path.getPointAtLength(prevDist);
+      const nextPoint = path.getPointAtLength(nextDist);
+      
+      const dx = nextPoint.x - prevPoint.x;
+      const dy = nextPoint.y - prevPoint.y;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      
+      if (length > 0) {
+        // Perpendicular vector (rotate tangent by 90 degrees)
+        const perpX = -dy / length;
+        const perpY = dx / length;
+        
+        // Apply offset (positive moves downward/inward from top edge)
+        const offsetX = perpX * sankeyVerticalOffset;
+        const offsetY = perpY * sankeyVerticalOffset;
+        
+        transformOffset = `translate(${offsetX}, ${offsetY})`;
+      }
     }
     
     if (expanded) {
@@ -391,6 +433,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
         <g 
           key={`bead-expanded-${bead.type}-${bead.index}`}
           style={{ cursor: 'pointer', pointerEvents: 'painted' }}
+          transform={transformOffset}
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -495,6 +538,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
         <g 
           key={`bead-collapsed-${bead.type}-${bead.index}`}
           style={{ cursor: 'pointer', pointerEvents: 'painted' }}
+          transform={transformOffset}
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
