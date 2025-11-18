@@ -1553,108 +1553,151 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (useSankeyView) {
       const NODE_WIDTH = DEFAULT_NODE_WIDTH; // Fixed width for Sankey view
       
-      // Calculate flow mass through each node
-      // For Sankey diagrams, we want to show the TOTAL flow passing through each node
-      const flowMass = new Map<string, number>();
-      
+      // Calculate flow mass through each node ACROSS ALL VISIBLE LAYERS
+      // For Sankey diagrams, we want to size nodes based on max(inbound probability) across all visible scenarios
       console.log('[Sankey] Graph nodes:', graph.nodes?.map((n: any) => ({ uuid: n.uuid, id: n.id, label: n.label, isStart: n.entry?.is_start })));
       console.log('[Sankey] Graph edges:', graph.edges?.map((e: any) => ({ from: e.from, to: e.to, prob: e.p?.mean })));
       
-      // Initialize start nodes with their entry weights
-      graph.nodes?.forEach((node: any) => {
-        if (node.entry?.is_start) {
-          const entryWeight = node.entry.entry_weight || 1.0;
-          console.log(`[Sankey] Initializing start node ${node.label} (uuid: ${node.uuid}) with mass ${entryWeight}`);
-          flowMass.set(node.uuid, entryWeight);
-        } else {
-          // Initialize all other nodes to 0
-          flowMass.set(node.uuid, 0);
-        }
-      });
+      // Determine which layers to calculate mass for
+      const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
+      const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
+      const layersToCalculate = visibleScenarioIds.includes('current')
+        ? visibleScenarioIds
+        : [...visibleScenarioIds, 'current']; // Always include current even if hidden
       
-      console.log('[Sankey] Initial flowMass:', Array.from(flowMass.entries()));
+      console.log('[Sankey] Calculating mass for layers:', layersToCalculate);
       
-      // Build incoming edges map (we calculate mass from incoming flows)
-      // Store the full edge object so we can access case information
-      const incomingEdges = new Map<string, Array<any>>();
-      graph.edges?.forEach((edge: any) => {
-        const to = edge.to;
+      // Track maximum mass for each node across all layers
+      const maxFlowMass = new Map<string, number>();
+      
+      // Calculate flow mass for each layer
+      for (const layerId of layersToCalculate) {
+        console.log(`[Sankey] Processing layer: ${layerId}`);
+        const flowMass = new Map<string, number>();
         
-        if (!incomingEdges.has(to)) {
-          incomingEdges.set(to, []);
-        }
-        incomingEdges.get(to)!.push(edge);
-      });
-      
-      // Topological sort: process nodes in dependency order
-      // Simple approach: iterate until all nodes are calculated
-      const processed = new Set<string>();
-      let iterations = 0;
-      const maxIterations = graph.nodes?.length * 3 || 100;
-      
-      while (processed.size < (graph.nodes?.length || 0) && iterations < maxIterations) {
-        iterations++;
-        let madeProgress = false;
+        // Determine the effective whatIfDSL for this layer
+        let layerWhatIfDSL = effectiveWhatIfDSL;
+        let composedParams: any = null;
         
-        graph.nodes?.forEach((node: any) => {
-          const nodeId = node.uuid || node.id;
-          
-          // Skip if already processed or if it's a start node (already initialized)
-          if (processed.has(nodeId) || node.entry?.is_start) {
-            if (node.entry?.is_start) processed.add(nodeId);
-            return;
-          }
-          
-          // Check if all incoming nodes have been processed
-          const incoming = incomingEdges.get(nodeId) || [];
-          const allIncomingProcessed = incoming.every((edge: any) => processed.has(edge.from));
-          
-          if (allIncomingProcessed && incoming.length > 0) {
-            // Calculate total incoming mass, accounting for case node variant weights and what-if analysis
-            let totalMass = 0;
-            incoming.forEach((edge: any) => {
-              const from = edge.from;
-              const sourceMass = flowMass.get(from) || 0;
-              
-              // Use unified what-if engine to get effective probability
-              // This handles: case node variant weights, conditional overrides, and what-if analysis
-              const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
-              const effectiveProb = computeEffectiveEdgeProbability(
-                graph,
-                edgeId,
-              { whatIfDSL: effectiveWhatIfDSL },
-                undefined
-              );
-              
-              console.log(`[Sankey] Edge ${edgeId}: sourceMass=${sourceMass.toFixed(3)}, effectiveProb=${effectiveProb.toFixed(3)}, contribution=${(sourceMass * effectiveProb).toFixed(3)}`);
-              
-              totalMass += sourceMass * effectiveProb;
-            });
+        if (layerId !== 'current' && layerId !== 'base' && scenariosContext) {
+          // For scenario layers, compose params from base + all layers below this one
+          const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
+          if (scenario) {
+            const allScenarios = scenariosContext.scenarios;
+            const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
+            const layersBelow = allScenarios
+              .slice(0, currentIndex)
+              .map((s: any) => s.params)
+              .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
             
-            flowMass.set(nodeId, totalMass);
-            processed.add(nodeId);
-            madeProgress = true;
-            console.log(`[Sankey] Calculated node ${node.label}: incoming mass = ${totalMass.toFixed(3)}`);
+            composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
+            layerWhatIfDSL = null; // Scenarios don't use what-if DSL
+          }
+        }
+        
+        // Initialize start nodes with their entry weights
+        graph.nodes?.forEach((node: any) => {
+          if (node.entry?.is_start) {
+            const entryWeight = node.entry.entry_weight || 1.0;
+            flowMass.set(node.uuid, entryWeight);
+          } else {
+            flowMass.set(node.uuid, 0);
           }
         });
         
-        if (!madeProgress) {
-          console.warn('[Sankey] No progress made in iteration', iterations, 'processed:', processed.size);
-          break;
+        // Build incoming edges map
+        const incomingEdges = new Map<string, Array<any>>();
+        graph.edges?.forEach((edge: any) => {
+          const to = edge.to;
+          if (!incomingEdges.has(to)) {
+            incomingEdges.set(to, []);
+          }
+          incomingEdges.get(to)!.push(edge);
+        });
+        
+        // Topological sort: process nodes in dependency order
+        const processed = new Set<string>();
+        let iterations = 0;
+        const maxIterations = graph.nodes?.length * 3 || 100;
+        
+        while (processed.size < (graph.nodes?.length || 0) && iterations < maxIterations) {
+          iterations++;
+          let madeProgress = false;
+          
+          graph.nodes?.forEach((node: any) => {
+            const nodeId = node.uuid || node.id;
+            
+            if (processed.has(nodeId) || node.entry?.is_start) {
+              if (node.entry?.is_start) processed.add(nodeId);
+              return;
+            }
+            
+            const incoming = incomingEdges.get(nodeId) || [];
+            const allIncomingProcessed = incoming.every((edge: any) => processed.has(edge.from));
+            
+            if (allIncomingProcessed && incoming.length > 0) {
+              let totalMass = 0;
+              incoming.forEach((edge: any) => {
+                const from = edge.from;
+                const sourceMass = flowMass.get(from) || 0;
+                
+                const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+                let effectiveProb = 0;
+                
+                if (layerId === 'current') {
+                  // Use what-if DSL for current layer
+                  effectiveProb = computeEffectiveEdgeProbability(
+                    graph,
+                    edgeId,
+                    { whatIfDSL: layerWhatIfDSL },
+                    undefined
+                  );
+                } else if (composedParams) {
+                  // Use composed params for scenario layer
+                  const edgeKey = edge.id || `${edge.from}->${edge.to}`;
+                  effectiveProb = composedParams.edges?.[edgeKey]?.p?.mean 
+                    ?? edge.p?.mean ?? 0;
+                  
+                  // Apply case variant weight if applicable
+                  // (simplified - full case handling would require more logic)
+                } else {
+                  // Fallback
+                  effectiveProb = edge.p?.mean ?? 0;
+                }
+                
+                totalMass += sourceMass * effectiveProb;
+              });
+              
+              flowMass.set(nodeId, totalMass);
+              processed.add(nodeId);
+              madeProgress = true;
+            }
+          });
+          
+          if (!madeProgress) {
+            break;
+          }
         }
+        
+        // Update maximum mass for each node
+        flowMass.forEach((mass, nodeId) => {
+          const currentMax = maxFlowMass.get(nodeId) || 0;
+          maxFlowMass.set(nodeId, Math.max(currentMax, mass));
+        });
+        
+        console.log(`[Sankey] Layer ${layerId} flow mass:`, Array.from(flowMass.entries()).slice(0, 5));
       }
       
-      console.log('[Sankey] Flow mass calculated (after propagation):', Array.from(flowMass.entries()));
-      console.log(`[Sankey] Propagation completed in ${iterations} iterations`);
+      console.log('[Sankey] Maximum flow mass across all layers:', Array.from(maxFlowMass.entries()));
       
       // Find max mass to normalize heights
-      const maxMass = Math.max(...Array.from(flowMass.values()), 0.001); // Avoid division by zero
-      console.log('[Sankey] Max mass:', maxMass);
+      const maxMass = Math.max(...Array.from(maxFlowMass.values()), 0.001); // Avoid division by zero
+      console.log('[Sankey] Max mass across all layers:', maxMass);
       
-      // Apply heights to nodes
+      // Apply heights to nodes using maximum mass across all layers
       console.log('[Sankey] ReactFlow nodes to size:', nodesWithSelection.map(n => ({ id: n.id, label: n.data?.label })));
       nodesWithSelection = nodesWithSelection.map(node => {
-        const mass = flowMass.get(node.id) || 0;
+        const mass = maxFlowMass.get(node.id) || 0;
         const normalizedMass = mass / maxMass;
         const height = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, normalizedMass * MAX_NODE_HEIGHT));
         
