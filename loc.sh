@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Extensions to include (lowercase)
-EXTS=(js jsx ts tsx json html css scss md)
+# Only actual source code extensions (no json, html, css, md)
+EXTS=(js jsx ts tsx)
 
 # Directories (by name) to exclude everywhere
 EXCL_DIRS=(node_modules dist build .git coverage .next out .turbo .cache)
 
-echo "Counting lines of code by directory in $(pwd)..."
+echo "Counting source lines of code (excluding blanks/comments) in $(pwd)..."
 echo
 
 # Build the prune part: -type d \( -name dir1 -o -name dir2 ... \) -prune
@@ -26,19 +26,31 @@ done
 unset 'name_expr[${#name_expr[@]}-1]' # drop trailing -o
 name_expr+=( \) -print0 )
 
-# Collect files safely (null-separated), run wc -l, then aggregate by dir
-found_any=0
-find . \( "${exclude_dirs_expr[@]}" \) -o \( "${name_expr[@]}" \) \
-| xargs -0 -n 100 wc -l \
-| awk '
-  NF {
-    # wc -l output: <lines> <path...>
+# Use associative array to track seen files (prevent duplicates)
+declare -A seen_files
+
+# Process each file, count non-blank, non-comment lines
+find . \( "${exclude_dirs_expr[@]}" \) -o \( "${name_expr[@]}" \) | while IFS= read -r -d '' file; do
+  # Normalize path to prevent duplicates
+  normalized=$(readlink -f "$file" 2>/dev/null || echo "$file")
+  
+  # Skip if we've already seen this file
+  if [[ -n "${seen_files[$normalized]:-}" ]]; then
+    continue
+  fi
+  seen_files[$normalized]=1
+  
+  # Count lines that are not blank and not comment-only
+  # This excludes: empty lines, lines with only whitespace, lines that are only // or /* */ comments
+  count=$(grep -vE '^\s*$|^\s*(//|/\*|\*|//)' "$file" | wc -l)
+  
+  # Output: count and file path
+  echo "$count $file"
+done | awk '
+  {
     lines = $1
     $1 = ""; sub(/^ +/, "", $0)
     file = $0
-
-    # skip summary lines from wc when xargs batches (they look like: "total")
-    if (file == "total") next
 
     # derive directory
     dir = file
@@ -58,7 +70,7 @@ find . \( "${exclude_dirs_expr[@]}" \) -o \( "${name_expr[@]}" \) \
       printf "%10d  %s\n", sum[d], d
     }
     print "----------------------------------"
-    printf "Total lines of code: %d\n", total
+    printf "Total source lines: %d\n", total
   }
 ' | sort -nr
 
