@@ -1310,9 +1310,16 @@ schedules:
 - [ ] Verify batch operations work for cases
 
 ### Component 5: Window-Aware Schedules
-- [ ] Add `getCaseWeightsForWindow` to windowAggregationService
-- [ ] Document windowing behavior in schema
-- [ ] (Phase 2) Integrate into graph rendering
+- [ ] **Phase 1**: Add `getCaseWeightsForWindow` (simple: most recent schedule)
+- [ ] **Phase 2**: Add `aggregateCaseSchedulesForWindow` (time-weighted averaging)
+- [ ] Add `RawCaseAggregation` interface (mirrors `RawAggregation` for params)
+- [ ] Integrate into graph rendering (use windowed weights for edge probability calc)
+- [ ] Document windowing behavior in case schema
+- [ ] Test: verify time-weighted averaging works correctly
+- [ ] Test: verify window selection works like parameters
+- [ ] (Phase 3) Statistical enhancement: add to `statisticalEnhancementService`
+- [ ] (Phase 3) Python stats methods: `bayesian-rollout`, `trend-detection`
+- [ ] (Phase 3) "As at date" resolver with lag distribution convolution
 
 ### Testing
 - [ ] Write unit tests for `resolveVariantToBool`
