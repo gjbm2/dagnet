@@ -160,9 +160,17 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     data.case.variants.forEach(variant => {
       const edges = variantEdges.get(variant.name) || [];
       const totalProbability = edges.reduce((sum, edge) => {
-        const edgeId = edge.id || `${edge.source}->${edge.target}`;
-        const effectiveProb = computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL });
-        return sum + effectiveProb;
+        // For PMF validation, use raw edge probability (not variant-weighted)
+        // Find the edge data in the graph
+        const edgeData = graph.edges?.find((e: any) => 
+          (e.id && e.id === edge.id) || 
+          (e.uuid && e.uuid === edge.id) ||
+          `${e.from}->${e.to}` === edge.id
+        );
+        
+        // Use raw edge probability for PMF check
+        const edgeProb = edgeData?.p?.mean ?? 0;
+        return sum + edgeProb;
       }, 0);
       
       variantResults.push({
@@ -178,7 +186,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       variants: variantResults,
       hasAnyIncomplete: variantResults.some(v => !v.isComplete && v.edgeCount > 0)
     };
-  }, [isCaseNode, data.case, data.id, data.uuid, getEdges, graph, whatIfDSL]);
+  }, [isCaseNode, data.case, data.id, data.uuid, getEdges, graph]);
   
   const caseVariantProbabilityMass = getCaseVariantProbabilityMass();
   
