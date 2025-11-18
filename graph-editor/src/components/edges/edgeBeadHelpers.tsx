@@ -14,17 +14,10 @@ import { getConditionalProbabilityColor, ensureDarkBeadColor } from '@/lib/condi
 import { darkenCaseColor } from '@/lib/conditionalColors';
 import type { ScenarioParams } from '../../types/scenarios';
 import type { Graph, GraphEdge } from '../../types';
+import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue } from './BeadLabelBuilder';
 
-// ============================================================================
-// Data Structures
-// ============================================================================
-
-export interface BeadValue {
-  scenarioId: string;
-  value: number | string;
-  color: string; // scenario color
-  stdev?: number; // Standard deviation (for probability and cost beads)
-}
+// Re-export for backwards compatibility
+export type { BeadValue, HiddenCurrentValue };
 
 export interface BeadDefinition {
   type: 'probability' | 'cost_gbp' | 'cost_time' | 'variant' | 'conditional_p';
@@ -54,30 +47,12 @@ export interface BeadDefinition {
 // ============================================================================
 // Helper: Format Value
 // ============================================================================
+// NOTE: These are now provided by BeadLabelBuilder for consistency
+// Keeping local aliases for backwards compatibility in this file
 
-function formatProbability(value: number, stdev?: number): string {
-  // Convert probability (0-1) to percentage (0-100)
-  const percent = value * 100;
-  const stdevPercent = stdev ? stdev * 100 : undefined;
-  if (stdevPercent && stdevPercent > 0) {
-    return `${Math.round(percent)}% ± ${Math.round(stdevPercent)}%`;
-  }
-  return `${Math.round(percent)}%`;
-}
-
-function formatCostGBP(value: number, stdev?: number): string {
-  if (stdev && stdev > 0) {
-    return `£${value.toFixed(2)} ± £${stdev.toFixed(2)}`;
-  }
-  return `£${value.toFixed(2)}`;
-}
-
-function formatCostTime(value: number, stdev?: number): string {
-  if (stdev && stdev > 0) {
-    return `${value.toFixed(1)}d ± ${stdev.toFixed(1)}d`;
-  }
-  return `${value.toFixed(1)}d`;
-}
+const formatProbability = BeadLabelBuilder.formatProbability;
+const formatCostGBP = BeadLabelBuilder.formatCostGBP;
+const formatCostTime = BeadLabelBuilder.formatCostTime;
 
 function formatVariant(variantName: string, weight: number): string {
   // weight is already 0-1, convert to percentage
@@ -104,51 +79,174 @@ function formatConditional(condition: string, prob: number): string {
 }
 
 // ============================================================================
-// Helper: Format Bead Text with Multi-Scenario Support
+// Generic Parameter Bead Builder
 // ============================================================================
 
+/**
+ * Generic function to build a parameter bead.
+ * Handles the common pattern of:
+ * 1. Checking if parameter exists in ANY layer
+ * 2. Extracting values from all visible layers (using proper compositing)
+ * 3. Building label using BeadLabelBuilder
+ * 4. Constructing BeadDefinition
+ * 
+ * This eliminates duplicate logic across probability, cost_gbp, cost_time, etc.
+ */
+function buildParameterBead(config: {
+  beadType: 'probability' | 'cost_gbp' | 'cost_time';
+  
+  // Check if parameter exists anywhere (current, base, or any visible scenario)
+  checkExists: () => boolean;
+  
+  // Extract value from specific layer (returns {mean/value, stdev} or undefined)
+  extractFromLayer: (layerId: string) => { mean?: number; value?: number; stdev?: number } | undefined;
+  
+  // Build label using BeadLabelBuilder
+  // The third boolean parameter indicates whether there is existence variation
+  // (i.e. param present in some layers but missing in others).
+  buildLabel: (
+    values: BeadValue[], 
+    hiddenCurrent: HiddenCurrentValue | undefined, 
+    hasExistenceVariation: boolean
+  ) => { displayText: React.ReactNode; allIdentical: boolean };
+  
+  // Bead styling and metadata
+  backgroundColor: string;
+  hasParameterConnection: boolean;
+  
+  // Position info
+  baseDistance: number;
+  beadIndex: number;
+  
+  // Layer info
+  orderedVisibleIds: string[];
+  currentVisible: boolean;
+  getScenarioColor: (layerId: string) => string;
+}): BeadDefinition | null {
+  
+  // Check if parameter exists anywhere
+  if (!config.checkExists()) {
+    return null;
+  }
+  
+  const values: BeadValue[] = [];
+  let hiddenCurrent: HiddenCurrentValue | undefined;
+  
+  // First pass: inspect raw extracted values per visible layer
+  const rawLayerValues = new Map<string, { value?: number; stdev?: number } | null>();
+  for (const layerId of config.orderedVisibleIds) {
+    const extracted = config.extractFromLayer(layerId);
+    const extractedValue = extracted?.mean ?? extracted?.value;
+    rawLayerValues.set(
+      layerId, 
+      extracted ? { value: extractedValue, stdev: extracted?.stdev } : null
+    );
+  }
+  
+  // Do any visible layers have an explicit value?
+  const hasAnyExplicitValue = Array.from(rawLayerValues.values()).some(
+    v => v !== null && v.value !== undefined
+  );
+  
+  // For non-probability numeric params (costs, etc.), when at least one layer
+  // has an explicit value, we treat "missing" on other layers as 0 for
+  // display/delta purposes. This lets us render e.g. "£0 £1.60".
+  const shouldTreatMissingAsZero =
+    hasAnyExplicitValue && config.beadType !== 'probability';
+  
+  // Second pass: construct final layerValues with optional zero-filling
+  const layerValues = new Map<string, { value: number; stdev?: number } | null>();
+  for (const [layerId, raw] of rawLayerValues.entries()) {
+    if (raw && raw.value !== undefined) {
+      layerValues.set(layerId, { value: raw.value, stdev: raw.stdev });
+    } else if (shouldTreatMissingAsZero) {
+      layerValues.set(layerId, { value: 0, stdev: undefined });
+    } else {
+      layerValues.set(layerId, null);
+    }
+  }
+  
+  // Check if there's variation in existence (some layers have a real value, others only zero/missing)
+  const hasValue = Array.from(layerValues.values()).some(v => v !== null);
+  const hasNoValue = Array.from(layerValues.values()).some(v => v === null);
+  const hasExistenceVariation = hasValue && hasNoValue;
+  
+  // Collect values from layers that have them
+  for (const [layerId, extracted] of layerValues.entries()) {
+    if (extracted !== null) {
+      values.push({
+        scenarioId: layerId,
+        value: extracted.value,
+        color: config.getScenarioColor(layerId),
+        stdev: extracted.stdev
+      });
+    }
+  }
+  
+  // Check hidden current
+  if (!config.currentVisible) {
+    const extracted = config.extractFromLayer('current');
+    const extractedValue = extracted?.mean ?? extracted?.value;
+    
+    if (extractedValue !== undefined) {
+      // Check if hidden current differs from visible values
+      if (values.length > 0) {
+        const tempBuilder = new BeadLabelBuilder(
+          values,
+          { value: extractedValue, stdev: extracted?.stdev },
+          (v: number | string, stdev?: number) => String(v)
+        );
+        if (!tempBuilder.doesHiddenCurrentMatch()) {
+          hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev };
+        }
+      } else {
+        // No visible values but hidden current exists - definitely different
+        hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev };
+      }
+    } else if (values.length > 0) {
+      // Hidden current doesn't exist but visible layers do - that's also a difference
+      // We can't represent "no value" in hiddenCurrent, but the existence variation will trigger display
+    }
+  }
+  
+  // If no values collected and no hiddenCurrent, don't create bead
+  if (values.length === 0 && !hiddenCurrent) {
+    return null;
+  }
+  
+  // If there's existence variation (some layers have value, others don't), 
+  // we should show the bead even if only one visible layer has a value
+  // This is valid variation - absence vs presence is meaningful
+  
+  // Build label using BeadLabelBuilder
+  const label = config.buildLabel(values, hiddenCurrent, hasExistenceVariation);
+  
+  return {
+    type: config.beadType,
+    values,
+    hiddenCurrent,
+    displayText: label.displayText,
+    allIdentical: label.allIdentical,
+    backgroundColor: config.backgroundColor,
+    hasParameterConnection: config.hasParameterConnection,
+    distance: config.baseDistance + config.beadIndex * BEAD_SPACING,
+    expanded: true,
+    index: config.beadIndex
+  };
+}
+
+/**
+ * DEPRECATED: Use BeadLabelBuilder.buildCustomLabel() instead
+ * This function is kept for backwards compatibility but delegates to BeadLabelBuilder
+ * 
+ * @deprecated Use BeadLabelBuilder.buildCustomLabel() for consistent behavior
+ */
 function formatBeadText(
   values: BeadValue[],
-  hiddenCurrent?: { value: number | string; stdev?: number },
+  hiddenCurrent?: HiddenCurrentValue,
   formatter: (v: number | string, stdev?: number) => string = (v) => String(v)
 ): React.ReactNode {
-  const allIdentical = values.length > 0 && values.every(v => v.value === values[0].value);
-  
-  if (allIdentical && !hiddenCurrent) {
-    // Always use white/bright text on dark grey backgrounds
-    // If all identical, use the stdev from the first value
-    return <span style={{ color: '#FFFFFF' }}>{formatter(values[0].value, values[0].stdev)}</span>;
-  }
-  
-  const segments: React.ReactNode[] = [];
-  
-  // Visible scenario values
-  values.forEach((val, idx) => {
-    segments.push(
-      <span key={idx} style={{ color: val.color }}>
-        {formatter(val.value, val.stdev)}
-      </span>
-    );
-    if (idx < values.length - 1) {
-      segments.push(' ');
-    }
-  });
-  
-  // Hidden current in brackets (if present and differs)
-  if (hiddenCurrent !== undefined) {
-    const visibleAllIdentical = allIdentical && values.length > 0 && values[0].value === hiddenCurrent.value;
-    if (!visibleAllIdentical) {
-      segments.push(' (');
-      segments.push(
-        <span key="hidden" style={{ color: '#808080' }}>
-          {formatter(hiddenCurrent.value, hiddenCurrent.stdev)}
-        </span>
-      );
-      segments.push(')');
-    }
-  }
-  
-  return <>{segments}</>;
+  return BeadLabelBuilder.buildCustomLabel(values, hiddenCurrent, formatter).displayText;
 }
 
 // ============================================================================
@@ -314,8 +412,9 @@ function getCaseVariantForLayer(
         
         if (caseNode) {
           // Check for case override (try multiple key formats)
+          const caseNodeCaseId = caseNode.case?.id;
           const override = parsed.caseOverrides?.[caseNode.id] || 
-                          parsed.caseOverrides?.[caseNode.case?.id] ||
+                          (caseNodeCaseId ? parsed.caseOverrides?.[caseNodeCaseId] : undefined) ||
                           parsed.caseOverrides?.[caseId];
           
           if (override !== undefined) {
@@ -501,140 +600,95 @@ export function buildBeadDefinitions(
   // ============================================================================
   // 2. Probability Bead
   // ============================================================================
-  const probValues: BeadValue[] = [];
-  let hiddenCurrentProb: { value: number } | undefined;
-  
-  // Collect visible scenario values in scenarioOrder (panel display order)
-  for (const scenarioId of orderedVisibleIds) {
-    const { probability, stdev } = getEdgeProbabilityForLayer(scenarioId, edge, graph, scenariosContext, whatIfDSL);
-    
-    probValues.push({
-      scenarioId,
-      value: probability,
-      color: getScenarioColor(scenarioId),
-      stdev
-    });
-  }
-  
-  // Check hidden current
-  if (!currentVisible) {
-    const { probability, stdev } = getEdgeProbabilityForLayer('current', edge, graph, scenariosContext, whatIfDSL);
-    const visibleAllSame = probValues.length > 0 && probValues.every(v => v.value === probValues[0].value);
-    if (!visibleAllSame || probValues.length === 0 || probValues[0].value !== probability) {
-      hiddenCurrentProb = { value: probability, stdev };
-    }
-  }
-  
-  const allProbIdentical = probValues.length > 0 && probValues.every(v => v.value === probValues[0].value);
-  
-  beads.push({
-    type: 'probability',
-    values: probValues,
-    hiddenCurrent: hiddenCurrentProb,
-    displayText: formatBeadText(probValues, hiddenCurrentProb, (v, stdev) => formatProbability(v as number, stdev)),
-    allIdentical: allProbIdentical && !hiddenCurrentProb,
-    backgroundColor: '#000000', // Black with white/bright text (80% opacity)
+  const probBead = buildParameterBead({
+    beadType: 'probability',
+    checkExists: () => true, // Every edge has probability
+    extractFromLayer: (layerId) => {
+      const { probability, stdev } = getEdgeProbabilityForLayer(layerId, edge, graph, scenariosContext, whatIfDSL);
+      return { value: probability, stdev };
+    },
+    buildLabel: BeadLabelBuilder.buildProbabilityLabel,
+    backgroundColor: '#000000',
     hasParameterConnection: !!(edge as any).parameter_id,
-    distance: baseDistance + beadIndex * BEAD_SPACING,
-    expanded: true, // Default expanded
-    index: beadIndex++
+    baseDistance,
+    beadIndex: beadIndex,
+    orderedVisibleIds,
+    currentVisible,
+    getScenarioColor
   });
   
-  // ============================================================================
-  // 3. Cost GBP Bead (if present)
-  // ============================================================================
-  const edgeKeyForCosts = edge.id || edge.uuid;
-  if (edge.cost_gbp || (edgeKeyForCosts && scenariosContext.baseParams.edges?.[edgeKeyForCosts]?.cost_gbp)) {
-    const costValues: BeadValue[] = [];
-    let hiddenCurrentCost: { value: number } | undefined;
-    
-    // Use orderedVisibleIds (panel display order)
-    for (const scenarioId of orderedVisibleIds) {
-      const cost = getEdgeCostGBPForLayer(scenarioId, edge, graph, scenariosContext);
-      if (cost?.mean !== undefined) {
-        costValues.push({
-          scenarioId,
-          value: cost.mean,
-          color: getScenarioColor(scenarioId),
-          stdev: cost.stdev
-        });
-      }
-    }
-    
-    if (!currentVisible && costValues.length > 0) {
-      const cost = getEdgeCostGBPForLayer('current', edge, graph, scenariosContext);
-      if (cost?.mean !== undefined) {
-        const visibleAllSame = costValues.every(v => v.value === costValues[0].value);
-        if (!visibleAllSame || costValues[0].value !== cost.mean) {
-          hiddenCurrentCost = { value: cost.mean, stdev: cost.stdev };
-        }
-      }
-    }
-    
-    const allCostIdentical = costValues.length > 0 && costValues.every(v => v.value === costValues[0].value);
-    
-    if (costValues.length > 0 || hiddenCurrentCost) {
-      beads.push({
-        type: 'cost_gbp',
-        values: costValues,
-        hiddenCurrent: hiddenCurrentCost,
-        displayText: formatBeadText(costValues, hiddenCurrentCost, (v, stdev) => formatCostGBP(v as number, stdev)),
-        allIdentical: allCostIdentical && !hiddenCurrentCost,
-        backgroundColor: '#000000', // Black with white/bright text (80% opacity)
-        hasParameterConnection: !!((edge as any).cost_gbp_parameter_id),
-        distance: baseDistance + beadIndex * BEAD_SPACING,
-        expanded: true, // Default expanded
-        index: beadIndex++
-      });
-    }
+  if (probBead) {
+    beads.push(probBead);
+    beadIndex++;
   }
   
   // ============================================================================
-  // 4. Cost Time Bead (if present)
+  // 3. Cost GBP Bead (if present in ANY layer)
   // ============================================================================
-  if (edge.cost_time || (edgeKeyForCosts && scenariosContext.baseParams.edges?.[edgeKeyForCosts]?.cost_time)) {
-    const costValues: BeadValue[] = [];
-    let hiddenCurrentCost: { value: number } | undefined;
-    
-    // Use orderedVisibleIds (panel display order)
-    for (const scenarioId of orderedVisibleIds) {
-      const cost = getEdgeCostTimeForLayer(scenarioId, edge, graph, scenariosContext);
-      if (cost?.mean !== undefined) {
-        costValues.push({
-          scenarioId,
-          value: cost.mean,
-          color: getScenarioColor(scenarioId),
-          stdev: cost.stdev
-        });
+  const edgeKeyForCosts = edge.id || edge.uuid;
+  const costGBPBead = buildParameterBead({
+    beadType: 'cost_gbp',
+    checkExists: () => {
+      // Check current
+      if (edge.cost_gbp) return true;
+      // Check base
+      if (edgeKeyForCosts && scenariosContext.baseParams.edges?.[edgeKeyForCosts]?.cost_gbp) return true;
+      // Check all visible scenarios
+      for (const scenarioId of orderedVisibleIds) {
+        if (scenarioId === 'current' || scenarioId === 'base') continue;
+        const cost = getEdgeCostGBPForLayer(scenarioId, edge, graph, scenariosContext);
+        if (cost?.mean !== undefined) return true;
       }
-    }
-    
-    if (!currentVisible && costValues.length > 0) {
-      const cost = getEdgeCostTimeForLayer('current', edge, graph, scenariosContext);
-      if (cost?.mean !== undefined) {
-        const visibleAllSame = costValues.every(v => v.value === costValues[0].value);
-        if (!visibleAllSame || costValues[0].value !== cost.mean) {
-          hiddenCurrentCost = { value: cost.mean, stdev: cost.stdev };
-        }
+      return false;
+    },
+    extractFromLayer: (layerId) => getEdgeCostGBPForLayer(layerId, edge, graph, scenariosContext),
+    buildLabel: BeadLabelBuilder.buildCostGBPLabel,
+    backgroundColor: '#000000',
+    hasParameterConnection: !!((edge as any).cost_gbp_parameter_id),
+    baseDistance,
+    beadIndex: beadIndex,
+    orderedVisibleIds,
+    currentVisible,
+    getScenarioColor
+  });
+  
+  if (costGBPBead) {
+    beads.push(costGBPBead);
+    beadIndex++;
+  }
+  
+  // ============================================================================
+  // 4. Cost Time Bead (if present in ANY layer)
+  // ============================================================================
+  const costTimeBead = buildParameterBead({
+    beadType: 'cost_time',
+    checkExists: () => {
+      // Check current
+      if (edge.cost_time) return true;
+      // Check base
+      if (edgeKeyForCosts && scenariosContext.baseParams.edges?.[edgeKeyForCosts]?.cost_time) return true;
+      // Check all visible scenarios
+      for (const scenarioId of orderedVisibleIds) {
+        if (scenarioId === 'current' || scenarioId === 'base') continue;
+        const cost = getEdgeCostTimeForLayer(scenarioId, edge, graph, scenariosContext);
+        if (cost?.mean !== undefined) return true;
       }
-    }
-    
-    const allCostIdentical = costValues.length > 0 && costValues.every(v => v.value === costValues[0].value);
-    
-    if (costValues.length > 0 || hiddenCurrentCost) {
-      beads.push({
-        type: 'cost_time',
-        values: costValues,
-        hiddenCurrent: hiddenCurrentCost,
-        displayText: formatBeadText(costValues, hiddenCurrentCost, (v, stdev) => formatCostTime(v as number, stdev)),
-        allIdentical: allCostIdentical && !hiddenCurrentCost,
-        backgroundColor: '#000000', // Black with white/bright text (80% opacity)
-        hasParameterConnection: !!((edge as any).cost_time_parameter_id),
-        distance: baseDistance + beadIndex * BEAD_SPACING,
-        expanded: true, // Default expanded
-        index: beadIndex++
-      });
-    }
+      return false;
+    },
+    extractFromLayer: (layerId) => getEdgeCostTimeForLayer(layerId, edge, graph, scenariosContext),
+    buildLabel: BeadLabelBuilder.buildCostTimeLabel,
+    backgroundColor: '#000000',
+    hasParameterConnection: !!((edge as any).cost_time_parameter_id),
+    baseDistance,
+    beadIndex: beadIndex,
+    orderedVisibleIds,
+    currentVisible,
+    getScenarioColor
+  });
+  
+  if (costTimeBead) {
+    beads.push(costTimeBead);
+    beadIndex++;
   }
   
   // ============================================================================

@@ -335,16 +335,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     return path;
   }, [data.useSankeyView, data.faceDirections, nodeShape.width, nodeShape.height]);
   
-  // Get case node color (from layout, no default)
-  const caseNodeColor = isCaseNode ? (data.layout?.color || null) : null;
-  
   // Case node styling - suppressed coloration (neutral gray)
-  const caseNodeStyle = isCaseNode ? {
-    background: '#F3F4F6', // neutral light gray (gray-100)
-    border: selected ? '2px solid #9CA3AF' : '2px solid #D1D5DB', // gray-400 selected, gray-300 normal
-    color: '#374151', // dark gray text (gray-700)
-    fontSize: `${CASE_NODE_FONT_SIZE}px`
-  } : {};
+  // Store color for bead use, but don't apply to node itself
+  const caseNodeColorForBeads = isCaseNode ? (data.layout?.color || null) : null;
 
   // Determine if handles should be visible
   const showHandles = isHovered || isConnecting;
@@ -360,11 +353,10 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         padding: '8px',
         border: outlinePathD ? 'none' : (selected ? '5px solid #333' : // Thick dark grey border for all selected nodes
                 ((probabilityMass && !probabilityMass.isComplete) || (conditionalValidation?.hasProbSumError)) ? '2px solid #ff6b6b' : // Red border for probability conservation errors
-                isCaseNode ? `2px solid ${caseNodeColor || '#7C3AED'}` :
                 '2px solid #ddd'),
         ...nodeShape, // Apply shape-specific styles
-        background: outlinePathD ? 'transparent' : (isCaseNode ? (caseNodeColor || '#e5e7eb') : '#fff'), // SVG handles fill if outline present
-        color: isCaseNode && caseNodeColor ? '#fff' : '#333', // White text on colored case nodes for readability
+        background: outlinePathD ? 'transparent' : '#fff', // Same white for all nodes
+        color: '#333', // Same text color for all nodes
         textAlign: 'center',
         cursor: 'pointer',
         boxShadow: outlinePathD ? 'none' : (() => {
@@ -475,7 +467,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             {/* Fill */}
             <path
               d={outlinePathD}
-              fill={isCaseNode ? (caseNodeColor || '#e5e7eb') : '#fff'}
+              fill='#fff' // Same white for all nodes
             />
             
             {/* Inner edge glow - blurred stroke clipped to INSIDE the node face only */}
@@ -514,9 +506,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
                 selected ? '#333'
                   : (probabilityMass && !probabilityMass.isComplete) || conditionalValidation?.hasProbSumError
                     ? '#ff6b6b'
-                    : isCaseNode
-                      ? (caseNodeColor || '#7C3AED')
-                      : '#ddd'
+                    : '#ddd'
               }
               strokeWidth={selected ? 5 : 2}
             />
@@ -663,7 +653,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         {isCaseNode && data.case && (
           <div style={{ 
             fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
-            color: '#FFFFFF', 
+            color: '#666', // Same secondary color as other nodes
             marginTop: '2px',
             opacity: 0.9
           }}>
@@ -713,7 +703,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           width: '8px',
           height: '8px',
           borderRadius: '50%',
-          backgroundColor: caseNodeColor || '#8B5CF6',
+          backgroundColor: caseNodeColorForBeads || '#8B5CF6', // Use stored color for indicator
           border: '1px solid #FFFFFF',
           zIndex: 15,
           pointerEvents: 'none'
