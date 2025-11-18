@@ -63,12 +63,13 @@ e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and
 **Priority:** Should be fixed before production release
 
 ## Major components
-- Edge ids not updating/persisting
 - Context support
+- Declarartive Analytics Module
 - Latency/lag management
 - Dashboarding views
 - Bayesian modelling (...is expected?)
 - Asynch / api updates
+- Cyclic graphs
 
 - download CSV built from selected funnel (or generate Google spreadsheet?)
 - node renaming, file renaming -- need to handle globally
@@ -79,6 +80,10 @@ e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and
 - add moving arrow effect, speed of animation scale on log lag
 
 ### Medium Priority
+- Zap drop down menu:
+  - 'Connection settings' on zap drop down menu isn't working
+  - Sync status' on zap drop down should show last sync, source, etc. from files/graph
+- Edit: copy & paste
 - fix tools panel view options (Again)
 - Graph integrity checker report
 - Minus autocomplete not working in query/selector
