@@ -1,26 +1,15 @@
 # TODO
 
 
-selected / highlighted edges when current is hidden need to make current properly visible
-
-
-edge_id changes don't persist
-
-
-
 ## Scenarios project
 
 ---
-
+- selected / highlighted edges when current is hidden need to make current properly visible
+- edge_id changes don't persist
+- add icons to collapsed beads?
 - playing with edges resets edge_id! 
 - clicking beads -- make hotspot larger
-- check conversion graph...scenarios are fucked on it...
-- confidence bands have gone over-wide...
-- Confidence interval rendering has been broken under scenarios
-- we've lost pmf warning flags for variant ps
-- inspect the styling of the props and tools sidebar & compare to the (white background) styling of the Scenarios panel. adapt the scenarios panel to match.
-  - you'll need to make the layers objects slightly shaded so they are viisible distinct from the panel background
-
+- we've lost pmf warning flags for variant ps (have red outline only)
 - whatif layer: prob needs is own layer in the palette really for clarity...
 
 ## Current query DSL
@@ -41,6 +30,8 @@ This query string is then also a natural candidate for what to use to populate t
 If user creates a DIFF scenario rather than an ALL scenario, we can also subtract this query FROM what is otherwise shown (compositing layer 2 and below) to construct a helpful Human Readable name
 
 e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and user then added window(1-Jan-25:1-Jan-25).case(experiment:treament), then when they created a diff snapshot, it would calculate window(1-Jan-25:1-Jan-25).case(experiment:treament)-window(1-Jan-25:1-Jan-25)=case(experiment:treament) (noting we need a service for this query subtraction & addition logic, not to do it inline in the scenario editor) and write "case(experiment:treament) @ 9:24am, 13-Nov-25"  as the scenario name
+
+- this would allow dynamic layers / scenarios (useful for saved charts/reports)
 
 ### Data project
 **Case/Variant Filtering** (4-6 hrs)

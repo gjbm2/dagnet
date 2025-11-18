@@ -514,10 +514,12 @@ export default function ConversionEdge({
   
   // Confidence interval rendering logic
   const confidenceIntervalLevel = viewPrefs?.confidenceIntervalLevel ?? 'none';
-  // For scenario overlays, use scenario-specific stdev, fallback to base edge stdev
+  // For scenario overlays, use scenario-specific stdev (do NOT fallback to current layer)
   // For current layer, use edge stdev directly
+  // Note: React state can sometimes hold stale stdev values from previous graphs/scenarios
+  // until a full refresh - the logic below should handle this correctly when state is fresh
   const stdev = data?.scenarioOverlay 
-    ? (data?.stdev ?? fullEdge?.p?.stdev ?? 0) 
+    ? (data?.stdev ?? 0) 
     : (fullEdge?.p?.stdev ?? data?.stdev ?? 0);
   const hasStdev = stdev !== undefined && stdev > 0;
   const shouldShowConfidenceIntervals = 
@@ -590,22 +592,54 @@ export default function ConversionEdge({
   const confidenceData = useMemo(() => {
     if (!shouldShowConfidenceIntervals) return null;
     
-    const mean = effectiveProbability ?? 0;
+    // For scenario overlays, use scenario-specific probability (do NOT bleed from current layer)
+    // For current layer, use effectiveProbability (which includes what-if logic)
+    const mean = data?.scenarioOverlay 
+      ? (data?.probability ?? 0)
+      : (effectiveProbability ?? 0);
     if (mean <= 0) return null; // Can't calculate widths if mean is 0
     
-    const bounds = calculateConfidenceBounds(mean, stdev, confidenceIntervalLevel as '80' | '90' | '95' | '99');
+    // Get distribution from appropriate layer (do NOT bleed from current layer to overlays)
+    const distribution = data?.scenarioOverlay
+      ? ((data as any)?.distribution || 'beta') as 'normal' | 'beta' | 'uniform'
+      : (fullEdge?.p?.distribution || 'beta') as 'normal' | 'beta' | 'uniform';
+    
+    const bounds = calculateConfidenceBounds(mean, stdev, confidenceIntervalLevel as '80' | '90' | '95' | '99', distribution);
     const opacities = calculateBandOpacities(confidenceIntervalLevel as '80' | '90' | '95' | '99');
     
-    // Calculate stroke widths based on bounds
-    // The width should directly reflect the probability bounds for upper
-    // For lower, use a minimum spread to prevent it from being too narrow
-    const minSpread = 1.2; // At least 20% difference for lower bound visibility
-    const upperRatio = bounds.upper / mean;
-    const lowerRatio = Math.max(0.5, Math.min(1 / minSpread, bounds.lower / mean));
+    // Calculate stroke widths with proper mass generosity scaling
+    // The strokeWidth already has the log scaling applied: width = MIN_WIDTH + Math.pow(actualMass, 1-g) * (MAX_WIDTH - MIN_WIDTH)
+    // We need to reverse the scaling, apply bounds, then re-scale each bound separately
     
-    const widthUpper = strokeWidth * upperRatio;
-    const widthMiddle = strokeWidth;
-    const widthLower = strokeWidth * lowerRatio;
+    const massGenerosity = viewPrefs?.massGenerosity ?? 0;
+    const MIN_WIDTH = 0.5;
+    const MAX_WIDTH = 50;
+    
+    let widthUpper, widthMiddle, widthLower;
+    
+    if (massGenerosity === 0) {
+      // No log scaling - simple linear scaling by probability ratio
+      widthUpper = strokeWidth * (bounds.upper / mean);
+      widthMiddle = strokeWidth;
+      widthLower = strokeWidth * (bounds.lower / mean);
+    } else {
+      // Reverse the scaling to get actual mass
+      const displayMass = (strokeWidth - MIN_WIDTH) / (MAX_WIDTH - MIN_WIDTH);
+      const actualMass = Math.pow(displayMass, 1 / (1 - massGenerosity));
+      
+      // Calculate actual masses for upper and lower bounds
+      const actualMassUpper = actualMass * (bounds.upper / mean);
+      const actualMassLower = actualMass * (bounds.lower / mean);
+      
+      // Apply log scaling to each bound
+      const displayMassUpper = Math.pow(actualMassUpper, 1 - massGenerosity);
+      const displayMassLower = Math.pow(actualMassLower, 1 - massGenerosity);
+      
+      // Convert back to widths
+      widthUpper = MIN_WIDTH + displayMassUpper * (MAX_WIDTH - MIN_WIDTH);
+      widthMiddle = strokeWidth;
+      widthLower = MIN_WIDTH + displayMassLower * (MAX_WIDTH - MIN_WIDTH);
+    }
     
     // Debug logging (remove after testing)
     if (id.includes('test') || id.includes('project')) {
@@ -623,7 +657,7 @@ export default function ConversionEdge({
         lower: Math.max(1, widthLower)
       }
     };
-  }, [shouldShowConfidenceIntervals, effectiveProbability, stdev, confidenceIntervalLevel, strokeWidth, id]);
+  }, [shouldShowConfidenceIntervals, effectiveProbability, data?.probability, stdev, confidenceIntervalLevel, strokeWidth, id, viewPrefs?.massGenerosity, fullEdge?.p?.distribution, data?.scenarioOverlay, (data as any)?.distribution]);
   
   // Update stroke-width via DOM to enable CSS transitions
   React.useEffect(() => {
@@ -1533,7 +1567,7 @@ export default function ConversionEdge({
                   strokeOpacity: confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
-                  strokeLinecap: 'butt',
+                  strokeLinecap: 'round',
                   strokeLinejoin: 'miter',
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
@@ -1557,7 +1591,7 @@ export default function ConversionEdge({
                   strokeOpacity: confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
-                  strokeLinecap: 'butt',
+                  strokeLinecap: 'round',
                   strokeLinejoin: 'miter',
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
@@ -1579,10 +1613,10 @@ export default function ConversionEdge({
                 style={{
                   stroke: (effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor()),
                   strokeWidth: confidenceData.widths.lower,
-                  strokeOpacity: data?.scenarioOverlay ? (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8)) : confidenceData.opacities.inner,
+                  strokeOpacity: confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
-                  strokeLinecap: 'butt',
+                  strokeLinecap: 'round',
                   strokeLinejoin: 'miter',
                   strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
                   markerEnd: 'none',
@@ -1609,7 +1643,7 @@ export default function ConversionEdge({
                   strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
                   mixBlendMode: 'multiply',
                   fill: 'none',
-                  strokeLinecap: 'butt',
+                  strokeLinecap: 'round',
                   strokeLinejoin: 'miter',
                   strokeDasharray: ((data?.effectiveWeight !== undefined ? data.effectiveWeight : effectiveWeight) === 0) ? '5,5' : 'none',
                   markerEnd: 'none',
