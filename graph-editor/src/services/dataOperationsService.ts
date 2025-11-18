@@ -1094,21 +1094,68 @@ class DataOperationsService {
       // Filter node to only include the relevant case data
       const filteredNode: any = { case: sourceNode.case };
       
-      const result = await updateManager.handleGraphToFile(
+      console.log('[putCaseToFile] Source node case data:', {
+        hasCase: !!sourceNode.case,
+        hasConnection: !!sourceNode.case?.connection,
+        connection: sourceNode.case?.connection,
+        connectionString: sourceNode.case?.connection_string,
+        filteredNode
+      });
+      
+      // 1) APPEND schedule entry from current variants (keeps history)
+      const appendResult = await updateManager.handleGraphToFile(
         filteredNode,
         caseFile.data,
-        'APPEND', // Use APPEND for case schedules
+        'APPEND', // APPEND to case.schedules[]
         'case',
         { interactive: true, validateOnly: true } // Don't apply in UpdateManager, we'll use applyChanges
       );
       
-      if (!result.success || !result.changes) {
-        toast.error('Failed to update case file');
+      console.log('[putCaseToFile] APPEND result:', {
+        success: appendResult.success,
+        changesCount: appendResult.changes?.length,
+        changes: appendResult.changes
+      });
+      
+      if (!appendResult.success || !appendResult.changes) {
+        toast.error('Failed to update case file (schedule)');
         return;
       }
       
       const updatedFileData = structuredClone(caseFile.data);
-      applyChanges(updatedFileData, result.changes);
+      applyChanges(updatedFileData, appendResult.changes);
+      
+      // 2) UPDATE case metadata (connection, etc.) at top level
+      const updateResult = await updateManager.handleGraphToFile(
+        filteredNode,
+        updatedFileData,
+        'UPDATE', // UPDATE case.variants + connection fields
+        'case',
+        { interactive: true, validateOnly: true }
+      );
+      
+      console.log('[putCaseToFile] UPDATE result:', {
+        success: updateResult.success,
+        changesCount: updateResult.changes?.length,
+        errorsCount: updateResult.errors?.length,
+        changes: updateResult.changes,
+        errors: updateResult.errors,
+        updatedFileDataBefore: structuredClone(updatedFileData)
+      });
+      
+      // Apply changes even if there were some errors (as long as we have changes)
+      if (updateResult.changes && updateResult.changes.length > 0) {
+        applyChanges(updatedFileData, updateResult.changes);
+        console.log('[putCaseToFile] After applying UPDATE changes:', {
+          hasConnection: !!updatedFileData.case?.connection,
+          connection: updatedFileData.case?.connection,
+          connectionString: updatedFileData.case?.connection_string
+        });
+        
+        if (!updateResult.success) {
+          console.warn('[putCaseToFile] Applied changes despite errors:', updateResult.errors);
+        }
+      }
       
       await fileRegistry.updateFile(`case-${caseId}`, updatedFileData);
       toast.success(`✓ Updated ${caseId}.yaml`, { duration: 2000 });
@@ -1305,7 +1352,9 @@ class DataOperationsService {
         // Cases: fetch gate config, append to schedules[], update graph nodes
         console.log(`[DataOperationsService] getFromSource for case: ${objectId}`);
         
-        // 1. Fetch from source (adapter will append to case file schedules[])
+        // 1. Fetch from source and write to case file
+        // For cases, we manually extract variants_update and write to file
+        // (Unlike params which have daily time_series, cases have discrete schedule snapshots)
         await this.getFromSourceDirect({
           objectType,
           objectId,
@@ -1313,7 +1362,8 @@ class DataOperationsService {
           graph,
           setGraph,
           window,
-          dailyMode: false, // Cases don't use daily mode (single schedule entry)
+          dailyMode: false, // Cases do not use daily time-series; this is a single snapshot
+          versionedCase: true, // Signal to append schedule to case file instead of direct graph apply
           bustCache: false
         });
         
@@ -1421,10 +1471,10 @@ class DataOperationsService {
                       );
                       
                       // Copy rebalanced variants back
-                      const rebalancedNode = updatedGraph.nodes.find((n: any) => 
-                        (n.uuid || n.id) === (node.uuid || node.id)
+                      const rebalancedNode = updatedGraph.nodes.find(
+                        (n: any) => (n.uuid || n.id) === (node.uuid || node.id)
                       );
-                      if (rebalancedNode) {
+                      if (rebalancedNode && rebalancedNode.case?.variants) {
                         node.case.variants = rebalancedNode.case.variants;
                       }
                       
@@ -1479,10 +1529,24 @@ class DataOperationsService {
     paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
     conditionalIndex?: number;
     window?: DateRange; // Optional: date range for fetching
-    dailyMode?: boolean; // If true, fetch daily time-series data
+    dailyMode?: boolean; // For parameters: if true, fetch daily time-series data into file
     bustCache?: boolean; // If true, ignore existing dates and re-fetch everything
+    // For cases: distinguish direct vs versioned/schedule-based path
+    versionedCase?: boolean; // If true AND objectType==='case', append schedule to case file instead of direct graph update
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, dailyMode, bustCache } = options;
+      const {
+        objectType,
+        objectId,
+        targetId,
+        graph,
+        setGraph,
+        paramSlot,
+        conditionalIndex,
+        window,
+        dailyMode,
+        bustCache,
+        versionedCase,
+      } = options;
     
     try {
       let connectionName: string | undefined;
@@ -1822,9 +1886,11 @@ class DataOperationsService {
       // Set context mode: 'daily' if dailyMode is true, otherwise 'aggregate'
       const contextMode = dailyMode ? 'daily' : 'aggregate';
       
-      // Collect all time-series data from all gaps
+      // Collect all time-series data from all gaps (parameters only)
       const allTimeSeriesData: Array<{ date: string; n: number; k: number; p: number }> = [];
       let updateData: any = {};
+      // For cases: capture the most recent transformed raw result (e.g. variants_update, gate_id)
+      let lastResultRaw: any = null;
       
       // Store query info for daily mode storage
       let queryParamsForStorage: any = undefined;
@@ -1840,8 +1906,9 @@ class DataOperationsService {
         fullQueryForStorage = queryString || JSON.stringify(dsl);
       }
       
-      // Determine data source type from connection name
-      const dataSourceType = connectionName?.includes('amplitude') ? 'amplitude' : 'api';
+      // Determine data source type from connection name (used for parameter files)
+      const dataSourceType =
+        connectionName?.includes('amplitude') ? 'amplitude' : 'api';
       
       // Chain requests for each contiguous gap
       for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
@@ -1920,6 +1987,11 @@ class DataOperationsService {
             timeSeriesValue: result.raw?.time_series,
             window: fetchWindow,
           });
+          
+          // Capture raw data for cases (used for direct graph updates)
+          if (objectType === 'case') {
+            lastResultRaw = result.raw;
+          }
         
           // Collect time-series data if in daily mode
           if (dailyMode && result.raw?.time_series) {
@@ -1956,24 +2028,45 @@ class DataOperationsService {
         }
       }
       
-      // Show success message after all gaps are fetched
+      // Show success message after all gaps are fetched (for non-daily/direct pulls)
       if (actualFetchWindows.length > 1) {
         toast.success(`✓ Fetched all ${actualFetchWindows.length} gaps`, { id: 'das-fetch' });
       } else if (!dailyMode) {
         toast.success(`Fetched data from source`, { id: 'das-fetch' });
       }
       
-      // Add data_source metadata for direct external connections
+      // Add data_source metadata for direct external connections (graph-level provenance)
       if (!dailyMode) {
         updateData.data_source = {
-          type: connectionName?.includes('amplitude') ? 'amplitude' : 'api',
+          type: connectionName?.includes('amplitude')
+            ? 'amplitude'
+            : connectionName?.includes('statsig')
+            ? 'statsig'
+            : 'api',
           retrieved_at: new Date().toISOString(),
           query: dsl,
           full_query: dsl.query || JSON.stringify(dsl),
         };
       }
       
-      // 6a. If dailyMode is true, merge all collected time-series data
+      // For cases (Statsig, etc.), extract variants from raw transformed data
+      // Adapters expose variant weights as `variants_update` (or `variants`) in transform output
+      if (objectType === 'case' && !dailyMode && lastResultRaw) {
+        console.log('[DataOperationsService] Extracting case variants from raw data', {
+          rawKeys: Object.keys(lastResultRaw),
+          hasVariantsUpdate: !!(lastResultRaw as any).variants_update,
+          hasVariants: !!(lastResultRaw as any).variants,
+        });
+        const rawAny: any = lastResultRaw;
+        if (rawAny.variants_update) {
+          updateData.variants = rawAny.variants_update;
+        } else if (rawAny.variants) {
+          updateData.variants = rawAny.variants;
+        }
+      }
+      
+      // 6a. If dailyMode is true, write data to files
+      // For parameters: write time-series data
       if (dailyMode && allTimeSeriesData.length > 0 && objectType === 'parameter' && objectId) {
         try {
           // Get parameter file (re-read to get latest state)
@@ -2026,7 +2119,65 @@ class DataOperationsService {
           console.error('[DataOperationsService] Failed to append time-series data:', error);
           // Don't fail the whole operation, just log the error
         }
-      } else if (!dailyMode) {
+      }
+      
+      // 6b. For versioned case fetches: write schedule entry to case file
+      // NOTE: Controlled by versionedCase flag, NOT dailyMode (dailyMode is parameter-specific and for parameters only)
+      if (versionedCase && objectType === 'case' && objectId && lastResultRaw) {
+        try {
+          const caseFileId = `case-${objectId}`;
+          const caseFile = fileRegistry.getFile(caseFileId);
+          
+          if (!caseFile) {
+            console.error('[DataOperationsService] Case file not found for versioned case fetch:', { caseFileId });
+            toast.error(`Case file not found: ${objectId}`);
+            return;
+          }
+          
+          // Extract variants from transform output
+          const variants = lastResultRaw.variants_update || lastResultRaw.variants;
+          if (!variants) {
+            console.error('[DataOperationsService] No variants found in transform output');
+            toast.error('No variant data returned from Statsig');
+            return;
+          }
+          
+          // Create new schedule entry
+          const newSchedule = {
+            window_from: window?.start || new Date().toISOString(),
+            window_to: null,
+            variants,
+            // Capture provenance on the schedule itself (case file history)
+            retrieved_at: new Date().toISOString(),
+            source: connectionName?.includes('statsig')
+              ? 'statsig'
+              : connectionName?.includes('amplitude')
+              ? 'amplitude'
+              : 'external',
+          };
+          
+          console.log('[DataOperationsService] Appending case schedule:', newSchedule);
+          
+          const updatedFileData: any = structuredClone(caseFile.data);
+          // Support both legacy root-level schedules and nested case.schedules[]
+          if (Array.isArray(updatedFileData.schedules)) {
+            updatedFileData.schedules.push(newSchedule);
+          } else {
+            updatedFileData.case = updatedFileData.case || {};
+            updatedFileData.case.schedules = updatedFileData.case.schedules || [];
+            updatedFileData.case.schedules.push(newSchedule);
+          }
+          
+          await fileRegistry.updateFile(caseFileId, updatedFileData);
+          toast.success(`✓ Added new schedule entry to case file`);
+          
+        } catch (error) {
+          console.error('[DataOperationsService] Failed to append case schedule:', error);
+          // Don't fail the whole operation, just log the error
+        }
+      }
+      
+      if (!dailyMode) {
         console.log('Extracted data from DAS (using schema terminology):', updateData);
         
         // Calculate stdev and enhance stats if we have n and k (same codepath as file pulls)
@@ -2089,8 +2240,11 @@ class DataOperationsService {
       // 7. Apply directly to graph (only if NOT in dailyMode)
       // When dailyMode is true, the versioned path (getFromSource) will update the graph
       // via getParameterFromFile after the file is updated
-      if (!dailyMode) {
+      if (!dailyMode && objectType === 'parameter') {
         if (!targetId || !graph || !setGraph) {
+          console.error('[DataOperationsService] Cannot apply to graph: missing context', {
+            targetId, hasGraph: !!graph, hasSetGraph: !!setGraph
+          });
           toast.error('Cannot apply to graph: missing context');
           return;
         }
@@ -2098,6 +2252,9 @@ class DataOperationsService {
         // Find the target edge
         const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
         if (!targetEdge) {
+          console.error('[DataOperationsService] Target edge not found in graph', {
+            targetId, edgeCount: graph.edges?.length
+          });
           toast.error('Target edge not found in graph');
           return;
         }
@@ -2191,8 +2348,119 @@ class DataOperationsService {
           toast('No changes to apply', { icon: 'ℹ️' });
         }
       } else {
-        // In dailyMode, we've already updated the file - graph will be updated by getFromSource via getParameterFromFile
-        console.log('[DataOperationsService] Skipping direct graph update (dailyMode=true, versioned path will handle it)');
+        // In dailyMode, we've already updated the parameter file - graph will be updated by getFromSource via getParameterFromFile
+        console.log(
+          '[DataOperationsService] Skipping direct graph update for parameters (dailyMode=true, versioned path will handle it)'
+        );
+      }
+      
+      // 8. For cases in direct mode: Apply variants directly to graph nodes (no case file)
+      // (External → Graph Case Node: see Mapping 7 in SCHEMA_FIELD_MAPPINGS.md)
+      if (objectType === 'case' && !dailyMode && !versionedCase && graph && setGraph && targetId) {
+        if (!updateData.variants) {
+          console.warn('[DataOperationsService] No variants data to apply to case node');
+          return;
+        }
+        
+        console.log('[DataOperationsService] Applying case variants directly to graph', {
+          variants: updateData.variants,
+          data_source: updateData.data_source,
+        });
+        
+        const caseNode = graph.nodes?.find((n: any) => 
+          (n.uuid === targetId || n.id === targetId) && n.type === 'case'
+        );
+        
+        if (!caseNode) {
+          console.error('[DataOperationsService] Case node not found', { targetId });
+          toast.error('Case node not found in graph');
+          return;
+        }
+        
+        // Build payload for UpdateManager: variants + data_source provenance
+        const caseDataSource = updateData.data_source
+          ? {
+              ...updateData.data_source,
+              // Attach experiment/gate id if available from transform or DSL
+              experiment_id:
+                (lastResultRaw as any)?.gate_id ??
+                (dsl as any)?.gate_id ??
+                updateData.data_source.experiment_id,
+            }
+          : undefined;
+
+        const payload: any = {
+          variants: updateData.variants,
+        };
+        if (caseDataSource) {
+          payload.data_source = caseDataSource;
+        }
+
+        // Use UpdateManager to apply variants (and data_source) to case node (respects override flags)
+        const updateResult = await updateManager.handleExternalToGraph(
+          payload,
+          caseNode,
+          'UPDATE',
+          'case',
+          { interactive: false }
+        );
+        
+        if (!updateResult.success) {
+          console.error('[DataOperationsService] UpdateManager failed for case', updateResult);
+          toast.error('Failed to apply case updates');
+          return;
+        }
+        
+        // Apply changes to graph
+        if (updateResult.changes && updateResult.changes.length > 0) {
+          const nextGraph = structuredClone(graph);
+          const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+            n.uuid === targetId || n.id === targetId
+          );
+          
+          if (nodeIndex >= 0) {
+            applyChanges(nextGraph.nodes[nodeIndex], updateResult.changes);
+            
+            // Auto-rebalance variants if needed
+            if (
+              (updateResult.metadata as any)?.requiresVariantRebalance &&
+              nextGraph.nodes[nodeIndex].case &&
+              Array.isArray(nextGraph.nodes[nodeIndex].case.variants)
+            ) {
+              const variantIndex =
+                nextGraph.nodes[nodeIndex].case.variants.findIndex(
+                  (v: any) => !v.weight_overridden
+                );
+              
+              if (variantIndex >= 0) {
+                const rebalancedGraph = updateManager.rebalanceVariantWeights(
+                  nextGraph,
+                  targetId,
+                  variantIndex,
+                  false
+                );
+                
+                // Copy rebalanced node back
+                const rebalancedNode = rebalancedGraph.nodes.find(
+                  (n: any) => (n.uuid || n.id) === targetId
+                );
+                if (rebalancedNode && rebalancedNode.case?.variants) {
+                  nextGraph.nodes[nodeIndex].case.variants =
+                    rebalancedNode.case.variants;
+                }
+              }
+            }
+            
+            if (nextGraph.metadata) {
+              nextGraph.metadata.updated_at = new Date().toISOString();
+            }
+            
+            setGraph(nextGraph);
+            toast.success('✓ Updated case from Statsig');
+          }
+        } else {
+          toast('No changes to apply', { icon: 'ℹ️' });
+        }
       }
       
     } catch (error) {

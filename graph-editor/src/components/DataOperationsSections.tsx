@@ -77,7 +77,8 @@ export function getNodeDataSections(
     const caseId = node.case.id;
     const file = caseId ? fileRegistry.getFile(`case-${caseId}`) : null;
     const hasFile = !!file;
-    const hasFileConnection = hasFile && !!file.data?.connection;
+    // For case files, connection is at file.data.case.connection (per case-parameter-schema)
+    const hasFileConnection = hasFile && !!file.data?.case?.connection;
     const hasDirectConnection = !!node.case.connection;
     const hasAnyConnection = hasDirectConnection || hasFileConnection;
     const canPutToFile = !!caseId;

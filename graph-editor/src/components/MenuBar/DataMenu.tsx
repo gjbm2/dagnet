@@ -398,8 +398,8 @@ export function DataMenu() {
                     </Menubar.Item>
                   )}
                   {section.operations.getFromSource && (
-                    <Menubar.Item 
-                      className="menubar-item"
+          <Menubar.Item 
+            className="menubar-item" 
                       onSelect={() => handleSectionGetFromSource(section)}
                       style={{
                         display: 'flex',
@@ -407,7 +407,7 @@ export function DataMenu() {
                         justifyContent: 'space-between',
                         gap: '16px'
                       }}
-                    >
+          >
                       <span>Get from Source</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <DatabaseZap size={12} />
@@ -416,11 +416,11 @@ export function DataMenu() {
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>+</span>
                         <TrendingUpDown size={12} />
                       </div>
-                    </Menubar.Item>
+          </Menubar.Item>
                   )}
                   {section.operations.getFromFile && (
-                    <Menubar.Item 
-                      className="menubar-item"
+          <Menubar.Item 
+            className="menubar-item" 
                       onSelect={() => handleSectionGetFromFile(section)}
                       style={{
                         display: 'flex',
@@ -428,18 +428,18 @@ export function DataMenu() {
                         justifyContent: 'space-between',
                         gap: '16px'
                       }}
-                    >
+          >
                       <span>Get from File</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Folders size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
                         <TrendingUpDown size={12} />
                       </div>
-                    </Menubar.Item>
+          </Menubar.Item>
                   )}
                   {section.operations.putToFile && (
-                    <Menubar.Item 
-                      className="menubar-item"
+          <Menubar.Item 
+            className="menubar-item" 
                       onSelect={() => handleSectionPutToFile(section)}
                       style={{
                         display: 'flex',
@@ -447,25 +447,25 @@ export function DataMenu() {
                         justifyContent: 'space-between',
                         gap: '16px'
                       }}
-                    >
+          >
                       <span>Put to File</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <TrendingUpDown size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
                         <Folders size={12} />
                       </div>
-                    </Menubar.Item>
+          </Menubar.Item>
                   )}
                 </Menubar.SubContent>
               </Menubar.Sub>
             ))
           ) : (
-            <Menubar.Item 
-              className="menubar-item" 
+          <Menubar.Item 
+            className="menubar-item" 
               disabled
-            >
+          >
               Select edge or node...
-            </Menubar.Item>
+          </Menubar.Item>
           )}
           
           <Menubar.Separator className="menubar-separator" />
