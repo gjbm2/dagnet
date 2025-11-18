@@ -14,6 +14,8 @@ import VariantWeightInput from './VariantWeightInput';
 import { AutomatableField } from './AutomatableField';
 import { isProbabilityMassUnbalanced } from '../utils/rebalanceUtils';
 import toast from 'react-hot-toast';
+import { getAllDataSections, type DataOperationSection } from './DataOperationsSections';
+import { DataSectionSubmenu } from './DataSectionSubmenu';
 
 interface NodeContextMenuProps {
   x: number;
@@ -139,7 +141,13 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   };
 
   const handleGetCaseFromSourceDirect = () => {
-    if (!caseConnectionInfo.hasAnyConnection) {
+    // Check for connection (file connection OR direct connection)
+    const file = nodeData?.case?.id ? fileRegistry.getFile(`case-${nodeData.case.id}`) : null;
+    const hasFileConn = !!file?.data?.connection;
+    const hasDirectConnection = !!nodeData?.case?.connection;
+    const hasAnyConnection = hasDirectConnection || hasFileConn;
+    
+    if (!hasAnyConnection) {
       toast.error('No connection configured for case');
       return;
     }
@@ -178,6 +186,35 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       window: undefined
     });
     onClose();
+  };
+
+  // Generic section-based handlers (for refactored rendering)
+  const handleSectionGetFromFile = (section: DataOperationSection) => {
+    if (section.objectType === 'case') {
+      handleGetCaseFromFile();
+    } else if (section.objectType === 'node') {
+      handleGetNodeFromFile();
+    }
+  };
+
+  const handleSectionPutToFile = (section: DataOperationSection) => {
+    if (section.objectType === 'case') {
+      handlePutCaseToFile();
+    } else if (section.objectType === 'node') {
+      handlePutNodeToFile();
+    }
+  };
+
+  const handleSectionGetFromSourceDirect = (section: DataOperationSection) => {
+    if (section.objectType === 'case') {
+      handleGetCaseFromSourceDirect();
+    }
+  };
+
+  const handleSectionGetFromSource = (section: DataOperationSection) => {
+    if (section.objectType === 'case') {
+      handleGetCaseFromSourceVersioned();
+    }
   };
 
   const handleShowInNewGraph = async () => {
@@ -277,7 +314,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       </div>
 
       {/* Case Variant Weights (if case node) */}
-      {isCaseNode && nodeData?.case?.variants && nodeData.case.variants.length > 0 && (
+      {!!nodeData?.case && nodeData?.case?.variants && nodeData.case.variants.length > 0 && (
         <>
           <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
           <div style={{ padding: '8px 12px', fontSize: '12px', fontWeight: '600', color: '#333' }}>
@@ -370,250 +407,27 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
         </>
       )}
 
-      {/* Data operations (if any files connected) */}
-      {hasAnyFile && (
+      {/* Data operations (using single source of truth) */}
+      {dataOperationSections.length > 0 && (
         <>
           <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
           
-          {/* Node file submenu */}
-          {canPutNodeToFile && (
-            <div
-              style={{ position: 'relative' }}
-              onMouseEnter={() => handleSubmenuEnter('node')}
+          {/* Render all data operation sections */}
+          {dataOperationSections.map(section => (
+            <DataSectionSubmenu
+              key={section.id}
+              section={section}
+              isOpen={openSubmenu === section.id}
+              onMouseEnter={() => handleSubmenuEnter(section.id)}
               onMouseLeave={handleSubmenuLeave}
-            >
-              <div
-                style={{
-                  padding: '8px 12px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  borderRadius: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  background: openSubmenu === 'node' ? '#f8f9fa' : 'white'
-                }}
-              >
-                <span>Node file</span>
-                <ChevronRight size={14} style={{ color: '#666' }} />
-              </div>
-              
-              {openSubmenu === 'node' && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '100%',
-                    top: 0,
-                    background: 'white',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                    minWidth: '200px',
-                    padding: '4px',
-                    zIndex: 10001,
-                    marginLeft: '4px',
-                    whiteSpace: 'nowrap'
-                  }}
-                  onMouseEnter={handleSubmenuContentEnter}
-                  onMouseLeave={handleSubmenuContentLeave}
-                >
-                  {hasNodeFile && (
-                    <div
-                      onClick={handleGetNodeFromFile}
-                      style={{
-                        padding: '6px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        borderRadius: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '16px'
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                    >
-                      <span>Get data from file</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                        <Folders size={12} />
-                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                        <TrendingUpDown size={12} />
-                      </div>
-                    </div>
-                  )}
-                  <div
-                    onClick={handlePutNodeToFile}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Put data to file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <TrendingUpDown size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <Folders size={12} />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Case data submenu - show if case node has ANY connection OR can put to file (matches node pattern) */}
-          {isCaseNode && (caseConnectionInfo.hasAnyConnection || canPutCaseToFile) && (
-            <div
-              style={{ position: 'relative' }}
-              onMouseEnter={() => handleSubmenuEnter('case')}
-              onMouseLeave={handleSubmenuLeave}
-            >
-              <div
-                style={{
-                  padding: '8px 12px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  borderRadius: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  background: openSubmenu === 'case' ? '#f8f9fa' : 'white'
-                }}
-              >
-                <span>Case Data</span>
-                <ChevronRight size={14} style={{ color: '#666' }} />
-              </div>
-              
-              {openSubmenu === 'case' && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '100%',
-                    top: 0,
-                    background: 'white',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                    minWidth: '200px',
-                    padding: '4px',
-                    zIndex: 10001,
-                    marginLeft: '4px',
-                    whiteSpace: 'nowrap'
-                  }}
-                  onMouseEnter={handleSubmenuContentEnter}
-                  onMouseLeave={handleSubmenuContentLeave}
-                >
-                  {/* Show "Get from Source (direct)" if there's ANY connection (direct OR file) */}
-                  {caseConnectionInfo.hasAnyConnection && (
-                    <div
-                      onClick={handleGetCaseFromSourceDirect}
-                      style={{
-                        padding: '6px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        borderRadius: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '16px'
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                    >
-                      <span>Get from Source (direct){caseConnectionName ? ` (${caseConnectionName})` : ''}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                        <Database size={12} />
-                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                        <TrendingUpDown size={12} />
-                      </div>
-                    </div>
-                  )}
-                  {/* Show "Get from Source" (versioned) only if file exists AND has connection */}
-                  {caseConnectionInfo.hasFileConnection && (
-                    <div
-                      onClick={handleGetCaseFromSourceVersioned}
-                      style={{
-                        padding: '6px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        borderRadius: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '16px'
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                    >
-                      <span>Get from Source{caseConnectionName ? ` (${caseConnectionName})` : ''}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                        <DatabaseZap size={12} />
-                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                        <Folders size={12} />
-                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>+</span>
-                        <TrendingUpDown size={12} />
-                      </div>
-                    </div>
-                  )}
-                  {/* Show "Get from File" only if file exists (matches node pattern) */}
-                  {hasCaseFile && (
-                    <div
-                      onClick={handleGetCaseFromFile}
-                      style={{
-                        padding: '6px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        borderRadius: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '16px'
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                    >
-                      <span>Get data from file</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                        <Folders size={12} />
-                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                        <TrendingUpDown size={12} />
-                      </div>
-                    </div>
-                  )}
-                  {/* Show "Put to File" always (submenu already checked canPutCaseToFile - matches node pattern) */}
-                  <div
-                    onClick={handlePutCaseToFile}
-                    style={{
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      borderRadius: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '16px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-                  >
-                    <span>Put data to file</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
-                      <TrendingUpDown size={12} />
-                      <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
-                      <Folders size={12} />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+              onSubmenuContentEnter={handleSubmenuContentEnter}
+              onSubmenuContentLeave={handleSubmenuContentLeave}
+              onGetFromFile={handleSectionGetFromFile}
+              onPutToFile={handleSectionPutToFile}
+              onGetFromSource={handleSectionGetFromSource}
+              onGetFromSourceDirect={handleSectionGetFromSourceDirect}
+            />
+          ))}
         </>
       )}
 

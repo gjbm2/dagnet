@@ -7,6 +7,8 @@ import { BatchOperationsModal } from '../modals/BatchOperationsModal';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import type { BatchOperationType } from '../modals/BatchOperationsModal';
+import { getAllDataSections, type DataOperationSection } from '../DataOperationsSections';
+import { Database, DatabaseZap, Folders, TrendingUpDown } from 'lucide-react';
 
 /**
  * Data Menu
@@ -179,289 +181,6 @@ export function DataMenu() {
   };
   
   // Context-dependent operations
-  const handleGetFromFile = async () => {
-    if (!isGraphTab || !graph) {
-      toast.error('No graph loaded');
-      return;
-    }
-    
-    // Determine what's selected
-    if (selectedEdgeId) {
-      const edge = graph.edges?.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId);
-      if (!edge) {
-        toast.error('Selected edge not found');
-        return;
-      }
-      
-      // Check which parameter slot has a file connection
-      const paramId = edge.p?.id || edge.cost_gbp?.id || edge.cost_time?.id;
-      if (!paramId) {
-        toast.error('No parameter file connected to selected edge');
-        return;
-      }
-      
-      const paramSlot = edge.p?.id ? 'p' : edge.cost_gbp?.id ? 'cost_gbp' : 'cost_time';
-      
-      try {
-        await dataOperationsService.getParameterFromFile({
-          paramId,
-          edgeId: selectedEdgeId,
-          graph,
-          setGraph: handleSetGraph,
-          window: windowState || undefined,
-        });
-        toast.success('Data loaded from file');
-      } catch (error) {
-        toast.error(`Failed to get data from file: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    } else if (selectedNodeId) {
-      const node = graph.nodes?.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-      if (!node) {
-        toast.error('Selected node not found');
-        return;
-      }
-      
-      // Check for case file first, then node file
-      const caseId = node.case?.id;
-      const nodeFileId = node.id; // Use node.id, not node.node_id
-      
-      if (caseId) {
-        // Get case data from file
-        try {
-          await dataOperationsService.getCaseFromFile({
-            caseId,
-            nodeId: selectedNodeId,
-            graph,
-            setGraph: handleSetGraph,
-          });
-          toast.success('Case data loaded from file');
-        } catch (error) {
-          toast.error(`Failed to get case from file: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      } else if (nodeFileId) {
-        // Get node data from file
-        try {
-          await dataOperationsService.getNodeFromFile({
-            nodeId: nodeFileId,
-            graph,
-            setGraph: handleSetGraph,
-            targetNodeUuid: selectedNodeId,
-          });
-          toast.success('Node data loaded from file');
-        } catch (error) {
-          toast.error(`Failed to get node from file: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      } else {
-        toast.error('No case or node file connected to selected node');
-      }
-    } else {
-      toast.error('No edge or node selected');
-    }
-  };
-  
-  const handleGetFromSource = async () => {
-    if (!isGraphTab || !graph) {
-      toast.error('No graph loaded');
-      return;
-    }
-    
-    if (selectedEdgeId) {
-      const edge = graph.edges?.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId);
-      if (!edge) {
-        toast.error('Selected edge not found');
-        return;
-      }
-      
-      const paramId = edge.p?.id || edge.cost_gbp?.id || edge.cost_time?.id;
-      if (!paramId) {
-        toast.error('No parameter file connected to selected edge');
-        return;
-      }
-      
-      const paramSlot = edge.p?.id ? 'p' : edge.cost_gbp?.id ? 'cost_gbp' : 'cost_time';
-      
-      try {
-        await dataOperationsService.getFromSource({
-          objectType: 'parameter',
-          objectId: paramId,
-          targetId: selectedEdgeId,
-          graph,
-          setGraph: handleSetGraph,
-          paramSlot,
-          window: windowState || undefined,
-        });
-      } catch (error) {
-        toast.error(`Failed to get data from source: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    } else if (selectedNodeId) {
-      const node = graph.nodes?.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-      if (!node) {
-        toast.error('Selected node not found');
-        return;
-      }
-      
-      const caseId = node.case?.id;
-      if (!caseId) {
-        toast.error('No case file connected to selected node');
-        return;
-      }
-      
-      try {
-        await dataOperationsService.getFromSource({
-          objectType: 'case',
-          objectId: caseId,
-          targetId: selectedNodeId,
-          graph,
-          setGraph: handleSetGraph,
-        });
-      } catch (error) {
-        toast.error(`Failed to get case from source: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    } else {
-      toast.error('No edge or node selected');
-    }
-  };
-  
-  const handleGetFromSourceDirect = async () => {
-    if (!isGraphTab || !graph) {
-      toast.error('No graph loaded');
-      return;
-    }
-    
-    if (selectedEdgeId) {
-      // Handle edge (parameter) direct connection
-      const edge = graph.edges?.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId);
-      if (!edge) {
-        toast.error('Selected edge not found');
-        return;
-      }
-      
-      const paramSlot = edge.p?.connection ? 'p' : edge.cost_gbp?.connection ? 'cost_gbp' : edge.cost_time?.connection ? 'cost_time' : undefined;
-      if (!paramSlot) {
-        toast.error('No direct connection on selected edge');
-        return;
-      }
-      
-      try {
-        await dataOperationsService.getFromSourceDirect({
-          objectType: 'parameter',
-          objectId: '', // Direct connection, no file
-          targetId: selectedEdgeId,
-          graph,
-          setGraph: handleSetGraph,
-          paramSlot,
-          window: windowState || undefined,
-          dailyMode: false, // Direct to graph, not daily mode
-        });
-      } catch (error) {
-        toast.error(`Failed to get data from source (direct): ${error instanceof Error ? error.message : String(error)}`);
-      }
-    } else if (selectedNodeId) {
-      // Handle node (case) direct connection
-      const node = graph.nodes?.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-      if (!node) {
-        toast.error('Selected node not found');
-        return;
-      }
-      
-      if (!node.case?.connection) {
-        toast.error('No direct connection on selected node');
-        return;
-      }
-      
-      try {
-        await dataOperationsService.getFromSourceDirect({
-          objectType: 'case',
-          objectId: '', // Direct connection, no file
-          targetId: selectedNodeId,
-          graph,
-          setGraph: handleSetGraph,
-          window: windowState || undefined,
-          dailyMode: false,
-        });
-      } catch (error) {
-        toast.error(`Failed to get case from source (direct): ${error instanceof Error ? error.message : String(error)}`);
-      }
-    } else {
-      toast.error('No edge or node selected');
-    }
-  };
-  
-  const handlePutToFile = async () => {
-    if (!isGraphTab || !graph) {
-      toast.error('No graph loaded');
-      return;
-    }
-    
-    if (selectedEdgeId) {
-      const edge = graph.edges?.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId);
-      if (!edge) {
-        toast.error('Selected edge not found');
-        return;
-      }
-      
-      const paramId = edge.p?.id || edge.cost_gbp?.id || edge.cost_time?.id;
-      if (!paramId) {
-        toast.error('No parameter file connected to selected edge');
-        return;
-      }
-      
-      const paramSlot = edge.p?.id ? 'p' : edge.cost_gbp?.id ? 'cost_gbp' : 'cost_time';
-      
-      try {
-        await dataOperationsService.putParameterToFile({
-          paramId,
-          edgeId: selectedEdgeId,
-          graph,
-          setGraph: handleSetGraph,
-        });
-        toast.success('Data saved to file');
-      } catch (error) {
-        toast.error(`Failed to put data to file: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    } else if (selectedNodeId) {
-      const node = graph.nodes?.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-      if (!node) {
-        toast.error('Selected node not found');
-        return;
-      }
-      
-      // Check for case file first, then node file
-      const caseId = node.case?.id;
-      const nodeFileId = node.id; // Use node.id, not node.node_id
-      
-      if (caseId) {
-        // Put case data to file
-        try {
-          await dataOperationsService.putCaseToFile({
-            caseId,
-            nodeId: selectedNodeId,
-            graph,
-            setGraph: handleSetGraph,
-          });
-          toast.success('Case data saved to file');
-        } catch (error) {
-          toast.error(`Failed to put case to file: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      } else if (nodeFileId) {
-        // Put node data to file
-        try {
-          await dataOperationsService.putNodeToFile({
-            nodeId: nodeFileId,
-            graph,
-            setGraph: handleSetGraph,
-          });
-          toast.success('Node data saved to file');
-        } catch (error) {
-          toast.error(`Failed to put node to file: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      } else {
-        toast.error('No case or node file connected');
-      }
-    } else {
-      toast.error('No edge or node selected');
-    }
-  };
   
   const handleConnections = async () => {
     // Open connections configuration file
@@ -486,6 +205,90 @@ export function DataMenu() {
     
     await operations.openTab(credentialsItem, 'interactive');
   };
+
+  // Section-based handlers for data operations
+  const handleSectionGetFromFile = (section: DataOperationSection) => {
+    if (!graph) return;
+    if (section.objectType === 'parameter') {
+      dataOperationsService.getParameterFromFile({
+        paramId: section.objectId,
+        edgeId: section.targetId,
+        graph,
+        setGraph: handleSetGraph,
+      });
+    } else if (section.objectType === 'case') {
+      dataOperationsService.getCaseFromFile({
+        caseId: section.objectId,
+        nodeId: section.targetId,
+        graph,
+        setGraph: handleSetGraph,
+      });
+    } else if (section.objectType === 'node') {
+      dataOperationsService.getNodeFromFile({
+        nodeId: section.objectId,
+        graph,
+        setGraph: handleSetGraph,
+        targetNodeUuid: section.targetId,
+      });
+    }
+  };
+
+  const handleSectionPutToFile = (section: DataOperationSection) => {
+    if (!graph) return;
+    if (section.objectType === 'parameter') {
+      dataOperationsService.putParameterToFile({
+        paramId: section.objectId,
+        edgeId: section.targetId,
+        graph,
+        setGraph: handleSetGraph,
+      });
+    } else if (section.objectType === 'case') {
+      dataOperationsService.putCaseToFile({
+        caseId: section.objectId,
+        nodeId: section.targetId,
+        graph,
+        setGraph: handleSetGraph,
+      });
+    } else if (section.objectType === 'node') {
+      dataOperationsService.putNodeToFile({
+        nodeId: section.objectId,
+        graph,
+        setGraph: handleSetGraph,
+      });
+    }
+  };
+
+  const handleSectionGetFromSourceDirect = (section: DataOperationSection) => {
+    if (!graph) return;
+    dataOperationsService.getFromSourceDirect({
+      objectType: section.objectType as 'parameter' | 'case' | 'node',
+      objectId: section.objectId,
+      targetId: section.targetId,
+      graph,
+      setGraph: handleSetGraph,
+      paramSlot: section.paramSlot,
+      conditionalIndex: section.conditionalIndex,
+      window: windowState || undefined,
+      dailyMode: false,
+    });
+  };
+
+  const handleSectionGetFromSource = (section: DataOperationSection) => {
+    if (!graph) return;
+    dataOperationsService.getFromSource({
+      objectType: section.objectType as 'parameter' | 'case' | 'node',
+      objectId: section.objectId,
+      targetId: section.targetId,
+      graph,
+      setGraph: handleSetGraph,
+      paramSlot: section.paramSlot,
+      conditionalIndex: section.conditionalIndex,
+      window: windowState || undefined,
+    });
+  };
+  
+  // Get all data operation sections using single source of truth
+  const dataOperationSections = getAllDataSections(selectedNodeId, selectedEdgeId, graph);
   
   // Determine if context-dependent items should be enabled
   const hasSelection = selectedEdgeId !== null || selectedNodeId !== null;
@@ -505,175 +308,11 @@ export function DataMenu() {
     graphEdgeCount: graph?.edges?.length,
   });
   
-  // Check if selected edge/node has file connections
-  let hasFileConnection = false; // File exists AND has connection - for "Get from Source" (versioned)
-  let hasAnyFile = false; // File exists (for "Get from File")
-  let canPutToFile = false; // Can put to file (file exists OR has ID - for "Put to File")
-  let hasDirectConnection = false; // Direct connection on edge/node (for "Get from Source (direct)")
-  let hasAnyConnection = false; // ANY connection (direct OR file) - for "Get from Source (direct)"
-  
-  if (hasEdgeSelection && graph) {
-    const edge = graph.edges?.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId);
-    if (edge) {
-      // Check each parameter slot (p, cost_gbp, cost_time)
-      const paramSlots: Array<'p' | 'cost_gbp' | 'cost_time'> = ['p', 'cost_gbp', 'cost_time'];
-      
-      for (const slot of paramSlots) {
-        const param = slot === 'p' ? edge.p : edge[slot];
-        const paramId = param?.id;
-        
-        // Check for direct connection on edge
-        if (param?.connection) {
-          hasDirectConnection = true;
-          hasAnyConnection = true;
-        }
-        
-        // Check for connection in file
-        if (paramId) {
-          const file = fileRegistry.getFile(`parameter-${paramId}`);
-          if (file) {
-            hasAnyFile = true; // File exists
-            canPutToFile = true; // Can put to file (file exists)
-            if (file.data?.connection) {
-              hasFileConnection = true; // File exists AND has connection
-              hasAnyConnection = true; // Any connection (file or direct)
-            }
-          } else {
-            // File doesn't exist but paramId exists - can create file
-            canPutToFile = true;
-          }
-        }
-      }
-    }
-  }
-  
-  if (hasNodeSelection && graph) {
-    console.log('[DataMenu] Checking node selection:', {
-      hasNodeSelection,
-      selectedNodeId,
-      graphExists: !!graph,
-      nodeCount: graph?.nodes?.length,
-    });
-    
-    const node = graph.nodes?.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-    if (node) {
-      console.log('[DataMenu] Node found:', {
-        selectedNodeId,
-        nodeId: node.id,
-        nodeUuid: node.uuid,
-        hasCase: !!node.case,
-        caseId: node.case?.id,
-        caseConnection: node.case?.connection,
-      });
-      
-      // Check for case file connection
-      const caseId = node.case?.id;
-      if (caseId) {
-        const file = fileRegistry.getFile(`case-${caseId}`);
-        console.log('[DataMenu] Case file check:', {
-          caseId,
-          fileExists: !!file,
-          fileConnection: file?.data?.connection,
-        });
-        if (file) {
-          hasAnyFile = true; // File exists
-          canPutToFile = true; // Can put to file (file exists)
-          if (file.data?.connection) {
-            hasFileConnection = true; // File exists AND has connection
-            hasAnyConnection = true; // Any connection
-          }
-        } else {
-          // Case file doesn't exist but caseId exists - can create file
-          canPutToFile = true;
-        }
-      }
-      
-      // Check for direct case connection (regardless of file existence - matches parameter pattern)
-      if (node.case?.connection) {
-        console.log('[DataMenu] Direct case connection found');
-        hasDirectConnection = true;
-        hasAnyConnection = true;
-      }
-      
-      // Check for node file connection
-      // Note: Nodes use node.id as the file reference (like NodeContextMenu does)
-      // If node has an id, it can have a node file (even if file doesn't exist yet)
-      const nodeFileId = node.id;
-      console.log('[DataMenu] Node file check:', {
-        nodeFileId,
-        nodeId: node.id,
-        willCheckFile: !!nodeFileId,
-      });
-      if (nodeFileId) {
-        const file = fileRegistry.getFile(`node-${nodeFileId}`);
-        console.log('[DataMenu] Node file lookup result:', {
-          nodeFileId,
-          fileId: `node-${nodeFileId}`,
-          fileExists: !!file,
-          willSetCanPutToFile: true, // Always true if nodeFileId exists
-        });
-        if (file) {
-          hasAnyFile = true; // File exists
-          canPutToFile = true; // Can put to file (file exists)
-          console.log('[DataMenu] Node file EXISTS - setting hasAnyFile and canPutToFile');
-        } else {
-          // Node file doesn't exist but nodeFileId exists - can create file
-          canPutToFile = true;
-          console.log('[DataMenu] Node file DOES NOT EXIST but nodeFileId exists - setting canPutToFile=true');
-        }
-        console.log('[DataMenu] After node file check:', { hasAnyFile, canPutToFile });
-      } else {
-        console.log('[DataMenu] No nodeFileId - skipping node file check');
-      }
-    } else {
-      console.warn('[DataMenu] Node not found:', {
-        selectedNodeId,
-        nodeCount: graph?.nodes?.length,
-        nodeIds: graph?.nodes?.map((n: any) => ({ id: n.id, uuid: n.uuid })),
-      });
-    }
-  }
-  
   // Debug logging
-  if (hasSelection) {
-    console.log('[DataMenu] Connection check:', {
-      hasSelection,
-      hasEdgeSelection,
-      hasNodeSelection,
-      selectedEdgeId,
-      selectedNodeId,
-      hasAnyFile,
-      canPutToFile,
-      hasFileConnection,
-      hasDirectConnection,
-      hasAnyConnection,
-      isGraphTab,
-      // Calculate disabled states for menu items
-      getFromFileDisabled: !isGraphTab || !hasSelection || !hasAnyFile,
-      getFromSourceDisabled: !isGraphTab || !hasSelection || !hasFileConnection,
-      getFromSourceDirectDisabled: !isGraphTab || !hasEdgeSelection || !hasAnyConnection,
-      putToFileDisabled: !isGraphTab || !hasSelection || !canPutToFile,
-    });
-  }
-  
-  // Force re-render of menu content when selection changes
-  const menuContentKey = `${selectedEdgeId || 'no-edge'}-${selectedNodeId || 'no-node'}-${canPutToFile ? 'can-put' : 'cannot-put'}`;
-  
-  // Debug: Log the actual disabled value that will be used
-  const putToFileDisabled = !isGraphTab || !hasSelection || !canPutToFile;
-  console.log('[DataMenu] Put to File disabled (final):', {
-    isGraphTab,
-    hasSelection,
-    canPutToFile,
-    putToFileDisabled,
-    selectedEdgeId,
-    selectedNodeId,
-    menuContentKey,
-  });
   
   return (
     <>
-      <Menubar.Menu key={menuContentKey}>
+      <Menubar.Menu>
         <Menubar.Trigger className="menubar-trigger" onPointerDown={() => {
           if (isGraphTab) {
             const editorState = activeTab?.editorState;
@@ -720,47 +359,114 @@ export function DataMenu() {
           
           <Menubar.Separator className="menubar-separator" />
           
-          {/* Context-dependent operations */}
-          <Menubar.Item 
-            key={`get-from-file-${hasSelection}-${hasAnyFile}`}
-            className="menubar-item" 
-            onSelect={handleGetFromFile}
-            disabled={!isGraphTab || !hasSelection || !hasAnyFile}
-          >
-            Get data from file...
-            {!hasSelection && <div className="menubar-right-slot">(select edge/node)</div>}
-          </Menubar.Item>
-          
-          <Menubar.Item 
-            key={`get-from-source-${hasSelection}-${hasFileConnection}`}
-            className="menubar-item" 
-            onSelect={handleGetFromSource}
-            disabled={!isGraphTab || !hasSelection || !hasFileConnection}
-          >
-            Get data from source...
-            {!hasSelection && <div className="menubar-right-slot">(select edge/node)</div>}
-          </Menubar.Item>
-          
-          <Menubar.Item 
-            key={`get-from-source-direct-${hasSelection}-${hasAnyConnection}`}
-            className="menubar-item" 
-            onSelect={handleGetFromSourceDirect}
-            disabled={!isGraphTab || !hasSelection || !hasAnyConnection}
-          >
-            Get data from source (direct)...
-            {!hasSelection && <div className="menubar-right-slot">(select edge/node)</div>}
-          </Menubar.Item>
-          
-          <Menubar.Item 
-            key={`put-to-file-${hasSelection}-${canPutToFile}-${selectedNodeId}-${selectedEdgeId}`}
-            className="menubar-item" 
-            onSelect={handlePutToFile}
-            disabled={!isGraphTab || !hasSelection || !canPutToFile}
-          >
-            Put data to file...
-            {!hasSelection && <div className="menubar-right-slot">(select edge/node)</div>}
-            {(hasSelection && !canPutToFile) && <div className="menubar-right-slot">(no file ID)</div>}
-          </Menubar.Item>
+          {/* Context-dependent operations (section-based submenus) */}
+          {dataOperationSections.length > 0 ? (
+            dataOperationSections.map(section => (
+              <Menubar.Sub key={section.id}>
+                <Menubar.SubTrigger className="menubar-item">
+                  {section.label}
+                </Menubar.SubTrigger>
+                <Menubar.SubContent 
+                  className="menubar-submenu-content"
+                  style={{
+                    background: 'white',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    minWidth: '180px',
+                    padding: '4px',
+                    zIndex: 99999
+                  }}
+                >
+                  {section.operations.getFromSourceDirect && (
+                    <Menubar.Item 
+                      className="menubar-item"
+                      onSelect={() => handleSectionGetFromSourceDirect(section)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                    >
+                      <span>Get from Source (direct)</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <Database size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
+                    </Menubar.Item>
+                  )}
+                  {section.operations.getFromSource && (
+                    <Menubar.Item 
+                      className="menubar-item"
+                      onSelect={() => handleSectionGetFromSource(section)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                    >
+                      <span>Get from Source</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <DatabaseZap size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <Folders size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>+</span>
+                        <TrendingUpDown size={12} />
+                      </div>
+                    </Menubar.Item>
+                  )}
+                  {section.operations.getFromFile && (
+                    <Menubar.Item 
+                      className="menubar-item"
+                      onSelect={() => handleSectionGetFromFile(section)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                    >
+                      <span>Get from File</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <Folders size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <TrendingUpDown size={12} />
+                      </div>
+                    </Menubar.Item>
+                  )}
+                  {section.operations.putToFile && (
+                    <Menubar.Item 
+                      className="menubar-item"
+                      onSelect={() => handleSectionPutToFile(section)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                    >
+                      <span>Put to File</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+                        <TrendingUpDown size={12} />
+                        <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                        <Folders size={12} />
+                      </div>
+                    </Menubar.Item>
+                  )}
+                </Menubar.SubContent>
+              </Menubar.Sub>
+            ))
+          ) : (
+            <Menubar.Item 
+              className="menubar-item" 
+              disabled
+            >
+              Select edge or node...
+            </Menubar.Item>
+          )}
           
           <Menubar.Separator className="menubar-separator" />
           
