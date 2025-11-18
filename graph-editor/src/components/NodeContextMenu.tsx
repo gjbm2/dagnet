@@ -384,14 +384,14 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                       if (!nodeInGraph) return;
                       
                       const oldGraph = graph;
-                      const nextGraph = updateManager.rebalanceVariantWeights(
+                      const result = updateManager.rebalanceVariantWeights(
                         graph,
                         nodeInGraph.uuid || nodeInGraph.id,
                         currentIdx,
                         true // forceRebalance: true - override _overridden flags when user clicks rebalance
                       );
                       
-                      await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                      await graphMutationService.updateGraph(oldGraph, result.graph, setGraph);
                     }}
                     currentIndex={index}
                     allVariants={allVariants}

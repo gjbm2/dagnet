@@ -1,4 +1,4 @@
-# TODO
+bead labels aren't updating when values change e.g. on data retrieval, revbalances, etc.# TODO
 
 ## Nasty glitches
 - defaulting scenarios to visibility = false on app init / load. wrong.

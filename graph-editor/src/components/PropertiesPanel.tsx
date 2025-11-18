@@ -1682,7 +1682,7 @@ export default function PropertiesPanel({
                                   const { graphMutationService } = await import('../services/graphMutationService');
                                   
                                   const oldGraph = graph;
-                                  const nextGraph = updateManager.rebalanceVariantWeights(
+                                  const result = updateManager.rebalanceVariantWeights(
                                     graph,
                                     selectedNodeId,
                                     currentIndex,
@@ -1690,12 +1690,12 @@ export default function PropertiesPanel({
                                   );
                                   
                                   // Update local state
-                                  const updatedVariants = nextGraph.nodes.find((n: any) => 
+                                  const updatedVariants = result.graph.nodes.find((n: any) => 
                                     n.uuid === selectedNodeId || n.id === selectedNodeId
                                   )?.case?.variants || [];
                                   setCaseData({...caseData, variants: updatedVariants});
                                   
-                                  await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                                  await graphMutationService.updateGraph(oldGraph, result.graph, setGraph);
                                   saveHistoryState('Auto-rebalance case variant weights', selectedNodeId);
                                 }
                               }}
@@ -1997,13 +1997,13 @@ export default function PropertiesPanel({
                               const { graphMutationService } = await import('../services/graphMutationService');
                               
                               const oldGraph = graph;
-                              const nextGraph = updateManager.rebalanceVariantWeights(
+                              const result = updateManager.rebalanceVariantWeights(
                                 graph,
                                 caseNode.uuid || caseNode.id,
                                 variantIndex,
                                 true
                               );
-                              await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
+                              await graphMutationService.updateGraph(oldGraph, result.graph, setGraph);
                               saveHistoryState('Auto-rebalance case variant weights', caseNode.id);
                             }}
                             onClearOverride={() => {

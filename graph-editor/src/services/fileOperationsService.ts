@@ -143,6 +143,32 @@ class FileOperationsService {
             ...(metadata || {})
           }
         };
+      } else if (type === 'case') {
+        // Create case file with proper structure per case-parameter-schema
+        defaultData = {
+          parameter_id: `case-${name}`,
+          parameter_type: 'case',
+          id: name,
+          name,
+          description: '',
+          case: {
+            id: name,
+            status: 'active',
+            variants: [
+              { name: 'control', weight: 0.5 },
+              { name: 'treatment', weight: 0.5 }
+            ],
+            schedules: []
+          },
+          metadata: {
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            author: 'user',
+            version: '1.0.0',
+            status: 'active',
+            ...(metadata || {})
+          }
+        };
       } else {
         defaultData = {
           id: name,

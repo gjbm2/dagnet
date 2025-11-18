@@ -976,7 +976,7 @@ class DataOperationsService {
           return;
         }
         
-        const nextGraph = structuredClone(graph);
+        let nextGraph = structuredClone(graph);
         const nodeIndex = nextGraph.nodes.findIndex((n: any) => n.uuid === nodeId || n.id === nodeId);
         
         if (nodeIndex >= 0) {
@@ -1009,12 +1009,47 @@ class DataOperationsService {
             caseId,
             'node.case.id': nextGraph.nodes[nodeIndex].case?.id,
             'variants.length': nextGraph.nodes[nodeIndex].case?.variants?.length,
-            'variants': nextGraph.nodes[nodeIndex].case?.variants
+            'variants': nextGraph.nodes[nodeIndex].case?.variants,
+            'requiresVariantRebalance': (result.metadata as any)?.requiresVariantRebalance
           });
+          
+          // AUTO-REBALANCE: If UpdateManager flagged this update as needing variant rebalance
+          let overriddenCount = 0;
+          if ((result.metadata as any)?.requiresVariantRebalance) {
+            const variantIndex = nextGraph.nodes[nodeIndex].case.variants?.findIndex((v: any) => !v.weight_overridden) ?? 0;
+            
+            if (variantIndex >= 0) {
+              const { updateManager } = await import('./UpdateManager');
+              const rebalanceResult = updateManager.rebalanceVariantWeights(
+                nextGraph,
+                nextGraph.nodes[nodeIndex].uuid || nextGraph.nodes[nodeIndex].id,
+                variantIndex,
+                false // Don't force - respect override flags
+              );
+              
+              nextGraph = rebalanceResult.graph;
+              overriddenCount = rebalanceResult.overriddenCount;
+              
+              console.log('[DataOperationsService] Rebalanced case variants from file:', {
+                nodeId: nextGraph.nodes[nodeIndex].uuid || nextGraph.nodes[nodeIndex].id,
+                overriddenCount
+              });
+            }
+          }
+          
           if (nextGraph.metadata) {
             nextGraph.metadata.updated_at = new Date().toISOString();
           }
           setGraph(nextGraph);
+          
+          // Show overridden notification if any variants were skipped during rebalancing
+          if (overriddenCount > 0) {
+            toast(`⚠️ ${overriddenCount} variant${overriddenCount > 1 ? 's' : ''} overridden`, { 
+              duration: 3000,
+              icon: '⚠️'
+            });
+          }
+          
           toast.success(`✓ Updated from ${caseId}.yaml`, { duration: 2000 });
         }
       } else {
@@ -1422,6 +1457,7 @@ class DataOperationsService {
               // Update all nodes with this case_id using UpdateManager
               let updatedGraph = structuredClone(graph);
               let updated = false;
+              let totalOverriddenCount = 0; // Track total overridden across all nodes and rebalancing
               
               for (const node of updatedGraph.nodes || []) {
                 if (node.type === 'case' && node.case?.id === objectId) {
@@ -1438,8 +1474,15 @@ class DataOperationsService {
                   console.log('[DataOperationsService] UpdateManager result for case:', {
                     success: updateResult.success,
                     changes: updateResult.changes,
+                    conflicts: updateResult.conflicts,
                     metadata: updateResult.metadata
                   });
+                  
+                  // Track overridden fields from UpdateManager
+                  if (updateResult.conflicts && updateResult.conflicts.length > 0) {
+                    const overriddenCount = updateResult.conflicts.filter(c => c.reason === 'overridden').length;
+                    totalOverriddenCount += overriddenCount;
+                  }
                   
                   if (!updateResult.success) {
                     console.warn('[DataOperationsService] Failed to apply case updates');
@@ -1463,12 +1506,15 @@ class DataOperationsService {
                       // Find first non-overridden variant as origin for rebalancing
                       const variantIndex = node.case.variants?.findIndex((v: any) => !v.weight_overridden) ?? 0;
                       
-                      updatedGraph = updateManager.rebalanceVariantWeights(
+                      const rebalanceResult = updateManager.rebalanceVariantWeights(
                         updatedGraph,
                         node.uuid || node.id,
                         variantIndex,
                         false // Don't force - respect override flags
                       );
+                      
+                      updatedGraph = rebalanceResult.graph;
+                      totalOverriddenCount += rebalanceResult.overriddenCount;
                       
                       // Copy rebalanced variants back
                       const rebalancedNode = updatedGraph.nodes.find(
@@ -1494,6 +1540,14 @@ class DataOperationsService {
                   updatedGraph.metadata.updated_at = new Date().toISOString();
                 }
                 setGraph(updatedGraph);
+                
+                // Show combined overridden count notification
+                if (totalOverriddenCount > 0) {
+                  toast(`⚠️ ${totalOverriddenCount} variant${totalOverriddenCount > 1 ? 's' : ''} overridden`, { 
+                    duration: 3000,
+                    icon: '⚠️'
+                  });
+                }
               }
             }
           }
@@ -2282,8 +2336,20 @@ class DataOperationsService {
           success: updateResult.success,
           changesLength: updateResult.changes?.length,
           changes: updateResult.changes,
+          conflicts: updateResult.conflicts,
           metadata: updateResult.metadata
         });
+        
+        // Notify user of overridden fields
+        if (updateResult.conflicts && updateResult.conflicts.length > 0) {
+          const overriddenCount = updateResult.conflicts.filter(c => c.reason === 'overridden').length;
+          if (overriddenCount > 0) {
+            toast(`⚠️ ${overriddenCount} parameter field${overriddenCount > 1 ? 's' : ''} overridden`, { 
+              duration: 3000,
+              icon: '⚠️'
+            });
+          }
+        }
         
         if (!updateResult.success) {
           toast.error('Failed to apply updates to graph');
@@ -2405,6 +2471,19 @@ class DataOperationsService {
           { interactive: false }
         );
         
+        console.log('[DataOperationsService] Direct case update result:', {
+          success: updateResult.success,
+          changes: updateResult.changes,
+          conflicts: updateResult.conflicts
+        });
+        
+        // Track overridden fields
+        let totalOverriddenCount = 0;
+        if (updateResult.conflicts && updateResult.conflicts.length > 0) {
+          const overriddenCount = updateResult.conflicts.filter(c => c.reason === 'overridden').length;
+          totalOverriddenCount += overriddenCount;
+        }
+        
         if (!updateResult.success) {
           console.error('[DataOperationsService] UpdateManager failed for case', updateResult);
           toast.error('Failed to apply case updates');
@@ -2433,15 +2512,17 @@ class DataOperationsService {
                 );
               
               if (variantIndex >= 0) {
-                const rebalancedGraph = updateManager.rebalanceVariantWeights(
+                const rebalanceResult = updateManager.rebalanceVariantWeights(
                   nextGraph,
                   targetId,
                   variantIndex,
                   false
                 );
                 
+                totalOverriddenCount += rebalanceResult.overriddenCount;
+                
                 // Copy rebalanced node back
-                const rebalancedNode = rebalancedGraph.nodes.find(
+                const rebalancedNode = rebalanceResult.graph.nodes.find(
                   (n: any) => (n.uuid || n.id) === targetId
                 );
                 if (rebalancedNode && rebalancedNode.case?.variants) {
@@ -2456,6 +2537,14 @@ class DataOperationsService {
             }
             
             setGraph(nextGraph);
+            
+            // Show combined notification
+            if (totalOverriddenCount > 0) {
+              toast(`⚠️ ${totalOverriddenCount} variant${totalOverriddenCount > 1 ? 's' : ''} overridden`, { 
+                duration: 3000,
+                icon: '⚠️'
+              });
+            }
             toast.success('✓ Updated case from Statsig');
           }
         } else {

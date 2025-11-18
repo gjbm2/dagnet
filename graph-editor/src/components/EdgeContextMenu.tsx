@@ -375,8 +375,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     const oldGraph = graph;
     const nodeId = caseNode.uuid || caseNode.id;
     if (!nodeId) return;
-    const nextGraph = updateManager.rebalanceVariantWeights(graph, nodeId, variantIndex, true);
-    await graphMutationService.updateGraph(oldGraph, nextGraph, (updatedGraph) => {
+    const result = updateManager.rebalanceVariantWeights(graph, nodeId, variantIndex, true);
+    await graphMutationService.updateGraph(oldGraph, result.graph, (updatedGraph) => {
       onUpdateGraph(updatedGraph, 'Update and balance variant weights', caseNode?.id || caseNode?.uuid);
     });
   }, [graph, edge, caseNode, variantIndex, onUpdateGraph]);
