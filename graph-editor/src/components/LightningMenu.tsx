@@ -81,7 +81,8 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         position: 'fixed',
         top: `${dropdownPosition.top}px`,
         left: `${dropdownPosition.left}px`,
-        transform: 'translateX(-100%)'
+        transform: 'translateX(-100%)',
+        zIndex: 99999
       }}
     >
       <DataOperationsMenu

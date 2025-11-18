@@ -16,6 +16,8 @@ import { ChevronRight } from 'lucide-react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils';
+import { getAllDataSections, type DataOperationSection } from './DataOperationsSections';
+import { DataSectionSubmenu } from './DataSectionSubmenu';
 
 interface EdgeContextMenuProps {
   x: number;
@@ -112,25 +114,64 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   // Check for connected parameters from the actual edge object
   // Check for file-based connections (parameter_id OR p.id) OR direct connections (connection field)
   // Note: parameter_id can be top-level OR nested in p.id (transform.ts maps p.id → parameter_id for ReactFlow)
-  const parameterId = edge?.parameter_id || edge?.p?.id; // Prefer top-level, fallback to nested
-  const hasProbabilityParam = !!parameterId || !!edge?.p?.connection;
   // Check if conditional_p exists (for showing editing UI)
   const hasConditionalP = edge?.conditional_p && edge.conditional_p.length > 0;
-  // Check if ANY conditional_p has a parameter_id or connection (for showing parameter submenu)
-  const hasConditionalParam = edge?.conditional_p?.some((cp: any) => 
-    cp.p?.parameter_id || cp.p?.id || cp.p?.connection
-  ) || false;
-  // Get the first conditional parameter ID (for file operations)
-  const firstConditionalParamId = edge?.conditional_p?.find((cp: any) => 
-    cp.p?.parameter_id || cp.p?.id
-  )?.p?.parameter_id || edge?.conditional_p?.find((cp: any) => 
-    cp.p?.parameter_id || cp.p?.id
-  )?.p?.id;
-  const costGbpParameterId = edge?.cost_gbp_parameter_id || edge?.cost_gbp?.id;
-  const hasCostGbpParam = !!costGbpParameterId || !!edge?.cost_gbp?.connection;
-  const costTimeParameterId = edge?.cost_time_parameter_id || edge?.cost_time?.id;
-  const hasCostTimeParam = !!costTimeParameterId || !!edge?.cost_time?.connection;
-  const hasAnyParam = hasProbabilityParam || hasConditionalParam || hasCostGbpParam || hasCostTimeParam;
+  
+  // Get all data operation sections using single source of truth
+  const dataOperationSections = getAllDataSections(null, edgeId, graph);
+  
+  // Generic section-based handlers for data operations
+  const handleSectionGetFromFile = (section: DataOperationSection) => {
+    // Delegate to dataOperationsService
+    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
+      dataOperationsService.getParameterFromFile({
+        paramId: section.objectId,
+        edgeId: section.targetId,
+        graph,
+        setGraph,
+      });
+    });
+  };
+
+  const handleSectionPutToFile = (section: DataOperationSection) => {
+    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
+      dataOperationsService.putParameterToFile({
+        paramId: section.objectId,
+        edgeId: section.targetId,
+        graph,
+        setGraph,
+      });
+    });
+  };
+
+  const handleSectionGetFromSourceDirect = (section: DataOperationSection) => {
+    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
+      dataOperationsService.getFromSourceDirect({
+        objectType: 'parameter',
+        objectId: section.objectId,
+        targetId: section.targetId,
+        graph,
+        setGraph,
+        paramSlot: section.paramSlot,
+        conditionalIndex: section.conditionalIndex,
+        dailyMode: false,
+      });
+    });
+  };
+
+  const handleSectionGetFromSource = (section: DataOperationSection) => {
+    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
+      dataOperationsService.getFromSource({
+        objectType: 'parameter',
+        objectId: section.objectId,
+        targetId: section.targetId,
+        graph,
+        setGraph,
+        paramSlot: section.paramSlot,
+        conditionalIndex: section.conditionalIndex,
+      });
+    });
+  };
   
   // Check if it's a case edge with variants
   // Case edges can have case_variant set, and we infer case_id from the source node if missing
@@ -461,227 +502,27 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         </div>
       )}
 
-      {/* Data operations (if any parameters connected) */}
-      {hasAnyParam && (
+      {/* Data operations (using single source of truth) */}
+      {dataOperationSections.length > 0 && (
         <>
           <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
           
-          {/* Probability parameter submenu */}
-          {hasProbabilityParam && (
-            <div
-              style={{ position: 'relative' }}
-              onMouseEnter={() => handleSubmenuEnter('probability')}
+          {/* Render all data operation sections */}
+          {dataOperationSections.map(section => (
+            <DataSectionSubmenu
+              key={section.id}
+              section={section}
+              isOpen={openSubmenu === section.id}
+              onMouseEnter={() => handleSubmenuEnter(section.id)}
               onMouseLeave={handleSubmenuLeave}
-            >
-              <div
-                style={{
-                  padding: '8px 12px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  borderRadius: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  background: openSubmenu === 'probability' ? '#f8f9fa' : 'white'
-                }}
-              >
-                <span>Probability parameter</span>
-                <ChevronRight size={14} style={{ color: '#666' }} />
-              </div>
-              
-              {openSubmenu === 'probability' && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '100%',
-                    top: 0,
-                    marginLeft: '4px',
-                    zIndex: 10001
-                  }}
-                  onMouseEnter={handleSubmenuContentEnter}
-                  onMouseLeave={handleSubmenuContentLeave}
-                >
-                  <DataOperationsMenu
-                    objectType="parameter"
-                    objectId={parameterId || ''}
-                    hasFile={!!parameterId}
-                    targetId={edgeId}
-                    graph={graph}
-                    setGraph={setGraph}
-                    paramSlot="p"
-                    window={window}
-                    mode="submenu"
-                    showConnectionSettings={false}
-                    showSyncStatus={true}
-                    onClose={() => setOpenSubmenu(null)}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Conditional probability parameter submenu (if has conditionals) */}
-          {hasConditionalParam && (
-            <div
-              style={{ position: 'relative' }}
-              onMouseEnter={() => handleSubmenuEnter('conditional')}
-              onMouseLeave={handleSubmenuLeave}
-            >
-              <div
-                style={{
-                  padding: '8px 12px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  borderRadius: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  background: openSubmenu === 'conditional' ? '#f8f9fa' : 'white'
-                }}
-              >
-                <span>Conditional prob. parameter</span>
-                <ChevronRight size={14} style={{ color: '#666' }} />
-              </div>
-              
-              {openSubmenu === 'conditional' && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '100%',
-                    top: 0,
-                    marginLeft: '4px',
-                    zIndex: 10001
-                  }}
-                  onMouseEnter={handleSubmenuContentEnter}
-                  onMouseLeave={handleSubmenuContentLeave}
-                >
-                  <DataOperationsMenu
-                    objectType="parameter"
-                    objectId={firstConditionalParamId || ''}
-                    hasFile={!!firstConditionalParamId}
-                    targetId={edgeId}
-                    graph={graph}
-                    setGraph={setGraph}
-                    paramSlot="p"
-                    conditionalIndex={0}
-                    window={window}
-                    mode="submenu"
-                    showConnectionSettings={false}
-                    showSyncStatus={true}
-                    onClose={() => setOpenSubmenu(null)}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Cost GBP parameter submenu */}
-          {hasCostGbpParam && (
-            <div
-              style={{ position: 'relative' }}
-              onMouseEnter={() => handleSubmenuEnter('cost_gbp')}
-              onMouseLeave={handleSubmenuLeave}
-            >
-              <div
-                style={{
-                  padding: '8px 12px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  borderRadius: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  background: openSubmenu === 'cost_gbp' ? '#f8f9fa' : 'white'
-                }}
-              >
-                <span>Cost (£) parameter</span>
-                <ChevronRight size={14} style={{ color: '#666' }} />
-              </div>
-              
-              {openSubmenu === 'cost_gbp' && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '100%',
-                    top: 0,
-                    marginLeft: '4px',
-                    zIndex: 10001
-                  }}
-                  onMouseEnter={handleSubmenuContentEnter}
-                  onMouseLeave={handleSubmenuContentLeave}
-                >
-                  <DataOperationsMenu
-                    objectType="parameter"
-                    objectId={costGbpParameterId || ''}
-                    hasFile={!!costGbpParameterId}
-                    targetId={edgeId}
-                    graph={graph}
-                    setGraph={setGraph}
-                    paramSlot="cost_gbp"
-                    window={window}
-                    mode="submenu"
-                    showConnectionSettings={false}
-                    showSyncStatus={true}
-                    onClose={() => setOpenSubmenu(null)}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Cost Time parameter submenu */}
-          {hasCostTimeParam && (
-            <div
-              style={{ position: 'relative' }}
-              onMouseEnter={() => handleSubmenuEnter('cost_time')}
-              onMouseLeave={handleSubmenuLeave}
-            >
-              <div
-                style={{
-                  padding: '8px 12px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  borderRadius: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  background: openSubmenu === 'cost_time' ? '#f8f9fa' : 'white'
-                }}
-              >
-                <span>Duration parameter</span>
-                <ChevronRight size={14} style={{ color: '#666' }} />
-              </div>
-              
-              {openSubmenu === 'cost_time' && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '100%',
-                    top: 0,
-                    marginLeft: '4px',
-                    zIndex: 10001
-                  }}
-                  onMouseEnter={handleSubmenuContentEnter}
-                  onMouseLeave={handleSubmenuContentLeave}
-                >
-                  <DataOperationsMenu
-                    objectType="parameter"
-                    objectId={costTimeParameterId || ''}
-                    hasFile={!!costTimeParameterId}
-                    targetId={edgeId}
-                    graph={graph}
-                    setGraph={setGraph}
-                    paramSlot="cost_time"
-                    window={window}
-                    mode="submenu"
-                    showConnectionSettings={false}
-                    showSyncStatus={true}
-                    onClose={() => setOpenSubmenu(null)}
-                  />
-                </div>
-              )}
-            </div>
-          )}
+              onSubmenuContentEnter={handleSubmenuContentEnter}
+              onSubmenuContentLeave={handleSubmenuContentLeave}
+              onGetFromFile={handleSectionGetFromFile}
+              onPutToFile={handleSectionPutToFile}
+              onGetFromSource={handleSectionGetFromSource}
+              onGetFromSourceDirect={handleSectionGetFromSourceDirect}
+            />
+          ))}
         </>
       )}
 
@@ -721,7 +562,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               borderRadius: '4px',
               boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
               minWidth: '120px',
-              zIndex: 10001
+              zIndex: 99999
             }}
             onMouseEnter={handleSubmenuContentEnter}
             onMouseLeave={handleSubmenuContentLeave}
