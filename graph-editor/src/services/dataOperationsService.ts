@@ -31,16 +31,211 @@ import toast from 'react-hot-toast';
 import { fileRegistry } from '../contexts/TabContext';
 import { UpdateManager } from './UpdateManager';
 import type { Graph, DateRange } from '../types';
-import { WindowAggregationService, parameterToTimeSeries, calculateIncrementalFetch, mergeTimeSeriesIntoParameter, normalizeDate, parseDate, isDateInRange } from './windowAggregationService';
+import {
+  WindowAggregationService,
+  parameterToTimeSeries,
+  calculateIncrementalFetch,
+  mergeTimeSeriesIntoParameter,
+  normalizeDate,
+  parseDate,
+  isDateInRange,
+} from './windowAggregationService';
 import { statisticalEnhancementService } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
+import { resolveEdgeHRN } from './HRNResolver';
 
 // Shared UpdateManager instance
 const updateManager = new UpdateManager();
 
 // Shared WindowAggregationService instance
 const windowAggregationService = new WindowAggregationService();
+
+/**
+ * Extract a minimal external update payload from a Sheets DAS result,
+ * based on connection_string.mode, param_slot, and the current graph context.
+ *
+ * This is intentionally conservative and focuses on the current parameter context:
+ * - Patterns:
+ *   - mode=auto|single → use scalar_value as mean when no usable param_pack is present
+ *   - mode=auto|param-pack → use param_pack keys that are unambiguous in the current context
+ * - HRN keys (e.*) are resolved via HRNResolver and only applied when they point at
+ *   the current target edge; other HRNs are treated as out-of-scope for this direct pull.
+ */
+export function extractSheetsUpdateData(
+  raw: any,
+  connectionString: any,
+  paramSlot: 'p' | 'cost_gbp' | 'cost_time' | undefined,
+  graph: Graph | null | undefined,
+  targetId: string | undefined
+): { mean?: number; stdev?: number; n?: number; k?: number } {
+  const update: { mean?: number; stdev?: number; n?: number; k?: number } = {};
+
+  const mode = (connectionString?.mode as 'auto' | 'single' | 'param-pack' | undefined) ?? 'auto';
+  const scalarValue = raw?.scalar_value;
+  const paramPack = (raw?.param_pack ?? raw?.paramPack) as Record<string, unknown> | null | undefined;
+
+  const hasParamPack = !!paramPack && Object.keys(paramPack).length > 0;
+  const targetSlot = paramSlot || 'p';
+
+   // Resolve the current target edge UUID (if applicable)
+  let targetEdgeUuid: string | undefined;
+  if (graph && targetId) {
+    const edge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
+    targetEdgeUuid = edge?.uuid;
+  }
+
+  const applyNumeric = (field: 'mean' | 'stdev' | 'n' | 'k', value: unknown) => {
+    if (value === null || value === undefined) return;
+    const num = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(num)) return;
+    update[field] = num;
+  };
+
+  const considerKeyValue = (key: string, value: unknown) => {
+    const lower = key.toLowerCase();
+
+    // HRN-style keys (e.*) – only apply when they resolve to the current target edge
+    if (lower.startsWith('e.')) {
+      if (!graph || !targetEdgeUuid) {
+        return;
+      }
+
+      // We expect patterns like:
+      //   e.edge-id.p.mean
+      //   e.edge-id.cost_gbp.mean
+      // Find the param-slot marker (".p.", ".cost_gbp.", ".cost_time.")
+      const markers: Array<{ slot: 'p' | 'cost_gbp' | 'cost_time'; marker: string }> = [
+        { slot: 'p', marker: '.p.' },
+        { slot: 'cost_gbp', marker: '.cost_gbp.' },
+        { slot: 'cost_time', marker: '.cost_time.' },
+      ];
+
+      let foundMarker: { slot: 'p' | 'cost_gbp' | 'cost_time'; index: number } | null = null;
+      for (const m of markers) {
+        const idx = lower.indexOf(m.marker);
+        if (idx !== -1) {
+          foundMarker = { slot: m.slot, index: idx };
+          break;
+        }
+      }
+
+      if (!foundMarker) {
+        console.warn('[DataOperationsService] Sheets HRN key has no recognized param slot marker:', { key });
+        return;
+      }
+
+      // If HRN refers to a different param slot than the current one, treat as out-of-scope
+      if (foundMarker.slot !== targetSlot) {
+        console.log('[DataOperationsService] Sheets HRN key out of scope for current param slot:', {
+          key,
+          targetSlot,
+        });
+        return;
+      }
+
+      const entityHrn = key.substring(0, foundMarker.index); // preserve original case for resolver
+      const resolvedUuid = resolveEdgeHRN(entityHrn, graph);
+
+      if (!resolvedUuid) {
+        console.warn('[DataOperationsService] Sheets HRN could not be resolved to an edge:', {
+          key,
+          entityHrn,
+        });
+        return;
+      }
+
+      if (resolvedUuid !== targetEdgeUuid) {
+        console.log('[DataOperationsService] Sheets HRN resolved to different edge (out of scope):', {
+          key,
+          entityHrn,
+          resolvedUuid,
+          targetEdgeUuid,
+        });
+        return;
+      }
+
+      // At this point, HRN refers to the current edge and correct slot.
+      // Interpret the suffix after the param slot marker.
+      const markerLength =
+        foundMarker.slot === 'p'
+          ? '.p.'.length
+          : foundMarker.slot === 'cost_gbp'
+          ? '.cost_gbp.'.length
+          : '.cost_time.'.length;
+      const suffix = lower.substring(foundMarker.index + markerLength);
+      const suffixParts = suffix.split('.');
+      const last = suffixParts[suffixParts.length - 1];
+
+      if (last === 'mean') {
+        applyNumeric('mean', value);
+      } else if (last === 'stdev') {
+        applyNumeric('stdev', value);
+      } else if (last === 'n') {
+        applyNumeric('n', value);
+      } else if (last === 'k') {
+        applyNumeric('k', value);
+      }
+
+      return;
+    }
+
+    // Node HRNs (n.*) are currently out-of-scope for direct edge parameter updates
+    if (lower.startsWith('n.')) {
+      console.log('[DataOperationsService] Sheets node HRN ignored in edge parameter context:', { key });
+      return;
+    }
+
+    // Only accept non-HRN keys that are clearly about the current param slot.
+    // Examples we accept:
+    // - "mean", "stdev", "n", "k"
+    // - "p.mean", "p.stdev", "p.n", "p.k"
+    // - "<slot>.mean" etc. where slot matches paramSlot (e.g. "cost_gbp.mean").
+    const parts = lower.split('.');
+    const last = parts[parts.length - 1];
+    const first = parts[0];
+
+    const slotMatches =
+      first === targetSlot ||
+      // Allow bare field names (mean, stdev, n, k) in the current context
+      (parts.length === 1 && (last === 'mean' || last === 'stdev' || last === 'n' || last === 'k')) ||
+      // Allow "p.*" as shorthand for the primary probability slot
+      (first === 'p' && targetSlot === 'p');
+
+    if (!slotMatches) {
+      return;
+    }
+
+    if (last === 'mean') {
+      applyNumeric('mean', value);
+    } else if (last === 'stdev') {
+      applyNumeric('stdev', value);
+    } else if (last === 'n') {
+      applyNumeric('n', value);
+    } else if (last === 'k') {
+      applyNumeric('k', value);
+    }
+  };
+
+  // Decide whether to favor paramPack or scalar based on mode + availability
+  const shouldUseParamPack = (mode === 'param-pack') || (mode === 'auto' && hasParamPack);
+  const shouldUseScalar = (mode === 'single') || (mode === 'auto' && !hasParamPack);
+
+  if (shouldUseParamPack && paramPack) {
+    for (const [key, value] of Object.entries(paramPack)) {
+      considerKeyValue(key, value);
+    }
+  }
+
+  if (shouldUseScalar && scalarValue !== undefined && scalarValue !== null) {
+    // In scalar mode, treat scalar_value as the mean for the current param slot.
+    if (update.mean === undefined) {
+      applyNumeric('mean', scalarValue);
+    }
+  }
+
+  return update;
+}
 
 /**
  * Compute query signature (SHA-256 hash) for consistency checking
@@ -785,20 +980,42 @@ class DataOperationsService {
         return;
       }
       
-      // Check if file exists
-      const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
-      if (!paramFile) {
-        toast.error(`Parameter file not found: ${paramId}`);
-        return;
-      }
-      
-      // Find the source edge
+      // Find the source edge first (needed to determine parameter type if creating)
       const sourceEdge = graph.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
       if (!sourceEdge) {
         toast.error(`Edge not found in graph`);
         return;
       }
       
+      // Check if file exists, create if missing
+      let paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+      if (!paramFile) {
+        console.log(`[putParameterToFile] File not found, creating: ${paramId}`);
+        
+        // Determine parameter type from edge
+        let paramType: 'probability' | 'cost_gbp' | 'cost_time' = 'probability';
+        if (sourceEdge.cost_gbp?.id === paramId) {
+          paramType = 'cost_gbp';
+        } else if (sourceEdge.cost_time?.id === paramId) {
+          paramType = 'cost_time';
+        }
+        
+        // Create file using fileOperationsService (handles registry update)
+        const { fileOperationsService } = await import('./fileOperationsService');
+        await fileOperationsService.createFile(paramId, 'parameter', {
+          openInTab: false,
+          metadata: { parameterType: paramType }
+        });
+        
+        // Now get the created file
+        paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+        if (!paramFile) {
+          toast.error(`Failed to create parameter file: ${paramId}`);
+          return;
+        }
+        
+        toast.success(`Created new parameter file: ${paramId}`);
+      }
       // Determine which parameter slot this file corresponds to
       // (an edge can have p, cost_gbp, AND cost_time - we only want to write ONE)
       let filteredEdge: any = { ...sourceEdge };
@@ -1114,16 +1331,33 @@ class DataOperationsService {
         return;
       }
       
-      const caseFile = fileRegistry.getFile(`case-${caseId}`);
-      if (!caseFile) {
-        toast.error(`Case file not found: ${caseId}`);
-        return;
-      }
-      
+      // Find the source node first
       const sourceNode = graph.nodes?.find((n: any) => n.uuid === nodeId || n.id === nodeId);
       if (!sourceNode) {
         toast.error(`Node not found in graph`);
         return;
+      }
+      
+      // Check if file exists, create if missing
+      let caseFile = fileRegistry.getFile(`case-${caseId}`);
+      if (!caseFile) {
+        console.log(`[putCaseToFile] File not found, creating: ${caseId}`);
+        
+        // Create file using fileOperationsService (handles registry update)
+        const { fileOperationsService } = await import('./fileOperationsService');
+        await fileOperationsService.createFile(caseId, 'case', {
+          openInTab: false,
+          metadata: {}
+        });
+        
+        // Now get the created file
+        caseFile = fileRegistry.getFile(`case-${caseId}`);
+        if (!caseFile) {
+          toast.error(`Failed to create case file: ${caseId}`);
+          return;
+        }
+        
+        toast.success(`Created new case file: ${caseId}`);
       }
       
       // Filter node to only include the relevant case data
@@ -1760,7 +1994,7 @@ class DataOperationsService {
               };
             };
             
-            // Build DSL with event mapping
+            // Build DSL with event mapping for analytics-style connections (e.g., Amplitude)
             dsl = await buildDslFromEdge(
               targetEdge,
               graph,
@@ -1962,7 +2196,13 @@ class DataOperationsService {
       
       // Determine data source type from connection name (used for parameter files)
       const dataSourceType =
-        connectionName?.includes('amplitude') ? 'amplitude' : 'api';
+        connectionName?.includes('amplitude')
+          ? 'amplitude'
+          : connectionName?.includes('sheets')
+          ? 'sheets'
+          : connectionName?.includes('statsig')
+          ? 'statsig'
+          : 'api';
       
       // Chain requests for each contiguous gap
       for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
@@ -2013,8 +2253,8 @@ class DataOperationsService {
             window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
             context: { mode: contextMode }, // Pass mode to adapter (daily or aggregate)
             edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
-            caseId: objectType === 'case' ? objectId : undefined,  // Pass caseId for cases
-            nodeId: objectType === 'node' ? (targetId || objectId) : undefined  // Pass nodeId for nodes (future)
+            caseId: objectType === 'case' ? objectId : undefined, // Pass caseId for cases
+            nodeId: objectType === 'node' ? (targetId || objectId) : undefined, // Pass nodeId for nodes (future)
           });
           
           if (!result.success) {
@@ -2037,7 +2277,11 @@ class DataOperationsService {
             hasTimeSeries: !!result.raw?.time_series,
             timeSeriesType: typeof result.raw?.time_series,
             timeSeriesIsArray: Array.isArray(result.raw?.time_series),
-            timeSeriesLength: Array.isArray(result.raw?.time_series) ? result.raw.time_series.length : (result.raw?.time_series ? 'not array' : 'null/undefined'),
+            timeSeriesLength: Array.isArray(result.raw?.time_series)
+              ? result.raw.time_series.length
+              : result.raw?.time_series
+              ? 'not array'
+              : 'null/undefined',
             timeSeriesValue: result.raw?.time_series,
             window: fetchWindow,
           });
@@ -2067,15 +2311,36 @@ class DataOperationsService {
           // Parse the updates to extract values for simple queries (use latest result for non-daily mode)
           // UpdateManager now expects schema terminology: mean, n, k (not external API terminology)
           if (!dailyMode) {
-            for (const update of result.updates) {
-              const parts = update.target.split('/').filter(Boolean);
-              const field = parts[parts.length - 1];
-              
-              // Pass schema terminology directly to UpdateManager
-              if (field === 'mean' || field === 'n' || field === 'k' || field === 'stdev') {
-                updateData[field] = typeof update.value === 'number' ? update.value : Number(update.value);
-              } else {
-                updateData[field] = update.value;
+            // Special handling for Sheets: interpret scalar_value / param_pack into updateData
+            if (connectionName?.includes('sheets')) {
+              const sheetsUpdate = extractSheetsUpdateData(
+                result.raw,
+                connectionString,
+                paramSlot,
+                graph,
+                targetId
+              );
+
+              console.log('[DataOperationsService] Sheets scalar/param_pack extracted:', {
+                sheetsUpdate,
+                raw: result.raw,
+                connection_string: connectionString,
+              });
+
+              Object.assign(updateData, sheetsUpdate);
+            } else {
+              // Default path: use updates emitted by the adapter (e.g., Amplitude)
+              for (const update of result.updates) {
+                const parts = update.target.split('/').filter(Boolean);
+                const field = parts[parts.length - 1];
+
+                // Pass schema terminology directly to UpdateManager
+                if (field === 'mean' || field === 'n' || field === 'k' || field === 'stdev') {
+                  updateData[field] =
+                    typeof update.value === 'number' ? update.value : Number(update.value);
+                } else {
+                  updateData[field] = update.value;
+                }
               }
             }
           }

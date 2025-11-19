@@ -255,10 +255,17 @@ connections:
         range:
           type: string
           description: "A1 notation range (e.g., 'Sheet1!A1:B10')"
-        expected_format:
+        mode:
           type: string
-          description: "Optional hint for data format (e.g., 'p_mean, n, k')"
+          enum: [auto, single, param-pack]
+          default: auto
+          description: >
+            Parse mode: auto-detect, single-cell scalar value, or param pack (JSON/YAML or name/value pairs).
     adapter:
+      pre_request:
+        script: |
+          // Keep pre_request minimal; any edge/node context is handled by the caller (e.g., scenarios modal).
+          return dsl;
       request:
         url_template: "https://sheets.googleapis.com/v4/spreadsheets/{{{connection_string.spreadsheet_id}}}/values/{{{connection_string.range}}}"
         method: GET
@@ -269,21 +276,32 @@ connections:
           - name: values
             jmes: "values"
       transform:
-        - name: p_mean
-          jsonata: "$number(values[0][1])"
-        - name: n
-          jsonata: "$number(values[1][1])"
-        - name: k
-          jsonata: "$number(values[2][1])"
-      upsert:
-        mode: replace
-        writes:
-          - target: "/edges/{{edgeId}}/p/mean"
-            value: "{{p_mean}}"
-          - target: "/edges/{{edgeId}}/p/evidence/n"
-            value: "{{n}}"
-          - target: "/edges/{{edgeId}}/p/evidence/k"
-            value: "{{k}}"
+        - name: parsed_result
+          jsonata: |
+            (
+              $dasHelpers := dasHelpers;
+
+              $dasHelpers.parseSheetsRange ?
+                $dasHelpers.parseSheetsRange(values) :
+                {
+                  "mode": "error",
+                  "scalarValue": null,
+                  "paramPack": {},
+                  "errors": [
+                    {
+                      "row": 0,
+                      "col": 0,
+                      "message": "dasHelpers.parseSheetsRange not available"
+                    }
+                  ]
+                }
+            )
+        - name: scalar_value
+          jsonata: "parsed_result.scalarValue"
+        - name: param_pack
+          jsonata: "parsed_result.paramPack"
+        - name: errors
+          jsonata: "parsed_result.errors"
 
   # Statsig - Feature Gate/Experiment Configuration
   - name: statsig-prod
