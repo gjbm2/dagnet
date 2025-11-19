@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.91.10-beta
+**Released:** November 19, 2025
+
+Bug: file registries weren't updating properly. Now resolved.
+
+---
+
 ## Version 0.91.9-beta
 **Released:** November 19, 2025
 
