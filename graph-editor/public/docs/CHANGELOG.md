@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.91.9-beta
+**Released:** November 19, 2025
+
+Added _this_ changelog. Meta.
+
+---
+
 ## Version 0.91.7-beta
 **Released:** November 19, 2025
 
