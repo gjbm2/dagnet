@@ -26,8 +26,8 @@ export default defineConfig(({ mode }) => {
   // Build timestamp
   const buildTimestamp = new Date().toISOString();
   
-  // Format version for display (0.91.0-beta → 0.91b)
-  const versionShort = version.replace(/^v/, '').replace(/\.0(-\w+)?$/, (_, pre) => pre ? pre.charAt(1) : '');
+  // Format version for display (0.91.8-beta → 0.91.8b)
+  const versionShort = version.replace(/^v/, '').replace(/-beta$/, 'b').replace(/-alpha$/, 'a');
 
   // Credentials init env (optional, used by welcome-screen init)
   const initSecret = env.INIT_CREDENTIALS_SECRET || '';

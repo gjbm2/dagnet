@@ -246,14 +246,11 @@ ${RELEASE_NOTES}
 EOF
   
   # Insert after the first line (# DagNet Release Notes)
-  head -n 1 graph-editor/CHANGELOG.md > /tmp/changelog_new.tmp
+  head -n 1 graph-editor/public/docs/CHANGELOG.md > /tmp/changelog_new.tmp
   cat /tmp/changelog_entry.tmp >> /tmp/changelog_new.tmp
-  tail -n +2 graph-editor/CHANGELOG.md >> /tmp/changelog_new.tmp
-  mv /tmp/changelog_new.tmp graph-editor/CHANGELOG.md
+  tail -n +2 graph-editor/public/docs/CHANGELOG.md >> /tmp/changelog_new.tmp
+  mv /tmp/changelog_new.tmp graph-editor/public/docs/CHANGELOG.md
   rm /tmp/changelog_entry.tmp
-  
-  # Copy to public/docs directory so it's served by the app
-  cp graph-editor/CHANGELOG.md graph-editor/public/docs/CHANGELOG.md
   
   print_green "  ✓ Added release notes to CHANGELOG.md"
 else
@@ -263,7 +260,7 @@ fi
 # Stage changes
 print_blue "[3/6] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/CHANGELOG.md graph-editor/public/docs/CHANGELOG.md
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/docs/CHANGELOG.md
 else
   git add graph-editor/package.json graph-editor/package-lock.json
 fi
