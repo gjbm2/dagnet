@@ -49,7 +49,7 @@
 | 18 | Syntax toggle: YAML \| JSON | ✅ Implemented | 🟢 | `ScenarioEditorModal.tsx:278-290` |
 | 19 | Structure toggle: Nested \| Flat | ✅ Implemented | 🟢 | `ScenarioEditorModal.tsx:292-306` |
 | 20 | Default: YAML + Nested | ✅ Correct | 🟢 | `ScenarioEditorModal.tsx:35` |
-| 21 | Lossless round-trip between representations | ✅ Implemented | 🟢 | `ScenarioFormatConverter.ts` |
+| 21 | Lossless round-trip between representations | ✅ Implemented | 🟢 | `ParamPackDSLService.ts` |
 | 22 | Export: "Copy as CSV" (Flat) | ✅ Implemented | 🟢 | `ScenarioEditorModal.tsx:312-315` |
 | 23 | Metadata panel - readonly fields | ✅ Implemented | 🟢 | `ScenarioEditorModal.tsx:230-258` |
 | 24 | Metadata panel - editable Note | ✅ Implemented | 🟢 | `ScenarioEditorModal.tsx:261-271` |

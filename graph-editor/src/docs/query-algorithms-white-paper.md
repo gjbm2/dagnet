@@ -802,7 +802,7 @@ These match the v1 DSL and schemas referenced by the Data Connections specificat
 
 **Document Version:** 1.0  
 **Last Updated:** November 2025  
-**For Implementation:** See [DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md](../../../DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md)
+**For Implementation:** See the data connections implementation documentation in the repository
 
 ---
 

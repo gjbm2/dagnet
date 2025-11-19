@@ -141,8 +141,9 @@ describe('HRNResolver', () => {
       
       const { resolved, unresolved } = resolveAllHRNs(params, mockGraph);
       
-      expect(resolved.edges['edge-uuid-1']).toBeDefined();
-      expect(resolved.nodes['node-uuid-1']).toBeDefined();
+      // resolveAllHRNs now prefers edge.id / node.id over UUIDs
+      expect(resolved.edges['checkout-to-purchase']).toBeDefined();
+      expect(resolved.nodes['checkout']).toBeDefined();
       expect(unresolved).toHaveLength(0);
     });
     

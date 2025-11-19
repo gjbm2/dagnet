@@ -52,7 +52,7 @@
    - Epsilon threshold support for numeric comparisons
    - Edge and node parameter diffing
    
-2. **ScenarioFormatConverter** (`src/services/ScenarioFormatConverter.ts`)
+2. **ParamPackDSLService** (`src/services/ParamPackDSLService.ts`)
    - YAML/JSON parsing and serialization
    - Nested/Flat structure conversion
    - CSV export (flat format)
@@ -232,7 +232,7 @@
 - `src/services/HRNResolver.ts` (230 lines)
 - `src/services/HRNParser.ts` (210 lines)
 - `src/services/DiffService.ts` (265 lines)
-- `src/services/ScenarioFormatConverter.ts` (145 lines)
+- `src/services/ParamPackDSLService.ts` (145 lines)
 - `src/services/ScenarioValidator.ts` (280 lines)
 
 **Contexts:**
