@@ -210,10 +210,10 @@ export interface SheetsParseResult {
  * Parse Google Sheets range data into either:
  * - a single scalar numeric value (Pattern A), or
  * - a normalized param pack object (Patterns B/C).
- *
+ * 
  * The interpretation of keys (DSL / HRN → actual graph params) is delegated
  * to the existing scenarios / DSL layer.
- *
+ * 
  * @param values - Raw cell values from Sheets API (2D array)
  * @returns Parsed result, including any non-fatal parse errors
  */
@@ -230,7 +230,7 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
       errors: [{ row: 0, col: 0, message: 'Empty range' }],
     };
   }
-
+  
   // Populate cells list for diagnostics / debugging
   for (let r = 0; r < values.length; r++) {
     const row = values[r] ?? [];
@@ -245,7 +245,7 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
   if (isSingleCell) {
     const raw = values[0][0];
     const numeric = parseNumericValue(raw);
-
+    
     if (numeric !== null) {
       return {
         mode: 'single-cell',
@@ -268,9 +268,9 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
       };
     }
 
-    errors.push({
+        errors.push({ 
       row: 0,
-      col: 0,
+          col: 0, 
       message: `Single-cell mode expects numeric or JSON/YAML object, got: ${String(
         raw
       )}`,
@@ -291,9 +291,9 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
   );
 
   if (flatCells.length === 0) {
-    errors.push({
+        errors.push({ 
       row: 0,
-      col: 0,
+          col: 0, 
       message: 'Range has no non-empty cells',
     });
     return {
@@ -302,12 +302,12 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
       paramPack: {},
       errors,
     };
-  }
-
+      }
+      
   if (flatCells.length % 2 !== 0) {
-    errors.push({
+        errors.push({ 
       row: 0,
-      col: 0,
+          col: 0, 
       message:
         'Name/value pairs pattern requires an even number of non-empty cells (DSL name, value, DSL name, value, ...)',
     });
@@ -321,14 +321,14 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
 
     const name = String(nameCell.value).trim();
     if (!name) {
-      errors.push({
+        errors.push({ 
         row: nameCell.row,
         col: nameCell.col,
         message: 'Empty DSL/HRN name cell in name/value pair',
-      });
-      continue;
-    }
-
+        });
+        continue;
+      }
+      
     const rawValue = valueCell.value;
     let value: any = rawValue;
 
@@ -340,12 +340,12 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
       if (asObject && typeof asObject === 'object') {
         // Preserve nested objects as-is; they will be handled by DSL/param logic
         value = asObject;
-      }
+        }
     }
 
     paramPack[name] = value;
   }
-
+  
   return {
     mode: 'param-pack',
     cells,
@@ -361,7 +361,7 @@ function parseNumericValue(value: any): number | null {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
   }
-
+  
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (!trimmed) return null;
@@ -370,15 +370,15 @@ function parseNumericValue(value: any): number | null {
     const cleaned = trimmed.replace(/,/g, '').replace(/%$/, '');
     const parsed = parseFloat(cleaned);
     if (Number.isNaN(parsed)) return null;
-
+    
     // Handle percentages
     if (trimmed.endsWith('%')) {
       return parsed / 100;
     }
-
+    
     return parsed;
   }
-
+  
   return null;
 }
 
@@ -504,7 +504,7 @@ const scriptEnv = {
             (
               $dasHelpers := dasHelpers;
               
-              $dasHelpers.parseSheetsRange ?
+              $dasHelpers.parseSheetsRange ? 
                 $dasHelpers.parseSheetsRange(values) :
                 {
                   "mode": "error",
