@@ -3452,7 +3452,7 @@ export class UpdateManager {
 
           // Case 2: first-time id assignment: replace uuid token with new id in id string
           if (firstTimeId && nodeUuid && edgeIdStr.includes(nodeUuid)) {
-            edgeIdStr = edgeIdStr.replaceAll(nodeUuid, newId);
+            edgeIdStr = edgeIdStr.replace(new RegExp(nodeUuid, 'g'), newId);
             edgeIdsUpdatedFromUuid++;
             idChanged = true;
           }

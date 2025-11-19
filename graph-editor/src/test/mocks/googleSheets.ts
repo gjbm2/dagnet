@@ -152,9 +152,15 @@ export function mockSubtleCrypto() {
     importKey: vi.fn(() =>
       Promise.resolve({} as CryptoKey)
     ),
-    sign: vi.fn(() =>
-      Promise.resolve(new ArrayBuffer(64))
-    ),
+    sign: vi.fn(() => {
+      // Create a realistic-looking signature (64 bytes of pseudo-random data)
+      const buffer = new ArrayBuffer(64);
+      const view = new Uint8Array(buffer);
+      for (let i = 0; i < 64; i++) {
+        view[i] = Math.floor(Math.random() * 256);
+      }
+      return Promise.resolve(buffer);
+    }),
   };
 }
 
@@ -165,18 +171,29 @@ export function setupGoogleSheetsMocks() {
   const originalFetch = global.fetch;
   const originalCrypto = global.crypto;
   
-  global.fetch = mockGoogleTokenFetch() as any;
-  global.crypto = {
-    ...global.crypto,
-    subtle: mockSubtleCrypto() as any,
-  };
+  const mockFetch = mockGoogleTokenFetch();
+  global.fetch = mockFetch as any;
+  
+  // Use Object.defineProperty to override read-only crypto
+  Object.defineProperty(global, 'crypto', {
+    value: {
+      ...originalCrypto,
+      subtle: mockSubtleCrypto() as any,
+    },
+    writable: true,
+    configurable: true,
+  });
   
   return {
     restore: () => {
       global.fetch = originalFetch;
-      global.crypto = originalCrypto;
+      Object.defineProperty(global, 'crypto', {
+        value: originalCrypto,
+        writable: true,
+        configurable: true,
+      });
     },
-    mockFetch: global.fetch as any,
+    mockFetch,
   };
 }
 
