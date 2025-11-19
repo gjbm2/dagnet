@@ -1,21 +1,3 @@
-*** I THINK WE NEED TO KEEP THIS SIMPLE: THERE ARE THREE CLASSES OF ACCEPTABLE INPUT FROM A GOOGLE RANGE CONNECTION AND IDEALLY WE WOULD HANDLE ALL OF THEM:
-A. RANGE RESOLVES TO ONE CELL ONLY & CELL CONTAINS A NUMERIC VALUE
-    TAKE AS P.MEAN
-B. RANGE RESOLVES TO ONE CELL ONLY & CELL CONTAINS A YAML OR JSON OBJECT WHICH CAN REASONABLY TAKE THE JSON FORM: { VARNAME: VALUE, VARNAME2: VALUE2, ... }
-    ACCEPT JSON OBJECT AS A PARAM PACK AND PROCESS AS BELOW
-C. RANGE CONTAINS AN EVEN NUMBER OF CELLS
-    ITERATE THROUGH EACH CELL:
-        IN FIRST CELL, RETRIEVE DSL-NAME OF A VAR
-        IN SECOND CELL, RETRIEVE VALUE OF THAT VAR
-    REPEAT UNTIL DONE, BUILDING A JSON OBJECT OF THE FORM { VARNAME: VALUE, VARNAME2: VALUE2, ... }
-
-NOW IF WE HAVE JSON FROM EITHER B OR C PATH, THEN PROCESS VARNAMES USING OUR DSL READER [PER SCENARIOS MODAL]. SUPPORT BOTH 'FLAT' AND 'NESTED' YAML STRUCTURES PER OUR SCENARIOS MODAL. E.G. IF USER ONLY GIVES "{ 'MEAN': 0.5, 'STDEV': 0.1 }" THEN THIS SHOULD PASS AS THE EXPLICIT NAME FOR THE PARAM ETC. IS AVAIABLLE FROM CONTEXT. IF USER DOES GIVE SOME EXPLICIT NAMES WHICH ARE OUTSDIDE THE SCOPE OF THIS QUERY RETRIEVAL (E.G. REFER TO ANOTHER PARAM ELSEHWERE ON THE GRPAH) THEN SKIP OVER THEM GRACEFULLY; WE SHOULD _NOT_ USE THEM BUT IT IS NOT AN INVALID SUBMISSION.
-
-I THINK THIS APPROACH PERMITS A GOOD DEAL OF PRACTICAL FLEXIBILTIY AND SENSIBLE ERGONOMICS.
-
-WE DO NOT NEED TO IMPLEMENT MORE COMPLEX ARRAY LOOK UPS; IF USER WANTS TO BUILD AN ARRAY IN THE SPREADSHEET THEY CAN PRE-PARSE THAT INTO A JSON STRING BEFORE PASSING THAT IN A RANGE REF TO US ***
-
-
 # Google Sheets HRN Integration Specification
 
 **Status**: 🚧 Not Yet Implemented  
@@ -77,7 +59,7 @@ If user pastes `e.edge-name.p.mean` into a cell, this tries to convert the strin
 The adapter supports **exactly three** classes of input from a Google Sheets range.  
 Anything outside these patterns is treated as an error (or ignored) rather than a special case.
 
-#### Pattern A: Single Numeric Cell
+#### Pattern A: Single-Cell Scalar Value
 
 ```
 | A1              |
@@ -86,7 +68,7 @@ Anything outside these patterns is treated as an error (or ignored) rather than 
 ```
 
 **Behavior**:
-- Interprets the single numeric value as the **primary numeric parameter** for the current context (typically `p.mean` of the selected edge or parameter).
+- Interprets the single cell value as the **primary parameter value** for the current context (typically `p.mean` of the selected edge or parameter). The cell content is usually numeric (e.g., a probability) but does **not** have to be numeric as long as the consumer can interpret it.
 - No parameter name is required in the sheet; the **name comes from context** (e.g., which edge/param the user attached the connection to).
 
 **Use case**:
@@ -115,13 +97,12 @@ or (YAML-style):
 - Supports both:
   - **Flat** structures (e.g., `"p.mean": 0.5`), and
   - **Nested** structures (e.g., `p: { mean: 0.5, stdev: 0.1 }`), which are normalized to dotted paths like `p.mean`, `p.stdev`.
-- The resulting object is then processed by the **same DSL reader used in the scenarios modal**:
-  - DSL / HRN-style names are interpreted in context and applied to the graph.
-  - Keys that refer to parameters **outside the scope of the current retrieval** are **silently skipped** (ignored, not treated as an error).
+- The normalization and interpretation rules are shared with the **same DSL reader used in the scenarios modal**, so there is a **single canonical specification and code path** for param packs coming from both Sheets and the scenarios system.
+- Keys that refer to parameters **outside the scope of the current retrieval** are **silently skipped** (ignored, not treated as an error).
 
 **Use cases**:
 - **Compact param packs** in a single cell.
-- Advanced users who want to precompute a structured blob and paste it directly.
+- Users who want to precompute a structured blob (e.g., via DagCalc or existing Apps Script helpers) and paste it directly.
 
 #### Pattern C: Name / Value Pairs (Even Number of Cells)
 
@@ -141,6 +122,8 @@ or, linear range (row-wise):
 | p.mean                         | 0.45   | p.stdev                        | 0.03 |
 ```
 
+The same alternating name/value pattern also works when names are laid out in the first row and values in the second row (for example, `A1 = p.mean`, `B1 = p.stdev`, `A2 = 0.45`, `B2 = 0.03`); since we simply enumerate cells in the selected range, any layout that results in **alternating param name / value cells** is supported.
+
 **Requirements**:
 - The selected range must contain an **even number of non-empty cells**.
 - Cells are read in order and interpreted as **(name, value)** pairs:
@@ -158,13 +141,14 @@ or, linear range (row-wise):
 **Use cases**:
 - **Bulk parameter updates** keyed by DSL/HRN names.
 - Copy/paste from the scenarios modal into Sheets, adjust values, then pull them back.
+- Maintain offline parameter tables (e.g., cost inputs or other parameter classes) that act as a source of truth and can be periodically pulled into DagNet.
 
 #### Deliberate Non-Goals
 
 - **No complex array lookups** from spreadsheet structures:
-  - If the user wants to construct an array in Sheets, they should **pre-serialize it to JSON** in a cell and then pass that serialized string as the **value** in Pattern B or C.
-- **No multi-scenario column semantics** in this first version:
-  - Users can still model multi-scenario data in the sheet, but this adapter only reads one set of values at a time via the three simple patterns above.
+  - If the user wants to construct an array in Sheets, they should **pre-serialize it to JSON** in a cell and then pass that serialized string as the **value** in Pattern B or C. There is already an existing Apps Script helper that can do this JSON serialization directly in the sheet.
+- **Scenario semantics are out of scope for this adapter**:
+  - Users can still model multi-scenario data in the sheet, but from the adapter's perspective this is purely about **parameter data sourcing**: each invocation reads one set of values via the three simple patterns above, and higher layers (e.g., the scenarios system) decide how to interpret those values.
 
 ---
 
@@ -191,14 +175,14 @@ export interface SheetsCellValue {
 }
 
 export type SheetsMode =
-  | 'single-cell'      // Pattern A: one numeric cell → scalar value
+  | 'single-cell'      // Pattern A: single-cell → scalar value
   | 'param-pack';      // Patterns B/C: object of { varName: value }
 
 export interface SheetsParseResult {
   mode: SheetsMode;
   cells: SheetsCellValue[];
-  scalarValue?: number;                 // Only for Pattern A
-  paramPack?: Record<string, any>;      // For Patterns B/C
+  scalarValue?: any;                   // Only for Pattern A (often numeric)
+  paramPack?: Record<string, any>;     // For Patterns B/C
   errors: Array<{
     row: number;
     col: number;
@@ -208,7 +192,7 @@ export interface SheetsParseResult {
 
 /**
  * Parse Google Sheets range data into either:
- * - a single scalar numeric value (Pattern A), or
+ * - a single scalar value (Pattern A, often numeric), or
  * - a normalized param pack object (Patterns B/C).
  * 
  * The interpretation of keys (DSL / HRN → actual graph params) is delegated
@@ -241,20 +225,9 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
 
   const isSingleCell = values.length === 1 && values[0].length === 1;
 
-  // Pattern A: Single numeric cell
+  // Pattern A: Single-cell scalar value
   if (isSingleCell) {
     const raw = values[0][0];
-    const numeric = parseNumericValue(raw);
-    
-    if (numeric !== null) {
-      return {
-        mode: 'single-cell',
-        cells,
-        scalarValue: numeric,
-        paramPack: undefined,
-        errors,
-      };
-    }
 
     // Pattern B: Single-cell object (JSON / YAML-like)
     const parsedObject = tryParseObject(raw);
@@ -268,18 +241,14 @@ export function parseSheetsRange(values: any[][]): SheetsParseResult {
       };
     }
 
-        errors.push({ 
-      row: 0,
-          col: 0, 
-      message: `Single-cell mode expects numeric or JSON/YAML object, got: ${String(
-        raw
-      )}`,
-    });
+    // Fallback: treat as scalar value, with best-effort numeric parsing
+    const numeric = parseNumericValue(raw);
+    const scalar = numeric !== null ? numeric : raw;
 
     return {
       mode: 'single-cell',
       cells,
-      scalarValue: undefined,
+      scalarValue: scalar,
       paramPack: undefined,
       errors,
     };
@@ -385,6 +354,7 @@ function parseNumericValue(value: any): number | null {
 /**
  * Best-effort parse of JSON or YAML-ish content from a string cell.
  * Implementation detail: use JSON.parse and, if available, a YAML parser.
+ * In practice we expect nested or flat YAML and flat JSON objects to be most common; nested JSON is allowed but likely less common.
  */
 function tryParseObject(value: any): any | null {
   if (typeof value !== 'string') return null;
@@ -482,7 +452,7 @@ const scriptEnv = {
           enum: [auto, single, param-pack]
           default: auto
           description: >
-            Parse mode: auto-detect, single numeric cell, or param pack (JSON/YAML or name/value pairs).
+            Parse mode: auto-detect, single-cell scalar value, or param pack (JSON/YAML or name/value pairs).
     adapter:
       pre_request:
         script: |
@@ -539,7 +509,7 @@ const scriptEnv = {
 ### Phase 1: Core Sheets Parsing (Prerequisite)
 - [ ] Create `sheetsHrnResolver.ts` helper focused on patterns A/B/C
 - [ ] Unit tests for `parseSheetsRange()`
-  - Test single-cell numeric (Pattern A)
+  - Test single-cell scalar values (Pattern A), including numeric and non-numeric cases
   - Test single-cell JSON/YAML object (Pattern B)
   - Test name/value pairs with even/odd cell counts (Pattern C)
   - Test numeric parsing (%, commas, etc.)
