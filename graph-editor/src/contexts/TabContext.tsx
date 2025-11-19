@@ -1046,12 +1046,18 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         console.log(`TabContext: Loading markdown ${item.name}...`);
         // Load markdown content from local docs
         try {
-          const response = await fetch(`/docs/${item.id}.md`);
+          // Use the path if provided, otherwise default to /docs/{id}.md
+          // Ensure path starts with / for absolute fetch
+          const fetchPath = item.path || `docs/${item.id}.md`;
+          const absolutePath = fetchPath.startsWith('/') ? fetchPath : `/${fetchPath}`;
+          console.log(`TabContext: Fetching markdown from ${absolutePath}`);
+          const response = await fetch(absolutePath);
           if (response.ok) {
             const markdownContent = await response.text();
+            console.log(`TabContext: Loaded ${markdownContent.length} chars of markdown`);
             data = { content: markdownContent };
           } else {
-            console.warn(`TabContext: Could not load markdown file: ${item.id}.md`);
+            console.warn(`TabContext: Could not load markdown file: ${absolutePath} (status ${response.status})`);
             data = { content: '# File Not Found\n\nThe requested markdown file could not be loaded.' };
           }
         } catch (error) {

@@ -81,10 +81,10 @@ export function HelpMenu() {
 
   const handleCurrentVersion = async () => {
     const changelogItem = {
-      id: 'changelog',
+      id: 'CHANGELOG',
       type: 'markdown' as const,
       name: 'Release Notes',
-      path: 'CHANGELOG.md'
+      path: 'docs/CHANGELOG.md'
     };
     await operations.openTab(changelogItem, 'interactive', true);
   };
