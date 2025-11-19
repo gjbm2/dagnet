@@ -1,7 +1,6 @@
 bead labels aren't updating when values change e.g. on data retrieval, revbalances, etc.# TODO
 
 ## Nasty glitches
-- defaulting scenarios to visibility = false on app init / load. wrong.
 - Sheets range resolution logic
   docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md
 - what-if funky and fussy (render path...)
@@ -117,6 +116,7 @@ bead labels aren't updating when values change e.g. on data retrieval, revbalanc
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- make 'overridden' icons brighter
 - add icons to collapsed beads?
 - playing with edges resets edge_id! 
 - clicking beads -- make hotspot larger
@@ -130,3 +130,4 @@ bead labels aren't updating when values change e.g. on data retrieval, revbalanc
 - maxmised tabs are appearing on top (zorder) of navigator button (incorrect)
 - maximised tabs in main app are not reflecting padding
 - somewhere along the line we lose animations on edge width changes, which is sad
+- Sankey mode and normal view use diff code paths for mass infernece; hence sankey requires start node to work -- weird glitch

@@ -30,7 +30,7 @@ for arg in "$@"; do
   esac
 done
 
-# Navigate to script directory
+# Navigate to script directory (should be repo root)
 cd "$(dirname "$0")"
 
 # Check if there are uncommitted changes and commit them FIRST
@@ -43,7 +43,7 @@ if [[ -n $(git status --porcelain) ]]; then
 fi
 
 # Read current version from package.json
-CURRENT_VERSION=$(node -p "require('./package.json').version")
+CURRENT_VERSION=$(node -p "require('./graph-editor/package.json').version")
 CURRENT_DISPLAY=$(echo "$CURRENT_VERSION" | sed 's/\.0-beta$/b/')
 
 print_blue "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -219,10 +219,10 @@ echo ""
 
 # Update package.json version
 print_blue "[1/6] Updating package.json..."
-npm version "$NEW_VERSION" --no-git-tag-version
+(cd graph-editor && npm version "$NEW_VERSION" --no-git-tag-version)
 
 # Verify the version was updated correctly
-UPDATED_VERSION=$(node -p "require('./package.json').version")
+UPDATED_VERSION=$(node -p "require('./graph-editor/package.json').version")
 if [[ "$UPDATED_VERSION" != "$NEW_VERSION" ]]; then
   print_red "Error: Version mismatch after npm version."
   echo "Expected: $NEW_VERSION"
@@ -246,10 +246,10 @@ ${RELEASE_NOTES}
 EOF
   
   # Insert after the first line (# DagNet Release Notes)
-  head -n 1 CHANGELOG.md > /tmp/changelog_new.tmp
+  head -n 1 graph-editor/CHANGELOG.md > /tmp/changelog_new.tmp
   cat /tmp/changelog_entry.tmp >> /tmp/changelog_new.tmp
-  tail -n +2 CHANGELOG.md >> /tmp/changelog_new.tmp
-  mv /tmp/changelog_new.tmp CHANGELOG.md
+  tail -n +2 graph-editor/CHANGELOG.md >> /tmp/changelog_new.tmp
+  mv /tmp/changelog_new.tmp graph-editor/CHANGELOG.md
   rm /tmp/changelog_entry.tmp
   
   print_green "  ✓ Added release notes to CHANGELOG.md"
@@ -260,9 +260,9 @@ fi
 # Stage changes
 print_blue "[3/6] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  git add package.json CHANGELOG.md
+  git add graph-editor/package.json graph-editor/CHANGELOG.md
 else
-  git add package.json
+  git add graph-editor/package.json
 fi
 
 # Commit the version bump
