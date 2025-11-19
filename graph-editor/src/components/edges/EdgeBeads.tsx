@@ -276,6 +276,18 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
         return Math.atan2(afterPoint.y - beforePoint.y, afterPoint.x - beforePoint.x) * 180 / Math.PI;
       })() : 0;
       
+      // Calculate text angle at start position to determine if text would be upside down
+      const textAngle = (() => {
+        const beforePoint = path.getPointAtLength(Math.max(0, textStartDistance - 1));
+        const afterPoint = path.getPointAtLength(Math.min(pathLength, textStartDistance + 1));
+        const angle = Math.atan2(afterPoint.y - beforePoint.y, afterPoint.x - beforePoint.x) * 180 / Math.PI;
+        // Normalize to -180 to 180 range
+        return angle;
+      })();
+      
+      // Text is upside down if angle is between 90 and 270 degrees (or -90 to -270)
+      const isTextUpsideDown = Math.abs(textAngle) > 90;
+      
       // Get text color for plug icon (use first colored segment or default to white)
       const getTextColor = (): string => {
         if (typeof bead.displayText === 'string') {
@@ -467,28 +479,39 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           />
           
           {/* Text along the path - render with scenario colors using tspan */}
-          <text
-            style={{
-              fontSize: `${BEAD_FONT_SIZE}px`,
-              fontWeight: '500',
-              fill: '#FFFFFF', // Always white/bright text on dark grey or colored backgrounds
-              pointerEvents: 'painted', // Only capture events over painted (visible) text, not the entire path
-            }}
-            dominantBaseline="middle"
-            dy="0"
-          >
-            <textPath
-              href={`#${beadPathId}`}
-              startOffset={`${(textStartDistance / pathLength) * 100}%`}
-            >
-              {renderColoredText()}
-            </textPath>
-          </text>
+          {/* Calculate center point of text for rotation when upside down */}
+          {(() => {
+            // Get the midpoint of the text for rotation anchor
+            const textMidDistance = (textStartDistance + textEndDistance) / 2;
+            const textCenterPoint = path.getPointAtLength(Math.min(textMidDistance, pathLength * 0.9));
+            
+            return (
+              <g transform={isTextUpsideDown ? `rotate(180, ${textCenterPoint.x}, ${textCenterPoint.y})` : ''}>
+                <text
+                  style={{
+                    fontSize: `${BEAD_FONT_SIZE}px`,
+                    fontWeight: '500',
+                    fill: '#FFFFFF', // Always white/bright text on dark grey or colored backgrounds
+                    pointerEvents: 'painted', // Only capture events over painted (visible) text, not the entire path
+                  }}
+                  dominantBaseline="middle"
+                  dy="0"
+                >
+                  <textPath
+                    href={`#${beadPathId}`}
+                    startOffset={`${(textStartDistance / pathLength) * 100}%`}
+                  >
+                    {renderColoredText()}
+                  </textPath>
+                </text>
+              </g>
+            );
+          })()}
           
           {/* Plug icon after text (if parameter connection exists) */}
           {hasPlug && plugIconPoint && (
             <g
-              transform={`translate(${plugIconPoint.x}, ${plugIconPoint.y}) rotate(${iconAngle})`}
+              transform={`translate(${plugIconPoint.x}, ${plugIconPoint.y}) rotate(${isTextUpsideDown ? iconAngle + 180 : iconAngle})`}
               style={{ pointerEvents: 'none' }}
             >
               <foreignObject
