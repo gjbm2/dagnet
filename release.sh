@@ -252,6 +252,9 @@ EOF
   mv /tmp/changelog_new.tmp graph-editor/CHANGELOG.md
   rm /tmp/changelog_entry.tmp
   
+  # Copy to public/docs directory so it's served by the app
+  cp graph-editor/CHANGELOG.md graph-editor/public/docs/CHANGELOG.md
+  
   print_green "  ✓ Added release notes to CHANGELOG.md"
 else
   print_yellow "  ⊘ Skipped (no release notes provided)"
@@ -260,7 +263,7 @@ fi
 # Stage changes
 print_blue "[3/6] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/CHANGELOG.md
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/CHANGELOG.md graph-editor/public/docs/CHANGELOG.md
 else
   git add graph-editor/package.json graph-editor/package-lock.json
 fi
