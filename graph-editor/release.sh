@@ -190,11 +190,20 @@ echo ""
 print_blue "Proceeding with release..."
 echo ""
 
-# Check if working directory is clean
+# Check if there are uncommitted changes and commit them
 if [[ -n $(git status --porcelain) ]]; then
-  print_red "Error: Working directory has uncommitted changes."
-  echo "Please commit or stash your changes first."
-  exit 1
+  print_yellow "Found uncommitted changes. Committing them first..."
+  git add .
+  
+  # Use release notes as commit message if provided, otherwise use default
+  if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
+    # Strip trailing newlines for commit message
+    PRE_RELEASE_MESSAGE=$(echo "$RELEASE_NOTES" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+    git commit -m "$PRE_RELEASE_MESSAGE"
+  else
+    git commit -m "Pre-release commit for v${NEW_VERSION}"
+  fi
+  echo ""
 fi
 
 # Update package.json version
