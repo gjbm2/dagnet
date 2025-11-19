@@ -260,9 +260,9 @@ fi
 # Stage changes
 print_blue "[3/6] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  git add graph-editor/package.json graph-editor/CHANGELOG.md
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/CHANGELOG.md
 else
-  git add graph-editor/package.json
+  git add graph-editor/package.json graph-editor/package-lock.json
 fi
 
 # Commit the version bump
@@ -281,6 +281,14 @@ git push origin "$CURRENT_BRANCH" --tags
 if [[ "$MERGE_TO_MAIN" == true ]]; then
   echo ""
   print_blue "[7/7] Merging to main..."
+  
+  # Safety check: ensure no uncommitted changes before checkout
+  if [[ -n $(git status --porcelain) ]]; then
+    print_red "Error: Uncommitted changes detected before merge:"
+    git status --short
+    print_red "This shouldn't happen. Aborting merge."
+    exit 1
+  fi
   
   # Fetch latest main
   git fetch origin main
