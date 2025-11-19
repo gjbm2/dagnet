@@ -209,44 +209,19 @@ export function ParameterSelector({
   };
 
   const handleCreateFile = async (name: string, fileType: ObjectType) => {
-    // Create the file using the same logic as other places
-    const defaultData = fileType === 'graph' 
-      ? { 
-          nodes: [], 
-          edges: [], 
-          metadata: { 
-            name, 
-            description: '', 
-            created: new Date().toISOString() 
-          } 
-        }
-      : { id: name, name, description: '' };
-
-    const file = fileRegistry.getOrCreateFile(
-      `${fileType}-${name}.yaml`, 
-      fileType, 
-      { repository: 'local', path: `${fileType}s/${name}.yaml`, branch: 'main' },
-      defaultData
-    );
+    // Use centralized file operations service (handles registry updates automatically)
+    const { fileOperationsService } = await import('../services/fileOperationsService');
     
-    // Add to navigator as local item
-    const newItem = {
-      id: name,
-      name: `${name}.yaml`,
-      path: `${fileType}s/${name}.yaml`,
-      type: fileType,
-      size: 0,
-      lastModified: new Date().toISOString(),
-      isLocal: true
-    };
+    // Determine metadata based on parameter type if applicable
+    const metadata = fileType === 'parameter' && parameterType 
+      ? { parameterType } 
+      : {};
     
-    await navOps.addLocalItem(newItem);
-
-    // Open the file in a new tab
-    await tabOps.openTab(newItem, 'interactive');
-
-    // Refresh the navigator to update the registry state
-    await navOps.refreshItems();
+    await fileOperationsService.createFile(name, fileType, {
+      openInTab: true,
+      viewMode: 'interactive',
+      metadata
+    });
 
     // Set as selected value
     setInputValue(name);

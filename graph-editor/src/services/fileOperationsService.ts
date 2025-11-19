@@ -650,6 +650,14 @@ class FileOperationsService {
         if (file.data.category) entry.category = file.data.category;
         if (file.data.event_id) entry.event_id = file.data.event_id;
       }
+      if (file.type === 'event') {
+        // Add name and description for events (required by events-index schema)
+        if (file.data.name) entry.name = file.data.name;
+        if (file.data.description) entry.description = file.data.description;
+        // Map event_type to category in the index (per events-index-schema.yaml)
+        if (file.data.event_type) entry.category = file.data.event_type;
+        if (file.data.category) entry.category = file.data.category;
+      }
       
       // Update or add entry
       if (existingIdx >= 0) {
