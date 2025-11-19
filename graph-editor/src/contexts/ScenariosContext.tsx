@@ -23,7 +23,7 @@ import {
 import { Graph } from '../types';
 import { composeParams } from '../services/CompositionService';
 import { computeDiff } from '../services/DiffService';
-import { fromYAML, fromJSON } from '../services/ScenarioFormatConverter';
+import { fromYAML, fromJSON } from '../services/ParamPackDSLService';
 import { validateScenarioParams } from '../services/ScenarioValidator';
 import { extractParamsFromGraph } from '../services/GraphParamExtractor';
 import { parseWhatIfDSL } from '../lib/whatIf';
@@ -500,13 +500,13 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   ): Promise<void> => {
     const { format, structure = 'nested', validate = true } = options;
     
-    // Parse content
+    // Parse content via canonical DSL engine (includes HRN resolution when graph is present)
     let parsedParams: ScenarioParams;
     try {
       if (format === 'yaml') {
-        parsedParams = fromYAML(content, structure);
+        parsedParams = fromYAML(content, structure, graph);
       } else {
-        parsedParams = fromJSON(content, structure);
+        parsedParams = fromJSON(content, structure, graph);
       }
     } catch (error: any) {
       throw new Error(`Failed to parse ${format.toUpperCase()}: ${error.message}`);
@@ -543,13 +543,13 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   ): Promise<ScenarioValidationResult> => {
     const { format, structure = 'nested' } = options;
     
-    // Parse content
+    // Parse content via canonical DSL engine (includes HRN resolution when graph is present)
     let parsedParams: ScenarioParams;
     try {
       if (format === 'yaml') {
-        parsedParams = fromYAML(content, structure);
+        parsedParams = fromYAML(content, structure, graph);
       } else {
-        parsedParams = fromJSON(content, structure);
+        parsedParams = fromJSON(content, structure, graph);
       }
     } catch (error: any) {
       return {

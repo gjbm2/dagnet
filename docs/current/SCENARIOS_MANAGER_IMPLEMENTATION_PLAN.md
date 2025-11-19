@@ -283,7 +283,7 @@ Tab (view-scoped)
    - Actions: Apply, Cancel
    - Export: "Copy as CSV" button (flat format, two-column key/value)
 
-2. **Implement format converters** (`src/services/ScenarioFormatConverter.ts`):
+2. **Implement format converters** (`src/services/ParamPackDSLService.ts`):
    - `toYAML(params, format: 'nested' | 'flat'): string`
    - `toJSON(params, format: 'nested' | 'flat'): string`
    - `toCSV(params): string` (flat only; key,value pairs)
@@ -407,7 +407,7 @@ Tab (view-scoped)
    - DiffService (all/differences, epsilon)
    - HRNResolver (all selector types, ambiguity)
    - ColorAssigner (1/2/N colors)
-   - ScenarioFormatConverter (round-trip YAML/JSON, flat/nested)
+   - ParamPackDSLService (round-trip YAML/JSON, flat/nested)
 
 2. **Integration tests**:
    - Create snapshot → edit → apply → render

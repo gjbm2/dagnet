@@ -175,11 +175,13 @@ function findNodeByIdOrName(idOrName: string, graph: Graph): GraphNode | undefin
 }
 
 /**
- * Resolve all HRNs in a scenario params object to UUIDs
+ * Resolve all HRNs in a scenario params object to canonical IDs
+ * 
+ * Prefers human-readable IDs over UUIDs for user-facing keys.
  * 
  * @param params - Scenario params with potentially HRN keys
  * @param graph - Graph to resolve against
- * @returns New params object with UUIDs, and list of unresolved HRNs
+ * @returns New params object with canonical IDs (preferring edge.id/node.id), and list of unresolved HRNs
  */
 export function resolveAllHRNs(
   params: any,
@@ -194,7 +196,10 @@ export function resolveAllHRNs(
     for (const [key, value] of Object.entries(params.edges)) {
       const uuid = resolveEdgeHRN(key, graph);
       if (uuid) {
-        resolved.edges[uuid] = value;
+        // Find the edge and prefer ID over UUID for the key
+        const edge = graph.edges?.find(e => e.uuid === uuid);
+        const canonicalKey = edge?.id || uuid;
+        resolved.edges[canonicalKey] = value;
       } else {
         unresolved.push(`edges.${key}`);
         // Keep the original key even if unresolved (warning, not error)
@@ -209,7 +214,10 @@ export function resolveAllHRNs(
     for (const [key, value] of Object.entries(params.nodes)) {
       const uuid = resolveNodeHRN(key, graph);
       if (uuid) {
-        resolved.nodes[uuid] = value;
+        // Find the node and prefer ID over UUID for the key
+        const node = graph.nodes?.find(n => n.uuid === uuid);
+        const canonicalKey = node?.id || uuid;
+        resolved.nodes[canonicalKey] = value;
       } else {
         unresolved.push(`nodes.${key}`);
         // Keep the original key even if unresolved (warning, not error)

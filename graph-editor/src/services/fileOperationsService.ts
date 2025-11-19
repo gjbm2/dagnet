@@ -80,7 +80,7 @@ class FileOperationsService {
 
     // 1. Create default data based on type
     let defaultData: any;
-    
+
     if (basedOn) {
       // Duplication: load source file data
       const sourceFile = fileRegistry.getFile(basedOn);
@@ -92,7 +92,7 @@ class FileOperationsService {
         }
       }
     }
-    
+
     if (!defaultData) {
       // Create new default data
       if (type === 'graph') {
@@ -147,7 +147,7 @@ class FileOperationsService {
       } else if (type === 'parameter') {
         // Use parameterType from metadata if creating from registry, else default to probability
         const parameterType = metadata?.parameterType || 'probability';
-        
+
         defaultData = {
           id: name,
           name,
@@ -204,14 +204,14 @@ class FileOperationsService {
 
     // 2. Create file in FileRegistry
     const fileId = `${type}-${name}`;
-    
+
     // Determine correct file path
     // Index files go to repo root: parameter-index.yaml
     // Regular files go to subdirectories: parameters/my-param.yaml
-    const filePath = fileId.endsWith('-index') 
-      ? `${fileId}.yaml` 
+    const filePath = fileId.endsWith('-index')
+      ? `${fileId}.yaml`
       : `${type}s/${name}.yaml`;
-    
+
     const file = await fileRegistry.getOrCreateFile(
       fileId,
       type,
@@ -279,7 +279,7 @@ class FileOperationsService {
     // Check if already open
     const fileId = `${item.type}-${item.id}`;
     const file = fileRegistry.getFile(fileId);
-    
+
     if (file && file.viewTabs && file.viewTabs.length > 0 && switchIfExists) {
       // Switch to existing tab
       const existingTabId = file.viewTabs[0];
@@ -291,7 +291,7 @@ class FileOperationsService {
     // Open new tab
     const tabId = await this.tabOps.openTab(item, viewMode, targetPanel);
     console.log(`FileOperationsService: Opened new tab ${tabId}`);
-    
+
     return tabId;
   }
 
@@ -316,7 +316,7 @@ class FileOperationsService {
 
     let file = fileRegistry.getFile(fileId);
     console.log(`FileOperationsService: File found in memory:`, !!file, file ? `(tabs: ${file.viewTabs.length}, dirty: ${file.isDirty})` : '');
-    
+
     // If not in memory, try loading from IndexedDB
     if (!file) {
       console.log(`FileOperationsService: File not in memory, checking IndexedDB...`);
@@ -329,7 +329,7 @@ class FileOperationsService {
         file = fileFromDb;
       }
     }
-    
+
     const [type] = fileId.split('-');
     const isIndexOnlyEntry = !file && ['parameter', 'context', 'case', 'node'].includes(type);
 
@@ -343,19 +343,19 @@ class FileOperationsService {
           cancelLabel: 'Cancel',
           confirmVariant: 'danger'
         });
-        
+
         if (!confirm) return false;
       }
 
       // Remove from index only
       try {
         await (fileRegistry as any).updateIndexOnDelete(type, fileId);
-        
+
         // Refresh Navigator
         if (this.navigatorOps) {
           await this.navigatorOps.refreshItems();
         }
-        
+
         console.log(`FileOperationsService: Removed ${fileId} from index`);
         return true;
       } catch (error) {
@@ -379,9 +379,9 @@ class FileOperationsService {
           cancelLabel: 'Cancel',
           confirmVariant: 'danger'
         });
-        
+
         if (!confirm) return false;
-        
+
         // Close all tabs
         await this.closeAllTabsForFile(fileId);
       } else {
@@ -399,7 +399,7 @@ class FileOperationsService {
           cancelLabel: 'Cancel',
           confirmVariant: 'danger'
         });
-        
+
         if (!confirm) return false;
       } else {
         throw new Error('Cannot delete dirty file. Commit or revert changes first.');
@@ -415,7 +415,7 @@ class FileOperationsService {
       const message = isCommitted
         ? `Delete "${file.name || fileId}" from local workspace AND remote repository?`
         : `Delete "${file.name || fileId}" from local workspace?`;
-      
+
       const confirm = await this.dialogOps.showConfirm({
         title: 'Delete file',
         message,
@@ -423,7 +423,7 @@ class FileOperationsService {
         cancelLabel: 'Cancel',
         confirmVariant: 'danger'
       });
-      
+
       if (!confirm) return false;
     }
 
@@ -437,7 +437,7 @@ class FileOperationsService {
 
         const repoName = file.source?.repository;
         const gitCreds = credsResult.credentials.git.find((r: any) => r.name === repoName);
-        
+
         if (!gitCreds) {
           throw new Error(`Repository "${repoName}" not found in credentials`);
         }
@@ -449,11 +449,11 @@ class FileOperationsService {
           `Delete ${file.name || fileId}`,
           file.source?.branch || 'main'
         );
-        
+
         if (!deleteResult.success) {
           throw new Error(deleteResult.error || 'Failed to delete from repository');
         }
-        
+
         console.log(`FileOperationsService: Deleted ${fileId} from repository`);
       } catch (error) {
         console.error(`FileOperationsService: Failed to delete ${fileId} from repository:`, error);
@@ -590,10 +590,10 @@ class FileOperationsService {
   private async updateIndexFile(file: import('@/types').FileState): Promise<void> {
     // Skip if this IS an index file
     if (file.fileId.endsWith('-index')) return;
-    
+
     // Skip if file type doesn't have indices (graphs don't)
     if (file.type === 'graph') return;
-    
+
     // Skip if file doesn't have an id (can't index it)
     if (!file.data?.id) {
       console.warn(`FileOperationsService: Cannot update index for file without id: ${file.fileId}`);
@@ -603,7 +603,7 @@ class FileOperationsService {
     try {
       const indexFileId = `${file.type}-index`; // FileIds use singular form
       const pluralKey = `${file.type}s`;
-      
+
       // Load or create index file
       let indexFile = fileRegistry.getFile(indexFileId);
       if (!indexFile) {
@@ -612,26 +612,26 @@ class FileOperationsService {
         indexFile = await fileRegistry.getOrCreateFile(
           indexFileId,
           file.type,
-          { 
-            repository: file.source?.repository || 'local', 
-            path: `${pluralKey}-index.yaml`, 
-            branch: file.source?.branch || 'main' 
+          {
+            repository: file.source?.repository || 'local',
+            path: `${pluralKey}-index.yaml`,
+            branch: file.source?.branch || 'main'
           },
           indexData
         );
       }
-      
+
       // Update index entry
       const index = indexFile.data;
       const entries = index[pluralKey] || [];
-      
+
       const existingIdx = entries.findIndex((e: any) => e.id === file.data.id);
       const entry: any = {
         id: file.data.id,
         file_path: file.source?.path || `${pluralKey}/${file.data.id}.yaml`,
         status: file.data.metadata?.status || file.data.status || 'active'
       };
-      
+
       // Add optional fields if present
       if (file.data.type) entry.type = file.data.type;
       if (file.data.metadata?.tags || file.data.tags) {
@@ -641,7 +641,7 @@ class FileOperationsService {
       entry.updated_at = new Date().toISOString();
       if (file.data.metadata?.author) entry.author = file.data.metadata.author;
       if (file.data.metadata?.version) entry.version = file.data.metadata.version;
-      
+
       // Type-specific fields
       if (file.type === 'context' && file.data.category) {
         entry.category = file.data.category;
@@ -658,24 +658,24 @@ class FileOperationsService {
         if (file.data.event_type) entry.category = file.data.event_type;
         if (file.data.category) entry.category = file.data.category;
       }
-      
+
       // Update or add entry
       if (existingIdx >= 0) {
         entries[existingIdx] = entry;
       } else {
         entries.push(entry);
       }
-      
+
       // Sort by id for consistency
       entries.sort((a: any, b: any) => a.id.localeCompare(b.id));
-      
+
       // Update index
       index[pluralKey] = entries;
       index.updated_at = new Date().toISOString();
-      
+
       // Save index back to fileRegistry (this will mark it dirty automatically!)
       await fileRegistry.updateFile(indexFileId, index);
-      
+
       console.log(`FileOperationsService: Updated index ${indexFileId} for ${file.data.id}`);
     } catch (error) {
       console.error(`FileOperationsService: Failed to update index for ${file.fileId}:`, error);
@@ -689,40 +689,40 @@ class FileOperationsService {
   private async removeFromIndexFile(file: import('@/types').FileState): Promise<void> {
     // Skip if this IS an index file
     if (file.fileId.endsWith('-index')) return;
-    
+
     // Skip if file type doesn't have indices
     if (file.type === 'graph') return;
-    
+
     // Skip if file doesn't have an id
     if (!file.data?.id) return;
 
     try {
       const indexFileId = `${file.type}-index`; // FileIds use singular form
       const pluralKey = `${file.type}s`;
-      
+
       const indexFile = fileRegistry.getFile(indexFileId);
       if (!indexFile) {
         console.warn(`FileOperationsService: Index file ${indexFileId} not found, cannot remove entry`);
         return;
       }
-      
+
       const index = indexFile.data;
       const entries = index[pluralKey] || [];
-      
+
       // Remove entry
       const filtered = entries.filter((e: any) => e.id !== file.data.id);
-      
+
       if (filtered.length === entries.length) {
         console.log(`FileOperationsService: Entry ${file.data.id} not found in index, nothing to remove`);
         return;
       }
-      
+
       index[pluralKey] = filtered;
       index.updated_at = new Date().toISOString();
-      
+
       // Save index back (marks dirty automatically!)
       await fileRegistry.updateFile(indexFileId, index);
-      
+
       console.log(`FileOperationsService: Removed ${file.data.id} from index ${indexFileId}`);
     } catch (error) {
       console.error(`FileOperationsService: Failed to remove from index for ${file.fileId}:`, error);
@@ -744,20 +744,20 @@ class FileOperationsService {
     // Update file state
     file.isDirty = false;
     file.lastSaved = Date.now();
-    
+
     // Persist to IndexedDB
     await db.files.put(file);
-    
+
     // Notify listeners
     (fileRegistry as any).notifyListeners(fileId, file);
-    
+
     console.log(`FileOperationsService: Saved ${fileId}`);
-    
+
     // AUTO-UPDATE INDEX FILE (if this is not an index file itself)
     if (!fileId.endsWith('-index')) {
       await this.updateIndexFile(file);
     }
-    
+
     return true;
   }
 
@@ -788,14 +788,14 @@ class FileOperationsService {
             cancelLabel: 'Cancel',
             confirmVariant: 'danger'
           });
-          
+
           if (!confirm) return false;
-          
+
           // Delete the file
           return await this.deleteFile(fileId, { force: true, skipConfirm: true });
         }
       }
-      
+
       console.warn(`FileOperationsService: No original data for ${fileId}`);
       return false;
     }
@@ -809,25 +809,25 @@ class FileOperationsService {
         cancelLabel: 'Cancel',
         confirmVariant: 'danger'
       });
-      
+
       if (!confirm) return false;
     }
 
     // Revert to original
     file.data = structuredClone(file.originalData);
     file.isDirty = false;
-    
+
     // Persist to IndexedDB
     await db.files.put(file);
-    
+
     // Fire custom event so Navigator and tab indicators can update
-    window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
-      detail: { fileId, isDirty: false } 
+    window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', {
+      detail: { fileId, isDirty: false }
     }));
-    
+
     // Notify listeners
     (fileRegistry as any).notifyListeners(fileId, file);
-    
+
     console.log(`FileOperationsService: Reverted ${fileId}`);
     return true;
   }

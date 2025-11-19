@@ -32,7 +32,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     expandedSections: ['graphs', 'parameters', 'contexts', 'cases', 'nodes', 'events'],
     availableRepos: [],
     availableBranches: [],
-    
+
     // Filter and sort defaults
     viewMode: 'all',
     showLocalOnly: false,
@@ -71,12 +71,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const handleFileDirtyChanged = (event: any) => {
       const { fileId, isDirty } = event.detail;
-      
+
       // Ignore credentials file - it shouldn't trigger workspace reload
       if (fileId === 'credentials-credentials') {
         return;
       }
-      
+
       console.log(`🔄 NavigatorContext: File ${fileId} dirty state changed to ${isDirty}`);
       // NOTE: No need to reload items! The Navigator will automatically update
       // because NavigatorContent subscribes to registry changes via registryService.
@@ -104,16 +104,16 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       console.log('🔑 NavigatorContext: Loading credentials...');
       const result = await credentialsManager.loadCredentials();
       console.log('🔑 NavigatorContext: Credentials result:', result);
-      
+
       if (result.success && result.credentials) {
         const availableRepos = result.credentials.git.map(repo => repo.name);
-        
+
         // Determine default repo (NEW: prefer isDefault flag, fallback to defaultGitRepo or first repo)
         const repoWithDefaultFlag = result.credentials.git.find(r => r.isDefault);
         let defaultRepo = repoWithDefaultFlag?.name;
         console.log(`🔑 NavigatorContext: Repo with isDefault=true:`, repoWithDefaultFlag);
         console.log(`🔑 NavigatorContext: defaultRepo from isDefault flag:`, defaultRepo);
-        
+
         if (!defaultRepo) {
           // Check if defaultGitRepo is valid (exists in available repos)
           if (result.credentials.defaultGitRepo && availableRepos.includes(result.credentials.defaultGitRepo)) {
@@ -125,34 +125,34 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
             console.log(`🔑 NavigatorContext: Falling back to first available repo:`, defaultRepo);
           }
         }
-        
+
         // Use saved repo if it exists and is valid, otherwise use default
         const savedRepoName = savedState?.selectedRepo;
         console.log(`🔑 NavigatorContext: Saved repo from DB: ${savedRepoName}`);
         console.log(`🔑 NavigatorContext: Available repos: ${availableRepos.join(', ')}`);
         console.log(`🔑 NavigatorContext: Default repo: ${defaultRepo}`);
-        
+
         const repoToUse = savedRepoName && availableRepos.includes(savedRepoName) ? savedRepoName : defaultRepo;
         const gitCreds = result.credentials.git.find(repo => repo.name === repoToUse) || result.credentials.git[0];
-        
+
         console.log(`🔑 NavigatorContext: Using repo: ${repoToUse}`);
         console.log(`🔑 NavigatorContext: Selected git creds:`, gitCreds);
-        
+
         if (gitCreds) {
           // Get repo name (support both 'name' field and deprecated 'repo' field)
           const repoName = gitCreds.repo || gitCreds.name;
           console.log(`🔑 NavigatorContext: Updating repo to ${gitCreds.name} (${gitCreds.owner}/${repoName})`);
-          
+
           // Fetch branches for the selected repository
           console.log(`🔑 NavigatorContext: Fetching branches for ${gitCreds.name}...`);
           const branches = await fetchBranches(gitCreds.name);
           // Prefer configured branch from credentials, then fall back to 'main' or first available
           const selectedBranch = gitCreds.branch || (branches.includes('main') ? 'main' : branches[0]) || 'main';
-          
+
           // Use saved branch if valid, otherwise use default
           const savedBranchName = savedState?.selectedBranch;
           const branchToUse = savedBranchName && branches.includes(savedBranchName) ? savedBranchName : selectedBranch;
-          
+
           setState(prev => {
             const newState = {
               ...prev,
@@ -164,7 +164,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
             console.log('🔑 NavigatorContext: New state set:', newState);
             return newState;
           });
-          
+
           // Return chosen repo/branch to allow caller to immediately load
           return { repo: gitCreds.name, branch: branchToUse };
         } else {
@@ -206,13 +206,13 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       console.log('📁 NavigatorContext: Restoring state:', restoredState);
       console.log('📁 NavigatorContext: Saved selectedRepo:', appState.navigatorState.selectedRepo);
       setState(restoredState);
-      
+
       // Restore local items
       if (appState.localItems) {
         console.log('📁 NavigatorContext: Restoring local items:', appState.localItems);
         setLocalItems(appState.localItems);
       }
-      
+
       return restoredState;
     } else {
       console.log('📁 NavigatorContext: No saved state found in DB');
@@ -274,7 +274,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   const fetchBranches = async (repo: string) => {
     try {
       const credentialsResult = await credentialsManager.loadCredentials();
-      
+
       if (!credentialsResult.success || !credentialsResult.credentials) {
         console.log('NavigatorContext: No credentials available for fetching branches');
         return [];
@@ -289,13 +289,13 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       const { gitService } = await import('../services/gitService');
       // @ts-ignore - Dynamic import type inference issue
       const branchesResult = await gitService.getBranches(gitCreds.owner, gitCreds.repo || gitCreds.name, gitCreds.token);
-      
+
       if (branchesResult.success && branchesResult.data) {
         const branches = branchesResult.data.map((branch: any) => branch.name);
         console.log(`NavigatorContext: Found branches for ${repo}:`, branches);
         return branches;
       }
-      
+
       return [];
     } catch (error) {
       console.error('NavigatorContext: Failed to fetch branches:', error);
@@ -322,13 +322,13 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     if (repo) {
       // Fetch branches for the selected repository
       const branches = await fetchBranches(repo);
-      
+
       // Get credentials for this repo to find the configured branch
       const credentialsResult = await credentialsManager.loadCredentials();
       const gitCreds = credentialsResult.credentials?.git?.find((r: any) => r.name === repo);
       // Prefer configured branch from credentials, then fall back to 'main' or first available
       const selectedBranch = gitCreds?.branch || (branches.includes('main') ? 'main' : branches[0]) || '';
-      
+
       setState(prev => ({
         ...prev,
         availableBranches: branches,
@@ -336,7 +336,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       }));
 
       console.log(`🔄 NavigatorContext: Loading items for ${repo}/${selectedBranch} (loadItems will clear FileRegistry)`);
-      
+
       // Load items for this repository with the selected branch (loadItems will clear FileRegistry)
       await loadItems(repo, selectedBranch);
     }
@@ -347,10 +347,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    */
   const selectBranch = useCallback(async (branch: string) => {
     console.log(`🔄 NavigatorContext: selectBranch called with: ${branch}`);
-    
+
     // Get current repo from state
     let currentRepo = state.selectedRepo;
-    
+
     setState(prev => {
       currentRepo = prev.selectedRepo; // Get latest value
       return {
@@ -360,7 +360,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     });
 
     console.log(`🔄 NavigatorContext: Loading items for ${currentRepo}/${branch}`);
-    
+
     // Reload items for new branch (loadItems will clear FileRegistry)
     await loadItems(currentRepo, branch);
   }, [state.selectedRepo]);
@@ -378,7 +378,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         console.warn('Failed to save expanded sections to localStorage:', e);
       }
       return {
-      ...prev,
+        ...prev,
         expandedSections: newExpandedSections
       };
     });
@@ -397,7 +397,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         console.warn('Failed to save expanded sections to localStorage:', e);
       }
       return {
-      ...prev,
+        ...prev,
         expandedSections: newExpandedSections
       };
     });
@@ -436,7 +436,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
     loadingRef.current = true;
     setIsLoading(true);
-    
+
     // Clear FileRegistry before loading new workspace to prevent file ID collisions
     // Files from different repos can have same IDs (e.g. parameter-checkout-duration)
     console.log(`🧹 WorkspaceService: Clearing FileRegistry before loading ${repo}/${branch}`);
@@ -444,12 +444,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     (fileRegistry as any).files.clear();
     (fileRegistry as any).listeners.clear();
     console.log(`🧹 WorkspaceService: Cleared ${registrySize} files from FileRegistry`);
-    
+
     try {
       // Get credentials
       const credentialsResult = await credentialsManager.loadCredentials();
       console.log('📦 WorkspaceService: Credentials check result:', credentialsResult);
-      
+
       if (!credentialsResult.success || !credentialsResult.credentials) {
         console.log('📦 NavigatorContext: No credentials available, cannot load repository items');
         // Clear items and registry indexes
@@ -470,7 +470,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       // Find the credentials for this repository
       const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === repo);
       console.log(`📦 NavigatorContext: Looking for creds for repo ${repo}:`, gitCreds);
-      
+
       if (!gitCreds) {
         console.log(`📦 NavigatorContext: No credentials found for repository ${repo}`);
         // Clear items and registry indexes
@@ -490,7 +490,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
       // Check if workspace exists
       const workspaceExists = await workspaceService.workspaceExists(repo, branch);
-      
+
       if (!workspaceExists) {
         console.log(`🔄 WorkspaceService: Workspace ${repo}/${branch} doesn't exist, cloning...`);
         await workspaceService.cloneWorkspace(repo, branch, gitCreds);
@@ -502,7 +502,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       // Get all files from workspace (IDB)
       let workspaceFiles = await workspaceService.getWorkspaceFiles(repo, branch);
       console.log(`📦 WorkspaceService: Loaded ${workspaceFiles.length} files from workspace`);
-      
+
       // If workspace exists but has no files, force re-clone
       if (workspaceFiles.length === 0 && workspaceExists) {
         console.log(`⚠️ WorkspaceService: Workspace exists but is empty! Force re-cloning...`);
@@ -531,7 +531,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           description: file.isLocal ? 'Local only (not committed)' : undefined,
           isLocal: file.isLocal
         }));
-      
+
       // Load registry indexes from current workspace files only (not from stale IDB)
       const parametersIndexFile = workspaceFiles.find(f => f.fileId === 'parameter-index');
       const contextsIndexFile = workspaceFiles.find(f => f.fileId === 'context-index');
@@ -551,20 +551,20 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         nodes: nodesIndexFile?.data,
         events: eventsIndexFile?.data
       });
-      
+
       setItems(items);
-      
+
       // Update state with registry indexes
-        setState(prev => ({
-          ...prev,
-          registryIndexes: {
+      setState(prev => ({
+        ...prev,
+        registryIndexes: {
           parameters: parametersIndexFile?.data || undefined,
           contexts: contextsIndexFile?.data || undefined,
           cases: casesIndexFile?.data || undefined,
           nodes: nodesIndexFile?.data || undefined,
           events: eventsIndexFile?.data || undefined
-          }
-        }));
+        }
+      }));
 
     } catch (error) {
       console.error('Failed to load items:', error);
@@ -593,11 +593,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       // Check if item already exists
       const exists = prev.some(i => i.id === item.id && i.type === item.type);
       if (exists) return prev;
-      
+
       return [...prev, { ...item, isLocal: true }];
     });
   }, []);
-  
+
   /**
    * Remove local item (e.g., after commit)
    */
@@ -608,7 +608,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       return prev.filter(item => !(item.id === id && item.type === type));
     });
   }, []);
-  
+
   /**
    * Refresh items from repository
    */
@@ -633,11 +633,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
     // Apply search query
     if (state.searchQuery) {
-    const query = state.searchQuery.toLowerCase();
-      filteredItems = filteredItems.filter(item => 
-      item.name.toLowerCase().includes(query) ||
-      item.description?.toLowerCase().includes(query)
-    );
+      const query = state.searchQuery.toLowerCase();
+      filteredItems = filteredItems.filter(item =>
+        item.name.toLowerCase().includes(query) ||
+        item.description?.toLowerCase().includes(query)
+      );
     }
 
     // Apply view mode filter (All vs Files Only)
@@ -664,25 +664,25 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         switch (state.sortBy) {
           case 'name':
             return a.name.localeCompare(b.name);
-          
+
           case 'type':
             if (a.type === b.type) {
               return a.name.localeCompare(b.name);
             }
             return a.type.localeCompare(b.type);
-          
+
           case 'status':
             // Sort by local first, then by name
             if (a.isLocal !== b.isLocal) {
               return a.isLocal ? -1 : 1;
             }
             return a.name.localeCompare(b.name);
-          
+
           case 'modified':
           case 'opened':
             // TODO: Implement when we have timestamp data
             return a.name.localeCompare(b.name);
-          
+
           default:
             return 0;
         }
@@ -744,19 +744,19 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     // Allow external callers (e.g., credentials editor) to reload creds and refresh
     reloadCredentials: async () => {
       console.log('🔄 NavigatorContext: Reloading credentials and workspace...');
-      
+
       // Get the OLD repo/branch before reloading credentials
       const oldRepo = state.selectedRepo;
       const oldBranch = state.selectedBranch;
       console.log(`🔄 NavigatorContext: Old workspace: ${oldRepo}/${oldBranch}`);
-      
+
       // Reload credentials and determine NEW repo/branch
       // DON'T use saved state - force re-evaluation of default repo from credentials
       const repoBranch = await loadCredentialsAndUpdateRepo(null);
-      
+
       if (repoBranch?.repo && repoBranch?.branch) {
         console.log(`🔄 NavigatorContext: New workspace: ${repoBranch.repo}/${repoBranch.branch}`);
-        
+
         try {
           // Force re-clone NEW workspace with new credentials
           console.log('🔄 NavigatorContext: Cloning new workspace with updated credentials...');
@@ -773,13 +773,13 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
               await workspaceService.cloneWorkspace(repoBranch.repo, repoBranch.branch, gitCreds);
             }
           }
-          
+
           // Only delete OLD workspace AFTER successfully cloning the new one
           if (oldRepo && oldBranch && (oldRepo !== repoBranch.repo || oldBranch !== repoBranch.branch)) {
             console.log(`🔄 NavigatorContext: Deleting old workspace ${oldRepo}/${oldBranch}...`);
             await workspaceService.deleteWorkspace(oldRepo, oldBranch);
           }
-          
+
           // Load items from new workspace
           await loadItems(repoBranch.repo, repoBranch.branch);
         } catch (error) {
@@ -789,44 +789,44 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    
+
     // Force full reload - delete workspace and re-clone (escape hatch for smart pull issues)
     forceFullReload: async () => {
       console.log('🔄 NavigatorContext: Force full reload requested...');
-      
+
       if (!state.selectedRepo || !state.selectedBranch) {
         console.warn('⚠️ NavigatorContext: No repo/branch selected, cannot force reload');
         return;
       }
-      
+
       const repo = state.selectedRepo;
       const branch = state.selectedBranch;
-      
+
       try {
         setIsLoading(true);
-        
+
         // Delete workspace
         console.log(`🗑️ NavigatorContext: Deleting workspace ${repo}/${branch}...`);
         await workspaceService.deleteWorkspace(repo, branch);
-        
+
         // Get credentials
         const credentialsResult = await credentialsManager.loadCredentials();
         if (!credentialsResult.success || !credentialsResult.credentials) {
           throw new Error('Failed to load credentials');
         }
-        
+
         const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === repo);
         if (!gitCreds) {
           throw new Error(`Git credentials not found for ${repo}`);
         }
-        
+
         // Re-clone
         console.log(`📦 NavigatorContext: Re-cloning workspace ${repo}/${branch}...`);
         await workspaceService.cloneWorkspace(repo, branch, gitCreds);
-        
+
         // Reload items
         await loadItems(repo, branch);
-        
+
         console.log('✅ NavigatorContext: Force reload complete!');
       } catch (error) {
         console.error('❌ NavigatorContext: Force reload failed:', error);
@@ -835,7 +835,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false);
       }
     },
-    
+
     // Filter and sort operations
     setViewMode,
     setShowLocalOnly,
@@ -845,30 +845,30 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setGroupBySubCategories,
     setGroupByTags
   };
-  
+
   // Listen for last view closed events
   // NOTE: We DON'T remove local items when tabs close - they're part of the workspace
   // Local files persist in the navigator until explicitly deleted by the user
   useEffect(() => {
     const handleLastViewClosed = (event: CustomEvent) => {
       const { fileId } = event.detail;
-      
+
       console.log(`NavigatorContext: Last view of file ${fileId} closed - file persists in workspace`);
-      
+
       // Local files stay in the navigator - they're part of the workspace
       // Only explicit user delete action removes them
     };
-    
+
     window.addEventListener('dagnet:lastViewClosed', handleLastViewClosed as EventListener);
     return () => window.removeEventListener('dagnet:lastViewClosed', handleLastViewClosed as EventListener);
   }, [localItems, removeLocalItem]);
 
   return (
-    <NavigatorContext.Provider value={{ 
-      state, 
-      operations, 
-      items: getFilteredItems(), 
-      isLoading 
+    <NavigatorContext.Provider value={{
+      state,
+      operations,
+      items: getFilteredItems(),
+      isLoading
     }}>
       {children}
     </NavigatorContext.Provider>

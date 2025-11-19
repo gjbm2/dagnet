@@ -556,6 +556,21 @@ const scriptEnv = {
    | e.checkout-to-purchase.p.stdev       | 0.03        | 0.02           |
    ```
 
+3. **Sheet: "Conditional Probabilities"** (for conditional probability parameters)
+   ```
+   | A                                                  | B (Value) |
+   |----------------------------------------------------|-----------|
+   | e.checkout-to-purchase.visited(promo).p.mean       | 0.72      |
+   | e.checkout-to-purchase.visited(promo).p.stdev      | 0.04      |
+   | e.checkout-to-purchase.visited(blog).p.mean        | 0.58      |
+   | e.cart-to-checkout.context(device:mobile).p.mean   | 0.65      |
+   ```
+
+   **Note:** Conditional probability HRNs use the format `e.<edge-id>.<condition>.p.<field>` where:
+   - `<condition>` is the condition string (e.g., `visited(promo)`, `context(device:mobile)`)
+   - The condition sits **directly** between the edge ID and `.p.` (no `conditional_p` segment)
+   - This matches the canonical format used in scenarios and dagCalc
+
 3. **In DagNet**:
    - Select edge `checkout-to-purchase`
    - Open connection settings
@@ -675,28 +690,29 @@ Sheets **must not** introduce a second, divergent DSL/HRN parsing implementation
     - `scalar_value` (Pattern A)
     - `param_pack` (Patterns B/C) as a flat map `{ key: value }`
     - `errors` (non-fatal parse issues)
-  - A provisional helper (`extractSheetsUpdateData`) currently performs some ad‑hoc HRN/key parsing for direct edge updates; this MUST be refactored to use the canonical param‑pack engine described above.
+  - ✅ **IMPLEMENTED**: Sheets now uses the canonical `ParamPackDSLService` for all HRN/DSL parsing, ensuring a single code path for both scenarios and Sheets.
 
 **Outstanding work**
 
-- [ ] **Rename and formalize the canonical param‑pack engine as a general DSL service**:
-  - Rename `ScenarioFormatConverter` to something neutral and DSL-focused (e.g. `ParamPackDSLService`), and update imports.
-  - Treat this service as the single home for:
+- [x] ✅ **Rename and formalize the canonical param‑pack engine as a general DSL service**:
+  - ✅ Renamed `ScenarioFormatConverter` to `ParamPackDSLService` and updated all imports.
+  - ✅ This service is now the single home for:
     - `flattenParams()` / `unflattenParams()` (HRN ↔ `ScenarioParams`).
+    - `parseFlatHRNToParams()` (HRN resolution + structural parsing in one step).
     - `applyScopeToParams(params, scope, graph)` (scoping).
     - Format detection and nested/flat conversions used by scenarios and other tools.
-- [ ] **Keep the canonical param‑pack engine centralized in this renamed service**:
+- [x] ✅ **Keep the canonical param‑pack engine centralized in this service**:
   - The “flat HRN map ↔ `ScenarioParams` ↔ graph diff” logic is owned by:
     - `ParamPackDSLService.unflattenParams()` / `flattenParams()`.
     - `CompositionService.composeParams()` / `mergeEdgeParams()` / `mergeNodeParams()`.
     - Existing `GraphParamExtractor` / `UpdateManager` mappings.
   - Clearly document the supported key shapes (shared by scenarios, Sheets, and future sources):
     - Edge params: `e.edge-id.p.*`, `e.from(a).to(b).p.*`, `e.edge-id.cost_gbp.*`, `e.edge-id.cost_time.*`, etc.
-    - Edge conditionals: `e.edge-id.conditional_p.<condition>.p.*` (using the same `condition` strings/DSL paths scenarios already use).
+    - Edge conditionals: `e.edge-id.<condition>.p.*` where `<condition>` is the condition string (e.g. `visited(promo)`, `visited(a).exclude(b)`). The condition sits **directly** between edge ID and `.p.` with no `conditional_p` segment.
     - Node params: `n.node-id.entry.*`, `n.node-id.costs.*`, etc.
     - Case variants: `n.case-node-id.case(<caseId>:<variantName>).weight`.
     - Event-linked params (where applicable): keys that ultimately map to `event_id`s via the registry / HRNResolver.
-- [ ] **Extend scoping in this engine so it is the only place that understands “what is in scope?”**:
+- [x] ✅ **Extend scoping in this engine so it is the only place that understands "what is in scope?"**:
   - Scope can describe:
     - A specific **edge/param slot** (e.g. edge UUID + `p` or `cost_gbp`).
     - A specific **edge conditional entry** (edge UUID + `condition` string).
@@ -709,20 +725,21 @@ Sheets **must not** introduce a second, divergent DSL/HRN parsing implementation
     - Only params **within scope** are retained in the diff (others are *explicitly ignored* for that operation).
     - Out‑of‑scope but valid keys are reported as “skipped” (for logging / UX), not silently dropped.
   - When no scope is provided (e.g. scenario overlays), the engine behaves as it does today: scope is effectively the **entire graph**.
-- [ ] Define **how structured diffs are consumed** in distinct application layers:
+- [x] ✅ Define **how structured diffs are consumed** in distinct application layers:
   - For **scenarios**:
     - Continue to treat `ScenarioParams` diffs as **overlays** composed via `composeParams()` for rendering and analysis only.
     - The live graph is **not** mutated by the param‑pack engine; it is only mutated when the user explicitly flattens scenarios.
   - For **data ingestion sources** (Sheets, Amplitude, Statsig, etc.):
     - Convert scoped `ScenarioParams` diffs into external payloads (`{ mean, stdev, n, k, variants, ... }`) and pass them through the existing ingestion pipeline:
       - `DataOperationsService` → `UpdateManager.handleExternalToGraph` / `handleExternalToFile` → graph/file mutation + rebalance + provenance.
-- [ ] Ensure this engine is the **only** place that:
+- [x] ✅ Ensure this engine is the **only** place that:
   - Parses HRN-style keys into structured params, and
   - Interprets conditional DSL / case variant selectors.
+  - Resolves HRNs (e.from(a).to(b) → edge UUID, visited(node-id) → visited(node-uuid)).
 
 **Sheets-specific behavior (built on the canonical engine)**
 
-- [ ] For Sheets `param_pack` ingestion:
+- [x] ✅ For Sheets `param_pack` ingestion:
   - Treat the pack as a **flat HRN map**, pass it through the canonical engine with an appropriate **scope**:
     - Direct edge pull (`getFromSourceDirect` on a specific edge/param slot):
       - Scope = “this edge UUID/id + this param slot (+ optional condition string when targeting conditional_p)”.
@@ -731,7 +748,7 @@ Sheets **must not** introduce a second, divergent DSL/HRN parsing implementation
     - Future batch/multi-edge Sheets workflows:
       - Scope can be “entire graph” or a subset, as appropriate.
   - Convert the resulting scoped `ScenarioParams` diff into the external payload expected by `UpdateManager.handleExternalToGraph` / `handleExternalToFile` (schema terminology: `mean`, `stdev`, `n`, `k`, `variants`, etc.), so Sheets uses the **same graph/file mutation code paths** as scenarios, Amplitude, Statsig, etc.
-- [ ] For `scalar_value` (Pattern A):
+- [x] ✅ For `scalar_value` (Pattern A):
   - Treat it as a **degenerate param pack** for the scoped param:
     - E.g. in a direct edge pull for `p`, interpret `scalar_value` as `p.mean` *only if* the pack is otherwise empty for that scope.
   - Feed it through the same engine (`unflattenParams` + `applyScopeToParams`) so that any future enhancements to param semantics (e.g. bounds, distributions) apply uniformly.
