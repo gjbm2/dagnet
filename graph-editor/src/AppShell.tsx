@@ -41,6 +41,12 @@ function AppShellContent() {
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
 
+  // Keep a ref to navState for the fileOperationsService callback
+  const navStateRef = useRef(navState);
+  useEffect(() => {
+    navStateRef.current = navState;
+  }, [navState]);
+
   // Init-from-secret modal state
   const [showInitCredsModal, setShowInitCredsModal] = useState(false);
   const [initSecret, setInitSecret] = useState('');
@@ -57,7 +63,11 @@ function AppShellContent() {
     fileOperationsService.initialize({
       navigatorOps: navOperations,
       tabOps: tabOperations,
-      dialogOps
+      dialogOps,
+      getWorkspaceState: () => ({
+        repo: navStateRef.current.selectedRepo,
+        branch: navStateRef.current.selectedBranch
+      })
     });
     
     repositoryOperationsService.initialize({
