@@ -235,17 +235,22 @@ print_blue "[2/6] Updating CHANGELOG.md..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
   CURRENT_DATE=$(date +"%B %d, %Y")
   
-  # Create new changelog entry
-  NEW_ENTRY="## Version ${NEW_DISPLAY}
+  # Create new changelog entry in a temp file
+  cat > /tmp/changelog_entry.tmp << EOF
+## Version ${NEW_DISPLAY}
 **Released:** ${CURRENT_DATE}
 
 ${RELEASE_NOTES}
 ---
 
-"
+EOF
   
   # Insert after the first line (# DagNet Release Notes)
-  sed -i "2i\\${NEW_ENTRY}" CHANGELOG.md
+  head -n 1 CHANGELOG.md > /tmp/changelog_new.tmp
+  cat /tmp/changelog_entry.tmp >> /tmp/changelog_new.tmp
+  tail -n +2 CHANGELOG.md >> /tmp/changelog_new.tmp
+  mv /tmp/changelog_new.tmp CHANGELOG.md
+  rm /tmp/changelog_entry.tmp
   
   print_green "  ✓ Added release notes to CHANGELOG.md"
 else
