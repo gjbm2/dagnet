@@ -872,8 +872,6 @@ export default function PropertiesPanel({
                           'Are you sure you want to commit this ID?',
                         confirmLabel: 'OK',
                         cancelLabel: 'Cancel',
-                        // Encourage Cancel as the "safe" choice
-                        confirmVariant: 'secondary',
                       });
 
                       if (!confirmed) {

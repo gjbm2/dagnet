@@ -18,11 +18,39 @@ import {
   mockGoogleAuthFailure,
 } from '../../test/mocks/googleSheets';
 
+// Mock the jose library
+vi.mock('jose', () => {
+  class MockSignJWT {
+    constructor(payload: any) {}
+    setProtectedHeader(header: any) { return this; }
+    setIssuer(issuer: string) { return this; }
+    setSubject(subject: string) { return this; }
+    setAudience(audience: string) { return this; }
+    setIssuedAt(iat: number) { return this; }
+    setExpirationTime(exp: number) { return this; }
+    async sign(privateKey: any) { return 'mock.jwt.token'; }
+  }
+  
+  return {
+    importPKCS8: vi.fn((key: string) => {
+      if (key === 'invalid-key') {
+        return Promise.reject(new Error('Invalid private key format'));
+      }
+      return Promise.resolve('mock-private-key' as any);
+    }),
+    SignJWT: MockSignJWT,
+  };
+});
+
 describe('Google Service Account Authentication', () => {
   let mocks: ReturnType<typeof setupGoogleSheetsMocks>;
   
-  beforeEach(() => {
+  beforeEach(async () => {
     mocks = setupGoogleSheetsMocks();
+    vi.clearAllMocks();
+    // Clear token cache before each test
+    const { clearTokenCache } = await import('../googleServiceAccountAuth');
+    clearTokenCache();
   });
   
   afterEach(() => {
@@ -122,12 +150,14 @@ describe('Google Service Account Authentication', () => {
     it('should refresh token before expiry buffer', async () => {
       const { getServiceAccountAccessToken } = await import('../googleServiceAccountAuth');
       
+      vi.useFakeTimers();
+      const now = Date.now();
+      
       // First call
       const token1 = await getServiceAccountAccessToken(mockServiceAccount);
       
-      // Mock time passing (5 minutes + 1 second past expiry buffer)
-      vi.useFakeTimers();
-      vi.advanceTimersByTime(5 * 60 * 1000 + 1000);
+      // Advance time beyond expiry buffer (3600s - 300s buffer + 1s = 3301s)
+      vi.setSystemTime(now + (3600 - 300 + 1) * 1000);
       
       // Second call should trigger refresh
       const token2 = await getServiceAccountAccessToken(mockServiceAccount);
@@ -174,8 +204,9 @@ describe('Google Service Account Authentication', () => {
       
       // JWT should be in the body as 'assertion'
       const fetchCall = mocks.mockFetch.mock.calls[0];
-      expect(fetchCall[1].body).toContain('assertion=');
-      expect(fetchCall[1].body).toContain('grant_type=');
+      const bodyString = fetchCall[1].body.toString();
+      expect(bodyString).toContain('assertion=');
+      expect(bodyString).toContain('grant_type=');
     });
   });
 });
