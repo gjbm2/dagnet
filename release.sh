@@ -293,8 +293,8 @@ if [[ "$MERGE_TO_MAIN" == true ]]; then
   # Fetch latest main
   git fetch origin main
   
-  # Checkout main
-  git checkout main
+  # Checkout main (force to avoid conflicts with local files)
+  git checkout -f main
   
   # Pull latest changes
   git pull origin main
