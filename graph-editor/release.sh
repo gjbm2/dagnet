@@ -219,7 +219,7 @@ echo ""
 
 # Update package.json version
 print_blue "[1/6] Updating package.json..."
-npm version "$INCREMENT_TYPE" --no-git-tag-version
+npm version "$NEW_VERSION" --no-git-tag-version
 
 # Verify the version was updated correctly
 UPDATED_VERSION=$(node -p "require('./package.json').version")
