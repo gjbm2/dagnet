@@ -41,6 +41,7 @@ class FileOperationsService {
   private navigatorOps: any = null;
   private tabOps: any = null;
   private dialogOps: any = null;
+  private getWorkspaceState: (() => { repo: string; branch: string }) | null = null;
 
   /**
    * Initialize the service with required dependencies
@@ -50,10 +51,12 @@ class FileOperationsService {
     navigatorOps: any;
     tabOps: any;
     dialogOps?: any;
+    getWorkspaceState?: () => { repo: string; branch: string };
   }) {
     this.navigatorOps = deps.navigatorOps;
     this.tabOps = deps.tabOps;
     this.dialogOps = deps.dialogOps;
+    this.getWorkspaceState = deps.getWorkspaceState || null;
   }
 
   /**
@@ -211,11 +214,20 @@ class FileOperationsService {
     const filePath = fileId.endsWith('-index')
       ? `${fileId}.yaml`
       : `${type}s/${name}.yaml`;
+    
+    // Get current workspace state to ensure persistence works correctly
+    // If we use 'local'/'main' when the user is in a specific repo, the file will be created
+    // but won't be loaded on next refresh because WorkspaceService filters by repo/branch.
+    const workspace = this.getWorkspaceState ? this.getWorkspaceState() : { repo: 'local', branch: 'main' };
+    const repository = workspace.repo || 'local';
+    const branch = workspace.branch || 'main';
+    
+    console.log(`FileOperationsService: Creating file in workspace ${repository}/${branch}`);
 
     const file = await fileRegistry.getOrCreateFile(
       fileId,
       type,
-      { repository: 'local', path: filePath, branch: 'main' },
+      { repository, path: filePath, branch },
       defaultData
     );
 
