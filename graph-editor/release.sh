@@ -33,6 +33,15 @@ done
 # Navigate to script directory
 cd "$(dirname "$0")"
 
+# Check if there are uncommitted changes and commit them FIRST
+if [[ -n $(git status --porcelain) ]]; then
+  print_yellow "⚠ You have uncommitted changes."
+  print_yellow "These will be committed before proceeding with the release."
+  echo ""
+  read -p "Press Enter to continue or Ctrl+C to cancel..."
+  echo ""
+fi
+
 # Read current version from package.json
 CURRENT_VERSION=$(node -p "require('./package.json').version")
 CURRENT_DISPLAY=$(echo "$CURRENT_VERSION" | sed 's/\.0-beta$/b/')
@@ -177,7 +186,7 @@ print_yellow "Enter release notes (optional, press Ctrl+D when done):"
 print_yellow "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Describe what's new in this release:"
-echo "(Leave blank to skip changelog update)"
+echo "(This will be used as your commit message and added to CHANGELOG)"
 echo ""
 
 # Read multi-line input
@@ -187,24 +196,26 @@ while IFS= read -r line; do
 done
 
 echo ""
-print_blue "Proceeding with release..."
-echo ""
 
-# Check if there are uncommitted changes and commit them
-if [[ -n $(git status --porcelain) ]]; then
-  print_yellow "Found uncommitted changes. Committing them first..."
+# Commit any uncommitted changes BEFORE proceeding
+HAS_UNCOMMITTED=$(git status --porcelain)
+if [[ -n "$HAS_UNCOMMITTED" ]]; then
+  print_blue "Committing current changes..."
   git add .
   
   # Use release notes as commit message if provided, otherwise use default
   if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
     # Strip trailing newlines for commit message
-    PRE_RELEASE_MESSAGE=$(echo "$RELEASE_NOTES" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
-    git commit -m "$PRE_RELEASE_MESSAGE"
+    COMMIT_MESSAGE=$(echo "$RELEASE_NOTES" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+    git commit -m "$COMMIT_MESSAGE"
   else
     git commit -m "Pre-release commit for v${NEW_VERSION}"
   fi
   echo ""
 fi
+
+print_blue "Proceeding with release..."
+echo ""
 
 # Update package.json version
 print_blue "[1/6] Updating package.json..."
