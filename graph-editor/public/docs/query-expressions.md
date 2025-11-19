@@ -1,636 +1,294 @@
-# Query Expression Syntax & Semantics
+# DagNet DSL: Graph Queries & Parameter Addressing
 
-**Version:** 1.0  
+**Version:** 2.0  
 **Last Updated:** November 2025
 
 ---
 
 ## Overview
 
-Query expressions are a domain-specific language (DSL) for specifying data retrieval constraints in DagNet. They define **which path** through a conversion graph you want to retrieve data for, when multiple paths exist between two nodes.
+This document defines the **unified DSL (Domain Specific Language)** used throughout DagNet for:
 
-**Use Cases:**
-- **Parameter Data Retrieval:** Specify which events to query from Amplitude
-- **Conditional Probabilities:** Define path conditions (e.g., "probability of B→C given visited A")
-- **Parameter Packs:** Group related parameters with shared constraints
-- **Python Analytics:** Use the same syntax in dagCalc and Bayesian modeling scripts
+1. **Identifying graph entities** (edges, nodes, cases) via Human-Readable Names (HRNs)
+2. **Addressing parameters** on those entities (e.g., `e.edge-id.p.mean`, `n.node-id.case(exp:ctrl).weight`)
+3. **Querying analytics data** via structural path expressions (e.g., `from(a).visited(m).to(z).window(...)`)
 
----
+The DSL operates in **layers**, with a shared identity/HRN foundation and context‑specific extensions for param packs vs analytics queries.
 
-## Quick Start
-
-### Basic Syntax
-
-```
-from(start-node).to(end-node)
-```
-
-This is the simplest query: retrieve data for **all** paths from `start-node` to `end-node`.
-
-### Example
-
-**Graph:**
-```
-homepage → product-page → checkout → purchase
-```
-
-**Query:**
-```
-from(product-page).to(checkout)
-```
-
-**Meaning:** Get conversion rate from product page to checkout (includes all traffic).
+**Critical architectural principle**: There is **one canonical parser** for HRN param packs (`ScenarioFormatConverter.unflattenParams`), used by both scenarios and external data sources (e.g., Google Sheets). No duplicate DSL parsing logic exists.
 
 ---
 
-## Core Concepts
+## Layers
 
-### Node Identifiers
+### Layer 0: Graph Identity & HRNs
 
-**What they are:**
-- `node_id` in the graph (e.g., `homepage`, `product-page`)
-- Uses **ids** from graph nodes (not UUIDs)
-- Falls back to registry IDs if node has no id
+**Purpose**: Provide unambiguous, human-readable references to graph entities.
 
-**Conventions:**
-- Lowercase with hyphens: `checkout-page`
-- Descriptive: `abandoned-cart-email`
-- Consistent across graph, registry, and external systems
+**Syntax**:
+- Edges: `e.<edge-id>` or `e.from(<node-id>).to(<node-id>)`
+- Nodes: `n.<node-id>`
+- Cases (A/B tests): `n.<case-node-id>.case(<case-id>:<variant-name>)`
 
-### Path Constraints
+**Examples**:
+- `e.checkout-to-purchase` → edge by id
+- `e.from(cart).to(purchase)` → edge by topology
+- `n.homepage` → node by id
+- `n.promo-gate.case(pricing-test:treatment)` → case variant
 
-Query expressions define a **target path** by specifying:
-1. **Start and end:** Required (`.from()` and `.to()`)
-2. **Exclusions:** Nodes the path must NOT visit (`.exclude()`)
-3. **Requirements:** Nodes the path MUST visit (`.visited()`)
-4. **Case filters:** Experiment variants to include (`.case()`)
+**Resolver**: `HRNResolver` provides `resolveEdgeHRN`, `resolveNodeHRN`, `resolveAllHRNs` to map HRNs to UUIDs.
 
 ---
 
-## Syntax Reference
+### Layer 1: Param Pack DSL (Parameters & Overlays)
 
-### 1. From-To (Required)
+**Purpose**: Address specific parameter fields on graph entities for reading/writing values (scenarios, Sheets, etc.).
 
-```
-from(node-id).to(node-id)
-```
+**Syntax**:
+- Edge probability: `e.<edge-id>.p.mean`, `e.<edge-id>.p.stdev`
+- Edge costs: `e.<edge-id>.cost_gbp.mean`, `e.<edge-id>.cost_time.mean`
+- Conditional probabilities: `e.<edge-id>.conditional_p.<condition>.p.mean`
+- Case variant weights: `n.<node-id>.case(<case-id>:<variant>).weight`
+- Node entry weights: `n.<node-id>.entry.weight`
 
-**Purpose:** Define start and end nodes of the path.
-
-**Rules:**
-- Must always appear (both required)
-- Order doesn't matter: `from(a).to(b)` = `to(b).from(a)`
-- Can only specify one `from` and one `to`
-
-**Examples:**
-```
-from(homepage).to(purchase)
-from(signup-start).to(signup-complete)
-```
-
----
-
-### 2. Exclude (Optional)
-
-```
-.exclude(node-id)
-.exclude(node-id, node-id, ...)
-```
-
-**Purpose:** Rule out paths that visit specific nodes.
-
-**Use When:**
-- Multiple paths exist, and you want to avoid certain routes
-- Isolating "direct" conversions vs. "detour" conversions
-- Filtering out specific user journeys
-
-**Examples:**
-
-**Single exclusion:**
-```
-from(homepage).to(purchase).exclude(abandoned-cart)
-```
-*Meaning:* Get conversions that didn't abandon cart.
-
-**Multiple exclusions:**
-```
-from(homepage).to(purchase).exclude(help-page, faq-page)
-```
-*Meaning:* Get conversions without visiting support pages.
-
-**Real-world scenario:**
-```
-Graph:
-  homepage → product → checkout → purchase
-  homepage → product → cart → checkout → purchase
-  
-Query: from(homepage).to(purchase).exclude(cart)
-Result: Only the direct path (skips cart step)
-```
-
----
-
-### 3. Visited (Optional)
-
-```
-.visited(node-id)
-.visited(node-id, node-id, ...)
-```
-
-**Purpose:** Require paths that visit specific nodes (conditional probability).
-
-**Use When:**
-- Measuring "what happens after X?"
-- Conditional conversion rates
-- Sequential event analysis
-
-**Examples:**
-
-**Single requirement:**
-```
-from(homepage).to(purchase).visited(email-click)
-```
-*Meaning:* Conversion rate for users who clicked an email first.
-
-**Multiple requirements:**
-```
-from(product-page).to(purchase).visited(reviews-page, add-to-cart)
-```
-*Meaning:* Users who viewed reviews AND added to cart.
-
-**Real-world scenario (conditional probability):**
-```
-Graph:
-  homepage → blog → product → purchase
-  homepage → product → purchase
-  
-Query: from(product).to(purchase).visited(blog)
-Result: Conversion rate for users who came via blog
-```
-
----
-
-### 4. Case (Optional)
-
-```
-.case(case-id:variant)
-.case(case-id:variant, case-id:variant, ...)
-```
-
-**Purpose:** Filter by A/B test or experiment variant.
-
-**Use When:**
-- Analyzing experiment results
-- Comparing treatment vs. control
-- Segmenting by user group
-
-**Syntax:**
-- `case-id`: Identifier for the experiment (from case registry)
-- `variant`: Specific variant name (e.g., `treatment`, `control`, `variant-a`)
-
-**Examples:**
-
-**Single case:**
-```
-from(homepage).to(purchase).case(pricing-test:treatment)
-```
-*Meaning:* Conversion rate for users in the pricing test treatment group.
-
-**Multiple cases:**
-```
-from(homepage).to(purchase).case(pricing-test:treatment, ui-redesign:variant-b)
-```
-*Meaning:* Users in BOTH the pricing treatment AND UI variant B.
-
-**Real-world scenario:**
-```
-Experiment: "checkout-flow-v2"
-Variants: control, simplified, express
-
-Query: from(cart).to(purchase).case(checkout-flow-v2:simplified)
-Result: Conversion rate for simplified checkout variant only
-```
-
----
-
-## Semantics & Evaluation
-
-### Path Matching
-
-A query expression defines a **filter** over all possible paths in the graph.
-
-**Matching Algorithm:**
-```
-1. Find all paths from source to target
-2. For each path P:
-   a. If any node in .exclude() is in P → reject
-   b. If any node in .visited() is NOT in P → reject
-   c. If case variant doesn't match → reject
-   d. Otherwise → accept
-3. Query results = union of all accepted paths
-```
-
-### Logical Interpretation
-
-**Constraints are ANDed:**
-```
-from(a).to(b).exclude(c).visited(d)
-```
-Means: 
-- Start at A AND
-- End at B AND
-- NOT visit C AND
-- DO visit D
-
-**Multiple items in one constraint are ORed:**
-```
-.exclude(c, d)  →  NOT (visit C OR visit D)
-.visited(c, d)  →  visit C AND visit D  (both required)
-```
-
----
-
-## Minimality & Validation
-
-### Minimal Constraints
-
-**Principle:** Use the **minimum** number of constraints needed to uniquely identify your path.
-
-**Why:**
-- Simpler queries are easier to understand
-- Less brittle when graph structure changes
-- Better for debugging
-
-**Example:**
-
-```
-Graph: A → B → C → D
-       A → E → D
-
-Query 1 (over-specified):
-  from(a).to(d).visited(b).visited(c).exclude(e)
-
-Query 2 (minimal):
-  from(a).to(d).exclude(e)
-
-Both identify the same path, but Query 2 is better.
-```
-
-**DagNet's MSMDC Algorithm:** Automatically generates minimal queries for you.
-
-### Validation
-
-**Queries are validated on:**
-
-1. **Ambiguity:** Does the query match multiple paths?
-   - ⚠️ Warning: "Query matches 3 paths. Consider adding `.exclude(node-x)`"
-   
-2. **Empty Results:** Does the query match NO paths?
-   - ❌ Error: "No path matches this query. Check node IDs."
-   
-3. **Missing Nodes:** Are all referenced nodes in the graph?
-   - ❌ Error: "`node-xyz` not found in graph or registry."
-
-4. **Redundancy:** Are there unnecessary constraints?
-   - 💡 Info: "`.visited(b)` is redundant (only one path through B)."
-
----
-
-## Common Patterns
-
-### 1. Direct vs. Indirect Paths
-
-**Scenario:** Users can checkout directly or go through cart first.
-
-```
-Graph:
-  product → checkout → purchase
-  product → cart → checkout → purchase
-```
-
-**Direct conversions:**
-```
-from(product).to(purchase).exclude(cart)
-```
-
-**Cart-based conversions:**
-```
-from(product).to(purchase).visited(cart)
-```
-
----
-
-### 2. Email Campaign Effectiveness
-
-**Scenario:** Measure conversions driven by email clicks.
-
-```
-Graph:
-  homepage → product → purchase
-  email-click → product → purchase
-```
-
-**Email-driven conversions:**
-```
-from(product).to(purchase).visited(email-click)
-```
-
-**Organic conversions (no email):**
-```
-from(product).to(purchase).exclude(email-click)
-```
-
----
-
-### 3. Experiment Analysis
-
-**Scenario:** A/B test with different landing pages.
-
-```
-Experiment: "hero-image-test"
-Variants: control, lifestyle, product-focus
-```
-
-**Treatment group conversion:**
-```
-from(landing-page).to(signup).case(hero-image-test:lifestyle)
-```
-
-**Control group conversion:**
-```
-from(landing-page).to(signup).case(hero-image-test:control)
-```
-
----
-
-### 4. Sequential Engagement
-
-**Scenario:** Users who engaged with content before converting.
-
-```
-Graph:
-  homepage → blog-post → product → purchase
-  homepage → product → purchase
-```
-
-**Content-engaged conversions:**
-```
-from(product).to(purchase).visited(blog-post)
-```
-
----
-
-## Advanced Usage
-
-### Combining Multiple Constraints
-
-**Complex filtering:**
-```
-from(homepage).to(purchase)
-  .visited(product-page, reviews-page)
-  .exclude(support-chat, help-center)
-  .case(pricing-test:treatment)
-```
-
-**Meaning:**
-- Users who viewed product page AND reviews
-- But didn't visit support
-- And were in the pricing test treatment
-
----
-
-### Parameter Packs
-
-**Group related parameters with shared constraints:**
-
-```yaml
-# parameter-pack.yaml
-pack_id: checkout-funnel-treatment
-base_query: "from(cart).case(checkout-flow-v2:simplified)"
-parameters:
-  - param_id: cart-to-shipping
-    query: "${base_query}.to(shipping)"
-  - param_id: shipping-to-payment
-    query: "${base_query}.to(payment)"
-  - param_id: payment-to-complete
-    query: "${base_query}.to(purchase)"
-```
-
-This retrieves all three parameters with consistent case filtering.
-
----
-
-### Python Integration (dagCalc, Bayesian Models)
-
-**Use the same syntax in Python:**
-
-```python
-# dagcalc/query_parser.py
-from dagnet.query import parse_query
-
-query = parse_query("from(a).to(b).exclude(c)")
-
-# Execute against Amplitude
-results = amplitude_client.query(
-    start_event=query.from_node,
-    end_event=query.to_node,
-    exclude_events=query.excluded_nodes
-)
-
-# Use in Bayesian models
-prior = get_parameter("conversion-rate")
-likelihood = query_results_to_likelihood(results, query)
-posterior = bayesian_update(prior, likelihood)
-```
-
----
-
-## Reference Implementation
-
-### TypeScript
-
+**Structure**: Param packs are internally represented as `ScenarioParams`:
 ```typescript
-interface QueryExpression {
-  from: string;
-  to: string;
-  exclude?: string[];
-  visited?: string[];
-  cases?: Array<{ caseId: string; variant: string }>;
-}
-
-function parseQuery(expr: string): QueryExpression {
-  // Parse "from(a).to(b).exclude(c).visited(d).case(e:f)"
-  // Returns structured object
-}
-
-function validateQuery(
-  query: QueryExpression, 
-  graph: Graph
-): ValidationResult {
-  // Check ambiguity, empty results, missing nodes
-}
-
-function matchesPath(query: QueryExpression, path: string[]): boolean {
-  // Returns true if path satisfies query constraints
+{
+  edges: { [edgeId: string]: { p?: {mean, stdev, ...}, conditional_p?: [...], cost_gbp?: {...}, ... } },
+  nodes: { [nodeId: string]: { case?: { variants: [{name, weight}] }, ... } }
 }
 ```
 
----
-
-## Grammar (Formal)
-
-```ebnf
-query ::= from-clause to-clause modifier*
-
-from-clause ::= "from(" node-id ")"
-to-clause   ::= "to(" node-id ")"
-
-modifier ::= exclude-clause | visited-clause | case-clause
-
-exclude-clause ::= ".exclude(" node-list ")"
-visited-clause ::= ".visited(" node-list ")"
-case-clause    ::= ".case(" case-list ")"
-
-node-list ::= node-id ("," node-id)*
-case-list ::= case-spec ("," case-spec)*
-case-spec ::= case-id ":" variant-id
-
-node-id    ::= [a-z0-9] [a-z0-9-]*
-case-id    ::= [a-z0-9] [a-z0-9-]*
-variant-id ::= [a-z0-9] [a-z0-9-]*
+**Canonical parser**:
+```typescript
+ScenarioFormatConverter.unflattenParams(flat: Record<string, any>): ScenarioParams
 ```
 
-**Key Rules:**
-- Whitespace is ignored
-- IDs are lowercase alphanumeric with hyphens
-- Order of clauses doesn't matter (except for readability)
-- Duplicate clauses are invalid (e.g., two `.from()` calls)
+This function is the **single source of truth** for all HRN→param mapping. It handles:
+- `e.*` (edges, including nested paths like `e.edge-id.p.mean`)
+- `n.*` (nodes, including `case(...)` syntax)
+- `conditional_p` condition strings
+
+**Scope support**: When ingesting from external sources (e.g., Sheets), a **scope** (edge+slot, node/case, conditional) is applied to drop out-of-scope params, preventing unintended updates.
+
+**Consumers**:
+- **Scenarios**: use param packs as overlays (non-mutating) via `CompositionService.composeParams`
+- **Sheets / external data**: use param packs to build ingestion payloads, then apply via `UpdateManager.handleExternalToGraph` (mutating)
 
 ---
 
-## FAQ
+### Layer 2: Structural Query DSL (Analytics & Path Selection)
 
-### Q: Can I use event names instead of node IDs?
+**Purpose**: Describe path constraints and filters for analytics queries (Amplitude, etc.) and journey analysis.
 
-**A:** No. Query expressions use `node_id` (graph-level identifiers). Events are mapped to nodes via `node.event_id`, but queries operate at the graph topology level.
+**Syntax**:
+- **Core**: `from(<node-id>).to(<node-id>)`
+- **Path constraints**: `.visited(<node-id>)`, `.exclude(<node-id>)`
+- **Case filters**: `.case(<case-id>:<variant>)`
+- **Set operations**: `.plus(...)`, `.minus(...)`
+- **Analytics modifiers**: `.window(<start>, <end>)`, `.segment(<segment-id>)`, `.context(<key>:<value>)`
 
-**Why:** This keeps param files self-contained and graph-centric.
+**Examples**:
+- `from(product).to(checkout)` → all paths from product to checkout
+- `from(product).to(checkout).visited(promo)` → conditional probability (paths via promo node)
+- `from(homepage).to(purchase).case(pricing-test:treatment)` → paths for a specific A/B test variant
+- `from(cart).to(purchase).window(2025-01-01, 2025-12-31)` → time-filtered analytics query
 
----
+**Parser**: `parseDSL` (AST-based) for composite queries; `CompositeQueryExecutor` for set operations.
 
-### Q: What if I delete a node that's referenced in a query?
-
-**A:** The query becomes invalid. DagNet's graph validation service will:
-1. Detect the broken reference on save
-2. Show a warning: "Query references deleted node `xyz`"
-3. Suggest either updating the query or reconnecting the node
-
----
-
-### Q: Can I specify "OR" logic (e.g., visit A or B)?
-
-**A:** Not in v1. Constraints are always ANDed. If you need OR logic, create separate parameters with different queries.
-
-**Future:** May add `visited(a | b)` syntax if use cases emerge.
+**Relationship to param packs**: The query DSL and param DSL **share the same node/edge identity layer** (HRNs), but serve different purposes:
+- **Query DSL**: "which paths / users / events?" (temporal/behavioral constraints)
+- **Param DSL**: "which fields / values?" (parameter addressing)
 
 ---
 
-### Q: How do I know if my query is minimal?
+## Architectural Standards
 
-**A:** DagNet's MSMDC algorithm automatically generates minimal queries. If you edit manually, the validator will show an info hint if it detects redundant constraints.
+1. **Single canonical HRN/param-pack engine**:
+   - `ScenarioFormatConverter.unflattenParams` is the only place where HRN keys are parsed into `ScenarioParams`.
+   - No ad hoc DSL parsers are allowed.
 
----
+2. **Separation of parsing vs. application**:
+   - Parsing/interpretation (HRN → structured diff) is **shared**.
+   - Application of diffs is **context‑specific**:
+     - Scenarios: overlays via `composeParams`, no graph mutation until flatten.
+     - Sheets / external sources: diffs → external payloads → `UpdateManager.external_to_graph` / `external_to_file`.
 
-### Q: Can I test a query without retrieving data?
+3. **Scope‑aware ingestion for external sources**:
+   - When ingesting from Sheets or similar:
+     - Always pass a **scope** (edge/param, node/case, conditional) to the param‑pack engine.
+     - Only apply params inside scope; log out‑of‑scope keys as skipped/non‑fatal.
 
-**A:** Yes! The query editor shows real-time validation:
-- ✅ Green: Valid, unambiguous
-- ⚠️ Yellow: Valid but ambiguous (suggests fixes)
-- ❌ Red: Invalid (broken references, syntax errors)
+4. **Shared condition DSL**:
+   - `conditional_p` keys must use the same `condition` strings across:
+     - Graph, scenarios, Sheets, and any other DSLs.
 
----
-
-## Best Practices
-
-### 1. Let Auto-Generation Do Its Job
-
-**Default behavior:** When you connect a parameter to an edge, DagNet auto-generates the query.
-
-**When to override:**
-- You want a specific conditional probability
-- You're analyzing a particular experiment variant
-- You need custom filtering beyond topology
-
-**Track state:** Queries are marked `query_auto_generated: true/false` so you know which are manual.
+5. **Extensibility**:
+   - New features (e.g. richer journey DSL, additional query modifiers) must:
+     - Reuse the same identity/HRN layer for nodes/edges/cases.
+     - Plug into the structural query layer without duplicating core parsing logic.
 
 ---
 
-### 2. Use Descriptive Node IDs
+## Runtime Flows & Component Responsibilities
 
-**Good:**
+This section ties the DSL layers to the actual runtime components and data flows in DagNet.
+
+### Unified Flow Diagram: Single Canonical DSL Parser for Scenarios and Sheets
+
+```text
+                    ┌──────────────────────────────────────────┐
+                    │  TWO DIFFERENT ENTRY POINTS:             │
+                    │                                          │
+                    │  [A] User edits scenario (YAML/JSON)     │
+                    │  [B] User imports Sheets range           │
+                    └──────────────────────────────────────────┘
+                                      │
+                 ┌────────────────────┴────────────────────┐
+                 │                                         │
+                 ▼                                         ▼
+    ┌─────────────────────────┐          ┌─────────────────────────────┐
+    │ [A] SCENARIO PATH       │          │ [B] SHEETS PATH             │
+    └─────────────────────────┘          └─────────────────────────────┘
+                 │                                         │
+                 │                                         │
+    User creates/edits YAML:                  Sheets API returns:
+      edges:                                    { scalar_value: 0.7,
+        edge-1:                                   param_pack: {
+          p:                                        "e.edge-1.p.mean": 0.7,
+            mean: 0.7                                "p.stdev": 0.05 },
+                                                  errors: [] }
+                 │                                         │
+                 │                                         │
+                 ▼                                         ▼
+    ScenarioFormatConverter         DataOperationsService merges
+    .fromYAML(content)              scalar + param_pack into flat:
+      │                               { "e.edge-1.p.mean": 0.7,
+      │                                 "p.stdev": 0.05,
+      ├─ Parse YAML → object            "mean": 0.7 }
+      ├─ If nested: flatten                      │
+      │   to HRN keys                             │
+      │                                           ▼
+      │                            ParamPackEngine normalizes
+      │                            relative keys to HRNs:
+      │                              "mean" → "e.edge-1.p.mean"
+      │                              "p.stdev" → "e.edge-1.p.stdev"
+      │                                           │
+      ▼                                           ▼
+    flat HRN map:                   normalizedFlat HRN map:
+    { "e.edge-1.p.mean": 0.7 }      { "e.edge-1.p.mean": 0.7,
+                                      "e.edge-1.p.stdev": 0.05 }
+                 │                                         │
+                 │                                         │
+                 └─────────────────┬─────────────────────┘
+                                   │
+                                   ▼
+              ╔═════════════════════════════════════════════════════╗
+              ║  ★ CANONICAL DSL PARSER (SINGLE CODE PATH) ★       ║
+              ║                                                     ║
+              ║  ScenarioFormatConverter.unflattenParams(flat)      ║
+              ║                                                     ║
+              ║  Parses ALL HRN keys:                               ║
+              ║    • e.<edgeId>.<path> → edges[edgeId].<path>       ║
+              ║    • n.<nodeId>.<path> → nodes[nodeId].<path>       ║
+              ║    • n.<nodeId>.case(<id>:<var>).weight             ║
+              ║      → nodes[nodeId].case.variants[{name, weight}]  ║
+              ║    • e.<edgeId>.conditional_p.<cond>.p.<field>      ║
+              ║      → edges[edgeId].conditional_p[{condition, p}]  ║
+              ║                                                     ║
+              ║  Returns: ScenarioParams                            ║
+              ║    { edges: {...}, nodes: {...} }                   ║
+              ╚═════════════════════════════════════════════════════╝
+                                   │
+                                   │
+                 ┌─────────────────┴─────────────────┐
+                 │                                   │
+                 ▼                                   ▼
+    ┌─────────────────────────┐      ┌─────────────────────────────┐
+    │ [A] SCENARIO PATH       │      │ [B] SHEETS PATH             │
+    │     (continued)         │      │     (continued)             │
+    └─────────────────────────┘      └─────────────────────────────┘
+                 │                                   │
+                 │                                   │
+                 ▼                                   ▼
+    Full ScenarioParams           ParamPackEngine scopes result
+    (all edges + nodes)           to just edges[edge-1].p
+                 │                                   │
+                 ▼                                   ▼
+    ScenariosContext stores       Extract payload for UpdateManager:
+    overlayParams                   { mean: 0.7, stdev: 0.05 }
+                 │                                   │
+                 ▼                                   ▼
+    composeParams(base, overlays) UpdateManager.handleExternalToGraph
+    → composed ScenarioParams       (updateData, edge, 'UPDATE', 'parameter')
+                 │                                   │
+                 ▼                                   ▼
+    ScenarioRenderer uses         Write to edge.parameter.p.mean, .stdev
+    composed params for           Set provenance: data_source.type='sheets'
+    edge widths/beads             Trigger sibling rebalance
+                 │                                   │
+                 ▼                                   ▼
+    ★ NO GRAPH MUTATION ★         ★ GRAPH MUTATION + REBALANCE ★
+    (overlay only)                (permanent update)
 ```
-from(product-detail-page).to(add-to-cart)
-```
-
-**Bad:**
-```
-from(pdp).to(atc)
-```
-
-Readable queries are easier to debug and share with teammates.
 
 ---
 
-### 3. Avoid Over-Specification
+### Critical Architecture Point
 
-**Over-specified:**
-```
-from(a).to(d).visited(b).visited(c).exclude(e)
-```
+**The diagram above shows that there is ONE AND ONLY ONE place where HRN/DSL keys are parsed:**
 
-**Minimal:**
 ```
-from(a).to(d).exclude(e)
+ScenarioFormatConverter.unflattenParams(flat: Record<string, any>): ScenarioParams
 ```
 
-If there's only one path through B and C, specifying them is redundant.
+**Both scenarios and Sheets call this same function.** The differences are:
+
+1. **Input preparation:**
+   - Scenarios: YAML/JSON → object → flatten to HRN map → `unflattenParams`
+   - Sheets: raw range → scalar/param_pack → merge + normalize relative keys → `unflattenParams`
+
+2. **Output usage:**
+   - Scenarios: full `ScenarioParams` → store as overlay → compose for rendering (no mutation)
+   - Sheets: full `ScenarioParams` → scope to target edge/slot → extract `{mean, stdev, ...}` → `UpdateManager` (mutation)
+
+**There is no second DSL parser.** `ParamPackEngine` does NOT parse HRN semantics; it only normalizes shorthand keys and then delegates to `unflattenParams`.
 
 ---
 
-### 4. Document Complex Queries
+## Future Extensions
 
-If a query has multiple constraints, add a comment in the parameter file:
+1. **Richer journey DSL**:
+   - Per-user path tracking: `from(a).then(b).then(c)` with sequencing
+   - Repeat/loop constraints
 
-```yaml
-# parameters/conversion-rate-email-engaged.yaml
-query: "from(product).to(purchase).visited(email-click).exclude(support-chat)"
-description: "Conversion rate for email-driven users who didn't need support"
-```
+2. **Param-aware queries**:
+   - Filter paths by param values: `from(a).to(b).where(p.mean > 0.5)`
+   - Return aggregated params for a query: `from(a).to(b).params(['p.mean', 'cost_gbp.mean'])`
 
----
+3. **Named query templates**:
+   - Reusable query fragments: `template funnel_engaged = visited(email-click).exclude(support-chat)`
+   - Compose: `from(product).to(purchase).apply(funnel_engaged)`
 
-### 5. Test Before Committing
-
-Before committing parameter changes:
-1. Use "Validate Graph" to check all queries
-2. Review warnings/suggestions
-3. Test data retrieval on a single param
-4. Then batch-update
+4. **Multi-variant case filters**:
+   - Union of variants: `.case(pricing-test:[treatment, control])`
+   - Negative case filters: `.exclude_case(feature-gate:disabled)`
 
 ---
 
 ## Related Documentation
 
-- **[MSMDC Algorithm](./query-algorithms-white-paper.md#1-msmdc-minimal-set-of-maximally-discriminating-constraints):** Technical deep-dive on automatic query generation
-- **[Query Factorization](./query-algorithms-white-paper.md#2-query-factorization-for-batch-optimization):** Batch optimization for efficient API calls
-- **[Implementation Plan](../../../DATA_CONNECTIONS_IMPLEMENTATION_PLAN.md):** Roadmap for data connections system
-- **[Parameter Schema](../../public/param-schemas/parameter-schema.yaml):** Full parameter file structure
+- **[SCENARIOS_MANAGER_SPEC.md](../../../docs/current/SCENARIOS_MANAGER_SPEC.md)**: Full spec for scenario system (HRN addressing is in Appendix A.1)
+- **[GOOGLE_SHEETS_HRN_INTEGRATION.md](../../../docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md)**: Implementation plan for Sheets param pack ingestion
+- **[MSMDC Algorithm](./query-algorithms-white-paper.md#1-msmdc-minimal-set-of-maximally-discriminating-constraints)**: Technical deep-dive on automatic query generation
+- **[Query Factorization](./query-algorithms-white-paper.md#2-query-factorization-for-batch-optimization)**: Batch optimization for efficient API calls
+- **[Parameter Schema](../../public/param-schemas/parameter-schema.yaml)**: Full parameter file structure
 
 ---
 
 **Version History:**
-- **1.0** (Nov 2025): Initial release
+- **2.0** (Nov 2025): Unified DSL doc (replaces "Query Expression Syntax & Semantics"), added architecture flows
+- **1.0** (Nov 2025): Initial query expression doc
 
 **Maintained by:** DagNet Team  
 **Questions?** See [DATA_CONNECTIONS_README.md](../../../DATA_CONNECTIONS_README.md)
-

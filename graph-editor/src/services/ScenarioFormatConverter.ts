@@ -9,6 +9,7 @@
 
 import * as yaml from 'js-yaml';
 import { ScenarioParams } from '../types/scenarios';
+import type { Graph } from '../types';
 
 /**
  * Convert scenario params to YAML
@@ -276,7 +277,7 @@ function flattenDeep(obj: any, prefix: string, result: Record<string, any>) {
  * →
  *   { 'e.edge-1.p.mean': 0.5, 'n.node-1.case(node-1:control).weight': 0.5 }
  */
-function flattenParams(params: ScenarioParams): Record<string, any> {
+export function flattenParams(params: ScenarioParams): Record<string, any> {
   const flat: Record<string, any> = {};
   
   // Flatten edges with 'e.' prefix
@@ -346,7 +347,7 @@ function flattenObject(obj: any, prefix: string, result: Record<string, any>) {
  * →
  *   { edges: { 'edge-1': { p: { mean: 0.5 } } }, nodes: { 'node-1': { case: { variants: [{name: 'control', weight: 0.5}] } } } }
  */
-function unflattenParams(flat: Record<string, any>): ScenarioParams {
+export function unflattenParams(flat: Record<string, any>): ScenarioParams {
   const params: ScenarioParams = {
     edges: {},
     nodes: {}
@@ -409,6 +410,100 @@ function unflattenParams(flat: Record<string, any>): ScenarioParams {
   }
   
   return params;
+}
+
+/**
+ * Narrow a full ScenarioParams object to a particular scope.
+ *
+ * Scope kinds:
+ * - kind: 'graph'       → no narrowing (entire ScenarioParams)
+ * - kind: 'edge-param'  → only a single edge + param slot (p / cost_gbp / cost_time)
+ *
+ * NOTE: Additional scopes (edge-conditional, node, case, event) can be added
+ * here in a single, canonical place. For now, only edge-param is needed
+ * by the Sheets ingestion path; scenarios use 'graph' scope.
+ */
+export type ParamSlot = 'p' | 'cost_gbp' | 'cost_time';
+
+export interface EdgeParamScope {
+  kind: 'edge-param';
+  edgeUuid?: string;
+  edgeId?: string;
+  slot: ParamSlot;
+}
+
+export type ParamScope =
+  | { kind: 'graph' }
+  | EdgeParamScope;
+
+export function applyScopeToParams(
+  params: ScenarioParams,
+  scope: ParamScope,
+  graph?: Graph | null
+): ScenarioParams {
+  if (!scope || scope.kind === 'graph') {
+    // No narrowing; return params as-is
+    return params;
+  }
+
+  if (scope.kind === 'edge-param') {
+    const result: ScenarioParams = {};
+
+    if (!graph) {
+      return result;
+    }
+
+    // Resolve the edge by UUID or id; this uses the same identity layer as elsewhere.
+    const edge = graph.edges?.find(
+      (e: any) => (scope.edgeUuid && e.uuid === scope.edgeUuid) || (scope.edgeId && e.id === scope.edgeId)
+    );
+    if (!edge) {
+      return result;
+    }
+
+    const edgeKey: string = edge.id || edge.uuid;
+    const edgeParams = params.edges?.[edgeKey];
+    if (!edgeParams) {
+      return result;
+    }
+
+    result.edges = {};
+    result.edges[edgeKey] = {};
+
+    if (scope.slot === 'p' && edgeParams.p) {
+      result.edges[edgeKey].p = edgeParams.p;
+    } else if (scope.slot === 'cost_gbp' && edgeParams.cost_gbp) {
+      result.edges[edgeKey].cost_gbp = edgeParams.cost_gbp;
+    } else if (scope.slot === 'cost_time' && edgeParams.cost_time) {
+      result.edges[edgeKey].cost_time = edgeParams.cost_time;
+    }
+
+    return result;
+  }
+
+  // Fallback: if a new scope kind is added but not yet implemented, return empty.
+  return {};
+}
+
+/**
+ * Convenience helper: from a flat HRN map and a scope, produce a scoped
+ * ScenarioParams diff. This is the canonical entry point for external
+ * ingestion flows (e.g. Sheets) that need to apply scoping.
+ *
+ * Scenarios generally call unflattenParams(flat) + composeParams directly
+ * with implicit 'graph' scope.
+ */
+export function buildScopedParamsFromFlatPack(
+  flatPack: Record<string, unknown> | null | undefined,
+  scope: ParamScope,
+  graph?: Graph | null
+): ScenarioParams {
+  if (!flatPack || Object.keys(flatPack).length === 0) {
+    return {};
+  }
+
+  const full = unflattenParams(flatPack as Record<string, any>);
+  return applyScopeToParams(full, scope, graph ?? null);
 }
 
 /**
