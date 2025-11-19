@@ -280,40 +280,15 @@ git push origin "$CURRENT_BRANCH" --tags
 # Merge to main if requested
 if [[ "$MERGE_TO_MAIN" == true ]]; then
   echo ""
-  print_blue "[7/7] Merging to main..."
+  print_blue "[7/7] Pushing to main..."
   
-  # Safety check: ensure no uncommitted changes before checkout
-  if [[ -n $(git status --porcelain) ]]; then
-    print_red "Error: Uncommitted changes detected before merge:"
-    git status --short
-    print_red "This shouldn't happen. Aborting merge."
-    exit 1
-  fi
-  
-  # Fetch latest main
-  git fetch origin main
-  
-  # Checkout main (force to avoid conflicts with local files)
-  git checkout -f main
-  
-  # Pull latest changes
-  git pull origin main
-  
-  # Merge the release branch
-  echo "Merging ${CURRENT_BRANCH} into main..."
-  git merge "$CURRENT_BRANCH" --no-ff -m "Merge ${CURRENT_BRANCH} for release v${NEW_VERSION}"
-  
-  # Push main
-  echo "Pushing main to remote..."
-  git push origin main
-  
-  # Return to original branch
-  git checkout "$CURRENT_BRANCH"
+  # Push current branch directly to main without checking it out
+  git push origin "${CURRENT_BRANCH}:main" --tags
   
   echo ""
   print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   print_green "✓ Release ${NEW_DISPLAY} complete!"
-  print_green "✓ Merged to main!"
+  print_green "✓ Pushed to main!"
   print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
   printf "Version: \033[0;32m%s\033[0m\n" "$NEW_DISPLAY"
