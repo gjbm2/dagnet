@@ -16,9 +16,10 @@ import * as yaml from 'js-yaml';
 import { useScenariosContext } from '../../contexts/ScenariosContext';
 import { useTabContext } from '../../contexts/TabContext';
 import { Scenario, ScenarioContentFormat } from '../../types/scenarios';
-import { toYAML, toJSON, toCSV, fromYAML, fromJSON } from '../../services/ScenarioFormatConverter';
+import { toYAML, toJSON, toCSV, fromYAML, fromJSON } from '../../services/ParamPackDSLService';
 import { X, FileText, Download, AlertCircle, CheckCircle2, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useGraphStore } from '../../contexts/GraphStoreContext';
 import './Modal.css';
 import './ScenarioEditorModal.css';
 
@@ -33,6 +34,8 @@ interface ScenarioEditorModalProps {
 export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave }: ScenarioEditorModalProps) {
   const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot, createBlank } = useScenariosContext();
   const { operations } = useTabContext();
+  const graphStore = useGraphStore();
+  const graph = graphStore?.getState().graph || null;
   
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [editorValue, setEditorValue] = useState('');
@@ -181,8 +184,8 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
       if (scenario.id === 'base') {
         // Apply edits to Base: mutate Base directly
         const parsed = format.syntax === 'yaml'
-          ? fromYAML(editorValue, format.structure)
-          : fromJSON(editorValue, format.structure);
+          ? fromYAML(editorValue, format.structure, graph)
+          : fromJSON(editorValue, format.structure, graph);
         setBaseParams(parsed);
         toast.success('Base updated');
         setIsDirty(false);

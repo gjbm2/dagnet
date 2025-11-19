@@ -43,7 +43,7 @@ import {
 import { statisticalEnhancementService } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
-import { buildScopedParamsFromFlatPack, ParamSlot } from './ScenarioFormatConverter';
+import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 
 // Shared UpdateManager instance
 const updateManager = new UpdateManager();
@@ -52,19 +52,14 @@ const updateManager = new UpdateManager();
 const windowAggregationService = new WindowAggregationService();
 
 /**
- * Extract a minimal external update payload from a Sheets DAS result,
- * based on connection_string.mode, param_slot, and the current graph context.
- *
- * This function is a thin adapter around the canonical param-pack engine:
- * - It merges scalar_value into a flat param pack when appropriate.
- * - It delegates HRN parsing and scoping to ScenarioFormatConverter's
- *   unflattenParams + applyScope helpers.
- * - It then extracts a {mean, stdev, n, k} payload suitable for UpdateManager.
+ * Extract external update payload from Sheets DAS result for edge parameters.
+ * Supports edge-param scope (p/cost_gbp/cost_time) and edge-conditional scope.
  */
-export function extractSheetsUpdateData(
+export function extractSheetsUpdateDataForEdge(
   raw: any,
   connectionString: any,
   paramSlot: 'p' | 'cost_gbp' | 'cost_time' | undefined,
+  conditionalIndex: number | undefined,
   graph: Graph | null | undefined,
   targetId: string | undefined
 ): { mean?: number; stdev?: number; n?: number; k?: number } {
@@ -77,7 +72,6 @@ export function extractSheetsUpdateData(
   const hasParamPack = !!paramPack && Object.keys(paramPack).length > 0;
   const slot: ParamSlot = paramSlot || 'p';
 
-  // Decide whether to treat scalar_value as a param-pack contribution
   const shouldUseParamPack = mode === 'param-pack' || (mode === 'auto' && hasParamPack);
   const shouldUseScalar = mode === 'single' || (mode === 'auto' && !hasParamPack);
 
@@ -88,8 +82,6 @@ export function extractSheetsUpdateData(
   }
 
   if (shouldUseScalar && scalarValue !== undefined && scalarValue !== null) {
-    // Treat scalar_value as the mean for the current param slot in the current context.
-    // This is equivalent to a relative "mean" or "p.mean" key in the flat pack.
     if (!('mean' in mergedFlat) && !('p.mean' in mergedFlat)) {
       mergedFlat['mean'] = scalarValue;
     }
@@ -104,37 +96,72 @@ export function extractSheetsUpdateData(
     return update;
   }
 
-  const scopedParams = buildScopedParamsFromFlatPack(
-    mergedFlat,
-    {
-      kind: 'edge-param',
-      edgeUuid: edge.uuid,
-      edgeId: edge.id,
-      slot,
-    },
-    graph
-  );
+  // Determine scope: conditional vs edge-param
+  let scopedParams: any;
 
-  const edgeKey = edge.id || edge.uuid;
-  const edgeParams = scopedParams.edges?.[edgeKey];
-  if (!edgeParams) {
-    return update;
-  }
+  if (conditionalIndex !== undefined && edge.conditional_p && edge.conditional_p[conditionalIndex]) {
+    // Targeting a specific conditional_p entry
+    const condEntry = edge.conditional_p[conditionalIndex];
+    const condition = condEntry.condition;
 
-  const apply = (field: 'mean' | 'stdev', value: unknown) => {
-    if (value === null || value === undefined) return;
-    const num = typeof value === 'number' ? value : Number(value);
-    if (!Number.isFinite(num)) return;
-    update[field] = num;
-  };
+    scopedParams = buildScopedParamsFromFlatPack(
+      mergedFlat,
+      {
+        kind: 'edge-conditional',
+        edgeUuid: edge.uuid,
+        edgeId: edge.id,
+        condition,
+      },
+      graph
+    );
 
-  if (slot === 'p' && edgeParams.p) {
-    apply('mean', (edgeParams.p as any).mean);
-    apply('stdev', (edgeParams.p as any).stdev);
-  } else if (slot === 'cost_gbp' && edgeParams.cost_gbp) {
-    apply('mean', (edgeParams.cost_gbp as any).mean);
-  } else if (slot === 'cost_time' && edgeParams.cost_time) {
-    apply('mean', (edgeParams.cost_time as any).mean);
+    const edgeKey = edge.id || edge.uuid;
+    const edgeParams = scopedParams.edges?.[edgeKey];
+    if (edgeParams?.conditional_p?.[condition]) {
+      const condP = edgeParams.conditional_p[condition];
+      const apply = (field: 'mean' | 'stdev', value: unknown) => {
+        if (value === null || value === undefined) return;
+        const num = typeof value === 'number' ? value : Number(value);
+        if (!Number.isFinite(num)) return;
+        update[field] = num;
+      };
+      apply('mean', condP.mean);
+      apply('stdev', condP.stdev);
+    }
+  } else {
+    // Standard edge-param scope
+    scopedParams = buildScopedParamsFromFlatPack(
+      mergedFlat,
+      {
+        kind: 'edge-param',
+        edgeUuid: edge.uuid,
+        edgeId: edge.id,
+        slot,
+      },
+      graph
+    );
+
+    const edgeKey = edge.id || edge.uuid;
+    const edgeParams = scopedParams.edges?.[edgeKey];
+    if (!edgeParams) {
+      return update;
+    }
+
+    const apply = (field: 'mean' | 'stdev', value: unknown) => {
+      if (value === null || value === undefined) return;
+      const num = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(num)) return;
+      update[field] = num;
+    };
+
+    if (slot === 'p' && edgeParams.p) {
+      apply('mean', (edgeParams.p as any).mean);
+      apply('stdev', (edgeParams.p as any).stdev);
+    } else if (slot === 'cost_gbp' && edgeParams.cost_gbp) {
+      apply('mean', (edgeParams.cost_gbp as any).mean);
+    } else if (slot === 'cost_time' && edgeParams.cost_time) {
+      apply('mean', (edgeParams.cost_time as any).mean);
+    }
   }
 
   return update;
@@ -2214,23 +2241,79 @@ class DataOperationsService {
           // Parse the updates to extract values for simple queries (use latest result for non-daily mode)
           // UpdateManager now expects schema terminology: mean, n, k (not external API terminology)
           if (!dailyMode) {
-            // Special handling for Sheets: interpret scalar_value / param_pack into updateData
+            // Special handling for Sheets: interpret scalar_value / param_pack using the
+            // canonical ParamPackDSLService engine and scoping.
             if (connectionName?.includes('sheets')) {
-              const sheetsUpdate = extractSheetsUpdateData(
-                result.raw,
-                connectionString,
-                paramSlot,
-                graph,
-                targetId
-              );
+              if (objectType === 'parameter') {
+                const sheetsUpdate = extractSheetsUpdateDataForEdge(
+                  result.raw,
+                  connectionString,
+                  paramSlot,
+                  conditionalIndex,
+                  graph,
+                  targetId
+                );
 
-              console.log('[DataOperationsService] Sheets scalar/param_pack extracted:', {
-                sheetsUpdate,
-                raw: result.raw,
-                connection_string: connectionString,
-              });
+                console.log('[DataOperationsService] Sheets (parameter) scalar/param_pack extracted:', {
+                  sheetsUpdate,
+                  raw: result.raw,
+                  connection_string: connectionString,
+                  conditionalIndex,
+                });
 
-              Object.assign(updateData, sheetsUpdate);
+                Object.assign(updateData, sheetsUpdate);
+              } else if (objectType === 'case') {
+                // Sheets-driven case variants via HRN param packs:
+                //   n.<nodeId>.case(<caseId>:<variant>).weight
+                const rawAny: any = result.raw;
+                const paramPack = (rawAny.param_pack ?? rawAny.paramPack) as
+                  | Record<string, unknown>
+                  | null
+                  | undefined;
+
+                if (graph && targetId && paramPack) {
+                  const caseNode = graph.nodes?.find(
+                    (n: any) => n.uuid === targetId || n.id === targetId
+                  );
+
+                  if (caseNode) {
+                    const scopedParams = buildScopedParamsFromFlatPack(
+                      paramPack,
+                      {
+                        kind: 'case',
+                        nodeUuid: caseNode.uuid,
+                        nodeId: caseNode.id,
+                      },
+                      graph
+                    );
+
+                    const nodeKey: string = caseNode.id || caseNode.uuid;
+                    const nodeParams = scopedParams.nodes?.[nodeKey];
+                    const variants = nodeParams?.case?.variants;
+
+                    if (variants && variants.length > 0) {
+                      updateData.variants = variants.map((v) => ({
+                        name: v.name,
+                        weight: v.weight,
+                      }));
+
+                      console.log('[DataOperationsService] Sheets (case) variants extracted from param_pack:', {
+                        variants: updateData.variants,
+                        raw: result.raw,
+                        connection_string: connectionString,
+                      });
+                    }
+                  } else {
+                    console.warn('[DataOperationsService] Sheets case update: target case node not found', {
+                      targetId,
+                    });
+                  }
+                }
+              } else {
+                console.warn('[DataOperationsService] Sheets ingestion for objectType not yet implemented:', {
+                  objectType,
+                });
+              }
             } else {
               // Default path: use updates emitted by the adapter (e.g., Amplitude)
               for (const update of result.updates) {
@@ -2272,8 +2355,9 @@ class DataOperationsService {
       }
       
       // For cases (Statsig, etc.), extract variants from raw transformed data
-      // Adapters expose variant weights as `variants_update` (or `variants`) in transform output
-      if (objectType === 'case' && !dailyMode && lastResultRaw) {
+      // Adapters expose variant weights as `variants_update` (or `variants`) in transform output.
+      // For Sheets, variants are extracted from param_pack above and stored in updateData.variants.
+      if (objectType === 'case' && !dailyMode && lastResultRaw && !connectionName?.includes('sheets')) {
         console.log('[DataOperationsService] Extracting case variants from raw data', {
           rawKeys: Object.keys(lastResultRaw),
           hasVariantsUpdate: !!(lastResultRaw as any).variants_update,

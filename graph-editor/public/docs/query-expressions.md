@@ -15,7 +15,7 @@ This document defines the **unified DSL (Domain Specific Language)** used throug
 
 The DSL operates in **layers**, with a shared identity/HRN foundation and context‑specific extensions for param packs vs analytics queries.
 
-**Critical architectural principle**: There is **one canonical parser** for HRN param packs (`ScenarioFormatConverter.unflattenParams`), used by both scenarios and external data sources (e.g., Google Sheets). No duplicate DSL parsing logic exists.
+**Critical architectural principle**: There is **one canonical parser** for HRN param packs (`ParamPackDSLService.unflattenParams`), used by both scenarios and external data sources (e.g., Google Sheets). No duplicate DSL parsing logic exists.
 
 ---
 
@@ -61,7 +61,7 @@ The DSL operates in **layers**, with a shared identity/HRN foundation and contex
 
 **Canonical parser**:
 ```typescript
-ScenarioFormatConverter.unflattenParams(flat: Record<string, any>): ScenarioParams
+ParamPackDSLService.unflattenParams(flat: Record<string, any>): ScenarioParams
 ```
 
 This function is the **single source of truth** for all HRN→param mapping. It handles:
@@ -105,7 +105,7 @@ This function is the **single source of truth** for all HRN→param mapping. It 
 ## Architectural Standards
 
 1. **Single canonical HRN/param-pack engine**:
-   - `ScenarioFormatConverter.unflattenParams` is the only place where HRN keys are parsed into `ScenarioParams`.
+   - `ParamPackDSLService.unflattenParams` is the only place where HRN keys are parsed into `ScenarioParams`.
    - No ad hoc DSL parsers are allowed.
 
 2. **Separation of parsing vs. application**:
@@ -161,7 +161,7 @@ This section ties the DSL layers to the actual runtime components and data flows
                  │                                         │
                  │                                         │
                  ▼                                         ▼
-    ScenarioFormatConverter         DataOperationsService merges
+    ParamPackDSLService             DataOperationsService merges
     .fromYAML(content)              scalar + param_pack into flat:
       │                               { "e.edge-1.p.mean": 0.7,
       │                                 "p.stdev": 0.05,
@@ -169,13 +169,13 @@ This section ties the DSL layers to the actual runtime components and data flows
       ├─ If nested: flatten                      │
       │   to HRN keys                             │
       │                                           ▼
-      │                            ParamPackEngine normalizes
-      │                            relative keys to HRNs:
-      │                              "mean" → "e.edge-1.p.mean"
-      │                              "p.stdev" → "e.edge-1.p.stdev"
+      │                            (ingestion helper normalizes
+      │                             relative keys like "mean" to
+      │                             full HRNs such as
+      │                             "e.edge-1.p.mean")
       │                                           │
       ▼                                           ▼
-    flat HRN map:                   normalizedFlat HRN map:
+    flat HRN map:                   flat HRN map (Sheets-normalized):
     { "e.edge-1.p.mean": 0.7 }      { "e.edge-1.p.mean": 0.7,
                                       "e.edge-1.p.stdev": 0.05 }
                  │                                         │
@@ -186,7 +186,7 @@ This section ties the DSL layers to the actual runtime components and data flows
               ╔═════════════════════════════════════════════════════╗
               ║  ★ CANONICAL DSL PARSER (SINGLE CODE PATH) ★       ║
               ║                                                     ║
-              ║  ScenarioFormatConverter.unflattenParams(flat)      ║
+              ║  ParamPackDSLService.unflattenParams(flat)          ║
               ║                                                     ║
               ║  Parses ALL HRN keys:                               ║
               ║    • e.<edgeId>.<path> → edges[edgeId].<path>       ║
@@ -211,8 +211,8 @@ This section ties the DSL layers to the actual runtime components and data flows
                  │                                   │
                  │                                   │
                  ▼                                   ▼
-    Full ScenarioParams           ParamPackEngine scopes result
-    (all edges + nodes)           to just edges[edge-1].p
+    Full ScenarioParams           ParamPackDSLService.applyScopeToParams
+    (all edges + nodes)           with scope={kind:'edge-param',edge,slot}
                  │                                   │
                  ▼                                   ▼
     ScenariosContext stores       Extract payload for UpdateManager:
@@ -239,7 +239,7 @@ This section ties the DSL layers to the actual runtime components and data flows
 **The diagram above shows that there is ONE AND ONLY ONE place where HRN/DSL keys are parsed:**
 
 ```
-ScenarioFormatConverter.unflattenParams(flat: Record<string, any>): ScenarioParams
+ParamPackDSLService.unflattenParams(flat: Record<string, any>): ScenarioParams
 ```
 
 **Both scenarios and Sheets call this same function.** The differences are:
@@ -249,10 +249,10 @@ ScenarioFormatConverter.unflattenParams(flat: Record<string, any>): ScenarioPara
    - Sheets: raw range → scalar/param_pack → merge + normalize relative keys → `unflattenParams`
 
 2. **Output usage:**
-   - Scenarios: full `ScenarioParams` → store as overlay → compose for rendering (no mutation)
-   - Sheets: full `ScenarioParams` → scope to target edge/slot → extract `{mean, stdev, ...}` → `UpdateManager` (mutation)
+- Scenarios: full `ScenarioParams` → store as overlay → compose for rendering (no mutation)
+- Sheets: full `ScenarioParams` → `ParamPackDSLService.applyScopeToParams` to narrow to a specific scope (edge/slot, node/case, conditional, etc.) → extract `{mean, stdev, ...}` → `UpdateManager` (mutation)
 
-**There is no second DSL parser.** `ParamPackEngine` does NOT parse HRN semantics; it only normalizes shorthand keys and then delegates to `unflattenParams`.
+**There is no second DSL parser.** Ingestion helpers do **not** parse HRN semantics; they only normalize shorthand keys (e.g. `mean` → `e.edge-1.p.mean`) and decide which `applyScopeToParams` scope to use before handing the result to `UpdateManager`.
 
 ---
 

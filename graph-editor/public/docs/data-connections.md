@@ -430,5 +430,4 @@ To add a new data source:
 
 - [Query Expressions Documentation](./query-expressions.md) - Learn about DagNet Query DSL
 - [Credentials Setup](./CREDENTIALS_INIT_FLOW.md) - Detailed credentials configuration guide
-- [Amplitude Integration](../AMPLITUDE_INTEGRATION.MD) - Amplitude-specific integration details
 
