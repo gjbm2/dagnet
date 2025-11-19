@@ -1,203 +1,665 @@
-# Query Expression Syntax & Semantics
+# DagNet DSL: Graph Queries & Parameter Addressing
 
-**Version:** 1.0  
+**Version:** 2.0  
 **Last Updated:** November 2025
 
 ---
 
 ## Overview
 
-Query expressions are a domain-specific language (DSL) for specifying data retrieval constraints in DagNet. They define **which path** through a conversion graph you want to retrieve data for, when multiple paths exist between two nodes.
+DagNet uses a family of closely related DSLs to:
 
-**Use Cases:**
-- **Parameter Data Retrieval:** Specify which events to query from Amplitude
-- **Conditional Probabilities:** Define path conditions (e.g., "probability of B→C given visited A")
-- **Parameter Packs:** Group related parameters with shared constraints
-- **Python Analytics:** Use the same syntax in dagCalc and Bayesian modeling scripts
+- **Select graph structure** (paths, subgraphs, cases)
+- **Address parameters** on those structures (probabilities, costs, case variant weights)
+- **Drive external data retrieval** (Amplitude, Sheets, etc.)
+- **Apply overlays** for scenarios and what‑if analysis
 
----
+This document defines a unified view of that DSL family and the architectural standards around it. It **replaces** the previous “Query Expression Syntax & Semantics” doc.
 
-## Quick Start
+At a high level, all DSLs follow the same pattern:
 
-### Basic Syntax
+1. **Select a scope (subgraph / elements)** – e.g. `from(a).visited(m).to(z)`
+2. **Talk about an aspect of that scope** – e.g. `p.mean`, conditional probability, case variant weight, or external query settings like `window(...)`.
 
-```
-from(start-node).to(end-node)
-```
+The **identity and structure layer** (how `a`, `z`, `from(a).to(z)` and HRNs like `e.edge-id.p.mean` resolve) is shared across:
 
-This is the simplest query: retrieve data for **all** paths from `start-node` to `end-node`.
+- Scenarios (scenario params / overlays)
+- Sheets (param packs)
+- Analytics queries (Amplitude, dagCalc)
+- What‑if / path analysis
 
-### Example
-
-**Graph:**
-```
-homepage → product-page → checkout → purchase
-```
-
-**Query:**
-```
-from(product-page).to(checkout)
-```
-
-**Meaning:** Get conversion rate from product page to checkout (includes all traffic).
+Downstream behavior (render vs. query vs. update) is determined by the **consumer**, not by the DSL itself.
 
 ---
 
-## Core Concepts
+## Layered Architecture
 
-### Node Identifiers
+To keep semantics and implementation clean, we treat the DSL as three layers:
 
-**What they are:**
-- `node_id` in the graph (e.g., `homepage`, `product-page`)
-- Uses **ids** from graph nodes (not UUIDs)
-- Falls back to registry IDs if node has no id
+1. **Graph Identity & HRN Layer** – names for nodes, edges, cases, and params
+2. **Param Pack DSL Layer** – HRN keys that address *which parameter fields* you are setting/reading
+3. **Structural Query Layer** – expressions like `from(...)`, `visited(...)`, `to(...)`, `minus(...)`, `window(...)` that define path/subgraph scopes and query modifiers
 
-**Conventions:**
-- Lowercase with hyphens: `checkout-page`
-- Descriptive: `abandoned-cart-email`
-- Consistent across graph, registry, and external systems
+### Layer 0: Graph Identity & HRNs
 
-### Path Constraints
+This layer defines how we refer to graph entities in a stable, human‑readable way.
 
-Query expressions define a **target path** by specifying:
-1. **Start and end:** Required (`.from()` and `.to()`)
-2. **Exclusions:** Nodes the path must NOT visit (`.exclude()`)
-3. **Requirements:** Nodes the path MUST visit (`.visited()`)
-4. **Case filters:** Experiment variants to include (`.case()`)
+#### Node identifiers
+
+- `node-id` in the graph (e.g. `homepage`, `product-page`)
+- Typically:
+  - Lowercase with hyphens: `checkout-page`
+  - Descriptive: `abandoned-cart-email`
+- Must be consistent across:
+  - Graph definitions
+  - Registry entries
+  - External systems (Amplitude event mappings, Sheets, etc.)
+
+#### Edge identifiers & HRNs
+
+Edges can be referenced in multiple equivalent ways:
+
+- **Direct edge ID**:
+  - `e.edge-id`
+- **By endpoints**:
+  - `e.from(node-a).to(node-b)`
+  - Resolves to the unique edge from `node-a` to `node-b` (or is rejected/ambiguous if multiple exist).
+- **By UUID** (rare in user-facing UI, useful internally):
+  - `e.uuid(<uuid>)`
+
+All of these resolve to the same **edge UUID** via the shared `HRNResolver`.
+
+#### Case / node identifiers
+
+Nodes (including case nodes) use:
+
+- `n.node-id`
+- `n.uuid(<uuid>)`
+
+Case variants on case nodes are addressed via param‑pack keys (see below).
 
 ---
 
-## Syntax Reference
+## Layer 1: Param Pack DSL (HRN → Parameter Fields)
 
-### 1. From-To (Required)
+The **param pack DSL** is how we refer to specific *parameter fields* on graph entities. It underpins:
 
+- Scenario params (`ScenarioParams`)
+- Sheets `param_pack` objects
+- Any other external source that wants to “speak in param packs”
+
+### 1.1 HRN prefixes
+
+Param pack keys are always **flat strings** with HRN prefixes:
+
+- `e.<edgeId>.<path>` – edge‑level params
+- `n.<nodeId>.<path>` – node‑level/case params
+
+Examples:
+
+- `e.checkout-to-purchase.p.mean`
+- `e.checkout-to-purchase.conditional_p.visited(promo).p.mean`
+- `n.case-checkout.case(checkout-experiment:control).weight`
+
+### 1.2 Edge param keys
+
+Common paths for edges:
+
+- **Probability parameter**:
+  - `e.edge-id.p.mean`
+  - `e.edge-id.p.stdev`
+- **Conditional probabilities**:
+  - `e.edge-id.conditional_p.<condition>.p.mean`
+  - `e.edge-id.conditional_p.<condition>.p.stdev`
+  - `condition` is a string DSL (e.g. `visited(promo)`), and is the same string used in:
+    - Scenario param packs
+    - Graph’s `edge.conditional_p[].condition`
+- **Costs**:
+  - `e.edge-id.cost_gbp.mean`
+  - `e.edge-id.cost_time.mean`
+
+The **canonical interpretation** of these keys is implemented by a single DSL/param-pack engine:
+
+- `ScenarioFormatConverter.unflattenParams(flat: Record<string, any>): ScenarioParams`  
+  (conceptually this service will be renamed to a more general name like `ParamPackDSLService`, but the function already exists today).
+  - It parses flat HRN keys into structured `ScenarioParams`:
+    - `edges[edgeId].p`, `edges[edgeId].conditional_p[condition]`, `edges[edgeId].cost_gbp`, etc.
+
+### 1.3 Node / case param keys
+
+Case variant weights on case nodes use a dedicated HRN form:
+
+- `n.<nodeId>.case(<caseId>:<variantName>).weight`
+
+Interpretation:
+
+- “On node `<nodeId>`, inside case `<caseId>`, set the weight for variant `<variantName>`”
+
+`unflattenParams()` turns this into:
+
+- `nodes[nodeId].case.variants = [{ name: variantName, weight: value }, ...]`
+
+### 1.4 Structured representation: `ScenarioParams`
+
+After unflattening, all param packs (from scenarios, Sheets, etc.) share the same **structured representation**:
+
+```ts
+type ScenarioParams = {
+  edges?: {
+    [edgeId: string]: {
+      p?: { mean?: number; stdev?: number; /* ... */ };
+      conditional_p?: {
+        [condition: string]: { mean?: number; stdev?: number; /* ... */ };
+      };
+      cost_gbp?: { mean?: number; /* ... */ };
+      cost_time?: { mean?: number; /* ... */ };
+      weight_default?: number;
+      // ...
+    };
+  };
+  nodes?: {
+    [nodeId: string]: {
+      entry?: { entry_weight?: number };
+      costs?: { monetary?: number; time?: number };
+      case?: {
+        variants: Array<{ name: string; weight: number }>;
+      };
+      // ...
+    };
+  };
+};
 ```
+
+This is the **single canonical format** used by:
+
+- Scenario overlays (`composeParams`)
+- Sheets param packs after ingestion
+- Any other HRN‑speaking source
+
+### 1.5 Scope
+
+The **param‑pack engine** (built around `unflattenParams` + composition helpers) supports an optional **scope**:
+
+- Examples of scopes:
+  - “This edge + this param slot” (e.g. edge UUID + `p` or `cost_gbp`)
+  - “This edge + this condition” (conditional `p` at a specific `condition` string)
+  - “This case node” (case variant weights)
+- When **scope is provided** (e.g. Sheets direct pull):
+  - Params **inside scope** are retained and turned into a structured diff.
+  - Params **outside scope** are excluded from this operation (but may be logged as skipped).
+- When **no scope is provided** (e.g. scenario overlays):
+  - The entire param pack is interpreted; scope is effectively the whole graph parameter space.
+
+---
+
+## Layer 2: Structural Query DSL (Paths & Flows)
+
+The structural DSL answers: **“Which paths / subgraph / users are we talking about?”**
+
+It is primarily used for:
+
+- Analytics queries (e.g. Amplitude funnels, dagCalc)
+- Conditional probabilities (“probability of B→C given visited A”)
+- Path/journey analysis (“user clicked A, then M, then Z”)
+
+### 2.1 Core verbs
+
+Basic structural query:
+
+```text
 from(node-id).to(node-id)
 ```
 
-**Purpose:** Define start and end nodes of the path.
+Extended with constraints:
 
-**Rules:**
-- Must always appear (both required)
-- Order doesn't matter: `from(a).to(b)` = `to(b).from(a)`
-- Can only specify one `from` and one `to`
+- `.visited(node-id)` – paths must visit this node at least once
+- `.exclude(node-id)` – paths must **not** visit this node
+- `.case(case-id:variant)` – constrain by experiment variant (e.g. Statsig/Amplitude gates)
 
-**Examples:**
+Example:
+
+```text
+from(cart).visited(checkout).to(purchase)
 ```
+
+Meaning:
+
+- “Paths from `cart` to `purchase` that go through `checkout` at least once.”
+
+### 2.2 Composite queries (`plus` / `minus`)
+
+Composite queries let you build inclusion–exclusion logic:
+
+```text
+from(a).to(c)
+  .minus( visited(x) )
+  .plus( visited(y) )
+```
+
+Interpretation:
+
+- Base scope: all paths from `a` to `c`
+- Subtract those that visit `x`
+- Add those that visit `y`
+
+In the implementation, these are parsed into an AST and executed via a composite query executor (e.g. for Amplitude).
+
+### 2.3 Query modifiers: `window`, `segment`, `context`
+
+These extend the **same structural selector** with additional filters:
+
+- `window(start, end)` – time window for analytics data:
+  - E.g. `window(2025-01-01, 2025-12-31)`
+- `segment(...)` – cohort/segment constraints (e.g. mobile users only)
+- `context(...)` – additional metadata (e.g. scenario, environment, feature flags)
+
+Example:
+
+```text
 from(homepage).to(purchase)
-from(signup-start).to(signup-complete)
+  .visited(checkout)
+  .window(2025-01-01, 2025-03-31)
+```
+
+Meaning:
+
+- “Conversions from homepage to purchase, via checkout, during Q1 2025.”
+
+These modifiers are interpreted by the **analytics adapters** (e.g. Amplitude connector) when building HTTP requests.
+
+---
+
+## Relationships Between Layers
+
+The **identity/HRN layer** and **structural query layer** share the same vocabulary:
+
+- `node-id` and `edge-id` are the same in:
+  - HRNs (`e.edge-id`, `n.node-id`)
+  - Structural queries (`from(node-id)`, `visited(node-id)`)
+- `condition` strings in `conditional_p`:
+  - Are the same strings used in:
+    - Scenario param packs (HRN keys)
+    - Graph `edge.conditional_p[].condition`
+    - Conditional probability UIs.
+
+The **param‑pack layer** then uses HRNs to say:
+
+- “Within this scope (possibly implicit), **set these fields**.”
+
+The **query layer** uses the same graph vocabulary to say:
+
+- “Within this scope, **compute / retrieve these metrics**.”
+
+Examples:
+
+- **Scenario overlay**:
+  - HRN param pack only:
+    - `e.edge-1.p.mean = 0.4`
+    - `e.edge-1.conditional_p.visited(promo).p.mean = 0.6`
+  - Applied as an overlay (`composeParams`) and not written to graph unless flattened.
+
+- **Sheets param pack (direct edge pull)**:
+  - HRN param pack + optional `scalar_value`:
+    - Flat HRN map from Sheets → `ScenarioParams` via `unflattenParams(...)`, scoped to the selected edge/param.
+  - Structured diff → `{ mean, stdev, n, k, ... }` payload → `UpdateManager.handleExternalToGraph`.
+
+- **Analytics query**:
+  - Structural selector + modifiers:
+    - `from(cart).to(checkout).window(2025-01-01, 2025-01-31)`
+  - Compiled into a provider‑specific HTTP request (e.g. Amplitude funnels API).
+
+---
+
+## Architectural Standards
+
+1. **Single HRN / param‑pack engine**:
+   - All DSLs that refer to parameters by HRN must:
+     - Use the canonical engine (`ScenarioFormatConverter` today, to be renamed to a general `ParamPackDSLService`) for `flattenParams/unflattenParams`.
+     - Use `ScenarioParams` as the canonical structured representation.
+   - No second ad‑hoc HRN parsers for Sheets or any other source.
+
+2. **Separation of parsing vs. application**:
+   - Parsing/interpretation (HRN → structured diff) is **shared**.
+   - Application of diffs is **context‑specific**:
+     - Scenarios: overlays via `composeParams`, no graph mutation until flatten.
+     - Sheets / external sources: diffs → external payloads → `UpdateManager.external_to_graph` / `external_to_file`.
+
+3. **Scope‑aware ingestion for external sources**:
+   - When ingesting from Sheets or similar:
+     - Always pass a **scope** (edge/param, node/case, conditional) to `applyScopeToParams`.
+     - Only apply params inside scope; log out‑of‑scope keys as skipped/non‑fatal.
+
+4. **Shared condition DSL**:
+   - `conditional_p` keys must use the same `condition` strings across:
+     - Graph, scenarios, Sheets, and any other DSLs.
+
+5. **Extensibility**:
+   - New features (e.g. richer journey DSL, additional query modifiers) must:
+     - Reuse the same identity/HRN layer for nodes/edges/cases.
+     - Plug into the structural query layer without duplicating core parsing logic.
+
+---
+
+## Runtime Flows & Component Responsibilities
+
+This section ties the DSL layers to the actual runtime components and data flows in DagNet.
+
+### Unified Flow Diagram: Single Canonical DSL Parser for Scenarios and Sheets
+
+```text
+                    ┌──────────────────────────────────────────┐
+                    │  TWO DIFFERENT ENTRY POINTS:             │
+                    │                                          │
+                    │  [A] User edits scenario (YAML/JSON)     │
+                    │  [B] User imports Sheets range           │
+                    └──────────────────────────────────────────┘
+                                      │
+                 ┌────────────────────┴────────────────────┐
+                 │                                         │
+                 ▼                                         ▼
+    ┌─────────────────────────┐          ┌─────────────────────────────┐
+    │ [A] SCENARIO PATH       │          │ [B] SHEETS PATH             │
+    └─────────────────────────┘          └─────────────────────────────┘
+                 │                                         │
+                 │                                         │
+    User creates/edits YAML:                  Sheets API returns:
+      edges:                                    { scalar_value: 0.7,
+        edge-1:                                   param_pack: {
+          p:                                        "e.edge-1.p.mean": 0.7,
+            mean: 0.7                                "p.stdev": 0.05 },
+                                                  errors: [] }
+                 │                                         │
+                 │                                         │
+                 ▼                                         ▼
+    ScenarioFormatConverter         DataOperationsService merges
+    .fromYAML(content)              scalar + param_pack into flat:
+      │                               { "e.edge-1.p.mean": 0.7,
+      │                                 "p.stdev": 0.05,
+      ├─ Parse YAML → object            "mean": 0.7 }
+      ├─ If nested: flatten                      │
+      │   to HRN keys                             │
+      │                                           ▼
+      │                            (ingestion helper normalizes
+      │                             relative keys like \"mean\" to
+      │                             full HRNs such as
+      │                             \"e.edge-1.p.mean\")
+      │                                           │
+      ▼                                           ▼
+    flat HRN map:                   flat HRN map (Sheets-normalized):
+    { "e.edge-1.p.mean": 0.7 }      { "e.edge-1.p.mean": 0.7,
+                                      "e.edge-1.p.stdev": 0.05 }
+                 │                                         │
+                 │                                         │
+                 └─────────────────┬─────────────────────┘
+                                   │
+                                   ▼
+              ╔═════════════════════════════════════════════════════╗
+              ║  ★ CANONICAL DSL PARSER (SINGLE CODE PATH) ★       ║
+              ║                                                     ║
+              ║  ScenarioFormatConverter.unflattenParams(flat)      ║
+              ║                                                     ║
+              ║  Parses ALL HRN keys:                               ║
+              ║    • e.<edgeId>.<path> → edges[edgeId].<path>       ║
+              ║    • n.<nodeId>.<path> → nodes[nodeId].<path>       ║
+              ║    • n.<nodeId>.case(<id>:<var>).weight             ║
+              ║      → nodes[nodeId].case.variants[{name, weight}]  ║
+              ║    • e.<edgeId>.conditional_p.<cond>.p.<field>      ║
+              ║      → edges[edgeId].conditional_p[{condition, p}]  ║
+              ║                                                     ║
+              ║  Returns: ScenarioParams                            ║
+              ║    { edges: {...}, nodes: {...} }                   ║
+              ╚═════════════════════════════════════════════════════╝
+                                   │
+                                   │
+                 ┌─────────────────┴─────────────────┐
+                 │                                   │
+                 ▼                                   ▼
+    ┌─────────────────────────┐      ┌─────────────────────────────┐
+    │ [A] SCENARIO PATH       │      │ [B] SHEETS PATH             │
+    │     (continued)         │      │     (continued)             │
+    └─────────────────────────┘      └─────────────────────────────┘
+                 │                                   │
+                 │                                   │
+                 ▼                                   ▼
+    Full ScenarioParams           ScenarioFormatConverter.applyScopeToParams
+    (all edges + nodes)           with scope={kind:'edge-param',edge,slot}
+                 │                                   │
+                 ▼                                   ▼
+    ScenariosContext stores       Extract payload for UpdateManager:
+    overlayParams                   { mean: 0.7, stdev: 0.05 }
+                 │                                   │
+                 ▼                                   ▼
+    composeParams(base, overlays) UpdateManager.handleExternalToGraph
+    → composed ScenarioParams       (updateData, edge, 'UPDATE', 'parameter')
+                 │                                   │
+                 ▼                                   ▼
+    ScenarioRenderer uses         Write to edge.parameter.p.mean, .stdev
+    composed params for           Set provenance: data_source.type='sheets'
+    edge widths/beads             Trigger sibling rebalance
+                 │                                   │
+                 ▼                                   ▼
+    ★ NO GRAPH MUTATION ★         ★ GRAPH MUTATION + REBALANCE ★
+    (overlay only)                (permanent update)
 ```
 
 ---
 
-### 2. Exclude (Optional)
+### Implementation Status & Outstanding Work (DSL Engine Perspective)
 
-```
-.exclude(node-id)
-.exclude(node-id, node-id, ...)
-```
+From the DSL perspective, the remaining implementation work to fully realize this design is:
 
-**Purpose:** Rule out paths that visit specific nodes.
+- **Engine generalization & naming**
+  - [ ] Rename `ScenarioFormatConverter` to a neutral DSL/param-pack service (e.g. `ParamPackDSLService`) and update all references.
+  - [ ] Clearly document in code and docs that this service is the *only* place where HRN param-pack keys are parsed (`unflattenParams`) and scoped (`applyScopeToParams`).
 
-**Use When:**
-- Multiple paths exist, and you want to avoid certain routes
-- Isolating "direct" conversions vs. "detour" conversions
-- Filtering out specific user journeys
+- **Scoping semantics (all relevant situations)**
+  - [ ] Implement and test `applyScopeToParams` scope kinds:
+    - `graph` → no narrowing (scenario overlays).
+    - `edge-param` → a single edge+param slot (`p`, `cost_gbp`, `cost_time`, etc.).
+    - `edge-conditional` → a single conditional entry: (edge + `condition` string) narrowing to `conditional_p[condition].p.*`.
+    - `node` → node-level params (`entry`, `costs`, etc.).
+    - `case` → case variant weights on a specific case node (`n.node.case(<caseId>:<variant>).weight`).
+  - [ ] Ensure event-linked params (where used) are resolved via the same HRN/registry identity and can be included/excluded by scope.
 
-**Examples:**
+- **Sheets and other ingestion flows on top of the engine**
+  - [ ] For Sheets edge params:
+    - Normalize relative keys (`mean`, `p.mean`, `cost_gbp.mean`) into HRNs.
+    - Call `unflattenParams` once, then `applyScopeToParams(scope={edge-param})`.
+  - [ ] For Sheets conditional ps:
+    - Accept HRN keys like `e.edge-id.conditional_p.visited(promo).p.mean`.
+    - Scope to `{kind:'edge-conditional', edge, condition}` and feed the resulting diff into `UpdateManager` as `conditional_p[i].p`.
+  - [ ] For Sheets node/case params:
+    - Accept HRN keys like `n.case-node.case(exp:control).weight` and node params like `n.node.entry.weight`.
+    - Scope to `{kind:'case'}` / `{kind:'node'}` and reuse the existing `external_to_graph('case' | 'node')` codepaths.
 
-**Single exclusion:**
-```
-from(homepage).to(purchase).exclude(abandoned-cart)
-```
-*Meaning:* Get conversions that didn't abandon cart.
+- **Tests**
+  - [ ] Unit tests for the DSL engine itself:
+    - `unflattenParams` round-trips for all key shapes (edges, conditionals, nodes, cases, events).
+    - `applyScopeToParams` for all scope kinds (graph, edge-param, edge-conditional, node, case).
+  - [ ] Integration tests for:
+    - Scenarios: ensure existing scenario flows still use `unflattenParams` and overlays behave identically after the rename/refactor.
+    - Sheets: ensure all of the above scope types are correctly honored when ingesting param packs (edge p/cost, node, case, conditional p).
+    - Negative cases: invalid HRNs, out-of-scope keys, and conflicting scalar/pack combinations.
 
-**Multiple exclusions:**
-```
-from(homepage).to(purchase).exclude(help-page, faq-page)
-```
-*Meaning:* Get conversions without visiting support pages.
-
-**Real-world scenario:**
-```
-Graph:
-  homepage → product → checkout → purchase
-  homepage → product → cart → checkout → purchase
-  
-Query: from(homepage).to(purchase).exclude(cart)
-Result: Only the direct path (skips cart step)
-```
-
----
-
-### 3. Visited (Optional)
-
-```
-.visited(node-id)
-.visited(node-id, node-id, ...)
-```
-
-**Purpose:** Require paths that visit specific nodes (conditional probability).
-
-**Use When:**
-- Measuring "what happens after X?"
-- Conditional conversion rates
-- Sequential event analysis
-
-**Examples:**
-
-**Single requirement:**
-```
-from(homepage).to(purchase).visited(email-click)
-```
-*Meaning:* Conversion rate for users who clicked an email first.
-
-**Multiple requirements:**
-```
-from(product-page).to(purchase).visited(reviews-page, add-to-cart)
-```
-*Meaning:* Users who viewed reviews AND added to cart.
-
-**Real-world scenario (conditional probability):**
-```
-Graph:
-  homepage → blog → product → purchase
-  homepage → product → purchase
-  
-Query: from(product).to(purchase).visited(blog)
-Result: Conversion rate for users who came via blog
-```
+These TODOs should be kept in sync with the more detailed, connector-specific checklist in `GOOGLE_SHEETS_HRN_INTEGRATION.md`.
 
 ---
 
-### 4. Case (Optional)
+### Critical Architecture Point
+
+**The diagram above shows that there is ONE AND ONLY ONE place where HRN/DSL keys are parsed:**
 
 ```
-.case(case-id:variant)
-.case(case-id:variant, case-id:variant, ...)
+ScenarioFormatConverter.unflattenParams(flat: Record<string, any>): ScenarioParams
 ```
 
-**Purpose:** Filter by A/B test or experiment variant.
+**Both scenarios and Sheets call this same function.** The differences are:
 
-**Use When:**
-- Analyzing experiment results
-- Comparing treatment vs. control
-- Segmenting by user group
+1. **Input preparation:**
+   - Scenarios: YAML/JSON → object → flatten to HRN map → `unflattenParams`
+   - Sheets: raw range → scalar/param_pack → merge + normalize relative keys → `unflattenParams`
 
-**Syntax:**
-- `case-id`: Identifier for the experiment (from case registry)
-- `variant`: Specific variant name (e.g., `treatment`, `control`, `variant-a`)
+2. **Output usage:**
+- Scenarios: full `ScenarioParams` → store as overlay → compose for rendering (no mutation).
+- Sheets (and other external sources): full `ScenarioParams` → `ScenarioFormatConverter.applyScopeToParams` to narrow to a specific scope (edge/slot, node/case, conditional, etc.) → extract `{mean, stdev, variants, ...}` → `UpdateManager` (mutation).
 
-**Examples:**
+**There is no second DSL parser.** Ingestion helpers do **not** parse HRN semantics; they only normalize shorthand keys (e.g. `mean` → `e.edge-1.p.mean`) and decide which `applyScopeToParams` scope to use before handing the result to `UpdateManager`.
 
-**Single case:**
-```
-from(homepage).to(purchase).case(pricing-test:treatment)
-```
-*Meaning:* Conversion rate for users in the pricing test treatment group.
+### Scenarios (Overlays / What‑If)
 
-**Multiple cases:**
-```
+**Goal**: Let users define param overlays (including conditionals and case variants) without mutating the live graph until they explicitly flatten.
+
+**Flow**:
+
+1. **Graph → base ScenarioParams**
+   - Component: `GraphParamExtractor.extractParamsFromGraph(graph)`
+   - Output: `baseParams: ScenarioParams` (edges + nodes + conditional_p + case variants).
+
+2. **Scenario content (YAML/JSON) → ScenarioParams**
+   - Components: `ScenarioFormatConverter.fromYAML` / `fromJSON`
+   - Internals:
+     - Parse YAML/JSON into an object.
+     - If structure is `nested`, call `parseNestedHRN()` to produce a flat HRN map.
+     - Call `unflattenParams(flat)` to get a structured `ScenarioParams`.
+   - Validation: `ScenarioValidator.validateScenarioParams(params, graph)` uses `HRNResolver` to check all `e.*` / `n.*` keys against the graph.
+
+3. **Store overlays**
+   - Component: `ScenariosContext`
+   - Keeps:
+     - `baseParams: ScenarioParams`
+     - `scenarios[i].params: ScenarioParams` (overlays)
+
+4. **Compose overlays for rendering**
+   - Components: `CompositionService.composeParams`, `mergeEdgeParams`, `mergeNodeParams`
+   - For a given visible scenario (or the combined What‑If view):
+
+     ```ts
+     const composed = composeParams(baseParams, [overlay1, overlay2, ...]);
+     ```
+
+   - Semantics:
+     - Edge `p`, `conditional_p`, `cost_gbp`, `cost_time`, etc. are merged deterministically.
+     - Node `case.variants` and other node params merge per `mergeNodeParams`.
+
+5. **Render, without mutating graph**
+   - Components: `ScenarioRenderer`, `GraphCanvas`, bead/label helpers
+   - Use `composed` to compute:
+     - Edge widths / colors
+     - Conditional beads
+     - Case variant weights for visualization
+   - The live `Graph` stays untouched until/unless the user explicitly invokes flatten or a sync operation that writes back via `UpdateManager`.
+
+### Sheets (External Data Ingestion)
+
+**Goal**: Let Sheets provide param updates (including HRN param packs) while reusing the same DSL/HRN semantics as scenarios, but applying them through the ingestion pipeline.
+
+**Flow**:
+
+1. **Sheets API → DASRunner**
+   - Components:
+     - `DASRunner` with `sheets-readonly` connection.
+     - Adapter uses `parseSheetsRange(values)` to emit:
+       - `scalar_value` (Pattern A)
+       - `param_pack` (Patterns B/C, flat HRN-like map)
+       - `errors`.
+
+2. **DataOperationsService entry point**
+   - Component: `DataOperationsService.getFromSourceDirect`
+   - Context:
+     - `objectType: 'parameter'` (for now)
+     - `targetId: edgeId`
+     - `paramSlot: 'p' | 'cost_gbp' | 'cost_time'`
+   - Receives:
+     - `result.raw.scalar_value`
+     - `result.raw.param_pack`
+     - `result.raw.errors`
+
+3. **Merge scalar and param_pack into flat pack**
+
+   ```ts
+   const mergedFlat: Record<string, unknown> = {
+     ...(param_pack || {}),
+     // In single/auto modes, treat scalar_value as mean if no explicit mean present
+     ...(shouldUseScalar ? { mean: scalar_value } : {})
+   };
+   ```
+
+   - This is the same flat HRN map shape that scenarios use, plus some **relative** keys (`mean`, `p.mean`, etc.) that are interpreted in context.
+
+4. **Canonical HRN parsing + scoping**
+   - Components:
+     - Ingestion helper inside `DataOperationsService` (normalizes relative keys like `mean` → `e.edge-1.p.mean`).
+     - `ScenarioFormatConverter.unflattenParams(flat)` (canonical DSL parser).
+     - `ScenarioFormatConverter.applyScopeToParams(params, scope, graph)` (canonical scoping).
+
+   ```ts
+   const fullParams = ScenarioFormatConverter.unflattenParams(mergedFlat);
+   const scopedParams = ScenarioFormatConverter.applyScopeToParams(
+     fullParams,
+     { kind: 'edge-param', edgeUuid: edge.uuid, edgeId: edge.id, slot: paramSlot || 'p' },
+     graph
+   );
+   ```
+
+   - Responsibilities:
+     - Normalize relative keys (`mean`, `p.mean`, `cost_gbp.mean`) into full HRNs for the current edge+slot.
+     - Parse all HRNs into a full `ScenarioParams` object via `unflattenParams`.
+     - Narrow that `ScenarioParams` to the requested scope (here, one edge+slot) via `applyScopeToParams`.
+
+5. **Scoped ScenarioParams diff → ingestion payload**
+   - Component: `extractSheetsUpdateData`
+   - Reads the scoped `ScenarioParams` and converts to schema terms:
+
+   ```ts
+   const edgeParams = scopedParams.edges?.[edgeKey];
+   if (slot === 'p' && edgeParams.p) {
+     update.mean = edgeParams.p.mean;
+     update.stdev = edgeParams.p.stdev;
+   }
+   // similarly for cost slots and future extensions like n/k
+   ```
+
+   - Output: `{ mean?, stdev?, n?, k? }` — the same shape Amplitude and other sources use.
+
+6. **Apply via UpdateManager (same as other external sources)**
+   - Component: `UpdateManager.handleExternalToGraph('parameter')`
+
+   ```ts
+   const updateResult = await updateManager.handleExternalToGraph(
+     updateData,
+     targetEdge,
+     'UPDATE',
+     'parameter',
+     { interactive: false }
+   );
+   ```
+
+   - Responsibilities:
+     - Map `mean`, `stdev`, `n`, `k` into:
+       - `edge.p.mean`, `edge.p.stdev`
+       - `edge.p.evidence.n`, `edge.p.evidence.k`
+       - `edge.p.data_source`, etc.
+     - Handle overrides, conflicts, and provenance.
+     - Trigger sibling rebalance where appropriate.
+
+### Shared vs Distinct Responsibilities
+
+- **Shared, canonical path (DSL & param packs)**:
+  - `ScenarioFormatConverter.flattenParams / unflattenParams`
+  - `ScenarioParams` and `CompositionService` merge semantics
+  - HRN and condition string interpretation for:
+    - `e.*` (edges, including `conditional_p`)
+    - `n.*` (nodes, including case variants)
+
+- **Scenario-specific behavior**:
+  - Uses `ScenarioParams` purely as overlays for rendering and what‑if analysis.
+  - Does **not** mutate the graph until an explicit flatten or sync operation is invoked.
+
+- **Sheets/external-specific behavior**:
+  - Uses the same `ScenarioParams` representation to build **ingestion payloads**.
+  - Mutates graph/files only via `UpdateManager.external_to_graph` / `external_to_file`.
+  - Must always specify a **scope** (edge/slot, and in future conditional/case scopes) so that out‑of‑scope params in a pack are excluded for that operation.
+
 from(homepage).to(purchase).case(pricing-test:treatment, ui-redesign:variant-b)
 ```
 *Meaning:* Users in BOTH the pricing treatment AND UI variant B.
