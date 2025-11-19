@@ -640,6 +640,207 @@ const scriptEnv = {
 
 ---
 
+## Outstanding Work & Open Design Questions
+
+This section tracks the remaining implementation work and open decisions for the Sheets HRN integration.  
+It is written for **implementation review** and should be kept in sync with the actual code.
+
+### 1. Canonical Param Pack Engine (HRN → Graph / Param Application)
+
+**Design requirement**
+
+There must be **one single, robust, high‑quality code path** for:
+- (a) **Generating** parameter packs from a graph, and
+- (b) **Parsing / interpreting** parameter packs into a structured, mergeable object,
+
+used by **both**:
+- The **scenarios system** (snapshotting, overlays, composition), and
+- The **Sheets integration** (and any future external sources that speak “param packs”).
+
+Sheets **must not** introduce a second, divergent DSL/HRN parsing implementation.  
+**Important**: this shared engine is responsible for **DSL/HRN parsing and diff construction only** (pure data), **not** for how those diffs are ultimately applied to the live graph.
+
+**Current state**
+- For scenarios:
+  - `GraphParamExtractor` turns a `Graph` into `ScenarioParams` (including `p`, `conditional_p`, node `case.variants`, etc.).
+  - `ScenarioFormatConverter`:
+    - Flattens `ScenarioParams` into HRN keys like:
+      - `e.edge-id.p.mean`
+      - `e.edge-id.conditional_p.visited(promo).mean`
+      - `n.case-node.case(my-experiment:control).weight`
+    - Unflattens those HRN key/value maps back into `ScenarioParams` (`unflattenParams()`).
+  - `CompositionService.composeParams()` + `mergeEdgeParams()` implement the authoritative rules for overlaying param diffs (including `conditional_p` merge semantics).
+- For Sheets:
+  - The adapter returns:
+    - `scalar_value` (Pattern A)
+    - `param_pack` (Patterns B/C) as a flat map `{ key: value }`
+    - `errors` (non-fatal parse issues)
+  - A provisional helper (`extractSheetsUpdateData`) currently performs some ad‑hoc HRN/key parsing for direct edge updates; this MUST be refactored to use the canonical param‑pack engine described above.
+
+**Outstanding work**
+
+- [ ] **Extract and formalize the canonical param‑pack engine** from existing scenario code:
+  - Centralize the “flat HRN map ↔ `ScenarioParams` ↔ graph diff” logic into a dedicated service (e.g. `ParamPackEngine`) built on:
+    - `ScenarioFormatConverter.unflattenParams()` / `flattenParams()`
+    - `CompositionService.composeParams()` / `mergeEdgeParams()` / `mergeNodeParams()`
+    - Existing `GraphParamExtractor` / `UpdateManager` mappings.
+  - Clearly document the supported key shapes:
+    - Edge params: `e.edge-id.p.*`, `e.from(a).to(b).p.*`, etc.
+    - Edge conditionals: `e.edge-id.conditional_p.<condition>.p.*` (using the same `condition` strings/DSL paths scenarios already use).
+    - Node params: `n.node-id.entry.*`, `n.node-id.costs.*`, etc.
+    - Case variants: `n.case-node-id.case(<caseId>:<variantName>).weight`.
+- [ ] Extend this engine to accept an **optional “scope”** argument:
+  - Scope can describe:
+    - A specific **edge/param slot** (e.g. edge UUID + `p` or `cost_gbp`),
+    - A specific **node/case** (e.g. case node UUID),
+    - A specific **conditional entry** (edge UUID + `condition` string).
+  - When a scope is provided:
+    - Only params **within scope** are retained (others are *explicitly ignored* for this operation).
+    - Out‑of‑scope but valid keys are reported as “skipped” (for logging / UX), not silently dropped.
+  - When no scope is provided (e.g. scenario overlays), the engine behaves as it does today: scope is effectively the **entire graph**.
+- [ ] Define **how structured diffs are consumed** in distinct application layers:
+  - For **scenarios**:
+    - Continue to treat `ScenarioParams` diffs as **overlays** composed via `composeParams()` for rendering and analysis only.
+    - The live graph is **not** mutated by the param‑pack engine; it is only mutated when the user explicitly flattens scenarios.
+  - For **data ingestion sources** (Sheets, Amplitude, Statsig, etc.):
+    - Convert scoped `ScenarioParams` diffs into external payloads (`{ mean, stdev, n, k, variants, ... }`) and pass them through the existing ingestion pipeline:
+      - `DataOperationsService` → `UpdateManager.handleExternalToGraph` / `handleExternalToFile` → graph/file mutation + rebalance + provenance.
+- [ ] Ensure this engine is the **only** place that:
+  - Parses HRN-style keys into structured params, and
+  - Interprets conditional DSL / case variant selectors.
+
+**Sheets-specific behavior (built on the canonical engine)**
+
+- [ ] For Sheets `param_pack` ingestion:
+  - Treat the pack as a **flat HRN map**, pass it through the canonical engine with an appropriate **scope**:
+    - Direct edge pull (`getFromSourceDirect` on a specific edge/param slot):
+      - Scope = “this edge UUID + this param slot (+ optional condition index)”.
+    - Case update (Sheets driving case variants):
+      - Scope = “this case node UUID”.
+    - Future batch/multi-edge Sheets workflows:
+      - Scope can be “entire graph” or a subset, as appropriate.
+  - Convert the resulting scoped `ScenarioParams` diff into the external payload expected by `UpdateManager.handleExternalToGraph` / `handleExternalToFile` (schema terminology: `mean`, `stdev`, `n`, `k`, `variants`, etc.), so Sheets uses the **same graph/file mutation code paths** as scenarios, Amplitude, Statsig, etc.
+- [ ] For `scalar_value` (Pattern A):
+  - Treat it as a **degenerate param pack** for the scoped param:
+    - E.g. in a direct edge pull for `p`, interpret `scalar_value` as `p.mean` *only if* the pack is otherwise empty for that scope.
+  - Feed it through the same engine so that any future enhancements to param semantics (e.g. bounds, distributions) apply uniformly.
+
+### 2. Scalar Mode Semantics (`scalar_value`)
+
+**Current state**
+- `scalar_value` is returned for Pattern A (single-cell scalar), but we do not yet define:
+  - How it maps into graph fields (`p.mean` vs cost, etc.).
+  - How it interacts with a simultaneous `param_pack` for the same call.
+
+**Outstanding work**
+- [ ] Define, per object type (`parameter` / `node` / `case`), what `scalar_value` means.
+- [ ] Implement that mapping in `DataOperationsService.getFromSourceDirect` (and, if applicable, in the versioned/file path).
+
+**Proposed approach**
+- For **edge-level probability parameters** (objectType=`parameter`, paramSlot=`p`):
+  - Treat `scalar_value` as **“primary numeric value”** for `p.mean` when no conflicting `param_pack` key is present for that edge.
+  - Use `UpdateManager.handleExternalToGraph({ mean: scalar_value }, edge, 'UPDATE', 'parameter')` to leverage existing stats/provenance logic.
+- For **other param slots** (e.g. `cost_gbp`, `cost_time`):
+  - Treat `scalar_value` as `mean` for that slot.
+- Precedence:
+  - If a `param_pack` contains an explicit key for the current context (e.g. `p.mean`), that **wins** over `scalar_value`, and `scalar_value` is ignored for that specific param; this avoids silent conflicts.
+
+### 3. Sheets in Versioned / File-Based Workflows
+
+**Current state**
+- The primary integration so far is via `getFromSourceDirect` (graph-only updates).
+- Parameter files already support `connection: "sheets-readonly"` + `connection_string`, but:
+  - There is no dedicated path yet that **pulls from Sheets and appends a new `values[]` entry** using the Sheets data.
+
+**Outstanding work**
+- [ ] Define how Sheets should be used in **file-based** workflows:
+  - Append a new `values[]` entry using `scalar_value` / `param_pack`.
+  - Set `data_source.type: 'sheets'` plus URL / range / timestamp for provenance, following the **same provenance pattern used for Amplitude and other external sources**.
+- [ ] Implement this via the existing external→file path:
+  - Use the current `getFromSource` / `getFromSourceDirect` machinery to fetch from Sheets.
+  - Pass the resulting external payload through `UpdateManager.handleExternalToFile`, exactly as for other connectors, rather than introducing any Sheets-specific write logic.
+
+**Proposed approach**
+- For **probability parameters**:
+  - When invoked in versioned mode, consume `scalar_value` / `param_pack` and construct a `values[]` entry with:
+    - `mean`, `stdev`, `n`, `k` when available.
+    - `data_source: { type: 'sheets', url, retrieved_at, range }`.
+- For **cost/time parameters**:
+  - Store `mean` (and optional `stdev`) under the appropriate slot (`cost_gbp`, `cost_time`), reusing the existing mappings from external data → file.
+
+### 4. Error Surfacing & UX for Sheets
+
+**Current state**
+- `parseSheetsRange` returns structured `errors` (row, col, message).
+- The adapter exposes these as `errors` in the transform output.
+- The UI currently only surfaces **adapter-level errors** (e.g., HTTP failures, transform failure), not **per-cell parse errors**.
+
+**Outstanding work**
+- [ ] Decide how to surface Sheets parse errors to the user:
+  - Toast with a summary (“3 cells could not be parsed; see details”), consistent with other external sources.
+  - When **logging mode / batch mode** is active, also aggregate detailed errors and write them to the DAS log file for later inspection.
+  - Optional “details” view listing row/col + message.
+  - Potential highlighting of problematic cells (requires range + A1 conversion).
+- [ ] Implement error propagation path:
+  - Extend `DataOperationsService` to look at `result.raw.errors` for `sheets-readonly`.
+  - Surface them via `toast.error` and/or a dedicated “Sheets errors” panel.
+
+**Proposed approach**
+- Treat `errors` as **non-fatal warnings** as long as at least one valid value was parsed:
+  - Proceed with applying valid entries.
+  - Show a toast like:  
+    `“Sheets import applied (2 params updated). 1 cell could not be parsed: A3 (not a number).”`
+- If **no usable values** are parsed:
+  - Treat as a **hard error**: do not apply updates, show a clear error toast.
+
+### 5. Connection `mode` (auto / single / param-pack)
+
+**Current state**
+- `mode` is defined in the connection string schema for `sheets-readonly` but not yet consumed by the adapter or helper.
+- `parseSheetsRange` always **auto-detects** patterns based on shape and content.
+
+**Outstanding work**
+- [ ] Decide whether `mode` should:
+  - Influence how `parseSheetsRange` behaves (e.g., force scalar vs param-pack).
+  - Or simply be a hint at a **higher layer** (e.g., consumer decides what to expect).
+- [ ] Implement that behavior and tests.
+
+**Proposed approach**
+- Keep `parseSheetsRange` **auto-only** for now (pure heuristic).
+- Use `connection_string.mode` (when present) in the consumer:
+  - `mode: 'single'`:
+    - Require `scalar_value` to be present and ignore `param_pack` even if parseable.
+  - `mode: 'param-pack'`:
+    - Require non-empty `param_pack` and treat `scalar_value` as irrelevant.
+  - `mode: 'auto'` (default when `mode` is omitted from the connection string):
+    - Current behavior: use whichever the helper returns, with precedence rules as described in §2.
+
+### 6. Additional Tests (Sheets + HRN + Graph Updates)
+
+**Current state**
+- Implemented tests:
+  - Unit tests for `parseSheetsRange` Patterns A/B/C and edge cases.
+  - DASRunner adapter tests for mocked Sheets responses → `scalar_value` / `param_pack`.
+  - Basic integration test to ensure `sheets` `data_source.type` is recognized in daily flows.
+- Missing tests:
+  - End-to-end HRN resolution + graph updates driven by Sheets.
+  - Negative tests for bad HRNs, out-of-scope keys, and conflicting data.
+
+**Outstanding work**
+- [ ] Add integration tests that:
+  - Feed a mocked `param_pack` like `{ "e.checkout-to-purchase.p.mean": 0.45 }`.
+  - Use `HRNResolver` + `UpdateManager` to assert that the correct edge is updated.
+  - Verify that unknown HRNs are **ignored but logged**, not treated as hard errors.
+- [ ] Add tests for mixed scalar + param-pack calls and `mode` variations (auto / single / param-pack).
+
+**Proposed approach**
+- Extend `dataOperations.integration.test.ts` with a **“Sheets HRN param pack”** suite:
+  - Mock `createDASRunner().execute` to return a realistic `param_pack`.
+  - Build a small in-memory graph with known edge IDs/UUIDs.
+  - Assert that only the intended edges/params are mutated, provenance is set to `type: 'sheets'`, and unaffected edges remain unchanged.
+
+---
+
 ## Timeline Estimate
 
 - **Phase 1** (Core parsing): 2-3 days

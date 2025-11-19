@@ -16,6 +16,7 @@ import type {
   DASUpdate,
 } from './types';
 import { resolveVariantToBool } from './caseVariantHelpers';
+import { parseSheetsRange } from './sheetsHrnResolver';
 import { DASExecutionError, CredentialsError, TemplateError, ExtractionError } from './errors';
 
 interface LogEntry {
@@ -170,6 +171,7 @@ export class DASRunner {
         nodeId: context.nodeId,
         dasHelpers: {
           resolveVariantToBool,
+          parseSheetsRange,
         },
         // Provide safe console for debugging
         console: {
