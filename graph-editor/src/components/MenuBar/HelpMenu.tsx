@@ -79,6 +79,16 @@ export function HelpMenu() {
     await operations.openTab(aboutItem, 'interactive', true);
   };
 
+  const handleCurrentVersion = async () => {
+    const changelogItem = {
+      id: 'changelog',
+      type: 'markdown' as const,
+      name: 'Release Notes',
+      path: 'CHANGELOG.md'
+    };
+    await operations.openTab(changelogItem, 'interactive', true);
+  };
+
   const handleDocFile = async (docFile: {id: string, name: string, title: string}) => {
     const docItem = {
       id: docFile.id,
@@ -129,6 +139,14 @@ export function HelpMenu() {
           </Menubar.Item>
 
           <Menubar.Separator className="menubar-separator" />
+
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={handleCurrentVersion}
+          >
+            Current Version
+            <div className="menubar-right-slot">v{import.meta.env.VITE_APP_VERSION || '0.91b'}</div>
+          </Menubar.Item>
 
           <Menubar.Item 
             className="menubar-item" 

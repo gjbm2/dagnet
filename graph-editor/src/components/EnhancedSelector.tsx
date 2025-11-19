@@ -109,7 +109,7 @@ export function EnhancedSelector({
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const syncMenuRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const blurTimeoutRef = useRef<number | null>(null);
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // State for dropdown positioning
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
@@ -424,7 +424,7 @@ export function EnhancedSelector({
       clearTimeout(blurTimeoutRef.current);
     }
 
-    blurTimeoutRef.current = window.setTimeout(() => {
+    blurTimeoutRef.current = globalThis.setTimeout(() => {
       blurTimeoutRef.current = null;
       setShowSuggestions(false);
       
