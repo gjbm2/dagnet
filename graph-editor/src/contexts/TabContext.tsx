@@ -1263,16 +1263,25 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
    * Switch to a tab
    */
   const switchTab = useCallback(async (tabId: string): Promise<void> => {
-    console.log(`[TabContext.switchTab] Called with tabId=${tabId}`);
-    console.log(`[TabContext.switchTab] Current activeTabId=${activeTabId}`);
-    console.log(`[TabContext.switchTab] Tab exists=${!!tabs.find(t => t.id === tabId)}`);
-    console.log(`[TabContext.switchTab] Call stack:`, new Error().stack);
+    if (import.meta.env.DEV) {
+      console.log(`[TabContext.switchTab] Called with tabId=${tabId}`);
+      console.log(`[TabContext.switchTab] Current activeTabId=${activeTabId}`);
+      console.log(`[TabContext.switchTab] Tab exists=${!!tabs.find(t => t.id === tabId)}`);
+      // Only log call stack in development for debugging (if DEBUG_TAB_SWITCH env var is set)
+      if (import.meta.env.VITE_DEBUG_TAB_SWITCH === 'true') {
+        console.log(`[TabContext.switchTab] Call stack:`, new Error().stack);
+      }
+    }
     
     if (tabs.find(t => t.id === tabId)) {
-      console.log(`[TabContext.switchTab] Setting activeTabId to ${tabId}`);
+      if (import.meta.env.DEV) {
+        console.log(`[TabContext.switchTab] Setting activeTabId to ${tabId}`);
+      }
       setActiveTabId(tabId);
       await db.saveAppState({ activeTabId: tabId });
-      console.log(`[TabContext.switchTab] ✅ Done`);
+      if (import.meta.env.DEV) {
+        console.log(`[TabContext.switchTab] ✅ Done`);
+      }
     } else {
       console.warn(`[TabContext.switchTab] ⚠️ Tab ${tabId} not found in tabs array`);
     }

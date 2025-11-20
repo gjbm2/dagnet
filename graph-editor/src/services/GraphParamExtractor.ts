@@ -168,3 +168,52 @@ function extractNodeParams(node: GraphNode): NodeParamDiff | null {
   return Object.keys(params).length > 0 ? params : null;
 }
 
+/**
+ * Extract parameters from specific nodes and edges
+ * Used for copying vars from selected objects
+ */
+export function extractParamsFromSelection(
+  graph: Graph | null,
+  selectedNodeUuids: string[],
+  selectedEdgeUuids: string[]
+): ScenarioParams {
+  if (!graph) {
+    return { edges: {}, nodes: {} };
+  }
+
+  const params: ScenarioParams = {
+    edges: {},
+    nodes: {}
+  };
+
+  // Extract parameters from selected edges
+  if (selectedEdgeUuids.length > 0 && graph.edges) {
+    for (const edge of graph.edges) {
+      if (selectedEdgeUuids.includes(edge.uuid)) {
+        const edgeParams = extractEdgeParams(edge);
+        if (edgeParams && Object.keys(edgeParams).length > 0) {
+          // Use human-readable ID if available, fallback to UUID
+          const key = edge.id || edge.uuid;
+          params.edges![key] = edgeParams;
+        }
+      }
+    }
+  }
+
+  // Extract parameters from selected nodes
+  if (selectedNodeUuids.length > 0 && graph.nodes) {
+    for (const node of graph.nodes) {
+      if (selectedNodeUuids.includes(node.uuid)) {
+        const nodeParams = extractNodeParams(node);
+        if (nodeParams && Object.keys(nodeParams).length > 0) {
+          // Use human-readable ID if available, fallback to UUID
+          const key = node.id || node.uuid;
+          params.nodes![key] = nodeParams;
+        }
+      }
+    }
+  }
+
+  return params;
+}
+

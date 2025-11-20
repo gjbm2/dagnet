@@ -729,6 +729,9 @@ class FileOperationsService {
         entry.category = file.data.category;
       }
       if (file.type === 'node') {
+        // Add name and description for nodes (for display in navigator)
+        if (file.data.name) entry.name = file.data.name;
+        if (file.data.description) entry.description = file.data.description;
         if (file.data.category) entry.category = file.data.category;
         if (file.data.event_id) entry.event_id = file.data.event_id;
       }

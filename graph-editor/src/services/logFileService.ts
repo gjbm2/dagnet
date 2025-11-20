@@ -43,15 +43,27 @@ export class LogFileService {
       }
       
       // Metadata lines (bold)
-      if (trimmed.startsWith('Batch Operation:') || trimmed.startsWith('Started:') || trimmed.startsWith('Total items:')) {
+      if (trimmed.startsWith('Batch Operation:') || 
+          trimmed.startsWith('Index Rebuild Operation') ||
+          trimmed.startsWith('Started:') || 
+          trimmed.startsWith('Total items:') ||
+          trimmed.startsWith('Total files processed:') ||
+          trimmed.startsWith('Duration:')) {
         markdownLines.push(`**${trimmed}**`);
         continue;
       }
       
       // Results section header
-      if (trimmed === 'Results:') {
-        markdownLines.push('## Results');
-        markdownLines.push('');
+      if (trimmed === 'Results:' || trimmed.endsWith(':') && /^(Added to Index|Updated in Index|Already in Index|Skipped|Errors)\s*\(\d+\):$/.test(trimmed)) {
+        if (trimmed === 'Results:') {
+          markdownLines.push('## Results');
+          markdownLines.push('');
+        } else {
+          // Subsection headers like "Added to Index (5):"
+          markdownLines.push('');
+          markdownLines.push(`### ${trimmed.replace(':', '')}`);
+          markdownLines.push('');
+        }
         inResults = true;
         continue;
       }

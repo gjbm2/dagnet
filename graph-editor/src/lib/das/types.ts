@@ -90,6 +90,7 @@ export interface ConnectionDefinition {
   adapter: AdapterSpec;
   metadata?: Record<string, unknown>;
   tags?: string[];
+  requires_event_ids?: boolean; // Optional: if false, skip DSL building and event_id validation (default: true)
 }
 
 export interface ConnectionFile {

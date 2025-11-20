@@ -8,7 +8,7 @@ import React, { useState, useRef } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
-import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap } from 'lucide-react';
+import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy } from 'lucide-react';
 import { fileRegistry } from '../contexts/TabContext';
 import VariantWeightInput from './VariantWeightInput';
 import { AutomatableField } from './AutomatableField';
@@ -16,6 +16,7 @@ import { isProbabilityMassUnbalanced } from '../utils/rebalanceUtils';
 import toast from 'react-hot-toast';
 import { getAllDataSections, type DataOperationSection } from './DataOperationsSections';
 import { DataSectionSubmenu } from './DataSectionSubmenu';
+import { copyVarsToClipboard } from '../services/copyVarsService';
 
 interface NodeContextMenuProps {
   x: number;
@@ -277,6 +278,22 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
     }
   };
 
+  const handleCopyVars = async () => {
+    const selectedNodeUuids = selectedNodes.map(n => n.id);
+    const result = await copyVarsToClipboard(graph, selectedNodeUuids, []);
+    
+    if (result.success) {
+      toast.success(
+        `Copied ${result.count} variable${result.count !== 1 ? 's' : ''} ` +
+        `from ${result.nodeCount} node${result.nodeCount !== 1 ? 's' : ''} to clipboard`
+      );
+    } else {
+      toast.error(result.error || 'Failed to copy variables');
+    }
+    
+    onClose();
+  };
+
   return (
     <div
       style={{
@@ -431,10 +448,32 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
         </>
       )}
 
+      {/* Copy vars */}
+      <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          handleCopyVars();
+        }}
+        style={{
+          padding: '8px 12px',
+          cursor: 'pointer',
+          fontSize: '13px',
+          borderRadius: '2px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+      >
+        <Copy size={14} />
+        <span>Copy vars{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
+      </div>
+
       {/* Show in new graph (multi-select only) */}
       {isMultiSelect && (
         <>
-          <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
           <div
             onClick={(e) => {
               e.stopPropagation();
