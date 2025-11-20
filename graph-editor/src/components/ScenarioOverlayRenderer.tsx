@@ -1,7 +1,7 @@
 /**
  * ScenarioOverlayRenderer
  * 
- * Renders scenario overlays as additional edge layers with their own colors.
+ * Renders scenario overlays as additional edge layers with their own colours.
  * This component MUST be used inside ReactFlow's children to access the SVG viewport.
  * 
  * CURRENTLY NOT FUNCTIONAL - needs rewrite to compute paths properly
@@ -21,7 +21,7 @@ interface ScenarioOverlayRendererProps {
  * Renders scenario overlays for all visible scenarios
  * 
  * Each scenario is rendered as an SVG group containing paths for its edges.
- * The paths use the scenario's color and blend mode for visual comparison.
+ * The paths use the scenario's colour and blend mode for visual comparison.
  * 
  * TODO: This needs to compute edge paths using the same getBezierPath logic
  * as ConversionEdge, not query the DOM.
@@ -75,7 +75,7 @@ export function ScenarioOverlayRenderer({ tabId, graph }: ScenarioOverlayRendere
       return {
         scenarioId: scenario.scenarioId,
         name: scenario.name,
-        color: scenario.color,
+        colour: scenario.colour,
         paths: edgePaths,
       };
     });
@@ -112,7 +112,7 @@ export function ScenarioOverlayRenderer({ tabId, graph }: ScenarioOverlayRendere
             <path
               key={`${scenario.scenarioId}-${pathData.uuid}`}
               d={pathData.path}
-              stroke={scenario.color}
+              stroke={scenario.colour}
               strokeWidth={pathData.width}
               fill="none"
               strokeLinecap="butt"

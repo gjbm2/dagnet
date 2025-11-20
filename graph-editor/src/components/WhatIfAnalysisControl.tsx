@@ -3,7 +3,7 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useWhatIfContext } from '../contexts/WhatIfContext';
 import toast from 'react-hot-toast';
-import { getConditionalColor, getConditionSignature } from '@/lib/conditionalColors';
+import { getConditionalColour, getConditionSignature } from '@/lib/conditionalColours';
 import { 
   normalizeConstraintString, 
   evaluateConstraint, 
@@ -209,7 +209,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
     return Array.from(groups.entries()).map(([signature, edges]) => ({
       signature,
       edges,
-      color: edges[0]?.display?.conditional_color,
+      colour: edges[0]?.display?.conditional_colour,
       // Create display name from first edge's conditions
       displayName: edges[0]?.conditional_p?.[0]?.condition
         ? (typeof edges[0].conditional_p[0].condition === 'string'
@@ -320,7 +320,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                 });
                 const isActive = !!caseOverride;
                 const variants = node.case?.variants || [];
-                const nodeColor = node.layout?.color || '#e5e7eb';
+                const nodeColour = node.layout?.colour || '#e5e7eb';
                 
                 return (
                   <div
@@ -330,7 +330,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                       padding: '10px',
                       marginBottom: '6px',
                       borderRadius: '4px',
-                      border: isActive ? `2px solid ${nodeColor}` : '1px solid #e9ecef'
+                      border: isActive ? `2px solid ${nodeColour}` : '1px solid #e9ecef'
                     }}
                   >
                     <div style={{ 
@@ -345,7 +345,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                         width: '16px',
                         height: '16px',
                         borderRadius: '2px',
-                        background: nodeColor,
+                        background: nodeColour,
                         border: '1px solid rgba(0,0,0,0.2)',
                         flexShrink: 0
                       }} />
@@ -435,7 +435,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                     parsed.exclude.some(e => cond.condition.includes(e));
                   return dslHasVisited || dslHasExclude || normalizeConstraintString(whatIfDSL || '') === normalizedCond;
                 }) || false;
-                const groupColor = group.color || '#4ade80';
+                const groupColour = group.colour || '#4ade80';
                 
                 return (
                   <div
@@ -445,7 +445,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                       padding: '10px',
                       marginBottom: '6px',
                       borderRadius: '4px',
-                      border: anyActive ? `2px solid ${groupColor}` : '1px solid #e9ecef'
+                      border: anyActive ? `2px solid ${groupColour}` : '1px solid #e9ecef'
                     }}
                   >
                     <div style={{ marginBottom: '6px' }}>
@@ -454,7 +454,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                           width: '12px',
                           height: '12px',
                           borderRadius: '2px',
-                          background: groupColor,
+                          background: groupColour,
                           border: '1px solid #ddd'
                         }}></div>
                         <span style={{ fontWeight: '600', fontSize: '12px' }}>

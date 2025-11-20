@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * list_color_usages.js
+ * list_colour_usages.js
  *
- * Scans the repository for every occurrence of the alpha string "color"
+ * Scans the repository for every occurrence of the alpha string "colour"
  * (case-insensitive) and writes a JSON file with one entry per match.
  *
- * Output file: color-usages.json at the repo root.
+ * Output file: colour-usages.json at the repo root.
  *
  * Each entry looks like:
  * {
@@ -15,8 +15,8 @@
  *   "file": "graph-editor/src/types/index.ts",
  *   "line": 456,
  *   "column": 10,
- *   "match": "color",
- *   "context": "  color?: string; // hex color"
+ *   "match": "colour",
+ *   "context": "  colour?: string; // hex colour"
  * }
  *
  * You can then manually review / annotate this JSON and drive a second pass
@@ -60,7 +60,7 @@ const EXCLUDED_FILES = new Set([
   'package-lock.json',
   'pnpm-lock.yaml',
   'yarn.lock',
-  'color-usages.json'  // Don't scan our own output!
+  'colour-usages.json'  // Don't scan our own output!
 ]);
 
 /** Maximum length of the context line we store in JSON */
@@ -101,7 +101,7 @@ function walk(dir, onFile) {
 }
 
 /**
- * Analyze a single file for all case-insensitive occurrences of "color".
+ * Analyze a single file for all case-insensitive occurrences of "colour".
  * Returns an array of match descriptors for this file.
  * Line numbers are 1-based and reset for each file.
  */
@@ -119,7 +119,7 @@ function analyzeFile(filePath, nextIdRef) {
   const results = [];
 
   // Case-insensitive global regex
-  const regex = /color/gi;
+  const regex = /colour/gi;
 
   // Process each line independently - line numbers start at 1 for each file
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
@@ -132,7 +132,7 @@ function analyzeFile(filePath, nextIdRef) {
     let match;
     while ((match = regex.exec(lineText)) !== null) {
       const column = match.index + 1; // 1-based column
-      const matchedText = match[0]; // Preserve actual casing (color, Color, COLOR, etc.)
+      const matchedText = match[0]; // Preserve actual casing (colour, Colour, COLOUR, etc.)
       
       let context = lineText;
       if (context.length > MAX_CONTEXT_LENGTH) {
@@ -159,13 +159,13 @@ function analyzeFile(filePath, nextIdRef) {
 function main() {
   const nextIdRef = { value: 1 };
 
-  const outPath = path.join(ROOT, 'color-usages.json');
+  const outPath = path.join(ROOT, 'colour-usages.json');
 
   let stream;
   try {
     stream = fs.createWriteStream(outPath, { encoding: 'utf8' });
   } catch (err) {
-    console.error('Failed to open color-usages.json for writing:', err);
+    console.error('Failed to open colour-usages.json for writing:', err);
     process.exit(1);
   }
 
@@ -184,12 +184,12 @@ function main() {
   try {
     stream.end();
   } catch (err) {
-    console.error('Failed to write color-usages.json:', err);
+    console.error('Failed to write colour-usages.json:', err);
     process.exit(1);
   }
 
   console.error(`Wrote ${totalMatches} entries to ${outPath} (one JSON object per line)`);
-  console.error(`Each entry defaults to "change": true - use sieve_color.jq to flip safe cases to false`);
+  console.error(`Each entry defaults to "change": true - use sieve_colour.jq to flip safe cases to false`);
 }
 
 if (require.main === module) {

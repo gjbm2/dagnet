@@ -270,7 +270,7 @@ Different fields have different needs:
 
 ### Consistent Icon System
 
-| Icon | Meaning | Color | Usage |
+| Icon | Meaning | Colour | Usage |
 |------|---------|-------|-------|
 | ✓ | Valid, has file | Green | Item exists in registry with detail file |
 | ⚠ | Warning | Orange | Item in registry but no file, or custom value |

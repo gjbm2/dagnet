@@ -45,7 +45,7 @@ This document provides a consolidated, actionable implementation plan for the Da
 - [x] Monaco-based QueryExpressionEditor component **PROTOTYPED**
   - Dual-mode: Monaco (edit) ↔ Chips (view)
   - Context-aware autocomplete from graph + registries
-  - Sans-serif font, theme colors
+  - Sans-serif font, theme colours
   - Hover delete affordances
   - Integrated into PropertiesPanel (edge probability section)
   - **Note:** Prototype only - needs validation, auto-population, polish

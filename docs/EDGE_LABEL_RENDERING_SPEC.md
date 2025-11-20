@@ -33,7 +33,7 @@ This specification defines a **unified rendering system** for edge labels that c
 1. **Single Rendering Path**: All edge labels rendered through unified composite label system
 2. **Consistent Format**: Same edge type shows same format regardless of scenario visibility
 3. **Progressive Disclosure**: Show more detail only when useful (stdev, costs, etc.)
-4. **Color Semantics**: Color indicates scenario source, black indicates universal/identical
+4. **Colour Semantics**: Colour indicates scenario source, black indicates universal/identical
 5. **Smart Simplification**: Suppress redundant information (identical values, matching hidden)
 
 ---
@@ -55,13 +55,13 @@ This specification defines a **unified rendering system** for edge labels that c
 **Rationale**: Variant name comes first for immediate identification. Both weights shown to make multiplication visible: `effective = variantWeight × edgeProbability`.
 
 ### Rule 3: Costs Inline
-Costs are shown **inline, comma-separated**, not below. They follow the same segmentation and color coding as probabilities.
+Costs are shown **inline, comma-separated**, not below. They follow the same segmentation and colour coding as probabilities.
 
 **Example**: `65%, £1.50` (blue) `20%, £1.50` (pink)
 
-### Rule 4: Color Coding
+### Rule 4: Colour Coding
 - **Black**: Value is identical across all visible layers
-- **Scenario Color**: Value differs between layers, color matches scenario
+- **Scenario Colour**: Value differs between layers, colour matches scenario
 - **Light Grey (#999)**: Hidden 'current' layer shown in brackets
 
 ### Rule 5: Brackets for Hidden Current
@@ -70,7 +70,7 @@ When 'current' is not visible but differs from visible values, show: `visible_va
 ### Rule 6: Smart Simplification (Applies to ALL scenarios)
 - If all visible layers have identical values AND hidden current matches: show single black label
 - If all visible layers have identical values BUT hidden current differs: show `single_value (hidden_value)`
-- If values differ: show each colored label
+- If values differ: show each coloured label
 
 **CRITICAL**: This is the ONLY rendering path. No special cases for "no scenarios visible".
 
@@ -136,7 +136,7 @@ When 'current' is not visible but differs from visible values, show: `visible_va
 #### 1.8: Multiple Scenarios, Probabilities and Costs Differ
 ```
 ┌────────────────────────────────────────────────┐
-│ 40%, £100  50%, £150  55%, £150               │  ← Each segment colored
+│ 40%, £100  50%, £150  55%, £150               │  ← Each segment coloured
 └────────────────────────────────────────────────┘
 ```
 
@@ -147,7 +147,7 @@ When 'current' is not visible but differs from visible values, show: `visible_va
 └────────────────────────────────────────────────┘
 ```
 
-**Note**: Smart deduplication works per-field. If all costs are £150, show once in black. If probabilities differ, show colored.
+**Note**: Smart deduplication works per-field. If all costs are £150, show once in black. If probabilities differ, show coloured.
 
 #### 1.10: With Hidden Current (Differs)
 ```
@@ -282,12 +282,12 @@ When 'current' is not visible but differs from visible values, show: `visible_va
 └────────────────────────────────────────┘
 ```
 
-**Rationale**: Each segment represents a complete state. If ANY field differs, show the segment colored.
+**Rationale**: Each segment represents a complete state. If ANY field differs, show the segment coloured.
 
 #### 4.2: Different Probabilities, Same Costs
 ```
 ┌────────────────────────────────────────┐
-│ 40%  50%  60%, £100                    │  ← Cost deduplicated, probs colored
+│ 40%  50%  60%, £100                    │  ← Cost deduplicated, probs coloured
 └────────────────────────────────────────┘
 ```
 
@@ -385,7 +385,7 @@ justifyContent: center;
 flexWrap: wrap;  /* Wrap if too many values */
 ```
 
-### Color Palette
+### Colour Palette
 - Scenario 1: `#3b82f6` (blue)
 - Scenario 2: `#f97316` (orange)  
 - Scenario 3: `#8b5cf6` (purple)
@@ -394,7 +394,7 @@ flexWrap: wrap;  /* Wrap if too many values */
 - Hidden Current: `#999999` (grey)
 - Identical/Single: `#000000` (black)
 
-### Background Colors (Special States)
+### Background Colours (Special States)
 - Case Edge: `#F3F0FF` (light purple)
 - Conditional Override: `#f0fdf4` (light green)
 - Error State: `#fff5f5` (light red)
@@ -431,7 +431,7 @@ START: Need to render edge label
 │  │  └─ NO → Check per-field deduplication
 │  │     ├─ For each field (prob, cost_gbp, cost_time):
 │  │     │  ├─ All segments have same value? → Show once in black at end
-│  │     │  └─ Values differ? → Show for each segment in color
+│  │     │  └─ Values differ? → Show for each segment in colour
 │  │     │
 │  │     └─ Render segments with partial dedup
 │  │
@@ -466,13 +466,13 @@ function deduplicateSegments(segments: Segment[]): RenderInstruction {
     // Full deduplication possible
     const hiddenMatches = hidden.every(h => /* h matches visible[0] */);
     if (hiddenMatches) {
-      return { type: 'single', segment: visible[0], color: 'black' };
+      return { type: 'single', segment: visible[0], colour: 'black' };
     } else {
       return { 
         type: 'simplified', 
         visible: visible[0], 
         hidden: hidden,
-        visibleColor: 'black' 
+        visibleColour: 'black' 
       };
     }
   }
@@ -530,7 +530,7 @@ interface LabelSegment {
   cost_time_parameter_id?: string;
   
   // Display info
-  color: string;
+  colour: string;
   isHidden: boolean;
 }
 
@@ -650,7 +650,7 @@ return (
 - [ ] Single layer visible, normal edge
 - [ ] Single layer visible, case edge
 - [ ] Multiple identical values → single black label
-- [ ] Multiple different values → colored labels
+- [ ] Multiple different values → coloured labels
 - [ ] Hidden current matching → no brackets
 - [ ] Hidden current differing → grey brackets
 - [ ] Zero probability → dashed line + 0% label
@@ -662,7 +662,7 @@ return (
 - [ ] Screenshot comparison for each rendering scenario
 - [ ] Layout doesn't break with long variant names
 - [ ] Multi-value labels wrap correctly
-- [ ] Colors match design system
+- [ ] Colours match design system
 
 ---
 
@@ -674,9 +674,9 @@ return (
 |----------|------------------|---------------------|---------|
 | No scenarios, normal edge | `45%` (black) | `45%` (black) | ✅ Same |
 | No scenarios, case edge | `25%` + "control" (purple) | `25%/100%` (purple) | ⚠️ **Format Change** |
-| Single scenario visible | Colored if differs | Black if same, colored+bracketed if differs | ⚠️ **Behavior Change** |
-| Multiple identical | Shows all colored | Single black | ✅ **Improvement** |
-| Multiple different | Colored labels | Colored labels | ✅ Same |
+| Single scenario visible | Coloured if differs | Black if same, coloured+bracketed if differs | ⚠️ **Behavior Change** |
+| Multiple identical | Shows all coloured | Single black | ✅ **Improvement** |
+| Multiple different | Coloured labels | Coloured labels | ✅ Same |
 
 ### Breaking Changes
 
@@ -695,7 +695,7 @@ return (
    - **Impact**: Single-layer view looks identical, but uses same code path as multi-layer
 
 5. **Smart deduplication** shows single black label when all scenarios identical
-   - **Old**: Could show `45%` or colored labels inconsistently  
+   - **Old**: Could show `45%` or coloured labels inconsistently  
    - **New**: Always shows `45%` (black) when all identical
 
 **Mitigation**: 
@@ -766,7 +766,7 @@ return (
 
 ### Functional
 - ✅ All edge types render correctly in all scenario configurations
-- ✅ Color coding matches scenario colors
+- ✅ Colour coding matches scenario colours
 - ✅ Simplification logic works (identical → single label)
 - ✅ Hidden current shows in brackets when differing
 - ✅ Case edges show both variant weight and edge probability
@@ -800,7 +800,7 @@ Current Implementation:
 └──────────────────────┘
 
 Issues:
-- Color assignment inconsistent
+- Colour assignment inconsistent
 - Hidden current sometimes missing
 - Case edges show wrong format
 ```

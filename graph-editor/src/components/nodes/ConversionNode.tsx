@@ -32,7 +32,7 @@ interface ConversionNodeData {
     y?: number;
     rank?: number;
     group?: string;
-    color?: string;
+    colour?: string;
   };
   event_id?: string;
   event_id_overridden?: boolean;
@@ -405,9 +405,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     return path;
   }, [data.useSankeyView, data.faceDirections, nodeShape.width, nodeShape.height]);
   
-  // Case node styling - suppressed coloration (neutral gray)
-  // Store color for bead use, but don't apply to node itself
-  const caseNodeColorForBeads = isCaseNode ? (data.layout?.color || null) : null;
+  // Case node styling - suppressed colouration (neutral gray)
+  // Store colour for bead use, but don't apply to node itself
+  const caseNodeColourForBeads = isCaseNode ? (data.layout?.colour || null) : null;
 
   // Determine if handles should be visible
   const showHandles = isHovered || isConnecting;
@@ -443,12 +443,12 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         textAlign: 'center',
         cursor: 'pointer',
         boxShadow: outlinePathD ? 'none' : (() => {
-          // Canvas background color from GraphCanvas ReactFlow style
-          const canvasColor = '#f8fafc';
+          // Canvas background colour from GraphCanvas ReactFlow style
+          const canvasColour = '#f8fafc';
 
-          // Outer "halo" in canvas color to act as a pseudo-clip for edges
+          // Outer "halo" in canvas colour to act as a pseudo-clip for edges
           // This renders behind the node but above edges, hiding edge segments near the node boundary.
-          const outerHalo = `0 0 0 5px ${canvasColor}`;
+          const outerHalo = `0 0 0 5px ${canvasColour}`;
 
           // Base shadow for depth
           const baseShadow = selected ? '0 4px 8px rgba(51,51,51,0.4)' : '0 2px 4px rgba(0,0,0,0.1)';
@@ -819,11 +819,11 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
                 width: 12,
                 height: 12,
                 borderRadius: 3,
-                backgroundColor: nodeTheme.lightColor,
-                border: `1px solid ${nodeTheme.accentColor}`,
+                backgroundColor: nodeTheme.lightColour,
+                border: `1px solid ${nodeTheme.accentColour}`,
               }}
             >
-              <nodeTheme.icon size={8} strokeWidth={2} style={{ color: nodeTheme.accentColor }} />
+              <nodeTheme.icon size={8} strokeWidth={2} style={{ color: nodeTheme.accentColour }} />
             </span>
           </Tooltip>
         )}
@@ -837,11 +837,11 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
                 width: 12,
                 height: 12,
                 borderRadius: 3,
-                backgroundColor: caseTheme.lightColor,
-                border: `1px solid ${caseTheme.accentColor}`,
+                backgroundColor: caseTheme.lightColour,
+                border: `1px solid ${caseTheme.accentColour}`,
               }}
             >
-              <caseTheme.icon size={8} strokeWidth={2} style={{ color: caseTheme.accentColor }} />
+              <caseTheme.icon size={8} strokeWidth={2} style={{ color: caseTheme.accentColour }} />
             </span>
           </Tooltip>
         )}
@@ -855,11 +855,11 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
                 width: 12,
                 height: 12,
                 borderRadius: 3,
-                backgroundColor: eventTheme.lightColor,
-                border: `1px solid ${eventTheme.accentColor}`,
+                backgroundColor: eventTheme.lightColour,
+                border: `1px solid ${eventTheme.accentColour}`,
               }}
             >
-              <eventTheme.icon size={8} strokeWidth={2} style={{ color: eventTheme.accentColor }} />
+              <eventTheme.icon size={8} strokeWidth={2} style={{ color: eventTheme.accentColour }} />
             </span>
           </Tooltip>
         )}
@@ -874,7 +874,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           width: '8px',
           height: '8px',
           borderRadius: '50%',
-          backgroundColor: caseNodeColorForBeads || '#8B5CF6', // Use stored color for indicator
+          backgroundColor: caseNodeColourForBeads || '#8B5CF6', // Use stored color for indicator
           border: '1px solid #FFFFFF',
           zIndex: 15,
           pointerEvents: 'none'

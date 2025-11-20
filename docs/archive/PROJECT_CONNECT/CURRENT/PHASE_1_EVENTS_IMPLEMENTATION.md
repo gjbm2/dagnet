@@ -2,7 +2,7 @@
 
 **Date:** 2025-11-05  
 **Purpose:** Add Events throughout the app following the Cases pattern  
-**Color:** Yellow (`#FEF3C7` light, `#EAB308` accent)
+**Colour:** Yellow (`#FEF3C7` light, `#EAB308` accent)
 
 ---
 
@@ -57,8 +57,8 @@ export type ObjectType =
 export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
   // ... existing types
   event: {
-    lightColor: '#FEF3C7',  // light yellow
-    accentColor: '#EAB308', // yellow-500
+    lightColour: '#FEF3C7',  // light yellow
+    accentColour: '#EAB308', // yellow-500
     icon: Calendar,
     label: 'Event',
     emoji: '📅'
@@ -419,7 +419,7 @@ After implementation, verify:
 - [ ] events-index.yaml auto-updates when event file created/modified/deleted
 - [ ] Event files show dirty state (orange) when modified
 - [ ] Can open event file from node selector's "Open Connected" button
-- [ ] Event color (yellow) appears correctly in all locations
+- [ ] Event colour (yellow) appears correctly in all locations
 
 ---
 

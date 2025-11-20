@@ -31,7 +31,7 @@ import { useGraphStore } from './GraphStoreContext';
 import { db } from '../db/appDatabase';
 
 // Scenario colour palette (user scenarios cycle through these)
-// Using more saturated, vibrant colors for better visibility
+// Using more saturated, vibrant colours for better visibility
 const SCENARIO_PALETTE = [
   '#EC4899', // Hot Pink
   '#F59E0B', // Amber
@@ -62,8 +62,8 @@ interface ScenariosContextValue {
   editorOpenScenarioId: string | null;
   
   // Colours (graph-level, user-mutable)
-  currentColor: string;
-  baseColor: string;
+  currentColour: string;
+  baseColour: string;
   
   // CRUD operations
   createSnapshot: (
@@ -78,7 +78,7 @@ interface ScenariosContextValue {
   getScenario: (id: string) => Scenario | undefined;
   listScenarios: () => Scenario[];
   renameScenario: (id: string, name: string) => Promise<void>;
-  updateScenarioColor: (id: string, color: string) => Promise<void>;
+  updateScenarioColour: (id: string, colour: string) => Promise<void>;
   deleteScenario: (id: string) => Promise<void>;
   
   // Content operations
@@ -98,8 +98,8 @@ interface ScenariosContextValue {
   // Base/Current operations
   setBaseParams: (params: ScenarioParams) => void;
   setCurrentParams: (params: ScenarioParams) => void;
-  setCurrentColor: (color: string) => void;
-  setBaseColor: (color: string) => void;
+  setCurrentColour: (colour: string) => void;
+  setBaseColour: (colour: string) => void;
 }
 
 const ScenariosContext = createContext<ScenariosContextValue | null>(null);
@@ -123,8 +123,8 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [baseParams, setBaseParams] = useState<ScenarioParams>({ edges: {}, nodes: {} });
   const [currentParams, setCurrentParams] = useState<ScenarioParams>({ edges: {}, nodes: {} });
-  const [currentColor, setCurrentColor] = useState<string>('#3B82F6'); // Blue (vibrant)
-  const [baseColor, setBaseColor] = useState<string>('#A3A3A3'); // Neutral grey
+  const [currentColour, setCurrentColour] = useState<string>('#3B82F6'); // Blue (vibrant)
+  const [baseColour, setBaseColour] = useState<string>('#A3A3A3'); // Neutral grey
   const [editorOpenScenarioId, setEditorOpenScenarioId] = useState<string | null>(null);
   const lastFileIdRef = useRef<string | null>(null);
   const [scenariosLoaded, setScenariosLoaded] = useState(false);
@@ -143,7 +143,16 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         console.log(`ScenariosContext: Loaded ${savedScenarios.length} scenarios for file ${fileId}`);
         
         // Remove fileId from scenario objects (it's just for DB indexing)
-        const scenarios = savedScenarios.map(({ fileId: _fileId, ...scenario }) => scenario as Scenario);
+        // Also migrate old 'color' property to 'colour' if present
+        const scenarios = savedScenarios.map(({ fileId: _fileId, ...scenario }) => {
+          const scenarioAny = scenario as any;
+          // Migrate old 'color' property to 'colour' if needed
+          if (scenarioAny.color && !scenarioAny.colour) {
+            scenarioAny.colour = scenarioAny.color;
+            delete scenarioAny.color;
+          }
+          return scenario as Scenario;
+        });
         setScenarios(scenarios);
         setScenariosLoaded(true);
       } catch (error) {
@@ -366,16 +375,16 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     
     const now = new Date().toISOString();
     // Assign colour from palette, preferring a colour not currently in use
-    const usedColors = new Set(scenarios.map(s => s.color));
-    const firstUnusedIndex = SCENARIO_PALETTE.findIndex(c => !usedColors.has(c));
-    const color = firstUnusedIndex >= 0
+    const usedColours = new Set(scenarios.map(s => s.colour));
+    const firstUnusedIndex = SCENARIO_PALETTE.findIndex(c => !usedColours.has(c));
+    const colour = firstUnusedIndex >= 0
       ? SCENARIO_PALETTE[firstUnusedIndex]
       : SCENARIO_PALETTE[scenarios.length % SCENARIO_PALETTE.length];
     
     const scenario: Scenario = {
       id: generateId(),
       name,
-      color,
+      colour,
       createdAt: now,
       version: 1,
       params: diff,
@@ -414,16 +423,16 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     
     const now = new Date().toISOString();
     // Assign colour from palette, preferring a colour not currently in use
-    const usedColors = new Set(scenarios.map(s => s.color));
-    const firstUnusedIndex = SCENARIO_PALETTE.findIndex(c => !usedColors.has(c));
-    const color = firstUnusedIndex >= 0
+    const usedColours = new Set(scenarios.map(s => s.colour));
+    const firstUnusedIndex = SCENARIO_PALETTE.findIndex(c => !usedColours.has(c));
+    const colour = firstUnusedIndex >= 0
       ? SCENARIO_PALETTE[firstUnusedIndex]
       : SCENARIO_PALETTE[scenarios.length % SCENARIO_PALETTE.length];
     
     const scenario: Scenario = {
       id: generateId(),
       name,
-      color,
+      colour,
       createdAt: now,
       version: 1,
       params: { edges: {}, nodes: {} },
@@ -470,10 +479,10 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   /**
    * Update scenario colour
    */
-  const updateScenarioColor = useCallback(async (id: string, color: string): Promise<void> => {
+  const updateScenarioColour = useCallback(async (id: string, colour: string): Promise<void> => {
     setScenarios(prev => prev.map(s => 
       s.id === id 
-        ? { ...s, color, updatedAt: new Date().toISOString(), version: s.version + 1 }
+        ? { ...s, colour, updatedAt: new Date().toISOString(), version: s.version + 1 }
         : s
     ));
   }, []);
@@ -643,15 +652,15 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     scenarios,
     baseParams,
     currentParams,
-    currentColor,
-    baseColor,
+    currentColour,
+    baseColour,
     editorOpenScenarioId,
     createSnapshot,
     createBlank,
     getScenario,
     listScenarios,
     renameScenario,
-    updateScenarioColor,
+    updateScenarioColour,
     deleteScenario,
     applyContent,
     validateContent,
@@ -661,21 +670,21 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     flatten,
     setBaseParams,
     setCurrentParams,
-    setCurrentColor,
-    setBaseColor,
+    setCurrentColour,
+    setBaseColour,
   }), [
     scenarios,
     baseParams,
     currentParams,
-    currentColor,
-    baseColor,
+    currentColour,
+    baseColour,
     editorOpenScenarioId,
     createSnapshot,
     createBlank,
     getScenario,
     listScenarios,
     renameScenario,
-    updateScenarioColor,
+    updateScenarioColour,
     deleteScenario,
     applyContent,
     validateContent,
@@ -685,8 +694,8 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     flatten,
     setBaseParams,
     setCurrentParams,
-    setCurrentColor,
-    setBaseColor,
+    setCurrentColour,
+    setBaseColour,
   ]);
 
   return (

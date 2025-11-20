@@ -1,14 +1,14 @@
 /**
  * ScenarioRenderer
  * 
- * Renders scenario overlays with correct colors, widths, and offsets.
+ * Renders scenario overlays with correct colours, widths, and offsets.
  * Handles composition of parameters and computation of edge rendering data.
  */
 
 import { Graph, GraphEdge } from '../types';
 import { Scenario, ScenarioParams } from '../types/scenarios';
 import { composeParams } from './CompositionService';
-import { assignColors } from './ColorAssigner';
+import { assignColours } from './ColourAssigner';
 
 /**
  * Rendering data for a single scenario overlay
@@ -16,7 +16,7 @@ import { assignColors } from './ColorAssigner';
 export interface ScenarioRenderData {
   scenarioId: string;
   name: string;
-  color: string;
+  colour: string;
   edges: ScenarioEdgeRenderData[];
 }
 
@@ -39,7 +39,7 @@ export interface ScenarioEdgeRenderData {
  * @param baseParams - Base parameter state
  * @param scenarios - All scenarios (visible and hidden)
  * @param visibleScenarioIds - IDs of visible scenarios (in render order)
- * @param visibleColorOrderIds - IDs in activation order (for color assignment)
+ * @param visibleColourOrderIds - IDs in activation order (for colour assignment)
  * @returns Array of render data for each visible scenario
  */
 export function renderScenarios(
@@ -47,10 +47,10 @@ export function renderScenarios(
   baseParams: ScenarioParams,
   scenarios: Scenario[],
   visibleScenarioIds: string[],
-  visibleColorOrderIds: string[]
+  visibleColourOrderIds: string[]
 ): ScenarioRenderData[] {
-  // Assign colors based on activation order
-  const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
+  // Assign colours based on activation order
+  const colourMap = assignColours(visibleScenarioIds, visibleColourOrderIds);
   
   const renderData: ScenarioRenderData[] = [];
   
@@ -59,7 +59,7 @@ export function renderScenarios(
     const scenario = scenarios.find(s => s.id === scenarioId);
     if (!scenario) continue;
     
-    const color = colorMap.get(scenarioId) || scenario.color;
+    const colour = colourMap.get(scenarioId) || scenario.colour;
     
     // For each scenario, we need to:
     // 1. Compose params up to this layer (Base + all overlays up to and including this one)
@@ -82,7 +82,7 @@ export function renderScenarios(
     renderData.push({
       scenarioId,
       name: scenario.name,
-      color,
+      colour,
       edges: edgeRenderData
     });
   }

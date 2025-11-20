@@ -10,7 +10,7 @@ This plan details the implementation of the Scenarios Manager feature per `SCENA
 - Support "All" and "Differences" snapshot types
 - Provide Monaco-based editing with YAML/JSON and Flat/Nested views
 - Track metadata (window, context, what-if) per scenario
-- Maintain per-tab visibility/color state; graph-level scenario storage
+- Maintain per-tab visibility/colour state; graph-level scenario storage
 - Minimal performance impact (≤5 visible layers; on-demand composition)
 
 ## High-Level Architecture
@@ -22,12 +22,12 @@ Graph (session-scoped)
   ├─ Base (persisted baseline)
   ├─ Current (live working state)
   └─ Scenarios[] (shared across tabs)
-       └─ Scenario { id, name, color, params: ScenarioParams, meta: ScenarioMeta }
+       └─ Scenario { id, name, colour, params: ScenarioParams, meta: ScenarioMeta }
 
 Tab (view-scoped)
   └─ TabScenarioState
        ├─ visibleScenarioIds: string[]        // render order
-       ├─ visibleColorOrderIds: string[]      // activation order for color assignment
+       ├─ visibleColourOrderIds: string[]      // activation order for colour assignment
        └─ selectedScenarioId?: string
 ```
 
@@ -36,8 +36,8 @@ Tab (view-scoped)
 1. **ScenariosContext** — CRUD, snapshot creation, flatten
 2. **CompositionService** — Deep-merge diffs; produce composed params
 3. **HRNResolver** — Parse and resolve human-readable names to IDs
-4. **ColorAssigner** — Assign complementary/distributed colors by activation order
-5. **ScenarioRenderer** — Render overlays with per-layer colors and widths
+4. **ColourAssigner** — Assign complementary/distributed colours by activation order
+5. **ScenarioRenderer** — Render overlays with per-layer colours and widths
 
 ---
 
@@ -54,7 +54,7 @@ Tab (view-scoped)
    export interface Scenario {
      id: string;
      name: string;
-     color: string;
+     colour: string;
      createdAt: string;
      updatedAt?: string;
      version: number;
@@ -97,7 +97,7 @@ Tab (view-scoped)
 
    export interface TabScenarioState {
      visibleScenarioIds: string[];
-     visibleColorOrderIds: string[];
+     visibleColourOrderIds: string[];
      selectedScenarioId?: string;
    }
    ```
@@ -110,7 +110,7 @@ Tab (view-scoped)
 
 3. **Extend TabContext** to store `TabScenarioState`:
    - Add `scenarioState: TabScenarioState` per tab
-   - Methods: `getVisible`, `setVisible`, `toggleVisible`, `getColorOrder`, `updateColorOrder`
+   - Methods: `getVisible`, `setVisible`, `toggleVisible`, `getColourOrder`, `updateColourOrder`
 
 4. **Create CompositionService** (`src/services/CompositionService.ts`):
    - `composeParams(base: ScenarioParams, overlays: ScenarioParams[]): ScenarioParams`
@@ -121,9 +121,9 @@ Tab (view-scoped)
    - `resolveNodeHRN(hrn: string, graph: Graph): string | null` // returns node UUID
    - Implements precedence: `e.<edgeId>` → `e.from(<fromId>).to(<toId>)` → `e.uuid(<uuid>)`
 
-6. **Create ColorAssigner** (`src/services/ColorAssigner.ts`):
-   - `assignColors(visibleIds: string[], activationOrder: string[]): Map<string, string>`
-   - Returns color map keyed by scenario ID
+6. **Create ColourAssigner** (`src/services/ColourAssigner.ts`):
+   - `assignColours(visibleIds: string[], activationOrder: string[]): Map<string, string>`
+   - Returns colour map keyed by scenario ID
    - 1 visible → grey; 2 → complementary; N → evenly distributed hues
 
 **Acceptance**:
@@ -165,8 +165,8 @@ Tab (view-scoped)
    - Initialize `scenarioState` per tab
    - `toggleVisible(tabId, scenarioId)`:
      - Add/remove from `visibleScenarioIds`
-     - Add/remove from `visibleColorOrderIds` (append on show, remove on hide)
-   - `reorder(tabId, newOrder)`: update `visibleScenarioIds` (does NOT affect `visibleColorOrderIds`)
+     - Add/remove from `visibleColourOrderIds` (append on show, remove on hide)
+   - `reorder(tabId, newOrder)`: update `visibleScenarioIds` (does NOT affect `visibleColourOrderIds`)
 
 5. **Test CRUD in isolation**:
    - Unit tests for createSnapshot (all/differences)
@@ -231,7 +231,7 @@ Tab (view-scoped)
    - Render Base row (non-draggable, non-deletable, toggleable visibility)
    - Render Current row (pinned top, non-draggable, toggleable visibility)
    - Render scenario list (draggable, deletable, toggleable)
-   - Each row: color swatch, name (inline edit), eye toggle, Open button, Delete button
+   - Each row: colour swatch, name (inline edit), eye toggle, Open button, Delete button
    - Drag handles for reordering (updates `visibleScenarioIds` only)
 
 2. **Integrate ScenariosPanel into WhatIfPanel**:
@@ -245,23 +245,23 @@ Tab (view-scoped)
    - "New" button: creates blank scenario, opens editor
    - "Flatten" button: sets Base := Current, clears all overlays, shows confirmation dialog
 
-4. **Color swatch display**:
-   - Use `ColorAssigner` to compute color per scenario based on `visibleColorOrderIds`
-   - Display color swatch next to name
-   - Click swatch to manually override color (store in `Scenario.color`)
+4. **Colour swatch display**:
+   - Use `ColourAssigner` to compute colour per scenario based on `visibleColourOrderIds`
+   - Display colour swatch next to name
+   - Click swatch to manually override colour (store in `Scenario.colour`)
 
 5. **Tooltip on hover**:
    - Show `Scenario.meta` summary (window, context, what-if, source, created)
 
 6. **Wire up visibility toggles**:
    - Click eye icon → `toggleVisible(tabId, scenarioId)`
-   - Update `visibleColorOrderIds` on toggle
-   - Re-assign colors via `ColorAssigner`
+   - Update `visibleColourOrderIds` on toggle
+   - Re-assign colours via `ColourAssigner`
 
 **Acceptance**:
 - Scenarios palette renders correctly
 - Can create snapshots via UI
-- Can toggle visibility; colors update correctly
+- Can toggle visibility; colours update correctly
 - Can drag to reorder; render order updates
 - Can delete scenarios
 - Can rename scenarios inline
@@ -316,25 +316,25 @@ Tab (view-scoped)
 
 ### Phase 5: Rendering and Composition (3-4 days)
 
-**Goal**: Render scenario overlays with correct colors, widths, and offsets.
+**Goal**: Render scenario overlays with correct colours, widths, and offsets.
 
 #### Tasks
 
 1. **Create ScenarioRenderer** (`src/services/ScenarioRenderer.ts`):
-   - `renderScenarios(graph, visibleScenarioIds, visibleColorOrderIds, tabId): ScenarioRenderData[]`
+   - `renderScenarios(graph, visibleScenarioIds, visibleColourOrderIds, tabId): ScenarioRenderData[]`
    - For each visible scenario:
      - Compose params up to that layer
      - Compute edge widths using `calculateEdgeWidth` with composed params
      - Compute Sankey offsets per edge
-     - Return render data: { scenarioId, color, edgePaths[] }
+     - Return render data: { scenarioId, colour, edgePaths[] }
 
 2. **Integrate with GraphCanvas**:
    - After rendering base edges, render scenario overlays
-   - For each overlay: draw edge paths with scenario color, `mix-blend-mode: multiply`, `strokeOpacity: 0.3`
+   - For each overlay: draw edge paths with scenario colour, `mix-blend-mode: multiply`, `strokeOpacity: 0.3`
    - Use `strokeLinecap: 'butt'`, `strokeLinejoin: 'miter'`
 
-3. **Color assignment**:
-   - Use `ColorAssigner.assignColors(visibleScenarioIds, visibleColorOrderIds)`
+3. **Colour assignment**:
+   - Use `ColourAssigner.assignColours(visibleScenarioIds, visibleColourOrderIds)`
    - 1 visible → grey
    - 2 visible → complementary (blue/pink)
    - N visible → evenly distributed hues
@@ -349,10 +349,10 @@ Tab (view-scoped)
    - Cache HRN resolution per scenario
 
 **Acceptance**:
-- Overlays render correctly with assigned colors
+- Overlays render correctly with assigned colours
 - Widths and offsets are computed per layer
-- Color neutralization works (two identical overlays blend to neutral)
-- Differences show as colored fringes
+- Colour neutralization works (two identical overlays blend to neutral)
+- Differences show as coloured fringes
 - Performance acceptable with ≤5 visible layers
 
 ---
@@ -406,12 +406,12 @@ Tab (view-scoped)
    - CompositionService (deep-merge, null removal)
    - DiffService (all/differences, epsilon)
    - HRNResolver (all selector types, ambiguity)
-   - ColorAssigner (1/2/N colors)
+   - ColourAssigner (1/2/N colours)
    - ParamPackDSLService (round-trip YAML/JSON, flat/nested)
 
 2. **Integration tests**:
    - Create snapshot → edit → apply → render
-   - Toggle visibility → reorder → colors update
+   - Toggle visibility → reorder → colours update
    - Flatten → overlays cleared → Base updated
    - Multi-tab: different visibility per tab
 
@@ -423,9 +423,9 @@ Tab (view-scoped)
    - Renamed nodes/edges (HRN resolution fails, warning)
 
 4. **Accessibility**:
-   - Color contrast checks (ensure colors meet WCAG AA)
+   - Colour contrast checks (ensure colours meet WCAG AA)
    - Keyboard navigation (scenarios list, modal)
-   - Screen reader labels (color swatches, buttons)
+   - Screen reader labels (colour swatches, buttons)
 
 5. **Performance profiling**:
    - Test with 5+ visible scenarios
@@ -492,7 +492,7 @@ Tab (view-scoped)
 ### Risk: Tab state vs graph state confusion
 
 **Mitigation**:
-- Clear separation: scenarios (graph-level), visibility/color (tab-level)
+- Clear separation: scenarios (graph-level), visibility/colour (tab-level)
 - UI affordances show "Tab: A" indicator
 - Tooltip shows scenario is "visible in this tab"
 
@@ -566,8 +566,8 @@ Adjust for parallel work (e.g., UI and services can overlap) or team size.
 2. **Scenario templates**: Pre-built scenarios for common use cases
 3. **Scenario comparison view**: Side-by-side diff of two scenarios
 4. **Undo/redo for Flatten**: Store snapshot of pre-flatten state
-5. **Conditional blob indicators** (PHASE 2): Move conditional/case indicators to blobs instead of edge colors
-6. **Advanced color settings**: User-customizable color palettes
+5. **Conditional blob indicators** (PHASE 2): Move conditional/case indicators to blobs instead of edge colours
+6. **Advanced colour settings**: User-customizable colour palettes
 7. **Scenario export/import**: Share scenarios between projects
 8. **Scenario version history**: Track changes to scenarios over time
 

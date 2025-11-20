@@ -30,7 +30,7 @@
 
 2. ✅ **`PropertiesPanel.integration.test.tsx`** (NEW)
    - Graph properties editing
-   - Node properties editing (label, color, description)
+   - Node properties editing (label, colour, description)
    - Edge properties editing (probability, label)
    - Collapsible sections
    - Rapid change handling
@@ -55,7 +55,7 @@
    - Context-sensitive menus
 
 5. ✅ **`ContextMenus.integration.test.tsx`** (NEW)
-   - Node context menu (Edit, Delete, Duplicate, Color, Rename)
+   - Node context menu (Edit, Delete, Duplicate, Colour, Rename)
    - Edge context menu (Edit, Delete, Reverse, Add condition)
    - Navigator item context menu (Open, Rename, Delete, Duplicate, Properties)
    - Menu positioning

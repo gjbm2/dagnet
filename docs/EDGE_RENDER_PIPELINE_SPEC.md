@@ -71,14 +71,14 @@ Key state:
 - `baseParams: ScenarioParams`
 - `currentParams: ScenarioParams`
 - `scenarios: Scenario[]`
-- `currentColor: string`
-- `baseColor: string`
+- `currentColour: string`
+- `baseColour: string`
 
 Where:
 
 - `ScenarioParams` is `{ edges: Record<string, EdgeParamDiff>, nodes: Record<string, NodeParamDiff> }`.
 - Each `Scenario` has:
-  - `id`, `name`, `color`, `createdAt`, `version`.
+  - `id`, `name`, `colour`, `createdAt`, `version`.
   - `params: ScenarioParams` (a **diff overlay**).
   - `meta`: source (`all`/`diff`, `base`/`visible`), what‑if info, window, context.
 
@@ -171,8 +171,8 @@ Relevant fields in each tab’s `editorState`:
     - `'current'`
     - `'base'`
     - and user scenario IDs (`scenario-...`).
-- `scenarioState.visibleColorOrderIds: string[]`
-  - Color order mapping; used when assigning colors.
+- `scenarioState.visibleColourOrderIds: string[]`
+  - Colour order mapping; used when assigning colours.
 - `whatIfDSL` (per tab)
 - `rfViewport` (ReactFlow viewport per tab)
 - `hiddenNodes` (set of human-readable node IDs to hide).
@@ -358,7 +358,7 @@ const renderEdges = React.useMemo(() => {
     graph,
     scenariosContext,
     visibleScenarioIds,
-    visibleColorOrderIds,
+    visibleColourOrderIds,
     whatIfDSL: effectiveWhatIfDSL,
     useUniformScaling,
     massGenerosity,
@@ -430,13 +430,13 @@ For each `scenarioId` in `layersToRender`:
 1. Select colour:
 
    ```ts
-   const color = getScenarioColor(scenarioId, isVisible);
+   const colour = getScenarioColour(scenarioId, isVisible);
    ```
 
    - If **exactly one layer** is visible and this is that layer: forced grey `#808080`.
-   - `current` uses `scenariosContext.currentColor`.
-   - `base` uses `scenariosContext.baseColor`.
-   - Other IDs look up `scenario.color` from `scenariosContext.scenarios`.
+   - `current` uses `scenariosContext.currentColour`.
+   - `base` uses `scenariosContext.baseColour`.
+   - Other IDs look up `scenario.colour` from `scenariosContext.scenarios`.
 
 2. Compute **composedParams** for this layer:
 
@@ -620,7 +620,7 @@ For each layer:
          data: {
            ...cleanEdgeData, // no data.scaledWidth
            scenarioOverlay: !isCurrent,
-           scenarioColor: color,
+           scenarioColour: colour,
            strokeOpacity: overlayOpacity,
            originalEdgeId: edge.id,
            probability: edgeParams?.p?.mean ?? edge.data?.probability ?? 0.5,
@@ -631,7 +631,7 @@ For each layer:
            highlight flags on current,
            interaction handlers only on current,
          },
-         style: { stroke: color, strokeOpacity: overlayOpacity, pointerEvents: isCurrent ? 'auto' : 'none' },
+         style: { stroke: colour, strokeOpacity: overlayOpacity, pointerEvents: isCurrent ? 'auto' : 'none' },
          zIndex: layerIndex,
        }
        ```

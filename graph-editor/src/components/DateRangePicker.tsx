@@ -106,7 +106,7 @@ export function DateRangePicker({
             direction="horizontal"
             showDateDisplay={false}
             showMonthAndYearPickers={true}
-            rangeColors={['#1976d2']}
+            rangeColours={['#1976d2']}
           />
         </div>
       )}

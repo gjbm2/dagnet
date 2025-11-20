@@ -74,7 +74,7 @@ For each edge with `stdev`:
 
 **Current Pipeline:**
 - `GraphCanvas.tsx` calculates edge widths via `calculateEdgeWidth()`
-- `ConversionEdge.tsx` renders single `<path>` element with `strokeWidth` and `stroke` color
+- `ConversionEdge.tsx` renders single `<path>` element with `strokeWidth` and `stroke` colour
 - Path is calculated using bezier curve from source/target positions
 
 **New Pipeline:**
@@ -92,10 +92,10 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
    - Render order (back to front): upper → middle → lower
    - Z-index: lower < middle < upper (so middle appears on top)
 
-3. **Color Blending - Symmetric Intensity Schema:**
+3. **Colour Blending - Symmetric Intensity Schema:**
    
    **Design Goals:**
-   - **Inner band (a)**: Effective color = normal edge color exactly (100% match)
+   - **Inner band (a)**: Effective colour = normal edge colour exactly (100% match)
    - **Middle band (b)**: Slightly lighter than inner band
    - **Outer band (c)**: Significantly lighter than middle band
    - **Symmetric deltas**: Intensity differences are symmetric around middle band
@@ -104,11 +104,11 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
    **Current Edge Rendering:**
    - Edges use `strokeOpacity: 0.8` (EDGE_OPACITY constant)
    - Edges use `mixBlendMode: 'multiply'` (EDGE_BLEND_MODE constant)
-   - Normal edge effective color: `C × 0.8` (where C is base RGB color per channel)
+   - Normal edge effective colour: `C × 0.8` (where C is base RGB colour per channel)
    
    **Multiply Blend Math:**
    - Multiply blend: `Result = (source × destination) / 255` per RGB channel
-   - With 3 paths using colors `C_a`, `C_b`, `C_c` and opacity `O`:
+   - With 3 paths using colours `C_a`, `C_b`, `C_c` and opacity `O`:
      - Outer band (only path c): `E_c = C_c × O`
      - Middle band (paths b + c): `E_b = (C_b × O) × (C_c × O) / 255 = C_b × C_c × O² / 255`
      - Inner band (all 3 paths): `E_a = (C_a × O) × (C_b × O) × (C_c × O) / (255²) = C_a × C_b × C_c × O³ / (255²)`
@@ -136,7 +136,7 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
    - **80% confidence**: `r = 1.10` (subtle - closer to linear steps)
    
    **Example Calculation (Gray RGB(153, 153, 153), 95% confidence):**
-   - Base color: `C = 153`
+   - Base colour: `C = 153`
    - Normal edge: `C × 0.8 = 122.4`
    - `K = (255 / (153 × 0.8))² = (255 / 122.4)² ≈ 4.34`
    - `f = K^(1/3) ≈ 1.63`
@@ -145,11 +145,11 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
      - `C_a = 1.63 / 1.40 ≈ 1.164` → Lighten by 16.4%
      - `C_b = 1.63` → Lighten by 63%
      - `C_c = 1.63 × 1.40 ≈ 2.282` → Lighten by 128.2%
-   - Stroke colors (clamped to valid RGB):
+   - Stroke colours (clamped to valid RGB):
      - `C_a = min(255, 153 × 1.164) = 178`
      - `C_b = min(255, 153 × 1.63) = 249`
      - `C_c = min(255, 153 × 2.282) = 255` (clamped)
-   - Effective colors after multiply:
+   - Effective colours after multiply:
      - Inner: `(178 × 0.8) × (249 × 0.8) × (255 × 0.8) / (255²) ≈ 122.4` ✓ (matches normal edge)
      - Middle: `(249 × 0.8) × (255 × 0.8) / 255 ≈ 199.2` (lighter than inner)
      - Outer: `255 × 0.8 = 204` (lighter than middle)
@@ -157,7 +157,7 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
    **Implementation:**
    - Calculate `K` and `f` per RGB channel (or use luminance for grayscale)
    - Apply spread factor `r` based on confidence level
-   - Lighten base color: `C_a = C × (f/r)`, `C_b = C × f`, `C_c = C × f × r`
+   - Lighten base colour: `C_a = C × (f/r)`, `C_b = C × f`, `C_c = C × f × r`
    - Clamp all values to [0, 255]
    - Use `strokeOpacity: 0.8` (same as normal edges)
    - Use `mixBlendMode: 'multiply'` on all three paths
@@ -213,8 +213,8 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
 - Middle band: normal width (represents mean)
 - Lower band: narrowest (represents lower bound)
 
-**Color Scheme:**
-- Three paths use **different lightened colors** (C_a, C_b, C_c) calculated from base color
+**Colour Scheme:**
+- Three paths use **different lightened colours** (C_a, C_b, C_c) calculated from base colour
 - Lightening factors are symmetric around middle band (f/r, f, f×r)
 - Spread factor `r` depends on confidence level (1.10 to 1.60)
 
@@ -236,8 +236,8 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
 
 **Edge Selection:**
 - Selected edges: Apply confidence intervals to selected state
-- Highlighted edges: Apply confidence intervals to highlight color
-- Conditional edges: Apply confidence intervals to conditional color
+- Highlighted edges: Apply confidence intervals to highlight colour
+- Conditional edges: Apply confidence intervals to conditional colour
 
 **Sankey View:**
 - Confidence intervals should work in Sankey view mode
@@ -252,7 +252,7 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
 - [ ] Confidence intervals only show for edges with `stdev > 0`
 - [ ] Three bands render with correct widths (upper > middle > lower)
 - [ ] Three bands use same bezier path
-- [ ] Color blending works correctly (lighter outer, darker inner)
+- [ ] Colour blending works correctly (lighter outer, darker inner)
 - [ ] Blend mode creates visual band effect
 - [ ] Conditional probabilities show confidence intervals
 - [ ] Selected edges maintain selection styling
@@ -286,14 +286,14 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
 ### Phase 4: Rendering Implementation (4-6 hrs)
 1. Modify `ConversionEdge.tsx` to detect confidence interval mode
 2. Calculate three stroke widths using existing `calculateEdgeWidth()`
-3. Calculate three colors (lighter, normal, darker)
+3. Calculate three colours (lighter, normal, darker)
 4. Render three overlapping `<path>` elements
 5. Apply blend mode
 6. Handle conditional probabilities
 7. Test rendering in various scenarios
 
 ### Phase 5: Polish & Testing (2-3 hrs)
-1. Visual refinement (color blending, opacity)
+1. Visual refinement (colour blending, opacity)
 2. Performance optimization
 3. Edge case testing
 4. Integration testing
@@ -308,7 +308,7 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
 2. `calculateEdgeWidth()` computes stroke width from probability
 3. `ConversionEdge.tsx` renders single `<path>` element
 4. Path uses bezier curve from source/target positions
-5. Color computed from conditional/case/selection state
+5. Colour computed from conditional/case/selection state
 
 ### Proposed Changes
 1. Add confidence interval level to view preferences
@@ -317,11 +317,11 @@ When `confidenceIntervalLevel !== 'none'` and edge has `stdev`:
 4. Call `calculateEdgeWidth()` three times with different probabilities
 5. Render three `<path>` elements with same `d` attribute but different:
    - `strokeWidth` (upper > middle > lower)
-   - `stroke` color (lighter, normal, darker)
+   - `stroke` colour (lighter, normal, darker)
    - `mix-blend-mode="multiply"`
 6. Ensure proper z-ordering (lower → middle → upper)
 
-### Color Blending Implementation
+### Colour Blending Implementation
 
 **Symmetric Lightening Schema:**
 
@@ -336,12 +336,12 @@ const CONFIDENCE_SPREAD = {
 };
 
 // Calculate lightening factors for confidence interval paths
-function calculateConfidenceIntervalColors(
-  baseColor: string, // e.g., '#999999' or RGB(153, 153, 153)
+function calculateConfidenceIntervalColours(
+  baseColour: string, // e.g., '#999999' or RGB(153, 153, 153)
   confidenceLevel: '80' | '90' | '95' | '99'
 ): { inner: string; middle: string; outer: string } {
   // Convert hex to RGB
-  const rgb = hexToRgb(baseColor);
+  const rgb = hexToRgb(baseColour);
   const C = rgb.r; // Use same for all channels (or calculate per-channel)
   
   // Calculate K and base factor f
@@ -356,7 +356,7 @@ function calculateConfidenceIntervalColors(
   const factor_b = f;      // Middle (base)
   const factor_c = f * r;  // Outer (lightest)
   
-  // Calculate lightened colors (per RGB channel)
+  // Calculate lightened colours (per RGB channel)
   const lightenChannel = (channel: number, factor: number): number => {
     return Math.min(255, Math.round(channel * factor));
   };
@@ -387,25 +387,25 @@ function calculateConfidenceIntervalColors(
 }
 
 // In JSX:
-const colors = calculateConfidenceIntervalColors(edgeColor, confidenceLevel);
+const colours = calculateConfidenceIntervalColours(edgeColour, confidenceLevel);
 
 <path 
   d={edgePath} 
-  stroke={colors.outer}  // Lightest color
+  stroke={colours.outer}  // Lightest colour
   strokeWidth={widthUpper}
   strokeOpacity={EDGE_OPACITY}
   mixBlendMode="multiply"
 />
 <path 
   d={edgePath} 
-  stroke={colors.middle}  // Base color
+  stroke={colours.middle}  // Base colour
   strokeWidth={widthMiddle}
   strokeOpacity={EDGE_OPACITY}
   mixBlendMode="multiply"
 />
 <path 
   d={edgePath} 
-  stroke={colors.inner}  // Darkest color (compensates for 3 multiplies)
+  stroke={colours.inner}  // Darkest colour (compensates for 3 multiplies)
   strokeWidth={widthLower}
   strokeOpacity={EDGE_OPACITY}
   mixBlendMode="multiply"
@@ -413,7 +413,7 @@ const colors = calculateConfidenceIntervalColors(edgeColor, confidenceLevel);
 ```
 
 **Result:**
-- Inner band effective color = normal edge color exactly (100% match)
+- Inner band effective colour = normal edge colour exactly (100% match)
 - Middle band = slightly lighter than inner (symmetric delta)
 - Outer band = significantly lighter than middle (symmetric delta)
 - Spread controlled by confidence level (r factor)

@@ -32,9 +32,9 @@
    - 8 comprehensive unit tests
    - All passing
 
-3. `/graph-editor/src/lib/conditionalColors.ts` (119 lines)
-   - Color palette (12 colors)
-   - Deterministic color assignment
+3. `/graph-editor/src/lib/conditionalColours.ts` (119 lines)
+   - Colour palette (12 colours)
+   - Deterministic colour assignment
    - Helper utilities
 
 4. `/graph-editor/src/components/ConditionalProbabilitiesSection.tsx` (468 lines)
@@ -85,8 +85,8 @@
    - Added update handler
 
 6. `/graph-editor/src/components/edges/ConversionEdge.tsx`
-   - Updated getEdgeColor()
-   - Added conditional color support
+   - Updated getEdgeColour()
+   - Added conditional colour support
    - Visual distinction for conditional edges
 
 ---
@@ -96,7 +96,7 @@
 ### **Schema & Types** ✅
 - [x] ConditionalProbability interface
 - [x] Condition interface with visited array
-- [x] EdgeDisplay interface for colors
+- [x] EdgeDisplay interface for colours
 - [x] JSON schema updated
 - [x] Backward compatible
 
@@ -126,9 +126,9 @@
 - [x] Integrated into properties panel
 
 ### **Visualization** ✅
-- [x] Dynamic color palette (12 colors)
-- [x] Deterministic color assignment
-- [x] Color blending with highlights
+- [x] Dynamic colour palette (12 colours)
+- [x] Deterministic colour assignment
+- [x] Colour blending with highlights
 - [x] Visual distinction from case/normal edges
 - [x] Avoids selection blue and case purple
 
@@ -147,7 +147,7 @@
 - [ ] Real-time validation visual feedback (validation works, no UI indicators)
 
 ### **Phase 4 Polish**
-- [ ] Visual badge on conditional edges (color sufficient)
+- [ ] Visual badge on conditional edges (colour sufficient)
 - [ ] Upstream dependency highlighting (nice to have)
 
 ### **Phase 5 Advanced**
@@ -182,9 +182,9 @@
    - Updates visualization
 
 5. **Visual distinction**
-   - Conditional edges get unique colors
-   - Colors based on condition signature
-   - 12-color palette
+   - Conditional edges get unique colours
+   - Colours based on condition signature
+   - 12-colour palette
 
 6. **Apps Script calculations**
    - Evaluates conditional probabilities
@@ -244,13 +244,13 @@
 ┌─────────────────────────────────────────┐
 │         Visualization                    │
 │  ┌────────────────────────────────────┐ │
-│  │  conditionalColors.ts              │ │
-│  │   - getConditionalColor            │ │
-│  │   - CONDITIONAL_COLOR_PALETTE      │ │
+│  │  conditionalColours.ts              │ │
+│  │   - getConditionalColour            │ │
+│  │   - CONDITIONAL_COLOUR_PALETTE      │ │
 │  └────────────────────────────────────┘ │
 │  ┌────────────────────────────────────┐ │
 │  │  ConversionEdge.tsx                │ │
-│  │   - getEdgeColor (updated)         │ │
+│  │   - getEdgeColour (updated)         │ │
 │  │   - Renders conditional edges      │ │
 │  └────────────────────────────────────┘ │
 └─────────────────────────────────────────┘
@@ -270,7 +270,7 @@ Validation (validateConditionalProbabilities)
     ↓
 Visualization Update (ConversionEdge re-renders)
     ↓
-Color Assignment (getConditionalColor)
+Colour Assignment (getConditionalColour)
     ↓
 Display Updated Edge
 ```
@@ -308,7 +308,7 @@ Display Updated Edge
         }
       ],
       "display": {
-        "conditional_color": "#4ade80"
+        "conditional_colour": "#4ade80"
       }
     }
   ]
@@ -337,7 +337,7 @@ Display Updated Edge
 - ✅ Reorder works (up/down buttons)
 - ✅ Remove works
 - ✅ Node search works
-- ✅ Colors display correctly
+- ✅ Colours display correctly
 - ✅ Apps Script calculates correctly
 - ✅ Validation catches errors
 - ✅ Backward compatibility confirmed

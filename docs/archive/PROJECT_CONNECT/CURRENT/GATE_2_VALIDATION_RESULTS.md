@@ -157,7 +157,7 @@ These fields are intentionally excluded from auto-mapping:
 **Graph Node:**
 - `uuid` - System-generated, never synced
 - `layout.x`, `layout.y` - User positioning, never synced
-- `layout.rank`, `layout.group`, `layout.color` - UI state, not data
+- `layout.rank`, `layout.group`, `layout.colour` - UI state, not data
 - `tags` - Graph-specific categorization
 - `absorbing`, `outcome_type` - Graph structure, not registry data
 - `entry.is_start`, `entry.entry_weight` - Graph semantics

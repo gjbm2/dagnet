@@ -88,16 +88,16 @@
 - **Validation modes**: warning/strict/none (from `ValidationContext`)
 - **Parameter type filtering**: `parameterType="probability|cost_gbp|cost_time"`
 
-#### ✅ **`ColorSelector.tsx + .css`** - Color picker component
+#### ✅ **`ColourSelector.tsx + .css`** - Colour picker component
 **Features:**
-- 9 preset colors in 5-column grid
-- Custom color button (HTML5 picker)
-- Current color display with hex value
+- 9 preset colours in 5-column grid
+- Custom colour button (HTML5 picker)
+- Current colour display with hex value
 - Clean visual design
 
 #### 🔄 **`PropertiesPanel.tsx`** - Integration started
 **Completed:**
-- Imported `EnhancedSelector` and `ColorSelector`
+- Imported `EnhancedSelector` and `ColourSelector`
 - Replaced node slug `ParameterSelector` with `EnhancedSelector`
   - Separated `onChange` (sets slug) from `onPullFromRegistry` (loads data)
   - Pull handler loads name, description, tags from registry
@@ -109,7 +109,7 @@
 - Replace cost_gbp `ParameterSelector` (line ~1790)
 - Replace cost_time `ParameterSelector` (line ~1970)
 - Replace case node `ParameterSelector` (line ~927)
-- Add `ColorSelector` for edge/node colors
+- Add `ColourSelector` for edge/node colours
 - Reorganize sections with enhanced `CollapsibleSection`
 
 ## 🚧 Remaining Work
@@ -120,10 +120,10 @@
    - Cost Time selector → EnhancedSelector
    - Case parameter selector → EnhancedSelector
 
-2. **Add ColorSelector Usage**
-   - Node colors
-   - Edge colors
-   - Conditional probability colors
+2. **Add ColourSelector Usage**
+   - Node colours
+   - Edge colours
+   - Conditional probability colours
 
 3. **Conditional Probabilities Editor** (Major component)
    - Chip-based node selection (AND logic within condition)
@@ -159,14 +159,14 @@
    - Remove debug logging
    - Remove temporary styling
    - Consistent spacing/padding
-   - Test all pastel border colors
+   - Test all pastel border colours
 
 4. **Testing**
    - Test all sync operations
    - Test per-tab state persistence
    - Test accordion animations
    - Test inline creation workflow
-   - Test color selector
+   - Test colour selector
 
 ## 📁 New Files Created
 
@@ -186,8 +186,8 @@
 - `/src/components/panels/ToolsPanel.css`
 - `/src/components/EnhancedSelector.tsx` (475 lines)
 - `/src/components/EnhancedSelector.css` (323 lines)
-- `/src/components/ColorSelector.tsx`
-- `/src/components/ColorSelector.css`
+- `/src/components/ColourSelector.tsx`
+- `/src/components/ColourSelector.css`
 - `/src/components/CollapsibleSection.css`
 
 ### Layouts
@@ -237,7 +237,7 @@
    - Familiar VS Code-like UX
 
 4. **Pastel border visual language**
-   - Type-specific colors improve scannability
+   - Type-specific colours improve scannability
    - Connection status (thick/thin border)
    - Consistent across all connection fields
 
@@ -259,7 +259,7 @@
 
 1. Build Conditional Probabilities chip editor
 2. Replace remaining 3 ParameterSelectors
-3. Add ColorSelector usage
+3. Add ColourSelector usage
 4. Test end-to-end with actual graph
 
 ---

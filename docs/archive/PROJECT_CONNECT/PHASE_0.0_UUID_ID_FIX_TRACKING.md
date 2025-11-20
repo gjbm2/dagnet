@@ -50,7 +50,7 @@ const edge = graph.edges.find((e: any) =>
    - Line 209: `getEdgeWhatIfDisplay()` - **CRITICAL** (affects tooltips and UI)
 
 2. **✅ `/src/components/edges/ConversionEdge.tsx` (2 instances)**
-   - Line 176: `fullEdge` lookup - **CRITICAL** (affects edge rendering, colors, tooltips)
+   - Line 176: `fullEdge` lookup - **CRITICAL** (affects edge rendering, colours, tooltips)
    - Line 187: Dependency array lookup - **CRITICAL** (was causing dashed stroke on all edges)
 
 3. **✅ `/src/components/PropertiesPanel.tsx` (18 instances)**

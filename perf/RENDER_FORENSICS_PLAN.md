@@ -532,7 +532,7 @@ App
    └─ [Layout + Panels]
       └─ GraphEditor
          ├─ GraphStoreContext (graph data, history, undo/redo)
-         ├─ ScenariosContext (scenarios, visible sets, colors, base/current params)
+         ├─ ScenariosContext (scenarios, visible sets, colours, base/current params)
          └─ ViewPreferencesContext (view settings)
          └─ GraphCanvas (CanvasInner)
             ├─ ReactFlowProvider
@@ -562,7 +562,7 @@ Dependencies (current):
   - graph (from GraphStoreContext)
   - scenariosContext (from ScenariosContext)
   - visibleScenarioIds (from TabContext → scenarioState)
-  - visibleColorOrderIds (from TabContext → scenarioState)
+  - visibleColourOrderIds (from TabContext → scenarioState)
   - effectiveWhatIfDSL (computed in GraphCanvas from props + tab)
   - useUniformScaling (from TabContext → editorState)
   - massGenerosity (from TabContext → editorState)
@@ -673,7 +673,7 @@ const renderEdges = useMemo(() => {
     graph: graph?.nodes?.length || 0, // summarize
     scenariosContext: scenariosContext?.scenarios?.length || 0,
     visibleScenarioIds: visibleScenarioIds.join(','),
-    visibleColorOrderIds: visibleColorOrderIds.join(','),
+    visibleColourOrderIds: visibleColourOrderIds.join(','),
     effectiveWhatIfDSL,
     useUniformScaling,
     massGenerosity,
@@ -1053,7 +1053,7 @@ useEffect(() => {
 Apply to:
 - `graph` (GraphStoreContext)
 - `scenariosContext` (ScenariosContext)
-- `visibleScenarioIds` / `visibleColorOrderIds` (TabContext)
+- `visibleScenarioIds` / `visibleColourOrderIds` (TabContext)
 - `calculateEdgeOffsets`, `calculateEdgeWidth` (callbacks)
 - `highlightMetadata`
 
@@ -1076,7 +1076,7 @@ useEffect(() => {
 
 ### 5.3 Array Stability Analysis
 
-For `visibleScenarioIds`, `visibleColorOrderIds`:
+For `visibleScenarioIds`, `visibleColourOrderIds`:
 
 ```typescript
 const visibleScenarioIdsPrev = useRef<string[]>([]);
@@ -1529,7 +1529,7 @@ Priority effects:
    - Already logged; add:
      - Per-bead-type time (prob vs cost vs variant vs conditional)
      - Scenario value lookup time
-     - Color computation time
+     - Colour computation time
 
 ### Step 6: ReactFlow Integration (Day 3)
 

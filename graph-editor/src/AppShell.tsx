@@ -408,7 +408,7 @@ function AppShellContent() {
               <IconComponent 
                 size={14} 
                 strokeWidth={2}
-                style={{ color: theme.accentColor, flexShrink: 0 }}
+                style={{ color: theme.accentColour, flexShrink: 0 }}
               />
               <span style={{ 
                 flex: 1, 
@@ -479,7 +479,7 @@ function AppShellContent() {
               <IconComponent 
                 size={14} 
                 strokeWidth={2}
-                style={{ color: theme.accentColor, flexShrink: 0 }}
+                style={{ color: theme.accentColour, flexShrink: 0 }}
               />
               <span style={{ 
                 flex: 1, 
@@ -872,7 +872,7 @@ function AppShellContent() {
             <IconComponent 
               size={14} 
               strokeWidth={2}
-              style={{ color: theme.accentColor, flexShrink: 0 }}
+              style={{ color: theme.accentColour, flexShrink: 0 }}
             />
             <span style={{ 
               flex: 1, 

@@ -249,7 +249,7 @@ GraphData {
     type?: 'normal' | 'case';
     absorbing?: boolean;
     outcome_type?: 'success' | 'failure' | 'error' | 'neutral' | 'other';
-    layout?: { x: number; y: number; color?: string };  // ← Position stored here
+    layout?: { x: number; y: number; colour?: string };  // ← Position stored here
     case?: { ... };
     entry?: { ... };
     costs?: { ... };
@@ -333,7 +333,7 @@ This is the critical hierarchy for understanding data flow:
 │ ─────────────────────────────────────────────────────────── │
 │ FileState.data & GraphStore.graph (Raw JSON Schema)        │
 │ • Node structural properties (slug, label, type, case)      │
-│ • Node positions (layout.x, layout.y, layout.color)         │
+│ • Node positions (layout.x, layout.y, layout.colour)         │
 │ • Edge structural properties (from, to, p.mean, p.stdev)    │
 │ • Conditional probabilities (conditional_p)                 │
 │ • Graph metadata (version, created_at, updated_at)          │
@@ -367,7 +367,7 @@ This is the critical hierarchy for understanding data flow:
 │ • Node.position (from graph.layout + what-if adjustments)   │
 │ • Edge.data.probability (from graph.p + what-if overrides)  │
 │ • Edge widths (computed with what-if pruning/renorm)        │
-│ • Visual styling (colors, highlights, animations)           │
+│ • Visual styling (colours, highlights, animations)           │
 │ • Selection state (selected nodes/edges)                    │
 │ • Drag state (currently dragging)                           │
 │ • Zoom/pan state (viewport transform)                       │

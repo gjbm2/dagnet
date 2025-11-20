@@ -111,7 +111,7 @@ Optional top-level cases registry for convenience:
 - **Size**: 80% of normal node size (96px × 96px instead of 120px × 120px)
 - **Background**: `#8B5CF6` (purple-500)
 - **Border**: `#7C3AED` (purple-600), 2px solid
-- **Text Color**: `#FFFFFF` (white)
+- **Text Colour**: `#FFFFFF` (white)
 - **Shape**: Rectangle with 8px border radius (same as normal nodes)
 - **Font Size**: 11px (slightly smaller than normal)
 
@@ -122,13 +122,13 @@ Optional top-level cases registry for convenience:
 - Completed: `#6B7280` (gray-500)
 
 ### 2.2 Case Edges
-- **Stroke Color**: `#C4B5FD` (purple-300) - light purple
+- **Stroke Colour**: `#C4B5FD` (purple-300) - light purple
 - **Width**: Same as normal edges (use existing Sankey logic)
 - **Offsets**: Same as normal edges (use existing offset calculations)
 - **Scaling**: Follows same Global Log Mass scaling
 - **Arrows**: Same as normal edges
 
-**Key Point:** Case edges use ALL existing visual rendering logic except color.
+**Key Point:** Case edges use ALL existing visual rendering logic except colour.
 
 ---
 
@@ -264,7 +264,7 @@ Location: `dagnet/graph-editor/src/components/edges/ConversionEdge.tsx`
 
 **Changes:**
 - Detect case edges via `case_variant` or `case_id` properties
-- Conditional stroke color: purple for case edges, gray for normal
+- Conditional stroke colour: purple for case edges, gray for normal
 - Keep all existing width/offset/scaling logic
 
 **New Props:**
@@ -281,13 +281,13 @@ Location: `dagnet/graph-editor/src/components/GraphCanvas.tsx`
 
 **Changes:**
 - Handle case node rendering
-- Apply purple color to case edges
+- Apply purple colour to case edges
 - Update edge width calculations to handle case edges
 - Update offset calculations to handle case edges (same logic)
 
-**Edge Color Logic:**
+**Edge Colour Logic:**
 ```typescript
-const edgeColor = edge.data?.case_variant || edge.data?.case_id 
+const edgeColour = edge.data?.case_variant || edge.data?.case_id 
   ? '#C4B5FD' // purple-300 for case edges
   : '#999';   // gray for normal edges
 ```
@@ -833,7 +833,7 @@ function applyEdgeOverrides(graph, edgeOverrides) {
 
 **Component Files:**
 - `graph-editor/src/components/nodes/ConversionNode.tsx` - Case node rendering
-- `graph-editor/src/components/edges/ConversionEdge.tsx` - Case edge coloring
+- `graph-editor/src/components/edges/ConversionEdge.tsx` - Case edge colouring
 - `graph-editor/src/components/GraphCanvas.tsx` - Case node/edge handling
 - `graph-editor/src/components/PropertiesPanel.tsx` - Case node UI
 
@@ -864,7 +864,7 @@ function applyEdgeOverrides(graph, edgeOverrides) {
 1. Update graph schema with case node type
 2. Add case properties to node/edge interfaces
 3. Update ConversionNode to render case nodes (purple, smaller)
-4. Update ConversionEdge to color case edges purple
+4. Update ConversionEdge to colour case edges purple
 5. Add Node Type selector to Properties Panel
 6. Build manual variant management UI
 7. Add weight validation

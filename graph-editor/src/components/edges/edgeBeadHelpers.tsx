@@ -10,8 +10,8 @@ import { computeEffectiveEdgeProbability, parseWhatIfDSL } from '@/lib/whatIf';
 import { composeParams } from '../../services/CompositionService';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING } from '../../lib/nodeEdgeConstants';
 import { getCaseEdgeVariantInfo } from './edgeLabelHelpers';
-import { getConditionalProbabilityColor, ensureDarkBeadColor } from '@/lib/conditionalColors';
-import { darkenCaseColor } from '@/lib/conditionalColors';
+import { getConditionalProbabilityColour, ensureDarkBeadColour } from '@/lib/conditionalColours';
+import { darkenCaseColour } from '@/lib/conditionalColours';
 import type { ScenarioParams } from '../../types/scenarios';
 import type { Graph, GraphEdge } from '../../types';
 import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue } from './BeadLabelBuilder';
@@ -31,7 +31,7 @@ export interface BeadDefinition {
   };
   
   // Display
-  displayText: React.ReactNode; // Colored segments + optional grey brackets
+  displayText: React.ReactNode; // Coloured segments + optional grey brackets
   allIdentical: boolean; // true if all visible scenarios have same value
   
   // Bead appearance
@@ -121,7 +121,7 @@ function buildParameterBead(config: {
   // Layer info
   orderedVisibleIds: string[];
   currentVisible: boolean;
-  getScenarioColor: (layerId: string) => string;
+  getScenarioColour: (layerId: string) => string;
 }): BeadDefinition | null {
   
   // Check if parameter exists anywhere
@@ -177,7 +177,7 @@ function buildParameterBead(config: {
       values.push({
         scenarioId: layerId,
         value: extracted.value,
-        color: config.getScenarioColor(layerId),
+        colour: config.getScenarioColour(layerId),
         stdev: extracted.stdev
       });
     }
@@ -458,8 +458,8 @@ export function buildBeadDefinitions(
   scenariosContext: any,
   scenarioOrder: string[],
   visibleScenarioIds: string[],
-  visibleColorOrderIds: string[],
-  scenarioColors: Map<string, string>,
+  visibleColourOrderIds: string[],
+  scenarioColours: Map<string, string>,
   whatIfDSL?: string | null,
   visibleStartOffset?: number // Distance from path start to visible start (after chevron)
 ): BeadDefinition[] {
@@ -474,9 +474,9 @@ export function buildBeadDefinitions(
   // Use shared constants from nodeEdgeConstants.ts
   const baseDistance = (visibleStartOffset || 0) + BEAD_MARKER_DISTANCE;
   
-  // Helper to get scenario color
-  const getScenarioColor = (scenarioId: string): string => {
-    return scenarioColors.get(scenarioId) || '#000000';
+  // Helper to get scenario colour
+  const getScenarioColour = (scenarioId: string): string => {
+    return scenarioColours.get(scenarioId) || '#000000';
   };
   
   // Check if 'current' is visible
@@ -519,7 +519,7 @@ export function buildBeadDefinitions(
         variantValues.push({
           scenarioId,
           value: variant.variantWeight,
-          color: getScenarioColor(scenarioId)
+          colour: getScenarioColour(scenarioId)
         });
       }
     }
@@ -540,11 +540,11 @@ export function buildBeadDefinitions(
     
     const allVariantIdentical = variantValues.length > 0 && variantValues.every(v => v.value === variantValues[0].value);
     
-    // Use darkened case node color for background
-    const caseColor = sourceNode.layout?.color || '#8B5CF6';
-    const darkenedColor = darkenCaseColor(caseColor);
+    // Use darkened case node colour for background
+    const caseColour = sourceNode.layout?.colour || '#8B5CF6';
+    const darkenedColour = darkenCaseColour(caseColour);
     
-    // Format variant text: "variantName: 50% 25% 50%" with colored percentages
+    // Format variant text: "variantName: 50% 25% 50%" with coloured percentages
     const variantSegments: React.ReactNode[] = [];
     variantSegments.push(<span key="name" style={{ color: '#FFFFFF' }}>{variantName}: </span>);
     
@@ -556,10 +556,10 @@ export function buildBeadDefinitions(
         </span>
       );
     } else {
-      // Add colored percentages for each scenario (when they differ)
+      // Add coloured percentages for each scenario (when they differ)
       variantValues.forEach((val, idx) => {
         variantSegments.push(
-          <span key={idx} style={{ color: val.color }}>
+          <span key={idx} style={{ color: val.colour }}>
             {formatVariant(variantName, val.value as number)}
           </span>
         );
@@ -589,7 +589,7 @@ export function buildBeadDefinitions(
       hiddenCurrent: hiddenCurrentVariant,
       displayText: <>{variantSegments}</>,
       allIdentical: allVariantIdentical && !hiddenCurrentVariant,
-      backgroundColor: darkenedColor,
+      backgroundColor: darkenedColour,
       hasParameterConnection: false,
       distance: baseDistance + beadIndex * BEAD_SPACING,
       expanded: true, // Default expanded
@@ -614,7 +614,7 @@ export function buildBeadDefinitions(
     beadIndex: beadIndex,
     orderedVisibleIds,
     currentVisible,
-    getScenarioColor
+    getScenarioColour
   });
   
   if (probBead) {
@@ -649,7 +649,7 @@ export function buildBeadDefinitions(
     beadIndex: beadIndex,
     orderedVisibleIds,
     currentVisible,
-    getScenarioColor
+    getScenarioColour
   });
   
   if (costGBPBead) {
@@ -683,7 +683,7 @@ export function buildBeadDefinitions(
     beadIndex: beadIndex,
     orderedVisibleIds,
     currentVisible,
-    getScenarioColor
+    getScenarioColour
   });
   
   if (costTimeBead) {
@@ -742,7 +742,7 @@ export function buildBeadDefinitions(
         condValues.push({
           scenarioId,
           value: condProbValue,
-          color: getScenarioColor(scenarioId)
+          colour: getScenarioColour(scenarioId)
         });
       }
       
@@ -756,9 +756,9 @@ export function buildBeadDefinitions(
       
       const allCondIdentical = condValues.length > 0 && condValues.every(v => v.value === condValues[0].value);
       
-      // Get color for this specific conditional probability
-      const condColor = getConditionalProbabilityColor(cp);
-      const darkenedColor = ensureDarkBeadColor(condColor);
+      // Get colour for this specific conditional probability
+      const condColour = getConditionalProbabilityColour(cp);
+      const darkenedColour = ensureDarkBeadColour(condColour);
       
       beads.push({
         type: 'conditional_p',
@@ -770,7 +770,7 @@ export function buildBeadDefinitions(
           (v) => formatConditional(conditionStr, v as number)
         ),
         allIdentical: allCondIdentical && !hiddenCurrentCond,
-        backgroundColor: darkenedColor,
+        backgroundColor: darkenedColour,
         hasParameterConnection: false,
         distance: baseDistance + beadIndex * BEAD_SPACING,
         expanded: false, // Default collapsed

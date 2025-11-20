@@ -261,7 +261,7 @@ Before implementation, approve:
 ### 5. Case Parameter Contexts
 **Proposed:** Support contexts for A/B test cases
 
-**Use case:** Button color test performs differently on mobile vs desktop
+**Use case:** Button colour test performs differently on mobile vs desktop
 
 **Recommendation:** Include in v1 ✅
 

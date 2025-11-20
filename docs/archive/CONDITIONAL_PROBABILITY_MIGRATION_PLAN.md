@@ -465,7 +465,7 @@ if (evaluateConstraint(conditionalProb.condition, allVisitedNodes, context, case
 2. Remove old format handling
 3. Update all 7 call sites in file
 
-### 3.2 conditionalColors.ts (line ~90)
+### 3.2 conditionalColours.ts (line ~90)
 
 **Current**: Handles both formats in `getConditionSignature()`
 
@@ -621,7 +621,7 @@ npm run migrate:conditional-probabilities
 2. **If Unused (Dead Code)**:
    - Extract useful logic before removal:
      - Complementary conditional creation logic
-     - Color picker implementation
+     - Colour picker implementation
      - Rebalancing algorithms
    - Document extracted logic for Phase 3 (feature restoration)
    - Remove component file
@@ -790,14 +790,14 @@ export interface ConditionalProbability {
 
 3. ⚠️ **Phase 3**: Remove backward compatibility hacks - **MOSTLY COMPLETED**
    - ✅ 3.1: conditionalValidation.ts - Uses `getVisitedNodeIds()` from `queryDSL.ts`
-   - ⚠️ 3.2: conditionalColors.ts - Still has old format check (warns but continues gracefully)
+   - ⚠️ 3.2: conditionalColours.ts - Still has old format check (warns but continues gracefully)
    - ✅ 3.3: ConversionEdge.tsx - Uses `getVisitedNodeIds()` from `queryDSL.ts`
    - ✅ 3.4: WhatIfAnalysisControl.tsx - Uses `getVisitedNodeIds()` and `normalizeConstraintString()`
    - ⚠️ 3.5: ConditionalProbabilityEditor.tsx - Still has old format display handling (lines 129-130, 178, 183)
 
 4. ✅ **Phase 4**: Update type system - **COMPLETED**
    - ✅ Updated `ConditionalProbability.condition` to `string` only (no union type)
-   - ✅ Added `color?: string` field to `ConditionalProbability` interface
+   - ✅ Added `colour?: string` field to `ConditionalProbability` interface
    - ✅ Updated type comments with DSL format documentation
 
 5. ⚠️ **Phase 5**: Create data migration script - **PARTIALLY COMPLETED**
@@ -829,14 +829,14 @@ export interface ConditionalProbability {
    - ✅ `addConditionalProbability()` - Adds condition and propagates to siblings
    - ✅ `updateConditionalProbabilities()` - Updates conditions and syncs siblings
    - ✅ `removeConditionalProbability()` - Removes condition and cleans up siblings
-   - ✅ `propagateConditionalColor()` - Propagates color to matching conditions on siblings
+   - ✅ `propagateConditionalColour()` - Propagates colour to matching conditions on siblings
    - ✅ `createEdge()` - Centralized edge creation with proper ID generation
    - ✅ All methods handle string format conditions correctly
    - ✅ Tests written and passing
 
 9. ✅ **Phase 9**: Edge cases and error handling - **COMPLETED**
    - ✅ Parser handles empty/null/undefined gracefully (returns empty arrays)
-   - ✅ Old format warnings in place (`conditionalColors.ts`, `ConditionalProbabilityEditor.tsx`)
+   - ✅ Old format warnings in place (`conditionalColours.ts`, `ConditionalProbabilityEditor.tsx`)
    - ✅ Invalid strings handled gracefully (no crashes)
    - ✅ Condition comparison uses `normalizeConstraintString()` for consistency
    - ✅ Reference format extended to support full constraint strings
@@ -852,7 +852,7 @@ export interface ConditionalProbability {
 **Completed**: ~85% of planned work
 
 **Remaining Tasks**:
-1. ⚠️ **Phase 3.2 & 3.5**: Remove remaining old format handling from `conditionalColors.ts` and `ConditionalProbabilityEditor.tsx`
+1. ⚠️ **Phase 3.2 & 3.5**: Remove remaining old format handling from `conditionalColours.ts` and `ConditionalProbabilityEditor.tsx`
 2. ⚠️ **Phase 7**: Verify and handle `ConditionalProbabilitiesSection.tsx` (remove if unused, fix if used)
 3. ⚠️ **Phase 10**: Complete user-facing documentation updates
 
@@ -862,7 +862,7 @@ export interface ConditionalProbability {
 - Graph operations: ✅ Fixed
 - Edge context menu: ✅ Fixed
 - Conditional probability creation/update/delete: ✅ Working via UpdateManager
-- Color propagation: ✅ Working via UpdateManager
+- Colour propagation: ✅ Working via UpdateManager
 - Edge creation: ✅ Working via UpdateManager
 
 ## Dependencies and Prerequisites
@@ -968,7 +968,7 @@ After successful migration, consider:
 
 1. **Feature Restoration** (from Phase 3 in original doc):
    - Complementary conditional creation
-   - Color picker for conditional probabilities
+   - Colour picker for conditional probabilities
    - Implement via UpdateManager architecture
 
 2. **Performance Optimization**:

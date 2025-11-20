@@ -3,12 +3,12 @@
 ## ✅ Design Complete
 
 ### Core Design Decisions
-- ✅ **Single bead position** with multi-colored text segments (not perpendicular stacking)
+- ✅ **Single bead position** with multi-coloured text segments (not perpendicular stacking)
 - ✅ **Bead types**: p, cost_gbp, cost_time, variant, conditional_p
 - ✅ **Default states**: Normal params expanded, conditional_p collapsed
-- ✅ **Multi-scenario**: Colored text segments within single bead
+- ✅ **Multi-scenario**: Coloured text segments within single bead
 - ✅ **Hidden current**: Brackets with 50% alpha grey text
-- ✅ **Color contrast**: Darker colors for cases/conditionals
+- ✅ **Colour contrast**: Darker colours for cases/conditionals
 - ✅ **Text positioning**: Horizontal text (not curved along spline)
 
 ### Resolved Questions
@@ -84,17 +84,17 @@
 
 ### Phase 3: Multi-Scenario Support
 - [ ] Extract values from all visible scenarios
-- [ ] Implement colored text segments within expanded beads
+- [ ] Implement coloured text segments within expanded beads
 - [ ] Add deduplication logic (identical values → single black text)
 - [ ] Implement hidden current brackets (50% alpha grey)
-- [ ] Color coding matches scenario colors from `visibleColorOrderIds`
+- [ ] Colour coding matches scenario colours from `visibleColourOrderIds`
 
-### Phase 4: Color & Styling
-- [ ] Update `conditionalColors.ts` to use dark palette (600-700 level)
-- [ ] Implement `darkenCaseColor()` function
+### Phase 4: Colour & Styling
+- [ ] Update `conditionalColours.ts` to use dark palette (600-700 level)
+- [ ] Implement `darkenCaseColour()` function
 - [ ] Apply darkening to case variant beads
 - [ ] Ensure white text on dark backgrounds
-- [ ] Test color contrast with all scenario colors
+- [ ] Test colour contrast with all scenario colours
 
 ### Phase 5: Polish
 - [ ] Smooth expand/collapse animations
@@ -110,11 +110,11 @@
 ### New Files
 - `graph-editor/src/components/edges/EdgeBeads.tsx` - Main bead component
 - `graph-editor/src/components/edges/edgeBeadHelpers.tsx` - Bead data extraction
-- `graph-editor/src/utils/colorUtils.ts` - Color darkening functions (if not exists)
+- `graph-editor/src/utils/colourUtils.ts` - Colour darkening functions (if not exists)
 
 ### Modified Files
 - `graph-editor/src/components/edges/ConversionEdge.tsx` - Remove labels, add beads
-- `graph-editor/src/lib/conditionalColors.ts` - Update to dark palette
+- `graph-editor/src/lib/conditionalColours.ts` - Update to dark palette
 - `graph-editor/src/components/edges/edgeLabelHelpers.tsx` - Repurpose or remove
 
 ### Removed Code
@@ -131,10 +131,10 @@
 - ✅ All parameter types render as beads
 - ✅ Beads positioned correctly along spline (chevron-aware)
 - ✅ Expand/collapse works for all bead types
-- ✅ Multi-scenario values shown as colored text segments
+- ✅ Multi-scenario values shown as coloured text segments
 - ✅ Hidden current shown in brackets with 50% alpha
 - ✅ Default states correct (normal params expanded, conditional_p collapsed)
-- ✅ Colors match specification (dark grey normal params, dark case/conditional)
+- ✅ Colours match specification (dark grey normal params, dark case/conditional)
 
 ### Non-Functional
 - ✅ No collision detection code remains
@@ -147,7 +147,7 @@
 - ✅ Expanded beads readable at default zoom
 - ✅ Click interaction feels responsive
 - ✅ Visual hierarchy clear (normal params vs variants vs conditional)
-- ✅ Color contrast ensures readability
+- ✅ Colour contrast ensures readability
 
 ---
 

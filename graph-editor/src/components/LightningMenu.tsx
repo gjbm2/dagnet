@@ -112,7 +112,7 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         title="Data operations"
       >
         {hasFile ? (
-          <Zap size={14} fill="currentColor" />
+          <Zap size={14} fill="currentColour" />
         ) : (
           <Zap size={14} strokeWidth={2} />
         )}

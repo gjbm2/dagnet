@@ -28,7 +28,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       entry: n.entry,
       type: n.type, // Add node type (normal/case)
       case: n.case, // Add case data for case nodes
-      layout: n.layout, // Add layout object (includes color!)
+      layout: n.layout, // Add layout object (includes colour!)
       event_id: n.event_id, // Add event_id for DAS queries
       event_id_overridden: n.event_id_overridden, // Override flag
       onUpdate: callbacks?.onUpdateNode,

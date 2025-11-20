@@ -1,7 +1,7 @@
 # Scenarios Manager Specification
 
 ## Purpose
-Enable users to create, view, and compare multiple “scenario” overlays of graph parameters on top of the current working state (base). Scenarios are captured snapshots of the full parameter surface (the same surface the What‑If system manipulates). Multiple scenarios can be displayed concurrently; differences surface visually via colored fringes where edge widths diverge.
+Enable users to create, view, and compare multiple “scenario” overlays of graph parameters on top of the current working state (base). Scenarios are captured snapshots of the full parameter surface (the same surface the What‑If system manipulates). Multiple scenarios can be displayed concurrently; differences surface visually via coloured fringes where edge widths diverge.
 
 ## Scope
 - Adds a Scenarios palette above the existing What‑If controls. What‑If remains unchanged.
@@ -12,13 +12,13 @@ Enable users to create, view, and compare multiple “scenario” overlays of gr
 ## Terminology
 - Base: Session baseline; bottom layer reference (default hidden). Flatten sets Base := Current within the session. Persisting to repo is a separate commit action.
 - Current: Live working state (in‑memory graph + What‑If); top layer; receives edits; can be hidden.
-- Scenario: A named, colored, editable overlay stored as a diff; rendered when visible.
+- Scenario: A named, coloured, editable overlay stored as a diff; rendered when visible.
 
 ## UX
 - Location: “Scenarios” section at the top of the What‑If panel
 - Scenario list items (stacked):
   - Drag handles (drag and drop up/down to reorder palette; order affects visual render order only, not computation)
-  - Color swatch (click to change color - manual override)
+  - Colour swatch (click to change colour - manual override)
   - Name (inline editable; default: timestamp like "2025-11-12 14:30")
   - View toggle (eye icon) — visibility is per tab
   - Open (launches Monaco modal to edit YAML/JSON)
@@ -48,7 +48,7 @@ Enable users to create, view, and compare multiple “scenario” overlays of gr
   - Always present; pinned at the bottom of the stack (non-draggable, not deletable).
   - Default: not visible. May be hidden or shown; used as reference even when hidden.
   - Represents the session baseline. Flatten updates Base within the session; committing to repo is a separate action.
-  - Row shows color swatch placeholder, name (read-only "Base"), and Open button.
+  - Row shows colour swatch placeholder, name (read-only "Base"), and Open button.
   - Open button: launches Monaco modal showing Base parameter state (editable).
   - Applying edits to Base mutates Base; “Save as Snapshot” creates an overlay from editor content.
 
@@ -64,7 +64,7 @@ Scenario (stored in graph runtime; see Persistence):
 type Scenario = {
   id: string;              // uuid
   name: string;
-  color: string;           // hex or hsl string, consistent luminance
+  colour: string;           // hex or hsl string, consistent luminance
   createdAt: string;       // ISO
   updatedAt?: string;      // ISO
   version: number;         // schema version for params payload
@@ -110,26 +110,26 @@ type ScenarioMeta = {
 ```ts
 type TabScenarioState = {
   visibleScenarioIds: string[];         // order reflects legend/render order (drag handles)
-  visibleColorOrderIds: string[];       // order reflects visibility activation sequence (for color assignment)
+  visibleColourOrderIds: string[];       // order reflects visibility activation sequence (for colour assignment)
   selectedScenarioId?: string;    // for “Open” default target, optional
 };
 ```
 
-## Color Strategy (Complementarity)
-- Goal: When two scenarios with identical parameters are visible, their colors visually neutralize (over the base), so no bias appears; differences show as colored fringes.
+## Colour Strategy (Complementarity)
+- Goal: When two scenarios with identical parameters are visible, their colours visually neutralize (over the base), so no bias appears; differences show as coloured fringes.
 - **Auto-assignment model** (see Open Questions #10 for manual override options):
-  - Colors are assigned only to visible scenarios and follow the per‑tab visibility activation sequence:
-    - When a scenario is toggled on: append its id to `visibleColorOrderIds` for that tab; assign the next color in the N‑tuple for the current visible count.
-    - When a scenario is toggled off: remove its id from `visibleColorOrderIds`; remaining visible layers keep their relative color order; colors are reassigned from the tuple accordingly.
-    - Drag reordering (legend/render order) does not change color assignment; users can influence colors by toggling visibility order (hide all, then show in desired order).
-  - Color assignment algorithm:
-    - For one visible layer: render that layer in neutral grey (no palette color).
+  - Colours are assigned only to visible scenarios and follow the per‑tab visibility activation sequence:
+    - When a scenario is toggled on: append its id to `visibleColourOrderIds` for that tab; assign the next colour in the N‑tuple for the current visible count.
+    - When a scenario is toggled off: remove its id from `visibleColourOrderIds`; remaining visible layers keep their relative colour order; colours are reassigned from the tuple accordingly.
+    - Drag reordering (legend/render order) does not change colour assignment; users can influence colours by toggling visibility order (hide all, then show in desired order).
+  - Colour assignment algorithm:
+    - For one visible layer: render that layer in neutral grey (no palette colour).
     - For two visible scenarios: assign complementary hues (≈180° apart) at equal perceived luminance/saturation.
     - For N > 2: distribute hues evenly around the wheel (maximal separation). Prefer pairwise complementaries when possible (even N).
     - Keep luminance stable to avoid bias.
   - Base participation:
-    - If Base is visible alongside other layers, it participates in palette assignment like any other visible layer (e.g., with 3 visible layers, use a 3‑color palette: color[1] for first, color[2] for second, color[3] for Base).
-  - Manual color override: TBD (see Open Questions #10 for options).
+    - If Base is visible alongside other layers, it participates in palette assignment like any other visible layer (e.g., with 3 visible layers, use a 3‑colour palette: colour[1] for first, colour[2] for second, colour[3] for Base).
+  - Manual colour override: TBD (see Open Questions #10 for options).
 - Blending:
   - Default: `mix-blend-mode: multiply`
   - Low, stable `strokeOpacity` (e.g., 0.25–0.40) per scenario to support neutralization when overlaps are equal.
@@ -152,7 +152,7 @@ Pipeline:
      - Use the current graph geometry (paths/control points) for all layers.
    - Compute edge widths and per-edge lateral offsets using `composedParams`.
    - Draw:
-     - Render S as an overlay path using S.color, `mix-blend-mode: multiply`, fixed `strokeOpacity`.
+     - Render S as an overlay path using S.colour, `mix-blend-mode: multiply`, fixed `strokeOpacity`.
      - Use `strokeLinecap: 'butt'`, `strokeLinejoin: 'miter'` for crisp ends.
 3. Confidence intervals, selections, and highlights continue to function; CI bands render on Base only.
 
@@ -165,7 +165,7 @@ Render order:
 - Base renders first (always).
 - Overlays render in the order of the scenarios palette (user can reorder via drag handles).
 - Reordering updates the `visibleScenarioIds` array order (render order) for the current tab.
-- Color assignment order is independent and follows the `visibleColorOrderIds` activation sequence for the current tab.
+- Colour assignment order is independent and follows the `visibleColourOrderIds` activation sequence for the current tab.
 
 ## Operations (ScenariosContext API)
 ```ts
@@ -177,13 +177,13 @@ interface ScenariosContext {
     type?: 'all' | 'differences';  // default: 'all'
     source?: 'visible' | 'base';    // 'visible' = composition of all visible layers EXCLUDING Current; 'base' = Base only; default: 'visible'
     diffThreshold?: number;         // optional epsilon for "Differences" extraction
-  }): Scenario; // creates snapshot from current state per options; captures ScenarioMeta; assigns color when made visible
+  }): Scenario; // creates snapshot from current state per options; captures ScenarioMeta; assigns colour when made visible
   createBlank(name?: string): Scenario;      // creates empty scenario, opens editor
   openInEditor(id: string): void;            // launches Monaco modal for scenario
   applyContent(id: string, content: string, format: 'yaml' | 'json'): Result<Scenario, Error>; 
   // validate & persist; if id is "current", creates NEW scenario instead of modifying base
   rename(id: string, name: string): void;
-  setColor(id: string, color: string): void;
+  setColour(id: string, colour: string): void;
   reorder(scenarioIds: string[]): void;      // updates order (affects render order)
   delete(id: string): void;
 
@@ -193,8 +193,8 @@ interface ScenariosContext {
   toggleVisible(tabId: string, id: string): void;
   setSelected(tabId: string, id?: string): void;
   
-  // Color assignment
-  assignColor(scenarioId: string, existingVisibleIds: string[]): string; // computes complementary color
+  // Colour assignment
+  assignColour(scenarioId: string, existingVisibleIds: string[]): string; // computes complementary colour
   
   // Base helpers
   getBaseParams(): ScenarioParams;          // returns Base (working state) parameters
@@ -219,11 +219,11 @@ interface ScenariosContext {
 - Soft cap: recommend ≤5 visible scenarios; warn/degrade gracefully beyond.
 
 ## Accessibility
-- Ensure color assignments meet minimum contrast against the background and each other.
-- Provide tooltip/legend entries that identify scenario name/color.
+- Ensure colour assignments meet minimum contrast against the background and each other.
+- Provide tooltip/legend entries that identify scenario name/colour.
 
 ## Interactions & Compatibility
-- Highlights/selection: apply to base and overlays consistently; overlays use their own colors but respect selection emphasis.
+- Highlights/selection: apply to base and overlays consistently; overlays use their own colours but respect selection emphasis.
 - Confidence intervals: CI can remain enabled when scenarios are visible. CI bands render on base layer only (scenario overlays render without CI for v1).
 - Edge labels: base labels remain primary; optional future: per-scenario delta badges on hover.
 
@@ -309,11 +309,11 @@ Notes:
 - Overlays are unaffected by What‑If after capture; captures include What‑If implicitly because they diff from Current at the time of snapshot.
 
 ## Acceptance Criteria
-- Users can create a snapshot as "All" or "Differences" (from visible or Base); it appears in the list with an assigned color and is invisible by default or follow product choice (tunable).
-- Users can rename, recolor, toggle visibility (per tab), open the JSON modal, apply edits, and delete scenarios.
+- Users can create a snapshot as "All" or "Differences" (from visible or Base); it appears in the list with an assigned colour and is invisible by default or follow product choice (tunable).
+- Users can rename, recolour, toggle visibility (per tab), open the JSON modal, apply edits, and delete scenarios.
 - When scenarios are visible, overlays render additively from Base upward with per-layer widths and per-layer Sankey offsets using current graph geometry.
-- If two visible scenarios are identical, their overlays produce neutral appearance over the base (no obvious color bias), subject to blending and display variance.
-- If widths differ, colored fringes appear where one scenario’s edge extends beyond another.
+- If two visible scenarios are identical, their overlays produce neutral appearance over the base (no obvious colour bias), subject to blending and display variance.
+- If widths differ, coloured fringes appear where one scenario’s edge extends beyond another.
 - Scenarios persist in graph runtime (shared across tabs); visibility is stored per tab.
 - Current can be hidden; any param edit or What‑If change while hidden auto‑unhides Current with a toast.
 - Monaco modal supports toggling Syntax (YAML/JSON) and Structure (Flat/Nested), with lossless round-trip between representations.
@@ -321,16 +321,16 @@ Notes:
 - Snapshot creation captures `Scenario.meta` with window, context, what‑if DSL/summary, and source; modal allows editing `meta.note`.
 
 ## Open Questions / Areas Needing Design
-1. **Exact blending and alpha defaults**: Best values for neutralization across a variety of base colors and background themes (empirical tuning needed).
+1. **Exact blending and alpha defaults**: Best values for neutralization across a variety of base colours and background themes (empirical tuning needed).
 2. **Confidence intervals with scenarios**:
    - **Decision**: Permit user to leave CI on if they wish. No reason we cannot accommodate.
    - CI bands render on base layer; scenario overlays render without CI (for simplicity in v1).
    - Sankey diagram mode: No blocking issue; scenarios should work in Sankey mode.
 3. **Base layer implementation**:
    - Base is not draggable; it can be hidden or shown (default hidden). It is the background reference layer.
-   - Color behavior: 
+   - Colour behavior: 
      - If exactly one layer is visible (often Current), render that layer in neutral grey.
-     - If multiple layers are visible, assign a palette color to each visible layer, including Base if it is visible.
+     - If multiple layers are visible, assign a palette colour to each visible layer, including Base if it is visible.
    - Opening Base in the editor allows direct mutation of Base; a “Save as Snapshot” action creates an overlay from editor content.
 4. **Tooling/Architecture**:
    - Where to host `ScenariosContext` (new context vs extend existing ViewPreferences/Operations)?
@@ -339,8 +339,8 @@ Notes:
    - **Decision**: Store raw YAML/JSON string. Parse to ScenarioParams when needed (on scenario visibility change, data change, graph structure change, etc.).
    - Parsing is lightweight: enumerate through each visible scenario layer from bottom to top, apply params sequentially, store result.
    - Schema evolution: attempt best-effort parsing; mark scenario as invalid if parsing fails; allow user to fix in Monaco editor.
-6. **Color conflict with conditional/case edges** (PHASE 2):
-   - **Decision**: Move conditional/case indicators to "blobs" (small colored markers/shapes) on edges instead of coloring the entire edge stroke.
+6. **Colour conflict with conditional/case edges** (PHASE 2):
+   - **Decision**: Move conditional/case indicators to "blobs" (small coloured markers/shapes) on edges instead of colouring the entire edge stroke.
    - This is PHASE 2 work (deferred from v1).
    - Blob design (placement, size, interaction) TBD.
 7. **UI layout reorganization**:
@@ -362,17 +362,17 @@ Notes:
    - **Decision for v1**: Eye icon = toggle visibility. Keep this approach.
    - "View only this layer" feature: PHASE 2 (deferred). Users can manually deselect other layers, so this is convenience, not MVP.
    - No row-level click or double-click at this stage.
-   - Only interactions: eye icon (toggle), Open button (editor), Delete button, color swatch (picker), name (inline edit), drag handle (reorder).
-10. **Color assignment strategy**:
-    - **Decision**: Auto-assignment with standard color sequence.
-    - Colors assigned in standard sequence based on number of visible scenarios:
-      - 1 visible: Grey (normal mode, no overlay color)
+   - Only interactions: eye icon (toggle), Open button (editor), Delete button, colour swatch (picker), name (inline edit), drag handle (reorder).
+10. **Colour assignment strategy**:
+    - **Decision**: Auto-assignment with standard colour sequence.
+    - Colours assigned in standard sequence based on number of visible scenarios:
+      - 1 visible: Grey (normal mode, no overlay colour)
       - 2 visible: Blue and Pink (complementary pair)
       - 3 visible: Cyan, Magenta, Yellow (evenly distributed)
-      - 4+ visible: Continue geometric distribution around color wheel
-    - Users can control color assignment by ordering visibility: hide all, then make visible in desired order.
-    - Color swatch click: allows manual color override (Option B approach).
-    - PHASE 2: Add advanced "Color Settings" option to allow user to specify custom color sequence.
+      - 4+ visible: Continue geometric distribution around colour wheel
+    - Users can control colour assignment by ordering visibility: hide all, then make visible in desired order.
+    - Colour swatch click: allows manual colour override (Option B approach).
+    - PHASE 2: Add advanced "Colour Settings" option to allow user to specify custom colour sequence.
 
 ---
 
@@ -394,7 +394,7 @@ Inclusions (parameter surface):
 
 Exclusions:
 - Graph structure: nodes list, edges connectivity (`from`, `to`, handles), routing/control points
-- Layout and display: positions, colors, labels, descriptions, tags, display markers
+- Layout and display: positions, colours, labels, descriptions, tags, display markers
 - Metadata, policies, registry/connection details, data source queries/evidence
 - What‑If state (DSL/overrides) after capture; overlays store only resolved parameter diffs
 

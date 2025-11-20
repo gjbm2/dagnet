@@ -455,7 +455,7 @@ const pruning = computeGraphPruning(
 │ ReactFlow nodes & edges (transformed presentation)          │
 │ • Built via: toFlow(fileData) + applyWhatIfTransforms()     │
 │ • Edge widths reflect what-if probabilities                 │
-│ • Node positions, colors, labels                            │
+│ • Node positions, colours, labels                            │
 │ • Selection, drag, zoom, hover states                       │
 │                                                              │
 │ Scope: TAB-SPECIFIC - each tab renders independently        │

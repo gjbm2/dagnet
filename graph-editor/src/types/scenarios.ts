@@ -107,8 +107,8 @@ export interface Scenario {
   /** Display name (user-editable) */
   name: string;
   
-  /** Color for rendering (auto-assigned or user-overridden) */
-  color: string;
+  /** Colour for rendering (auto-assigned or user-overridden) */
+  colour: string;
   
   /** Timestamp of creation */
   createdAt: string;
@@ -136,8 +136,8 @@ export interface TabScenarioState {
   /** IDs of visible scenarios (subset of scenarioOrder that are currently shown) */
   visibleScenarioIds: string[];
   
-  /** IDs of scenarios in activation order (for color assignment) */
-  visibleColorOrderIds: string[];
+  /** IDs of scenarios in activation order (for colour assignment) */
+  visibleColourOrderIds: string[];
   
   /** Currently selected scenario (for highlighting in UI) */
   selectedScenarioId?: string;
