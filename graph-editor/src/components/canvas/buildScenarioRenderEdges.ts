@@ -17,7 +17,7 @@ interface BuildScenarioRenderEdgesParams {
   graph: any;
   scenariosContext: any;
   visibleScenarioIds: string[];
-  visibleColorOrderIds: string[];
+  visibleColourOrderIds: string[];
   whatIfDSL: string | null;
   useUniformScaling: boolean;
   massGenerosity: number;
@@ -56,7 +56,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     graph,
     scenariosContext,
     visibleScenarioIds,
-    visibleColorOrderIds,
+    visibleColourOrderIds,
     whatIfDSL,
     useUniformScaling,
     massGenerosity,
@@ -87,14 +87,14 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
   const scenarios = scenariosContext.scenarios;
   const baseParams = scenariosContext.baseParams;
-  const currentColor = scenariosContext.currentColor;
-  const baseColor = scenariosContext.baseColor;
+  const currentColour = scenariosContext.currentColour;
+  const baseColour = scenariosContext.baseColour;
 
   /**
    * Get effective colour for a scenario (with single-layer grey override)
-   * Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned color.
+   * Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned colour.
    */
-  const getScenarioColor = (scenarioId: string, isVisible: boolean = true): string => {
+  const getScenarioColour = (scenarioId: string, isVisible: boolean = true): string => {
     // Single-layer grey override: ONLY apply to the visible layer when exactly 1 layer is visible
     if (isVisible && visibleScenarioIds.length === 1) {
       return '#808080';
@@ -102,12 +102,12 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
     // Get stored colour (for both visible and hidden layers)
     if (scenarioId === 'current') {
-      return currentColor;
+      return currentColour;
     } else if (scenarioId === 'base') {
-      return baseColor;
+      return baseColour;
     } else {
       const scenario = scenarios.find((s: any) => s.id === scenarioId);
-      return scenario?.color || '#808080';
+      return scenario?.colour || '#808080';
     }
   };
 
@@ -228,7 +228,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     const scenarioId = layersToRender[layerIndex];
     const scenario = scenarios.find((s: any) => s.id === scenarioId);
     const isVisible = visibleScenarioIds.includes(scenarioId);
-    const color = getScenarioColor(scenarioId, isVisible);
+    const colour = getScenarioColour(scenarioId, isVisible);
 
     // Compose params based on layer type and visibility
     let composedParams = baseParams;
@@ -437,11 +437,11 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         data: {
           ...edge.data,
           scenarioOverlay: !isCurrent,  // 'current' is NOT an overlay, it's the live layer
-          scenarioColor: color,
+          scenarioColour: colour,
           strokeOpacity: overlayOpacity,
           originalEdgeId: edge.id,
           isPanningOrZooming: isPanningOrZooming,  // Pass through pan/zoom state
-          // STEP 6: suppressConditionalColors removed (dead code, conditional colors handled by scenarioColor)
+          // STEP 6: suppressConditionalColours removed (dead code, conditional colours handled by scenarioColour)
           suppressLabel: !isCurrent,  // Only 'current' shows labels
           scenarioParams: edgeParams,
           probability: edgeParams?.p?.mean ?? edge.data?.probability ?? 0.5,
@@ -463,7 +463,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         },
         style: {
           ...edge.style,
-          stroke: color,
+          stroke: colour,
           strokeOpacity: overlayOpacity,
           // 'current' is interactive; others are not
           pointerEvents: isCurrent ? 'auto' : 'none',

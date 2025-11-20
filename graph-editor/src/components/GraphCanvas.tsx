@@ -1336,13 +1336,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const outcomeTypeChanged = node.data?.outcome_type !== graphNode.outcome_type;
       const entryStartChanged = node.data?.entry?.is_start !== graphNode.entry?.is_start;
       const entryWeightChanged = node.data?.entry?.entry_weight !== graphNode.entry?.entry_weight;
-      const caseColorChanged = node.data?.layout?.color !== graphNode.layout?.color;
+      const caseColourChanged = node.data?.layout?.colour !== graphNode.layout?.colour;
       const caseTypeChanged = node.data?.type !== graphNode.type;
       const caseDataChanged = JSON.stringify(node.data?.case || {}) !== JSON.stringify(graphNode.case || {});
       
       const hasChanges = labelChanged || idChanged || descriptionChanged || absorbingChanged || 
                         outcomeTypeChanged || tagsChanged || entryStartChanged || entryWeightChanged ||
-                        caseColorChanged || caseTypeChanged || caseDataChanged;
+                        caseColourChanged || caseTypeChanged || caseDataChanged;
       
       if (hasChanges) {
         console.log('Node property changes detected:', {
@@ -1355,7 +1355,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           tagsChanged,
           entryStartChanged,
           entryWeightChanged,
-          caseColorChanged,
+          caseColourChanged,
           caseTypeChanged,
           caseDataChanged,
           nodeTags: node.data?.tags,
@@ -2000,7 +2000,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
     const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
-    const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+    const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
     
     let edgesWithScenarios = baseEdges;
     
@@ -2010,7 +2010,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     if (scenariosContext && visibleScenarioIds.length > 0 && graph) {
       const scenarios = scenariosContext.scenarios;
       const baseParams = scenariosContext.baseParams;
-      const colorMap = assignColors(visibleScenarioIds, visibleColorOrderIds);
+      const colourMap = assignColours(visibleScenarioIds, visibleColourOrderIds);
       
       const overlayEdges: any[] = [];
       
@@ -2019,7 +2019,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         const scenario = scenarios.find(s => s.id === scenarioId);
         if (!scenario) continue;
         
-        const color = colorMap.get(scenarioId) || scenario.color;
+        const colour = colourMap.get(scenarioId) || scenario.colour;
         
         // Compose params up to this scenario
         const layersUpToThis = visibleScenarioIds
@@ -2046,11 +2046,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             data: {
               ...edge.data,
               scenarioOverlay: true,
-              scenarioColor: color,
+              scenarioColour: colour,
               scenarioParams: edgeParams,
             },
             style: {
-              stroke: color,
+              stroke: colour,
               strokeOpacity: 0.3,
               pointerEvents: 'none',
             },
@@ -4863,7 +4863,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     </div>;
   }
 
-  // Scenario visibility state (for coloring/suppression decisions)
+  // Scenario visibility state (for colouring/suppression decisions)
   const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
 
   // DIAGNOSTIC URL FLAGS
@@ -4871,7 +4871,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const MINIMAL_MODE = urlParams.has('minimal');
 
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
-  const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+  const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
   
   // Log scenario state for debugging
   React.useEffect(() => {
@@ -4880,10 +4880,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         totalScenarios: scenariosContext.scenarios.length,
         scenarios: scenariosContext.scenarios.map(s => ({ id: s.id, name: s.name })),
         visibleScenarioIds,
-        visibleColorOrderIds
+        visibleColourOrderIds
       });
     }
-  }, [scenariosContext?.scenarios, visibleScenarioIds, visibleColorOrderIds, scenariosContext]);
+  }, [scenariosContext?.scenarios, visibleScenarioIds, visibleColourOrderIds, scenariosContext]);
 
   // NEW UNIFIED PIPELINE: Build all render edges through scenario logic
   // Replaces the old base/overlay split with a single scenario-based approach
@@ -4900,7 +4900,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         graph,
         scenariosContext,
         visibleScenarioIds,
-        visibleColorOrderIds,
+        visibleColourOrderIds,
         whatIfDSL: effectiveWhatIfDSL,
         useUniformScaling,
         massGenerosity,
@@ -4927,7 +4927,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     graph,
     scenariosContext,
     visibleScenarioIds,
-    visibleColorOrderIds,
+    visibleColourOrderIds,
     effectiveWhatIfDSL,
     useUniformScaling,
     massGenerosity,
@@ -5367,12 +5367,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                         ? (item.probability / (analysis.totalProbability || 1)) * 100 
                         : 0;
                       
-                      // Get outcome type color
+                      // Get outcome type colour
                       const outcomeType = item.node.data?.outcome_type;
-                      let barColor = '#6b7280'; // default gray
-                      if (outcomeType === 'success') barColor = '#16a34a'; // green
-                      else if (outcomeType === 'failure') barColor = '#dc2626'; // red
-                      else if (outcomeType === 'abandoned') barColor = '#ea580c'; // orange
+                      let barColour = '#6b7280'; // default gray
+                      if (outcomeType === 'success') barColour = '#16a34a'; // green
+                      else if (outcomeType === 'failure') barColour = '#dc2626'; // red
+                      else if (outcomeType === 'abandoned') barColour = '#ea580c'; // orange
                       
                       return (
                         <div key={item.node.id} style={{ marginBottom: '8px' }}>
@@ -5401,7 +5401,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                             <div style={{ 
                               width: `${barWidth}%`, 
                               height: '100%', 
-                              background: barColor,
+                              background: barColour,
                               transition: 'width 0.3s ease',
                               display: 'flex',
                               alignItems: 'center',

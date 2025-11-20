@@ -63,7 +63,7 @@ interface EnhancedSelectorProps {
  * 
  * Universal selector for all connection fields (nodes, parameters, cases, contexts).
  * Features:
- * - Distinctive pastel border (type-specific color)
+ * - Distinctive pastel border (type-specific colour)
  * - Plug icon (grey=disconnected, black=connected)
  * - Clear 'x' button
  * - Sync menu '[⋮]' with Pull/Push/Retrieve options
@@ -119,7 +119,7 @@ export function EnhancedSelector({
   const [isHovered, setIsHovered] = useState(false);
   const [showShimmer, setShowShimmer] = useState(false);
   
-  // Get theme colors and icon for this type
+  // Get theme colours and icon for this type
   const theme = getObjectTypeTheme(type as any);
   const IconComponent = theme.icon;
 
@@ -512,16 +512,16 @@ export function EnhancedSelector({
   const isLocalFile = currentItem?.isLocal || false;
   const inRegistryOnly = currentItem && !currentItem.file_path && !isLocalFile;
   
-  // Determine input text color and style based on state priority
-  let inputTextColor = 'inherit';
+  // Determine input text colour and style based on state priority
+  let inputTextColour = 'inherit';
   let inputFontStyle = 'normal';
   
   if (isDirty) {
-    inputTextColor = '#ea580c'; // Orange for dirty
+    inputTextColour = '#ea580c'; // Orange for dirty
   } else if (hasOpenTabs) {
-    inputTextColor = '#0066cc'; // Blue for open
+    inputTextColour = '#0066cc'; // Blue for open
   } else if (inRegistryOnly) {
-    inputTextColor = '#6B7280'; // Grey for registry-only
+    inputTextColour = '#6B7280'; // Grey for registry-only
   }
   
   if (isLocalFile) {
@@ -535,8 +535,8 @@ export function EnhancedSelector({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       style={{
-        '--selector-accent-color': theme.accentColor,
-        '--selector-light-color': theme.lightColor
+        '--selector-accent-colour': theme.accentColour,
+        '--selector-light-colour': theme.lightColour
       } as React.CSSProperties}
     >
       {/* Label */}
@@ -544,7 +544,7 @@ export function EnhancedSelector({
         <IconComponent 
           size={14} 
           strokeWidth={2}
-          style={{ color: theme.accentColor, marginRight: '4px' }}
+          style={{ color: theme.accentColour, marginRight: '4px' }}
         />
         {displayLabel}:
       </label>
@@ -602,7 +602,7 @@ export function EnhancedSelector({
             disabled={disabled}
             className="enhanced-selector-input"
             style={{
-              color: inputTextColor,
+              color: inputTextColour,
               fontStyle: inputFontStyle
             }}
           />
@@ -794,7 +794,7 @@ export function EnhancedSelector({
                 <IconComponent 
                   size={12} 
                   strokeWidth={2}
-                  style={{ color: theme.accentColor, marginRight: '6px' }}
+                  style={{ color: theme.accentColour, marginRight: '6px' }}
                 />
                 {group}
               </div>
@@ -810,15 +810,15 @@ export function EnhancedSelector({
                 const isLocal = item.isLocal || false;
                 const inRegistryOnly = !item.file_path && !isLocal;
                 
-                // Determine text color based on state priority: dirty > open > registry-only
-                let textColor = 'inherit';
+                // Determine text colour based on state priority: dirty > open > registry-only
+                let textColour = 'inherit';
                 let fontStyle = 'normal';
                 let opacity = 1;
                 
                 if (isDirty) {
-                  textColor = '#ea580c'; // Orange for dirty
+                  textColour = '#ea580c'; // Orange for dirty
                 } else if (hasOpenTabs) {
-                  textColor = '#0066cc'; // Blue for open
+                  textColour = '#0066cc'; // Blue for open
                 } else if (inRegistryOnly) {
                   opacity = 0.7; // Grey for registry-only
                 }
@@ -841,12 +841,12 @@ export function EnhancedSelector({
                         <IconComponent 
                           size={12} 
                           strokeWidth={2}
-                          style={{ color: theme.accentColor, marginRight: '6px', opacity: 0.5 }}
+                          style={{ color: theme.accentColour, marginRight: '6px', opacity: 0.5 }}
                         />
                         <span 
                           className="enhanced-selector-item-id"
                           style={{ 
-                            color: textColor, 
+                            color: textColour, 
                             fontStyle,
                             opacity
                           }}

@@ -5,11 +5,11 @@
 ### Problem
 When multiple scenarios are visible, we need to show parameter values from each scenario. How should beads display multiple values?
 
-### Selected Approach: Single Bead Position with Multi-Colored Text ✅
+### Selected Approach: Single Bead Position with Multi-Coloured Text ✅
 
 **How it works**: 
 - Beads render only on 'current' layer (same as today)
-- Each expanded bead shows values from all visible scenarios as colored text segments
+- Each expanded bead shows values from all visible scenarios as coloured text segments
 - Format: `([blue] 50% [pink] 25% [yellow] 50%)` when values differ
 - Format: `50%` (black) when all scenarios identical
 
@@ -38,16 +38,16 @@ Expanded [p] bead shows:
 - Consider showing only first 3-4 scenarios, "+N more" if many
 - Use spacing between segments for readability
 
-### Decision: Single Bead with Multi-Colored Text Segments
+### Decision: Single Bead with Multi-Coloured Text Segments
 
 **Implementation Details**:
 - **Bead position**: Single position along spline (on 'current' layer only)
-- **Text segments**: Each scenario value shown as colored span within expanded bead
-- **Color coding**: 
-  - Normal param beads: Dark grey background, colored text segments
-  - Variant/conditional beads: Colored background, colored text segments
+- **Text segments**: Each scenario value shown as coloured span within expanded bead
+- **Colour coding**: 
+  - Normal param beads: Dark grey background, coloured text segments
+  - Variant/conditional beads: Coloured background, coloured text segments
 - **Deduplication**: If all scenarios identical, show single black text
-- **Text format**: Space-separated segments: `"50% 25% 50%"` with each segment colored
+- **Text format**: Space-separated segments: `"50% 25% 50%"` with each segment coloured
 - **Max scenarios**: No hard limit, but consider truncation if >5 scenarios
 
 ---
@@ -100,44 +100,44 @@ All scenarios' values shown within the same bead position. This maintains clean 
 
 ---
 
-## Color Scheme
+## Colour Scheme
 
 ### Normal Parameters (p, cost_gbp, cost_time)
-- **Color**: Dark grey (`#4A5568`)
+- **Colour**: Dark grey (`#4A5568`)
 - **Text**: White (`#FFFFFF`)
 - **Rationale**: 
   - These are "base" parameters, not scenario-specific
-  - Dark grey distinguishes from colorful scenario beads
+  - Dark grey distinguishes from colourful scenario beads
   - High contrast (white on dark) ensures readability
 
 ### Case Variants
-- **Color**: Darkened case node color (`darkenColor(node.layout.color, 0.35)`)
+- **Colour**: Darkened case node colour (`darkenColour(node.layout.colour, 0.35)`)
 - **Text**: Always white (`#FFFFFF`)
 - **Rationale**: 
-  - Darker background ensures contrast with pastel scenario text colors
+  - Darker background ensures contrast with pastel scenario text colours
   - Maintains visual connection to case node (same hue, darker shade)
   - Consistent white text improves readability
 
 ### Conditional Probabilities
-- **Color**: Dark color palette (600-700 level Tailwind colors)
+- **Colour**: Dark colour palette (600-700 level Tailwind colours)
 - **Text**: Always white (`#FFFFFF`)
 - **Rationale**: 
-  - Dark backgrounds ensure contrast with pastel scenario text colors
+  - Dark backgrounds ensure contrast with pastel scenario text colours
   - Consistent white text improves readability
-  - Darker colors distinguish from scenario colors (which are lighter/pastel)
+  - Darker colours distinguish from scenario colours (which are lighter/pastel)
 
-### Color Darkening Strategy
-**Problem**: When scenario colors (pastels) are used as text color inside expanded beads, they may clash with case/conditional bead backgrounds.
+### Colour Darkening Strategy
+**Problem**: When scenario colours (pastels) are used as text colour inside expanded beads, they may clash with case/conditional bead backgrounds.
 
 **Solution**: 
-1. **Case variants**: Darken `node.layout.color` by 30-40% lightness
+1. **Case variants**: Darken `node.layout.colour` by 30-40% lightness
 2. **Conditional_p**: Use darker default palette (600-700 level instead of 400)
-3. **User-set colors**: Darken `cp.color` if lightness > 50%
+3. **User-set colours**: Darken `cp.colour` if lightness > 50%
 
 **Implementation**:
 ```typescript
-function ensureDarkColor(color: string, minLightness: number = 0.3): string {
-  const hsl = hexToHsl(color);
+function ensureDarkColour(colour: string, minLightness: number = 0.3): string {
+  const hsl = hexToHsl(colour);
   if (hsl.l > minLightness) {
     hsl.l = minLightness; // Darken to minimum lightness
   }
@@ -145,20 +145,20 @@ function ensureDarkColor(color: string, minLightness: number = 0.3): string {
 }
 ```
 
-**Result**: All case/conditional beads have dark backgrounds with white text, ensuring readability regardless of scenario text color.
+**Result**: All case/conditional beads have dark backgrounds with white text, ensuring readability regardless of scenario text colour.
 
 ### Multi-Scenario Normal Params
 **Question**: How to show normal param values when they differ across scenarios?
 
-**Decision**: **Dark grey bead background, colored text segments**
+**Decision**: **Dark grey bead background, coloured text segments**
 - Bead background stays dark grey (indicates parameter type)
-- Text segments use scenario colors (indicates which scenario has which value)
-- Format: `"50% 25% 50%"` where each percentage is colored (blue, pink, yellow)
+- Text segments use scenario colours (indicates which scenario has which value)
+- Format: `"50% 25% 50%"` where each percentage is coloured (blue, pink, yellow)
 - If all identical: Single black text `"50%"`
 
 **Rationale**: 
 - Maintains visual distinction: dark grey = normal param type
-- Colored text = scenario values
+- Coloured text = scenario values
 - Consistent with label system approach
 
 ---
@@ -182,16 +182,16 @@ function ensureDarkColor(color: string, minLightness: number = 0.3): string {
 
 ### Case Variant Bead
 - **Format (single scenario)**: `treatment: 25%`
-- **Format (multi-scenario, differ)**: `treatment: 20% 25% 30%` (colored weights)
+- **Format (multi-scenario, differ)**: `treatment: 20% 25% 30%` (coloured weights)
 - **Format (multi-scenario, identical)**: `treatment: 25%` (black)
-- **Components**: Variant name + weight percentages (colored if differ)
+- **Components**: Variant name + weight percentages (coloured if differ)
 - **Rationale**: Edge probability (p) shown separately in probability bead before this, so only variant weight needed here
 
 ### Conditional Probability Bead
 - **Format (single scenario)**: `visited(promo): 30%`
-- **Format (multi-scenario, differ)**: `visited(promo): 30% 25% 35%` (colored probs)
+- **Format (multi-scenario, differ)**: `visited(promo): 30% 25% 35%` (coloured probs)
 - **Format (multi-scenario, identical)**: `visited(promo): 30%` (black)
-- **Components**: Condition string (simplified) + probabilities (colored if differ)
+- **Components**: Condition string (simplified) + probabilities (coloured if differ)
 - **Simplification**: Show readable version of condition DSL
   - `visited(promo)` → `visited(promo)`
   - `context(device:mobile)` → `mobile`
@@ -231,7 +231,7 @@ Expanded beads need to show text that follows the edge spline for readability.
 ## Deduplication Strategy
 
 ### When to Deduplicate
-If **all visible scenarios** have **identical values** for a parameter type, show **single black text** instead of colored segments.
+If **all visible scenarios** have **identical values** for a parameter type, show **single black text** instead of coloured segments.
 
 ### Examples
 
@@ -255,27 +255,27 @@ If **all visible scenarios** have **identical values** for a parameter type, sho
 
 #### Probabilities Differ, Hidden Current Differs
 ```
-[p]  → Expanded: "50% 25% 50% (60%)" (colored visible, grey hidden)
+[p]  → Expanded: "50% 25% 50% (60%)" (coloured visible, grey hidden)
 ```
 
 #### All Different
 ```
-[p]  → Expanded: "50% 25% 50%" (colored segments)
-[£]  → Expanded: "£100 £150 £120" (colored segments)
-[t]  → Expanded: "2d 3d 2.5d" (colored segments)
+[p]  → Expanded: "50% 25% 50%" (coloured segments)
+[£]  → Expanded: "£100 £150 £120" (coloured segments)
+[t]  → Expanded: "2d 3d 2.5d" (coloured segments)
 ```
 
 #### All Different with Hidden Current
 ```
-[p]  → Expanded: "50% 25% 50% (60%)" (colored visible, grey hidden)
-[£]  → Expanded: "£100 £150 (£120)" (colored visible, grey hidden)
+[p]  → Expanded: "50% 25% 50% (60%)" (coloured visible, grey hidden)
+[£]  → Expanded: "£100 £150 (£120)" (coloured visible, grey hidden)
 ```
 
 ### Implementation
 ```typescript
 function formatBeadText(
   values: number[], 
-  scenarioColors: string[],
+  scenarioColours: string[],
   hiddenCurrent?: number
 ): React.ReactNode {
   const allIdentical = values.every(v => v === values[0]);
@@ -379,8 +379,8 @@ function formatBeadText(
 
 ## Open Questions Resolved
 
-### Q1: Should normal param beads be colored by scenario?
-**A**: No, keep dark grey. Color reserved for scenario-specific concepts (variants, conditionals).
+### Q1: Should normal param beads be coloured by scenario?
+**A**: No, keep dark grey. Colour reserved for scenario-specific concepts (variants, conditionals).
 
 ### Q2: How to handle many scenarios (10+)?
 **A**: No hard limit initially. If performance issues, consider:

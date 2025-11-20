@@ -107,7 +107,7 @@ export default function Base64Encoder() {
         )}
       </Paper>
 
-      <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+      <Paper sx={{ p: 2, bgcolour: 'grey.50' }}>
         <Typography variant="subtitle2" gutterBottom>
           Usage:
         </Typography>

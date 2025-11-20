@@ -1748,7 +1748,7 @@ console.info('[WindowAggregation] ℹ️ Window has no schedules. Using last sch
 **UI indicators** (Phase 3):
 - Window selector badge: "⚠️ 38% coverage"
 - Tooltip: "This window has partial data coverage. 62% of period is extrapolated from last known schedule."
-- Graph node indicator: Faded color or dotted border for extrapolated weights
+- Graph node indicator: Faded colour or dotted border for extrapolated weights
 
 ### Edge Cases
 

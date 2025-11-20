@@ -12,18 +12,18 @@ This document outlines the design for implementing conditional probabilities on 
 
 Based on review and discussion, the following decisions have been made:
 
-1. **Color Strategy**: Dynamic color palette approach
-   - Each conditional structure gets unique color from algorithmic palette
-   - User can optionally override colors
-   - Colors persisted in JSON as display parameters
-   - When conditional edge selected, highlights upstream dependency nodes in same color
-   - **Selection color**: Bright blue (#007bff) reserved for selections
-   - **Highlight color**: Dark grey (#333333) for edge highlighting with fading
+1. **Colour Strategy**: Dynamic colour palette approach
+   - Each conditional structure gets unique colour from algorithmic palette
+   - User can optionally override colours
+   - Colours persisted in JSON as display parameters
+   - When conditional edge selected, highlights upstream dependency nodes in same colour
+   - **Selection colour**: Bright blue (#007bff) reserved for selections
+   - **Highlight colour**: Dark grey (#333333) for edge highlighting with fading
    
 2. **Node Visual Strategy**: Consider shape-based differentiation
    - Use shapes (rectangle/diamond/octagon) for node types
-   - Reserve colors for functional purposes (case variants, conditional groups)
-   - Start/terminal indicated by icon/badge rather than color
+   - Reserve colours for functional purposes (case variants, conditional groups)
+   - Start/terminal indicated by icon/badge rather than colour
 
 3. **Export Format**: JSON only
    - No CSV export planned
@@ -190,12 +190,12 @@ Allow edges to specify conditional probabilities based on whether specific upstr
     }
   ],
   "display": {
-    "conditional_color": "#4ade80"  // Optional user override for edge color
+    "conditional_colour": "#4ade80"  // Optional user override for edge colour
   }
 }
 ```
 
-**Note**: The `display` field is optional and only used if user wants to override the automatically assigned color.
+**Note**: The `display` field is optional and only used if user wants to override the automatically assigned colour.
 
 ---
 
@@ -821,7 +821,7 @@ Active: [Promo Flow: Treatment ×] [checkout-flow: if-promo ×]
 
 **Element Highlighting**:
 - Case edges with overrides: Purple glow + variant label badge
-- Conditional edges with overrides: Conditional color + scenario badge
+- Conditional edges with overrides: Conditional colour + scenario badge
 - Affected probability labels: Update to show conditional values
 - Dependency nodes: Highlight when conditional edge is affected
 
@@ -1046,15 +1046,15 @@ function getEdgeProbability(edge, visitedNodes, params) {
 2. ✅ Implement condition node selector
 3. ✅ Add "Add Condition" / "Remove Condition" buttons
 4. ✅ Show validation errors in real-time
-5. ✅ Add visual indicators for conditional edges (color palette system)
+5. ✅ Add visual indicators for conditional edges (colour palette system)
 6. ✅ Update tooltips to show conditions
 7. ✅ Implement "Quick View" conditional scenario selector
 8. ✅ Add upstream dependency highlighting when conditional edge selected
-9. ✅ Implement color override UI for conditional groups
+9. ✅ Implement colour override UI for conditional groups
 
 **Deliverables**:
 - Updated properties panel with conditional UI
-- Dynamic color palette for conditional edges
+- Dynamic colour palette for conditional edges
 - Conditional scenario quick view dropdown
 - Visual indicators and dependency highlighting
 - Real-time validation feedback
@@ -1280,67 +1280,67 @@ The current approach is clearer: separate outcomes are separate nodes.
 
 ### 10.4 Visualization ✅ DECIDED
 
-**Edge Coloring Strategy**:
+**Edge Colouring Strategy**:
 
-**Option A: Fixed Color (Simpler)**
+**Option A: Fixed Colour (Simpler)**
 - Conditional edges: Green (to distinguish from purple case edges)
 - Pro: Simple, consistent, easy to implement
 - Con: Can't distinguish between different conditional groups
 
-**Option B: Dynamic Color Palette (Recommended)**
-- Each unique conditional structure gets a distinct color from an algorithmic palette
-- Colors assigned deterministically based on condition signature
-- User can optionally override color choice
-- Color choice persisted in edge JSON as display parameter (like node position)
+**Option B: Dynamic Colour Palette (Recommended)**
+- Each unique conditional structure gets a distinct colour from an algorithmic palette
+- Colours assigned deterministically based on condition signature
+- User can optionally override colour choice
+- Colour choice persisted in edge JSON as display parameter (like node position)
 - Pro: Can visually group related conditions, user can highlight areas of interest
-- Con: More complex, need to manage color assignments
+- Con: More complex, need to manage colour assignments
 
 **Recommendation**: Start with Option B for maximum flexibility
 
-**Color Management**:
+**Colour Management**:
 ```json
 {
   "conditional_p": [...],
   "display": {
-    "conditional_color": "#4ade80"  // Optional user override
+    "conditional_colour": "#4ade80"  // Optional user override
   }
 }
 ```
 
 **Node Type Visual Strategy**:
-- Consider using **shape** rather than color for node types (normal vs case vs terminal)
-- Reserve **color** for functional/analytical purposes (case variants, conditional groups)
+- Consider using **shape** rather than colour for node types (normal vs case vs terminal)
+- Reserve **colour** for functional/analytical purposes (case variants, conditional groups)
 - Example: Terminal nodes = octagon, Case nodes = diamond, Normal = rectangle
-- Start node: Use icon/badge rather than color
+- Start node: Use icon/badge rather than colour
 
 **Selection Highlighting**:
-- When a conditional edge is selected, highlight (in same color) the upstream nodes it depends on
+- When a conditional edge is selected, highlight (in same colour) the upstream nodes it depends on
 - Creates visual trace of conditional dependency chain
 - Fading intensity based on distance (like current recursive highlighting)
 
-**Color Palette Algorithm**:
+**Colour Palette Algorithm**:
 ```typescript
-function getConditionalColor(edge: Edge): string {
+function getConditionalColour(edge: Edge): string {
   // Check for user override first
-  if (edge.display?.conditional_color) {
-    return edge.display.conditional_color;
+  if (edge.display?.conditional_colour) {
+    return edge.display.conditional_colour;
   }
   
-  // Generate deterministic color based on condition signature
+  // Generate deterministic colour based on condition signature
   const conditionSignature = edge.conditional_p
     ?.map(cp => cp.condition.visited.sort().join('+'))
     .sort()
     .join('||');
   
-  // Use hash of signature to pick from color palette
+  // Use hash of signature to pick from colour palette
   const hash = simpleHash(conditionSignature);
-  const paletteIndex = hash % CONDITIONAL_COLOR_PALETTE.length;
+  const paletteIndex = hash % CONDITIONAL_COLOUR_PALETTE.length;
   
-  return CONDITIONAL_COLOR_PALETTE[paletteIndex];
+  return CONDITIONAL_COLOUR_PALETTE[paletteIndex];
 }
 
-// Sensible color palette (avoiding blue for selections, purple reserved for cases)
-const CONDITIONAL_COLOR_PALETTE = [
+// Sensible colour palette (avoiding blue for selections, purple reserved for cases)
+const CONDITIONAL_COLOUR_PALETTE = [
   '#4ade80', // green-400
   '#f87171', // red-400
   '#fbbf24', // amber-400
@@ -1354,17 +1354,17 @@ const CONDITIONAL_COLOR_PALETTE = [
 ];
 ```
 
-**Color Philosophy**:
+**Colour Philosophy**:
 - **Blue (#007bff)**: Reserved for selections (nodes, edges, control points)
 - **Purple (#C4B5FD, #8b5cf6)**: Reserved for case edges and variants
 - **Dark Grey (#333333)**: Used for edge highlighting with fading intensity
-- **Palette colors**: Available for conditional groupings
-- **Light Gray (#b3b3b3)**: Default edge color
+- **Palette colours**: Available for conditional groupings
+- **Light Gray (#b3b3b3)**: Default edge colour
 
 **Benefits**:
-- Same condition structure always gets same color (consistency)
-- Different conditions get different colors (differentiation)
-- User can override if they want specific color (flexibility)
+- Same condition structure always gets same colour (consistency)
+- Different conditions get different colours (differentiation)
+- User can override if they want specific colour (flexibility)
 - Clear visual hierarchy: blue=selection, purple=cases, palette=conditionals, black=highlights
 
 ### 10.5 Limits
@@ -1626,13 +1626,13 @@ Note: probabilities sum to 1.0 both with and without help visit.
 
 **Key Decisions Finalized**:
 - ✅ Schema design (per-edge conditional_p with visited array)
-- ✅ Color strategy (dynamic palette with user overrides)
+- ✅ Colour strategy (dynamic palette with user overrides)
 - ✅ What-If control (per-element with multi-selection, not bulk)
 - ✅ Edge Properties Panel UX (comprehensive design in Section 5.1)
 - ✅ Condition ordering (drag-and-drop with context menu)
 - ✅ Bayesian compatibility confirmed
 - ✅ Export format (JSON only)
-- ✅ Node shape vs color strategy
+- ✅ Node shape vs colour strategy
 
 **Ready to Proceed**: All phases ready - full implementation can begin immediately
 

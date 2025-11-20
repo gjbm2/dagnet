@@ -249,7 +249,7 @@ GraphData {
     type?: 'normal' | 'case';
     absorbing?: boolean;
     outcome_type?: 'success' | 'failure' | 'error' | 'neutral' | 'other';
-    layout?: { x: number; y: number; color?: string };  // ← Position stored here
+    layout?: { x: number; y: number; colour?: string };  // ← Position stored here
     case?: { ... };
     entry?: { ... };
     costs?: { ... };
@@ -328,7 +328,7 @@ Edge[] = [{
 #### On Raw Graph (FileState, GraphStore)
 - Node structural properties (id, label, absorbing, type, case data)
 - Node positions (`layout.x`, `layout.y`)
-- Node colors (`layout.color`)
+- Node colours (`layout.colour`)
 - Edge structural properties (from, to, handles, probability, costs)
 - Graph-level metadata (version, created_at, updated_at)
 - Graph-level policies (default_outcome, overflow_policy)

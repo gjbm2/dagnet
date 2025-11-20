@@ -5,7 +5,7 @@ egist{
     "slug": "landing",
     "label": "Landing",
     "entry": { "is_start": true, "entry_weight": 1 },
-    "layout": { "x": 40, "y": 60, "rank": 0, "group": "Top", "color": "#111827" },
+    "layout": { "x": 40, "y": 60, "rank": 0, "group": "Top", "colour": "#111827" },
     "tags": ["entry"]
     },
     {
@@ -26,7 +26,7 @@ egist{
     "label": "Purchase",
     "absorbing": true,
     "outcome_type": "success",
-    "layout": { "x": 620, "y": 60, "rank": 3, "color": "#16A34A" }
+    "layout": { "x": 620, "y": 60, "rank": 3, "colour": "#16A34A" }
     },
     {
     "id": "55555555-5555-4555-8555-555555555555",
@@ -34,7 +34,7 @@ egist{
     "label": "Abandon",
     "absorbing": true,
     "outcome_type": "failure",
-    "layout": { "x": 620, "y": 140, "rank": 3, "color": "#EF4444" }
+    "layout": { "x": 620, "y": 140, "rank": 3, "colour": "#EF4444" }
     }
     ],
     "edges": [

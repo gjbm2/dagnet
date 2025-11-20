@@ -33,20 +33,20 @@ This complements the existing `EnhancedSelector` (connect/selector) by providing
 ### **Core Features**
 
 1. **Dual-Mode Rendering**
-   - **View Mode:** Color-coded chips with hover affordances
+   - **View Mode:** Colour-coded chips with hover affordances
    - **Edit Mode:** Monaco editor with syntax highlighting + autocomplete
    - Click chips or empty space → enter edit mode
    - Blur → return to chip view
 
 2. **Monaco Integration**
    - Custom language registration (one-time, no pollution)
-   - Syntax highlighting with theme colors
+   - Syntax highlighting with theme colours
    - Context-aware autocomplete from registries + graph
    - Sans-serif font for readability
 
 3. **Chip System**
    - Parsed from expression using regex/grammar
-   - Color-coded by type (from/to, exclude, visited, case, etc.)
+   - Colour-coded by type (from/to, exclude, visited, case, etc.)
    - Delete on hover (X button)
    - Icon per chip type (from Lucide)
 
@@ -333,9 +333,9 @@ interface ModalAutocompleteConfig {
 ```typescript
 interface ChipConfig {
   [chipType: string]: {
-    color: string;       // Border/icon color
-    bgColor: string;     // Background color
-    textColor: string;   // Text color
+    colour: string;       // Border/icon colour
+    bgColour: string;     // Background colour
+    textColour: string;   // Text colour
     icon: LucideIcon;    // Icon component
     label: string;       // Display label
   };
@@ -350,7 +350,7 @@ const dataConnectionChips: ChipConfig = {
 };
 ```
 
-### **Theme Colors (Global)**
+### **Theme Colours (Global)**
 
 Use app's existing theme system:
 - Primary: `#3B82F6` (blue)
@@ -377,7 +377,7 @@ describe('QuerySelector', () => {
     ]);
   });
   
-  test('renders chips with correct colors', () => {
+  test('renders chips with correct colours', () => {
     const { container } = render(<QuerySelector value="from(a).to(b)" />);
     const chips = container.querySelectorAll('[data-chip]');
     expect(chips[0]).toHaveStyle({ backgroundColor: '#EFF6FF' });
@@ -455,7 +455,7 @@ describe('QuerySelector Integration', () => {
 5. Click away or press Escape to save
 
 **Viewing:**
-1. Expression renders as color-coded chips
+1. Expression renders as colour-coded chips
 2. Hover over a chip to see delete button
 3. Click X to remove that part of the query
 4. Click empty space to edit entire expression

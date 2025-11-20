@@ -218,7 +218,7 @@ interface GraphNode {
   // Visual properties (NOT override pattern - user positioning)
   x: number;                          // ❌ User drags
   y: number;                          // ❌ User drags
-  color?: string;                     // ❓ MAYBE (if theme-based coloring in future)
+  colour?: string;                     // ❓ MAYBE (if theme-based colouring in future)
 }
 ```
 
@@ -1931,7 +1931,7 @@ describe('UpdateManager - Schema Field Mapping Validation', () => {
     
     // Document which fields are intentionally NOT mapped
     const unmappedFields = {
-      node: ['id', 'x', 'y', 'color'], // User positioning
+      node: ['id', 'x', 'y', 'colour'], // User positioning
       edge: ['id', 'from', 'to'],      // Structural
       parameter: ['id', 'type'],       // Core identity
       case: ['id', 'platform']         // Core identity

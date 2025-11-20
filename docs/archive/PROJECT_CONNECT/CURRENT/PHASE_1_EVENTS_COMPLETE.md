@@ -22,9 +22,9 @@ Successfully implemented Events throughout the application, following the Cases 
 **File:** `graph-editor/src/theme/objectTypeTheme.ts`
 - Added `Calendar` icon import from lucide-react
 - Added `'event'` to `ObjectType` union
-- Added event theme with yellow colors:
-  - `lightColor: '#FEF3C7'` (light yellow)
-  - `accentColor: '#EAB308'` (yellow-500)
+- Added event theme with yellow colours:
+  - `lightColour: '#FEF3C7'` (light yellow)
+  - `accentColour: '#EAB308'` (yellow-500)
   - `icon: Calendar`
   - `label: 'Event'`
   - `emoji: '📅'`
@@ -46,7 +46,7 @@ Successfully implemented Events throughout the application, following the Cases 
 - Added Events `<ObjectTypeSection>` in JSX with:
   - Title: "Events"
   - Icon: `Calendar`
-  - Yellow theme colors
+  - Yellow theme colours
   - Expand/collapse support
   - Context menu support
   - Index file dirty tracking
@@ -117,7 +117,7 @@ Successfully implemented Events throughout the application, following the Cases 
 ✅ Can link node to event via selector (requires Properties Panel update - see Phase 1B)  
 ✅ events-index.yaml auto-updates when event file created/modified/deleted  
 ✅ Event files show dirty state (orange) when modified  
-✅ Event color (yellow) appears correctly in all locations  
+✅ Event colour (yellow) appears correctly in all locations  
 
 ---
 

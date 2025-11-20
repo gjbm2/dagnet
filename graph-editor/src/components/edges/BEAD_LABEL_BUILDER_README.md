@@ -14,7 +14,7 @@ This eliminates duplicate code and ensures all parameters (probability, cost_gbp
 `BeadLabelBuilder` is responsible for:
 
 - **Checking if values are identical across scenarios** (including both mean AND stdev)
-- **Formatting display text** with proper color coding
+- **Formatting display text** with proper colour coding
 - **Handling hidden current values**
 - **Applying formatters uniformly**
 
@@ -118,7 +118,7 @@ const probBead = buildParameterBead({
   beadIndex: beadIndex,
   orderedVisibleIds,
   currentVisible,
-  getScenarioColor
+  getScenarioColour
 });
 
 if (probBead) {
@@ -148,7 +148,7 @@ const costGBPBead = buildParameterBead({
   beadIndex: beadIndex,
   orderedVisibleIds,
   currentVisible,
-  getScenarioColor
+  getScenarioColour
 });
 
 if (costGBPBead) {
@@ -205,9 +205,9 @@ Checks if hidden current matches all visible values (both value AND stdev).
 Returns true only if all visible values are identical AND hidden current matches. Use this for the `allIdentical` flag.
 
 ### `buildDisplayText(): React.ReactNode`
-Builds the display text with proper color coding:
+Builds the display text with proper colour coding:
 - White text for deduplicated values
-- Scenario colors for differing values
+- Scenario colours for differing values
 - Grey text in brackets for hidden current (when it differs)
 
 ## Static Formatters
@@ -322,7 +322,7 @@ When testing bead labels, verify:
 - [ ] Values with same mean AND stdev are deduplicated
 - [ ] Hidden current with different stdev is shown in brackets
 - [ ] White text for deduplicated values
-- [ ] Colored text for differing values
+- [ ] Coloured text for differing values
 - [ ] Grey text in brackets for hidden current
 
 ## Related Files

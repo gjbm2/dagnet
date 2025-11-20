@@ -16,7 +16,7 @@
   - Historically both **visual** and **interactive** representation.
 - **Scenario overlays (`overlayEdges` in `GraphCanvas`)**:
   - Non-interactive clones of base edges per scenario layer (`base`, `current`, user scenarios).
-  - Visual-only: colored, semi-transparent, no event handlers.
+  - Visual-only: coloured, semi-transparent, no event handlers.
 
 **Problem:** We now always render `current` via the scenario overlay path, but we still merge in base edges as invisible/neutral “interaction shells” when scenarios are present. This creates:
 
@@ -54,7 +54,7 @@ ReactFlow is still absolutely in use; we are only changing **what** we pass as `
 #### 2.2. Data Flow
 
 - **Graph store (`GraphStoreContext`)**: canonical graph (`nodes`, `edges`, parameters).
-- **Scenarios (`ScenariosContext`)**: base params, scenario params, current params, color palette.
+- **Scenarios (`ScenariosContext`)**: base params, scenario params, current params, colour palette.
 - **Tab state (`TabContext`)**: per-tab visibility (`visibleScenarioIds`), layer order, What-If DSL.
 - **GraphCanvas**:
   - Pulls graph + scenario + tab state.
@@ -77,7 +77,7 @@ Before refactoring:
   - Scenario overlays and base edges both render without visual corruption.
 - Use this as the regression baseline; keep a copy of the relevant sections from:
   - `GraphCanvas.tsx` (overlay construction and `displayEdges`).
-  - `ConversionEdge.tsx` (selection/highlight, colors).
+  - `ConversionEdge.tsx` (selection/highlight, colours).
   - `edgeLabelHelpers.tsx` (labels).
 
 This minimizes risk: all later steps are compared against known-good behavior.
@@ -129,7 +129,7 @@ For each base edge and each scenario layer (`'base'`, `'current'`, user scenario
 1. **Build a scenario edge object** with:
    - `data.scenarioOverlay: true` for non-current layers.
    - `data.scenarioOverlay: false` for `current` layer.
-   - `data.scenarioColor`, `data.strokeOpacity`, scenario params, etc., as today.
+   - `data.scenarioColour`, `data.strokeOpacity`, scenario params, etc., as today.
    - `data.originalEdgeId`: base ID (for label lookups, path mapping, etc.).
 
 2. **For `scenarioId === 'current'` only:**
@@ -174,7 +174,7 @@ Once `renderEdges` is authoritative and `current` overlays are interactive:
 3. Confirm that:
    - No component accesses base `edges` directly for visuals; only for topology/ReactFlow events.
 
-**Risk:** Medium. If any legacy code still assumes base edges are rendered (e.g., for z-index, label suppression, or hit-testing), it will break. Grep for `forceBaseStrokeColor`, `suppressLabel`, etc., and remove/adjust as necessary.
+**Risk:** Medium. If any legacy code still assumes base edges are rendered (e.g., for z-index, label suppression, or hit-testing), it will break. Grep for `forceBaseStrokeColour`, `suppressLabel`, etc., and remove/adjust as necessary.
 
 ---
 
@@ -196,8 +196,8 @@ Once `renderEdges` is authoritative and `current` overlays are interactive:
    - For non-current layers, leave these flags unset.
 
 3. **`ConversionEdge` shading logic** stays in one place, but now always applies to the visible `current` stroke, not to an invisible base clone:
-   - Uses `data.isHighlighted`, `data.highlightDepth`, `data.isSingleNodeHighlight` to blend black with base color.
-   - Uses `selected` to override color/opacity for selected current edges.
+   - Uses `data.isHighlighted`, `data.highlightDepth`, `data.isSingleNodeHighlight` to blend black with base colour.
+   - Uses `selected` to override colour/opacity for selected current edges.
    - When the `current` layer is “ghosted” (not in `visibleScenarioIds`), its **baseline** opacity is very low (≈3–5%), but:
      - Selected and/or highlighted segments should temporarily boost opacity enough to be visible.
      - We likely want ghosted `current` edges to render **behind** other scenario layers visually, while still being the only interactive layer (other layers remain pointer-events: none).
@@ -238,8 +238,8 @@ After the new pipeline is stable and tested, aggressively remove dead surface ar
 
 - **In `ConversionEdge.tsx`:**
   - Remove or narrow usage of:
-    - `forceBaseStrokeColor` (no base edges rendered).
-    - `suppressConditionalColors` (scenario overlays already control color via `scenarioColor`).
+    - `forceBaseStrokeColour` (no base edges rendered).
+    - `suppressConditionalColours` (scenario overlays already control colour via `scenarioColour`).
     - Any stroke/opacity hacks that only existed to hide base edges under overlays.
 
 - **In `GraphCanvas.tsx`:**

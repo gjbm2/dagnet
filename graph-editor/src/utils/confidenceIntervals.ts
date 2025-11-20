@@ -1,8 +1,8 @@
 /**
- * Confidence Interval Color Calculation
+ * Confidence Interval Colour Calculation
  * 
- * Calculates lightened colors for confidence interval bands using symmetric intensity schema.
- * Ensures inner band matches normal edge color exactly.
+ * Calculates lightened colours for confidence interval bands using symmetric intensity schema.
+ * Ensures inner band matches normal edge colour exactly.
  */
 
 const EDGE_OPACITY = 0.8; // Match existing edge opacity
@@ -15,7 +15,7 @@ const CONFIDENCE_SPREAD = {
 } as const;
 
 /**
- * Convert hex color to RGB
+ * Convert hex colour to RGB
  */
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   // Remove # if present
@@ -36,7 +36,7 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
 }
 
 /**
- * Convert RGB to hex color
+ * Convert RGB to hex colour
  */
 function rgbToHex(r: number, g: number, b: number): string {
   const toHex = (n: number) => {
@@ -47,26 +47,26 @@ function rgbToHex(r: number, g: number, b: number): string {
 }
 
 /**
- * Calculate confidence interval colors for three overlapping paths
+ * Calculate confidence interval colours for three overlapping paths
  * 
  * Uses symmetric lightening factors to ensure:
- * - Inner band (a) matches normal edge color exactly
+ * - Inner band (a) matches normal edge colour exactly
  * - Middle band (b) is slightly lighter than inner
  * - Outer band (c) is significantly lighter than middle
  * - Spread is symmetric around middle band
  * 
- * @param baseColor Hex color string (e.g., '#999999')
+ * @param baseColour Hex colour string (e.g., '#999999')
  * @param confidenceLevel Confidence level ('80' | '90' | '95' | '99')
- * @returns Object with inner, middle, and outer color strings
+ * @returns Object with inner, middle, and outer colour strings
  */
-export function calculateConfidenceIntervalColors(
-  baseColor: string,
+export function calculateConfidenceIntervalColours(
+  baseColour: string,
   confidenceLevel: '80' | '90' | '95' | '99'
 ): { inner: string; middle: string; outer: string } {
-  const rgb = hexToRgb(baseColor);
+  const rgb = hexToRgb(baseColour);
   if (!rgb) {
     // Fallback to gray if parsing fails
-    console.warn(`[CI Colors] Failed to parse color: ${baseColor}`);
+    console.warn(`[CI Colours] Failed to parse color: ${baseColour}`);
     return { inner: '#999999', middle: '#999999', outer: '#999999' };
   }
 
@@ -103,7 +103,7 @@ export function calculateConfidenceIntervalColors(
     }
     const f_sc_adjusted = Math.min(1, Math.max(oneMinus + 0.01, t / (f_sb * f_sa)));
 
-    // Convert composite factors back to stroke colors per channel
+    // Convert composite factors back to stroke colours per channel
     const s_a = Math.min(1, Math.max(0, (f_sa - oneMinus) / alpha));
     const s_b = Math.min(1, Math.max(0, (f_sb - oneMinus) / alpha));
     const s_c = Math.min(1, Math.max(0, (f_sc_adjusted - oneMinus) / alpha));
@@ -112,8 +112,8 @@ export function calculateConfidenceIntervalColors(
     const middle = Math.round(s_b * 255);
     const outer = Math.round(s_c * 255);
 
-    if (C === rgb.r && (baseColor.includes('b3b3b3') || baseColor.includes('999'))) {
-      console.log(`[CI Colors] C=${C}, t=${t.toFixed(3)}, f_sb=${f_sb.toFixed(3)}, f_sc=${f_sc_adjusted.toFixed(3)}, f_sa=${f_sa.toFixed(3)}, s:`, {s_a: s_a.toFixed(3), s_b: s_b.toFixed(3), s_c: s_c.toFixed(3)});
+    if (C === rgb.r && (baseColour.includes('b3b3b3') || baseColour.includes('999'))) {
+      console.log(`[CI Colours] C=${C}, t=${t.toFixed(3)}, f_sb=${f_sb.toFixed(3)}, f_sc=${f_sc_adjusted.toFixed(3)}, f_sa=${f_sa.toFixed(3)}, s:`, {s_a: s_a.toFixed(3), s_b: s_b.toFixed(3), s_c: s_c.toFixed(3)});
     }
 
     return { inner, middle, outer };

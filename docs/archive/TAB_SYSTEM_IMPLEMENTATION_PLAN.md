@@ -798,7 +798,7 @@ Test on:
 **Check**:
 - [ ] Keyboard navigation works everywhere
 - [ ] Screen reader announces important changes
-- [ ] Color contrast meets WCAG AA
+- [ ] Colour contrast meets WCAG AA
 - [ ] No keyboard traps
 - [ ] Focus visible
 - [ ] All interactive elements have labels

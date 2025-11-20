@@ -22,22 +22,22 @@ Currently, `ConversionNode` renders as a rectangular `<div>` with:
    - Hit-testing, dragging, selection all rely on this rectangular boundary.
 
 2. **Visual layers (CSS-based)**:
-   - **Border**: `2px solid #ddd` (default), `5px solid #333` (selected), `2px solid #ff6b6b` (error), or custom case-node color.
-   - **Background**: `#fff` (default), case-node color, or error tint.
+   - **Border**: `2px solid #ddd` (default), `5px solid #333` (selected), `2px solid #ff6b6b` (error), or custom case-node colour.
+   - **Background**: `#fff` (default), case-node colour, or error tint.
    - **Box-shadow** (composed):
-     - **Outer halo** (edge pseudo-clip): `0 0 0 5px #f8fafc` (canvas color).
+     - **Outer halo** (edge pseudo-clip): `0 0 0 5px #f8fafc` (canvas colour).
      - **Base drop shadow**: `0 2px 4px rgba(0,0,0,0.1)` (unselected) or `0 4px 8px rgba(51,51,51,0.4)` (selected).
-     - **Inner glow** (start/terminal nodes): `inset 0 0 20px 0px <color>` (blue for start, green/red/gray for terminal outcomes).
+     - **Inner glow** (start/terminal nodes): `inset 0 0 20px 0px <colour>` (blue for start, green/red/gray for terminal outcomes).
      - **Side shadows** (optional, for faceDirections hint): `±4px 0 8px -2px rgba(0,0,0,0.18)` per face (convex outer, concave inset).
    - **Padding**: `8px` for internal spacing.
 
 3. **Internal content** (Flexbox layout):
    - **Label**: `font-weight: 500`, `font-size: 12px`, centered.
    - **Probability mass indicator** (if incomplete): Red text `PMF: XX%`.
-   - **Case node status badge**: Colored pill (`background`, `text-transform: uppercase`, etc.).
+   - **Case node status badge**: Coloured pill (`background`, `text-transform: uppercase`, etc.).
    - **Event ID badge**: Monospace, yellow if overridden.
    - **Start node indicator**: Absolute-positioned blue dot (top-left corner).
-   - **Terminal node indicator**: Absolute-positioned colored dot (bottom-right corner, green/red/gray).
+   - **Terminal node indicator**: Absolute-positioned coloured dot (bottom-right corner, green/red/gray).
 
 4. **Handles** (ReactFlow connection points):
    - Four handles: `left`, `right`, `top`, `bottom`.
@@ -52,10 +52,10 @@ Currently, `ConversionNode` renders as a rectangular `<div>` with:
 ### 1.2 What Must Not Change
 
 - **Outer card dimensions and layout**: ReactFlow requires rectangular nodes; `width`/`height` must remain as-is.
-- **Internal content positioning and styling**: Labels, badges, icons, fonts, colors, spacing—all must look identical.
+- **Internal content positioning and styling**: Labels, badges, icons, fonts, colours, spacing—all must look identical.
 - **Interactivity**: Hover, click, drag, handle visibility, delete button—all must work exactly as before.
-- **Border colors and weights**: Selected = thick black, error = red, case-node = purple, etc.—must be preserved.
-- **Drop shadow depth and color**: The "lift" effect for selected nodes and the subtle shadow for unselected nodes must remain.
+- **Border colours and weights**: Selected = thick black, error = red, case-node = purple, etc.—must be preserved.
+- **Drop shadow depth and colour**: The "lift" effect for selected nodes and the subtle shadow for unselected nodes must remain.
 - **Inner glows** (start/terminal nodes): The blue/green/red inset shadows must remain.
 - **Handles**: Position, size, visibility logic unchanged.
 
@@ -64,7 +64,7 @@ Currently, `ConversionNode` renders as a rectangular `<div>` with:
 **Only the outline shape** of the node:
 
 - **Border**: Instead of following a rectangular box, it will follow a **curved path** where faces are convex/concave.
-- **Outer halo** (canvas-colored edge mask): Will follow the same curved path (slightly larger).
+- **Outer halo** (canvas-coloured edge mask): Will follow the same curved path (slightly larger).
 - **Drop shadow**: Will be cast by the curved outline, not a rectangle.
 - **Side shadows** (directional hints): Will be replaced/upgraded by the actual geometry, or kept as subtle inner cues.
 
@@ -81,8 +81,8 @@ Currently, `ConversionNode` renders as a rectangular `<div>` with:
 │  │ SVG overlay (absolute, EXTENDED viewBox)      │ │ ← NEW
 │  │  • viewBox includes padding for convex faces  │ │
 │  │  • Curved outline path (can extend beyond 0,0,w,h) │ │
-│  │  • Halo path (canvas color)                   │ │
-│  │  • Border path (same color as CSS)            │ │
+│  │  • Halo path (canvas colour)                   │ │
+│  │  • Border path (same colour as CSS)            │ │
 │  │  • Drop shadow (feDropShadow on path)         │ │
 │  │  • z-index: 0 (behind content)                │ │
 │  └───────────────────────────────────────────────┘ │
@@ -169,7 +169,7 @@ When a face is **convex**, the outline bulges **outward** by `CONVEX_DEPTH` pixe
 
 1. **Halo (outermost, for edge masking)**:
    - `<path d={pathD} fill="none" stroke="#f8fafc" strokeWidth={10} />` (or larger if needed).
-   - Purpose: hide edge segments near the node by painting over them in canvas color.
+   - Purpose: hide edge segments near the node by painting over them in canvas colour.
    - z-order: drawn first (bottom layer of the SVG).
 
 2. **Border (middle)**:
@@ -213,9 +213,9 @@ When a face is **convex**, the outline bulges **outward** by `CONVEX_DEPTH` pixe
 
 - **Layout**: The outer card is still a rectangular div; ReactFlow layout is unaffected.
 - **Content**: All text, badges, icons render in the Flexbox div exactly as before; no changes to fonts, spacing, alignment.
-- **Border**: The SVG path border uses the **exact same colors and weights** as the old CSS border, so visually it's identical except the shape is now curved.
-- **Shadow**: The `feDropShadow` filter uses the **exact same offsets and colors** as the old `box-shadow`, just applied to the path instead of the box.
-- **Halo**: The canvas-colored halo was already in `box-shadow`; now it's an SVG stroke, but same color/size so edges are clipped identically.
+- **Border**: The SVG path border uses the **exact same colours and weights** as the old CSS border, so visually it's identical except the shape is now curved.
+- **Shadow**: The `feDropShadow` filter uses the **exact same offsets and colours** as the old `box-shadow`, just applied to the path instead of the box.
+- **Halo**: The canvas-coloured halo was already in `box-shadow`; now it's an SVG stroke, but same colour/size so edges are clipped identically.
 - **Handles**: Still positioned by ReactFlow at the rectangular boundaries; the SVG doesn't interfere.
 
 **Net effect**: If you set all faces to `'flat'`, the SVG overlay draws a rectangle and the node looks **exactly as it did before**. When faces go convex/concave, **only the outline curves**; everything else stays the same.
@@ -409,7 +409,7 @@ Place an `<svg>` as the **first child** of the node div:
         {/* Fill (node body) */}
         <path
           d={outlinePathD}
-          fill={isCaseNode ? (caseNodeColor || '#e5e7eb') : '#fff'}
+          fill={isCaseNode ? (caseNodeColour || '#e5e7eb') : '#fff'}
           filter={isStartNode ? `url(#node-start-glow-${data.id})` : isTerminalNode ? `url(#node-terminal-glow-${data.id})` : undefined}
         />
 
@@ -422,7 +422,7 @@ Place an `<svg>` as the **first child** of the node div:
               : (probabilityMass && !probabilityMass.isComplete) || conditionalValidation?.hasProbSumError
                 ? '#ff6b6b'
                 : isCaseNode
-                  ? (caseNodeColor || '#7C3AED')
+                  ? (caseNodeColour || '#7C3AED')
                   : '#ddd'
           }
           strokeWidth={selected ? 5 : 2}
@@ -705,7 +705,7 @@ visibleStartOffset = 24 - 12 = 12px
 
 ### 6.1 Halo purpose
 
-The **canvas-colored halo** (`stroke="#f8fafc"`) acts as a **visual mask** for edges:
+The **canvas-coloured halo** (`stroke="#f8fafc"`) acts as a **visual mask** for edges:
 - Edges are rendered in the SVG layer (below nodes in z-order).
 - The node's halo path is drawn **above edges** (nodes have `z-index: 2000` in CSS).
 - The halo paints over edge segments near the node, creating the illusion that edges are clipped by the node outline.
@@ -914,9 +914,9 @@ The **canvas-colored halo** (`stroke="#f8fafc"`) acts as a **visual mask** for e
    - Add SVG overlay as first child (z-index 0).
    - Ensure content div has `position: relative, zIndex: 1`.
 3. **SVG overlay renders**:
-   - Halo path (canvas color, thick stroke).
-   - Fill path (background color).
-   - Border path (outline color, matching old CSS border logic).
+   - Halo path (canvas colour, thick stroke).
+   - Fill path (background colour).
+   - Border path (outline colour, matching old CSS border logic).
    - Wrap in `<g filter="...">` for drop shadow.
 4. **Test**:
    - With `faceDirections` all `'flat'`, nodes should look **identical** to the old rectangular nodes.
@@ -1022,7 +1022,7 @@ Remove diagnostic `console.log` calls added during development:
 - **Wrong**: `<filter id="node-shadow">` (one global filter for all nodes).
 - **Right**: `<filter id="node-shadow-{data.id}">` (one filter per node, uniquely scoped).
 
-**Why**: Different nodes have different states (selected, error, case-node color). Each node's filter must reflect its own state. Global filters would apply the wrong shadow to nodes with different states, or require complex state management in a shared `<defs>`.
+**Why**: Different nodes have different states (selected, error, case-node colour). Each node's filter must reflect its own state. Global filters would apply the wrong shadow to nodes with different states, or require complex state management in a shared `<defs>`.
 
 **Trade-off**: This creates N filters (one per node), which is fine for 7–20 nodes but could be optimized later by batching nodes with identical states into shared filter IDs.
 
@@ -1070,11 +1070,11 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     return path;
   }, [data.useSankeyView, data.faceDirections, nodeShape.width, nodeShape.height]);
 
-  // Determine colors and styles (existing logic)
+  // Determine colours and styles (existing logic)
   const borderColor = selected ? '#333' : error ? '#ff6b6b' : isCaseNode ? caseNodeColor : '#ddd';
   const borderWidth = selected ? 5 : 2;
   const backgroundColor = isCaseNode ? caseNodeColor : '#fff';
-  const shadowColor = error ? 'rgba(255,107,107,0.3)' : selected ? 'rgba(51,51,51,0.4)' : 'rgba(0,0,0,0.1)';
+  const shadowColour = error ? 'rgba(255,107,107,0.3)' : selected ? 'rgba(51,51,51,0.4)' : 'rgba(0,0,0,0.1)';
   const shadowY = selected ? 4 : 2;
   const shadowBlur = selected ? 4 : 2;
 
@@ -1241,7 +1241,7 @@ These are rendered as HTML inside the content div and positioned using CSS:
     - Or: Use sharp corners (not curved) so the outline is well-defined at `(0, 0)` and doesn't encroach inward.
   - **Recommendation**: For v1, **move start/terminal indicators inward** to `top/bottom: 8px, left/right: 8px` (or 10px) to ensure clearance.
 
-#### 11.1.6 Terminal node indicator (colored dot, bottom-right)
+#### 11.1.6 Terminal node indicator (coloured dot, bottom-right)
 - **Current**: `position: absolute, bottom: 4px, right: 4px`, `width: 12px, height: 12px`.
 - **With padding**: `bottom: 4px, right: 4px` puts the dot at nominal `(w - 4, h - 4) = (96, 96)` in a 100×100 nominal area.
 - **Conflict check**: Similar to start indicator; if the bottom-right corner is convex on both faces, the outline could bulge outward, but the corner itself is sharp at `(100, 100)`. The dot at `(96, 96)` is 4px inside; the outline stroke could graze it.
@@ -1267,7 +1267,7 @@ These are rendered as HTML inside the content div and positioned using CSS:
 
 These are rendered using the `outlinePathD`:
 
-#### 11.2.1 Halo (canvas-colored stroke)
+#### 11.2.1 Halo (canvas-coloured stroke)
 - **Applied to**: `<path d={outlinePathD} stroke="#f8fafc" strokeWidth={12} />`.
 - **Conflict check**: ✅ No conflict. The halo follows the outline by definition.
 
@@ -1275,7 +1275,7 @@ These are rendered using the `outlinePathD`:
 - **Applied to**: `<path d={outlinePathD} stroke={borderColor} strokeWidth={borderWidth} />`.
 - **Conflict check**: ✅ No conflict. The border follows the outline by definition.
 
-#### 11.2.3 Fill (node body color)
+#### 11.2.3 Fill (node body colour)
 - **Applied to**: `<path d={outlinePathD} fill={backgroundColor} />`.
 - **Conflict check**: ✅ No conflict. The fill is the interior of the outline.
 
@@ -1542,7 +1542,7 @@ Implementation is **complete and correct** when:
 
 ### 15.2 Halo stroke width
 
-**Decision**: What `strokeWidth` for the canvas-colored halo?
+**Decision**: What `strokeWidth` for the canvas-coloured halo?
 
 - Needs to be **larger than edge `INSET`** to fully mask inset segments.
 - If `INSET = 10px`, halo should be ≥ `12px` (safe) or `16px` (conservative).

@@ -152,7 +152,7 @@ These are modal dialogs, menu components, or mount-only effects that cannot poss
 - SidebarIconBar.tsx (1 useEffect)
 - ConversionNode.tsx (2 useEffect)
 - ConversionEdge.tsx (4 useEffect)
-- ColorSelector.tsx (1 useEffect)
+- ColourSelector.tsx (1 useEffect)
 - CollapsibleSection.tsx (1 useEffect)
 - Accordion.tsx (1 useEffect)
 - RawView.tsx (3 useEffect)

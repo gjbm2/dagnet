@@ -20,7 +20,7 @@ import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { Scenario } from '../../types/scenarios';
 import { ScenarioEditorModal } from '../modals/ScenarioEditorModal';
 import { ContextMenu, ContextMenuItem } from '../ContextMenu';
-import { ColorSelector } from '../ColorSelector';
+import { ColourSelector } from '../ColourSelector';
 import { 
   Eye, 
   EyeOff, 
@@ -98,7 +98,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     );
   }
   
-  const { scenarios, listScenarios, renameScenario, updateScenarioColor, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColor, baseColor, setCurrentColor, setBaseColor } = scenariosContext;
+  const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour } = scenariosContext;
   
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -135,7 +135,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   const scenarioState = currentTab?.editorState?.scenarioState as any;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
-  const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+  const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
   const selectedScenarioId = scenarioState?.selectedScenarioId;
   
   // Special entries: Original (base) and Current
@@ -147,9 +147,9 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   
   /**
    * Get effective colour for a scenario (with single-layer grey override)
-   * Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned color.
+   * Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned colour.
    */
-  const getScenarioColor = useCallback((scenarioId: string, isVisible: boolean = true): string => {
+  const getScenarioColour = useCallback((scenarioId: string, isVisible: boolean = true): string => {
     // Single-layer grey override: ONLY apply to the visible layer when exactly 1 layer is visible
     if (isVisible && visibleScenarioIds.length === 1) {
       return '#808080';
@@ -157,27 +157,27 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     
     // Get stored colour (for both visible and hidden layers)
     if (scenarioId === 'current') {
-      return currentColor;
+      return currentColour;
     } else if (scenarioId === 'base') {
-      return baseColor;
+      return baseColour;
     } else {
       const scenario = scenarios.find(s => s.id === scenarioId);
-      return scenario?.color || '#808080';
+      return scenario?.colour || '#808080';
     }
-  }, [visibleScenarioIds.length, currentColor, baseColor, scenarios]);
+  }, [visibleScenarioIds.length, currentColour, baseColour, scenarios]);
   
   /**
    * Handle colour change for a scenario
    */
-  const handleColorChange = useCallback((scenarioId: string, color: string) => {
+  const handleColourChange = useCallback((scenarioId: string, colour: string) => {
     if (scenarioId === 'current') {
-      setCurrentColor(color);
+      setCurrentColour(colour);
     } else if (scenarioId === 'base') {
-      setBaseColor(color);
+      setBaseColour(colour);
     } else {
-      updateScenarioColor(scenarioId, color);
+      updateScenarioColour(scenarioId, colour);
     }
-  }, [setCurrentColor, setBaseColor, updateScenarioColor]);
+  }, [setCurrentColour, setBaseColour, updateScenarioColour]);
   
   /**
    * Toggle scenario visibility
@@ -239,15 +239,15 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       if (tabId) {
         const scenarioState = operations.getScenarioState(tabId);
         if (scenarioState?.visibleScenarioIds.includes(scenarioId)) {
-          // Remove from both visible IDs and color order
+          // Remove from both visible IDs and colour order
           const newVisibleIds = scenarioState.visibleScenarioIds.filter(id => id !== scenarioId);
-          const newColorOrderIds = scenarioState.visibleColorOrderIds.filter(id => id !== scenarioId);
+          const newColourOrderIds = scenarioState.visibleColourOrderIds.filter(id => id !== scenarioId);
           
           await operations.updateTabState(tabId, {
             scenarioState: {
               ...scenarioState,
               visibleScenarioIds: newVisibleIds,
-              visibleColorOrderIds: newColorOrderIds,
+              visibleColourOrderIds: newColourOrderIds,
             }
           });
         }
@@ -734,7 +734,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           ...currentState,
           scenarioOrder: newScenarioOrder,
           visibleScenarioIds: newVisibleOrder,
-          visibleColorOrderIds: currentState.visibleColorOrderIds
+          visibleColourOrderIds: currentState.visibleColourOrderIds
         } as any
       });
       console.log(`[D&D] REORDER: Successfully updated tab state`);
@@ -778,15 +778,15 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {currentVisible ? (
-            <div className="scenario-color-swatch-wrapper">
-              <ColorSelector
+            <div className="scenario-colour-swatch-wrapper">
+              <ColourSelector
                 compact={true}
-                value={getScenarioColor('current', currentVisible)}
-                onChange={(color) => handleColorChange('current', color)}
+                value={getScenarioColour('current', currentVisible)}
+                onChange={(colour) => handleColourChange('current', colour)}
               />
             </div>
           ) : (
-            <div className="scenario-color-swatch-placeholder"></div>
+            <div className="scenario-colour-swatch-placeholder"></div>
           )}
           
           <div 
@@ -874,7 +874,7 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           return orderedScenarios.map((scenario, index) => {
           const isVisible = visibleScenarioIds.includes(scenario.id);
           const isSelected = selectedScenarioId === scenario.id;
-            const scenarioColor = getScenarioColor(scenario.id, isVisible);
+            const scenarioColour = getScenarioColour(scenario.id, isVisible);
           const isEditing = editingScenarioId === scenario.id;
           const isDragging = draggedScenarioId === scenario.id;
           const isDragOver = dragOverIndex === index;
@@ -929,14 +929,14 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
               
               {/* Swatch - always show, faded if not visible, clickable to change colour */}
               <div
-                className="scenario-color-swatch-wrapper"
+                className="scenario-colour-swatch-wrapper"
                 style={{ opacity: isVisible ? 1 : 0.3 }}
                 title="Click to change colour"
               >
-                <ColorSelector
+                <ColourSelector
                   compact={true}
-                  value={scenarioColor}
-                  onChange={(color) => handleColorChange(scenario.id, color)}
+                  value={scenarioColour}
+                  onChange={(colour) => handleColourChange(scenario.id, colour)}
                 />
               </div>
               
@@ -1023,15 +1023,15 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {baseVisible ? (
-            <div className="scenario-color-swatch-wrapper">
-              <ColorSelector
+            <div className="scenario-colour-swatch-wrapper">
+              <ColourSelector
                 compact={true}
-                value={getScenarioColor('base', baseVisible)}
-                onChange={(color) => handleColorChange('base', color)}
+                value={getScenarioColour('base', baseVisible)}
+                onChange={(colour) => handleColourChange('base', colour)}
               />
             </div>
           ) : (
-            <div className="scenario-color-swatch-placeholder"></div>
+            <div className="scenario-colour-swatch-placeholder"></div>
           )}
           
           <div 

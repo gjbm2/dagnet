@@ -72,8 +72,8 @@ if (!validation.valid || validation.warnings.length > 0) {
 
 **Fix**: 
 - GraphCanvas creates overlay edges for each visible scenario
-- Adds `scenarioOverlay`, `scenarioColor`, `scenarioParams` to edge data
-- ConversionEdge renders overlay edges with scenario color, multiply blend, 0.3 opacity
+- Adds `scenarioOverlay`, `scenarioColour`, `scenarioParams` to edge data
+- ConversionEdge renders overlay edges with scenario colour, multiply blend, 0.3 opacity
 
 **Files**: `GraphCanvas.tsx` (lines 1855-1917), `ConversionEdge.tsx` (lines 102-106, 1588-1604)
 

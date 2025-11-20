@@ -35,7 +35,7 @@
       "layout": {
         "x": -1178,
         "y": 28,
-        "color": "#fbbf24"
+        "colour": "#fbbf24"
       }
     },
     {
@@ -261,7 +261,7 @@
       "layout": {
         "x": 701,
         "y": -173,
-        "color": "#4ade80"
+        "colour": "#4ade80"
       }
     },
     {
@@ -360,7 +360,7 @@
         }
       ],
       "display": {
-        "conditional_color": "#34d399"
+        "conditional_colour": "#34d399"
       }
     },
     {
@@ -397,7 +397,7 @@
         }
       ],
       "display": {
-        "conditional_color": "#34d399"
+        "conditional_colour": "#34d399"
       }
     },
     {
@@ -580,7 +580,7 @@
         }
       ],
       "display": {
-        "conditional_color": "#f87171"
+        "conditional_colour": "#f87171"
       }
     },
     {
@@ -607,7 +607,7 @@
         }
       ],
       "display": {
-        "conditional_color": "#f87171"
+        "conditional_colour": "#f87171"
       }
     },
     {

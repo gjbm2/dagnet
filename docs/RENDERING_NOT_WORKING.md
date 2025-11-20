@@ -45,9 +45,9 @@ const edgeData = {
 {data?.scenarioOverlays?.map(overlay => (
   <path
     key={overlay.scenarioId}
-    d={edgePath}  // Same path, different width/color
+    d={edgePath}  // Same path, different width/colour
     style={{
-      stroke: overlay.color,
+      stroke: overlay.colour,
       strokeWidth: overlay.width,
       strokeOpacity: 0.3,
       fill: 'none',

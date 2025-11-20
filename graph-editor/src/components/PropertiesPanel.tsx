@@ -9,11 +9,11 @@ import ProbabilityInput from './ProbabilityInput';
 import { ParameterEditor } from './ParameterEditor';
 import VariantWeightInput from './VariantWeightInput';
 import CollapsibleSection from './CollapsibleSection';
-import { getNextAvailableColor } from '@/lib/conditionalColors';
+import { getNextAvailableColour } from '@/lib/conditionalColours';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { ParameterSelector } from './ParameterSelector';
 import { EnhancedSelector } from './EnhancedSelector';
-import { ColorSelector } from './ColorSelector';
+import { ColourSelector } from './ColourSelector';
 import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
@@ -1286,8 +1286,8 @@ export default function PropertiesPanel({
                           if (!next.nodes[nodeIndex].layout) {
                             next.nodes[nodeIndex].layout = { x: 0, y: 0 };
                           }
-                          if (!next.nodes[nodeIndex].layout!.color) {
-                            next.nodes[nodeIndex].layout!.color = getNextAvailableColor(graph as any);
+                          if (!next.nodes[nodeIndex].layout!.colour) {
+                            next.nodes[nodeIndex].layout!.colour = getNextAvailableColour(graph as any);
                           }
                           if (next.metadata) {
                             next.metadata.updated_at = new Date().toISOString();
@@ -1528,14 +1528,14 @@ export default function PropertiesPanel({
                     </AutomatableField>
                     </div>
 
-                    {/* Case Node Color */}
-                    <ColorSelector
-                      label="Node Color"
+                    {/* Case Node Colour */}
+                    <ColourSelector
+                      label="Node Colour"
                         value={(() => {
                           const node = graph?.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                        return node?.layout?.color || '#10B981'; // Default to green (first preset) if none assigned
+                        return node?.layout?.colour || '#10B981'; // Default to green (first preset) if none assigned
                         })()}
-                      onChange={(color) => {
+                      onChange={(colour) => {
                           if (graph && selectedNodeId) {
                             const next = structuredClone(graph);
                             const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
@@ -1543,12 +1543,12 @@ export default function PropertiesPanel({
                               if (!next.nodes[nodeIndex].layout) {
                                 next.nodes[nodeIndex].layout = { x: 0, y: 0 };
                               }
-                            next.nodes[nodeIndex].layout.color = color;
+                            next.nodes[nodeIndex].layout.colour = colour;
                               if (next.metadata) {
                                 next.metadata.updated_at = new Date().toISOString();
                               }
                               setGraph(next);
-                            saveHistoryState('Change node color', selectedNodeId || undefined);
+                            saveHistoryState('Change node colour', selectedNodeId || undefined);
                           }
                         }
                       }}
@@ -2244,17 +2244,17 @@ export default function PropertiesPanel({
                     onUpdateParam={updateConditionalPParam}
                     onRebalanceParam={rebalanceConditionalP}
                     isConditionalUnbalanced={isConditionalProbabilityUnbalanced}
-                    onUpdateConditionColor={async (index: number, color: string | undefined) => {
+                    onUpdateConditionColour={async (index: number, colour: string | undefined) => {
                       if (!selectedEdgeId || !graph) return;
                       const oldGraph = graph;
                       
-                      // Use UpdateManager to propagate condition color to matching conditions on siblings
+                      // Use UpdateManager to propagate condition colour to matching conditions on siblings
                       const { updateManager } = await import('../services/UpdateManager');
-                      const nextGraph = updateManager.propagateConditionalColor(
+                      const nextGraph = updateManager.propagateConditionalColour(
                         graph,
                         selectedEdgeId,
                         index,
-                        color
+                        colour
                       );
                       
                       // Update local state
@@ -2266,7 +2266,7 @@ export default function PropertiesPanel({
                       // Use graphMutationService to trigger query regeneration
                       const { graphMutationService } = await import('../services/graphMutationService');
                       await graphMutationService.updateGraph(oldGraph, nextGraph, setGraph);
-                      saveHistoryState('Update conditional probability color', undefined, selectedEdgeId);
+                      saveHistoryState('Update conditional probability colour', undefined, selectedEdgeId);
                     }}
                     onRemoveCondition={async (index: number) => {
                       if (!selectedEdgeId || !graph) return;

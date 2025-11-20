@@ -293,7 +293,7 @@ function generateFallbackArrowhead(bundle: EdgeBundle) {
     <polygon
       key={`arrow-${bundle.id}`}
       points="-4,-3 -4,3 4,0"  // Small triangle
-      fill={getEdgeColor(centerEdge)}
+      fill={getEdgeColour(centerEdge)}
       transform={`translate(${arrowPosition.x},${arrowPosition.y}) rotate(${arrowAngle})`}
     />
   );
@@ -304,7 +304,7 @@ function generateFallbackArrowhead(bundle: EdgeBundle) {
 - Chevrons are only visually meaningful when bundle is thick enough to see the shape
 - Traditional arrowhead at TARGET only (SOURCE "bite" not needed for thin bundles)
 - Positioned at 75% along center edge (standard position)
-- Uses same color as edge for consistency
+- Uses same colour as edge for consistency
 
 ## Integration with ReactFlow
 
@@ -342,7 +342,7 @@ function generateFallbackArrowhead(bundle: EdgeBundle) {
   - [ ] No chevron clipPath applied
   - [ ] Traditional arrowhead appears at target (75% along center edge)
   - [ ] No arrowhead at source
-  - [ ] Arrowhead color matches edge color
+  - [ ] Arrowhead colour matches edge colour
 - [ ] Wide bundles > node height (scaled appropriately)
 - [ ] Different bundle widths at source vs target
 - [ ] Edge selection still works with chevron clipping

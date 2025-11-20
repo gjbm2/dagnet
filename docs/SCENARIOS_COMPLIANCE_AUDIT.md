@@ -10,7 +10,7 @@
 |---|-------------|----------------|-----|----------------|
 | 1 | Base: Session baseline; bottom layer; default hidden | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:399` Base row at bottom |
 | 2 | Current: Live working state; top layer; receives edits | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:278` Current row at top |
-| 3 | Scenario: Named, colored, editable overlay stored as diff | ✅ Implemented | 🟢 | `types/scenarios.ts:103` |
+| 3 | Scenario: Named, coloured, editable overlay stored as diff | ✅ Implemented | 🟢 | `types/scenarios.ts:103` |
 
 ---
 
@@ -19,7 +19,7 @@
 | # | Requirement | Implementation | RAG | Code Reference |
 |---|-------------|----------------|-----|----------------|
 | 4 | Drag handles for reorder | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:323-325` |
-| 5 | Color swatch (click to change color - manual override) | ✅ DESCOPED | ⚫ | Not needed for v1
+| 5 | Colour swatch (click to change colour - manual override) | ✅ DESCOPED | ⚫ | Not needed for v1
 | 6 | Name (inline editable; default: timestamp) | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:143,359` Timestamp + pencil edit |
 | 7 | View toggle (eye icon) — per tab | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:352-358` |
 | 8 | Open (launches Monaco modal) | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:366-372` FileText icon |
@@ -64,7 +64,7 @@
 | 26 | Always present; pinned at bottom | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:400` |
 | 27 | Non-draggable, not deletable | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:402` Drag handle disabled |
 | 28 | Default: not visible | ✅ Reads from state | 🟢 | `ScenariosPanel.tsx:63` |
-| 29 | Color swatch, name "Base", Open button | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:405-427` |
+| 29 | Colour swatch, name "Base", Open button | ✅ Implemented | 🟢 | `ScenariosPanel.tsx:405-427` |
 | 30 | Open Base: Apply edits should mutate Base directly | ✅ Fixed | 🟢 | `ScenarioEditorModal.tsx:177-185` Updates baseParams |
 | 31 | Base modal also needs "Save as Snapshot" button | ❌ Not implemented | 🔴 | Button to create overlay from Base edits
 | 32 | "Save as Snapshot" creates overlay from editor | ❌ Not implemented | 🔴 | Missing button in modal
@@ -88,12 +88,12 @@
 
 | # | Requirement | Implementation | RAG | Code Reference |
 |---|-------------|----------------|-----|----------------|
-| 39 | Scenario: id, name, color, createdAt, updatedAt, version, params, meta | ✅ All fields | 🟢 | `types/scenarios.ts:103-127` |
+| 39 | Scenario: id, name, colour, createdAt, updatedAt, version, params, meta | ✅ All fields | 🟢 | `types/scenarios.ts:103-127` |
 | 40 | ScenarioMeta: window, context, whatIfDSL, whatIfSummary, source, note | ✅ All fields | 🟢 | `types/scenarios.ts:71-98` |
 | 41 | source.type: 'all' \| 'differences' | ✅ Implemented | 🟢 | `types/scenarios.ts:85` |
 | 42 | source.from: 'visible' \| 'base' | ✅ Implemented | 🟢 | `types/scenarios.ts:87` |
 | 43 | source.visibleExcludingCurrent | ⚠️ Field exists but not populated | 🟡 | `types/scenarios.ts:88` |
-| 44 | TabScenarioState: visibleScenarioIds, visibleColorOrderIds, selectedScenarioId | ✅ Implemented | 🟢 | `types/scenarios.ts:132-141` |
+| 44 | TabScenarioState: visibleScenarioIds, visibleColourOrderIds, selectedScenarioId | ✅ Implemented | 🟢 | `types/scenarios.ts:132-141` |
 
 ---
 
@@ -107,18 +107,18 @@
 
 ---
 
-## Color Strategy (Lines 118-136)
+## Colour Strategy (Lines 118-136)
 
 | # | Requirement | Implementation | RAG | Code Reference |
 |---|-------------|----------------|-----|----------------|
-| 48 | Colors only on visible scenarios | ✅ Conditional render | 🟢 | `ScenariosPanel.tsx:283,330,405` |
-| 49 | Toggle on: append to visibleColorOrderIds | ✅ Implemented | 🟢 | `TabContext.tsx:1433-1437` |
-| 50 | Toggle off: remove from visibleColorOrderIds | ✅ Implemented | 🟢 | `TabContext.tsx:1438-1441` |
-| 51 | 1 visible → grey | ✅ ColorAssigner | 🟢 | `ColorAssigner.ts:35-38` |
-| 52 | 2 visible → complementary (≈180° apart) | ✅ Blue/Pink | 🟢 | `ColorAssigner.ts:42-45` |
-| 53 | N > 2 → evenly distributed hues | ✅ Implemented | 🟢 | `ColorAssigner.ts:49-55` |
-| 54 | Base participates in palette if visible | ✅ Treated same as scenarios | 🟢 | ColorAssigner doesn't special-case |
-| 55 | Manual color override (TBD) | ❌ Not implemented | 🔴 | Spec says TBD, not implemented | *** NOT YET ***
+| 48 | Colours only on visible scenarios | ✅ Conditional render | 🟢 | `ScenariosPanel.tsx:283,330,405` |
+| 49 | Toggle on: append to visibleColourOrderIds | ✅ Implemented | 🟢 | `TabContext.tsx:1433-1437` |
+| 50 | Toggle off: remove from visibleColourOrderIds | ✅ Implemented | 🟢 | `TabContext.tsx:1438-1441` |
+| 51 | 1 visible → grey | ✅ ColourAssigner | 🟢 | `ColourAssigner.ts:35-38` |
+| 52 | 2 visible → complementary (≈180° apart) | ✅ Blue/Pink | 🟢 | `ColourAssigner.ts:42-45` |
+| 53 | N > 2 → evenly distributed hues | ✅ Implemented | 🟢 | `ColourAssigner.ts:49-55` |
+| 54 | Base participates in palette if visible | ✅ Treated same as scenarios | 🟢 | ColourAssigner doesn't special-case |
+| 55 | Manual colour override (TBD) | ❌ Not implemented | 🔴 | Spec says TBD, not implemented | *** NOT YET ***
 | 56 | mix-blend-mode: multiply | ✅ Implemented | 🟢 | `ScenarioOverlayRenderer.tsx:112` |
 | 57 | strokeOpacity 0.25-0.40 | ✅ 0.3 | 🟢 | `ScenarioOverlayRenderer.tsx:110` |
 
@@ -133,7 +133,7 @@
 | 60 | Each overlay deep-merges into composition | ✅ composeParams | 🟢 | `CompositionService.ts:17-30` |
 | 61 | Use current graph geometry for all layers | ✅ Reuses paths | 🟢 | `ScenarioOverlayRenderer.tsx:72` |
 | 62 | Compute widths per composed params | ✅ Implemented | 🟢 | `ScenarioRenderer.ts:116-135` |
-| 63 | Render with S.color, multiply, butt/miter | ✅ All correct | 🟢 | `ScenarioOverlayRenderer.tsx:105-113` |
+| 63 | Render with S.colour, multiply, butt/miter | ✅ All correct | 🟢 | `ScenarioOverlayRenderer.tsx:105-113` |
 | 64 | CI bands render on all layers | ✅ CLARIFIED | 🟢 | CI should render on all edge layers, not just base
 | 65 | Fail gracefully if edge missing | ⚠️ Basic check | 🟡 | `ScenarioRenderer.ts:210` shouldRenderEdge |
 | 66 | Compositing order (not render order) | ✅ CLARIFIED | 🟢 | Base default hidden; compositing order matters, not render order
@@ -153,14 +153,14 @@
 | 73 | openInEditor(id) | ✅ Implemented | 🟢 | `ScenariosContext.tsx:345-347` |
 | 74 | applyContent(id, content, format) | ✅ Implemented | 🟢 | `ScenariosContext.tsx:255-292` |
 | 75 | rename(id, name) | ✅ renameScenario() | 🟢 | `ScenariosContext.tsx:230-238` |
-| 76 | setColor(id, color) | ✅ DESCOPED | ⚫ | Not needed for v1
+| 76 | setColour(id, colour) | ✅ DESCOPED | ⚫ | Not needed for v1
 | 77 | reorder(scenarioIds) | ✅ Via TabContext | 🟢 | `TabContext.tsx:1473` reorderScenarios |
 | 78 | delete(id) | ✅ deleteScenario() | 🟢 | `ScenariosContext.tsx:243-251` |
 | 79 | getVisible(tabId) | ✅ Via TabContext | 🟢 | `TabContext.tsx:1383` getScenarioState |
 | 80 | setVisible(tabId, ids) | ✅ setVisibleScenarios | 🟢 | `TabContext.tsx:1397` |
 | 81 | toggleVisible(tabId, id) | ✅ Implemented | 🟢 | `TabContext.tsx:1417` |
 | 82 | setSelected(tabId, id) | ✅ selectScenario | 🟢 | `TabContext.tsx:1451` |
-| 83 | assignColor(scenarioId, existingIds) | ✅ Implemented differently | 🟢 | `ColorAssigner.ts:18` assignColors works correctly
+| 83 | assignColour(scenarioId, existingIds) | ✅ Implemented differently | 🟢 | `ColourAssigner.ts:18` assignColours works correctly
 | 84 | getBaseParams() | ✅ baseParams state | 🟢 | `ScenariosContext.tsx:90` |
 | 85 | openBaseInEditor() | ⚠️ Opens but needs special handling | 🟡 | Opens same as scenario, needs "base" id handling |
 
@@ -244,12 +244,12 @@
 |---|-------------|----------------|-----|----------------|
 | 116 | Create snapshot: appears in list, invisible by default | ✅ Created, not auto-visible | 🟢 | `ScenariosContext.tsx:179` |
 | 117 | Rename scenarios | ✅ Pencil icon | 🟢 | `ScenariosPanel.tsx:359-365` |
-| 118 | Recolor scenarios | ✅ DESCOPED | ⚫ | Not needed for v1
+| 118 | Recolour scenarios | ✅ DESCOPED | ⚫ | Not needed for v1
 | 119 | Toggle visibility per tab | ✅ Eye icon | 🟢 | Works |
 | 120 | Open JSON modal, apply edits, delete | ✅ All work | 🟢 | Implemented |
 | 121 | Overlays render additively Base → up | ⚠️ Overlay renderer exists but unclear if working | 🟡 | `ScenarioOverlayRenderer.tsx` |
 | 122 | Identical scenarios → neutral appearance | ⚠️ Blend mode set, untested | 🟡 | Needs visual verification |
-| 123 | Different widths → colored fringes | ⚠️ Untested | 🟡 | Needs visual verification |
+| 123 | Different widths → coloured fringes | ⚠️ Untested | 🟡 | Needs visual verification |
 | 124 | Scenarios persist in runtime (shared) | ✅ Correct | 🟢 | ScenariosContext |
 | 125 | Current hidden → auto-unhide on edit | ❌ Not implemented | 🔴 | Missing |
 | 126 | Monaco: YAML/JSON toggle | ✅ Works | 🟢 | Implemented |
@@ -310,7 +310,7 @@
 9. **Rendering verification** (Items 121-123)
    - Need to verify overlays actually render
    - Need to verify blend mode works
-   - Need to verify colored fringes appear
+   - Need to verify coloured fringes appear
 
 10. **CI/Scenario interaction** (Item 64)
     - CI should only render on base layer *** FALSE ***
@@ -321,7 +321,7 @@
 
 ### Critical
 - `ScenariosPanel.tsx` - Add tooltip with full metadata, make swatch clickable
-- `ScenariosContext.tsx` - Add setColor(), don't throw on validation error
+- `ScenariosContext.tsx` - Add setColour(), don't throw on validation error
 - `ScenarioEditorModal.tsx` - Add "Save as Snapshot" for Base, handle Current→New
 - `GraphEditor.tsx` or `GraphCanvas.tsx` - Add auto-unhide listeners
 
@@ -335,7 +335,7 @@
 ## Next Steps
 
 1. Implement auto-unhide Current (critical UX)
-2. Make swatches clickable for color override
+2. Make swatches clickable for colour override
 3. Add full metadata tooltip
 4. Handle Base/Current editing specially in modal
 5. Fix validation to warn-not-block

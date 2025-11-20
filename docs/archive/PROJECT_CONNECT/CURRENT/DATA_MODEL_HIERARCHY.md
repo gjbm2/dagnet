@@ -590,7 +590,7 @@ metadata:
 **Visual/layout defaults (optional):**
 ```yaml
 layout:
-  default_color: "#3B82F6"
+  default_colour: "#3B82F6"
   default_icon: "shopping-cart"
 ```
 

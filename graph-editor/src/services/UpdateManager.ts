@@ -26,7 +26,7 @@
 // TODO: Implement browser-compatible event system if needed (e.g., CustomEvent)
 
 import { generateUniqueId } from '../lib/idUtils';
-import { getSiblingEdges } from '../lib/conditionalColors';
+import { getSiblingEdges } from '../lib/conditionalColours';
 import { normalizeConstraintString } from '../lib/queryDSL';
 
 // ============================================================
@@ -2631,20 +2631,20 @@ export class UpdateManager {
   }
 
   /**
-   * Propagate condition-level color to matching conditions on sibling edges.
-   * Colors are stored per condition, not per edge.
+   * Propagate condition-level colour to matching conditions on sibling edges.
+   * Colours are stored per condition, not per edge.
    * 
    * @param graph - The current graph
    * @param edgeId - ID of the edge with the condition
-   * @param condIndex - Index of the condition to update color for
-   * @param color - Color to set (or undefined to clear)
-   * @returns Updated graph with color propagated to matching conditions on siblings
+   * @param condIndex - Index of the condition to update colour for
+   * @param colour - Colour to set (or undefined to clear)
+   * @returns Updated graph with colour propagated to matching conditions on siblings
    */
-  propagateConditionalColor(
+  propagateConditionalColour(
     graph: any,
     edgeId: string,
     condIndex: number,
-    color: string | undefined
+    colour: string | undefined
   ): any {
     const nextGraph = structuredClone(graph);
     const edgeIndex = nextGraph.edges.findIndex((e: any) => 
@@ -2663,14 +2663,14 @@ export class UpdateManager {
       return graph;
     }
     
-    // Update color on current condition
+    // Update colour on current condition
     const conditionToUpdate = currentEdge.conditional_p[condIndex];
     const condStr = typeof conditionToUpdate.condition === 'string' ? conditionToUpdate.condition : '';
     
-    if (color === undefined) {
-      delete currentEdge.conditional_p[condIndex].color;
+    if (colour === undefined) {
+      delete currentEdge.conditional_p[condIndex].colour;
     } else {
-      currentEdge.conditional_p[condIndex].color = color;
+      currentEdge.conditional_p[condIndex].colour = colour;
     }
     
     // Propagate to matching conditions on sibling edges (same source node, matching condition string)
@@ -2687,17 +2687,17 @@ export class UpdateManager {
         if (siblingIndex >= 0 && nextGraph.edges[siblingIndex].conditional_p) {
           const siblingEdge = nextGraph.edges[siblingIndex];
           
-          // Find matching condition (by normalized string) and update its color
+          // Find matching condition (by normalized string) and update its colour
           const matchingIndex = siblingEdge.conditional_p.findIndex((cond: any) => {
             const existingStr = typeof cond.condition === 'string' ? cond.condition : '';
             return normalizeConstraintString(existingStr) === normalizedToUpdate;
           });
           
           if (matchingIndex >= 0) {
-            if (color === undefined) {
-              delete siblingEdge.conditional_p[matchingIndex].color;
+            if (colour === undefined) {
+              delete siblingEdge.conditional_p[matchingIndex].colour;
             } else {
-              siblingEdge.conditional_p[matchingIndex].color = color;
+              siblingEdge.conditional_p[matchingIndex].colour = colour;
             }
           }
         }
@@ -2710,11 +2710,11 @@ export class UpdateManager {
     
     this.auditLog.push({
       timestamp: new Date().toISOString(),
-      operation: 'propagateConditionalColor',
+      operation: 'propagateConditionalColour',
       details: {
         edgeId,
         condIndex,
-        color: color || 'cleared'
+        color: colour || 'cleared'
       }
     });
     

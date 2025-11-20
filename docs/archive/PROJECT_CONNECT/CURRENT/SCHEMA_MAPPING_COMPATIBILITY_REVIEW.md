@@ -642,7 +642,7 @@ From MAPPING_TYPES.md, we have 18 mapping configurations to validate:
 - `type` ('normal' | 'case')
 - `absorbing`, `outcome_type`
 - `entry`, `costs`, `residual_behavior`
-- `layout` (x, y, color)
+- `layout` (x, y, colour)
 - `case` object (for case nodes)
 
 **Edge fields:**

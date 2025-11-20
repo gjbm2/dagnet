@@ -4,8 +4,8 @@ import { GraphData } from '@/types';
 
 type PostItType = NonNullable<GraphData['postits']>[number];
 
-// Traditional Post-it Note Colors
-const POSTIT_COLORS = [
+// Traditional Post-it Note Colours
+const POSTIT_COLOURS = [
   '#FFF59D', // Canary Yellow (classic Post-it)
   '#FFB3D9', // Pink
   '#AED6F1', // Sky Blue
@@ -81,9 +81,9 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
     onSelect(postit.id);
   }, [onSelect, postit.id]);
 
-  // Helper to darken color for folded corner
-  const adjustColorBrightness = (color: string, amount: number): string => {
-    const hex = color.replace('#', '');
+  // Helper to darken colour for folded corner
+  const adjustColourBrightness = (colour: string, amount: number): string => {
+    const hex = colour.replace('#', '');
     const r = Math.max(0, Math.min(255, parseInt(hex.substring(0, 2), 16) + amount));
     const g = Math.max(0, Math.min(255, parseInt(hex.substring(2, 4), 16) + amount));
     const b = Math.max(0, Math.min(255, parseInt(hex.substring(4, 6), 16) + amount));
@@ -118,7 +118,7 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
         style={{
           width: `${postit.width}px`,
           height: `${postit.height}px`,
-          backgroundColor: postit.color,
+          backgroundColor: postit.colour,
           boxShadow: selected ? '0 4px 12px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.15)',
           cursor: isEditing ? 'text' : 'pointer',
           fontFamily: 'Comic Sans MS, cursive, sans-serif',
@@ -140,7 +140,7 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
             height: 0,
             borderStyle: 'solid',
             borderWidth: '0 20px 20px 0',
-            borderColor: `transparent ${adjustColorBrightness(postit.color, -20)} transparent transparent`,
+            borderColor: `transparent ${adjustColourBrightness(postit.colour, -20)} transparent transparent`,
             pointerEvents: 'none',
           }}
         />
@@ -202,21 +202,21 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
           }}
         >
           <div style={{ padding: '8px 12px', fontSize: '12px', fontWeight: '600', color: '#666' }}>
-            Color
+            Colour
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px', padding: '4px 12px' }}>
-            {POSTIT_COLORS.map((color) => (
+            {POSTIT_COLOURS.map((colour) => (
               <div
-                key={color}
+                key={colour}
                 onClick={() => {
-                  onUpdate(postit.id, { color });
+                  onUpdate(postit.id, { colour });
                   setShowContextMenu(false);
                 }}
                 style={{
                   width: '32px',
                   height: '32px',
-                  backgroundColor: color,
-                  border: postit.color === color ? '2px solid #333' : '1px solid #ddd',
+                  backgroundColor: colour,
+                  border: postit.colour === colour ? '2px solid #333' : '1px solid #ddd',
                   borderRadius: '4px',
                   cursor: 'pointer',
                 }}

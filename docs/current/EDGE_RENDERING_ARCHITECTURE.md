@@ -29,7 +29,7 @@ This document describes how edge widths are computed and rendered in the graph e
 2. **Remove Legacy Parameter**: Remove `null` parameter from all `computeEffectiveEdgeProbability` calls
 3. **'Current' Hidden**: Use 3% opacity instead of VIEW ONLY mode (vastly simpler)
 4. **Snapshot Semantics**: Snapshots capture composite(live graph + What-If DSL) - what user sees
-5. **Color Assignment**: Hidden 'current' should NOT get palette color (use grey, not counted in distribution)
+5. **Colour Assignment**: Hidden 'current' should NOT get palette colour (use grey, not counted in distribution)
 6. **Edge Labels**: Show composite label from all visible layers, with special formatting for hidden current
 7. **PMF Warnings**: Only calculate/display for 'current' layer, NOT for scenario snapshots
 
@@ -131,7 +131,7 @@ When 'current' is toggled "hidden" (not in `visibleScenarioIds`):
 - **User mental model**: "Hide current" means "make current nearly invisible" not "lock me out of editing"
 - **Flexibility**: User can compare historical scenarios AND still edit/What-If if needed without toggling visibility first
 - **Real-time feedback**: What-If changes update the (barely visible) 'current' overlay immediately
-- **Visual impact**: At 3% opacity with `mix-blend-mode: multiply`, current has minimal effect on color perception
+- **Visual impact**: At 3% opacity with `mix-blend-mode: multiply`, current has minimal effect on colour perception
 - **Alternative exists**: Users who want pure historical comparison can open a separate tab
 
 **Implementation:**
@@ -149,35 +149,35 @@ const opacity = (scenarioId === 'current' && !visibleScenarioIds.includes('curre
 // - Auto-unhide logic (not needed)
 ```
 
-### 5. Color Assignment - Hidden 'Current' Special Case
+### 5. Colour Assignment - Hidden 'Current' Special Case
 
-**Problem:** Currently color assignment likely assigns a palette color to 'current' even when it's hidden.
+**Problem:** Currently colour assignment likely assigns a palette colour to 'current' even when it's hidden.
 
 **Should be:**
 ```typescript
-// Only assign palette colors to VISIBLE layers
+// Only assign palette colours to VISIBLE layers
 const visibleLayers = visibleScenarioIds;  // Array of visible layer IDs
-const colors = calculateComplementaryColors(visibleLayers.length);
+const colours = calculateComplementaryColours(visibleLayers.length);
 
-const colorMap = new Map<string, string>();
+const colourMap = new Map<string, string>();
 for (let i = 0; i < visibleLayers.length; i++) {
-  const layerId = visibleColorOrderIds[i];
+  const layerId = visibleColourOrderIds[i];
   if (visibleScenarioIds.includes(layerId)) {
-    colorMap.set(layerId, colors[i]);
+    colourMap.set(layerId, colours[i]);
   }
 }
 
 // Special case: 'current' hidden (always rendered, but not in visible list)
 // When rendering 'current' overlay at 3% opacity:
 if (!visibleScenarioIds.includes('current')) {
-  // Use neutral grey, NOT a palette color
-  currentOverlayColor = '#808080';  // or derive from base edge color
+  // Use neutral grey, NOT a palette colour
+  currentOverlayColour = '#808080';  // or derive from base edge colour
 }
 ```
 
 **Effect:**
-- Hidden 'current' doesn't steal a palette color from visible layers
-- Color distribution is based only on truly visible layers
+- Hidden 'current' doesn't steal a palette colour from visible layers
+- Colour distribution is based only on truly visible layers
 - Edge label shows hidden current in light grey (see section 6)
 
 ### 6. Edge Labels - Composite Display
@@ -205,13 +205,13 @@ function buildEdgeLabel(edgeId, visibleScenarioIds, scenarios, graph, whatIfDSL)
   for (const layerId of visibleScenarioIds) {
     const prob = getLayerProbability(layerId, edgeId);
     const stdev = getLayerStdev(layerId, edgeId);
-    const color = colorMap.get(layerId);
+    const colour = colourMap.get(layerId);
     
     const text = stdev 
       ? `${(prob * 100).toFixed(0)}% ± ${(stdev * 100).toFixed(0)}%`
       : `${(prob * 100).toFixed(0)}%`;
     
-    segments.push({ text, color });
+    segments.push({ text, colour });
   }
   
   // Add hidden 'current' if it exists
@@ -230,7 +230,7 @@ function buildEdgeLabel(edgeId, visibleScenarioIds, scenarios, graph, whatIfDSL)
     });
   }
   
-  return segments;  // Render as colored segments side by side
+  return segments;  // Render as coloured segments side by side
 }
 ```
 
@@ -246,7 +246,7 @@ Multiple layers (current visible):
 ```
 [cyan] 40% ± 2%  [magenta] 45% ± 3%  [pink] 60% ± 2%
 ```
-(Each colored by layer palette color)
+(Each coloured by layer palette colour)
 
 Multiple layers (current hidden):
 ```
@@ -271,7 +271,7 @@ Multiple layers (current hidden):
 │  │   ├─ .p.mean         │          │   ├─ whatIfDSL: string | null  │       │
 │  │   ├─ .conditional_p  │          │   ├─ scenarioState:            │       │
 │  │   └─ ...             │          │   │   ├─ visibleScenarioIds[]  │       │
-│  │ graph.nodes[]        │          │   │   ├─ visibleColorOrderIds[]│       │
+│  │ graph.nodes[]        │          │   │   ├─ visibleColourOrderIds[]│       │
 │  │   ├─ .case.variants  │          │   │   └─ selectedScenarioId    │       │
 │  │   └─ ...             │          │   └─ hiddenNodeIds[]          │       │
 │  └──────────────────────┘          └────────────────────────────────┘       │
@@ -284,7 +284,7 @@ Multiple layers (current hidden):
 │  │   ├─ layer2          │          │ • confidenceIntervalLevel      │       │
 │  │   └─ ...             │          └────────────────────────────────┘       │
 │  │ each has:            │                                                     │
-│  │   ├─ id, name, color │                                                     │
+│  │   ├─ id, name, colour │                                                     │
 │  │   ├─ params: {       │                                                     │
 │  │   │   edges: {...}   │                                                     │
 │  │   │   nodes: {...}   │                                                     │
@@ -344,16 +344,16 @@ Multiple layers (current hidden):
 │    opacity = visibleScenarioIds.includes('current') ? 0.30 : 0.05           │
 │              ↑ Normal 30%                              ↑ Nearly invisible 5%│
 │                                                                               │
-│  Color Assignment (uniform for VISIBLE layers only):                         │
-│    colors = calculateComplementaryColors(visibleScenarioIds.length)          │
-│    for each layer in visibleColorOrderIds:                                   │
+│  Colour Assignment (uniform for VISIBLE layers only):                         │
+│    colours = calculateComplementaryColours(visibleScenarioIds.length)          │
+│    for each layer in visibleColourOrderIds:                                   │
 │      if visibleScenarioIds.includes(layer):                                  │
-│        layer.color = colors[indexOf(layer in visibleColorOrderIds)]          │
+│        layer.colour = colours[indexOf(layer in visibleColourOrderIds)]          │
 │                                                                               │
 │    Special case: 'current' hidden (not in visibleScenarioIds)               │
-│      → 'current' does NOT get a palette color                                │
-│      → Renders at 3% opacity with grey/neutral color                         │
-│      → Not counted in color palette distribution                             │
+│      → 'current' does NOT get a palette colour                                │
+│      → Renders at 3% opacity with grey/neutral colour                         │
+│      → Not counted in colour palette distribution                             │
 │                                                                               │
 └───────────────────────────────────────────────────────────────────────────────┘
             │
@@ -429,7 +429,7 @@ Multiple layers (current hidden):
 │    For each layer in visibleScenarioIds:                                     │
 │      ┌────────────────────────────────────────────────────────────┐         │
 │      │  edgeId = `scenario-overlay__${layerId}__${baseEdgeId}`   │         │
-│      │  stroke = layer.color                                      │         │
+│      │  stroke = layer.colour                                      │         │
 │      │  strokeOpacity = (layerId === 'current' && !isVisible)    │         │
 │      │                   ? 0.05  // 95% transparent when "hidden" │         │
 │      │                   : 0.30  // 30% opacity normally          │         │
@@ -447,7 +447,7 @@ Multiple layers (current hidden):
 │      └────────────────────────────────────────────────────────────┘         │
 │                                                                               │
 │  Visual Layer Stack (z-index order, bottom to top):                          │
-│    -1: Scenario overlays (colored, semi-transparent, non-interactive)        │
+│    -1: Scenario overlays (coloured, semi-transparent, non-interactive)        │
 │     0: React Flow interactive edges (transparent)                            │
 │     1: Selected edge highlight                                               │
 │     2: Edge labels (composite from all visible layers)                       │
@@ -459,14 +459,14 @@ Multiple layers (current hidden):
 │    │                                                                  │       │
 │    │  IF multiple layers visible (including 'current'):             │       │
 │    │    Build composite label left-to-right (bottom to top):        │       │
-│    │    [color1] 55% ± 5%  [color2] 65% ± 1%  [color3] 50% ± 4%   │       │
-│    │    Each segment colored by layer's assigned palette color      │       │
+│    │    [colour1] 55% ± 5%  [colour2] 65% ± 1%  [colour3] 50% ± 4%   │       │
+│    │    Each segment coloured by layer's assigned palette colour      │       │
 │    │                                                                  │       │
 │    │  IF multiple layers visible (current HIDDEN):                  │       │
 │    │    Build composite label with current in parentheses:          │       │
-│    │    [color1] 55% ± 5%  [color2] 65% ± 1%  (50% ± 4%)           │       │
+│    │    [colour1] 55% ± 5%  [colour2] 65% ± 1%  (50% ± 4%)           │       │
 │    │    Current segment: light grey text, parentheses               │       │
-│    │    Other segments: colored by layer's palette color            │       │
+│    │    Other segments: coloured by layer's palette colour            │       │
 │    │                                                                  │       │
 │    │  Order: visible layers from bottom to top in stack             │       │
 │    │  Format: prob% ± stdev% (if stdev present)                     │       │
@@ -481,7 +481,7 @@ Multiple layers (current hidden):
 
 ```
 visibleScenarioIds = ['base', 'layer1', 'layer2', 'layer3', 'current']
-visibleColorOrderIds = ['base', 'layer1', 'layer2', 'layer3', 'current']
+visibleColourOrderIds = ['base', 'layer1', 'layer2', 'layer3', 'current']
 whatIfDSL = "case[checkout_case] = treatment"
 
 graph.edges['checkout-to-purchase'].p.mean = 0.50  (live value)
@@ -501,7 +501,7 @@ For edge "checkout-to-purchase":
 prob = scenarios.get('base').params.edges['checkout-to-purchase'].p.mean
     = 0.40
 width = f(0.40, siblings, massGenerosity)  // e.g., 25px
-color = complementaryColors[0]  // e.g., cyan
+colour = complementaryColours[0]  // e.g., cyan
 render: cyan path, 30% opacity, non-interactive
 ```
 
@@ -515,7 +515,7 @@ composedParams = deepMerge(
 prob = composedParams.edges['checkout-to-purchase'].p.mean
     = 0.45  // layer1 override wins
 width = f(0.45, siblings, massGenerosity)  // e.g., 28px
-color = complementaryColors[1]  // e.g., magenta
+colour = complementaryColours[1]  // e.g., magenta
 render: magenta path, 30% opacity, non-interactive
 ```
 
@@ -530,7 +530,7 @@ composedParams = deepMerge(
 prob = composedParams.edges['checkout-to-purchase'].p.mean
     = 0.45  // inherits from layer1 (layer2 has no override)
 width = f(0.45, siblings, massGenerosity)  // e.g., 28px
-color = complementaryColors[2]  // e.g., yellow
+colour = complementaryColours[2]  // e.g., yellow
 render: yellow path, 30% opacity, non-interactive
 ```
 
@@ -546,7 +546,7 @@ composedParams = deepMerge(
 prob = composedParams.edges['checkout-to-purchase'].p.mean
     = 0.55  // layer3 override wins
 width = f(0.55, siblings, massGenerosity)  // e.g., 35px
-color = complementaryColors[3]  // e.g., blue
+colour = complementaryColours[3]  // e.g., blue
 render: blue path, 30% opacity, non-interactive
 ```
 
@@ -561,7 +561,7 @@ prob = computeEffectiveEdgeProbability(
 )
     = 0.60  // e.g., What-If changed it from 0.50 to 0.60
 width = f(0.60, siblings, massGenerosity)  // e.g., 40px
-color = complementaryColors[4]  // e.g., pink
+colour = complementaryColours[4]  // e.g., pink
 render: pink path, 30% opacity, non-interactive
 ```
 
@@ -584,18 +584,18 @@ User sees (from bottom to top):
 - Blue path (0.55, width 35px) = layer3 at 30% opacity (wider, creates fringe)
 - Pink path (0.60, width 40px) = current at 30% opacity (widest, creates fringe)
 
-Where widths differ, colored fringes appear showing divergence between layers.
+Where widths differ, coloured fringes appear showing divergence between layers.
 
 **Edge Label (composite from all layers):**
 ```
 [cyan] 40% ± 2%  [magenta] 45% ± 3%  [yellow] 45% ± 3%  [blue] 55% ± 4%  [pink] 60% ± 2%
 ```
-Each segment colored by its layer's palette color, showing all visible layers left-to-right (bottom to top).
+Each segment coloured by its layer's palette colour, showing all visible layers left-to-right (bottom to top).
 
 **Note on 'current' visibility:**
 - If user toggles 'current' "hidden":
   - Pink path renders at 3% opacity (barely visible) instead of 30%
-  - 'current' does NOT get a palette color (uses grey)
+  - 'current' does NOT get a palette colour (uses grey)
   - Edge label shows current in parentheses with light grey:
     ```
     [cyan] 40% ± 2%  [magenta] 45% ± 3%  [yellow] 45% ± 3%  [blue] 55% ± 4%  (60% ± 2%)
@@ -633,11 +633,11 @@ User clicks "Create Snapshot":
      scenarios.push(newLayer)
   3. Make visible by default:
      visibleScenarioIds.push(newLayer.id)
-     visibleColorOrderIds.push(newLayer.id)
-  4. Assign color:
-     newLayer.color = complementaryColors[visibleScenarioIds.length - 1]
+     visibleColourOrderIds.push(newLayer.id)
+  4. Assign colour:
+     newLayer.colour = complementaryColours[visibleScenarioIds.length - 1]
   
-Result: New layer appears as colored overlay showing what user saw (including What-If)
+Result: New layer appears as coloured overlay showing what user saw (including What-If)
 ```
 
 ### Workflow 3: Compare Scenarios (Current Dimmed)
@@ -647,7 +647,7 @@ User toggles 'current' visibility OFF:
   visibleScenarioIds = ['base', 'layer1', 'layer2']  // 'current' not in list
   
 Visual result:
-  • Three colored overlays visible (base, layer1, layer2) at 30% opacity
+  • Three coloured overlays visible (base, layer1, layer2) at 30% opacity
   • 'current' overlay still renders but at 3% opacity (97% transparent, barely visible)
   • Interactive edges fully functional:
     - Hover → normal tooltips
@@ -714,33 +714,33 @@ const probResolver = (edge) => computeEffectiveEdgeProbability(
 );
 ```
 
-### Rule 3: Color Assignment - Only for VISIBLE Layers
+### Rule 3: Colour Assignment - Only for VISIBLE Layers
 ```typescript
-// WRONG: Assign colors to all layers including hidden 'current'
-const colors = calculateComplementaryColors(visibleColorOrderIds.length);
-for (let i = 0; i < visibleColorOrderIds.length; i++) {
-  const layerId = visibleColorOrderIds[i];
-  layerColors[layerId] = colors[i];
+// WRONG: Assign colours to all layers including hidden 'current'
+const colours = calculateComplementaryColours(visibleColourOrderIds.length);
+for (let i = 0; i < visibleColourOrderIds.length; i++) {
+  const layerId = visibleColourOrderIds[i];
+  layerColours[layerId] = colours[i];
 }
 
-// CORRECT: Only assign palette colors to VISIBLE layers
-const colors = calculateComplementaryColors(visibleScenarioIds.length);
-const colorMap = new Map<string, string>();
+// CORRECT: Only assign palette colours to VISIBLE layers
+const colours = calculateComplementaryColours(visibleScenarioIds.length);
+const colourMap = new Map<string, string>();
 
-for (let i = 0; i < visibleColorOrderIds.length; i++) {
-  const layerId = visibleColorOrderIds[i];
+for (let i = 0; i < visibleColourOrderIds.length; i++) {
+  const layerId = visibleColourOrderIds[i];
   if (visibleScenarioIds.includes(layerId)) {  // ← Check if visible
-    colorMap.set(layerId, colors[i]);
+    colourMap.set(layerId, colours[i]);
   }
 }
 
-// Hidden 'current' uses neutral grey (not a palette color)
+// Hidden 'current' uses neutral grey (not a palette colour)
 if (!visibleScenarioIds.includes('current')) {
-  currentOverlayColor = '#808080';  // Grey, not from palette
+  currentOverlayColour = '#808080';  // Grey, not from palette
 }
 ```
 
-**Effect:** Hidden 'current' doesn't steal a palette color. Color distribution is based only on truly visible layers.
+**Effect:** Hidden 'current' doesn't steal a palette colour. Colour distribution is based only on truly visible layers.
 
 ### Rule 4: Interactive Edges Always Connect to 'current' and Always Enabled
 ```typescript
@@ -750,7 +750,7 @@ const prob = computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL }, null)
 const width = calculateEdgeWidth(prob, ...);
 
 // Stroke is transparent when ANY scenarios visible
-const stroke = visibleScenarioIds.length > 0 ? 'transparent' : normalColor;
+const stroke = visibleScenarioIds.length > 0 ? 'transparent' : normalColour;
 
 // Interaction ALWAYS enabled (no VIEW ONLY mode)
 const interactive = true;  // Never disabled
@@ -789,10 +789,10 @@ function createSnapshot(options) {
   
   // Make visible by default
   visibleScenarioIds.push(newLayer.id);
-  visibleColorOrderIds.push(newLayer.id);
+  visibleColourOrderIds.push(newLayer.id);
   
-  // Assign color based on new visibility order
-  reassignColors(visibleScenarioIds);
+  // Assign colour based on new visibility order
+  reassignColours(visibleScenarioIds);
   
   return newLayer;
 }
@@ -807,24 +807,24 @@ function EdgeLabel({ edge }) {
 }
 
 // CORRECT: Build composite label from all visible layers
-function EdgeLabel({ edge, visibleScenarioIds, colorMap, graph, whatIfDSL }) {
+function EdgeLabel({ edge, visibleScenarioIds, colourMap, graph, whatIfDSL }) {
   // Single layer: black text, simple
   if (visibleScenarioIds.length === 1) {
     const prob = getLayerProbability(visibleScenarioIds[0], edge.id);
     return <text fill="black">{(prob * 100).toFixed(0)}%</text>;
   }
   
-  // Multiple layers: colored segments
+  // Multiple layers: coloured segments
   const segments = [];
   
   for (const layerId of visibleScenarioIds) {
     const prob = getLayerProbability(layerId, edge.id);
     const stdev = getLayerStdev(layerId, edge.id);
-    const color = colorMap.get(layerId);
+    const colour = colourMap.get(layerId);
     const text = stdev 
       ? `${(prob * 100).toFixed(0)}% ± ${(stdev * 100).toFixed(0)}%`
       : `${(prob * 100).toFixed(0)}%`;
-    segments.push(<tspan fill={color}>{text}  </tspan>);
+    segments.push(<tspan fill={colour}>{text}  </tspan>);
   }
   
   // Add hidden 'current' in grey with parentheses
@@ -843,7 +843,7 @@ function EdgeLabel({ edge, visibleScenarioIds, colorMap, graph, whatIfDSL }) {
 
 **Visual result:**
 - One layer: `50%` (black)
-- Multiple + current visible: `[cyan] 40% ± 2%  [magenta] 45%  [pink] 60%` (colored)
+- Multiple + current visible: `[cyan] 40% ± 2%  [magenta] 45%  [pink] 60%` (coloured)
 - Multiple + current hidden: `[cyan] 40% ± 2%  [magenta] 45%  (60%)` (current in grey with parens)
 
 ### Rule 7: PMF Warnings ONLY for 'Current' Layer
@@ -965,7 +965,7 @@ USER ACTION: Apply What-If "case[checkout_case] = treatment"
 ┌─────────────────────────────────────────────────────────────┐
 │ ConversionEdge (renders each edge)                          │
 │   • Draws Bézier path with offsets                          │
-│   • Applies stroke width/color/opacity                      │
+│   • Applies stroke width/colour/opacity                      │
 │   • Clips to chevron shape                                  │
 │   • Renders edge label                                      │
 └─────────────────────────────────────────────────────────────┘
@@ -973,10 +973,10 @@ USER ACTION: Apply What-If "case[checkout_case] = treatment"
      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ VISUAL RESULT                                                │
-│   • Multiple colored overlays (one per visible layer)       │
+│   • Multiple coloured overlays (one per visible layer)       │
 │   • 'current' overlay shows What-If changes (pink)          │
 │   • Wider edges where probabilities differ                  │
-│   • Colored fringes show divergence between layers          │
+│   • Coloured fringes show divergence between layers          │
 └─────────────────────────────────────────────────────────────┘
 ```
 

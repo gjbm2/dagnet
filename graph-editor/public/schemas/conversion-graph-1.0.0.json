@@ -140,7 +140,7 @@
             "y": { "type": "number" },
             "rank": { "type": "integer", "minimum": 0 },
             "group": { "type": "string", "maxLength": 128 },
-            "color": { "type": "string", "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" }
+            "colour": { "type": "string", "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" }
           }
         }
       }
@@ -206,7 +206,7 @@
         },
         "display": { 
           "$ref": "#/$defs/EdgeDisplay",
-          "description": "Display parameters for editor (colors, grouping)"
+          "description": "Display parameters for editor (colours, grouping)"
         }
       }
     },
@@ -329,15 +329,15 @@
       "additionalProperties": false,
       "$comment": "Display parameters for edges (not semantic, used by editor)",
       "properties": {
-        "conditional_color": { 
+        "conditional_colour": { 
           "type": "string", 
           "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
-          "description": "User-selected color override for conditional edges"
+          "description": "User-selected colour override for conditional edges"
         },
         "conditional_group": { 
           "type": "string", 
           "maxLength": 128,
-          "description": "Optional user-defined group for conditional color assignment"
+          "description": "Optional user-defined group for conditional colour assignment"
         }
       }
     },

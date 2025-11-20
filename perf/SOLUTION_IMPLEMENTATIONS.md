@@ -28,12 +28,12 @@ const isMinimalMode = urlParams.has('minimal');
 
 // Hardcode minimal scenario state
 const visibleScenarioIds = isMinimalMode ? ['current'] : (scenarioState?.visibleScenarioIds || []);
-const visibleColorOrderIds = isMinimalMode ? ['current'] : (scenarioState?.visibleColorOrderIds || []);
+const visibleColourOrderIds = isMinimalMode ? ['current'] : (scenarioState?.visibleColourOrderIds || []);
 ```
 
 **Effect**:
 - Only 'current' layer rendered (no overlays)
-- No scenario color blending
+- No scenario colour blending
 - Minimal edge count (100 vs 300)
 - Isolates ReactFlow baseline performance
 

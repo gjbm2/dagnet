@@ -37,7 +37,7 @@
 4. **Core Services:**
    - **CompositionService** (`src/services/CompositionService.ts`) - Deep-merge logic for overlays
    - **HRNResolver** (`src/services/HRNResolver.ts`) - Resolve human-readable names to UUIDs
-   - **ColorAssigner** (`src/services/ColorAssigner.ts`) - Color assignment by activation order
+   - **ColourAssigner** (`src/services/ColourAssigner.ts`) - Colour assignment by activation order
 
 ---
 
@@ -65,7 +65,7 @@
 4. **Unit Tests:**
    - `CompositionService.test.ts` - 10 test cases
    - `DiffService.test.ts` - 12 test cases
-   - `ColorAssigner.test.ts` - 6 test cases
+   - `ColourAssigner.test.ts` - 6 test cases
 
 ---
 
@@ -112,11 +112,11 @@
    - Visibility toggles with eye icons
    - Edit button opens Monaco modal
    - Delete button with confirmation
-   - Color swatch display from ColorAssigner
+   - Colour swatch display from ColourAssigner
    
 2. **Styling** (`src/components/panels/ScenariosPanel.css`, 320 lines)
    - Light theme consistent with app (fixed from initial dark theme)
-   - Tailwind-style colors: #F9FAFB, #E5E7EB, #374151
+   - Tailwind-style colours: #F9FAFB, #E5E7EB, #374151
    - Smooth hover states and transitions
    - Drag-over indicators with blue border
    - Selected row highlighting
@@ -186,7 +186,7 @@
 #### Tasks:
 1. Create `ScenarioRenderer` service
 2. Integrate with `GraphCanvas`
-3. Color assignment and blending (`mix-blend-mode: multiply`)
+3. Colour assignment and blending (`mix-blend-mode: multiply`)
 4. Compute widths and offsets per layer
 5. Optimize rendering (memoization, throttling)
 
@@ -228,7 +228,7 @@
 
 **Services:**
 - `src/services/CompositionService.ts` (185 lines)
-- `src/services/ColorAssigner.ts` (90 lines)
+- `src/services/ColourAssigner.ts` (90 lines)
 - `src/services/HRNResolver.ts` (230 lines)
 - `src/services/HRNParser.ts` (210 lines)
 - `src/services/DiffService.ts` (265 lines)
@@ -247,7 +247,7 @@
 **Tests:**
 - `src/services/__tests__/CompositionService.test.ts` (180 lines)
 - `src/services/__tests__/DiffService.test.ts` (150 lines)
-- `src/services/__tests__/ColorAssigner.test.ts` (95 lines)
+- `src/services/__tests__/ColourAssigner.test.ts` (95 lines)
 - `src/services/__tests__/HRNResolver.test.ts` (190 lines)
 
 **Modified Files:**
@@ -267,7 +267,7 @@
 ### Unit Tests: **43 test cases**
 - CompositionService: 10 tests ✅
 - DiffService: 12 tests ✅
-- ColorAssigner: 6 tests ✅
+- ColourAssigner: 6 tests ✅
 - HRNResolver: 15 tests ✅
 
 ### Integration Tests: **0 (planned for Phase 7)**
@@ -290,7 +290,7 @@
 **Immediate:** Begin Phase 5 - Rendering and Composition
 1. Create `ScenarioRenderer` service for multi-layer rendering
 2. Integrate with `GraphCanvas` component
-3. Implement color blending and opacity/offset strategies
+3. Implement colour blending and opacity/offset strategies
 4. Wire up to composed parameters from visible scenarios
 5. Add performance optimizations (memoization, throttling)
 
@@ -349,9 +349,9 @@ Next milestone: **Rendering and Composition** (Phase 5)
 ### Context for Phase 5:
 - **Goal:** Render multiple scenario layers on the graph canvas with visual differentiation
 - **Key Integration Point:** `GraphCanvas` component - needs to receive composed parameters
-- **Visual Strategy:** Use color/opacity/offset to distinguish overlays (mix-blend-mode: multiply)
+- **Visual Strategy:** Use colour/opacity/offset to distinguish overlays (mix-blend-mode: multiply)
 - **Performance:** Throttle recomputation on rapid visibility changes, memoize composed params
-- **Color Assignment:** Already implemented in `ColorAssigner` - use `assignColors()` with activation order
+- **Colour Assignment:** Already implemented in `ColourAssigner` - use `assignColours()` with activation order
 
 ### Files to Review:
 - `src/components/GraphCanvas.tsx` - Main rendering component
@@ -363,7 +363,7 @@ Next milestone: **Rendering and Composition** (Phase 5)
 1. Create `ScenarioRenderer` service or integrate into existing renderer
 2. Hook into GraphCanvas render cycle
 3. For each visible scenario (in order):
-   - Get color from `assignColors()`
+   - Get colour from `assignColours()`
    - Apply composed parameters
    - Render with visual offset/opacity
 4. Optimize with React.memo and useMemo hooks
@@ -371,6 +371,6 @@ Next milestone: **Rendering and Composition** (Phase 5)
 ### Testing Strategy:
 - Toggle scenario visibility and verify visual updates
 - Test with 5+ scenarios for performance
-- Verify color assignment matches activation order
+- Verify colour assignment matches activation order
 - Ensure drag-reorder updates render order immediately
 

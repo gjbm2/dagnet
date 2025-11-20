@@ -56,7 +56,7 @@ This directory contains all design documentation for the Data Connections system
 - ⚠️ **TECHNICAL DEBT**: See `CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md` for:
   - Conditional probability migration issues (backward compatibility hacks)
   - Graph-to-graph update architecture requirements (UpdateManager patterns)
-  - Lost features: complementary conditional creation, color picker
+  - Lost features: complementary conditional creation, colour picker
   - Estimated cleanup: 12-16 hours
 
 **Remaining Phase 1 Work:** ~25-35 hours (revised estimate - major progress on 1G!)

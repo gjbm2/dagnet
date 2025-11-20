@@ -176,7 +176,7 @@ Uses query subsumption to find minimal covering set.
 
 Components that switch between edit and view modes:
 
-- **View:** Color-coded chips (visual, readable)
+- **View:** Colour-coded chips (visual, readable)
 - **Edit:** Monaco editor (powerful, autocomplete)
 - **Behavior:** Click to edit, blur to view
 

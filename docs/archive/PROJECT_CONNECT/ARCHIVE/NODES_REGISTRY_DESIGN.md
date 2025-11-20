@@ -235,7 +235,7 @@ metadata:
 
 # Layout defaults (for when added to graphs)
 layout:
-  default_color: "#4CAF50"
+  default_colour: "#4CAF50"
   default_icon: "home"
   suggested_position: "left"
 

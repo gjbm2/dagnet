@@ -60,11 +60,11 @@
 **No unclear points** - ready to implement
 
 #### 5. Visualization Strategy (Section 10.4)
-- Dynamic color palette approach with deterministic assignment
-- Color based on condition signature hash
-- User can override colors (persisted in `display.conditional_color`)
+- Dynamic colour palette approach with deterministic assignment
+- Colour based on condition signature hash
+- User can override colours (persisted in `display.conditional_colour`)
 - Highlight upstream dependency nodes when conditional edge selected
-- Color palette provided (avoiding blue/purple)
+- Colour palette provided (avoiding blue/purple)
 
 **No unclear points** - ready to implement
 
@@ -93,8 +93,8 @@
 
 ---
 
-#### Q2: Condition Signature for Color Assignment
-**Section 10.4**: Color based on `conditionSignature`
+#### Q2: Condition Signature for Colour Assignment
+**Section 10.4**: Colour based on `conditionSignature`
 
 ```typescript
 const conditionSignature = edge.conditional_p
@@ -103,7 +103,7 @@ const conditionSignature = edge.conditional_p
   .join('||');
 ```
 
-**Question**: This signature combines ALL conditions on an edge. Should color instead be based on:
+**Question**: This signature combines ALL conditions on an edge. Should colour instead be based on:
 - A) All conditions on edge (current)
 - B) Each individual condition separately
 - C) User-defined "conditional group" field
@@ -114,7 +114,7 @@ Edge 1: conditional_p: [{visited: ['promo']}, {visited: ['help']}]
 Edge 2: conditional_p: [{visited: ['promo']}]
 ```
 
-Should Edge 1 and Edge 2 get the same color (both have 'promo' condition)?
+Should Edge 1 and Edge 2 get the same colour (both have 'promo' condition)?
 
 **Recommendation**: Use **Option C** - add optional `conditional_group` field:
 ```json
@@ -122,11 +122,11 @@ Should Edge 1 and Edge 2 get the same color (both have 'promo' condition)?
   "conditional_p": [...],
   "conditional_group": "promo-flow",  // Optional user-defined group
   "display": {
-    "conditional_color": "#4ade80"  // Optional user override
+    "conditional_colour": "#4ade80"  // Optional user override
   }
 }
 ```
-- If `conditional_group` is set, use that for color assignment
+- If `conditional_group` is set, use that for colour assignment
 - Otherwise fall back to signature-based algorithm
 - User can manually group related conditions
 
@@ -299,7 +299,7 @@ if (edge.conditional_p) {
 **Estimated**: 4-5 days
 
 ### Phase 4: Visualization ⚠️ NEEDS MINOR CLARIFICATION
-- Color strategy mostly clear
+- Colour strategy mostly clear
 - Conditional grouping needs decision (Q2)
 - Can proceed with signature-based approach, enhance later
 
@@ -334,13 +334,13 @@ if (edge.conditional_p) {
 **Blockers**: None - comprehensive UX design provided in Section 5.1
 
 ### Sprint 3: Visualization (Week 3)
-1. ✅ Implement signature-based color algorithm
+1. ✅ Implement signature-based colour algorithm
 2. ⚠️ **DECIDE**: Conditional grouping strategy (Q2) - can defer
-3. ✅ Add user color override UI
+3. ✅ Add user colour override UI
 4. ✅ Implement upstream dependency highlighting
 5. ✅ Edge label updates for conditional scenarios
 
-**Blockers**: Color grouping decision (Q2) - can use signature-based as MVP
+**Blockers**: Colour grouping decision (Q2) - can use signature-based as MVP
 
 ### Sprint 4: What-If Control (Week 4)
 1. ✅ Implement What-If state management
@@ -373,9 +373,9 @@ if (edge.conditional_p) {
    - Accessibility requirements documented
 
 ### Optional Before Sprint 3 📋
-1. **Decide Color Grouping** (Q2): Signature vs user-defined groups
+1. **Decide Colour Grouping** (Q2): Signature vs user-defined groups
    - **Recommendation**: Start with signature-based, add optional groups later
-   - Not a blocker - can proceed with algorithm-based coloring
+   - Not a blocker - can proceed with algorithm-based colouring
    - Low priority
 
 ### Can Defer to Later ✅
@@ -394,7 +394,7 @@ if (edge.conditional_p) {
 | Condition Matching | First match wins | Clear, predictable |
 | Validation | Per-condition + warnings | Comprehensive but not onerous |
 | What-If Control | Per-element multi-select | Flexible, composable scenarios |
-| Visualization | Dynamic color palette | Discoverable, user-overrideable |
+| Visualization | Dynamic colour palette | Discoverable, user-overrideable |
 | Conditional Costs | ❌ NOT implementing | Model as separate nodes instead |
 | Bayesian Compat | ✅ Fully compatible | Future-proofed |
 | Node References | Node IDs (not slugs) | Stable, reliable |

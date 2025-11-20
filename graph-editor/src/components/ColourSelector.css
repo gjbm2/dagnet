@@ -1,0 +1,157 @@
+/* Colour Selector Component Styling */
+
+.colour-selector {
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.colour-selector-label {
+  font-weight: 500;
+  font-size: 14px;
+  display: block;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+/* Presets flexbox */
+.colour-selector-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+/* Individual preset button */
+.colour-selector-preset {
+  width: 28px;
+  height: 28px;
+  border: 2px solid #E5E7EB;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #6B7280;
+  flex-shrink: 0;
+}
+
+.colour-selector-preset:hover:not(:disabled) {
+  border-color: #9CA3AF;
+  transform: scale(1.05);
+}
+
+.colour-selector-preset.selected {
+  border-color: #1F2937;
+  border-width: 3px;
+}
+
+.colour-selector-preset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Custom colour button */
+.colour-selector-preset.custom {
+  background: linear-gradient(135deg, 
+    #FF6B6B 0%, 
+    #4ECDC4 25%, 
+    #45B7D1 50%, 
+    #96CEB4 75%, 
+    #FFEAA7 100%);
+}
+
+/* Checkmark for selected */
+.colour-selector-checkmark {
+  color: #fff;
+  font-weight: bold;
+  font-size: 16px;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+}
+
+/* Current colour display */
+.colour-selector-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 4px;
+}
+
+.colour-selector-current-swatch {
+  width: 24px;
+  height: 24px;
+  border: 2px solid #E5E7EB;
+  border-radius: 4px;
+}
+
+.colour-selector-current-value {
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  color: #6B7280;
+}
+
+/* Compact mode */
+.colour-selector-compact {
+  position: relative;
+  display: inline-block;
+}
+
+.colour-selector-compact-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 2px solid #ddd;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.colour-selector-compact-swatch:hover {
+  border-color: #999;
+}
+
+.colour-selector-compact-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  min-width: 200px;
+}
+
+.colour-selector-compact-popup .colour-selector-presets {
+  position: relative;
+}
+
+/* Clear button */
+.colour-selector-clear {
+  padding: 4px 8px;
+  font-size: 11px;
+  background: #f1f1f1;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-top: 4px;
+  color: #666;
+  transition: all 0.2s ease;
+}
+
+.colour-selector-clear:hover:not(:disabled) {
+  background: #e5e5e5;
+  border-color: #bbb;
+}
+
+.colour-selector-clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+

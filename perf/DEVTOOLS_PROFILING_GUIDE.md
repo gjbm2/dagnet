@@ -69,7 +69,7 @@ You'll see several sections:
 **C. Main Thread (the important one)**
 - Shows what the browser was doing on the main thread
 - Tasks are shown as blocks (wider = took longer)
-- Color coding:
+- Colour coding:
   - **Yellow**: JavaScript execution
   - **Purple**: Rendering (style recalc, layout)
   - **Green**: Painting
@@ -212,7 +212,7 @@ You'll see a timeline at the top with **"commits"** (each commit = one React ren
 **A. Navigate Between Commits**
 - Each vertical bar = one commit
 - **Height** = how long that commit took
-- **Color**:
+- **Colour**:
   - Green/yellow = fast
   - Orange/red = slow
 - **Click on a bar** to see details
@@ -221,7 +221,7 @@ You'll see a timeline at the top with **"commits"** (each commit = one React ren
 
 Shows a hierarchical flame chart:
 - **Width** = render time
-- **Color** = render duration (green fast → yellow → orange → red slow)
+- **Colour** = render duration (green fast → yellow → orange → red slow)
 - Top component = your root (App/AppShell)
 - Below = children that rendered
 

@@ -57,7 +57,7 @@ export interface LabelSegment {
   hasCostTimeParam?: boolean;
   
   // Display info
-  color: string;
+  colour: string;
   isHidden: boolean;
 }
 
@@ -158,7 +158,7 @@ export function getEdgeInfoForLayer(
   graph: any,
   scenariosContext: any,
   whatIfDSL?: string | null
-): Omit<LabelSegment, 'color' | 'isHidden' | 'layerId'> {
+): Omit<LabelSegment, 'colour' | 'isHidden' | 'layerId'> {
   const lookupId = edge?.uuid || edge?.id;
   const edgeKey = edge?.id || edge?.uuid || lookupId;
   
@@ -273,8 +273,8 @@ export function buildCompositeLabel(
   activeTabId: string | null,
   tabs: any[],
   whatIfDSL?: string | null,
-  currentColor?: string,
-  baseColor?: string
+  currentColour?: string,
+  baseColour?: string
 ): CompositeLabel | null {
   if (!scenariosContext || !graph || !activeTabId) {
     // No scenarios context: return single segment for current layer
@@ -294,7 +294,7 @@ export function buildCompositeLabel(
         hasProbabilityParam: !!edge?.p?.id,
         hasCostGbpParam: !!edge?.cost_gbp?.id,
         hasCostTimeParam: !!edge?.cost_time?.id,
-        color: '#000',
+        colour: '#000',
         isHidden: false
       }],
       deduplication: { type: 'full' }
@@ -304,11 +304,11 @@ export function buildCompositeLabel(
   const currentTab = tabs.find(t => t.id === activeTabId);
   const scenarioState = currentTab?.editorState?.scenarioState;
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
-  const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+  const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
   
-  // Get scenario color using same logic as elsewhere
-  // Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned color.
-  const getScenarioColor = (scenarioId: string, isVisible: boolean = true): string => {
+  // Get scenario colour using same logic as elsewhere
+  // Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned colour.
+  const getScenarioColour = (scenarioId: string, isVisible: boolean = true): string => {
     // Single-layer grey override: ONLY apply to the visible layer when exactly 1 layer is visible
     if (isVisible && visibleScenarioIds.length === 1) {
       return '#808080';
@@ -316,12 +316,12 @@ export function buildCompositeLabel(
     
     // Get stored colour (for both visible and hidden layers)
     if (scenarioId === 'current') {
-      return currentColor || '#3B82F6';
+      return currentColour || '#3B82F6';
     } else if (scenarioId === 'base') {
-      return baseColor || '#A3A3A3';
+      return baseColour || '#A3A3A3';
     } else {
       const scenario = scenariosContext.scenarios.find((s: any) => s.id === scenarioId);
-      return scenario?.color || '#808080';
+      return scenario?.colour || '#808080';
     }
   };
   
@@ -332,7 +332,7 @@ export function buildCompositeLabel(
       segments: [{
         ...info,
         layerId: 'current',
-        color: '#000',
+        colour: '#000',
         isHidden: false
       }],
       deduplication: { type: 'full' }
@@ -347,7 +347,7 @@ export function buildCompositeLabel(
     segments.push({
       ...info,
       layerId,
-      color: getScenarioColor(layerId, true),
+      colour: getScenarioColour(layerId, true),
       isHidden: false
     });
   }
@@ -358,7 +358,7 @@ export function buildCompositeLabel(
     segments.push({
       ...info,
       layerId: 'current',
-      color: '#999', // Light grey for hidden
+      colour: '#999', // Light grey for hidden
       isHidden: true
     });
   }
@@ -543,7 +543,7 @@ export function formatSegmentValue(segment: LabelSegment, includeFields: {
 /**
  * Render composite label to React nodes
  * 
- * @param selected - Whether the edge is selected (affects text color on dark background)
+ * @param selected - Whether the edge is selected (affects text colour on dark background)
  */
 export function renderCompositeLabel(
   label: CompositeLabel,
@@ -579,7 +579,7 @@ export function renderCompositeLabel(
   }
   
   // Simplified: visible identical, hidden differs
-  // STEP 5: Adapt text color when selected
+  // STEP 5: Adapt text colour when selected
   if (deduplication.type === 'simplified') {
     const visibleValue = formatSegmentValue(visible[0], {
       probability: true,
@@ -682,7 +682,7 @@ export function renderCompositeLabel(
           <span 
             key={segment.layerId}
             style={{
-              color: segment.color,
+              color: segment.colour,
               fontWeight: 'bold',
               fontSize: '11px'
             }}
@@ -694,7 +694,7 @@ export function renderCompositeLabel(
       })}
       
       {/* If partial dedup, show deduplicated fields at end */}
-      {/* STEP 5: Adapt text color when selected */}
+      {/* STEP 5: Adapt text colour when selected */}
       {deduplication.type === 'partial' && visible.length > 0 && (
         <>
           {deduplication.dedupFlags?.probability && !isCaseEdge && (

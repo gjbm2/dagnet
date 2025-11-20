@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Replace floating text labels on edges with an interactive bead-based system. Each edge parameter (probability, costs, variants, conditional probabilities) is represented as a colored bead that can expand to show detailed information. This eliminates label collision detection overhead and provides a cleaner, more scalable visualization.
+Replace floating text labels on edges with an interactive bead-based system. Each edge parameter (probability, costs, variants, conditional probabilities) is represented as a coloured bead that can expand to show detailed information. This eliminates label collision detection overhead and provides a cleaner, more scalable visualization.
 
 ### Key Innovations
 
@@ -35,7 +35,7 @@ Replace floating text labels on edges with an interactive bead-based system. Eac
 3. **Expandable by Default**: Normal params and variants expanded, conditional_p collapsed
 4. **Click to Toggle**: Any bead can be expanded/collapsed independently
 5. **Text Follows Spline**: Expanded beads show text that curves along the edge path
-6. **Color Coding**: Normal params = dark grey, variants/conditional_p = scenario colors
+6. **Colour Coding**: Normal params = dark grey, variants/conditional_p = scenario colours
 
 ---
 
@@ -45,33 +45,33 @@ Replace floating text labels on edges with an interactive bead-based system. Eac
 
 1. **Probability Bead** (`p`)
    - **Default**: Expanded
-   - **Color**: Dark grey (`#4A5568`) with white text
+   - **Colour**: Dark grey (`#4A5568`) with white text
    - **Expanded Text**: `50% ± 5%` (or just `50%` if no stdev)
    - **Collapsed**: 16px dark grey circle
 
 2. **Cost GBP Bead** (`cost_gbp`) - *if present*
    - **Default**: Expanded
-   - **Color**: Dark grey (`#4A5568`) with white text
+   - **Colour**: Dark grey (`#4A5568`) with white text
    - **Expanded Text**: `£125.50 ± £10` (or just `£125.50`)
    - **Collapsed**: 16px dark grey circle
 
 3. **Cost Time Bead** (`cost_time`) - *if present*
    - **Default**: Expanded
-   - **Color**: Dark grey (`#4A5568`) with white text
+   - **Colour**: Dark grey (`#4A5568`) with white text
    - **Expanded Text**: `2.5d ± 0.5d` (or just `2.5d`)
    - **Collapsed**: 16px dark grey circle
 
 4. **Case Variant Bead** - *if edge has case_variant*
    - **Default**: Expanded
-   - **Color**: Case node color (from `node.layout.color`)
+   - **Colour**: Case node colour (from `node.layout.colour`)
    - **Expanded Text**: `treatment: 25%` (variant name + weight)
-   - **Collapsed**: 16px circle in case color
+   - **Collapsed**: 16px circle in case colour
 
 5. **Conditional Probability Beads** - *one per conditional_p entry*
    - **Default**: Collapsed
-   - **Color**: Per-condition color (from `cp.color` or generated)
+   - **Colour**: Per-condition colour (from `cp.colour` or generated)
    - **Expanded Text**: `visited(promo): 30%` (condition string + probability)
-   - **Collapsed**: 16px circle in condition color
+   - **Collapsed**: 16px circle in condition colour
 
 ---
 
@@ -79,15 +79,15 @@ Replace floating text labels on edges with an interactive bead-based system. Eac
 
 ### Collapsed State
 - **Shape**: Circle, 16px diameter
-- **Visual**: Solid color fill, 2px white border, shadow
+- **Visual**: Solid colour fill, 2px white border, shadow
 - **Interaction**: Click to expand
 - **Tooltip**: Hover shows full information
 
 ### Expanded State
 - **Shape**: Lozenge/pill (rounded rectangle)
 - **Visual**: 
-  - Background: Same color as collapsed state
-  - Text: White (for dark grey) or black (for light colors)
+  - Background: Same colour as collapsed state
+  - Text: White (for dark grey) or black (for light colours)
   - Padding: 4px horizontal, 2px vertical
   - Border: 2px white
   - Shadow: `0 2px 4px rgba(0,0,0,0.3)`
@@ -103,7 +103,7 @@ Replace floating text labels on edges with an interactive bead-based system. Eac
 ### Single Visible Scenario
 - Show beads for that scenario's values
 - Normal param beads: Dark grey
-- Variant/conditional beads: Scenario color
+- Variant/conditional beads: Scenario colour
 
 ### Multiple Visible Scenarios
 
@@ -135,12 +135,12 @@ Replace floating text labels on edges with an interactive bead-based system. Eac
 **Implementation**:
 - For each visible scenario, render a complete set of beads
 - Offset perpendicular to spline: `offsetY = scenarioIndex * 20px`
-- Use scenario color for variant/conditional beads
+- Use scenario colour for variant/conditional beads
 - Normal param beads always dark grey (they represent the same parameter across scenarios)
 
 **Deduplication**:
 - If all scenarios have identical values for a parameter, show only one bead (dark grey)
-- If values differ, show beads for each scenario (colored)
+- If values differ, show beads for each scenario (coloured)
 
 ---
 
@@ -152,7 +152,7 @@ Replace floating text labels on edges with an interactive bead-based system. Eac
 - **Method**: Use `path.getPointAtLength(distance)` to position along actual Bezier curve
 
 ### Perpendicular Offset (NOT USED)
-- **Note**: Multi-scenario values shown as colored text within single bead position
+- **Note**: Multi-scenario values shown as coloured text within single bead position
 - **No perpendicular stacking needed** - all scenarios' values shown in same bead
 
 ### Expanded Text Positioning
@@ -192,7 +192,7 @@ Replace floating text labels on edges with an interactive bead-based system. Eac
 width: 16px;
 height: 16px;
 border-radius: 50%;
-background: [bead color];
+background: [bead colour];
 border: 2px solid white;
 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
 cursor: pointer;
@@ -206,7 +206,7 @@ max-width: 200px; /* Wider to accommodate multi-scenario text */
 height: auto; /* Allow height to grow for wrapped text */
 min-height: 20px;
 border-radius: 10px;
-background: [bead color];
+background: [bead colour];
 border: 2px solid white;
 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
 padding: 4px 6px;
@@ -229,10 +229,10 @@ text-overflow: ellipsis;
 color: #000000; /* black */
 
 /* Multiple values (differ) */
-/* Each segment wrapped in <span> with scenario color */
-.segment-scenario-1 { color: #3b82f6; } /* blue */
-.segment-scenario-2 { color: #f97316; } /* orange */
-.segment-scenario-3 { color: #8b5cf6; } /* purple */
+/* Each segment wrapped in <span> with scenario colour */
+.segment-scenario-1 { colour: #3b82f6; } /* blue */
+.segment-scenario-2 { colour: #f97316; } /* orange */
+.segment-scenario-3 { colour: #8b5cf6; } /* purple */
 /* etc. */
 
 /* Hidden current (in brackets) */
@@ -245,7 +245,7 @@ color: #000000; /* black */
 
 #### Probability Bead
 - **Format (single/identical)**: `50% ± 5%` or `50%` (with 🔌 prefix if `parameter_id` exists)
-- **Format (multi-scenario, differ)**: `50% 25% 50%` (colored segments, 🔌 prefix if connected)
+- **Format (multi-scenario, differ)**: `50% 25% 50%` (coloured segments, 🔌 prefix if connected)
 - **Format (with hidden current)**: `50% 25% (50%)` (grey brackets for hidden)
 - **Format (with parameter connection)**: `🔌 50%` (plug icon prefix when expanded)
 - **Stdev**: Only shown if present and > 0
@@ -254,7 +254,7 @@ color: #000000; /* black */
 
 #### Cost GBP Bead
 - **Format (single/identical)**: `£125.50 ± £10` or `£125.50` (with 🔌 prefix if `cost_gbp_parameter_id` exists)
-- **Format (multi-scenario, differ)**: `£100 £150 £120` (colored segments, 🔌 prefix if connected)
+- **Format (multi-scenario, differ)**: `£100 £150 £120` (coloured segments, 🔌 prefix if connected)
 - **Format (with hidden current)**: `£100 £150 (£120)` (grey brackets)
 - **Format (with parameter connection)**: `🔌 £125.50` (plug icon prefix when expanded)
 - **Currency**: Always show £ symbol
@@ -263,7 +263,7 @@ color: #000000; /* black */
 
 #### Cost Time Bead
 - **Format (single/identical)**: `2.5d ± 0.5d` or `2.5d` (with 🔌 prefix if `cost_time_parameter_id` exists)
-- **Format (multi-scenario, differ)**: `2d 3d 2.5d` (colored segments, 🔌 prefix if connected)
+- **Format (multi-scenario, differ)**: `2d 3d 2.5d` (coloured segments, 🔌 prefix if connected)
 - **Format (with hidden current)**: `2d 3d (2.5d)` (grey brackets)
 - **Format (with parameter connection)**: `🔌 2.5d` (plug icon prefix when expanded)
 - **Units**: Show appropriate unit (d=days, h=hours, etc.)
@@ -272,16 +272,16 @@ color: #000000; /* black */
 
 #### Case Variant Bead
 - **Format (single/identical)**: `treatment: 25%`
-- **Format (multi-scenario, differ)**: `treatment: 20% 25% 30%` (colored weights)
+- **Format (multi-scenario, differ)**: `treatment: 20% 25% 30%` (coloured weights)
 - **Format (with hidden current)**: `treatment: 20% 25% (30%)` (grey brackets)
-- **Components**: Variant name + weight percentages (colored if differ)
+- **Components**: Variant name + weight percentages (coloured if differ)
 - **Rationale**: Edge probability (p) shown separately in probability bead before this, so only variant weight needed here
 
 #### Conditional Probability Bead
 - **Format (single/identical)**: `visited(promo): 30%`
-- **Format (multi-scenario, differ)**: `visited(promo): 30% 25% 35%` (colored probs)
+- **Format (multi-scenario, differ)**: `visited(promo): 30% 25% 35%` (coloured probs)
 - **Format (with hidden current)**: `visited(promo): 30% 25% (35%)` (grey brackets)
-- **Components**: Condition string (simplified) + probabilities (colored if differ)
+- **Components**: Condition string (simplified) + probabilities (coloured if differ)
 - **Simplification**: Show readable version of condition DSL
   - `visited(promo)` → `visited(promo)`
   - `context(device:mobile)` → `mobile`
@@ -293,34 +293,34 @@ color: #000000; /* black */
 - **Style**: Bracketed text in grey (`#999999`) with 50% opacity (`rgba(153, 153, 153, 0.5)`)
 - **Rationale**: Consistent with current label system (Rule 5), useful for comparison
 
-### Color Palette
+### Colour Palette
 - **Normal Params**: `#4A5568` (dark grey)
-- **Case Variants**: Darkened case node color (see darkening strategy below)
-- **Conditional_p**: Dark color palette (see dark palette below)
+- **Case Variants**: Darkened case node colour (see darkening strategy below)
+- **Conditional_p**: Dark colour palette (see dark palette below)
 - **Text on Dark Grey**: White (`#FFFFFF`)
-- **Text on Dark Colors**: White (`#FFFFFF`)
-- **Scenario Colors**: Pastel/vibrant (used as text color in expanded beads)
+- **Text on Dark Colours**: White (`#FFFFFF`)
+- **Scenario Colours**: Pastel/vibrant (used as text colour in expanded beads)
 - **Hidden Current Text**: `rgba(153, 153, 153, 0.5)` (grey, 50% opacity)
 
-### Color Contrast Strategy
+### Colour Contrast Strategy
 
-**Problem**: Scenario colors (pastels) used as text color may clash with case/conditional bead backgrounds.
+**Problem**: Scenario colours (pastels) used as text colour may clash with case/conditional bead backgrounds.
 
-**Solution**: Use darker colors for case variants and conditional_p beads to ensure contrast.
+**Solution**: Use darker colours for case variants and conditional_p beads to ensure contrast.
 
-#### Case Variant Colors
-- **Source**: `node.layout.color` (user-set or default)
+#### Case Variant Colours
+- **Source**: `node.layout.colour` (user-set or default)
 - **Strategy**: Darken by 30-40% lightness reduction
-- **Result**: Darker background ensures white text is readable, even when scenario text colors are similar
+- **Result**: Darker background ensures white text is readable, even when scenario text colours are similar
 
-#### Conditional_p Colors
-- **Default Palette**: Use darker Tailwind 600-700 level colors instead of 400 level
-- **User-set Colors**: Darken user-set colors (`cp.color`) by 30-40% if too light
+#### Conditional_p Colours
+- **Default Palette**: Use darker Tailwind 600-700 level colours instead of 400 level
+- **User-set Colours**: Darken user-set colours (`cp.colour`) by 30-40% if too light
 - **Result**: Consistent dark backgrounds for all conditional beads
 
-#### Dark Conditional Color Palette
+#### Dark Conditional Colour Palette
 ```typescript
-const CONDITIONAL_COLOR_PALETTE_DARK = [
+const CONDITIONAL_COLOUR_PALETTE_DARK = [
   '#16a34a', // green-600 (was green-400)
   '#dc2626', // red-600 (was red-400)
   '#d97706', // amber-600 (was amber-400)
@@ -336,13 +336,13 @@ const CONDITIONAL_COLOR_PALETTE_DARK = [
 ];
 ```
 
-#### Color Darkening Function
+#### Colour Darkening Function
 ```typescript
-function darkenColor(color: string, amount: number = 0.35): string {
+function darkenColour(colour: string, amount: number = 0.35): string {
   // Convert hex to HSL
   // Reduce lightness by amount (0-1)
   // Convert back to hex
-  // Ensures readable contrast with pastel scenario text colors
+  // Ensures readable contrast with pastel scenario text colours
 }
 ```
 
@@ -385,9 +385,9 @@ interface BeadState {
 
 ### Phase 3: Multi-Scenario Support
 1. Extend bead text rendering to show multiple scenario values
-2. Implement colored text segments within expanded beads
+2. Implement coloured text segments within expanded beads
 3. Add deduplication logic (identical values → single black text)
-4. Color coding matches scenario colors from visibleColorOrderIds
+4. Colour coding matches scenario colours from visibleColourOrderIds
 
 ### Phase 4: Polish
 1. Smooth animations for expand/collapse
@@ -406,7 +406,7 @@ interface EdgeBeadProps {
   edge: GraphEdge;
   path: SVGPathElement;
   visibleScenarios: string[];
-  visibleColorOrderIds: string[];
+  visibleColourOrderIds: string[];
   scenariosContext: ScenariosContext;
   whatIfDSL?: string | null;
 }
@@ -414,7 +414,7 @@ interface EdgeBeadProps {
 export function EdgeBeads(props: EdgeBeadProps): React.ReactNode {
   // Build bead definitions for 'current' layer only
   // Extract values from all visible scenarios
-  // Render single bead position with multi-colored text
+  // Render single bead position with multi-coloured text
   // Handle click to toggle expansion
 }
 ```
@@ -428,7 +428,7 @@ interface BeadDefinition {
   values: {
     scenarioId: string;
     value: number | string;
-    color: string; // scenario color
+    colour: string; // scenario colour
   }[];
   
   // Hidden current value (if 'current' not visible but differs)
@@ -437,7 +437,7 @@ interface BeadDefinition {
   };
   
   // Display
-  displayText: React.ReactNode; // Colored segments + optional grey brackets
+  displayText: React.ReactNode; // Coloured segments + optional grey brackets
   allIdentical: boolean; // true if all visible scenarios have same value
   
   // Position
@@ -519,9 +519,9 @@ interface BeadDefinition {
 - ✅ All parameter types render as beads
 - ✅ Beads positioned correctly along spline
 - ✅ Expand/collapse works for all bead types
-- ✅ Multi-scenario values shown as colored text segments within single bead
+- ✅ Multi-scenario values shown as coloured text segments within single bead
 - ✅ Default states correct (normal params expanded, conditional_p collapsed)
-- ✅ Colors match specification (dark grey for normal params)
+- ✅ Colours match specification (dark grey for normal params)
 
 ### Non-Functional
 - ✅ No collision detection code remains

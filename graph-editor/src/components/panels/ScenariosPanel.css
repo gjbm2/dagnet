@@ -99,25 +99,30 @@
   flex-shrink: 0;
 }
 
-/* Color Swatch - clickable to change color */
-.scenario-color-swatch {
+/* Colour Swatch - clickable to change colour */
+.scenario-colour-swatch-wrapper {
+  flex-shrink: 0;
+  pointer-events: auto; /* Clickable for colour picker */
+}
+
+.scenario-colour-swatch {
   width: 20px;
   height: 20px;
   border-radius: 3px;
   border: 1px solid #D1D5DB;
   cursor: pointer;
   flex-shrink: 0;
-  pointer-events: auto; /* Clickable for color picker */
+  pointer-events: auto; /* Clickable for colour picker */
   transition: transform 0.1s ease;
 }
 
-.scenario-color-swatch:hover {
+.scenario-colour-swatch:hover {
   transform: scale(1.1);
   border-color: #9CA3AF;
 }
 
 /* Empty placeholder for swatch when layer not visible */
-.scenario-color-swatch-placeholder {
+.scenario-colour-swatch-placeholder {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
