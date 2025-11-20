@@ -166,8 +166,8 @@ function findFilesToRename(dir, fileList = []) {
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     
-    // Skip node_modules, .git, etc.
-    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === 'build') continue;
+    // Skip node_modules, .git, venv, etc.
+    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === 'build' || entry.name === 'venv' || entry.name === '.venv' || entry.name === '__pycache__') continue;
 
     if (entry.isDirectory()) {
       findFilesToRename(fullPath, fileList);
