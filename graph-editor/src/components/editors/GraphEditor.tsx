@@ -1632,12 +1632,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           width: '100%',
           overflow: 'hidden'
         }}>
-        {/* Window Selector with integrated What-If & Context buttons */}
-        <WindowSelector tabId={tabId} />
-        
-        {/* Scenario Legend - shows when >1 scenario exists (excluding Base) */}
-        {tabId && <ScenarioLegendWrapper tabId={tabId} />}
-        
         {/* Main DockLayout - spans entire graph editor */}
         {dockLayout && (
           <DockLayout
@@ -1935,6 +1929,12 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
             }}
           />
         )}
+
+        {/* Window Selector with integrated What-If & Context buttons - rendered after DockLayout */}
+        <WindowSelector tabId={tabId} />
+        
+        {/* Scenario Legend - shows when >1 scenario exists (excluding Base) */}
+        {tabId && <ScenarioLegendWrapper tabId={tabId} />}
 
         {/* Icon Bar - when minimized */}
         {sidebarState.mode === 'minimized' && (
