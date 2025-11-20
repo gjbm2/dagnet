@@ -133,3 +133,4 @@ if (!validation.valid || validation.warnings.length > 0) {
 **Status**: Most critical functionality fixed. Main missing piece is auto-unhide Current, which requires hooking into graph mutation events.
 
 
+

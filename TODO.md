@@ -1,4 +1,4 @@
-bead labels aren't updating when values change e.g. on data retrieval, revbalances, etc.# TODO
+# TODO
 
 ## Nasty glitches
 - what-if funky and fussy (render path...)
@@ -115,6 +115,7 @@ bead labels aren't updating when values change e.g. on data retrieval, revbalanc
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- bead labels aren't updating when values change e.g. on data retrieval, revbalances, etc. 
 - make 'overridden' icons brighter
 - add icons to collapsed beads?
 - playing with edges resets edge_id! 
