@@ -46,7 +46,7 @@ Open the **Scenarios** tab in the right‑hand sidebar (What‑If panel). You’
 Each row has:
 
 - **Eye icon** – show/hide that layer in the composition
-- **Color chip** – the color used for that scenario in the graph
+- **Colour chip** – the colour used for that scenario in the graph
 - **Name** – editable scenario name (timestamp by default)
 - **Context menu** (right‑click) with actions:
   - **Show / Hide** – toggle visibility

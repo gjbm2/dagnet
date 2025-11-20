@@ -103,11 +103,11 @@ interface GraphNode {
   // Case node fields (SIMPLIFIED)
   case_id?: string;          // If present, this is a case node
                              // References /param-registry/cases/{case_id}.yaml
-                             // Pull variants, weights, status, colors from file
+                             // Pull variants, weights, status, colours from file
                              // Unless specific fields are _overridden
   
   // Visual fields
-  color?: string;
+  colour?: string;
   position: { x: number; y: number };
   
   // Display options
@@ -153,7 +153,7 @@ setLocalNodeData({
   id: node.id || '',                                    // ✅ Correct (renamed from slug)
   label: node.label || '',                              // ✅ Correct
   description: node.description || '',                  // ✅ Correct
-  color: node.color || '#3B82F6',                       // ✅ Correct
+  colour: node.colour || '#3B82F6',                       // ✅ Correct
   hideLabel: node.display?.hideLabel || false,          // ✅ Correct
   hideIcon: node.display?.hideIcon || false             // ✅ Correct
 });
@@ -318,7 +318,7 @@ setCaseData({
 **Correct Design:**
 - `node.case_id` (optional) - if present, this is a case node
 - References case file: `/param-registry/cases/{case_id}.yaml`
-- Pull data from case file: variants, weights, status, colors, etc.
+- Pull data from case file: variants, weights, status, colours, etc.
 - Override pattern applies: fields can be `_overridden` to prevent auto-sync from file
 **Required Action:**
 - ✅ Remove nested `node.case` object structure if present
@@ -408,7 +408,7 @@ setCaseData({
 - ✅ ID (node.id)
 - ✅ Label (node.label)
 - ✅ Description (node.description)
-- ✅ Color picker (node.color)
+- ✅ Colour picker (node.colour)
 - ✅ Display options (hideLabel, hideIcon)
 - ✅ Case fields (for case nodes)
 

@@ -100,7 +100,7 @@ We already know `from`/`to` from the edge endpoints, so conditions only need the
 **Rationale:**
 1. ✅ **Less UI complexity** - base probability is simple, special cases are separate
 2. ✅ **Existing logic works** - complement calculation, sibling weighting already implemented
-3. ✅ **Colors work** - conditional edges have color coding (already built)
+3. ✅ **Colours work** - conditional edges have colour coding (already built)
 4. ✅ **Pragmatic** - complexity only where needed (most edges are simple)
 5. ✅ **Clear semantics** - "this is the default, these are the special cases"
 
@@ -183,7 +183,7 @@ const mostSpecific = maxBy(matches, p => countConstraintClauses(p.condition));
 ### UI Changes
 - QueryExpressionEditor supports full queries AND constraint-only mode
 - Conditional probabilities panel parses string conditions
-- Color assignment still based on `conditional_p` array
+- Colour assignment still based on `conditional_p` array
 
 ### Runtime Changes
 - Runner evaluates constraints from strings

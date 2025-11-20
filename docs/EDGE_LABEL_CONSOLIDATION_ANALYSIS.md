@@ -17,14 +17,14 @@ Logic:
 - Checks if all visible segments are identical
 - If identical and hidden matches, shows single black label
 - If identical but hidden differs, shows simplified visible + grey bracketed hidden
-- Otherwise shows colored labels for each segment
+- Otherwise shows coloured labels for each segment
 
 **Handles**:
 - Case edges (variant weight + edge probability)
 - Normal edges (just probability)
 - Standard deviation
 - Hidden vs visible layers
-- Color coding by scenario
+- Colour coding by scenario
 
 ### Path 2: Fallback Rendering (Single Layer / No Scenarios)
 **Trigger**: `!(compositeLabel && compositeLabel.segments.length > 1)`  
@@ -157,8 +157,8 @@ function getEdgeProbabilityForLayer(
 #### 1.3: `formatEdgeProbabilityLabel(info: EdgeProbabilityInfo, options)`
 ```typescript
 interface LabelFormatOptions {
-  showColor?: boolean;
-  color?: string;
+  showColour?: boolean;
+  colour?: string;
   showParens?: boolean;
   showVariantName?: boolean;
   compact?: boolean;

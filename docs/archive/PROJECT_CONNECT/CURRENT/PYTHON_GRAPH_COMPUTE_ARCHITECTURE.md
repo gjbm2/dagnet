@@ -447,7 +447,7 @@ export interface MSMDCResponse {
 
 export interface MutationRequest {
   graph: Graph;
-  mutation_type: 'rebalance' | 'propagate_color' | 'add_complementary';
+  mutation_type: 'rebalance' | 'propagate_colour' | 'add_complementary';
   params: Record<string, any>;
 }
 
@@ -917,7 +917,7 @@ class GraphComputeClient {
 ### Phase 4: Graph Mutations (3-4 hours)
 1. Implement rebalancing algorithms
 2. Implement complementary conditional creation
-3. Implement color propagation
+3. Implement colour propagation
 4. API endpoints for each
 5. TypeScript client methods
 6. Tests
@@ -1111,7 +1111,7 @@ None - infrastructure ready for algorithmic work.
 #### Phase 4: Graph Mutations (3-4 hours)
 1. Implement rebalancing algorithms
 2. Implement complementary conditional creation
-3. Implement color propagation
+3. Implement colour propagation
 4. API endpoints for each
 5. TypeScript client methods
 6. Tests

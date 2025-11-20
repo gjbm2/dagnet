@@ -291,32 +291,32 @@ contexts:
 
 ### Scenario C: A/B Test with Context
 
-**Setup:** Testing new signup button colors, but results vary by channel
+**Setup:** Testing new signup button colours, but results vary by channel
 
 **Parameters:**
 ```yaml
 # Control (blue button)
 id: signup-blue-google
-case_parameter_id: button-color
+case_parameter_id: button-colour
 variant: blue
 context_filter: { channel: google }
 value: 0.35
 
 id: signup-blue-facebook  
-case_parameter_id: button-color
+case_parameter_id: button-colour
 variant: blue
 context_filter: { channel: facebook }
 value: 0.28
 
 # Treatment (green button)
 id: signup-green-google
-case_parameter_id: button-color
+case_parameter_id: button-colour
 variant: green
 context_filter: { channel: google }
 value: 0.37  # +2% on Google
 
 id: signup-green-facebook
-case_parameter_id: button-color
+case_parameter_id: button-colour
 variant: green
 context_filter: { channel: facebook }
 value: 0.27  # -1% on Facebook (worse!)

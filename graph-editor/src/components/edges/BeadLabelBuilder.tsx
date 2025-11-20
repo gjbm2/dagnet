@@ -5,7 +5,7 @@ import React from 'react';
  * 
  * Ensures consistent logic for:
  * - Checking if values are identical across scenarios (including stdev)
- * - Formatting display text with proper color coding
+ * - Formatting display text with proper colour coding
  * - Handling hidden current values
  * - Applying formatters uniformly
  * 
@@ -15,7 +15,7 @@ import React from 'react';
 export interface BeadValue {
   scenarioId: string;
   value: number | string;
-  color: string;
+  colour: string;
   stdev?: number;
 }
 
@@ -93,7 +93,7 @@ export class BeadLabelBuilder {
   }
   
   /**
-   * Build the display text with proper color coding
+   * Build the display text with proper colour coding
    * WHITE text used on dark backgrounds
    */
   buildDisplayText(): React.ReactNode {
@@ -118,10 +118,10 @@ export class BeadLabelBuilder {
         </span>
       );
     } else {
-      // Values differ - show each in its scenario color
+      // Values differ - show each in its scenario colour
       this.values.forEach((val, idx) => {
         segments.push(
-          <span key={`value-${idx}`} style={{ color: val.color }}>
+          <span key={`value-${idx}`} style={{ color: val.colour }}>
             {this.formatter(val.value, val.stdev)}
           </span>
         );

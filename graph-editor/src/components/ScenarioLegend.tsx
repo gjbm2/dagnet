@@ -14,8 +14,8 @@ interface ScenarioLegendProps {
   scenarios: Scenario[];
   scenarioOrder: string[];
   visibleScenarioIds: string[];
-  currentColor: string;
-  baseColor: string;
+  currentColour: string;
+  baseColour: string;
   showCurrent: boolean;
   showBase: boolean;
   onToggleVisibility: (scenarioId: string) => void;
@@ -27,8 +27,8 @@ export function ScenarioLegend({
   scenarios,
   scenarioOrder,
   visibleScenarioIds,
-  currentColor,
-  baseColor,
+  currentColour,
+  baseColour,
   showCurrent,
   showBase,
   onToggleVisibility,
@@ -45,9 +45,9 @@ export function ScenarioLegend({
   
   /**
    * Get effective colour for a scenario (with single-layer grey override)
-   * Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned color.
+   * Only the sole VISIBLE layer is shown in grey; hidden layers retain their assigned colour.
    */
-  const getScenarioColor = useCallback((scenarioId: string, isVisible: boolean = true): string => {
+  const getScenarioColour = useCallback((scenarioId: string, isVisible: boolean = true): string => {
     // Single-layer grey override: ONLY apply to the visible layer when exactly 1 layer is visible
     if (isVisible && visibleScenarioIds.length === 1) {
       return '#808080';
@@ -55,14 +55,14 @@ export function ScenarioLegend({
     
     // Get stored colour (for both visible and hidden layers)
     if (scenarioId === 'current') {
-      return currentColor;
+      return currentColour;
     } else if (scenarioId === 'base') {
-      return baseColor;
+      return baseColour;
     } else {
       const scenario = scenarios.find(s => s.id === scenarioId);
-      return scenario?.color || '#808080';
+      return scenario?.colour || '#808080';
   }
-  }, [visibleScenarioIds.length, currentColor, baseColor, scenarios]);
+  }, [visibleScenarioIds.length, currentColour, baseColour, scenarios]);
   
   // Derive tab-specific order for user scenarios (excluding base/current)
   const orderedUserScenarios: Scenario[] = (scenarioOrder.length > 0
@@ -84,7 +84,7 @@ export function ScenarioLegend({
           key="base"
           className={`scenario-legend-chip ${!visibleScenarioIds.includes('base') ? 'invisible' : ''}`}
           style={{
-            backgroundColor: getScenarioColor('base', visibleScenarioIds.includes('base')),
+            backgroundColor: getScenarioColour('base', visibleScenarioIds.includes('base')),
             opacity: visibleScenarioIds.includes('base') ? 1 : 0.3
           }}
           onClick={(e) => {
@@ -121,14 +121,14 @@ export function ScenarioLegend({
         .reverse()
         .map(scenario => {
         const isVisible = visibleScenarioIds.includes(scenario.id);
-        const color = getScenarioColor(scenario.id, isVisible);
+        const colour = getScenarioColour(scenario.id, isVisible);
         
         return (
           <div
             key={scenario.id}
             className={`scenario-legend-chip ${!isVisible ? 'invisible' : ''} ${deletingIds.includes(scenario.id) ? 'deleting' : ''}`}
             style={{
-              backgroundColor: color,
+              backgroundColor: colour,
               opacity: isVisible ? 1 : 0.3
             }}
             onClick={(e) => {
@@ -180,7 +180,7 @@ export function ScenarioLegend({
           key="current"
           className={`scenario-legend-chip ${!visibleScenarioIds.includes('current') ? 'invisible' : ''}`}
           style={{
-            backgroundColor: getScenarioColor('current', visibleScenarioIds.includes('current')),
+            backgroundColor: getScenarioColour('current', visibleScenarioIds.includes('current')),
             opacity: visibleScenarioIds.includes('current') ? 1 : 0.3
           }}
           onClick={(e) => {

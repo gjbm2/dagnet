@@ -679,7 +679,7 @@ interface EdgeVisualization {
   delta: number;           // currentValue - snapshotValue
   visualStyle: {
     width: number;         // Based on current value
-    color: string;         // Blended color showing delta
+    colour: string;         // Blended colour showing delta
     blur: number;          // Based on stdev (optional)
   };
 }
@@ -693,7 +693,7 @@ function visualizeEdgeDelta(snapshot: ParameterValue, current: ParameterValue): 
     delta,
     visualStyle: {
       width: current.mean * 10,  // Edge thickness
-      color: delta > 0 
+      colour: delta > 0 
         ? `rgba(0, 100, 255, ${Math.abs(delta) * 10})`  // Blue fringe = increased
         : `rgba(255, 0, 100, ${Math.abs(delta) * 10})`, // Pink fringe = decreased
       blur: current.stdev * 20  // Optional: uncertainty visualization
@@ -1035,7 +1035,7 @@ context_filters:
 **User's position:** "I don't think graphs need n & k... p & stdev suffice"
 
 **Use cases that might need n/k on graph:**
-- ❌ Snapshot visualization (NO - just need mean for fringe colors)
+- ❌ Snapshot visualization (NO - just need mean for fringe colours)
 - ❌ Stdev visualization (NO - already have stdev)
 - ❌ Revenue/day calculations (NO - do in dagCalc or separate tool)
 - ❌ MCMC analysis (NO - pull from params before sending to Py runner)

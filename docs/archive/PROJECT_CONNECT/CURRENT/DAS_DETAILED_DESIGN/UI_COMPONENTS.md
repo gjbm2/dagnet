@@ -236,7 +236,7 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
           </Box>
         ))}
         {items.length === 0 && (
-          <Box sx={{ p: 4, textAlign: 'center', color: 'text.secondary' }}>
+          <Box sx={{ p: 4, textAlign: 'center', colour: 'text.secondary' }}>
             No connections yet. Click "+ New" to add one.
           </Box>
         )}

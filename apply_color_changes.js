@@ -1,46 +1,46 @@
 #!/usr/bin/env node
 
 /**
- * apply_color_changes.js
+ * apply_colour_changes.js
  * 
- * 1. Reads color-usages.json
+ * 1. Reads colour-usages.json
  * 2. Filters for "change": true
  * 3. Groups by file
  * 4. Sorts changes within each file in REVERSE order (bottom-to-top, right-to-left)
  *    to preserve offsets for earlier edits.
  * 5. Applies changes to file content and saves.
- * 6. Scans for filenames containing "color" and renames them to "colour".
+ * 6. Scans for filenames containing "colour" and renames them to "colour".
  */
 
 const fs = require('fs');
 const path = require('path');
 
-const USAGES_FILE = 'color-usages.json';
+const USAGES_FILE = 'colour-usages.json';
 const ROOT = process.cwd();
 
 // Map for case-sensitive replacement logic
 // We want to preserve the casing style of the match
 function getReplacement(match) {
   // Exact match for specific common casings
-  if (match === 'color') return 'colour';
-  if (match === 'Color') return 'Colour';
-  if (match === 'COLOR') return 'COLOUR';
+  if (match === 'colour') return 'colour';
+  if (match === 'Colour') return 'Colour';
+  if (match === 'COLOUR') return 'COLOUR';
   
-  // Heuristic for mixed case (e.g. caseNodeColor -> caseNodeColour)
-  // If it ends in 'Color', replace with 'Colour'
-  if (match.endsWith('Color')) {
+  // Heuristic for mixed case (e.g. caseNodeColour -> caseNodeColour)
+  // If it ends in 'Colour', replace with 'Colour'
+  if (match.endsWith('Colour')) {
     return match.substring(0, match.length - 5) + 'Colour';
   }
-  // If it ends in 'color', replace with 'colour'
-  if (match.endsWith('color')) {
+  // If it ends in 'colour', replace with 'colour'
+  if (match.endsWith('colour')) {
     return match.substring(0, match.length - 5) + 'colour';
   }
   
   // Fallback: direct string replacement (insensitive)
-  return match.replace(/color/i, (m) => {
-    if (m === 'color') return 'colour';
-    if (m === 'Color') return 'Colour';
-    if (m === 'COLOR') return 'COLOUR';
+  return match.replace(/colour/i, (m) => {
+    if (m === 'colour') return 'colour';
+    if (m === 'Colour') return 'Colour';
+    if (m === 'COLOUR') return 'COLOUR';
     return 'colour'; // Default fallback
   });
 }
@@ -118,7 +118,7 @@ function applyTextChanges() {
       // But if we verified blindly, we might fail if a previous edit on this line changed length.
       // However, since we sort right-to-left (descending column), 'lines[lineIdx]' 
       // reflects the state *before* this current edit but *after* any edits to its right.
-      // Since we only replace "color", the left side is stable.
+      // Since we only replace "colour", the left side is stable.
       
       const potentialMatch = lineText.substring(colIdx, colIdx + matchStr.length);
       
@@ -127,10 +127,10 @@ function applyTextChanges() {
       if (potentialMatch !== matchStr) {
         // Try to find it nearby? Or just skip?
         // For safety, let's skip strict verification failure but log it.
-        // Actually, if we have multiple matches on a line "color: color", 
+        // Actually, if we have multiple matches on a line "colour: colour", 
         // the rightmost one is processed first.
-        // e.g. "color: color" (cols 1 and 8)
-        // 1. Process col 8. "color: colour".
+        // e.g. "colour: colour" (cols 1 and 8)
+        // 1. Process col 8. "colour: colour".
         // 2. Process col 1. "colour: colour".
         // It works.
         
@@ -172,7 +172,7 @@ function findFilesToRename(dir, fileList = []) {
     if (entry.isDirectory()) {
       findFilesToRename(fullPath, fileList);
     } else {
-      if (entry.name.match(/color/i) && !entry.name.endsWith('.json') && entry.name !== 'apply_color_changes.js' && entry.name !== 'list_color_usages.js' && entry.name !== 'sieve_color.jq') {
+      if (entry.name.match(/colour/i) && !entry.name.endsWith('.json') && entry.name !== 'apply_colour_changes.js' && entry.name !== 'list_colour_usages.js' && entry.name !== 'sieve_colour.jq') {
         fileList.push(fullPath);
       }
     }
@@ -187,7 +187,7 @@ function renameFiles() {
   let renameCount = 0;
 
   // Sort by depth desc (deepest first) so we don't rename a directory before its children
-  // (though we are currently only looking at files, not dirs. If dirs have 'color' in name, we should rename them too?)
+  // (though we are currently only looking at files, not dirs. If dirs have 'colour' in name, we should rename them too?)
   // For now, let's stick to files as requested ("incidence in file names").
   
   filesToRename.sort((a, b) => b.length - a.length);
@@ -196,10 +196,10 @@ function renameFiles() {
     const dir = path.dirname(oldPath);
     const oldName = path.basename(oldPath);
     
-    const newName = oldName.replace(/color/gi, (m) => {
-        if (m === 'color') return 'colour';
-        if (m === 'Color') return 'Colour';
-        if (m === 'COLOR') return 'COLOUR';
+    const newName = oldName.replace(/colour/gi, (m) => {
+        if (m === 'colour') return 'colour';
+        if (m === 'Colour') return 'Colour';
+        if (m === 'COLOUR') return 'COLOUR';
         return 'colour';
     });
 

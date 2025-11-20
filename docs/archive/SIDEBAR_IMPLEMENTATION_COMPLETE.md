@@ -42,10 +42,10 @@
 - ✅ Validation modes (warning/strict/none)
 - ✅ Parameter type filtering
 
-#### **ColorSelector Component** (/components/ColorSelector.tsx)
-- ✅ 9 preset colors in grid
-- ✅ Custom color via HTML5 picker
-- ✅ Current color display
+#### **ColourSelector Component** (/components/ColourSelector.tsx)
+- ✅ 9 preset colours in grid
+- ✅ Custom colour via HTML5 picker
+- ✅ Current colour display
 
 #### **ConditionalProbabilityEditor Component** (/components/ConditionalProbabilityEditor.tsx)
 - ✅ Chip-based node selection (AND logic)
@@ -78,7 +78,7 @@
 - `/src/components/panels/PropertiesPanelWrapper.tsx` + `.css`
 - `/src/components/panels/ToolsPanel.tsx` + `.css`
 - `/src/components/EnhancedSelector.tsx` (475 lines) + `.css` (323 lines)
-- `/src/components/ColorSelector.tsx` + `.css`
+- `/src/components/ColourSelector.tsx` + `.css`
 - `/src/components/ConditionalProbabilityEditor.tsx` + `.css`
 - `/src/components/CollapsibleSection.css`
 
@@ -100,15 +100,15 @@
 
 ## 🎨 Visual Design Features
 
-### Type-Specific Color System
+### Type-Specific Colour System
 Every connection field has a distinctive pastel border that indicates:
-1. **Type** (color)
+1. **Type** (colour)
 2. **Connection status** (thickness: 5px → 6px)
 3. **Interactivity** (hover states)
 
 ### Connection Indicators
 - **Plug icon**: Clear visual feedback (grey → black)
-- **Border color**: Type-specific pastel colors
+- **Border colour**: Type-specific pastel colours
 - **Sync menu**: Discoverable '[⋮]' button
 - **Badges**: Local/planned/connected indicators in dropdown
 
@@ -217,14 +217,14 @@ Every connection field has a distinctive pastel border that indicates:
 />
 ```
 
-### 3. ColorSelector
+### 3. ColourSelector
 ```typescript
-<ColorSelector
-  value={currentColor}
-  onChange={(newColor) => {
-    // Update color
+<ColourSelector
+  value={currentColour}
+  onChange={(newColour) => {
+    // Update colour
   }}
-  label="Edge Color"
+  label="Edge Colour"
 />
 ```
 
@@ -243,7 +243,7 @@ Comparing to `/GRAPH_EDITOR_SIDEBAR_REDESIGN.md` (2560 lines):
 | Pastel Borders | ✅ | ✅ | **COMPLETE** |
 | Sync Menu | ✅ | ✅ | **COMPLETE** |
 | Inline Creation | ✅ | ✅ | **COMPLETE** |
-| ColorSelector | ✅ | ✅ | **COMPLETE** |
+| ColourSelector | ✅ | ✅ | **COMPLETE** |
 | ConditionalProbabilityEditor | ✅ | ✅ | **COMPLETE** |
 | Accordion Animations | ✅ | ✅ | **COMPLETE** |
 | Per-Tab Persistence | ✅ | ✅ | **COMPLETE** |

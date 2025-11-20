@@ -228,11 +228,11 @@ interface LightningMenuProps {
 ### 2. Visual States
 
 **Lightning Button Icon:**
-- `<Zap fill="currentColor">` (filled) - Data source configured
+- `<Zap fill="currentColour">` (filled) - Data source configured
 - `<Zap fill="none">` (stroke) - No data source / manual only
 
 **Button States:**
-- Enabled: Lightning bolt in accent color
+- Enabled: Lightning bolt in accent colour
 - Disabled: Greyed out (when no connected file)
 
 ---
@@ -316,7 +316,7 @@ export function LightningMenu({
       >
         <Zap 
           size={16} 
-          fill={hasDataSource ? 'currentColor' : 'none'}
+          fill={hasDataSource ? 'currentColour' : 'none'}
         />
       </button>
 

@@ -15,7 +15,7 @@
 **Changes**:
 - Added `Condition` interface for conditional logic
 - Added `ConditionalProbability` interface
-- Added `EdgeDisplay` interface for conditional colors/grouping
+- Added `EdgeDisplay` interface for conditional colours/grouping
 - Updated `GraphEdge` to include:
   - `conditional_p?: ConditionalProbability[]`
   - `display?: EdgeDisplay`
@@ -59,7 +59,7 @@
 - Added `ProbabilityParam.parameter_id` field
 - Added `Condition` definition with `visited` array
 - Added `ConditionalProbability` definition
-- Added `EdgeDisplay` definition with `conditional_color` and `conditional_group`
+- Added `EdgeDisplay` definition with `conditional_colour` and `conditional_group`
 - Updated `Edge` schema with:
   - `conditional_p` array
   - `case_variant` and `case_id` fields (for case edges)
@@ -163,28 +163,28 @@
 
 ### Features to Implement:
 
-#### 11. Dynamic Color Palette - NOT STARTED
-**File**: `/home/gjbm2/dev/dagnet/graph-editor/src/lib/conditionalColors.ts`
+#### 11. Dynamic Colour Palette - NOT STARTED
+**File**: `/home/gjbm2/dev/dagnet/graph-editor/src/lib/conditionalColours.ts`
 
 **Required Functions**:
 ```typescript
-function getConditionalColor(edge: GraphEdge): string
+function getConditionalColour(edge: GraphEdge): string
 function simpleHash(str: string): number
-const CONDITIONAL_COLOR_PALETTE: string[]
+const CONDITIONAL_COLOUR_PALETTE: string[]
 ```
 
 **Features**:
-- Check for user override (`edge.display.conditional_color`)
+- Check for user override (`edge.display.conditional_colour`)
 - Check for conditional group (`edge.display.conditional_group`)
-- Generate color from condition signature hash
-- Deterministic color assignment
+- Generate colour from condition signature hash
+- Deterministic colour assignment
 - Avoid blue (#007bff) and purple (#C4B5FD, #8b5cf6)
 
 ####12. Edge Rendering Updates - NOT STARTED
 **File**: `/home/gjbm2/dev/dagnet/graph-editor/src/components/edges/ConversionEdge.tsx`
 
 **Required Changes**:
-- Update `getEdgeColor()` to use conditional colors
+- Update `getEdgeColour()` to use conditional colours
 - Add conditional edge indicator (badge/icon)
 - Update edge label to show conditional info
 - Add `conditional_group` field to edge data interface
@@ -195,7 +195,7 @@ const CONDITIONAL_COLOR_PALETTE: string[]
 **Required Features**:
 - When conditional edge is selected:
   - Highlight upstream dependency nodes (from condition.visited)
-  - Use same color as edge
+  - Use same colour as edge
   - Apply fading based on distance
   - Show connection lines/paths
 
@@ -244,7 +244,7 @@ const CONDITIONAL_COLOR_PALETTE: string[]
 - End-to-end conditional probability flow
 - What-if analysis state management
 - Validation with UI updates
-- Edge rendering with conditional colors
+- Edge rendering with conditional colours
 - Apps Script calculation accuracy
 
 #### 16. Documentation - NOT STARTED
@@ -307,8 +307,8 @@ const CONDITIONAL_COLOR_PALETTE: string[]
    - No multi-step wizard yet
    - Estimated: 1-2 hours
 
-3. **Phase 4.1**: Add conditional edge colors
-   - Implement color palette
+3. **Phase 4.1**: Add conditional edge colours
+   - Implement colour palette
    - Update edge rendering
    - Estimated: 1-2 hours
 
@@ -400,7 +400,7 @@ This will correctly evaluate conditional probabilities!
 2. Add condition wizard
 3. Drag-and-drop reordering
 4. Validation feedback UI
-5. Color palette implementation
+5. Colour palette implementation
 6. Edge rendering updates
 7. Dependency highlighting
 8. What-If control UI

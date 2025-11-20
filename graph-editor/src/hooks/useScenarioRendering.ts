@@ -3,7 +3,7 @@
  * 
  * Provides scenario rendering data for the current tab.
  * This hook integrates with ScenariosContext and TabContext to compute
- * which scenarios should be rendered and with what colors.
+ * which scenarios should be rendered and with what colours.
  */
 
 import { useMemo } from 'react';
@@ -57,7 +57,7 @@ export function useScenarioRendering(
       };
     }
     
-    const { visibleScenarioIds, visibleColorOrderIds } = scenarioState;
+    const { visibleScenarioIds, visibleColourOrderIds } = scenarioState;
     
     // If no visible scenarios, return empty
     if (visibleScenarioIds.length === 0) {
@@ -77,7 +77,7 @@ export function useScenarioRendering(
       baseParams,
       scenarios,
       visibleScenarioIds,
-      visibleColorOrderIds
+      visibleColourOrderIds
     );
     
     return {

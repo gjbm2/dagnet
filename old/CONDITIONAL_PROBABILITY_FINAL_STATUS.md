@@ -112,29 +112,29 @@ The Conditional Probability feature is now **functionally complete** with all co
 ### **Phase 4: Visualization** ✅ 80%
 
 #### Files Created:
-1. **`/graph-editor/src/lib/conditionalColors.ts`** ✅
-   - `CONDITIONAL_COLOR_PALETTE` with 12 colors
-   - `simpleHash()` for deterministic color assignment
+1. **`/graph-editor/src/lib/conditionalColours.ts`** ✅
+   - `CONDITIONAL_COLOUR_PALETTE` with 12 colours
+   - `simpleHash()` for deterministic colour assignment
    - `getConditionSignature()` for condition uniqueness
-   - `getConditionalColor()` with priority system:
-     1. User override (`display.conditional_color`)
+   - `getConditionalColour()` with priority system:
+     1. User override (`display.conditional_colour`)
      2. Conditional group (placeholder for future)
-     3. Signature-based hash color
+     3. Signature-based hash colour
    - `isConditionalEdge()` helper
-   - `lightenColor()` and `darkenColor()` utilities
+   - `lightenColour()` and `darkenColour()` utilities
 
 #### Files Modified:
 2. **`/graph-editor/src/components/edges/ConversionEdge.tsx`** ✅
-   - Import conditional color utilities
-   - Updated `getEdgeColor()` to check for conditional edges
-   - Conditional edges get unique colors from palette
-   - Colors blend correctly with highlight states
+   - Import conditional colour utilities
+   - Updated `getEdgeColour()` to check for conditional edges
+   - Conditional edges get unique colours from palette
+   - Colours blend correctly with highlight states
 
 #### Features:
-✅ Conditional edges get unique colors  
-✅ Colors assigned deterministically from palette  
-✅ User can override colors (schema ready, UI pending)  
-✅ Colors work with selection/highlight states  
+✅ Conditional edges get unique colours  
+✅ Colours assigned deterministically from palette  
+✅ User can override colours (schema ready, UI pending)  
+✅ Colours work with selection/highlight states  
 ✅ Avoids blue (selection) and purple (cases)  
 ❌ Visual badge/icon on conditional edges  
 ❌ Upstream dependency highlighting when selected  
@@ -163,7 +163,7 @@ The Conditional Probability feature is now **functionally complete** with all co
 **What's Missing**:
 1. **Visual Indicator Badge** ❌
    - Future: Small 🔀 icon or badge on conditional edges
-   - Priority: Low (color is sufficient)
+   - Priority: Low (colour is sufficient)
 
 2. **Upstream Dependency Highlighting** ❌
    - Future: Highlight dependency nodes when conditional edge is selected
@@ -222,7 +222,7 @@ Conditions are evaluated **in order**:
 
 ### **Visual Cues**
 
-- **Conditional Edge Colors**: Each unique condition set gets a distinct color
+- **Conditional Edge Colours**: Each unique condition set gets a distinct colour
 - **Purple Edges**: Case edges (variants)
 - **Gray Edges**: Normal edges without conditions
 - **Blue Edges**: Selected edges
@@ -266,7 +266,7 @@ For advanced users or programmatic editing:
         }
       ],
       "display": {
-        "conditional_color": "#4ade80",
+        "conditional_colour": "#4ade80",
         "conditional_group": "promo-flow"
       }
     }
@@ -292,7 +292,7 @@ For advanced users or programmatic editing:
 - ✅ Reorder conditions
 - ✅ Remove conditions
 - ✅ Search nodes in selector
-- ✅ Conditional edge colors display
+- ✅ Conditional edge colours display
 - ✅ Apps Script calculates correctly
 - ✅ Validation catches errors
 - ❌ What-if analysis UI (not built yet)
@@ -307,7 +307,7 @@ For advanced users or programmatic editing:
    - Planned for future update
 
 2. **No Visual Badge on Conditional Edges**:
-   - Colors distinguish them clearly
+   - Colours distinguish them clearly
    - Badge/icon would be nice addition
 
 3. **No Upstream Dependency Highlighting**:
@@ -417,7 +417,7 @@ For advanced users or programmatic editing:
 2. ✅ **JSON Schema**: Proper schema definition with validation
 3. ✅ **Apps Script Integration**: Conditional probabilities work in calculations
 4. ✅ **Functional UI**: Users can add/edit conditions without JSON
-5. ✅ **Visual Distinction**: Conditional edges have unique colors
+5. ✅ **Visual Distinction**: Conditional edges have unique colours
 6. ✅ **Validation**: Comprehensive error checking
 7. ✅ **Backward Compatible**: No breaking changes
 
@@ -430,7 +430,7 @@ For advanced users or programmatic editing:
 **What works**:
 - ✅ Adding conditional probabilities via UI
 - ✅ Editing and reordering conditions
-- ✅ Visual distinction with colors
+- ✅ Visual distinction with colours
 - ✅ Apps Script calculations
 - ✅ Complete validation
 - ✅ Backward compatible

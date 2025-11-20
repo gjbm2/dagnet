@@ -53,8 +53,8 @@ interface EdgeBeadsProps {
   graph: Graph | null;
   scenarioOrder: string[];
   visibleScenarioIds: string[];
-  visibleColorOrderIds: string[];
-  scenarioColors: Map<string, string>;
+  visibleColourOrderIds: string[];
+  scenarioColours: Map<string, string>;
   scenariosContext: any;
   whatIfDSL?: string | null;
   visibleStartOffset?: number;
@@ -75,8 +75,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     graph,
     scenarioOrder,
     visibleScenarioIds,
-    visibleColorOrderIds,
-    scenarioColors,
+    visibleColourOrderIds,
+    scenarioColours,
     scenariosContext,
     whatIfDSL,
     visibleStartOffset = 0,
@@ -109,8 +109,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       scenariosContext,
       scenarioOrder,
       effectiveVisibleIds,
-      visibleColorOrderIds.length > 0 ? visibleColorOrderIds : ['current'],
-      scenarioColors,
+      visibleColourOrderIds.length > 0 ? visibleColourOrderIds : ['current'],
+      scenarioColours,
       whatIfDSL,
       visibleStartOffset
     );
@@ -131,8 +131,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     JSON.stringify(scenariosContext?.baseParams?.edges?.[edge.uuid || edge.id || '']), // Edge-specific params
     scenarioOrder.join(','), // Scenario order (stable string)
     visibleScenarioIds.join(','), // Visible scenarios (stable string)
-    visibleColorOrderIds.join(','), // Color order (stable string)
-    Array.from(scenarioColors.entries()).join(','), // Scenario colors (stable string)
+    visibleColourOrderIds.join(','), // Colour order (stable string)
+    Array.from(scenarioColours.entries()).join(','), // Scenario colours (stable string)
     whatIfDSL, // What-If DSL
     visibleStartOffset, // Visible start offset
   ]);
@@ -288,60 +288,60 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       // Text is upside down if angle is between 90 and 270 degrees (or -90 to -270)
       const isTextUpsideDown = Math.abs(textAngle) > 90;
       
-      // Get text color for plug icon (use first colored segment or default to white)
-      const getTextColor = (): string => {
+      // Get text colour for plug icon (use first coloured segment or default to white)
+      const getTextColour = (): string => {
         if (typeof bead.displayText === 'string') {
           return '#FFFFFF';
         }
-        // Extract first color from ReactNode
-        const extractFirstColor = (node: React.ReactNode): string => {
+        // Extract first colour from ReactNode
+        const extractFirstColour = (node: React.ReactNode): string => {
           if (typeof node === 'string' || typeof node === 'number') {
             return '#FFFFFF';
           } else if (React.isValidElement(node)) {
             if (node.type === 'span' && node.props.style?.color) {
-              let color = node.props.style.color;
+              let colour = node.props.style.color;
               // Never use black - convert to white
-              if (color === '#000000' || color === 'black' || color === '#374151') {
-                color = '#FFFFFF';
+              if (colour === '#000000' || colour === 'black' || colour === '#374151') {
+                colour = '#FFFFFF';
               }
-              return color;
+              return colour;
             }
             const children = React.Children.toArray(node.props.children);
             for (const child of children) {
-              const color = extractFirstColor(child);
-              if (color && color !== '#FFFFFF') return color;
+              const colour = extractFirstColour(child);
+              if (colour && colour !== '#FFFFFF') return colour;
             }
           } else if (Array.isArray(node)) {
             for (const item of node) {
-              const color = extractFirstColor(item);
-              if (color && color !== '#FFFFFF') return color;
+              const colour = extractFirstColour(item);
+              if (colour && colour !== '#FFFFFF') return colour;
             }
           }
           return '#FFFFFF';
         };
-        return extractFirstColor(bead.displayText);
+        return extractFirstColour(bead.displayText);
       };
-      const plugIconColor = getTextColor();
+      const plugIconColour = getTextColour();
       
-      // Render colored text segments in SVG
-      // SVG textPath can contain tspan elements for colored text
-      const renderColoredText = () => {
+      // Render coloured text segments in SVG
+      // SVG textPath can contain tspan elements for coloured text
+      const renderColouredText = () => {
         if (typeof bead.displayText === 'string') {
           return bead.displayText;
         }
         
-        // Default text color: always use bright colors (white) on dark backgrounds, never black
-        const defaultTextColor = '#FFFFFF';
+        // Default text colour: always use bright colours (white) on dark backgrounds, never black
+        const defaultTextColour = '#FFFFFF';
         
-        // Helper to lighten a color (increase lightness) - but keep it saturated enough to be distinguishable
-        const lightenColor = (color: string): string => {
+        // Helper to lighten a colour (increase lightness) - but keep it saturated enough to be distinguishable
+        const lightenColour = (colour: string): string => {
           // If already white or invalid, return as-is
-          if (color === '#FFFFFF' || color === '#fff' || color === 'white' || !color.startsWith('#')) {
-            return color;
+          if (colour === '#FFFFFF' || colour === '#fff' || colour === 'white' || !colour.startsWith('#')) {
+            return colour;
           }
           
           // Convert hex to RGB
-          const hex = color.replace('#', '');
+          const hex = colour.replace('#', '');
           const r = parseInt(hex.substring(0, 2), 16);
           const g = parseInt(hex.substring(2, 4), 16);
           const b = parseInt(hex.substring(4, 6), 16);
@@ -364,7 +364,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             }
           }
           
-          // Increase lightness, but slightly less aggressively so colors don't wash out
+          // Increase lightness, but slightly less aggressively so colours don't wash out
           // Target: at least 60% lightness, or +20% if already bright
           l = Math.min(0.9, Math.max(0.6, l + 0.2));
           
@@ -388,40 +388,40 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           return `#${[rNew, gNew, bNew].map(x => x.toString(16).padStart(2, '0')).join('')}`;
         };
         
-        // Extract text and colors from ReactNode
-        const extractTextAndColors = (node: React.ReactNode): Array<{ text: string; color: string }> => {
-          const result: Array<{ text: string; color: string }> = [];
+        // Extract text and colours from ReactNode
+        const extractTextAndColours = (node: React.ReactNode): Array<{ text: string; colour: string }> => {
+          const result: Array<{ text: string; colour: string }> = [];
           
           if (typeof node === 'string' || typeof node === 'number') {
-            result.push({ text: String(node), color: defaultTextColor });
+            result.push({ text: String(node), colour: defaultTextColour });
           } else if (React.isValidElement(node)) {
             if (node.type === 'span') {
-              // Use the span's color, but ensure it's bright (never black) and lighten it
-              let color = node.props.style?.color || defaultTextColor;
+              // Use the span's colour, but ensure it's bright (never black) and lighten it
+              let colour = node.props.style?.colour || defaultTextColour;
               // Never use black - convert to white
-              if (color === '#000000' || color === 'black' || color === '#374151') {
-                color = '#FFFFFF';
+              if (colour === '#000000' || colour === 'black' || colour === '#374151') {
+                colour = '#FFFFFF';
               } else {
-                // Lighten the color to make it brighter
-                color = lightenColor(color);
+                // Lighten the colour to make it brighter
+                colour = lightenColour(colour);
               }
               const children = React.Children.toArray(node.props.children);
               children.forEach(child => {
-                const extracted = extractTextAndColors(child);
+                const extracted = extractTextAndColours(child);
                 extracted.forEach(item => {
-                  result.push({ text: item.text, color });
+                  result.push({ text: item.text, colour });
                 });
               });
             } else {
               const children = React.Children.toArray(node.props.children);
               children.forEach(child => {
-                const extracted = extractTextAndColors(child);
+                const extracted = extractTextAndColours(child);
                 result.push(...extracted);
               });
             }
           } else if (Array.isArray(node)) {
             node.forEach(item => {
-              const extracted = extractTextAndColors(item);
+              const extracted = extractTextAndColours(item);
               result.push(...extracted);
             });
           }
@@ -429,12 +429,12 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           return result;
         };
         
-        const segments = extractTextAndColors(bead.displayText);
+        const segments = extractTextAndColours(bead.displayText);
         
         // Render as tspan elements within textPath
         return segments.map((seg, idx) => {
           const tspan = (
-            <tspan key={idx} fill={seg.color} dx={idx === 0 ? 0 : undefined}>
+            <tspan key={idx} fill={seg.colour} dx={idx === 0 ? 0 : undefined}>
               {seg.text}
             </tspan>
           );
@@ -478,7 +478,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             }}
           />
           
-          {/* Text along the path - render with scenario colors using tspan */}
+          {/* Text along the path - render with scenario colours using tspan */}
           {/* Calculate center point of text for rotation when upside down */}
           {(() => {
             // Get the midpoint of the text for rotation anchor
@@ -491,7 +491,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
                   style={{
                     fontSize: `${BEAD_FONT_SIZE}px`,
                     fontWeight: '500',
-                    fill: '#FFFFFF', // Always white/bright text on dark grey or colored backgrounds
+                    fill: '#FFFFFF', // Always white/bright text on dark grey or coloured backgrounds
                     pointerEvents: 'painted', // Only capture events over painted (visible) text, not the entire path
                   }}
                   dominantBaseline="middle"
@@ -501,7 +501,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
                     href={`#${beadPathId}`}
                     startOffset={`${(textStartDistance / pathLength) * 100}%`}
                   >
-                    {renderColoredText()}
+                    {renderColouredText()}
                   </textPath>
                 </text>
               </g>
@@ -644,7 +644,7 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
   return (
     prevProps.edgeId === nextProps.edgeId &&
     prevProps.visibleScenarioIds?.join(',') === nextProps.visibleScenarioIds?.join(',') &&
-    prevProps.visibleColorOrderIds?.join(',') === nextProps.visibleColorOrderIds?.join(',') &&
+    prevProps.visibleColourOrderIds?.join(',') === nextProps.visibleColourOrderIds?.join(',') &&
     prevProps.whatIfDSL === nextProps.whatIfDSL &&
     // Compare edge properties that matter
     prevProps.edge?.uuid === nextProps.edge?.uuid &&

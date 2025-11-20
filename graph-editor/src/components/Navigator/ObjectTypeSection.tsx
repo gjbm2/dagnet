@@ -68,7 +68,7 @@ export function ObjectTypeSection({
   const sectionRef = React.useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = React.useState<number>(0);
   
-  // Get theme colors for this object type
+  // Get theme colours for this object type
   const theme = getObjectTypeTheme(sectionType);
   
   // Get the fileId of the active tab for comparison
@@ -222,8 +222,8 @@ export function ObjectTypeSection({
       className="object-type-section"
       data-type={sectionType}
       style={{
-        '--section-accent-color': theme.accentColor,
-        '--section-light-color': theme.lightColor
+        '--section-accent-colour': theme.accentColour,
+        '--section-light-colour': theme.lightColour
       } as React.CSSProperties}
     >
       <div 
@@ -246,7 +246,7 @@ export function ObjectTypeSection({
             className="section-icon" 
             size={16} 
             strokeWidth={2}
-            style={{ color: theme.accentColor }}
+            style={{ color: theme.accentColour }}
           />
           <span className="section-title">{title}</span>
           <span className="section-count">{entries.length}</span>

@@ -18,7 +18,7 @@ This document details the implementation plan to align the codebase with the spe
 | 2 | Remove null parameter | ❌ Not Started | **HIGH** | GraphCanvas.tsx, ConversionEdge.tsx, others | Low |
 | 3 | Hidden current opacity | ❌ Not Started | **HIGH** | GraphCanvas.tsx | Low |
 | 4 | Snapshot semantics | ❌ Not Started | **HIGH** | ScenariosContext.tsx | Medium |
-| 5 | Color assignment | ✅ Already Correct | **MEDIUM** | ColorAssigner.ts | N/A |
+| 5 | Colour assignment | ✅ Already Correct | **MEDIUM** | ColourAssigner.ts | N/A |
 | 6 | Composite edge labels | ❌ Not Started | **HIGH** | ConversionEdge.tsx | High |
 | 7 | PMF warnings | ❌ Not Started | **MEDIUM** | GraphCanvas.tsx or utils | Low |
 
@@ -140,16 +140,16 @@ Currently may be rendering 'current' at 30% opacity like other layers, or not re
 // When rendering scenario overlay for each layer
 for (const scenarioId of visibleScenarioIds) {
   const scenario = scenarios.find(s => s.id === scenarioId);
-  const color = colorMap.get(scenarioId) || scenario?.color || '#808080';
+  const colour = colourMap.get(scenarioId) || scenario?.colour || '#808080';
   
   // Determine opacity based on layer and visibility
   let opacity = 0.30; // Default for visible layers
   
   // ALWAYS render 'current', but check if it's in visible list
   if (scenarioId === 'current' && !visibleScenarioIds.includes('current')) {
-    // 'current' hidden: use 5% opacity with grey color
+    // 'current' hidden: use 5% opacity with grey colour
     opacity = 0.05;
-    color = '#808080'; // Grey, not palette color
+    colour = '#808080'; // Grey, not palette colour
   }
   
   // Render overlay with calculated opacity...
@@ -166,7 +166,7 @@ if (!visibleScenarioIds.includes('current')) {
 ### Testing
 
 **Test Case:** Hide 'current' layer
-- **Expected:** 'current' overlay still visible but very faint (5% opacity, grey color)
+- **Expected:** 'current' overlay still visible but very faint (5% opacity, grey colour)
 - **Expected:** Interactive edges still fully functional
 - **Expected:** What-If changes update the faint 'current' overlay in real-time
 
@@ -256,15 +256,15 @@ function createSnapshot(options: { name?: string; type?: 'all' | 'differences'; 
 
 ---
 
-## Change 5: Color Assignment (Already Correct ✅)
+## Change 5: Colour Assignment (Already Correct ✅)
 
 ### Current Implementation
 
-**Location:** `graph-editor/src/services/ColorAssigner.ts` lines 18-56
+**Location:** `graph-editor/src/services/ColourAssigner.ts` lines 18-56
 
 **Status:** ✅ **ALREADY CORRECT** - No changes needed!
 
-The `assignColors` function already filters to only visible scenarios (line 25-26):
+The `assignColours` function already filters to only visible scenarios (line 25-26):
 
 ```typescript
 const visibleInActivationOrder = activationOrder.filter(id => 
@@ -272,14 +272,14 @@ const visibleInActivationOrder = activationOrder.filter(id =>
 );
 ```
 
-This means if 'current' is not in `visibleIds`, it won't get a palette color assigned. The current implementation already follows the spec.
+This means if 'current' is not in `visibleIds`, it won't get a palette colour assigned. The current implementation already follows the spec.
 
 ### Verification Only
 
 **Verify:**
-1. Hidden 'current' does NOT appear in `colorMap`
+1. Hidden 'current' does NOT appear in `colourMap`
 2. Hidden 'current' overlay uses grey `#808080` (see Change 3)
-3. Color palette distribution is based only on visible layers
+3. Colour palette distribution is based only on visible layers
 
 ---
 
@@ -305,7 +305,7 @@ This only shows one value (from 'current' layer).
 function buildCompositeEdgeLabel(
   edge: Edge,
   visibleScenarioIds: string[],
-  colorMap: Map<string, string>,
+  colourMap: Map<string, string>,
   scenarios: Scenario[],
   graph: Graph,
   whatIfDSL: string | null
@@ -322,21 +322,21 @@ function buildCompositeEdgeLabel(
     );
   }
   
-  // Multiple layers: build colored segments
+  // Multiple layers: build coloured segments
   const segments: React.ReactNode[] = [];
   
   // Add visible layers in order (bottom to top)
   for (const layerId of visibleScenarioIds) {
     const prob = getLayerProbability(layerId, edge.id, scenarios, graph, whatIfDSL);
     const stdev = getLayerStdev(layerId, edge.id, scenarios, graph);
-    const color = colorMap.get(layerId) || '#808080';
+    const colour = colourMap.get(layerId) || '#808080';
     
     const text = stdev 
       ? `${Math.round(prob * 100)}% ± ${Math.round(stdev * 100)}%`
       : `${Math.round(prob * 100)}%`;
     
     segments.push(
-      <span key={layerId} style={{ color, marginRight: '6px' }}>
+      <span key={layerId} style={{ colour, marginRight: '6px' }}>
         {text}
       </span>
     );
@@ -422,7 +422,7 @@ function getLayerStdev(
 {buildCompositeEdgeLabel(
   { id: id, ...data } as Edge,
   visibleScenarioIds,
-  colorMap,
+  colourMap,
   scenarios,
   graph,
   whatIfDSL
@@ -433,13 +433,13 @@ function getLayerStdev(
 
 ConversionEdge needs access to:
 - `visibleScenarioIds` - from TabContext
-- `colorMap` - from ScenariosPanel (may need to pass down or recalculate)
+- `colourMap` - from ScenariosPanel (may need to pass down or recalculate)
 - `scenarios` - from ScenariosContext
 
 **May need to:**
 1. Pass these as props from GraphCanvas
 2. Or use context hooks directly in ConversionEdge
-3. Recalculate colorMap in ConversionEdge using `assignColors(visibleScenarioIds, visibleColorOrderIds)`
+3. Recalculate colourMap in ConversionEdge using `assignColours(visibleScenarioIds, visibleColourOrderIds)`
 
 ### Testing
 
@@ -447,7 +447,7 @@ ConversionEdge needs access to:
 - **Expected:** `50%` in black text (like current)
 
 **Test Case 2:** Multiple layers + current visible
-- **Expected:** `[cyan] 40% ± 2%  [magenta] 45%  [pink] 60%` (colored segments)
+- **Expected:** `[cyan] 40% ± 2%  [magenta] 45%  [pink] 60%` (coloured segments)
 
 **Test Case 3:** Multiple layers + current hidden
 - **Expected:** `[cyan] 40% ± 2%  [magenta] 45%  (60%)` (current in grey with parens)
@@ -534,7 +534,7 @@ validatePMF(graph, currentTabState.whatIfDSL);
 5. ✅ **Change 6:** Composite edge labels (major UI feature)
 
 ### Phase 3: Validation & Polish (Day 3-4)
-6. ✅ **Change 5:** Verify color assignment (already correct)
+6. ✅ **Change 5:** Verify colour assignment (already correct)
 7. ✅ **Change 7:** PMF warnings (nice to have, low impact)
 
 ### Phase 4: Testing & Documentation (Day 4-5)
@@ -574,7 +574,7 @@ validatePMF(graph, currentTabState.whatIfDSL);
    ```typescript
    describe('Composite Edge Labels', () => {
      it('should show single black text for one layer', () => {});
-     it('should show colored segments for multiple layers', () => {});
+     it('should show coloured segments for multiple layers', () => {});
      it('should show grey parentheses for hidden current', () => {});
    });
    ```
@@ -604,9 +604,9 @@ validatePMF(graph, currentTabState.whatIfDSL);
 - [ ] Layer compositing: Tab A vs Tab B show different values with different visible layers
 - [ ] Hidden current: Very faint overlay (5% opacity) still visible
 - [ ] Snapshot capture: Snapshots include What-If effects
-- [ ] Edge labels: Multiple colored segments shown correctly
+- [ ] Edge labels: Multiple coloured segments shown correctly
 - [ ] PMF warnings: Only one warning per node (not per layer)
-- [ ] Color assignment: Hidden current doesn't get palette color
+- [ ] Colour assignment: Hidden current doesn't get palette colour
 - [ ] Interactive edges: Always work regardless of current visibility
 
 ---

@@ -355,12 +355,12 @@ value:
 **Use case:** A/B test parameters managed by experimentation platform
 
 ```yaml
-id: button-color-test
+id: button-colour-test
 type: case
 
 data_source:
   type: statsig
-  experiment_id: "button_color_ab_test"
+  experiment_id: "button_colour_ab_test"
   refresh_frequency: "5m"
   authentication:
     type: api_key

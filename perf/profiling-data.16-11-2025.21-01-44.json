@@ -38166,7 +38166,7 @@
           {
             "id": 1648,
             "children": [],
-            "displayName": "ColorSelector",
+            "displayName": "ColourSelector",
             "hocDisplayNames": null,
             "key": null,
             "type": 5,
@@ -38346,7 +38346,7 @@
           {
             "id": 1936,
             "children": [],
-            "displayName": "ColorSelector",
+            "displayName": "ColourSelector",
             "hocDisplayNames": null,
             "key": null,
             "type": 5,
@@ -38470,7 +38470,7 @@
           {
             "id": 1945,
             "children": [],
-            "displayName": "ColorSelector",
+            "displayName": "ColourSelector",
             "hocDisplayNames": null,
             "key": null,
             "type": 5,

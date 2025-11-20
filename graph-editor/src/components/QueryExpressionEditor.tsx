@@ -81,13 +81,13 @@ const outerChipConfig = {
 // Inner chip styling by type
 const innerChipConfig = {
   node: {
-    bgColor: '#DBEAFE',  // Light blue
-    textColor: '#1E40AF',
+    bgColour: '#DBEAFE',  // Light blue
+    textColour: '#1E40AF',
     borderColor: '#93C5FD'
   },
   case: {
-    bgColor: '#E9D5FF',  // Light purple
-    textColor: '#6B21A8',
+    bgColour: '#E9D5FF',  // Light purple
+    textColour: '#6B21A8',
     borderColor: '#C084FC'
   }
 };
@@ -316,7 +316,7 @@ export function QueryExpressionEditor({
       }
     });
     
-    // Theme colors (using app's color scheme)
+    // Theme colours (using app's colour scheme)
     monaco.editor.defineTheme('dagnet-query-theme', {
       base: 'vs',
       inherit: true,
@@ -1347,7 +1347,7 @@ export function QueryExpressionEditor({
                       display: 'inline-flex',
                       alignItems: 'center',
                       padding: '2px 6px',
-                      backgroundColor: innerConfig.bgColor,
+                      backgroundColor: innerConfig.bgColour,
                       borderRadius: '4px',
                       border: `1px solid ${innerConfig.borderColor}`,
                       fontSize: '11px',
@@ -1356,7 +1356,7 @@ export function QueryExpressionEditor({
                       position: 'relative'
                     }}
                   >
-                    <span style={{ color: innerConfig.textColor }}>
+                    <span style={{ color: innerConfig.textColour }}>
                       {val}
                     </span>
                   </div>

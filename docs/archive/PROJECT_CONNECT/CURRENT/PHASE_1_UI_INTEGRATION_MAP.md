@@ -32,7 +32,7 @@ All operations write to **local files (IndexedDB)**, marking them **dirty (orang
 - `<HousePlug>` - Connected to parameter file + live data source
 
 ### Data Source Status (on connect/selector)
-- `<Zap fill="currentColor">` - Live data source configured (filled)
+- `<Zap fill="currentColour">` - Live data source configured (filled)
 - `<Zap fill="none">` - Manual data only / no external source (stroke only)
 
 ### Override Indicators (ONLY on RHS of fields in PropertiesPanel which can be overridden)
@@ -183,7 +183,7 @@ The **lightning menu button** (right side of selector) shows:
 ```typescript
 // Lightning button state:
 if (external_source) {
-  icon = <Zap fill="currentColor" className="text-blue-500" />;
+  icon = <Zap fill="currentColour" className="text-blue-500" />;
   tooltip = "Retrieve from {source_type}";
 } else {
   icon = <Zap fill="none" className="text-gray-400" />;

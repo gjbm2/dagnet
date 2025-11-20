@@ -129,7 +129,7 @@ export function SelectorModal({
         {/* Header */}
         <div className="selector-modal-header">
           <div className="selector-modal-title">
-            <IconComponent size={20} style={{ color: theme.accentColor }} />
+            <IconComponent size={20} style={{ color: theme.accentColour }} />
             <h3>Select {type.charAt(0).toUpperCase() + type.slice(1)}</h3>
           </div>
           <button

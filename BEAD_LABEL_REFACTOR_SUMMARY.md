@@ -81,7 +81,7 @@ checkExists: () => {
 ┌─────────────────────────────────────────┐
 │  BeadLabelBuilder                       │  Layer 1: Formatting
 │  - Checks if identical (value + stdev)  │
-│  - Formats with color coding            │
+│  - Formats with colour coding            │
 │  - Handles hidden current               │
 │  - Returns {displayText, allIdentical}  │
 └─────────────────────────────────────────┘
@@ -128,7 +128,7 @@ let hiddenCurrentProb: { value: number } | undefined;
 
 for (const scenarioId of orderedVisibleIds) {
   const { probability, stdev } = getEdgeProbabilityForLayer(...);
-  probValues.push({ scenarioId, value: probability, color: ..., stdev });
+  probValues.push({ scenarioId, value: probability, colour: ..., stdev });
 }
 
 if (!currentVisible) {
@@ -167,7 +167,7 @@ const probBead = buildParameterBead({
   beadIndex,
   orderedVisibleIds,
   currentVisible,
-  getScenarioColor
+  getScenarioColour
 });
 
 if (probBead) {
@@ -191,7 +191,7 @@ When testing, verify:
 - [ ] Cost parameters that vary across layers show correctly (e.g., `£100` `£150` `£200`)
 - [ ] Hidden current with different stdev is shown in grey brackets
 - [ ] White text for deduplicated values
-- [ ] Colored text for differing values
+- [ ] Coloured text for differing values
 - [ ] All beads use consistent formatting
 
 ---

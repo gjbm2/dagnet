@@ -35,7 +35,7 @@
 
 **Completeness:**
 - ✅ All core fields mapped
-- ⚠️ **MISSING:** What if node registry had `color` or `icon` hints? (Future consideration)
+- ⚠️ **MISSING:** What if node registry had `colour` or `icon` hints? (Future consideration)
 - ⚠️ **MISSING:** What about node `category` or `tags` from registry?
 
 **Current Schema Status:** ✅ All fields exist

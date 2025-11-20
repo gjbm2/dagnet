@@ -51,7 +51,7 @@
 │          - Conditions list      │
 │          - Add/edit/delete      │
 │          - Node selector        │
-│          - Color coding         │
+│          - Colour coding         │
 └─────────────────────────────────┘
 ```
 
@@ -192,7 +192,7 @@ function GraphEditor() {
 
 **Key Visual Design**:
 - **CONNECTION FIELDS = Prominent 5px pastel borders** to draw user attention
-- **Color-coded by type**: Blue (node), Purple (case), Orange (parameter), Green (context)
+- **Colour-coded by type**: Blue (node), Purple (case), Orange (parameter), Green (context)
 - Each connection field is a contained box with the standard selector + `[⋮]` sync menu
 - Other inputs (Label, Description, Value, Stdev) have standard minimal styling
 
@@ -303,7 +303,7 @@ function GraphEditor() {
 1. Create accordion components matching Navigator style
 2. Refactor Properties Panel sections to use accordions
 3. Ensure smooth animations and state persistence
-4. Add visual hierarchy (icons, colors, spacing)
+4. Add visual hierarchy (icons, colours, spacing)
 
 **Files**:
 - `graph-editor/src/components/Accordion.tsx` (NEW or reuse CollapsibleSection)
@@ -790,7 +790,7 @@ After click, new condition card appears:
 │                                     │
 │ ┌─────────────────────────────┐ [×]│  ← Delete button
 │ │ Condition 1                 │    │
-│ │ Color: [🔵]                 │    │  ← Color selector
+│ │ Colour: [🔵]                 │    │  ← Colour selector
 │ │                             │    │
 │ │ IF VISITED:                 │    │
 │ │ ┏━━━━━━━━━━━━━━━━━━━━━━━┓  │    │
@@ -867,7 +867,7 @@ User clicks parameter selector, chooses "high-conversion":
 │ ┃ 🔌 [high-conv     ▼][⋮]┃  │  ← Now connected (black plug)
 │ ┗━━━━━━━━━━━━━━━━━━━━━━━┛  │
 │ Probability: 0.90           │  ← Auto-populated from parameter
-│ Color: [🔵]                 │  ← Auto-populated or user-selectable
+│ Colour: [🔵]                 │  ← Auto-populated or user-selectable
 ```
 
 #### Step 5: Add Second Condition (OR logic)
@@ -880,7 +880,7 @@ User clicks "[+ Add Condition]" to add alternative scenario:
 #### Step 6: Canvas Visualization Updates
 
 As user adds conditions, the edge on canvas updates:
-- Edge color shows first matching condition color
+- Edge colour shows first matching condition colour
 - Tooltip shows "Conditional: 2 rules"
 - Existing canvas visualization renders condition indicators
 
@@ -963,7 +963,7 @@ As user adds conditions, the edge on canvas updates:
 2. ✅ All ambiguities resolved - State management, workflow, specifications
 3. ✅ Full property lists defined - Graph, Node, Edge
 4. ✅ Conditional probability workflow narrated - Step-by-step interaction
-5. ✅ Color selector specified - HTML5 native picker
+5. ✅ Colour selector specified - HTML5 native picker
 6. ✅ Inline creation specified - Create new registry items from selector
 7. 🔄 **Ready for implementation** - Start Phase 1
 
@@ -978,14 +978,14 @@ As user adds conditions, the edge on canvas updates:
 - Tools panel content (existing menu items refactored)
 - Accordion behavior (multiple open, per-tab persistence)
 - Conditional probabilities workflow (complete step-by-step)
-- **Color selector**: HTML5 native picker with 9 presets + custom
+- **Colour selector**: HTML5 native picker with 9 presets + custom
 - **Inline creation**: Create new registry item when typed ID doesn't exist
 - **Design consolidation**: Removed duplicate Section 9.4, clarified source of truth
 
 **📐 Document Structure** (Source of Truth):
 - **Section 7.5**: Functional specifications (field lists, order, behavior)
 - **Section 7.8**: Interaction workflows (conditional probabilities step-by-step)
-- **Section 9**: Visual design (colors, borders, styling, mockups)
+- **Section 9**: Visual design (colours, borders, styling, mockups)
 - **Rule**: If conflicts exist, Section 7.x takes precedence over Section 9.x
 
 **⏳ Deferred to Implementation Phase**:
@@ -1047,25 +1047,25 @@ if (selection && !propertiesAutoOpened && !propertiesUserClosed) {
 
 ---
 
-## 9. Visual Language & Color System
+## 9. Visual Language & Colour System
 
 **Purpose of This Section**: This section provides the **visual design specification** for components defined functionally in earlier sections.
 
 **Relationship to Other Sections**:
 - **Section 7.5**: Functional specifications (what fields, what order, what behavior)
-- **Section 9**: Visual design (colors, borders, styling, layout)
+- **Section 9**: Visual design (colours, borders, styling, layout)
 - **Section 7.8**: Interaction workflows (step-by-step user flows)
 
 **⚠️ SOURCE OF TRUTH**:
 - **Functional specs**: Section 7.5 (field lists, order, behavior)
 - **Interaction flows**: Section 7.8 (conditional probabilities complete workflow)
-- **Visual styling**: Section 9 (colors, borders, input styling)
+- **Visual styling**: Section 9 (colours, borders, input styling)
 
 If there are conflicts, the functional spec in Section 7.x takes precedence over visual mockups in Section 9.x.
 
 ---
 
-### 9.1 Object Type Color Palette
+### 9.1 Object Type Colour Palette
 
 **Purpose**: Provide consistent visual language across Navigator, tabs, and Properties panel
 
@@ -1302,14 +1302,14 @@ If there are conflicts, the functional spec in Section 7.x takes precedence over
 
 ---
 
-### 9.5 Color Selector Component
+### 9.5 Colour Selector Component
 
 **Purpose**: Standard component for selecting visual indicators (used in conditional probabilities, case variants, etc.)
 
 **Default View** (inline, no modal):
 ```
 ┌────────────────────────────────────────────────────────┐
-│ Color:                                                 │
+│ Colour:                                                 │
 │ [●] [○] [○] [○] [○] [○] [○] [○] [○] [Custom...]      │
 │  ↑   Red Blue Ylw Prpl Orng Cyan Pink Blk              │
 │  Green (selected)                                      │
@@ -1321,7 +1321,7 @@ Opens **HTML5 native color picker** (`<input type="color">`) - no custom modal n
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│ Color:                                                 │
+│ Colour:                                                 │
 │ [○] [○] [○] [○] [○] [○] [○] [○] [○] [■]              │
 │                                          ↑             │
 │                                    User clicked        │
@@ -1330,7 +1330,7 @@ Opens **HTML5 native color picker** (`<input type="color">`) - no custom modal n
 └────────────────────────────────────────────────────────┘
 ```
 
-After user selects custom color, the custom swatch shows the chosen color:
+After user selects custom colour, the custom swatch shows the chosen colour:
 ```
 │ [○] [○] [○] [○] [○] [○] [○] [○] [○] [■]              │
 │                                          ↑             │
@@ -1338,7 +1338,7 @@ After user selects custom color, the custom swatch shows the chosen color:
 │                                    (user's choice)     │
 ```
 
-**Preset Colors** (bold & bright for canvas visibility):
+**Preset Colours** (bold & bright for canvas visibility):
 - 🟢 Green: `#10B981` (Emerald 500) - Success/positive
 - 🔴 Red: `#EF4444` (Red 500) - Error/high priority
 - 🔵 Blue: `#3B82F6` (Blue 500) - Default/neutral
@@ -1350,9 +1350,9 @@ After user selects custom color, the custom swatch shows the chosen color:
 
 **Implementation**:
 ```tsx
-<ColorSelector
+<ColourSelector
   value="#10B981"
-  onChange={(color) => setConditionColor(color)}
+  onChange={(colour) => setConditionColour(colour)}
   presets={[
     '#10B981', // Green
     '#EF4444', // Red
@@ -1368,20 +1368,20 @@ After user selects custom color, the custom swatch shows the chosen color:
 />
 ```
 
-**HTML5 Color Picker**:
+**HTML5 Colour Picker**:
 - Uses `<input type="color">` - native browser picker
 - No need for custom modal or hex input field
-- Browser handles all color selection UX
+- Browser handles all colour selection UX
 - Returns hex value (e.g., `#FF5733`)
 - Works consistently across modern browsers
 - Accessible and familiar to users
 
 **Behavior**:
-1. User clicks one of 5 preset color circles → Immediate selection
-2. User clicks "Custom..." → HTML5 color picker opens
-3. User chooses color in native picker → Custom swatch updates
-4. Custom color is saved to component state
-5. On next open, custom color persists and shows in custom swatch
+1. User clicks one of 5 preset colour circles → Immediate selection
+2. User clicks "Custom..." → HTML5 colour picker opens
+3. User chooses colour in native picker → Custom swatch updates
+4. Custom colour is saved to component state
+5. On next open, custom colour persists and shows in custom swatch
 
 ---
 
@@ -1475,7 +1475,7 @@ After user selects custom color, the custom swatch shows the chosen color:
 
 ---
 
-### 9.4 Navigator Section Colors
+### 9.4 Navigator Section Colours
 
 ```css
 /* Navigator section headers with pastel gradients */
@@ -1519,7 +1519,7 @@ After user selects custom color, the custom swatch shows the chosen color:
 
 ---
 
-### 9.5 Tab Colors (rc-dock)
+### 9.5 Tab Colours (rc-dock)
 
 ```css
 /* Tab styling with pastel backgrounds and accent borders */
@@ -1655,7 +1655,7 @@ After user selects custom color, the custom swatch shows the chosen color:
 - Visibility: Only shown when value is set
 - Action: Clears value, resets to disconnected state
 - Size: 20×20px clickable area
-- Color: #6B7280 (gray), hover: #374151 (darker)
+- Colour: #6B7280 (gray), hover: #374151 (darker)
 
 **4. Sync Menu Button** (right edge, inside field):
 - Icon: `⋮` (vertical ellipsis)
@@ -1668,7 +1668,7 @@ After user selects custom color, the custom swatch shows the chosen color:
 
 **5. Outer Container** (connection field):
 - Border: 5px solid (disconnected) / 6px solid (connected)
-- Border color: Type-specific pastel (blue/purple/orange/green)
+- Border colour: Type-specific pastel (blue/purple/orange/green)
 - Border radius: 8px
 - Padding: 12px
 - Background: Linear gradient (pastel → white)
@@ -1755,7 +1755,7 @@ Note: "Current Graph" only shown for conditional "If Visited" context
    - Examples: "Used in Edge A→B" or "Used in Node checkout-flow" or "Used 3 times"
    - Provides context without taking horizontal space from long item names
 3. **Still Selectable**: User can reuse same item (common pattern)
-4. **Visual Distinction**: Slightly muted text color for in-use items
+4. **Visual Distinction**: Slightly muted text colour for in-use items
 
 **Dropdown Features**:
 1. **Contextual Grouping**: "Current Graph" only shown for conditional "If Visited" context
@@ -2136,7 +2136,7 @@ export function Selector(props: SelectorProps) {
 }
 
 .connection-icon.connected {
-  filter: grayscale(0);  /* Full color (or black if using monochrome icon) */
+  filter: grayscale(0);  /* Full colour (or black if using monochrome icon) */
   opacity: 1;
 }
 
@@ -2468,7 +2468,7 @@ export function Selector(props: SelectorProps) {
 9. Click [+ Add] to add node-payment → second chip
 10. Adjust probability slider: 0.90
 11. Set stdev: 0.03
-12. Choose color: Click green preset [●]
+12. Choose colour: Click green preset [●]
 13. Click [⋮] on parameter selector for sync options
 14. Condition auto-saves
 15. Repeat for more conditions
@@ -2535,10 +2535,10 @@ export function Selector(props: SelectorProps) {
 - ✅ Proven UX: Already shows graph items + registry
 - ✅ Less code: Don't duplicate selector logic
 
-**Why color selector component?**
+**Why colour selector component?**
 - ✅ Standard interface: Reusable across conditional probabilities
-- ✅ Preset options: Quick selection for common colors
-- ✅ Custom option: HTML5 color picker for flexibility
+- ✅ Preset options: Quick selection for common colours
+- ✅ Custom option: HTML5 colour picker for flexibility
 - ✅ Visual consistency: Same component everywhere
 
 **Why conditional probabilities?**
@@ -2547,8 +2547,8 @@ export function Selector(props: SelectorProps) {
 - ✅ First match wins: Simple evaluation model
 - ✅ Parameter connections: Each condition can sync to registry
 
-**Why pastel colors?**
-- ✅ Consistent language: Same color = same object type
+**Why pastel colours?**
+- ✅ Consistent language: Same colour = same object type
 - ✅ Gentle: Not distracting, supports content
 - ✅ Accessible: Sufficient contrast for readability
 - ✅ Professional: Modern, cohesive design system

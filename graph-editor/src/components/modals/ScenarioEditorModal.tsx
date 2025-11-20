@@ -58,7 +58,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         const pseudoScenario: Scenario = {
           id: 'base',
           name: 'Base',
-          color: '#808080',
+          colour: '#808080',
           createdAt: new Date().toISOString(),
           version: 1,
           params: baseParams,
@@ -80,7 +80,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         const pseudoScenario: Scenario = {
           id: 'current',
           name: 'Current',
-          color: '#4A90E2',
+          colour: '#4A90E2',
           createdAt: new Date().toISOString(),
           version: 1,
           params: currentParams,

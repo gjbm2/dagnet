@@ -140,7 +140,7 @@ export interface TabState {
     scenarioState?: {
       scenarioOrder?: string[];           // Full layer order (includes hidden + special layers)
       visibleScenarioIds: string[];       // IDs of visible scenarios (render order)
-      visibleColorOrderIds: string[];     // IDs in activation order (for color assignment)
+      visibleColourOrderIds: string[];     // IDs in activation order (for colour assignment)
       selectedScenarioId?: string;        // Currently selected scenario
     };
   };
@@ -300,7 +300,7 @@ export interface TabOperations {
     | {
         scenarioOrder?: string[];
         visibleScenarioIds: string[];
-        visibleColorOrderIds: string[];
+        visibleColourOrderIds: string[];
         selectedScenarioId?: string;
       }
     | undefined;
@@ -453,8 +453,8 @@ export interface ConditionalProbability {
   
   p: ProbabilityParam; // Probability when condition is satisfied
   
-  // Display color for this condition (propagates to matching conditions on sibling edges)
-  color?: string; // hex color
+  // Display colour for this condition (propagates to matching conditions on sibling edges)
+  colour?: string; // hex colour
 }
 
 export interface MonetaryCost {
@@ -487,7 +487,7 @@ export interface NodeLayout {
   y?: number;
   rank?: number; // >= 0
   group?: string; // <= 128 chars
-  color?: string; // hex color
+  colour?: string; // hex colour
 }
 
 export interface NodeEntry {
@@ -535,7 +535,7 @@ export interface GraphNode {
 }
 
 export interface EdgeDisplay {
-  conditional_color?: string;
+  conditional_colour?: string;
   conditional_group?: string;
 }
 
@@ -579,7 +579,7 @@ export interface Metadata {
 export interface PostIt {
   id: string;
   text: string;
-  color: string;
+  colour: string;
   width: number;
   height: number;
   x?: number;

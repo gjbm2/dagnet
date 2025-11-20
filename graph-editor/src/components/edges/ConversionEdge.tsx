@@ -6,7 +6,7 @@ import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useTabContext } from '../../contexts/TabContext';
 import Tooltip from '@/components/Tooltip';
-import { getConditionalColor, getConditionalProbabilityColor, isConditionalEdge } from '@/lib/conditionalColors';
+import { getConditionalColour, getConditionalProbabilityColour, isConditionalEdge } from '@/lib/conditionalColours';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
@@ -99,7 +99,7 @@ interface ConversionEdgeData {
   useSankeyView?: boolean;
   // Scenario overlay data
   scenarioOverlay?: boolean;
-  scenarioColor?: string;
+  scenarioColour?: string;
   strokeOpacity?: number; // Opacity for scenario overlays (0-1)
   effectiveWeight?: number; // Effective probability for this scenario overlay (for dashed line rendering)
   scenarioParams?: any;
@@ -132,7 +132,7 @@ export default function ConversionEdge({
   const scenarioState = currentTab?.editorState?.scenarioState;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
-  const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+  const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
   
   // ATOMIC RESTORATION: Read decoration visibility from context (not edge.data)
   const { beadsVisible, isPanning, isDraggingNode } = useDecorationVisibility();
@@ -329,7 +329,7 @@ export default function ConversionEdge({
     console.log(`[ConversionEdge ${id}] render with whatIfDSL:`, whatIfDSL);
   }, [id, whatIfDSL]);
   
-  // Get the full edge object from graph (needed for tooltips and colors)
+  // Get the full edge object from graph (needed for tooltips and colours)
   // Find edge in graph (check both uuid and human-readable id after Phase 0.0 migration)
   // For overlay edges, use originalEdgeId stored in data
   // Memoize to ensure it updates when graph changes
@@ -447,49 +447,49 @@ export default function ConversionEdge({
     return getEdgeWhatIfDisplay(graph, lookupId, { whatIfDSL }, null);
   }, [graph, lookupId, whatIfDSL]);
   
-  // Get scenario colors for beads
-  const scenarioColors = useMemo(() => {
-    const colorMap = new Map<string, string>();
+  // Get scenario colours for beads
+  const scenarioColours = useMemo(() => {
+    const colourMap = new Map<string, string>();
     
     // Ensure we have at least 'current' if no scenarios visible
     const effectiveVisibleIds = visibleScenarioIds.length > 0 ? visibleScenarioIds : ['current'];
-    const effectiveColorOrderIds = visibleColorOrderIds.length > 0 ? visibleColorOrderIds : ['current'];
+    const effectiveColourOrderIds = visibleColourOrderIds.length > 0 ? visibleColourOrderIds : ['current'];
     
     if (scenariosContext) {
       effectiveVisibleIds.forEach((id) => {
-        const orderIdx = effectiveColorOrderIds.indexOf(id);
+        const orderIdx = effectiveColourOrderIds.indexOf(id);
         if (orderIdx >= 0) {
-          // Use color from scenarios context or assign based on order
+          // Use colour from scenarios context or assign based on order
           const scenario = scenariosContext.scenarios?.find((s: any) => s.id === id);
-          if (scenario?.color) {
-            colorMap.set(id, scenario.color);
-          } else if (id === 'current' && scenariosContext.currentColor) {
-            colorMap.set(id, scenariosContext.currentColor);
-          } else if (id === 'base' && scenariosContext.baseColor) {
-            colorMap.set(id, scenariosContext.baseColor);
+          if (scenario?.colour) {
+            colourMap.set(id, scenario.colour);
+          } else if (id === 'current' && scenariosContext.currentColour) {
+            colourMap.set(id, scenariosContext.currentColour);
+          } else if (id === 'base' && scenariosContext.baseColour) {
+            colourMap.set(id, scenariosContext.baseColour);
           } else {
-            // Fallback: assign color based on order
-            const colors = ['#3b82f6', '#f97316', '#8b5cf6', '#ec4899', '#10b981'];
-            colorMap.set(id, colors[orderIdx % colors.length]);
+            // Fallback: assign colour based on order
+            const colours = ['#3b82f6', '#f97316', '#8b5cf6', '#ec4899', '#10b981'];
+            colourMap.set(id, colours[orderIdx % colours.length]);
           }
         } else {
-          // If not in color order, use default
+          // If not in colour order, use default
           if (id === 'current') {
-            colorMap.set(id, scenariosContext.currentColor || '#000000');
+            colourMap.set(id, scenariosContext.currentColour || '#000000');
           } else {
-            colorMap.set(id, '#000000');
+            colourMap.set(id, '#000000');
           }
         }
       });
     } else {
       // No scenarios context - use defaults
       effectiveVisibleIds.forEach((id) => {
-        colorMap.set(id, id === 'current' ? '#000000' : '#808080');
+        colourMap.set(id, id === 'current' ? '#000000' : '#808080');
       });
     }
     
-    return colorMap;
-  }, [scenariosContext, visibleScenarioIds, visibleColorOrderIds]);
+    return colourMap;
+  }, [scenariosContext, visibleScenarioIds, visibleColourOrderIds]);
   
   // Calculate stroke width using useMemo to enable CSS transitions
   const strokeWidth = useMemo(() => {
@@ -535,9 +535,9 @@ export default function ConversionEdge({
     } : { r: 153, g: 153, b: 153 }; // fallback to gray
   };
   
-  // Edge color logic: highlight/selection shading
-  // Case/conditional edge colors now shown as markers, not full edge coloring
-  const edgeColor = useMemo(() => {
+  // Edge colour logic: highlight/selection shading
+  // Case/conditional edge colours now shown as markers, not full edge colouring
+  const edgeColour = useMemo(() => {
     // Selected edges: darker gray to distinguish from highlighted edges
     if (effectiveSelected) {
       return '#222'; // very dark gray for selection
@@ -557,23 +557,23 @@ export default function ConversionEdge({
         blackIntensity = 0.5;
       }
       
-      // Blend scenario color with black for highlight
-      const baseColorHex = data?.scenarioColor || '#b3b3b3';
+      // Blend scenario colour with black for highlight
+      const baseColourHex = data?.scenarioColour || '#b3b3b3';
       const black = { r: 0, g: 0, b: 0 };
-      const baseColorRgb = hexToRgb(baseColorHex);
+      const baseColourRgb = hexToRgb(baseColourHex);
       
-      const blendedR = Math.round(black.r * blackIntensity + baseColorRgb.r * (1 - blackIntensity));
-      const blendedG = Math.round(black.g * blackIntensity + baseColorRgb.g * (1 - blackIntensity));
-      const blendedB = Math.round(black.b * blackIntensity + baseColorRgb.b * (1 - blackIntensity));
+      const blendedR = Math.round(black.r * blackIntensity + baseColourRgb.r * (1 - blackIntensity));
+      const blendedG = Math.round(black.g * blackIntensity + baseColourRgb.g * (1 - blackIntensity));
+      const blendedB = Math.round(black.b * blackIntensity + baseColourRgb.b * (1 - blackIntensity));
       
       return `rgb(${blendedR}, ${blendedG}, ${blendedB})`;
     }
     
-    // Default: use scenario color
-    return data?.scenarioColor || '#b3b3b3';
-  }, [effectiveSelected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.scenarioColor]);
+    // Default: use scenario colour
+    return data?.scenarioColour || '#b3b3b3';
+  }, [effectiveSelected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.scenarioColour]);
   
-  const getEdgeColor = () => edgeColor;
+  const getEdgeColour = () => edgeColour;
 
   // Band opacity schema – experimental: very low opacities
   // Outer: 0.1, Middle: 0.4, Inner: 0.5
@@ -585,7 +585,7 @@ export default function ConversionEdge({
     return { inner, middle, outer };
   };
 
-  // Calculate confidence bounds and colors if needed
+  // Calculate confidence bounds and colours if needed
   const confidenceData = useMemo(() => {
     if (!shouldShowConfidenceIntervals) return null;
     
@@ -1504,7 +1504,7 @@ export default function ConversionEdge({
         >
           <path
             d="M0,0 L0,9 L13.5,4.5 z"
-            fill={getEdgeColor()}
+            fill={getEdgeColour()}
           />
         </marker>
         {/* Fallback marker: fixed size, independent of stroke width */}
@@ -1519,7 +1519,7 @@ export default function ConversionEdge({
         >
           <path
             d="M0,0 L0,9 L13.5,4.5 z"
-            fill={getEdgeColor()}
+            fill={getEdgeColour()}
           />
         </marker>
         {/* Diagonal stripe pattern for hidden current layer */}
@@ -1531,8 +1531,8 @@ export default function ConversionEdge({
             height="10"
             patternTransform="rotate(45)"
           >
-            <rect x="0" y="0" width="5" height="10" fill={getEdgeColor()} fillOpacity="0.05" />
-            <rect x="5" y="0" width="5" height="10" fill={getEdgeColor()} fillOpacity="0.2" />
+            <rect x="0" y="0" width="5" height="10" fill={getEdgeColour()} fillOpacity="0.05" />
+            <rect x="5" y="0" width="5" height="10" fill={getEdgeColour()} fillOpacity="0.2" />
           </pattern>
         )}
         {/* Define offset path for text to follow (parallel to edge) */}
@@ -1557,7 +1557,7 @@ export default function ConversionEdge({
                 style={{
                   fill: isHiddenCurrent 
                     ? `url(#stripe-pattern-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   stroke: 'none',
@@ -1584,14 +1584,14 @@ export default function ConversionEdge({
           ) : shouldShowConfidenceIntervals && confidenceData ? (
             // Confidence interval mode: render three overlapping paths
             <>
-              {/* Outer band (upper bound) - widest, lightest color */}
+              {/* Outer band (upper bound) - widest, lightest colour */}
               <path
                 key={`${id}-ci-upper`}
                 id={`${id}-ci-upper`}
                 style={{
                   stroke: isHiddenCurrent 
                     ? `url(#stripe-pattern-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.upper,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -1610,14 +1610,14 @@ export default function ConversionEdge({
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
               />
-              {/* Middle band (mean) - normal width, base color */}
+              {/* Middle band (mean) - normal width, base colour */}
               <path
                 key={`${id}-ci-middle`}
                 id={`${id}-ci-middle`}
                 style={{
                   stroke: isHiddenCurrent 
                     ? `url(#stripe-pattern-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.middle,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -1636,7 +1636,7 @@ export default function ConversionEdge({
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
               />
-              {/* Inner band (lower bound) - narrowest, darkest color */}
+              {/* Inner band (lower bound) - narrowest, darkest colour */}
               <path
                 ref={pathRef}
                 key={`${id}-ci-lower`}
@@ -1644,7 +1644,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: isHiddenCurrent 
                     ? `url(#stripe-pattern-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.lower,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -1674,7 +1674,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: isHiddenCurrent 
                     ? `url(#stripe-pattern-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColor() : (data?.scenarioColor || getEdgeColor())),
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                   mixBlendMode: 'multiply',
                   fill: 'none',
@@ -1783,8 +1783,8 @@ export default function ConversionEdge({
                 graph={graph}
                 scenarioOrder={scenarioOrder}
                 visibleScenarioIds={visibleScenarioIds}
-                visibleColorOrderIds={visibleColorOrderIds}
-                scenarioColors={scenarioColors}
+                visibleColourOrderIds={visibleColourOrderIds}
+                scenarioColours={scenarioColours}
                 scenariosContext={scenariosContext}
                 whatIfDSL={whatIfDSL}
                 visibleStartOffset={visibleStartOffset}

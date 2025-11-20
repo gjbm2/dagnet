@@ -72,7 +72,7 @@
    - Multiple files still use old `condition: {visited: [...]}` format
    - Broken files: `EdgeContextMenu.tsx`, `runner.ts`, `conditionalReferences.ts`, `whatIf.ts`
    - Backward compatibility hacks need removal
-   - Lost features need restoration (complementary conditionals, color picker)
+   - Lost features need restoration (complementary conditionals, colour picker)
    - See `TODO.md` for full details
 
 2. **P-Slider Auto-Balance** (2-3 hrs)

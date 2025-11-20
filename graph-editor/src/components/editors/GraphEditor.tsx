@@ -62,14 +62,14 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
     return null;
   }
   
-  const { scenarios, deleteScenario, currentColor, baseColor } = scenariosContext;
+  const { scenarios, deleteScenario, currentColour, baseColour } = scenariosContext;
   
   // Get tab's scenario state
   const currentTab = tabs.find(t => t.id === tabId);
   const scenarioState = currentTab?.editorState?.scenarioState;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
-  const visibleColorOrderIds = scenarioState?.visibleColorOrderIds || [];
+  const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
   
   const handleToggleVisibility = React.useCallback((scenarioId: string) => {
     operations.toggleScenarioVisibility(tabId, scenarioId);
@@ -84,13 +84,13 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       const scenarioState = operations.getScenarioState(tabId);
       if (scenarioState?.visibleScenarioIds.includes(scenarioId)) {
         const newVisibleIds = scenarioState.visibleScenarioIds.filter(id => id !== scenarioId);
-        const newColorOrderIds = scenarioState.visibleColorOrderIds.filter(id => id !== scenarioId);
+        const newColourOrderIds = scenarioState.visibleColourOrderIds.filter(id => id !== scenarioId);
         
         await operations.updateTabState(tabId, {
           scenarioState: {
             ...scenarioState,
             visibleScenarioIds: newVisibleIds,
-            visibleColorOrderIds: newColorOrderIds,
+            visibleColourOrderIds: newColourOrderIds,
           }
         });
       }
@@ -112,8 +112,8 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       scenarios={scenarios}
       scenarioOrder={scenarioOrder}
       visibleScenarioIds={visibleScenarioIds}
-      currentColor={currentColor}
-      baseColor={baseColor}
+      currentColour={currentColour}
+      baseColour={baseColour}
       showCurrent={scenarios.length >= 1}
       showBase={baseVisible}
       onToggleVisibility={handleToggleVisibility}
@@ -366,30 +366,30 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
             validScenarioIds.add('base'); // 'base' is always valid
             
             const orphanedInVisible = currentState.visibleScenarioIds.filter(id => !validScenarioIds.has(id));
-            const orphanedInColorOrder = currentState.visibleColorOrderIds.filter(id => !validScenarioIds.has(id));
+            const orphanedInColourOrder = currentState.visibleColourOrderIds.filter(id => !validScenarioIds.has(id));
             
-            if (orphanedInVisible.length > 0 || orphanedInColorOrder.length > 0) {
+            if (orphanedInVisible.length > 0 || orphanedInColourOrder.length > 0) {
               console.warn(`[GraphEditor ${fileId}] 🧹 Found orphaned scenario IDs:`, {
                 orphanedInVisible,
-                orphanedInColorOrder,
+                orphanedInColourOrder,
                 validIds: Array.from(validScenarioIds)
               });
               
               // Clean up orphaned IDs
               const cleanedVisibleIds = currentState.visibleScenarioIds.filter(id => validScenarioIds.has(id));
-              const cleanedColorOrderIds = currentState.visibleColorOrderIds.filter(id => validScenarioIds.has(id));
+              const cleanedColourOrderIds = currentState.visibleColourOrderIds.filter(id => validScenarioIds.has(id));
               
               await tabOps.updateTabState(tabId, {
                 scenarioState: {
                   ...currentState,
                   visibleScenarioIds: cleanedVisibleIds,
-                  visibleColorOrderIds: cleanedColorOrderIds
+                  visibleColourOrderIds: cleanedColourOrderIds
                 }
               });
               
               console.log(`[GraphEditor ${fileId}] ✅ Cleaned up orphaned IDs, now:`, {
                 visibleScenarioIds: cleanedVisibleIds,
-                visibleColorOrderIds: cleanedColorOrderIds
+                visibleColourOrderIds: cleanedColourOrderIds
               });
             }
           }
@@ -420,23 +420,23 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     validScenarioIds.add('base');
     
     const orphanedInVisible = currentState.visibleScenarioIds.filter(id => !validScenarioIds.has(id));
-    const orphanedInColorOrder = currentState.visibleColorOrderIds.filter(id => !validScenarioIds.has(id));
+    const orphanedInColourOrder = currentState.visibleColourOrderIds.filter(id => !validScenarioIds.has(id));
     
-    if (orphanedInVisible.length > 0 || orphanedInColorOrder.length > 0) {
+    if (orphanedInVisible.length > 0 || orphanedInColourOrder.length > 0) {
       console.warn(`[GraphEditor ${fileId}] 🧹 Auto-cleanup: Found orphaned scenario IDs:`, {
         orphanedInVisible,
-        orphanedInColorOrder
+        orphanedInColourOrder
       });
       
       const cleanedVisibleIds = currentState.visibleScenarioIds.filter(id => validScenarioIds.has(id));
-      const cleanedColorOrderIds = currentState.visibleColorOrderIds.filter(id => validScenarioIds.has(id));
+      const cleanedColourOrderIds = currentState.visibleColourOrderIds.filter(id => validScenarioIds.has(id));
       
       if (tabId) {
         tabOps.updateTabState(tabId, {
           scenarioState: {
             ...currentState,
             visibleScenarioIds: cleanedVisibleIds,
-            visibleColorOrderIds: cleanedColorOrderIds
+            visibleColourOrderIds: cleanedColourOrderIds
           }
         }).catch(err => console.error('Failed to update tab state:', err));
       }
@@ -470,16 +470,16 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         if (!currentState) continue;
         
         const hasInVisible = currentState.visibleScenarioIds.includes(scenarioId);
-        const hasInColorOrder = currentState.visibleColorOrderIds.includes(scenarioId);
+        const hasInColourOrder = currentState.visibleColourOrderIds.includes(scenarioId);
         
-        if (hasInVisible || hasInColorOrder) {
+        if (hasInVisible || hasInColourOrder) {
           console.log(`[GraphEditor ${fileId}] 🧹 Removing ${scenarioId} from tab ${tab.id}`);
           
           await tabOps.updateTabState(tab.id, {
             scenarioState: {
               ...currentState,
               visibleScenarioIds: currentState.visibleScenarioIds.filter(id => id !== scenarioId),
-              visibleColorOrderIds: currentState.visibleColorOrderIds.filter(id => id !== scenarioId)
+              visibleColourOrderIds: currentState.visibleColourOrderIds.filter(id => id !== scenarioId)
             }
           });
         }

@@ -362,13 +362,13 @@ case:
 
 **Example Use Case:**
 ```
-A/B Test: Button color
+A/B Test: Button colour
 - Mobile: Blue wins (45% vs 40% for green)
 - Desktop: Green wins (52% vs 48% for blue)
 
 Solution: Two case parameters with context filters
-- button-color-mobile: weights=[0.6, 0.4] (blue, green)
-- button-color-desktop: weights=[0.4, 0.6] (blue, green)
+- button-colour-mobile: weights=[0.6, 0.4] (blue, green)
+- button-colour-desktop: weights=[0.4, 0.6] (blue, green)
 ```
 
 **Implementation Note:** Extend case resolution to check context filters

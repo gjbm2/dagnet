@@ -932,8 +932,8 @@ These visual treatments should be **consistent** across:
   {entry.isLocal && <Badge>(local)</Badge>}
   {entry.isOrphan && <WarningIcon>⚠️</WarningIcon>}
   <StatusDots>
-    {entry.isOpen && <Dot color="blue">●</Dot>}
-    {entry.isDirty && <Dot color="orange">●</Dot>}
+    {entry.isOpen && <Dot colour="blue">●</Dot>}
+    {entry.isDirty && <Dot colour="orange">●</Dot>}
   </StatusDots>
 </NavigatorItem>
 
@@ -953,7 +953,7 @@ function getNameClass(entry: NavigatorEntry): string {
     {tab.title}
   </Title>
   {tab.isLocal && <Badge>(local)</Badge>}
-  {tab.isDirty && <Dot color="orange">●</Dot>}
+  {tab.isDirty && <Dot colour="orange">●</Dot>}
   <CloseButton onClick={() => closeTab(tab.id)}>×</CloseButton>
 </TabHeader>
 ```
@@ -980,7 +980,7 @@ function getNameClass(entry: NavigatorEntry): string {
       {!entry.hasFile && <Badge>[create]</Badge>}
       {entry.isLocal && <Badge>(local)</Badge>}
       {entry.isOrphan && <WarningIcon>⚠️</WarningIcon>}
-      {entry.isDirty && <Dot color="orange">●</Dot>}
+      {entry.isDirty && <Dot colour="orange">●</Dot>}
       {/* Show additional context in selector */}
       {entry.path && <Path>({entry.path})</Path>}
     </SelectorOption>

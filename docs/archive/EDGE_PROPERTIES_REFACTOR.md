@@ -2,7 +2,7 @@
 
 **Status:** Ready for implementation  
 **Estimated Effort:** 18-25 hours  
-**Prerequisites:** Color Assignment Service, schema updates
+**Prerequisites:** Colour Assignment Service, schema updates
 
 ---
 
@@ -13,8 +13,8 @@ This refactor brings Edge Properties to the same quality standard as Node Proper
 1. **Reorganize into CollapsibleSections** - Basic Properties, Parameters (with 3 collapsible sub-sections), Conditional Probabilities, Case Edge Info
 2. **Add missing fields** - Description, Std Dev, Distribution (for all edges, not just non-case)
 3. **Refactor Conditional Probabilities** - From flat list to accordion cards (like Case Variants)
-4. **Fix Color Picker** - Show selected custom color, open at click location
-5. **Add Color Auto-Assignment** - Create reusable utility for Case Nodes and Conditional Probabilities
+4. **Fix Colour Picker** - Show selected custom colour, open at click location
+5. **Add Colour Auto-Assignment** - Create reusable utility for Case Nodes and Conditional Probabilities
 6. **Remove DELETE EDGE button** - Use Delete key (just fixed!) and context menu instead
 7. **Add Case Edge Info slider** - Link to upstream case node variant weight
 
@@ -26,9 +26,9 @@ This refactor brings Edge Properties to the same quality standard as Node Proper
 2. **Poor Organization** - All fields in flat list without logical grouping
 3. **Preposterously Prominent Delete Button** - "DELETE EDGE" too prominent (if exists)
 4. **Conditional Probabilities Not Accordion-Based** - Uses old `<ConditionalProbabilityEditor>` component instead of collapsible cards
-5. **Missing Color Picker** - Conditional probabilities have no color picker for visual distinction
-6. **ColorSelector Issues**:
-   - Custom color doesn't show in selected box after picking
+5. **Missing Colour Picker** - Conditional probabilities have no colour picker for visual distinction
+6. **ColourSelector Issues**:
+   - Custom colour doesn't show in selected box after picking
    - Picker opens at (0,0) instead of click location
 
 ## Goals
@@ -36,8 +36,8 @@ This refactor brings Edge Properties to the same quality standard as Node Proper
 1. Match the quality and organization of Node Properties Panel
 2. Use CollapsibleSections for logical grouping
 3. Accordion pattern for Conditional Probabilities (like Case Variants)
-4. Add color picker to each conditional probability
-5. Fix ColorSelector component issues
+4. Add colour picker to each conditional probability
+5. Fix ColourSelector component issues
 6. Remove/tone down edge deletion UI
 
 ---
@@ -160,7 +160,7 @@ INSIDE AS SHOWN ABOVE
 - Each condition in its own collapsible card (`.variant-card`)
 - Header shows:
   - Collapse/expand chevron
-  - **Color picker** (NEW!) - for visual distinction on graph 
+  - **Colour picker** (NEW!) - for visual distinction on graph 
 
             IT IS NOT NEW, IT WAS JUST BROKEN
 
@@ -183,7 +183,7 @@ INSIDE AS SHOWN ABOVE
 - "+ Conditional Probability" button at bottom (subdued `.property-add-btn` style)
 
 **Questions:**
-- Should collapsed state show color + condition name only?
+- Should collapsed state show colour + condition name only?
 
     YES, THOUGH CONDITION NAME  GENERATED DYNAMICALLY
 
@@ -191,7 +191,7 @@ INSIDE AS SHOWN ABOVE
 
     YES
 
-- Color picker position: before or after chevron?
+- Colour picker position: before or after chevron?
 
     AFTER
 
@@ -258,25 +258,25 @@ YES.
 
 ---
 
-## ColorSelector Component Fixes
+## ColourSelector Component Fixes
 
-### Issue 1: Custom Color Not Showing in Box 
+### Issue 1: Custom Colour Not Showing in Box 
 
 ON THIS PANEL AND IN CASE NODE COLOUR SELECTOR
 
 **Current Behavior:**
 ```
-[Custom Color Box]  →  Shows gradient, not actual picked color
+[Custom Colour Box]  →  Shows gradient, not actual picked colour
 ```
 
 **Expected Behavior:**
 ```
-[#FF5733 Solid]  →  Shows the actual custom color picked
+[#FF5733 Solid]  →  Shows the actual custom colour picked
 ```
 
-**Fix Location:** `ColorSelector.tsx`
-- When custom color selected, box should show solid color
-- Update box background when `customColor` changes
+**Fix Location:** `ColourSelector.tsx`
+- When custom colour selected, box should show solid colour
+- Update box background when `customColour` changes
 
 ### Issue 2: Picker Opens at (0,0)
 
@@ -303,7 +303,7 @@ Click custom box at (x, y)  →  Picker appears near (x, y)
 - `CollapsibleSection` - For main sections
 - `.variant-card` / `.variant-card-header` / `.variant-card-content` - For conditional probabilities
 - `.property-add-btn` - For "+ Conditional Probability" button
-- `ColorSelector` - For conditional probability colors (after fixing)
+- `ColourSelector` - For conditional probability colours (after fixing)
 - `EnhancedSelector` - Already used, ensure consistent styling
 - `ProbabilityInput` - Already used with slider
 
@@ -326,18 +326,18 @@ AND SLIDER COMPONENT
 - [ ] Add delete button (hidden during edit)
 - [ ] Add "+ Conditional Probability" button
 
-### Phase 3: Color Picker Integration
-- [ ] Import ColorSelector component
-- [ ] Integrate ColorSelector into conditional probability card headers (after chevron)
-- [ ] Auto-assign colors using Color Assignment Service when creating new conditional probabilities
+### Phase 3: Colour Picker Integration
+- [ ] Import ColourSelector component
+- [ ] Integrate ColourSelector into conditional probability card headers (after chevron)
+- [ ] Auto-assign colours using Colour Assignment Service when creating new conditional probabilities
 - [ ] Show probability value in collapsed header (e.g., "When: payment-success (85%)")
 - [ ] Generate display names dynamically ("When: {node_condition}")
 - [ ] Add Std Dev and Distribution fields to conditional probability content
-- [ ] Ensure colors persist in graph data
+- [ ] Ensure colours persist in graph data
 - [ ] Update Node Condition EnhancedSelector to show nodes from current graph
 
-### Phase 4: Fix ColorSelector Component
-- [ ] Show selected custom color in box (not gradient)
+### Phase 4: Fix ColourSelector Component
+- [ ] Show selected custom colour in box (not gradient)
 - [ ] Position picker near click location (not 0,0)
 - [ ] Test in both Node and Edge contexts
 
@@ -355,7 +355,7 @@ AND SLIDER COMPONENT
 - [ ] Verify undo/redo works for all changes
 - [ ] Test with case edges vs normal edges
 - [ ] Verify Weight Default and Std Dev show for all edges
-- [ ] Test color auto-assignment for new conditional probabilities
+- [ ] Test colour auto-assignment for new conditional probabilities
 - [ ] Verify EnhancedSelector visual treatment (dirty, open, local, registry-only)
 
 ---
@@ -366,10 +366,10 @@ All major design questions have been answered:
 
 1. **Parameter Sub-sections:** ✓ YES - make collapsible (use CollapsibleSection)
 2. **Probability Slider Location:** ✓ INSIDE Probability sub-section
-3. **Collapsed Conditional Probability:** ✓ Show color + name + probability value
+3. **Collapsed Conditional Probability:** ✓ Show colour + name + probability value
 4. **Case Edge Info:** ✓ Below Parameters section, as collapsible section
-5. **Color Picker Position:** ✓ AFTER chevron in header
-6. **Default Colors:** ✓ YES - auto-assign distinct colors (reuse logic from Case Nodes)
+5. **Colour Picker Position:** ✓ AFTER chevron in header
+6. **Default Colours:** ✓ YES - auto-assign distinct colours (reuse logic from Case Nodes)
 7. **Edge Deletion:** ✓ REMOVE button from panel entirely
 8. **Weight Default:** ✓ Show for ALL edges (not just non-case)
 9. **Probability Std Dev:** ✓ Show for ALL edges (not just non-case)
@@ -404,7 +404,7 @@ edge.conditional_p = [
 ```
 
 **Questions:**
-- Add `color` field?
+- Add `colour` field?
 
 DO WE NOT HAVE COLOUR ON SCHEMA FOR CONDITIONAL PS?
 
@@ -412,7 +412,7 @@ DO WE NOT HAVE COLOUR ON SCHEMA FOR CONDITIONAL PS?
 
 WE CAN ADD OPTIONALLY. WE WILL NEED TO ADD TO SCHEMA IN THAT CASE THOUGH
 
-- Default color assignment strategy?
+- Default colour assignment strategy?
 
 YES. WE SHOULD AUTO-ASSIGN A DISTINCT NOVEL COLOUR. WE NEED A STANDARD CLASS FOR THIS & RE-USE ACROSS CASE-NODES AND CONDITIONAL PS. THIS LOGIC SHOULD LOOK AT ALL COLOURS IN USE ON THE GRAPH AND PROPOSE A SOMEWHAT DISTINCT NOVEL ONE.
 
@@ -421,7 +421,7 @@ YES. WE SHOULD AUTO-ASSIGN A DISTINCT NOVEL COLOUR. WE NEED A STANDARD CLASS FOR
 ## Timeline Estimate
 
 - **Phase 0 (Prerequisites):** 2-3 hours
-  - Color Assignment Service creation
+  - Colour Assignment Service creation
   - Schema verification and updates
 - **Phase 1 (Structure):** 3-4 hours
   - Reorganize into CollapsibleSections
@@ -430,13 +430,13 @@ YES. WE SHOULD AUTO-ASSIGN A DISTINCT NOVEL COLOUR. WE NEED A STANDARD CLASS FOR
 - **Phase 2 (Conditional Probabilities):** 4-5 hours
   - Replace ConditionalProbabilityEditor with accordion cards
   - Add collapse/expand, inline editing, delete
-- **Phase 3 (Color Picker Integration):** 3-4 hours
-  - Integrate ColorSelector
-  - Auto-assign colors
+- **Phase 3 (Colour Picker Integration):** 3-4 hours
+  - Integrate ColourSelector
+  - Auto-assign colours
   - Dynamic name generation
   - Add Std Dev/Distribution to conditional probabilities
-- **Phase 4 (ColorSelector Fixes):** 2-3 hours
-  - Fix custom color display
+- **Phase 4 (ColourSelector Fixes):** 2-3 hours
+  - Fix custom colour display
   - Fix picker positioning
 - **Phase 5 (Case Edge Slider):** 2-3 hours
   - Add slider to Case Edge Info

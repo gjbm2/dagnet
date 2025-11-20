@@ -1040,7 +1040,7 @@ export default function ParamsPage() {
 
               <div style={{
                 // Custom RJSF styling
-                '--rjsf-label-color': '#333',
+                '--rjsf-label-colour': '#333',
                 '--rjsf-input-border': '#dee2e6',
                 '--rjsf-input-focus': '#007bff',
               } as React.CSSProperties}>
