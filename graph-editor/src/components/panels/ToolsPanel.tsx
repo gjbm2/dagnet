@@ -1,7 +1,7 @@
 import React from 'react';
 import CollapsibleSection from '../CollapsibleSection';
 import EdgeScalingControl from '../EdgeScalingControl';
-import { Layout, Maximize2, Eye } from 'lucide-react';
+import { Layout, Maximize2, Eye, Wrench } from 'lucide-react';
 import './ToolsPanel.css';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 
@@ -14,6 +14,9 @@ interface ToolsPanelProps {
   // Visibility
   onHideUnselected?: () => void;
   onShowAll?: () => void;
+  
+  // Hide header when used in hover preview
+  hideHeader?: boolean;
 }
 
 /**
@@ -27,7 +30,8 @@ export default function ToolsPanel({
   onSankeyLayout,
   onForceReroute,
   onHideUnselected,
-  onShowAll
+  onShowAll,
+  hideHeader = false
 }: ToolsPanelProps) {
   const viewPrefs = useViewPreferencesContext();
   if (!viewPrefs) {
@@ -50,6 +54,12 @@ export default function ToolsPanel({
   } = viewPrefs;
   return (
     <div className="tools-panel">
+      {!hideHeader && (
+        <div className="panel-header">
+          <Wrench size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span>Tools</span>
+        </div>
+      )}
       <div className="panel-body">
         {/* Layout Tools */}
         <CollapsibleSection title="Layout" defaultOpen={true} icon={Layout}>

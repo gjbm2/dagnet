@@ -1,6 +1,8 @@
 import React from 'react';
 import ScenariosPanel from './panels/ScenariosPanel';
 import PropertiesPanel from './PropertiesPanel';
+import ToolsPanel from './panels/ToolsPanel';
+import { Layers, FileText, Wrench } from 'lucide-react';
 import './SidebarHoverPreview.css';
 
 interface SidebarHoverPreviewProps {
@@ -10,13 +12,10 @@ interface SidebarHoverPreviewProps {
   selectedEdgeId: string | null;
   onSelectedNodeChange: (id: string | null) => void;
   onSelectedEdgeChange: (id: string | null) => void;
-  // Tools panel props (Phase 5)
-  onAutoLayout?: () => void;
+  // Tools panel props
+  onAutoLayout?: (direction?: 'LR' | 'RL' | 'TB' | 'BT') => void;
+  onSankeyLayout?: () => void;
   onForceReroute?: () => void;
-  massGenerosity?: number;
-  onMassGenerosityChange?: (value: number) => void;
-  useUniformScaling?: boolean;
-  onUniformScalingChange?: (value: boolean) => void;
   onHideUnselected?: () => void;
   onShowAll?: () => void;
 }
@@ -38,11 +37,8 @@ export default function SidebarHoverPreview({
   onSelectedEdgeChange,
   // Tools props
   onAutoLayout,
+  onSankeyLayout,
   onForceReroute,
-  massGenerosity = 0.5,
-  onMassGenerosityChange,
-  useUniformScaling = false,
-  onUniformScalingChange,
   onHideUnselected,
   onShowAll
 }: SidebarHoverPreviewProps) {
@@ -56,10 +52,11 @@ export default function SidebarHoverPreview({
         {panel === 'what-if' && (
           <div className="preview-panel">
             <div className="preview-header">
-              Scenarios
+              <Layers size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
+              <span>Scenarios</span>
             </div>
-            <div className="preview-body">
-              <ScenariosPanel tabId={tabId} />
+            <div className="preview-body" style={{ padding: 0 }}>
+              <ScenariosPanel tabId={tabId} hideHeader={true} />
             </div>
           </div>
         )}
@@ -67,14 +64,17 @@ export default function SidebarHoverPreview({
         {panel === 'properties' && (
           <div className="preview-panel">
             <div className="preview-header">
-              {selectedNodeId 
-                ? 'Node Properties'
-                : selectedEdgeId 
-                  ? 'Edge Properties'
-                  : 'Graph Properties'
-              }
+              <FileText size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
+              <span>
+                {selectedNodeId 
+                  ? 'Node Properties'
+                  : selectedEdgeId 
+                    ? 'Edge Properties'
+                    : 'Graph Properties'
+                }
+              </span>
             </div>
-            <div className="preview-body">
+            <div className="preview-body" style={{ padding: 0 }}>
               <PropertiesPanel
                 selectedNodeId={selectedNodeId}
                 onSelectedNodeChange={onSelectedNodeChange}
@@ -88,53 +88,19 @@ export default function SidebarHoverPreview({
         
         {panel === 'tools' && (
           <div className="preview-panel">
-            <div className="preview-header">🛠️ Tools</div>
-            <div className="preview-body">
-              {/* Tools Panel - Phase 5 */}
-              <div className="tools-section">
-                <h3>Layout</h3>
-                <button onClick={onAutoLayout} className="tool-button">
-                  Auto-Layout
-                </button>
-                <button onClick={onForceReroute} className="tool-button">
-                  Force Re-route
-                </button>
-                
-                <div className="tool-control">
-                  <label>Mass Generosity:</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                    value={massGenerosity}
-                    onChange={(e) => onMassGenerosityChange?.(parseFloat(e.target.value))}
-                  />
-                  <span>{(massGenerosity * 100).toFixed(0)}%</span>
-                </div>
-              </div>
-              
-              <div className="tools-section">
-                <h3>Scaling</h3>
-                <label className="tool-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={useUniformScaling}
-                    onChange={(e) => onUniformScalingChange?.(e.target.checked)}
-                  />
-                  <span>Uniform Edge Width</span>
-                </label>
-              </div>
-              
-              <div className="tools-section">
-                <h3>Visibility</h3>
-                <button onClick={onHideUnselected} className="tool-button">
-                  Hide Unselected
-                </button>
-                <button onClick={onShowAll} className="tool-button">
-                  Show All
-                </button>
-              </div>
+            <div className="preview-header">
+              <Wrench size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
+              <span>Tools</span>
+            </div>
+            <div className="preview-body" style={{ padding: 0 }}>
+              <ToolsPanel
+                onAutoLayout={onAutoLayout}
+                onSankeyLayout={onSankeyLayout}
+                onForceReroute={onForceReroute}
+                onHideUnselected={onHideUnselected}
+                onShowAll={onShowAll}
+                hideHeader={true}
+              />
             </div>
           </div>
         )}
