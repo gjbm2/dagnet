@@ -1,4 +1,13 @@
 # DagNet Release Notes
+## Version 0.92b
+**Released:** November 20, 2025
+
+Fairly significant update to allow much more sophisticated programmatic retrieval from Google Sheets -- makes it possible to pull in data ranges with param packs properly labelled.
+
+Also fixed a whole spate of bugs related to file interactions and event management. Still nea better UI schema for events and params, but... progress.
+
+---
+
 ## Version 0.91.10-beta
 **Released:** November 19, 2025
 
