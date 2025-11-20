@@ -642,6 +642,6 @@ For Google Sheets:
 
 ---
 
-**Version History:**
+**Version History:**u
 - **2.0** (November 2025): Simplified user guide format, correct conditional probability syntax
 - **1.0** (November 2025): Initial release

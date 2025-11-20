@@ -219,7 +219,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     window.addEventListener('dagnet:whatif-start', handler as any);
     return () => window.removeEventListener('dagnet:whatif-start', handler as any);
   }, []);
-  
+
   // What-If DSL: prefer latest tab state, fall back to prop if needed.
   // TabContext is the single source of truth; the prop is just a convenience.
   const tabForThisCanvas = tabId ? tabs.find(t => t.id === tabId) : undefined;
@@ -1254,6 +1254,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     window.addEventListener('dagnet:forceRedraw', handleForceRedraw);
     return () => window.removeEventListener('dagnet:forceRedraw', handleForceRedraw);
   }, []);
+
+  // Listen for selection queries (for Copy Vars from Edit menu)
+  useEffect(() => {
+    const handler = (e: any) => {
+      if (!e?.detail) return;
+      
+      // Get currently selected nodes and edges
+      const selectedNodes = nodes.filter(n => n.selected);
+      const selectedEdges = edges.filter(e => e.selected);
+      
+      // Populate the detail object with UUIDs
+      e.detail.selectedNodeUuids = selectedNodes.map(n => n.id); // ReactFlow IDs are UUIDs
+      e.detail.selectedEdgeUuids = selectedEdges.map(e => e.id); // ReactFlow IDs are UUIDs
+    };
+    window.addEventListener('dagnet:querySelection', handler as any);
+    return () => window.removeEventListener('dagnet:querySelection', handler as any);
+  }, [nodes, edges]);
 
   // Sync FROM graph TO ReactFlow when graph changes externally
   useEffect(() => {
@@ -5537,6 +5554,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           y={edgeContextMenu.y}
           edgeId={edgeContextMenu.edgeId}
           edgeData={contextMenuLocalData}
+          edges={edges}
           graph={graph}
               onClose={() => {
                 setEdgeContextMenu(null);

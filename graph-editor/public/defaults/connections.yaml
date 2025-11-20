@@ -243,18 +243,18 @@ connections:
     description: "Read-only access to Google Sheets for parameter data"
     enabled: true
     credsRef: google-sheets
+    requires_event_ids: false  # Google Sheets reads from spreadsheet ranges, doesn't need node event_ids
     defaults:
       api_version: "v4"
     connection_string_schema:
       type: object
-      required: [spreadsheet_id, range]
+      required: [sheet_url]
       properties:
-        spreadsheet_id:
+        sheet_url:
           type: string
-          description: "Google Sheets spreadsheet ID from URL"
-        range:
-          type: string
-          description: "A1 notation range (e.g., 'Sheet1!A1:B10')"
+          description: >
+            Google Sheets range URL. Right-click a range in Google Sheets and choose "Copy link to range".
+            Example: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit?gid=0#gid=0&range=A1:B1
         mode:
           type: string
           enum: [auto, single, param-pack]
@@ -264,10 +264,46 @@ connections:
     adapter:
       pre_request:
         script: |
-          // Keep pre_request minimal; any edge/node context is handled by the caller (e.g., scenarios modal).
+          // Parse Google Sheets URL to extract spreadsheet_id and range
+          // URL format: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit?gid={GID}#gid={GID}&range={RANGE}
+          // Example: https://docs.google.com/spreadsheets/d/1_ePUOzMF8czrunNW8YSNhdcqzVAt0nTLTKOsY1HYrWw/edit?gid=0#gid=0&range=A1:B1
+          
+          const sheetUrl = connection_string.sheet_url;
+          if (!sheetUrl) {
+            throw new Error('sheet_url is required');
+          }
+          
+          // Extract spreadsheet ID from URL path: /d/{SPREADSHEET_ID}/
+          const spreadsheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)\//);
+          if (!spreadsheetIdMatch) {
+            throw new Error('Invalid Google Sheets URL: could not extract spreadsheet ID');
+          }
+          const spreadsheet_id = spreadsheetIdMatch[1];
+          
+          // Extract range from URL hash fragment: #gid={GID}&range={RANGE} or #range={RANGE}
+          let range = null;
+          const hashMatch = sheetUrl.match(/#[^#]*range=([^&]+)/);
+          if (hashMatch) {
+            range = decodeURIComponent(hashMatch[1]);
+          } else {
+            // Fallback: try to extract from query string
+            const queryMatch = sheetUrl.match(/[?&]range=([^&#]+)/);
+            if (queryMatch) {
+              range = decodeURIComponent(queryMatch[1]);
+            }
+          }
+          
+          if (!range) {
+            throw new Error('Invalid Google Sheets URL: could not extract range. Make sure to copy the link with a range selected.');
+          }
+          
+          // Store parsed values in dsl for use in URL template
+          dsl.spreadsheet_id = spreadsheet_id;
+          dsl.range = range;
+          
           return dsl;
       request:
-        url_template: "https://sheets.googleapis.com/v4/spreadsheets/{{{connection_string.spreadsheet_id}}}/values/{{{connection_string.range}}}"
+        url_template: "https://sheets.googleapis.com/v4/spreadsheets/{{{dsl.spreadsheet_id}}}/values/{{{dsl.range}}}"
         method: GET
         headers:
           Authorization: "Bearer {{credentials.access_token}}"
@@ -279,22 +315,9 @@ connections:
         - name: parsed_result
           jsonata: |
             (
-              $dasHelpers := dasHelpers;
-
-              $dasHelpers.parseSheetsRange ?
-                $dasHelpers.parseSheetsRange(values) :
-                {
-                  "mode": "error",
-                  "scalarValue": null,
-                  "paramPack": {},
-                  "errors": [
-                    {
-                      "row": 0,
-                      "col": 0,
-                      "message": "dasHelpers.parseSheetsRange not available"
-                    }
-                  ]
-                }
+              dasHelpers.parseSheetsRange ?
+                dasHelpers.parseSheetsRange(values) :
+                $parseSheetsRange(values)
             )
         - name: scalar_value
           jsonata: "parsed_result.scalarValue"
@@ -302,6 +325,9 @@ connections:
           jsonata: "parsed_result.paramPack"
         - name: errors
           jsonata: "parsed_result.errors"
+      upsert:
+        mode: replace
+        writes: []  # Google Sheets data is extracted in dataOperationsService.ts, not via upsert
 
   # Statsig - Feature Gate/Experiment Configuration
   - name: statsig-prod

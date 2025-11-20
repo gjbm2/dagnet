@@ -109,6 +109,14 @@ class RegistryService {
       for (const entry of entries) {
         const normalizedId = this.normalizeId(entry.id, type);
         
+        if (isNodeType) {
+          console.log('🔍 RegistryService.getItems(node): Processing index entry:', {
+            entryId: entry.id,
+            normalizedId,
+            name: entry.name
+          });
+        }
+        
         itemsMap.set(normalizedId, {
           id: normalizedId,
           type: type as ObjectType,
@@ -151,6 +159,16 @@ class RegistryService {
       const normalizedId = this.normalizeId(file.fileId, type);
       const existing = itemsMap.get(normalizedId);
       
+      if (isNodeType) {
+        console.log('🔍 RegistryService.getItems(node): Processing file:', {
+          fileId: file.fileId,
+          normalizedId,
+          name: file.name,
+          foundInMap: !!existing,
+          mapKeys: Array.from(itemsMap.keys())
+        });
+      }
+      
       if (existing) {
         // File exists for this index entry - update flags
         existing.hasFile = true;
@@ -177,7 +195,8 @@ class RegistryService {
           console.log('🔍 RegistryService.getItems(node): Found orphan file:', {
             fileId: file.fileId,
             normalizedId,
-            name: file.name
+            name: file.name,
+            availableMapKeys: Array.from(itemsMap.keys())
           });
         }
         itemsMap.set(normalizedId, {

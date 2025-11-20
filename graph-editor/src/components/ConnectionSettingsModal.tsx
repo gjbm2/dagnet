@@ -3,6 +3,7 @@ import { X, Settings } from 'lucide-react';
 import { IndexedDBConnectionProvider } from '../lib/das/IndexedDBConnectionProvider';
 import { ConnectionSelector } from './ConnectionSelector';
 import type { ConnectionDefinition } from '../lib/das/types';
+import { credentialsManager } from '../lib/credentials';
 import './ConnectionSettingsModal.css';
 
 interface ConnectionSettingsModalProps {
@@ -31,6 +32,7 @@ export function ConnectionSettingsModal({
   const [selectedConnectionName, setSelectedConnectionName] = useState<string | undefined>(connectionName);
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [serviceAccountEmail, setServiceAccountEmail] = useState<string | null>(null);
 
   // Sync selected connection name when prop changes
   useEffect(() => {
@@ -82,9 +84,36 @@ export function ConnectionSettingsModal({
       const provider = new IndexedDBConnectionProvider();
       const conn = await provider.getConnection(selectedConnectionName);
       setConnection(conn);
+      
+      // Extract service account email for sheets-readonly connection
+      if (selectedConnectionName === 'sheets-readonly' && conn?.credsRef) {
+        try {
+          const creds = credentialsManager.getProviderCredentials(conn.credsRef);
+          if (creds?.service_account_json_b64) {
+            try {
+              const decoded = atob(creds.service_account_json_b64 as string);
+              const serviceAccount = JSON.parse(decoded);
+              if (serviceAccount.client_email) {
+                setServiceAccountEmail(serviceAccount.client_email);
+              }
+            } catch (e) {
+              console.warn('Failed to parse service account JSON:', e);
+              setServiceAccountEmail(null);
+            }
+          } else {
+            setServiceAccountEmail(null);
+          }
+        } catch (e) {
+          console.warn('Failed to get credentials:', e);
+          setServiceAccountEmail(null);
+        }
+      } else {
+        setServiceAccountEmail(null);
+      }
     } catch (error) {
       console.error('Failed to load connection:', error);
       setConnection(null);
+      setServiceAccountEmail(null);
     } finally {
       setLoading(false);
     }
@@ -346,6 +375,26 @@ export function ConnectionSettingsModal({
             </div>
           ) : (
             <>
+              {/* Display service account email for sheets-readonly */}
+              {selectedConnectionName === 'sheets-readonly' && serviceAccountEmail && (
+                <div className="connection-settings-info-box" style={{ 
+                  marginBottom: '16px', 
+                  padding: '12px', 
+                  backgroundColor: '#f0f9ff', 
+                  border: '1px solid #bae6fd', 
+                  borderRadius: '4px' 
+                }}>
+                  <div style={{ fontWeight: '600', marginBottom: '4px' }}>
+                    Service Account Email
+                  </div>
+                  <div style={{ fontFamily: 'monospace', fontSize: '0.9em', color: '#0369a1' }}>
+                    {serviceAccountEmail}
+                  </div>
+                  <div style={{ fontSize: '0.85em', color: '#64748b', marginTop: '8px' }}>
+                    Share your Google Sheets file with this email address to grant access.
+                  </div>
+                </div>
+              )}
               {schema.description && (
                 <div className="connection-settings-schema-description">
                   {schema.description as React.ReactNode}

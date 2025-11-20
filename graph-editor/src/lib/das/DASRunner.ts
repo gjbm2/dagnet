@@ -516,6 +516,11 @@ export class DASRunner {
         expression.assign('dsl', context.dsl);
         expression.assign('window', context.window);
         expression.assign('context', context.context || {});
+        
+        // Expose dasHelpers object for JSONata expressions
+        expression.assign('dasHelpers', {
+          parseSheetsRange: (values: unknown[][]) => parseSheetsRange(values),
+        });
 
         // Evaluate against transformed (not extracted) so previous transform results are available
         // This allows transforms to reference each other (e.g., time_series can reference mode)
