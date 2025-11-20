@@ -2,6 +2,10 @@
 # This schema defines the structure for the contexts.yaml file
 # which contains canonical definitions of all available context variables.
 
+$schema: http://json-schema.org/draft-07/schema#
+title: Context Definitions Schema
+description: Schema for context definitions in the Dagnet context registry system
+
 type: object
 required: [contexts, metadata]
 additionalProperties: false

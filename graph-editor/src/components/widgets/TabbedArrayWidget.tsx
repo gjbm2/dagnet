@@ -32,23 +32,63 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
   if (!tabField) {
     return (
       <Box sx={{ width: '100%', mb: 2 }}>
-        {title && <div style={{ marginBottom: '8px', fontWeight: 500 }}>{title}</div>}
+        {title && (
+          <div 
+            className="array-field-title"
+            style={{ 
+              marginBottom: '8px', 
+              fontWeight: 500,
+              marginLeft: 'calc(10% + 16px)',
+              width: '50%',
+              maxWidth: '50%',
+              textTransform: 'capitalize'
+            }}
+          >
+            {title}
+          </div>
+        )}
         {items.map(item => (
-          <Box key={item.key} sx={{ mb: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: '4px' }}>
-            {item.children}
+          <Box 
+            key={item.key} 
+            sx={{ 
+              mb: 2, 
+              p: 2, 
+              border: '1px solid #e0e0e0', 
+              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 2
+            }}
+          >
+            <Box sx={{ flex: 1 }}>
+              {item.children}
+            </Box>
             {item.hasRemove && !disabled && !readonly && (
-              <Box sx={{ mt: 1 }}>
-                <IconButton onClick={item.onDropIndexClick(item.index)} size="small" color="error">
-                  <DeleteIcon />
-                </IconButton>
+              <Box sx={{ flexShrink: 0 }}>
+                <Tooltip title="Delete this item">
+                  <IconButton onClick={item.onDropIndexClick(item.index)} size="small" color="error">
+                    <DeleteIcon />
+                  </IconButton>
+                </Tooltip>
               </Box>
             )}
           </Box>
         ))}
         {canAdd && !disabled && !readonly && (
-          <IconButton onClick={onAddClick as any} size="small" color="primary">
-            <AddIcon />
-          </IconButton>
+          <Box sx={{ 
+            display: 'grid',
+            gridTemplateColumns: '10% 50% 40%',
+            columnGap: '16px',
+            marginTop: '8px'
+          }}>
+            <Box sx={{ gridColumn: 2 }}>
+              <Tooltip title="Add new item">
+                <IconButton onClick={onAddClick as any} size="small" color="primary">
+                  <AddIcon />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          </Box>
         )}
       </Box>
     );
@@ -90,15 +130,23 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
     <Box sx={{ width: '100%', mb: 3 }}>
       {/* Title */}
       {title && (
-        <Box sx={{ mb: 2 }}>
-          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 500 }}>
+        <Box sx={{ mb: 1, mt: 5, marginLeft: 'calc(10% + 16px)', width: '50%', maxWidth: '50%' }}>
+          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 500, textTransform: 'capitalize' }}>
             {title}
           </h3>
         </Box>
       )}
       
       {/* Tab Bar */}
-      <Box sx={{ borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center' }}>
+      <Box sx={{ 
+        borderBottom: 1, 
+        borderColor: 'divider', 
+        display: 'flex', 
+        alignItems: 'center',
+        marginLeft: 'calc(10% + 16px)',
+        width: '50%',
+        maxWidth: '50%'
+      }}>
         <Tabs 
           value={items.length > 0 ? safeActiveTab : false}
           onChange={handleTabChange}
@@ -136,13 +184,16 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
       </Box>
       
       {/* Tab Panels */}
-      <Box sx={{ 
-        mt: 2, 
-        p: 3, 
-        border: '1px solid #e0e0e0', 
-        borderRadius: '4px',
-        backgroundColor: '#fafafa'
-      }}>
+      <Box 
+        className="tabbed-array-panel"
+        sx={{ 
+          mt: 2, 
+          p: 3, 
+          border: '1px solid #e0e0e0', 
+          borderRadius: '4px',
+          backgroundColor: '#fafafa'
+        }}
+      >
         {items.length === 0 ? (
           <Box sx={{ 
             textAlign: 'center', 

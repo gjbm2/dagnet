@@ -1,6 +1,6 @@
 $schema: http://json-schema.org/draft-07/schema#
-title: Node Definition Schema
-description: Schema for node definitions (optional detail files for graph nodes)
+title: Node Definition
+description: Nodes are used to define the nodes in the conversion graph. They are also used to store node name mappings and property filters for Amplitude queries, as well as case variants (experiments).
 
 type: object
 required:
