@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.92.1-beta
+**Released:** November 20, 2025
+
+Prettier forms. Just for you, Ezra.
+
+---
+
 ## Version 0.92b
 **Released:** November 20, 2025
 
