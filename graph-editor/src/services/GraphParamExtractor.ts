@@ -105,7 +105,7 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
   // Extract costs (only defined fields)
   if (edge.cost_gbp) {
     const costGbp: any = {};
-    if (edge.cost_gbp.mean !== undefined) costGbp.value = edge.cost_gbp.mean;
+    if (edge.cost_gbp.mean !== undefined) costGbp.mean = edge.cost_gbp.mean;
     if (edge.cost_gbp.stdev !== undefined) costGbp.stdev = edge.cost_gbp.stdev;
     if (edge.cost_gbp.distribution !== undefined) costGbp.distribution = edge.cost_gbp.distribution;
     costGbp.currency = 'GBP';
@@ -117,7 +117,7 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
 
   if (edge.cost_time) {
     const costTime: any = {};
-    if (edge.cost_time.mean !== undefined) costTime.value = edge.cost_time.mean;
+    if (edge.cost_time.mean !== undefined) costTime.mean = edge.cost_time.mean;
     if (edge.cost_time.stdev !== undefined) costTime.stdev = edge.cost_time.stdev;
     if (edge.cost_time.distribution !== undefined) costTime.distribution = edge.cost_time.distribution;
     costTime.units = 'days';

@@ -10,6 +10,7 @@ import '../../styles/file-state-indicators.css';
  */
 interface NavigatorEntry {
   id: string;
+  fileId: string; // Full fileId (e.g., 'node-household-created') used as unique key
   name: string;
   type: ObjectType;
   hasFile: boolean;
@@ -252,7 +253,7 @@ export function ObjectTypeSection({
         </div>
         
         {/* Index file icon - only for types that have indexes */}
-        {(sectionType === 'parameter' || sectionType === 'context' || sectionType === 'case' || sectionType === 'node') && onIndexClick && (
+        {(sectionType === 'parameter' || sectionType === 'context' || sectionType === 'case' || sectionType === 'node' || sectionType === 'event') && onIndexClick && (
           <div className="section-header-right">
             <FileText 
               className={`section-index-icon ${indexIsDirty ? 'dirty' : ''}`}

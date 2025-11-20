@@ -14,6 +14,9 @@ vi.mock('../../contexts/TabContext', () => ({
         updateIndexOnDelete: vi.fn(),
         notifyListeners: vi.fn(),
         getAllFiles: vi.fn().mockReturnValue([]),
+        get files() {
+            return new Map(); // Return a Map-like object with keys() method
+        },
     }
 }));
 

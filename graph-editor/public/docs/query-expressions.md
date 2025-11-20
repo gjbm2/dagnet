@@ -1,4 +1,4 @@
-# DagNet DSL: Graph Queries & Parameter Addressing
+# DagNet DSL: Parameter Addressing Guide
 
 **Version:** 2.0  
 **Last Updated:** November 2025
@@ -7,288 +7,641 @@
 
 ## Overview
 
-This document defines the **unified DSL (Domain Specific Language)** used throughout DagNet for:
+DagNet uses a simple DSL (Domain-Specific Language) to refer to parameters on your graph. This guide shows you how to read and write parameter references in:
 
-1. **Identifying graph entities** (edges, nodes, cases) via Human-Readable Names (HRNs)
-2. **Addressing parameters** on those entities (e.g., `e.edge-id.p.mean`, `n.node-id.case(exp:ctrl).weight`)
-3. **Querying analytics data** via structural path expressions (e.g., `from(a).visited(m).to(z).window(...)`)
-
-The DSL operates in **layers**, with a shared identity/HRN foundation and context‑specific extensions for param packs vs analytics queries.
-
-**Critical architectural principle**: There is **one canonical parser** for HRN param packs (`ParamPackDSLService.unflattenParams`), used by both scenarios and external data sources (e.g., Google Sheets). No duplicate DSL parsing logic exists.
+- **Scenario overlays** (YAML/JSON)
+- **Google Sheets** parameter tables
+- **Parameter files**
 
 ---
 
-## Layers
+## Quick Start Examples
 
-### Layer 0: Graph Identity & HRNs
+### Setting a probability
+```
+e.checkout-to-purchase.p.mean: 0.45
+```
+*"Set the mean probability on edge `checkout-to-purchase` to 0.45"*
 
-**Purpose**: Provide unambiguous, human-readable references to graph entities.
+### Setting a conditional probability
+```
+e.checkout-to-purchase.visited(promo).p.mean: 0.72
+```
+*"Set probability to 0.72 when users have visited the promo page"*
 
-**Syntax**:
-- Edges: `e.<edge-id>` or `e.from(<node-id>).to(<node-id>)`
-- Nodes: `n.<node-id>`
-- Cases (A/B tests): `n.<case-node-id>.case(<case-id>:<variant-name>)`
-
-**Examples**:
-- `e.checkout-to-purchase` → edge by id
-- `e.from(cart).to(purchase)` → edge by topology
-- `n.homepage` → node by id
-- `n.promo-gate.case(pricing-test:treatment)` → case variant
-
-**Resolver**: `HRNResolver` provides `resolveEdgeHRN`, `resolveNodeHRN`, `resolveAllHRNs` to map HRNs to UUIDs.
+### Setting a case variant weight
+```
+n.promo-gate.case(promo-experiment:treatment).weight: 0.6
+```
+*"Set the treatment variant weight to 60% on the promo-gate case node"*
 
 ---
 
-### Layer 1: Param Pack DSL (Parameters & Overlays)
+## Basic Syntax
 
-**Purpose**: Address specific parameter fields on graph entities for reading/writing values (scenarios, Sheets, etc.).
+All parameter references follow this pattern:
 
-**Syntax**:
-- Edge probability: `e.<edge-id>.p.mean`, `e.<edge-id>.p.stdev`
-- Edge costs: `e.<edge-id>.cost_gbp.mean`, `e.<edge-id>.cost_time.mean`
-- Conditional probabilities: `e.<edge-id>.conditional_p.<condition>.p.mean`
-- Case variant weights: `n.<node-id>.case(<case-id>:<variant>).weight`
-- Node entry weights: `n.<node-id>.entry.weight`
+```
+<entity-type>.<entity-identifier>.<parameter-path>
+```
 
-**Structure**: Param packs are internally represented as `ScenarioParams`:
-```typescript
+### Entity Types
+
+- `e.` — Edges (transitions between nodes)
+- `n.` — Nodes (states, gates, decision points)
+
+### Examples
+
+```
+e.cart-to-checkout.p.mean          # Edge probability
+e.cart-to-checkout.cost_gbp.mean   # Edge cost in GBP
+n.homepage.entry.weight            # Node entry weight
+```
+
+---
+
+## Referring to Edges
+
+You can refer to an edge in two ways:
+
+### 1. By Edge ID (Direct)
+```
+e.checkout-to-purchase.p.mean
+```
+
+### 2. By Endpoints (Topology)
+```
+e.from(checkout).to(purchase).p.mean
+```
+
+Both are equivalent. Use whichever is clearer for you. The second form is helpful when:
+- You don't know the edge ID
+- You want to be explicit about what connects to what
+- The edge was auto-generated and has a long ID
+
+---
+
+## Edge Parameters
+
+### Probability Parameters
+
+**Base probability** (applies when no conditions match):
+```
+e.edge-id.p.mean: 0.5
+e.edge-id.p.stdev: 0.05
+```
+
+**Conditional probability** (applies when condition is met):
+```
+e.edge-id.visited(node-id).p.mean: 0.7
+e.edge-id.visited(node-id).p.stdev: 0.03
+```
+
+The condition sits directly between the edge ID and `.p.` — this is how you specify WHICH probability parameter on that edge.
+
+**Multiple conditions:**
+```
+e.edge-id.visited(promo).exclude(blog).p.mean: 0.65
+```
+
+**Common conditions:**
+- `visited(node-id)` — user has visited this node
+- `exclude(node-id)` — user has NOT visited this node
+- `context(key:value)` — matches context (e.g., `context(device:mobile)`)
+- `case(experiment:variant)` — applies to specific A/B test variant
+
+### Cost Parameters
+
+**Monetary cost:**
+```
+e.checkout-to-purchase.cost_gbp.mean: 12.50
+```
+
+**Time cost:**
+```
+e.email-to-purchase.cost_time.mean: 86400  # seconds
+```
+
+---
+
+## Node Parameters
+
+### Case Variant Weights
+
+For A/B tests and feature gates:
+
+```
+n.promo-gate.case(promo-experiment:control).weight: 0.5
+n.promo-gate.case(promo-experiment:treatment).weight: 0.5
+```
+
+Format: `n.<node-id>.case(<case-id>:<variant-name>).weight`
+
+### Entry Weights
+
+```
+n.homepage.entry.weight: 1000
+```
+
+---
+
+## Format Options
+
+### YAML (Flat)
+
+Most explicit - every line has the full path:
+
+```yaml
+e.checkout-to-purchase.p.mean: 0.45
+e.checkout-to-purchase.p.stdev: 0.03
+e.checkout-to-purchase.visited(promo).p.mean: 0.72
+e.product-to-cart.p.mean: 0.28
+```
+
+**Best for:**
+- Google Sheets (one parameter per row)
+- Quick edits
+- Copy-pasting individual parameters
+
+### YAML (Nested)
+
+Groups by entity to reduce repetition:
+
+```yaml
+e:
+  checkout-to-purchase:
+    p:
+      mean: 0.45
+      stdev: 0.03
+    visited(promo):
+      p:
+        mean: 0.72
+  product-to-cart:
+    p:
+      mean: 0.28
+```
+
+**Best for:**
+- Editing multiple parameters on the same edge
+- Scenario files
+- Better readability when changing many related values
+
+### JSON (Flat)
+
+```json
 {
-  edges: { [edgeId: string]: { p?: {mean, stdev, ...}, conditional_p?: [...], cost_gbp?: {...}, ... } },
-  nodes: { [nodeId: string]: { case?: { variants: [{name, weight}] }, ... } }
+  "e.checkout-to-purchase.p.mean": 0.45,
+  "e.checkout-to-purchase.p.stdev": 0.03,
+  "e.checkout-to-purchase.visited(promo).p.mean": 0.72
 }
 ```
 
-**Canonical parser**:
-```typescript
-ParamPackDSLService.unflattenParams(flat: Record<string, any>): ScenarioParams
-```
+**Best for:**
+- API integrations
+- Programmatic parameter updates
 
-This function is the **single source of truth** for all HRN→param mapping. It handles:
-- `e.*` (edges, including nested paths like `e.edge-id.p.mean`)
-- `n.*` (nodes, including `case(...)` syntax)
-- `conditional_p` condition strings
+### JSON (Nested)
 
-**Scope support**: When ingesting from external sources (e.g., Sheets), a **scope** (edge+slot, node/case, conditional) is applied to drop out-of-scope params, preventing unintended updates.
-
-**Consumers**:
-- **Scenarios**: use param packs as overlays (non-mutating) via `CompositionService.composeParams`
-- **Sheets / external data**: use param packs to build ingestion payloads, then apply via `UpdateManager.handleExternalToGraph` (mutating)
-
----
-
-### Layer 2: Structural Query DSL (Analytics & Path Selection)
-
-**Purpose**: Describe path constraints and filters for analytics queries (Amplitude, etc.) and journey analysis.
-
-**Syntax**:
-- **Core**: `from(<node-id>).to(<node-id>)`
-- **Path constraints**: `.visited(<node-id>)`, `.exclude(<node-id>)`
-- **Case filters**: `.case(<case-id>:<variant>)`
-- **Set operations**: `.plus(...)`, `.minus(...)`
-- **Analytics modifiers**: `.window(<start>, <end>)`, `.segment(<segment-id>)`, `.context(<key>:<value>)`
-
-**Examples**:
-- `from(product).to(checkout)` → all paths from product to checkout
-- `from(product).to(checkout).visited(promo)` → conditional probability (paths via promo node)
-- `from(homepage).to(purchase).case(pricing-test:treatment)` → paths for a specific A/B test variant
-- `from(cart).to(purchase).window(2025-01-01, 2025-12-31)` → time-filtered analytics query
-
-**Parser**: `parseDSL` (AST-based) for composite queries; `CompositeQueryExecutor` for set operations.
-
-**Relationship to param packs**: The query DSL and param DSL **share the same node/edge identity layer** (HRNs), but serve different purposes:
-- **Query DSL**: "which paths / users / events?" (temporal/behavioral constraints)
-- **Param DSL**: "which fields / values?" (parameter addressing)
-
----
-
-## Architectural Standards
-
-1. **Single canonical HRN/param-pack engine**:
-   - `ParamPackDSLService.unflattenParams` is the only place where HRN keys are parsed into `ScenarioParams`.
-   - No ad hoc DSL parsers are allowed.
-
-2. **Separation of parsing vs. application**:
-   - Parsing/interpretation (HRN → structured diff) is **shared**.
-   - Application of diffs is **context‑specific**:
-     - Scenarios: overlays via `composeParams`, no graph mutation until flatten.
-     - Sheets / external sources: diffs → external payloads → `UpdateManager.external_to_graph` / `external_to_file`.
-
-3. **Scope‑aware ingestion for external sources**:
-   - When ingesting from Sheets or similar:
-     - Always pass a **scope** (edge/param, node/case, conditional) to the param‑pack engine.
-     - Only apply params inside scope; log out‑of‑scope keys as skipped/non‑fatal.
-
-4. **Shared condition DSL**:
-   - `conditional_p` keys must use the same `condition` strings across:
-     - Graph, scenarios, Sheets, and any other DSLs.
-
-5. **Extensibility**:
-   - New features (e.g. richer journey DSL, additional query modifiers) must:
-     - Reuse the same identity/HRN layer for nodes/edges/cases.
-     - Plug into the structural query layer without duplicating core parsing logic.
-
----
-
-## Runtime Flows & Component Responsibilities
-
-This section ties the DSL layers to the actual runtime components and data flows in DagNet.
-
-### Unified Flow Diagram: Single Canonical DSL Parser for Scenarios and Sheets
-
-```text
-                    ┌──────────────────────────────────────────┐
-                    │  TWO DIFFERENT ENTRY POINTS:             │
-                    │                                          │
-                    │  [A] User edits scenario (YAML/JSON)     │
-                    │  [B] User imports Sheets range           │
-                    └──────────────────────────────────────────┘
-                                      │
-                 ┌────────────────────┴────────────────────┐
-                 │                                         │
-                 ▼                                         ▼
-    ┌─────────────────────────┐          ┌─────────────────────────────┐
-    │ [A] SCENARIO PATH       │          │ [B] SHEETS PATH             │
-    └─────────────────────────┘          └─────────────────────────────┘
-                 │                                         │
-                 │                                         │
-    User creates/edits YAML:                  Sheets API returns:
-      edges:                                    { scalar_value: 0.7,
-        edge-1:                                   param_pack: {
-          p:                                        "e.edge-1.p.mean": 0.7,
-            mean: 0.7                                "p.stdev": 0.05 },
-                                                  errors: [] }
-                 │                                         │
-                 │                                         │
-                 ▼                                         ▼
-    ParamPackDSLService             DataOperationsService merges
-    .fromYAML(content)              scalar + param_pack into flat:
-      │                               { "e.edge-1.p.mean": 0.7,
-      │                                 "p.stdev": 0.05,
-      ├─ Parse YAML → object            "mean": 0.7 }
-      ├─ If nested: flatten                      │
-      │   to HRN keys                             │
-      │                                           ▼
-      │                            (ingestion helper normalizes
-      │                             relative keys like "mean" to
-      │                             full HRNs such as
-      │                             "e.edge-1.p.mean")
-      │                                           │
-      ▼                                           ▼
-    flat HRN map:                   flat HRN map (Sheets-normalized):
-    { "e.edge-1.p.mean": 0.7 }      { "e.edge-1.p.mean": 0.7,
-                                      "e.edge-1.p.stdev": 0.05 }
-                 │                                         │
-                 │                                         │
-                 └─────────────────┬─────────────────────┘
-                                   │
-                                   ▼
-              ╔═════════════════════════════════════════════════════╗
-              ║  ★ CANONICAL DSL PARSER (SINGLE CODE PATH) ★       ║
-              ║                                                     ║
-              ║  ParamPackDSLService.unflattenParams(flat)          ║
-              ║                                                     ║
-              ║  Parses ALL HRN keys:                               ║
-              ║    • e.<edgeId>.<path> → edges[edgeId].<path>       ║
-              ║    • n.<nodeId>.<path> → nodes[nodeId].<path>       ║
-              ║    • n.<nodeId>.case(<id>:<var>).weight             ║
-              ║      → nodes[nodeId].case.variants[{name, weight}]  ║
-              ║    • e.<edgeId>.conditional_p.<cond>.p.<field>      ║
-              ║      → edges[edgeId].conditional_p[{condition, p}]  ║
-              ║                                                     ║
-              ║  Returns: ScenarioParams                            ║
-              ║    { edges: {...}, nodes: {...} }                   ║
-              ╚═════════════════════════════════════════════════════╝
-                                   │
-                                   │
-                 ┌─────────────────┴─────────────────┐
-                 │                                   │
-                 ▼                                   ▼
-    ┌─────────────────────────┐      ┌─────────────────────────────┐
-    │ [A] SCENARIO PATH       │      │ [B] SHEETS PATH             │
-    │     (continued)         │      │     (continued)             │
-    └─────────────────────────┘      └─────────────────────────────┘
-                 │                                   │
-                 │                                   │
-                 ▼                                   ▼
-    Full ScenarioParams           ParamPackDSLService.applyScopeToParams
-    (all edges + nodes)           with scope={kind:'edge-param',edge,slot}
-                 │                                   │
-                 ▼                                   ▼
-    ScenariosContext stores       Extract payload for UpdateManager:
-    overlayParams                   { mean: 0.7, stdev: 0.05 }
-                 │                                   │
-                 ▼                                   ▼
-    composeParams(base, overlays) UpdateManager.handleExternalToGraph
-    → composed ScenarioParams       (updateData, edge, 'UPDATE', 'parameter')
-                 │                                   │
-                 ▼                                   ▼
-    ScenarioRenderer uses         Write to edge.parameter.p.mean, .stdev
-    composed params for           Set provenance: data_source.type='sheets'
-    edge widths/beads             Trigger sibling rebalance
-                 │                                   │
-                 ▼                                   ▼
-    ★ NO GRAPH MUTATION ★         ★ GRAPH MUTATION + REBALANCE ★
-    (overlay only)                (permanent update)
+```json
+{
+  "e": {
+    "checkout-to-purchase": {
+      "p": {
+        "mean": 0.45,
+        "stdev": 0.03
+      },
+      "visited(promo)": {
+        "p": {
+          "mean": 0.72
+        }
+      }
+    }
+  }
+}
 ```
 
 ---
 
-### Critical Architecture Point
+## Google Sheets Usage
 
-**The diagram above shows that there is ONE AND ONLY ONE place where HRN/DSL keys are parsed:**
+### Basic Parameter Table
 
 ```
-ParamPackDSLService.unflattenParams(flat: Record<string, any>): ScenarioParams
+| A                                 | B        |
+|-----------------------------------|----------|
+| e.homepage-to-product.p.mean      | 0.35     |
+| e.product-to-cart.p.mean          | 0.28     |
+| e.cart-to-checkout.p.mean         | 0.78     |
+| e.checkout-to-purchase.p.mean     | 0.45     |
+| e.checkout-to-purchase.p.stdev    | 0.03     |
 ```
 
-**Both scenarios and Sheets call this same function.** The differences are:
+### Conditional Probabilities
 
-1. **Input preparation:**
-   - Scenarios: YAML/JSON → object → flatten to HRN map → `unflattenParams`
-   - Sheets: raw range → scalar/param_pack → merge + normalize relative keys → `unflattenParams`
+```
+| A                                              | B      |
+|------------------------------------------------|--------|
+| e.checkout-to-purchase.visited(promo).p.mean   | 0.72   |
+| e.checkout-to-purchase.visited(promo).p.stdev  | 0.04   |
+| e.checkout-to-purchase.visited(blog).p.mean    | 0.58   |
+```
 
-2. **Output usage:**
-- Scenarios: full `ScenarioParams` → store as overlay → compose for rendering (no mutation)
-- Sheets: full `ScenarioParams` → `ParamPackDSLService.applyScopeToParams` to narrow to a specific scope (edge/slot, node/case, conditional, etc.) → extract `{mean, stdev, ...}` → `UpdateManager` (mutation)
+### Case Variants
 
-**There is no second DSL parser.** Ingestion helpers do **not** parse HRN semantics; they only normalize shorthand keys (e.g. `mean` → `e.edge-1.p.mean`) and decide which `applyScopeToParams` scope to use before handing the result to `UpdateManager`.
+```
+| A                                                      | B     |
+|--------------------------------------------------------|-------|
+| n.promo-gate.case(promo-experiment:control).weight    | 0.5   |
+| n.promo-gate.case(promo-experiment:treatment).weight  | 0.5   |
+```
+
+### Multiple Scenarios in Columns
+
+```
+| A                                 | B (Current) | C (Optimistic) | D (Pessimistic) |
+|-----------------------------------|-------------|----------------|-----------------|
+| e.checkout-to-purchase.p.mean     | 0.45        | 0.55           | 0.35            |
+| e.checkout-to-purchase.p.stdev    | 0.03        | 0.02           | 0.05            |
+```
 
 ---
 
-## Future Extensions
+## Common Patterns
 
-1. **Richer journey DSL**:
-   - Per-user path tracking: `from(a).then(b).then(c)` with sequencing
-   - Repeat/loop constraints
+### Pattern 1: Base vs Conditional Probabilities
 
-2. **Param-aware queries**:
-   - Filter paths by param values: `from(a).to(b).where(p.mean > 0.5)`
-   - Return aggregated params for a query: `from(a).to(b).params(['p.mean', 'cost_gbp.mean'])`
+```yaml
+# Base probability (fallback when no conditions match)
+e.checkout-to-purchase.p.mean: 0.45
 
-3. **Named query templates**:
-   - Reusable query fragments: `template funnel_engaged = visited(email-click).exclude(support-chat)`
-   - Compose: `from(product).to(purchase).apply(funnel_engaged)`
+# Higher probability when user visited promo page
+e.checkout-to-purchase.visited(promo).p.mean: 0.72
 
-4. **Multi-variant case filters**:
-   - Union of variants: `.case(pricing-test:[treatment, control])`
-   - Negative case filters: `.exclude_case(feature-gate:disabled)`
+# Lower probability when user came from email
+e.checkout-to-purchase.visited(email).p.mean: 0.38
+```
+
+### Pattern 2: Using Endpoint References
+
+Instead of:
+```yaml
+e.checkout-to-purchase.p.mean: 0.45
+```
+
+You can write:
+```yaml
+e.from(checkout).to(purchase).p.mean: 0.45
+```
+
+Both are equivalent. Use whichever is clearer.
+
+### Pattern 3: Multiple Parameters on Same Edge
+
+**Flat format:**
+```yaml
+e.checkout-to-purchase.p.mean: 0.45
+e.checkout-to-purchase.p.stdev: 0.03
+e.checkout-to-purchase.cost_gbp.mean: 15.00
+```
+
+**Nested format (less repetition):**
+```yaml
+e:
+  checkout-to-purchase:
+    p:
+      mean: 0.45
+      stdev: 0.03
+    cost_gbp:
+      mean: 15.00
+```
+
+### Pattern 4: A/B Test Variants
+
+```yaml
+n.promo-gate.case(promo-experiment:control).weight: 0.5
+n.promo-gate.case(promo-experiment:treatment).weight: 0.5
+```
+
+To shift traffic to treatment:
+```yaml
+n.promo-gate.case(promo-experiment:control).weight: 0.2
+n.promo-gate.case(promo-experiment:treatment).weight: 0.8
+```
 
 ---
 
-## Related Documentation
+## Condition Syntax Reference
 
-- **[SCENARIOS_MANAGER_SPEC.md](../../../docs/current/SCENARIOS_MANAGER_SPEC.md)**: Full spec for scenario system (HRN addressing is in Appendix A.1)
-- **[GOOGLE_SHEETS_HRN_INTEGRATION.md](../../../docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md)**: Implementation plan for Sheets param pack ingestion
-- **[MSMDC Algorithm](./query-algorithms-white-paper.md#1-msmdc-minimal-set-of-maximally-discriminating-constraints)**: Technical deep-dive on automatic query generation
-- **[Query Factorization](./query-algorithms-white-paper.md#2-query-factorization-for-batch-optimization)**: Batch optimization for efficient API calls
-- **[Parameter Schema](../../public/param-schemas/parameter-schema.yaml)**: Full parameter file structure
+Conditions can be combined to create specific targeting:
+
+### Single Conditions
+
+```
+visited(node-id)           # User visited this node
+exclude(node-id)           # User did NOT visit this node
+context(key:value)         # Matches context variable
+case(experiment:variant)   # In this experiment variant
+```
+
+### Combined Conditions
+
+```
+visited(promo).exclude(blog)                    # Visited promo but not blog
+visited(a).visited(b)                           # Visited both a and b
+context(device:mobile).case(test:treatment)     # Mobile users in treatment
+```
+
+---
+
+## Complete Example: E-commerce Funnel
+
+```yaml
+# Base conversion probabilities
+e.homepage-to-product.p.mean: 0.35
+e.product-to-cart.p.mean: 0.28
+e.cart-to-checkout.p.mean: 0.78
+e.checkout-to-purchase.p.mean: 0.45
+
+# Conditional probabilities (promo campaign)
+e.checkout-to-purchase.visited(promo-landing).p.mean: 0.62
+
+# Costs
+e.checkout-to-purchase.cost_gbp.mean: 15.00
+e.checkout-to-purchase.cost_time.mean: 300
+
+# A/B test on checkout flow
+n.checkout-gate.case(checkout-redesign:control).weight: 0.5
+n.checkout-gate.case(checkout-redesign:simplified).weight: 0.5
+```
+
+---
+
+## Validation & Errors
+
+### Valid References
+
+✅ `e.checkout-to-purchase.p.mean`  
+✅ `e.from(cart).to(checkout).p.mean`  
+✅ `e.edge-id.visited(promo).p.mean`  
+✅ `n.case-node.case(exp:control).weight`
+
+### Common Mistakes
+
+❌ `e.edge-id.conditional_p.visited(promo).mean`  
+→ Use: `e.edge-id.visited(promo).p.mean`
+
+❌ `edge-id.p.mean` (missing `e.` prefix)  
+→ Use: `e.edge-id.p.mean`
+
+❌ `e.edge-id.probability.mean` (wrong parameter name)  
+→ Use: `e.edge-id.p.mean`
+
+### What Happens When...
+
+**You reference a non-existent edge?**
+- In scenarios: Warning displayed, parameter ignored
+- In Sheets: Logged as skipped, other parameters still applied
+
+**You reference a non-existent condition?**
+- Parameter is stored but won't match at runtime
+- No error (allows forward references)
+
+**You mix different edges in one Sheets range?**
+- Only parameters matching the target edge are applied
+- Others are logged as out-of-scope
+
+---
+
+## Advanced: Nested Structures
+
+When using nested YAML/JSON, the structure maps directly to the flat format:
+
+### Nested YAML
+```yaml
+e:
+  checkout-to-purchase:
+    p:
+      mean: 0.45
+      stdev: 0.03
+    visited(promo):
+      p:
+        mean: 0.72
+        stdev: 0.05
+```
+
+### Equivalent Flat YAML
+```yaml
+e.checkout-to-purchase.p.mean: 0.45
+e.checkout-to-purchase.p.stdev: 0.03
+e.checkout-to-purchase.visited(promo).p.mean: 0.72
+e.checkout-to-purchase.visited(promo).p.stdev: 0.05
+```
+
+Both produce the same result. Use nested for better readability when editing many parameters; use flat for Google Sheets and quick edits.
+
+---
+
+## Tips & Best Practices
+
+### 1. Use Descriptive IDs
+
+**Good:**
+```
+e.product-detail-to-add-to-cart.p.mean
+```
+
+**Less clear:**
+```
+e.pdp-atc.p.mean
+```
+
+### 2. Copy from Scenarios Modal
+
+The easiest way to get the correct syntax:
+1. Open a scenario in DagNet
+2. View as YAML (flat format)
+3. Copy the parameter reference
+4. Paste into your Sheet or file
+
+### 3. Start with Flat Format
+
+Until you're comfortable with the syntax, use flat format:
+- Less indentation to worry about
+- Easier to copy individual lines
+- Works great in Google Sheets
+
+### 4. Group Related Parameters
+
+When editing many parameters on the same edge, switch to nested format:
+
+```yaml
+e:
+  checkout-to-purchase:
+    p:
+      mean: 0.45
+      stdev: 0.03
+      n: 1000
+      k: 450
+```
+
+Instead of:
+```yaml
+e.checkout-to-purchase.p.mean: 0.45
+e.checkout-to-purchase.p.stdev: 0.03
+e.checkout-to-purchase.p.n: 1000
+e.checkout-to-purchase.p.k: 450
+```
+
+---
+
+## Complete Reference
+
+### Edge Parameters
+
+```
+# Probability
+e.<edge-id>.p.mean                             # Mean probability
+e.<edge-id>.p.stdev                            # Standard deviation
+e.<edge-id>.p.n                                # Sample size
+e.<edge-id>.p.k                                # Success count
+
+# Conditional probability
+e.<edge-id>.<condition>.p.mean                 # Conditional mean
+e.<edge-id>.<condition>.p.stdev                # Conditional stdev
+
+# Costs
+e.<edge-id>.cost_gbp.mean                      # Cost in GBP
+e.<edge-id>.cost_time.mean                     # Time cost (seconds)
+
+# Weight (for probability distribution)
+e.<edge-id>.weight_default                     # Fallback weight
+```
+
+### Node Parameters
+
+```
+# Entry weight
+n.<node-id>.entry.weight                       # Entry probability weight
+
+# Case variants
+n.<node-id>.case(<case-id>:<variant>).weight   # Variant weight
+```
+
+### Condition Syntax
+
+```
+visited(<node-id>)                             # User visited this node
+visited(<node-a>).visited(<node-b>)            # Visited both nodes
+exclude(<node-id>)                             # User did NOT visit
+visited(<node-a>).exclude(<node-b>)            # Visited a but not b
+context(<key>:<value>)                         # Context matches
+case(<experiment>:<variant>)                   # In experiment variant
+```
+
+---
+
+## Real-World Example: Promo Campaign Analysis
+
+You're running a promo campaign and want to model different conversion rates based on whether users saw the promo.
+
+### Scenario YAML
+
+```yaml
+# Base conversions (no promo)
+e.product-to-cart.p.mean: 0.25
+e.cart-to-checkout.p.mean: 0.75
+e.checkout-to-purchase.p.mean: 0.45
+
+# Improved conversions after seeing promo
+e.product-to-cart.visited(promo-landing).p.mean: 0.35
+e.cart-to-checkout.visited(promo-landing).p.mean: 0.80
+e.checkout-to-purchase.visited(promo-landing).p.mean: 0.62
+```
+
+### Google Sheet Version
+
+```
+| A                                                  | B (No Promo) | C (With Promo) |
+|----------------------------------------------------|--------------|----------------|
+| e.product-to-cart.p.mean                           | 0.25         | —              |
+| e.product-to-cart.visited(promo-landing).p.mean    | —            | 0.35           |
+| e.cart-to-checkout.p.mean                          | 0.75         | —              |
+| e.cart-to-checkout.visited(promo-landing).p.mean   | —            | 0.80           |
+| e.checkout-to-purchase.p.mean                      | 0.45         | —              |
+| e.checkout-to-purchase.visited(promo-landing).p.mean | —          | 0.62           |
+```
+
+---
+
+## FAQ
+
+### Can I use spaces in the DSL?
+No. Use hyphens for multi-word IDs:
+- ✅ `e.checkout-to-purchase`
+- ❌ `e.checkout to purchase`
+
+### What if my edge doesn't have an ID?
+Use the `from().to()` syntax:
+```
+e.from(node-a).to(node-b).p.mean
+```
+
+### Can I set multiple fields at once?
+Yes, in nested format:
+```yaml
+e:
+  checkout-to-purchase:
+    p:
+      mean: 0.45
+      stdev: 0.03
+      n: 1000
+```
+
+Or in Google Sheets, use multiple rows:
+```
+e.checkout-to-purchase.p.mean     | 0.45
+e.checkout-to-purchase.p.stdev    | 0.03
+e.checkout-to-purchase.p.n        | 1000
+```
+
+### What's the difference between `visited(a).visited(b)` and `visited(a,b)`?
+They're the same — both mean "visited both a AND b".
+
+### How do I know if my syntax is correct?
+DagNet validates all parameter references when you:
+- Save a scenario
+- Import from Google Sheets
+- Edit parameter files
+
+Invalid references show clear error messages.
+
+---
+
+## Getting Started
+
+1. **Open a scenario** in DagNet
+2. **View as YAML (flat)** to see existing parameters
+3. **Copy a parameter reference** as a template
+4. **Modify the value** or condition as needed
+5. **Save** and DagNet validates your changes
+
+For Google Sheets:
+1. Create a sheet with two columns: **Parameter** and **Value**
+2. In column A, paste parameter references (e.g., `e.checkout-to-purchase.p.mean`)
+3. In column B, enter the values
+4. Connect the sheet to your edge in DagNet
+5. Click "Get from Source"
+
+---
+
+## Need More Help?
+
+- **In DagNet**: Open the Scenarios modal to see live examples of parameter references
+- **For Google Sheets**: See the Google Sheets integration documentation in the app
+- **For Developers**: See the implementation specifications in the repository docs
 
 ---
 
 **Version History:**
-- **2.0** (Nov 2025): Unified DSL doc (replaces "Query Expression Syntax & Semantics"), added architecture flows
-- **1.0** (Nov 2025): Initial query expression doc
-
-**Maintained by:** DagNet Team  
-**Questions?** See [DATA_CONNECTIONS_README.md](../../../DATA_CONNECTIONS_README.md)
+- **2.0** (November 2025): Simplified user guide format, correct conditional probability syntax
+- **1.0** (November 2025): Initial release

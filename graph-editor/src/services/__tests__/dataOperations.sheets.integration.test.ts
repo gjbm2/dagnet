@@ -135,8 +135,9 @@ describe('Sheets conditional_p ingestion: canonical DSL engine usage', () => {
     // Internal key may be normalized (e.g. visited(promo-uuid)), so just ensure it's the promo condition
     expect(key).toContain('visited');
     expect(key).toContain('promo');
-    expect(edgeConds[key].mean).toBe(0.68);
-    expect(edgeConds[key].stdev).toBe(0.04);
+    expect(edgeConds[key]).not.toBeNull();
+    expect(edgeConds[key]!.mean).toBe(0.68);
+    expect(edgeConds[key]!.stdev).toBe(0.04);
   });
 
   it('Sheets conditional_p with contextual keys scoped to edge-conditional', () => {
@@ -157,8 +158,9 @@ describe('Sheets conditional_p ingestion: canonical DSL engine usage', () => {
     const key = keys[0];
     expect(key).toContain('visited');
     expect(key).toContain('promo');
-    expect(edgeConds[key].mean).toBe(0.72);
-    expect(edgeConds[key].stdev).toBe(0.06);
+    expect(edgeConds[key]).not.toBeNull();
+    expect(edgeConds[key]!.mean).toBe(0.72);
+    expect(edgeConds[key]!.stdev).toBe(0.06);
   });
 });
 

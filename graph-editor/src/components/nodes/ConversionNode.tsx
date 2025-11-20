@@ -5,6 +5,8 @@ import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
+import { getObjectTypeTheme } from '@/theme/objectTypeTheme';
+import { fileRegistry } from '@/contexts/TabContext';
 import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE, CONVEX_HANDLE_OFFSET_MULTIPLIER, CONCAVE_HANDLE_OFFSET_MULTIPLIER, FLAT_HANDLE_OFFSET_MULTIPLIER } from '@/lib/nodeEdgeConstants';
 
 interface ConversionNodeData {
@@ -414,6 +416,19 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   // Determine if handles should be visible
   const showHandles = isHovered || isConnecting;
 
+  // Determine file connection status for node/case/event
+  const nodeFileId = data.id ? `node-${data.id}` : null;
+  const caseFileId = data.case?.id ? `case-${data.case.id}` : null;
+  const eventFileId = data.event_id ? `event-${data.event_id}` : null;
+
+  const nodeFile = nodeFileId ? fileRegistry.getFile(nodeFileId) : null;
+  const caseFile = caseFileId ? fileRegistry.getFile(caseFileId) : null;
+  const eventFile = eventFileId ? fileRegistry.getFile(eventFileId) : null;
+
+  const nodeTheme = getObjectTypeTheme('node');
+  const caseTheme = getObjectTypeTheme('case');
+  const eventTheme = getObjectTypeTheme('event');
+
   return (
     <Tooltip content={getTooltipContent()} position="top" delay={300}>
       <div 
@@ -691,6 +706,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             overflowWrap: 'break-word',
             hyphens: 'auto',
             maxWidth: '100%',
+            paddingLeft: '12px',
+            paddingRight: '12px',
             textAlign: 'center',
             display: 'flex',
             alignItems: 'center',
@@ -701,11 +718,6 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           onDoubleClick={handleDoubleClick}
           title="Double-click to edit in properties panel"
         >
-          {data.id && (
-            <span style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, opacity: 0.7 }} title={`Connected to node: ${data.id}`}>
-              ⛓️
-            </span>
-          )}
           <span>{data.label}</span>
         </div>
         
@@ -789,6 +801,74 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         )}
       </div>
 
+      {/* Bottom-left connection status icons for node/case/event files */}
+      <div
+        style={{
+          position: 'absolute',
+          left: data.useSankeyView ? 10 : 20,
+          bottom: data.useSankeyView ? 10 : 20,
+          display: 'flex',
+          gap: 2,
+          alignItems: 'center',
+          pointerEvents: 'auto',
+        }}
+      >
+        {nodeFile && (
+          <Tooltip content={`Node file connected (${data.id})`} position="top" delay={200}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 12,
+                height: 12,
+                borderRadius: 3,
+                backgroundColor: nodeTheme.lightColor,
+                border: `1px solid ${nodeTheme.accentColor}`,
+              }}
+            >
+              <nodeTheme.icon size={8} strokeWidth={2} style={{ color: nodeTheme.accentColor }} />
+            </span>
+          </Tooltip>
+        )}
+        {caseFile && (
+          <Tooltip content={`Case file connected (${data.case?.id})`} position="top" delay={200}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 12,
+                height: 12,
+                borderRadius: 3,
+                backgroundColor: caseTheme.lightColor,
+                border: `1px solid ${caseTheme.accentColor}`,
+              }}
+            >
+              <caseTheme.icon size={8} strokeWidth={2} style={{ color: caseTheme.accentColor }} />
+            </span>
+          </Tooltip>
+        )}
+        {eventFile && (
+          <Tooltip content={`Event file connected (${data.event_id})`} position="top" delay={200}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 12,
+                height: 12,
+                borderRadius: 3,
+                backgroundColor: eventTheme.lightColor,
+                border: `1px solid ${eventTheme.accentColor}`,
+              }}
+            >
+              <eventTheme.icon size={8} strokeWidth={2} style={{ color: eventTheme.accentColor }} />
+            </span>
+          </Tooltip>
+        )}
+      </div>
+
       {/* Case node status indicator - outside content wrapper to avoid rotation (well inside visible node area) */}
       {isCaseNode && data.case && (
         <div style={{ 
@@ -826,14 +906,14 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           position: 'absolute',
           top: data.useSankeyView ? '10px' : '20px',
           left: data.useSankeyView ? '10px' : '20px',
-          width: '18px',
-          height: '18px',
+          width: '14px',
+          height: '14px',
           borderRadius: '50%',
           background: '#3b82f6',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: `${NODE_SMALL_FONT_SIZE}px`,
+          fontSize: `${NODE_SMALL_FONT_SIZE - 1}px`,
           color: '#fff',
           fontWeight: 'bold',
           boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
@@ -849,16 +929,16 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       {isTerminalNode && (
         <div style={{
           position: 'absolute',
-          top: isStartNode ? (data.useSankeyView ? '34px' : '44px') : (data.useSankeyView ? '10px' : '20px'),
+          top: isStartNode ? (data.useSankeyView ? '30px' : '40px') : (data.useSankeyView ? '10px' : '20px'),
           left: data.useSankeyView ? '10px' : '20px',
-          width: '18px',
-          height: '18px',
+          width: '14px',
+          height: '14px',
           borderRadius: '50%',
           background: data.outcome_type === 'success' ? '#10b981' : data.outcome_type === 'failure' ? '#ef4444' : '#6b7280',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: `${NODE_SECONDARY_FONT_SIZE}px`,
+          fontSize: `${NODE_SECONDARY_FONT_SIZE - 1}px`,
           color: '#fff',
           fontWeight: 'bold',
           boxShadow: '0 1px 3px rgba(0,0,0,0.2)',

@@ -108,24 +108,7 @@ describe('DASRunner - Google Sheets adapter (sheets-readonly)', () => {
           {
             name: 'parsed_result',
             jsonata: `
-              (
-                $dasHelpers := dasHelpers;
-
-                $dasHelpers.parseSheetsRange ?
-                  $dasHelpers.parseSheetsRange(values) :
-                  {
-                    "mode": "error",
-                    "scalarValue": null,
-                    "paramPack": {},
-                    "errors": [
-                      {
-                        "row": 0,
-                        "col": 0,
-                        "message": "dasHelpers.parseSheetsRange not available"
-                      }
-                    ]
-                  }
-              )
+              $parseSheetsRange(values)
             `,
           },
           {
@@ -260,21 +243,18 @@ describe('DASRunner - Google Sheets adapter (sheets-readonly)', () => {
           {
             name: 'parsed_result',
             jsonata: `
-              (
-                // Intentionally do NOT reference dasHelpers here
-                {
-                  "mode": "error",
-                  "scalarValue": null,
-                  "paramPack": {},
-                  "errors": [
-                    {
-                      "row": 0,
-                      "col": 0,
-                      "message": "dasHelpers.parseSheetsRange not available"
-                    }
-                  ]
-                }
-              )
+              {
+                "mode": "error",
+                "scalarValue": null,
+                "paramPack": {},
+                "errors": [
+                  {
+                    "row": 0,
+                    "col": 0,
+                    "message": "dasHelpers.parseSheetsRange not available"
+                  }
+                ]
+              }
             `,
           },
           {

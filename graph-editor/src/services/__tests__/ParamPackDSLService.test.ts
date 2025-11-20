@@ -647,8 +647,10 @@ describe('ParamPackDSLService: HRN equivalence (e.edge-id vs e.from(a).to(b))', 
     expect(condKeyHRN).toContain('visited');
     expect(condKeyHRN).toContain('promo');
 
-    expect(condMapDirect[condKeyDirect].mean).toBe(0.75);
-    expect(condMapHRN[condKeyHRN].mean).toBe(0.75);
+    expect(condMapDirect[condKeyDirect]).not.toBeNull();
+    expect(condMapHRN[condKeyHRN]).not.toBeNull();
+    expect(condMapDirect[condKeyDirect]!.mean).toBe(0.75);
+    expect(condMapHRN[condKeyHRN]!.mean).toBe(0.75);
   });
 });
 

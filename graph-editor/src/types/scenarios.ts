@@ -22,7 +22,7 @@ export interface ProbabilityParam {
  * Cost parameter (monetary or time)
  */
 export interface CostParam {
-  value?: number;
+  mean?: number; // Primary value field (matches schema and graph CostParam)
   stdev?: number;
   distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform';
   currency?: string; // For monetary costs

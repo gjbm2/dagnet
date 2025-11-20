@@ -228,3 +228,21 @@ properties:
           type: string
         description: Tags for categorization (duplicates root-level tags for consistency)
 
+examples:
+  # Minimal example for new case creation (used as default template)
+  - parameter_id: case-example
+    parameter_type: case
+    name: "Example Case"
+    case:
+      id: example
+      status: active
+      variants:
+        - name: control
+          weight: 0.5
+        - name: treatment
+          weight: 0.5
+    metadata:
+      created_at: "2025-01-01T00:00:00Z"
+      updated_at: "2025-01-01T00:00:00Z"
+      version: "1.0.0"
+
