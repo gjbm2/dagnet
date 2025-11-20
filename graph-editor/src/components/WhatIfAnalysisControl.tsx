@@ -3,7 +3,7 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useWhatIfContext } from '../contexts/WhatIfContext';
 import toast from 'react-hot-toast';
-import { getConditionalColour, getConditionSignature } from '@/lib/conditionalColours';
+import { getConditionalColour, getConditionSignature, getConditionalProbabilityColour } from '@/lib/conditionalColours';
 import { 
   normalizeConstraintString, 
   evaluateConstraint, 
@@ -14,6 +14,9 @@ import {
 } from '@/lib/queryDSL';
 import { convertOverridesToDSL, parseWhatIfDSL } from '@/lib/whatIf';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
+import CollapsibleSection from './CollapsibleSection';
+import { Search, X } from 'lucide-react';
+import './PropertiesPanel.css';
 
 export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
   const { graph } = useGraphStore();
@@ -206,17 +209,25 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
     });
     
     // Convert to array of objects
-    return Array.from(groups.entries()).map(([signature, edges]) => ({
-      signature,
-      edges,
-      colour: edges[0]?.display?.conditional_colour,
-      // Create display name from first edge's conditions
-      displayName: edges[0]?.conditional_p?.[0]?.condition
-        ? (typeof edges[0].conditional_p[0].condition === 'string'
-            ? edges[0].conditional_p[0].condition
-            : 'Empty condition')
-        : 'Empty condition'
-    }));
+    return Array.from(groups.entries()).map(([signature, edges]) => {
+      // Get colour from first condition in first edge
+      const firstCondition = edges[0]?.conditional_p?.[0];
+      const colour = firstCondition 
+        ? getConditionalProbabilityColour(firstCondition)
+        : getConditionalColour(edges[0]) || '#4ade80';
+      
+      return {
+        signature,
+        edges,
+        colour,
+        // Create display name from first edge's conditions
+        displayName: edges[0]?.conditional_p?.[0]?.condition
+          ? (typeof edges[0].conditional_p[0].condition === 'string'
+              ? edges[0].conditional_p[0].condition
+              : 'Empty condition')
+          : 'Empty condition'
+      };
+    });
   }, [graph, conditionalEdges]);
 
   // Filter based on search
@@ -247,10 +258,37 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
   return (
     <div>
       {/* DSL Editor - NEW: Use QueryExpressionEditor for display/editing */}
-      <div style={{ marginBottom: '16px' }}>
-        <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '8px', color: '#333' }}>
-          What-If Scenario
-        </div>
+      <div className="property-section">
+        <label className="property-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>What-If Scenario</span>
+          {whatIfDSL && (
+            <button
+              onClick={clearAllOverrides}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#6B7280',
+                fontSize: '11px',
+                cursor: 'pointer',
+                padding: '2px 6px',
+                borderRadius: '3px',
+                fontWeight: 'normal',
+                textDecoration: 'underline',
+                opacity: 0.7
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.opacity = '1';
+                e.currentTarget.style.color = '#EF4444';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.opacity = '0.7';
+                e.currentTarget.style.color = '#6B7280';
+              }}
+            >
+              clear
+            </button>
+          )}
+        </label>
         <QueryExpressionEditor
           value={whatIfDSL || ''}
           onChange={(newDSL) => {
@@ -261,49 +299,78 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
           height="80px"
           readonly={false}
         />
-        {whatIfDSL && (
-          <button
-            onClick={clearAllOverrides}
-            style={{
-              marginTop: '8px',
-              padding: '6px 12px',
-              background: '#ef4444',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px'
-            }}
-          >
-            Clear All
-          </button>
-        )}
       </div>
 
       {/* Main content */}
-      <div style={{ marginTop: '8px' }}>
+      <div className="property-section">
           {/* Search */}
-          <input
-            type="text"
-            placeholder="Search cases or conditional edges..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '8px',
-              border: '1px solid #ddd',
-              borderRadius: '4px',
-              marginBottom: '12px',
-              boxSizing: 'border-box'
-            }}
-          />
+          <div style={{ position: 'relative', marginBottom: '12px' }}>
+            <Search 
+              className="search-icon" 
+              size={16} 
+              strokeWidth={2}
+              style={{
+                position: 'absolute',
+                left: '8px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                color: '#999',
+                pointerEvents: 'none',
+                zIndex: 1
+              }}
+            />
+            <input
+              type="text"
+              className="property-input"
+              placeholder="Search cases or conditional edges..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                paddingLeft: '32px',
+                paddingRight: searchTerm ? '32px' : '10px',
+                fontFamily: 'inherit',
+                background: 'white'
+              }}
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                style={{
+                  position: 'absolute',
+                  right: '6px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: '#666',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '50%',
+                  transition: 'background-color 0.15s ease',
+                  zIndex: 2
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#e9ecef';
+                  e.currentTarget.style.color = '#333';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = '#666';
+                }}
+                title="Clear search"
+              >
+                <X size={14} strokeWidth={2} />
+              </button>
+            )}
+          </div>
 
           {/* Case Nodes Section */}
           {filteredCaseNodes.length > 0 && (
-            <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '8px', color: '#8B5CF6' }}>
-                🎭 Case Nodes
-              </div>
+            <CollapsibleSection title="Case Nodes" defaultOpen={true}>
               {filteredCaseNodes.map(node => {
                 // Check if this case node has an override in the DSL
                 const parsed = parseConstraints(whatIfDSL || '');
@@ -322,59 +389,23 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                 const variants = node.case?.variants || [];
                 const nodeColour = node.layout?.colour || '#e5e7eb';
                 
-                return (
-                  <div
-                    key={node.id}
-                    style={{
-                      background: 'white',
-                      padding: '10px',
-                      marginBottom: '6px',
-                      borderRadius: '4px',
-                      border: isActive ? `2px solid ${nodeColour}` : '1px solid #e9ecef'
-                    }}
-                  >
-                    <div style={{ 
-                      fontWeight: '600', 
-                      fontSize: '12px', 
-                      marginBottom: '6px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}>
-                      <div style={{
-                        width: '16px',
-                        height: '16px',
-                        borderRadius: '2px',
-                        background: nodeColour,
-                        border: '1px solid rgba(0,0,0,0.2)',
-                        flexShrink: 0
-                      }} />
-                      {node.case?.id || node.label || node.id}
-                    </div>
-                  <select
-                      value={(() => {
-                        // Check if this case node has an override in the DSL
-                        const parsed = parseConstraints(whatIfDSL || '');
-                        const caseOverride = parsed.cases.find(c => {
-                          // Match by case.id or node UUID/ID
-                          const caseNode = graph?.nodes.find((n: any) => 
-                            n.type === 'case' && (
-                              n.case?.id === c.key || 
-                              n.uuid === c.key || 
-                              n.id === c.key ||
-                              (n.uuid === node.uuid || n.id === node.id)
-                            )
-                          );
-                          return caseNode && (caseNode.uuid === node.uuid || caseNode.id === node.id);
-                        });
-                        return caseOverride?.value || '';
-                      })()}
-                      onChange={(e) => {
-                        const variantName = e.target.value;
-                        if (variantName) {
-                          addCaseOverride(node.id || node.uuid, variantName);
-                        } else {
-                          // Find current override and remove it
+                  return (
+                    <div key={node.id} style={{ marginBottom: '8px' }}>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '8px', color: '#333' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div className="property-color-swatch" style={{
+                            background: nodeColour
+                          }} />
+                          {node.case?.id || node.label || node.id}
+                        </div>
+                      </label>
+                      <select
+                        className="property-input"
+                        style={{
+                          zIndex: 10,
+                          position: 'relative'
+                        }}
+                        value={(() => {
                           const parsed = parseConstraints(whatIfDSL || '');
                           const caseOverride = parsed.cases.find(c => {
                             const caseNode = graph?.nodes.find((n: any) => 
@@ -387,40 +418,48 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                             );
                             return caseNode && (caseNode.uuid === node.uuid || caseNode.id === node.id);
                           });
-                          if (caseOverride) {
-                            removeCaseOverride(node.id || node.uuid, caseOverride.value);
+                          return caseOverride?.value || '';
+                        })()}
+                        onChange={(e) => {
+                          const variantName = e.target.value;
+                          if (variantName) {
+                            addCaseOverride(node.id || node.uuid, variantName);
+                          } else {
+                            // Find current override and remove it
+                            const parsed = parseConstraints(whatIfDSL || '');
+                            const caseOverride = parsed.cases.find(c => {
+                              const caseNode = graph?.nodes.find((n: any) => 
+                                n.type === 'case' && (
+                                  n.case?.id === c.key || 
+                                  n.uuid === c.key || 
+                                  n.id === c.key ||
+                                  (n.uuid === node.uuid || n.id === node.id)
+                                )
+                              );
+                              return caseNode && (caseNode.uuid === node.uuid || caseNode.id === node.id);
+                            });
+                            if (caseOverride) {
+                              removeCaseOverride(node.id || node.uuid, caseOverride.value);
+                            }
                           }
-                        }
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '6px',
-                        border: '1px solid #ddd',
-                        borderRadius: '4px',
-                        fontSize: '12px',
-                        background: isActive ? '#fff9e6' : 'white',
-                        fontWeight: isActive ? 'bold' : 'normal'
-                      }}
-                    >
-                      <option value="">All variants (actual weights)</option>
-                      {variants.map(variant => (
-                        <option key={variant.name} value={variant.name}>
-                          {variant.name} - What if 100%?
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                );
-              })}
-            </div>
+                        }}
+                      >
+                        <option value="">All variants (actual weights)</option>
+                        {variants.map(variant => (
+                          <option key={variant.name} value={variant.name}>
+                            {variant.name} - What if 100%?
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+            </CollapsibleSection>
           )}
 
           {/* Condition Groups Section */}
           {filteredConditionGroups.length > 0 && (
-            <div>
-              <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '8px', color: '#4ade80' }}>
-                🔀 Conditional Probability Groups
-              </div>
+            <CollapsibleSection title="Conditional Probabilities" defaultOpen={true}>
               {filteredConditionGroups.map((group, groupIdx) => {
                 // Check if any edge in this group has an active override in the DSL
                 const parsed = parseConstraints(whatIfDSL || '');
@@ -437,114 +476,94 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
                 }) || false;
                 const groupColour = group.colour || '#4ade80';
                 
-                return (
-                  <div
-                    key={group.signature}
-                    style={{
-                      background: 'white',
-                      padding: '10px',
-                      marginBottom: '6px',
-                      borderRadius: '4px',
-                      border: anyActive ? `2px solid ${groupColour}` : '1px solid #e9ecef'
-                    }}
-                  >
-                    <div style={{ marginBottom: '6px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                        <div style={{
-                          width: '12px',
-                          height: '12px',
-                          borderRadius: '2px',
-                          background: groupColour,
-                          border: '1px solid #ddd'
-                        }}></div>
-                        <span style={{ fontWeight: '600', fontSize: '12px' }}>
-                          {group.displayName}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#6c757d', marginLeft: '18px' }}>
+                  return (
+                    <div key={group.signature} style={{ marginBottom: '8px' }}>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '8px', color: '#333' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div className="property-color-swatch" style={{
+                            background: groupColour
+                          }}></div>
+                          <span>
+                            {group.displayName}
+                          </span>
+                        </div>
+                      </label>
+                      <div className="property-helper-text" style={{ marginBottom: '6px', fontSize: '11px', color: '#666' }}>
                         Affects {group.edges.length} edge{group.edges.length > 1 ? 's' : ''}
                       </div>
-                    </div>
-                    <select
-                      value={(() => {
-                        // Check if any edge in this group has an active override in the DSL
-                        const parsed = parseConstraints(whatIfDSL || '');
-                        // Find matching condition from DSL
-                        for (const cond of group.edges[0]?.conditional_p || []) {
-                          if (typeof cond.condition !== 'string') continue;
-                          const normalizedCond = normalizeConstraintString(cond.condition);
-                          // Check if DSL contains this condition (or a superset)
-                          const dslHasVisited = parsed.visited.length > 0 && 
-                            cond.condition.includes('visited(') &&
-                            parsed.visited.some(v => cond.condition.includes(v));
-                          const dslHasExclude = parsed.exclude.length > 0 &&
-                            cond.condition.includes('exclude(') &&
-                            parsed.exclude.some(e => cond.condition.includes(e));
-                          
-                          if (dslHasVisited || dslHasExclude || normalizeConstraintString(whatIfDSL || '') === normalizedCond) {
-                            return normalizedCond;
-                          }
-                        }
-                        return '';
-                      })()}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        if (!value) {
-                          // Remove condition from DSL
-                          // Find which condition was active
+                      <select
+                        className="property-input"
+                        style={{
+                          zIndex: 10,
+                          position: 'relative'
+                        }}
+                        value={(() => {
+                          // Check if any edge in this group has an active override in the DSL
                           const parsed = parseConstraints(whatIfDSL || '');
-                          // Remove visited/exclude that match this group's conditions
+                          // Find matching condition from DSL
                           for (const cond of group.edges[0]?.conditional_p || []) {
                             if (typeof cond.condition !== 'string') continue;
                             const normalizedCond = normalizeConstraintString(cond.condition);
-                            const condParsed = parseConstraints(normalizedCond);
-                            // Remove matching visited/exclude nodes
-                            const newDSL = removeConstraintFromDSL(whatIfDSL, normalizedCond);
-                            if (newDSL !== whatIfDSL) {
-                              setWhatIfDSL(newDSL || null);
-                              break;
+                            // Check if DSL contains this condition (or a superset)
+                            const dslHasVisited = parsed.visited.length > 0 && 
+                              cond.condition.includes('visited(') &&
+                              parsed.visited.some(v => cond.condition.includes(v));
+                            const dslHasExclude = parsed.exclude.length > 0 &&
+                              cond.condition.includes('exclude(') &&
+                              parsed.exclude.some(e => cond.condition.includes(e));
+                            
+                            if (dslHasVisited || dslHasExclude || normalizeConstraintString(whatIfDSL || '') === normalizedCond) {
+                              return normalizedCond;
                             }
                           }
-                        } else {
-                          // Add condition to DSL
-                          addConditionalOverride(value);
-                        }
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '6px',
-                        border: '1px solid #ddd',
-                        borderRadius: '4px',
-                        fontSize: '12px',
-                        background: anyActive ? '#fff9e6' : 'white',
-                        fontWeight: anyActive ? 'bold' : 'normal'
-                      }}
-                    >
-                      <option value="">Base probabilities</option>
-                      {group.edges[0]?.conditional_p?.map((cond, idx) => {
-                        // Skip old format conditions
-                        if (typeof cond.condition !== 'string') {
-                          return null;
-                        }
-                        
-                        const conditionSig = normalizeConstraintString(cond.condition);
-                        const displayLabel = cond.condition;
-                        
-                        return (
-                          <option key={idx} value={conditionSig}>
-                            What if: {displayLabel}?
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                );
-              })}
-            </div>
+                          return '';
+                        })()}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          if (!value) {
+                            // Remove condition from DSL
+                            const parsed = parseConstraints(whatIfDSL || '');
+                            // Remove visited/exclude that match this group's conditions
+                            for (const cond of group.edges[0]?.conditional_p || []) {
+                              if (typeof cond.condition !== 'string') continue;
+                              const normalizedCond = normalizeConstraintString(cond.condition);
+                              const newDSL = removeConstraintFromDSL(whatIfDSL, normalizedCond);
+                              if (newDSL !== whatIfDSL) {
+                                setWhatIfDSL(newDSL || null);
+                                break;
+                              }
+                            }
+                          } else {
+                            // Add condition to DSL
+                            addConditionalOverride(value);
+                            }
+                          }}
+                        >
+                        <option value="">Base probabilities</option>
+                        {group.edges[0]?.conditional_p?.map((cond, idx) => {
+                          // Skip old format conditions
+                          if (typeof cond.condition !== 'string') {
+                            return null;
+                          }
+                          
+                          const conditionSig = normalizeConstraintString(cond.condition);
+                          const displayLabel = cond.condition;
+                          
+                          return (
+                            <option key={idx} value={conditionSig}>
+                              What if: {displayLabel}?
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  );
+                })}
+            </CollapsibleSection>
           )}
 
           {filteredCaseNodes.length === 0 && conditionalEdges.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+            <div className="property-helper-text" style={{ textAlign: 'center', padding: '20px' }}>
               {searchTerm ? 'No matching cases or conditional edges' : 'No cases or conditional edges in this graph'}
             </div>
           )}
