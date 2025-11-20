@@ -55,10 +55,13 @@
   background: transparent;
 }
 
-/* Ensure sidebar panels have proper styling */
-.dock-panel[data-panel-id="graph-sidebar-panel"] {
+/* Ensure sidebar panels have proper styling and sit above canvas/window selector + its dropdowns */
+.graph-editor-dock-container .dock-panel[data-panel-id="graph-sidebar-panel"],
+.graph-editor-dock-container .dock-panel[data-dockid="graph-sidebar-panel"] {
   border-left: 1px solid #d0d5d8;
   background: #f8f9fa; /* Slightly darker than pure white */
+  position: relative !important;
+  z-index: 100 !important; /* Above canvas & WindowSelector + its dropdowns (z-index: 50) */
 }
 
 /* Hide maximize button on graph editor sidebar panels */

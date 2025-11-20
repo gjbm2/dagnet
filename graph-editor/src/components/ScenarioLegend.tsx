@@ -5,7 +5,7 @@
  * Positioned below the window panel on the graph canvas.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { Scenario } from '../types/scenarios';
 import { Eye, EyeOff, X, Plus } from 'lucide-react';
 import './ScenarioLegend.css';
@@ -37,11 +37,124 @@ export function ScenarioLegend({
 }: ScenarioLegendProps) {
   const [isHoveringNew, setIsHoveringNew] = useState(false);
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
+  const [canvasWidth, setCanvasWidth] = useState<number | null>(null);
+  const legendRef = useRef<HTMLDivElement>(null);
   
   // Count visible scenarios (user scenarios + current/base if visible)
   const visibleCount = visibleScenarioIds.length;
   // Show chips if there are any scenarios (visible or not) or if current/base are shown
   const shouldShowChips = scenarios.length > 0 || visibleCount > 0;
+  
+  // Detect visible canvas width (not total tab width)
+  useEffect(() => {
+    const updateCanvasWidth = () => {
+      // Find the canvas panel element - try multiple selectors
+      // rc-dock uses data-panel-id attribute
+      const container = document.querySelector('.graph-editor-dock-container');
+      if (!container) {
+        console.log('[ScenarioLegend] Container not found');
+        return;
+      }
+      
+      // Try to find canvas panel with various selectors
+      let canvasPanel: HTMLElement | null = null;
+      const selectors = [
+        '.dock-panel[data-panel-id="graph-canvas-panel"]',
+        '[data-panel-id="graph-canvas-panel"]',
+        '.dock-panel[data-dockid="graph-canvas-panel"]',
+        '[data-dockid="graph-canvas-panel"]'
+      ];
+      
+      for (const selector of selectors) {
+        canvasPanel = container.querySelector(selector) as HTMLElement;
+        if (canvasPanel) break;
+      }
+      
+      // Try to find sidebar panel
+      let sidebarPanel: HTMLElement | null = null;
+      const sidebarSelectors = [
+        '.dock-panel[data-panel-id="graph-sidebar-panel"]',
+        '[data-panel-id="graph-sidebar-panel"]',
+        '.dock-panel[data-dockid="graph-sidebar-panel"]',
+        '[data-dockid="graph-sidebar-panel"]'
+      ];
+      
+      for (const selector of sidebarSelectors) {
+        sidebarPanel = container.querySelector(selector) as HTMLElement;
+        if (sidebarPanel) break;
+      }
+      
+      if (canvasPanel) {
+        const canvasRect = canvasPanel.getBoundingClientRect();
+        const sidebarWidth = sidebarPanel ? sidebarPanel.getBoundingClientRect().width : 0;
+        // Use canvas panel width directly (it already accounts for sidebar)
+        const width = canvasRect.width;
+        console.log('[ScenarioLegend] Canvas width:', width, 'sidebar:', sidebarWidth);
+        setCanvasWidth(Math.max(200, width - 40)); // 40px for left/right margins
+      } else {
+        // Fallback: calculate from container width minus sidebar
+        const containerRect = container.getBoundingClientRect();
+        const sidebarWidth = sidebarPanel ? sidebarPanel.getBoundingClientRect().width : 0;
+        const width = containerRect.width - sidebarWidth - 40; // 40px for margins
+        console.log('[ScenarioLegend] Canvas width (fallback):', width, 'sidebar:', sidebarWidth, 'container:', containerRect.width);
+        setCanvasWidth(Math.max(200, width));
+      }
+    };
+    
+    // Initial update with delay to ensure DOM is ready
+    const timeoutId = setTimeout(updateCanvasWidth, 200);
+    
+    // Watch for resize events
+    const resizeObserver = new ResizeObserver(() => {
+      updateCanvasWidth();
+    });
+    
+    const container = document.querySelector('.graph-editor-dock-container');
+    if (container) {
+      resizeObserver.observe(container);
+      
+      // Try to find and observe canvas panel
+      const selectors = [
+        '.dock-panel[data-panel-id="graph-canvas-panel"]',
+        '[data-panel-id="graph-canvas-panel"]',
+        '.dock-panel[data-dockid="graph-canvas-panel"]',
+        '[data-dockid="graph-canvas-panel"]'
+      ];
+      
+      for (const selector of selectors) {
+        const canvasPanel = container.querySelector(selector);
+        if (canvasPanel) {
+          resizeObserver.observe(canvasPanel);
+          break;
+        }
+      }
+      
+      // Also observe sidebar panel to recalculate when sidebar opens/closes
+      const sidebarSelectors = [
+        '.dock-panel[data-panel-id="graph-sidebar-panel"]',
+        '[data-panel-id="graph-sidebar-panel"]',
+        '.dock-panel[data-dockid="graph-sidebar-panel"]',
+        '[data-dockid="graph-sidebar-panel"]'
+      ];
+      
+      for (const selector of sidebarSelectors) {
+        const sidebarPanel = container.querySelector(selector);
+        if (sidebarPanel) {
+          resizeObserver.observe(sidebarPanel);
+          break;
+        }
+      }
+    }
+    
+    // Also listen to window resize as fallback
+    window.addEventListener('resize', updateCanvasWidth);
+    
+    return () => {
+      clearTimeout(timeoutId);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateCanvasWidth);
+    };
+  }, []);
   
   /**
    * Get effective colour for a scenario (with single-layer grey override)
@@ -74,7 +187,11 @@ export function ScenarioLegend({
   );
 
   return (
-    <div className="scenario-legend">
+    <div 
+      ref={legendRef}
+      className="scenario-legend"
+      style={canvasWidth !== null && canvasWidth > 0 ? { maxWidth: `${Math.max(200, canvasWidth - 40)}px` } : undefined}
+    >
       {/* Order chips from bottom of stack (left) to top of stack (right) */}
       {/* Bottom: Original -> User Scenarios (reverse order) -> Current (top) */}
       
