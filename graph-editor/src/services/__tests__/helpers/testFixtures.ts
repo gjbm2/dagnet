@@ -69,7 +69,7 @@ export const createTestParameterFile = (overrides: any = {}) => ({
  * Create a test case file
  */
 export const createTestCaseFile = (overrides: any = {}) => ({
-  parameter_id: 'case-test-case',
+  id: 'case-test-case',
   parameter_type: 'case',
   name: 'Test Case',
   description: 'Test case for unit tests',
@@ -187,7 +187,7 @@ export const createCaseFileWithSchedules = (
   schedules: Array<{ variants: any[]; window_from: string; source?: string }>
 ) => {
   return createTestCaseFile({
-    parameter_id: `case-${id}`,
+    id,
     case: {
       id,
       status: 'active',

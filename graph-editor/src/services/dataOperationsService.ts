@@ -876,11 +876,10 @@ class DataOperationsService {
         }
         
         // Save to graph store
-        // Dispatch event to suppress store→file sync (this is a programmatic update from file, not user edit)
-        // Use globalThis.window to avoid shadowing from the 'window' parameter (DateRange)
-        if (typeof globalThis.window !== 'undefined' && globalThis.window.dispatchEvent) {
-        globalThis.window.dispatchEvent(new CustomEvent('dagnet:suppressStoreToFileSync', { detail: { duration: 200 } }));
-        }
+        // Note: We do NOT suppress store→file sync here because graph updates from
+        // external sources (DAS, parameter files) are USER-INITIATED operations that
+        // should persist to the graph file. The GraphEditor's syncingRef flag already
+        // prevents infinite loops during the initial load.
         setGraph(finalGraph);
         
         const hadRebalance = finalGraph !== nextGraph;
@@ -938,8 +937,10 @@ class DataOperationsService {
       
       // Check if file exists, create if missing
       let paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+      let isNewFile = false;
       if (!paramFile) {
         console.log(`[putParameterToFile] File not found, creating: ${paramId}`);
+        isNewFile = true;
         
         // Determine parameter type from edge
         let paramType: 'probability' | 'cost_gbp' | 'cost_time' = 'probability';
@@ -982,6 +983,23 @@ class DataOperationsService {
         return;
       }
       
+      // For NEW files: Use CREATE operation to initialize connection settings from edge
+      // This copies connection, connection_string, and other metadata from the edge
+      let createResult: any = null;
+      if (isNewFile) {
+        createResult = await updateManager.handleGraphToFile(
+          filteredEdge,      // source (filtered to only relevant parameter)
+          paramFile.data,    // target (parameter file)
+          'CREATE',          // operation (initialize connection settings)
+          'parameter',       // sub-destination
+          { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
+        );
+        
+        if (!createResult.success) {
+          console.warn('[DataOperationsService] CREATE operation failed for new parameter file:', createResult);
+        }
+      }
+      
       // Call UpdateManager to transform data (validateOnly mode - don't apply yet)
       const result = await updateManager.handleGraphToFile(
         filteredEdge,      // source (filtered to only relevant parameter)
@@ -1010,9 +1028,16 @@ class DataOperationsService {
       const updatedFileData = structuredClone(paramFile.data);
       console.log('[DataOperationsService] putParameterToFile - changes to apply:', {
         paramId,
+        isNewFile,
+        createChanges: createResult?.changes ? JSON.stringify(createResult.changes, null, 2) : 'none',
         appendChanges: JSON.stringify(result.changes, null, 2),
         updateChanges: updateResult.changes ? JSON.stringify(updateResult.changes, null, 2) : 'none'
       });
+      
+      // For new files: Apply CREATE changes first (connection settings)
+      if (isNewFile && createResult?.success && createResult?.changes) {
+        applyChanges(updatedFileData, createResult.changes);
+      }
       
       // Apply APPEND changes (values[])
       applyChanges(updatedFileData, result.changes);

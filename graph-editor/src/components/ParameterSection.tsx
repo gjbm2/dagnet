@@ -7,6 +7,8 @@ import { AutomatableField } from './AutomatableField';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { GraphData } from '../types';
 import { useTabContext } from '../contexts/TabContext';
+import { dataOperationsService } from '../services/dataOperationsService';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 import './ParameterSection.css';
 
 interface ParameterSectionProps {
@@ -79,6 +81,8 @@ export function ParameterSection({
   disabled = false
 }: ParameterSectionProps) {
   const { tabs, operations: tabOps } = useTabContext();
+  const { graph: currentGraph, setGraph } = useGraphStore();
+  
   // Local state for immediate input feedback
   const [localQuery, setLocalQuery] = useState(param?.query || '');
   // Note: isSettingsModalOpen state moved into ConnectionControl component
@@ -87,6 +91,36 @@ export function ParameterSection({
   useEffect(() => {
     setLocalQuery(param?.query || '');
   }, [param?.query]);
+  
+  // Callback to initialize a newly created parameter file from current edge data
+  const handleCreateAndInitialize = async (paramId: string) => {
+    if (objectType !== 'edge' || !currentGraph) {
+      console.warn('[ParameterSection] Cannot initialize file: not in edge context or no graph');
+      return;
+    }
+    
+    console.log('[ParameterSection] Initializing new parameter file from edge data:', {
+      paramId,
+      edgeId: objectId,
+      paramSlot
+    });
+    
+    // Wrap setGraph to handle null (putParameterToFile expects a function that accepts null)
+    const setGraphWrapper = (graph: GraphData | null) => {
+      if (graph !== null) {
+        setGraph(graph);
+      }
+    };
+    
+    // Call putParameterToFile to copy all edge data to the new file
+    // This includes connection settings, mean, stdev, distribution, etc.
+    await dataOperationsService.putParameterToFile({
+      paramId,
+      edgeId: objectId,
+      graph: currentGraph,
+      setGraph: setGraphWrapper
+    });
+  };
   
   return (
     <div style={{ marginBottom: '20px' }}>
@@ -104,6 +138,7 @@ export function ParameterSection({
             onUpdate({ id: newParamId });
           }
         }}
+        onCreateAndInitialize={handleCreateAndInitialize}
         onOpenConnected={() => {
           const id = param?.id;
           if (!id) return;

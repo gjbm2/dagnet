@@ -26,7 +26,7 @@ interface ConditionalCondition {
     stdev_overridden?: boolean;
     distribution_overridden?: boolean;
     locked?: boolean;
-    parameter_id?: string;
+    id?: string;
   };
   
   // Display color for this condition
