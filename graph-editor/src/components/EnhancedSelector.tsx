@@ -320,8 +320,9 @@ export function EnhancedSelector({
     setInputValue(newValue);
     setShowSuggestions(true);
     
-    // Immediate commit only when allowed (most fields), not when caller wants commit-on-blur semantics
-    if (!commitOnBlurOnly && validationMode !== 'strict') {
+    // Immediate commit only when allowed (most fields), not when caller wants commit-on-blur semantics.
+    // Validation mode controls messaging (warnings/errors) but should not block user edits.
+    if (!commitOnBlurOnly) {
       onChange(newValue);
     }
   };
@@ -416,10 +417,6 @@ export function EnhancedSelector({
   };
 
   const handleInputBlur = () => {
-    // Capture whether suggestions are open at blur time
-    const shouldCommitOnBlur =
-      commitOnBlurOnly && !showSuggestions && validationMode !== 'strict';
-
     if (blurTimeoutRef.current) {
       clearTimeout(blurTimeoutRef.current);
     }
@@ -428,11 +425,11 @@ export function EnhancedSelector({
       blurTimeoutRef.current = null;
       setShowSuggestions(false);
       
-      if (validationMode === 'strict' && inputValue && !isConnected) {
-        setInputValue(value);
-      } else if (shouldCommitOnBlur && inputValue !== value) {
-        // Commit final value on blur when using commit-on-blur semantics,
-        // but only when dropdown is not open (to avoid interfering with item clicks).
+      // Always commit the final value on blur when it differs from the prop value.
+      // Validation mode can show warnings/errors but must not block or revert edits.
+      if (inputValue !== value) {
+        // This covers both commit-on-blur fields (e.g. node IDs) and
+        // normal fields (e.g. event IDs), without requiring Enter.
         onChange(inputValue);
       }
     }, 200);

@@ -321,6 +321,19 @@ properties:
 
 # Example valid parameter definitions
 examples:
+  # Minimal example for new parameter creation (used as default template)
+  - id: example-param
+    name: "Example Parameter"
+    type: probability
+    values:
+      - mean: 0.5
+    metadata:
+      description: ""
+      created_at: "2025-01-01T00:00:00Z"
+      updated_at: "2025-01-01T00:00:00Z"
+      author: "user"
+      version: "1.0.0"
+  
   # Simple probability parameter with single value
   - id: conversion-rate-baseline
     name: "Baseline Conversion Rate"

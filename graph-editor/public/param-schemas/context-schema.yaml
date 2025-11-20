@@ -209,6 +209,22 @@ properties:
 
 # Example valid contexts file
 examples:
+  # Minimal example for new context file creation (used as default template)
+  - contexts:
+      - id: example_context
+        name: "Example Context"
+        type: categorical
+        values:
+          - id: value1
+            label: "Value 1"
+          - id: value2
+            label: "Value 2"
+    metadata:
+      version: "1.0.0"
+      created_at: "2025-01-01T00:00:00Z"
+      updated_at: "2025-01-01T00:00:00Z"
+  
+  # Full example with multiple contexts
   - contexts:
       - id: channel
         name: "Marketing Channel"

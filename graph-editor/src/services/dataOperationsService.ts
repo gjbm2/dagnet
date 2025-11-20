@@ -119,7 +119,7 @@ export function extractSheetsUpdateDataForEdge(
     const edgeParams = scopedParams.edges?.[edgeKey];
     if (edgeParams?.conditional_p?.[condition]) {
       const condP = edgeParams.conditional_p[condition];
-      const apply = (field: 'mean' | 'stdev', value: unknown) => {
+      const apply = (field: 'mean' | 'stdev' | 'n' | 'k', value: unknown) => {
         if (value === null || value === undefined) return;
         const num = typeof value === 'number' ? value : Number(value);
         if (!Number.isFinite(num)) return;
@@ -127,6 +127,8 @@ export function extractSheetsUpdateDataForEdge(
       };
       apply('mean', condP.mean);
       apply('stdev', condP.stdev);
+      apply('n', condP.n);
+      apply('k', condP.k);
     }
   } else {
     // Standard edge-param scope
@@ -147,7 +149,7 @@ export function extractSheetsUpdateDataForEdge(
       return update;
     }
 
-    const apply = (field: 'mean' | 'stdev', value: unknown) => {
+    const apply = (field: 'mean' | 'stdev' | 'n' | 'k', value: unknown) => {
       if (value === null || value === undefined) return;
       const num = typeof value === 'number' ? value : Number(value);
       if (!Number.isFinite(num)) return;
@@ -155,8 +157,11 @@ export function extractSheetsUpdateDataForEdge(
     };
 
     if (slot === 'p' && edgeParams.p) {
-      apply('mean', (edgeParams.p as any).mean);
-      apply('stdev', (edgeParams.p as any).stdev);
+      const p = edgeParams.p as any;
+      apply('mean', p.mean);
+      apply('stdev', p.stdev);
+      apply('n', p.n);
+      apply('k', p.k);
     } else if (slot === 'cost_gbp' && edgeParams.cost_gbp) {
       apply('mean', (edgeParams.cost_gbp as any).mean);
     } else if (slot === 'cost_time' && edgeParams.cost_time) {
@@ -165,6 +170,20 @@ export function extractSheetsUpdateDataForEdge(
   }
 
   return update;
+}
+
+/**
+ * Alias for extractSheetsUpdateDataForEdge with simplified signature for backward compatibility.
+ * Maps (raw, connectionString, paramSlot, graph, edgeId) to the full signature.
+ */
+export function extractSheetsUpdateData(
+  raw: any,
+  connectionString: any,
+  paramSlot: 'p' | 'cost_gbp' | 'cost_time' | undefined,
+  graph: Graph | null | undefined,
+  edgeId: string | undefined
+): { mean?: number; stdev?: number; n?: number; k?: number } {
+  return extractSheetsUpdateDataForEdge(raw, connectionString, paramSlot, undefined, graph, edgeId);
 }
 
 /**

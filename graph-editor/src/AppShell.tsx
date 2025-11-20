@@ -47,6 +47,42 @@ function AppShellContent() {
     navStateRef.current = navState;
   }, [navState]);
 
+  // Warn when logical IDs inside registry-backed files are changed
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const e = event as CustomEvent<{
+        fileId: string;
+        type: string;
+        oldId: string;
+        newId: string;
+      }>;
+      const detail = e.detail;
+      if (!detail) return;
+
+      const { fileId, type, oldId, newId } = detail;
+
+      // Non-blocking warning: highlight risk but do not revert or prevent change
+      dialogOps.showConfirm?.({
+        title: 'Warning: ID field changed',
+        message:
+          `You changed the ID inside "${fileId}" from "${oldId}" to "${newId}".\n\n` +
+          `This can break graphs and other references that use the old ID. ` +
+          `It is usually safer to create a new ${type} or use a dedicated rename flow.\n\n` +
+          `Continue with this change? (Cancel is recommended.)`,
+        confirmLabel: 'Continue',
+        cancelLabel: 'Cancel',
+        confirmVariant: 'danger',
+      }).catch(() => {
+        // Ignore dialog errors in tests/edge cases
+      });
+    };
+
+    window.addEventListener('dagnet:logicalIdChanged' as any, handler);
+    return () => {
+      window.removeEventListener('dagnet:logicalIdChanged' as any, handler);
+    };
+  }, [dialogOps]);
+
   // Init-from-secret modal state
   const [showInitCredsModal, setShowInitCredsModal] = useState(false);
   const [initSecret, setInitSecret] = useState('');

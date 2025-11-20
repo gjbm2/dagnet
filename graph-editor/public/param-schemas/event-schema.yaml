@@ -170,6 +170,10 @@ properties:
 
 # Example valid event definitions
 examples:
+  # Minimal example for new event creation (used as default template)
+  - id: example_event
+    name: "Example Event"
+  
   # Simple event matching Amplitude exactly
   - id: checkout_started
     name: "Checkout Started"

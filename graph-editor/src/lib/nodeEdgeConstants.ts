@@ -91,7 +91,7 @@ export const SANKEY_EDGE_CURVATURE = 0.3;
 // ===== TYPOGRAPHY =====
 
 /** Font size for node labels (pixels) */
-export const NODE_LABEL_FONT_SIZE = 10;
+export const NODE_LABEL_FONT_SIZE = 9;
 
 /** Font size for node secondary text (pixels) */
 export const NODE_SECONDARY_FONT_SIZE = 8;

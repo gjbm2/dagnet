@@ -29,7 +29,12 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
 
   // Get registry items for the selected type
   const typeToUse = fileType || selectedType;
-  const registrySupported = typeToUse === 'parameter' || typeToUse === 'context' || typeToUse === 'case' || typeToUse === 'node';
+  const registrySupported = 
+    typeToUse === 'parameter' || 
+    typeToUse === 'context' || 
+    typeToUse === 'case' || 
+    typeToUse === 'node' ||
+    typeToUse === 'event';
   
   const registryItems = registrySupported && state.registryIndexes ? (() => {
     const key = `${typeToUse}s` as keyof typeof state.registryIndexes;
@@ -37,7 +42,7 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
     
     if (!index) return [];
     
-    // Extract IDs from the registry index (preserve full item data for parameters)
+    // Extract IDs from the registry index (preserve full item data where needed)
     if (typeToUse === 'parameter' && 'parameters' in index) {
       return (index as any).parameters.map((p: any) => ({ 
         id: p.id, 
@@ -51,6 +56,12 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
       return (index as any).cases.map((c: any) => ({ id: c.id, name: c.name, description: c.description }));
     } else if (typeToUse === 'node' && 'nodes' in index) {
       return (index as any).nodes.map((n: any) => ({ id: n.id, name: n.name, description: n.description }));
+    } else if (typeToUse === 'event' && 'events' in index) {
+      return (index as any).events.map((e: any) => ({
+        id: e.id,
+        name: e.name,
+        description: e.description
+      }));
     }
     return [];
   })() : [];

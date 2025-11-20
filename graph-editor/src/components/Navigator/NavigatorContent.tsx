@@ -16,6 +16,7 @@ import './Navigator.css';
  */
 interface NavigatorEntry {
   id: string;
+  fileId: string; // Full fileId (e.g., 'node-household-created') used as unique key
   name: string;
   type: ObjectType;
   hasFile: boolean;
@@ -75,6 +76,19 @@ export function NavigatorContent() {
         ]);
         
         console.log(`📦 NavigatorContent: Loaded ${parameters.length} parameters, ${contexts.length} contexts, ${cases.length} cases, ${nodes.length} nodes, ${events.length} events`);
+        
+        // DETAILED LOGGING FOR NODES
+        console.log('🔍 NavigatorContent: NODES from registryService.getNodes():', nodes.map(n => ({
+          id: n.id,
+          name: n.name,
+          hasFile: n.hasFile,
+          isLocal: n.isLocal,
+          inIndex: n.inIndex,
+          isOrphan: n.isOrphan,
+          file_path: n.file_path,
+          fileId: `node-${n.id}`
+        })));
+        
         setRegistryItems({ parameters, contexts, cases, nodes, events });
       } catch (error) {
         console.error('Failed to load registry items:', error);
@@ -125,8 +139,10 @@ export function NavigatorContent() {
     // 1. Convert RegistryItem to NavigatorEntry for parameters, contexts, cases, nodes
     const addRegistryItems = (items: RegistryItem[]) => {
       for (const item of items) {
-        entriesMap.set(item.id, {
+        const fileId = `${item.type}-${item.id}`; // CRITICAL: Construct fileId for registry items
+        entriesMap.set(fileId, { // CRITICAL: Use fileId as map key to avoid type collisions
           id: item.id,
+          fileId: fileId,
           name: item.name || item.id,
           type: item.type,
           hasFile: item.hasFile,
@@ -150,10 +166,33 @@ export function NavigatorContent() {
     addRegistryItems(registryItems.parameters);
     addRegistryItems(registryItems.contexts);
     addRegistryItems(registryItems.cases);
+    
+    // DETAILED LOGGING FOR NODES BEFORE ADDING
+    console.log('🔍 NavigatorContent: About to add nodes to entriesMap:', registryItems.nodes.map(n => ({
+      id: n.id,
+      type: n.type, // CRITICAL: Check the type field
+      name: n.name,
+      hasFile: n.hasFile,
+      isLocal: n.isLocal,
+      inIndex: n.inIndex
+    })));
     addRegistryItems(registryItems.nodes);
+    
     addRegistryItems(registryItems.events);
     
     // 2. Add graph files from NavigatorContext (graphs don't have indexes)
+    // Also add node files from NavigatorContext that aren't already in entriesMap (orphans)
+    // DETAILED LOGGING: What items from NavigatorContext contains
+    const nodeItemsFromContext = items.filter(item => item.type === 'node');
+    console.log('🔍 NavigatorContent: NODE items from NavigatorContext.items:', nodeItemsFromContext.map(item => ({
+      id: item.id,
+      fileId: `${item.type}-${item.id}`,
+      type: item.type,
+      name: item.name,
+      path: item.path,
+      isLocal: item.isLocal
+    })));
+    
     for (const item of items) {
       if (item.type === 'graph') {
         const fileId = `graph-${item.id}`;
@@ -168,8 +207,9 @@ export function NavigatorContent() {
           });
         }
         
-        entriesMap.set(item.id, {
+        entriesMap.set(fileId, { // Use fileId as map key
           id: item.id,
+          fileId: fileId,
           name: item.name.replace(/\.(yaml|yml|json)$/, ''),
           type: 'graph',
           hasFile: true,
@@ -182,10 +222,56 @@ export function NavigatorContent() {
           lastModified: file?.lastModified,
           lastOpened: file?.lastOpened
         });
+      } else if (item.type === 'node') {
+        // Add node files from NavigatorContext that aren't already in entriesMap
+        // This handles orphan nodes (files that exist but aren't in the index)
+        const fileId = `node-${item.id}`;
+        const file = fileRegistry.getFile(fileId);
+        const itemTabs = tabs.filter(t => t.fileId === fileId);
+        const existingEntry = entriesMap.get(fileId); // Check by fileId
+        
+        // Only add if not already present (registry items take precedence)
+        if (!existingEntry) {
+          entriesMap.set(fileId, { // Use fileId as map key
+            id: item.id,
+            fileId: fileId,
+            name: item.name || item.id,
+            type: 'node',
+            hasFile: true,
+            isLocal: item.isLocal || false,
+            inIndex: false, // Not in index (orphan)
+            isDirty: file?.isDirty || false,
+            isOpen: itemTabs.length > 0,
+            isOrphan: true,
+            path: item.path,
+            lastModified: file?.lastModified,
+            lastOpened: file?.lastOpened
+          });
+        }
       }
     }
     
-    return Array.from(entriesMap.values());
+    const allEntries = Array.from(entriesMap.values());
+    const nodeEntries = allEntries.filter(e => e.type === 'node');
+    console.log('🔍 NavigatorContent: entriesMap has', entriesMap.size, 'total entries');
+    console.log('🔍 NavigatorContent: entriesMap keys:', Array.from(entriesMap.keys()));
+    console.log('🔍 NavigatorContent: ALL entriesMap entries with types:', allEntries.map(e => ({
+      id: e.id,
+      type: e.type, // CRITICAL: What type do entries have?
+      fileId: e.fileId, // CRITICAL: What fileId do they have?
+      name: e.name
+    })));
+    console.log('🔍 NavigatorContent: Final NODE entries in navigatorEntries ('+nodeEntries.length+'):', nodeEntries.map(e => ({
+      id: e.id,
+      name: e.name,
+      hasFile: e.hasFile,
+      isLocal: e.isLocal,
+      inIndex: e.inIndex,
+      isOrphan: e.isOrphan,
+      path: e.path
+    })));
+    
+    return allEntries;
   }, [items, tabs, registryItems, dirtyStateVersion]);
 
   // Apply filters and sorting
@@ -260,6 +346,18 @@ export function NavigatorContent() {
       connections: []
     };
     
+    // DETAILED LOGGING: What nodes are in filteredAndSortedEntries
+    const filteredNodes = filteredAndSortedEntries.filter(e => e.type === 'node');
+    console.log('🔍 NavigatorContent: NODE entries after filtering/sorting:', filteredNodes.map(e => ({
+      id: e.id,
+      name: e.name,
+      hasFile: e.hasFile,
+      isLocal: e.isLocal,
+      inIndex: e.inIndex,
+      isOrphan: e.isOrphan,
+      path: e.path
+    })));
+    
     for (const entry of filteredAndSortedEntries) {
       if (groups[entry.type]) {
         groups[entry.type].push(entry);
@@ -267,6 +365,17 @@ export function NavigatorContent() {
         console.warn(`Unknown entry type: ${entry.type}`, entry);
       }
     }
+    
+    // DETAILED LOGGING: Final grouped nodes
+    console.log('🔍 NavigatorContent: Final groupedEntries.node:', groups.node.map(e => ({
+      id: e.id,
+      name: e.name,
+      hasFile: e.hasFile,
+      isLocal: e.isLocal,
+      inIndex: e.inIndex,
+      isOrphan: e.isOrphan,
+      path: e.path
+    })));
     
     return groups;
   }, [filteredAndSortedEntries]);

@@ -213,6 +213,11 @@ describe('Registry + FileOperationsService integration', () => {
       expect(created!.isOpen).toBe(true);
       expect(created!.isDirty).toBe(false);
 
+      // Ensure on-create invariant: logical id inside file matches name
+      const file = fileRegistry.getFile(fileId) as any;
+      expect(file).toBeDefined();
+      expect(file.data?.id).toBe(name);
+
       // Index file shape
       const indexFileId = `${type}-index`;
       const indexFile = fileRegistry.getFile(indexFileId) as any;

@@ -513,6 +513,17 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Build RepositoryItem list from FileStates
+      // DETAILED LOGGING: What node files are in workspaceFiles
+      const nodeFiles = workspaceFiles.filter(f => f.type === 'node' && !f.fileId.endsWith('-index'));
+      console.log('🔍 NavigatorContext: NODE files in workspaceFiles:', nodeFiles.map(f => ({
+        fileId: f.fileId,
+        type: f.type,
+        name: f.name,
+        path: f.path,
+        isLocal: f.isLocal,
+        id: f.fileId.replace(`${f.type}-`, '')
+      })));
+      
       const items: RepositoryItem[] = workspaceFiles
         .filter(file => {
           // Exclude system files (credentials) and index files
@@ -531,6 +542,36 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           description: file.isLocal ? 'Local only (not committed)' : undefined,
           isLocal: file.isLocal
         }));
+      
+      // DETAILED LOGGING: What node items are built
+      const nodeItems = items.filter(i => i.type === 'node');
+      console.log('🔍 NavigatorContext: NODE items built from workspaceFiles (before dedup):', nodeItems.map(i => ({
+        id: i.id,
+        fileId: `${i.type}-${i.id}`,
+        type: i.type,
+        name: i.name,
+        path: i.path,
+        isLocal: i.isLocal
+      })));
+      
+      // DEDUPLICATE items by fileId (in case IndexedDB has duplicates)
+      const seenFileIds = new Set<string>();
+      const deduplicatedItems = items.filter(item => {
+        const fileId = `${item.type}-${item.id}`;
+        if (seenFileIds.has(fileId)) {
+          console.warn(`🔍 NavigatorContext: Skipping duplicate item: ${fileId}`);
+          return false;
+        }
+        seenFileIds.add(fileId);
+        return true;
+      });
+      
+      const deduplicatedNodeItems = deduplicatedItems.filter(i => i.type === 'node');
+      console.log('🔍 NavigatorContext: NODE items after dedup:', deduplicatedNodeItems.map(i => ({
+        id: i.id,
+        fileId: `${i.type}-${i.id}`,
+        type: i.type
+      })));
 
       // Load registry indexes from current workspace files only (not from stale IDB)
       const parametersIndexFile = workspaceFiles.find(f => f.fileId === 'parameter-index');
@@ -539,8 +580,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       const nodesIndexFile = workspaceFiles.find(f => f.fileId === 'node-index');
       const eventsIndexFile = workspaceFiles.find(f => f.fileId === 'event-index');
 
-      console.log(`📦 WorkspaceService: Loaded ${workspaceFiles.length} files total, ${items.length} non-index items`);
-      console.log(`📦 WorkspaceService: Items by type:`, items.reduce((acc, item) => {
+      console.log(`📦 WorkspaceService: Loaded ${workspaceFiles.length} files total, ${deduplicatedItems.length} non-index items (${items.length - deduplicatedItems.length} duplicates removed)`);
+      console.log(`📦 WorkspaceService: Items by type:`, deduplicatedItems.reduce((acc, item) => {
         acc[item.type] = (acc[item.type] || 0) + 1;
         return acc;
       }, {} as Record<string, number>));
@@ -552,7 +593,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         events: eventsIndexFile?.data
       });
 
-      setItems(items);
+      setItems(deduplicatedItems);
 
       // Update state with registry indexes
       setState(prev => ({

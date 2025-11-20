@@ -1,8 +1,6 @@
 bead labels aren't updating when values change e.g. on data retrieval, revbalances, etc.# TODO
 
 ## Nasty glitches
-- Sheets range resolution logic
-  docs/current/GOOGLE_SHEETS_HRN_INTEGRATION.md
 - what-if funky and fussy (render path...)
 
 ## Current query DSL
@@ -58,6 +56,7 @@ bead labels aren't updating when values change e.g. on data retrieval, revbalanc
 - add moving arrow effect, speed of animation scale on log lag
 
 ### Medium Priority
+- Events that can fire several times we may need to build Amplitude funnels further one step further upstream in order to ensure we know that it's this specific event we care about 
 - Add UI schemas for common forms (params, cases, etc.)
 - Zap drop down menu:
   - 'Connection settings' on zap drop down menu isn't working
