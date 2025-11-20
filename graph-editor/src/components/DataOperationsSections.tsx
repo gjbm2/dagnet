@@ -117,8 +117,8 @@ export function getEdgeDataSections(
   const edge = graph?.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
   if (!edge) return sections;
   
-  // 1. Probability parameter (edge.p)
-  const parameterId = edge.parameter_id || edge.p?.id;
+  // 1. Probability parameter (edge.p) - use nested p.id only
+  const parameterId = edge.p?.id;
   if (parameterId || edge.p?.connection) {
     const file = parameterId ? fileRegistry.getFile(`parameter-${parameterId}`) : null;
     const hasFile = !!file;
@@ -154,7 +154,7 @@ export function getEdgeDataSections(
       // Skip old format conditions (string-based)
       if (typeof condP.condition === 'string') return;
       
-      const condParamId = condP.p?.parameter_id || condP.p?.id;
+      const condParamId = condP.p?.id;
       if (condParamId || condP.p?.connection) {
         const file = condParamId ? fileRegistry.getFile(`parameter-${condParamId}`) : null;
         const hasFile = !!file;
@@ -191,8 +191,8 @@ export function getEdgeDataSections(
     });
   }
   
-  // 3. Cost (GBP) parameter (edge.cost_gbp)
-  const costGbpParameterId = edge.cost_gbp_parameter_id || edge.cost_gbp?.id;
+  // 3. Cost (GBP) parameter (edge.cost_gbp) - use nested cost_gbp.id only
+  const costGbpParameterId = edge.cost_gbp?.id;
   if (costGbpParameterId || edge.cost_gbp?.connection) {
     const file = costGbpParameterId ? fileRegistry.getFile(`parameter-${costGbpParameterId}`) : null;
     const hasFile = !!file;
@@ -221,8 +221,8 @@ export function getEdgeDataSections(
     });
   }
   
-  // 4. Cost (time) parameter (edge.cost_time)
-  const costTimeParameterId = edge.cost_time_parameter_id || edge.cost_time?.id;
+  // 4. Cost (time) parameter (edge.cost_time) - use nested cost_time.id only
+  const costTimeParameterId = edge.cost_time?.id;
   if (costTimeParameterId || edge.cost_time?.connection) {
     const file = costTimeParameterId ? fileRegistry.getFile(`parameter-${costTimeParameterId}`) : null;
     const hasFile = !!file;

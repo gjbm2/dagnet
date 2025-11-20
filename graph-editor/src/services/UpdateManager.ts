@@ -1458,7 +1458,7 @@ export class UpdateManager {
       
       // NOTE: Query string is NOT synced from file→graph
       // The dataOperationsService must:
-      // 1. Find the conditional_p[i] element where p.parameter_id matches the paramId
+      // 1. Find the conditional_p[i] element that matches the target param (by p.id)
       // 2. Pass conditional_p[i].p (the ProbabilityParam object) as the target to UpdateManager
       // 3. After update, replace conditional_p[i].p with the updated object
       // This way, the same mappings work for both edge.p and edge.conditional_p[i].p

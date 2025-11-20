@@ -253,7 +253,7 @@
     "CostParam": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Cost structure (GBP monetary or time). Mirrors ProbabilityParam pattern with override flags and optional parameter_id/connection.",
+      "$comment": "Cost structure (GBP monetary or time). Mirrors ProbabilityParam pattern with override flags and optional connection.",
       "properties": {
         "mean": { "type": "number", "minimum": 0 },
         "mean_overridden": { "type": "boolean", "default": false, "description": "If true, mean was manually edited and should not be auto-updated" },

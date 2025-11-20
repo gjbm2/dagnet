@@ -253,12 +253,11 @@ export default function ParamsPage() {
       };
     } else if (selectedObjectType === 'cases') {
       newData = {
-        parameter_id: 'case-',
+        id: '',
         parameter_type: 'case',
         name: '',
         description: '',
         case: {
-          id: '',
           status: 'active',
           variants: [
             { name: 'control', weight: 0.5, description: '' },
@@ -304,7 +303,7 @@ export default function ParamsPage() {
 
   const handleSaveClick = () => {
     // Set default commit message
-    const itemId = selectedItemData?.id || selectedItemData?.parameter_id || 'new-item';
+    const itemId = selectedItemData?.id || 'new-item';
     const action = isCreatingNew ? 'Add' : 'Update';
     const itemType = selectedObjectType === 'parameters' ? 'parameter' : 
                      selectedObjectType === 'contexts' ? 'context' : 
@@ -350,7 +349,7 @@ export default function ParamsPage() {
         }
         content = yaml.dump(selectedItemData);
       } else if (selectedObjectType === 'cases') {
-        itemId = selectedItemData.parameter_id;
+        itemId = selectedItemData.id;
         if (repo?.gitBasePath) {
           filePath = `${repo.gitBasePath}/cases/${itemId}.yaml`;
         } else {

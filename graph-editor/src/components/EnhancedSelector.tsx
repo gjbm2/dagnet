@@ -54,6 +54,8 @@ interface EnhancedSelectorProps {
   conditionalIndex?: number;
   /** When true, only call onChange on blur/selection (not on each keystroke) */
   commitOnBlurOnly?: boolean;
+  /** Callback to create and initialize a new file from current graph data (returns the created file ID) */
+  onCreateAndInitialize?: (fileId: string) => Promise<void>;
 }
 
 /**
@@ -89,7 +91,8 @@ export function EnhancedSelector({
   targetInstanceUuid,
   paramSlot,
   conditionalIndex,
-  commitOnBlurOnly = false
+  commitOnBlurOnly = false,
+  onCreateAndInitialize
 }: EnhancedSelectorProps) {
   console.log(`[${new Date().toISOString()}] [EnhancedSelector] RENDER (type=${type}, value=${value})`);
   const { operations: navOps } = useNavigatorContext();
@@ -463,6 +466,16 @@ export function EnhancedSelector({
     onChange(inputValue);
     setShowSuggestions(false);
     
+    // If onCreateAndInitialize is provided, call it to populate the file from graph data
+    // This is used when creating a parameter file from within an edge editor
+    if (onCreateAndInitialize) {
+      try {
+        await onCreateAndInitialize(inputValue);
+      } catch (error) {
+        console.error('[EnhancedSelector] Failed to initialize new file from graph data:', error);
+      }
+    }
+    
     // Call onAfterCreate if provided (though data is now in FileRegistry)
     if (onAfterCreate) {
       const file = fileRegistry.getFile(`${type}-${inputValue}`);
@@ -545,7 +558,11 @@ export function EnhancedSelector({
           <button
             type="button"
             className={`enhanced-selector-plug ${isConnected ? 'connected' : ''}`}
-            onClick={() => {
+            onClick={(e) => {
+              // Prevent the click from bubbling up to rc-dock/tab chrome
+              // so it doesn't immediately re-activate the current graph tab.
+              e.stopPropagation();
+              e.preventDefault();
               if (isConnected && onOpenConnected) {
                 onOpenConnected();
               }

@@ -8,7 +8,8 @@
  * - edge.id → edge.uuid (system UUID)
  * - edge.slug → edge.id (human-readable)
  * 
- * Foreign keys (parameter_id, case_id, event_id) remain unchanged.
+ * Foreign key-style references (case_id, event_id, parameter ids within p.id/cost_gbp.id/etc.)
+ * remain unchanged.
  * 
  * Usage:
  *   ts-node scripts/migrate-id-slug.ts <input.json> [output.json]
@@ -209,7 +210,7 @@ function main() {
   console.log(`  - Renamed node.slug → node.id for ${newGraph.nodes.length} nodes`);
   console.log(`  - Renamed edge.id → edge.uuid for ${newGraph.edges.length} edges`);
   console.log(`  - Renamed edge.slug → edge.id for ${newGraph.edges.length} edges`);
-  console.log(`  - Foreign keys (parameter_id, case_id, event_id) unchanged`);
+  console.log(`  - Foreign keys (case_id, event_id, parameter ids via p.id/cost ids) unchanged`);
 }
 
 main();

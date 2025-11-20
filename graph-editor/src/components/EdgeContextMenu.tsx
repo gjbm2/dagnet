@@ -112,8 +112,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   }, [graph, edge]);
   
   // Check for connected parameters from the actual edge object
-  // Check for file-based connections (parameter_id OR p.id) OR direct connections (connection field)
-  // Note: parameter_id can be top-level OR nested in p.id (transform.ts maps p.id → parameter_id for ReactFlow)
+  // Check for file-based connections via nested ids (p.id, cost_gbp.id, cost_time.id) OR direct connections (connection field)
   // Check if conditional_p exists (for showing editing UI)
   const hasConditionalP = edge?.conditional_p && edge.conditional_p.length > 0;
   

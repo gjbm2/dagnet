@@ -151,13 +151,13 @@ export interface CasesIndex {
 }
 
 export interface Case {
-  parameter_id: string;
+  // Canonical case identifier (matches root-level id in case files)
+  id: string;
   parameter_type: string;
   name: string;
   description?: string;
   case: {
-    uuid: string;
-    id?: string;
+    uuid?: string;
     status: string;
     platform?: any;
     variants: any[];
@@ -616,7 +616,7 @@ class ParamRegistryService {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${caseData.parameter_id}.yaml`;
+    a.download = `${caseData.id}.yaml`;
     a.click();
     URL.revokeObjectURL(url);
   }
