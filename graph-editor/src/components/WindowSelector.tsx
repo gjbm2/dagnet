@@ -11,11 +11,12 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import type { DateRange } from '../types';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { calculateIncrementalFetch } from '../services/windowAggregationService';
-import { fileRegistry } from '../contexts/TabContext';
+import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
-import { Sparkles, Database, Layers } from 'lucide-react';
+import { Sparkles, Database, Layers, X } from 'lucide-react';
 import WhatIfAnalysisControl from './WhatIfAnalysisControl';
 import WhatIfAnalysisHeader from './WhatIfAnalysisHeader';
+import { parseConstraints } from '@/lib/queryDSL';
 import toast from 'react-hot-toast';
 import './WindowSelector.css';
 
@@ -59,6 +60,7 @@ interface WindowSelectorProps {
 
 export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow } = useGraphStore();
+  const { tabs, operations } = useTabContext();
   const [needsFetch, setNeedsFetch] = useState(false);
   const [isCheckingCoverage, setIsCheckingCoverage] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
@@ -68,6 +70,35 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // What-If and Context dropdown states
   const [showWhatIfDropdown, setShowWhatIfDropdown] = useState(false);
   const [showContextDropdown, setShowContextDropdown] = useState(false);
+  
+  // Get what-if DSL and count conditions
+  const currentTab = tabs.find(t => t.id === tabId);
+  const whatIfDSL = currentTab?.editorState?.whatIfDSL;
+  const whatIfConditionCount = useMemo(() => {
+    if (!whatIfDSL || whatIfDSL.trim().length === 0) return 0;
+    try {
+      const parsed = parseConstraints(whatIfDSL);
+      const caseCount = parsed.cases?.length || 0;
+      const visitedCount = parsed.visited?.length || 0;
+      const excludeCount = parsed.exclude?.length || 0;
+      return caseCount + visitedCount + excludeCount;
+    } catch (e) {
+      return 0;
+    }
+  }, [whatIfDSL]);
+  
+  const handleClearWhatIf = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (tabId && whatIfDSL) {
+      try {
+        await operations.updateTabState(tabId, { whatIfDSL: null });
+        setShowWhatIfDropdown(false);
+      } catch (error) {
+        console.error('[WindowSelector] Failed to clear What-If:', error);
+        toast.error('Failed to clear What-If');
+      }
+    }
+  };
   const whatIfButtonRef = useRef<HTMLButtonElement>(null);
   const whatIfDropdownRef = useRef<HTMLDivElement>(null);
   const contextButtonRef = useRef<HTMLButtonElement>(null);
@@ -856,10 +887,35 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               setShowWhatIfDropdown(!showWhatIfDropdown);
               setShowContextDropdown(false);
             }}
-            title="What-If Analysis"
+            title={whatIfConditionCount > 0 ? `What-If Analysis (${whatIfConditionCount} active)` : "What-If Analysis"}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: whatIfConditionCount > 0 ? '600' : 'normal' }}
           >
             <Sparkles size={14} />
-            <span>What-If</span>
+            <span>What-If{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}</span>
+            {whatIfConditionCount > 0 && (
+              <button
+                onClick={handleClearWhatIf}
+                title="Clear What-If conditions"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: '2px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  marginLeft: '4px'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#FEE2E2';
+                  e.currentTarget.style.borderRadius = '3px';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'none';
+                }}
+              >
+                <X size={12} style={{ color: '#DC2626' }} />
+              </button>
+            )}
           </button>
           
           {showWhatIfDropdown && (

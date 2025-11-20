@@ -9,9 +9,13 @@
   top: 80px; /* Below window panel - extra space to avoid overlap */
   left: 20px; /* Extra margin from left edge */
   display: flex;
+  flex-wrap: wrap; /* Allow chips to wrap to new row */
   gap: 8px;
+  /* max-width set dynamically based on visible canvas width */
   z-index: 50; /* Below UI controls (z-index: 100+) but above canvas */
   pointer-events: auto;
+  width: auto; /* Allow natural width */
+  max-width: 100%; /* Fallback - will be overridden by inline style */
 }
 
 .scenario-legend-chip {
