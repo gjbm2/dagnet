@@ -56,7 +56,16 @@
           "defaults": {
             "type": "object",
             "description": "Default values merged into all requests (e.g., global filters)",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "properties": {
+              "excluded_cohorts": {
+                "type": "array",
+                "description": "Array of cohort IDs to exclude from queries",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "connection_string_schema": {
             "type": "object",

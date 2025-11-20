@@ -2,6 +2,10 @@
 # This schema defines the structure for individual event definitions
 # in the Dagnet events registry system.
 
+$schema: http://json-schema.org/draft-07/schema#
+title: Event Definition
+description: Events are used to define the events that can fire in the conversion graph. They are also used to store event name mappings and property filters for Amplitude queries.
+
 type: object
 required: [id, name]
 additionalProperties: false
@@ -9,12 +13,12 @@ additionalProperties: false
 properties:
   id:
     type: string
-    pattern: '^[a-z0-9_]+$'
+    pattern: '^[a-z0-9_-]+$'
     minLength: 2
     maxLength: 128
     description: |
       Canonical event ID (used throughout app, likely matches production event names).
-      Allows underscores for production event naming conventions (e.g., checkout_started).
+      Allows underscores and hyphens for production event naming conventions.
     examples: ["checkout_started", "purchase_completed", "page_view", "add_to_cart"]
   
   name:
@@ -81,59 +85,6 @@ properties:
           operator: "is any of"
           values: ["DO_MOST_OF_IT_FOR_ME", "DO_ALL_OF_IT_FOR_ME"]
   
-  connectors:
-    type: object
-    description: "Platform-specific mappings (only if platform uses different names)"
-    additionalProperties: false
-    properties:
-      amplitude:
-        type: object
-        description: "Amplitude-specific configuration"
-        additionalProperties: false
-        properties:
-          event_name:
-            type: string
-            description: "Override if Amplitude uses different event name than canonical id"
-          event_type:
-            type: string
-            description: "Amplitude event type classification (if applicable)"
-          properties:
-            type: object
-            description: "Expected event properties schema (for documentation)"
-            additionalProperties: true
-      
-      google_analytics:
-        type: object
-        description: "Google Analytics configuration (future)"
-        additionalProperties: true
-      
-      mixpanel:
-        type: object
-        description: "Mixpanel configuration (future)"
-        additionalProperties: true
-  
-  properties:
-    type: object
-    description: "Expected event properties (for documentation and validation)"
-    additionalProperties:
-      type: object
-      properties:
-        type:
-          type: string
-          enum: [string, number, boolean, datetime, array, object]
-          description: "Property data type"
-        description:
-          type: string
-          description: "What this property represents"
-        required:
-          type: boolean
-          default: false
-          description: "Whether this property is required"
-        examples:
-          type: array
-          items: {}
-          description: "Example values for this property"
-  
   metadata:
     type: object
     description: "Additional metadata about the event"
@@ -147,16 +98,6 @@ properties:
         type: string
         format: date-time
         description: "When this event definition was last updated"
-      
-      author:
-        type: string
-        maxLength: 64
-        description: "Author or team responsible for this event definition"
-      
-      version:
-        type: string
-        pattern: '^\\d+\\.\\d+\\.\\d+$'
-        description: "Semantic version of this event definition"
       
       status:
         type: string
@@ -174,68 +115,21 @@ examples:
   - id: example_event
     name: "Example Event"
   
-  # Simple event matching Amplitude exactly
-  - id: checkout_started
-    name: "Checkout Started"
-    description: "User initiates checkout process"
-    category: "user_action"
-    tags: ["checkout", "conversion", "ecommerce"]
+  - id: household-delegated
+    name: Delegation Completed
+    description: Household has completed delegation step
+    category: user_action
+    tags: []
+    provider_event_names:
+      amplitude: Household DelegationStatusChanged
+    amplitude_filters:
+      - property: newDelegationStatus
+        operator: is any of
+        values:
+          - 'ON'
     metadata:
-      status: "active"
-  
-  # Event with platform override
-  - id: purchase_completed
-    name: "Purchase Completed"
-    description: "User successfully completes a purchase transaction"
-    category: "conversion"
-    tags: ["purchase", "conversion", "revenue"]
-    connectors:
-      amplitude:
-        event_name: "Purchase Complete"  # Amplitude uses slightly different name
-        properties:
-          transaction_id:
-            type: string
-            description: "Unique transaction identifier"
-          revenue:
-            type: number
-            description: "Transaction revenue amount"
-    properties:
-      order_id:
-        type: string
-        description: "Order identifier"
-        required: true
-      total_amount:
-        type: number
-        description: "Total purchase amount in GBP"
-        required: true
-      currency:
-        type: string
-        description: "Currency code"
-        examples: ["GBP", "USD", "EUR"]
-      items:
-        type: array
-        description: "Array of purchased items"
-    metadata:
-      status: "active"
-      version: "1.0.0"
-  
-  # Page view event
-  - id: page_view
-    name: "Page View"
-    description: "User views a page on the website"
-    category: "page_view"
-    tags: ["navigation", "tracking"]
-    properties:
-      page_url:
-        type: string
-        description: "Full page URL"
-        required: true
-      page_title:
-        type: string
-        description: "Page title"
-      referrer:
-        type: string
-        description: "Referring URL"
-    metadata:
-      status: "active"
-
+      created_at: '2025-11-10T00:00:00.000Z'
+      updated_at: '2025-11-19T23:59:11.112Z'
+      status: active
+      notes: |
+        This event requires property-based filtering in Amplitude funnel queries

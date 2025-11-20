@@ -7,7 +7,7 @@ import validator from '@rjsf/validator-ajv8';
 import { RJSFSchema, RegistryWidgetsType, UiSchema, TemplatesType } from '@rjsf/utils';
 import { getFileTypeConfig, getSchemaFile, getUiSchemaFile } from '../../config/fileTypeRegistry';
 import { GuardedOperationModal } from '../modals/GuardedOperationModal';
-import { MonacoWidget, TabbedArrayWidget, AccordionObjectFieldTemplate } from '../widgets';
+import { MonacoWidget, TabbedArrayWidget, AccordionObjectFieldTemplate, ThreeColumnFieldTemplate } from '../widgets';
 
 /**
  * Form Editor
@@ -386,7 +386,8 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   // Custom templates registry for RJSF
   const customTemplates: Partial<TemplatesType> = {
     ArrayFieldTemplate: TabbedArrayWidget, // Conditionally renders as tabs when ui:options.tabField is set
-    ObjectFieldTemplate: AccordionObjectFieldTemplate // Conditionally renders as accordion when ui:options.accordion = true
+    ObjectFieldTemplate: AccordionObjectFieldTemplate, // Conditionally renders as accordion when ui:options.accordion = true
+    FieldTemplate: ThreeColumnFieldTemplate
   };
 
   if (!data) {
@@ -421,6 +422,101 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
           width: '100%',
           boxSizing: 'border-box'
         }}>
+          <style>{`
+            /* Hide Material UI's built-in labels when using ThreeColumnFieldTemplate */
+            /* We render our own labels in the left column */
+            [class*="three-column-field-wrapper"] .MuiInputLabel-root,
+            [class*="three-column-field-wrapper"] .MuiFormLabel-root {
+              display: none !important;
+              transform: none !important;
+              transition: none !important;
+            }
+            
+            /* Prevent label animation/transform when hidden */
+            [class*="three-column-field-wrapper"] .MuiInputBase-root .MuiInputLabel-root,
+            [class*="three-column-field-wrapper"] .MuiFormControl-root .MuiInputLabel-root {
+              display: none !important;
+              transform: none !important;
+              transition: none !important;
+            }
+            
+            /* Remove the space reserved for animated labels */
+            [class*="three-column-field-wrapper"] .MuiFormControl-root:has(.MuiInputLabel-root) {
+              margin-top: 0 !important;
+            }
+            
+            /* Ensure fields take full width of their column */
+            [class*="three-column-field-wrapper"] .field-column .MuiTextField-root,
+            [class*="three-column-field-wrapper"] .field-column .MuiFormControl-root,
+            [class*="three-column-field-wrapper"] .field-column .MuiAutocomplete-root,
+            [class*="three-column-field-wrapper"] .field-column .MuiSelect-root,
+            [class*="three-column-field-wrapper"] .field-column > div {
+              width: 100% !important;
+            }
+            
+            /* Remove top margin/padding that MUI adds for labels */
+            [class*="three-column-field-wrapper"] .field-column .MuiFormControl-root {
+              margin-top: 0 !important;
+            }
+            
+            /* Ensure description column padding is applied */
+            .field-description-column {
+              padding-right: 8px !important;
+              font-size: 11px !important;
+            }
+            
+            /* Suppress description text under fields within tabs (descriptions are already on RHS) */
+            .tabbed-array-panel .field-column .MuiFormHelperText-root,
+            .tabbed-array-panel .field-column .MuiTypography-caption {
+              display: none !important;
+            }
+            
+            /* Align schema title and description with 50% column */
+            /* Target any Typography that appears before fieldset */
+            .form-editor-wrapper .rjsf form > .MuiTypography-root:first-of-type,
+            .form-editor-wrapper .rjsf form .MuiTypography-h4:first-of-type,
+            .form-editor-wrapper .rjsf form .MuiTypography-h5:first-of-type {
+              margin-left: calc(10% + 16px) !important;
+              margin-bottom: 8px !important;
+              width: 50% !important;
+              max-width: 50% !important;
+              display: block !important;
+              font-size: 1.25rem !important;
+              font-weight: 600 !important;
+              text-transform: capitalize !important;
+            }
+            
+            /* Schema description - second Typography or body2 */
+            .form-editor-wrapper .rjsf form > .MuiTypography-root:nth-of-type(2),
+            .form-editor-wrapper .rjsf form .MuiTypography-body2:first-of-type {
+              margin-left: calc(10% + 16px) !important;
+              margin-bottom: 32px !important;
+              width: 50% !important;
+              max-width: 50% !important;
+              display: block !important;
+            }
+            
+            /* Align array field titles with 50% column */
+            .form-group.field-array > div > div:first-child > div:first-child {
+              margin-left: calc(10% + 16px) !important;
+              width: 50% !important;
+              max-width: 50% !important;
+            }
+            
+            /* Also target Typography that might be wrapped differently */
+            .form-editor-wrapper .rjsf .MuiTypography-root:first-of-type {
+              margin-left: calc(10% + 16px) !important;
+              width: 60% !important;
+              max-width: 60% !important;
+            }
+            
+            .form-editor-wrapper .rjsf .MuiTypography-root:nth-of-type(2) {
+              margin-left: calc(10% + 16px) !important;
+              width: 60% !important;
+              max-width: 60% !important;
+            }
+          `}</style>
+          <div className="form-editor-wrapper">
           {schema && formData ? (
             <Form
               schema={schema}
@@ -451,6 +547,7 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
               Loading schema...
             </div>
           )}
+          </div>
         </div>
       </div>
       
