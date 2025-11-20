@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.92.4-beta
+**Released:** November 20, 2025
+
+Fixed Google sheets, Added reindexing and copying of node and edge param packs.
+
+---
+
 ## Version 0.92.1-beta
 **Released:** November 20, 2025
 
