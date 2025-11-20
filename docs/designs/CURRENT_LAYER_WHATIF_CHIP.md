@@ -245,9 +245,11 @@ const handleClearWhatIf = () => {
   onClick={panelExpanded ? handleClearWhatIf : openPanel}
   title={panelExpanded ? "Clear What-If analysis" : "Open What-If panel"}
 >
-  + What if {panelExpanded && 'x'}
+  + What if {panelExpanded && <X size={12} />}
 </button>
 ```
+
+Note: Use a proper close icon component (e.g., `X` from lucide-react or similar) in tab state, not the letter "x".
 
 ### Panel JSX
 
@@ -493,8 +495,10 @@ The window bar What-If button remains **fully independent**. Both locations show
 3. **Max height for panel?**
    - Recommendation: 400px with scroll. Ensures it doesn't dominate the scenarios panel.
 
-4. **Should the "x" in "+ What if x" be styled differently?**
-   - Recommendation: Plain text is clear. Could use a subtle × character if preferred. *** THE X SHOULD BE A CLOSE NORMAL X CLOSE ICON FOR USE ON A TAB, NOT THE LETTER X ***
+4. **Close icon in tab state?**
+   - Decision: Use a proper close icon (X icon) like used on tabs, not the letter "x"
+   - Icon should be inline with "+ What if" text in tab state
+   - Similar styling to close buttons on browser tabs or UI tabs
 
 5. **Light grey color choice?**
    - Decision: Light grey (`#E5E7EB`) matches the Scenarios panel color temperature and provides subtle distinction while being slightly darker than the panel background.
