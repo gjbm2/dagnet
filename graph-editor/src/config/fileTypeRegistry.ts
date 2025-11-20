@@ -126,6 +126,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     displayName: 'Event',
     displayNamePlural: 'Events',
     schemaFile: '/param-schemas/event-schema.yaml',
+    uiSchemaFile: '/ui-schemas/event-ui-schema.json',
     directory: 'events',
     indexFile: 'events-index.yaml',
     extensions: ['.yaml', '.yml', '.json'],

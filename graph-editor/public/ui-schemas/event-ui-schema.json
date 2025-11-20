@@ -1,0 +1,70 @@
+{
+  "ui:order": ["id", "name", "description", "category", "tags", "provider_event_names", "amplitude_filters", "metadata"],
+  
+  "id": {
+    "ui:description": ""
+  },
+  
+  "name": {
+    "ui:description": ""
+  },
+  
+  "description": {
+    "ui:widget": "textarea",
+    "ui:options": {
+      "rows": 3
+    },
+    "ui:description": ""
+  },
+  
+  "category": {
+    "ui:widget": "select",
+    "ui:description": ""
+  },
+  
+  "tags": {
+    "ui:options": {
+      "orderable": true
+    },
+    "ui:description": ""
+  },
+  
+  "provider_event_names": {
+    "ui:description": ""
+  },
+  
+  "amplitude_filters": {
+    "ui:options": {
+      "orderable": true
+    },
+    "ui:description": "",
+    "items": {
+      "property": {},
+      "operator": {
+        "ui:widget": "select"
+      },
+      "values": {
+        "ui:options": {
+          "orderable": true
+        }
+      }
+    }
+  },
+  
+  "metadata": {
+    "ui:options": {
+      "accordion": true
+    },
+    "created_at": {},
+    "updated_at": {},
+    "status": {
+      "ui:widget": "select"
+    },
+    "notes": {
+      "ui:widget": "textarea",
+      "ui:options": {
+        "rows": 4
+      }
+    }
+  }
+}
