@@ -6,7 +6,9 @@ if (
   (.context | test("style\\.color")) or
   (.context | test("style *= *\\{\\{[^}]*color *:")) or
   (.context | test("style\\s*:\\s*\\{[^}]*color\\s*:")) or
-  (.context | test("background-color|border-color|outline-color|text-decoration-color|caret-color")) or
+  # GLOBALLY EXCLUDE COMPOUND CSS PROPS to prevent 'backgroundColour' in JS objects
+  (.context | test("background-color|border-color|outline-color|text-decoration-color|caret-color|flood-color|lighting-color|stop-color")) or
+  (.context | test("backgroundColor|borderColor|outlineColor|textDecorationColor|caretColor|floodColor|lightingColor|stopColor")) or
 
   # 3) HTML color input
   (.context | test("type=\\\"color\\\"|type=\\'color\\'")) or
@@ -35,10 +37,6 @@ if (
   (.context | test("style=\\\"[^\\\"]*color:")) or
   (.context | test("style=\\'[^\\']*color:")) or
 
-  # 11) backgroundColor, borderColor, textColor - compound CSS-like properties in style objects or CSS
-  ((.file | test("\\.css$")) and (.context | test("(background|border|text|accent)Color[^a-z]"))) or
-  ((.context | test("style\\s*[:=]")) and (.context | test("(background|border|text|accent)Color[^a-z]"))) or
-
   # 12) CSS variable references
   (.context | test("var\\(--[^)]*color")) or
 
@@ -47,7 +45,7 @@ if (
   (.context | test("transition.*'color")) or
 
   # 14) External library component props (lucide-react icons, react-flow components)
-  (.context | test("<(ZapOff|Background)\\s+[^>]*color\\s*=")) or
+  (.context | test("<(ZapOff|Zap|Check|X|AlertCircle|Info|Warning|Error|Success|Close|Menu|Search|Filter|Settings|Home|User|LogOut|Plus|Minus|Edit|Trash|Download|Upload|Share|Copy|Save|File|Folder|Image|Video|Music|Play|Pause|Stop|SkipForward|SkipBack|Rewind|FastForward|Volume|Mute|Bell|Mail|Message|Phone|Calendar|Clock|Star|Heart|ThumbsUp|ThumbsDown|Like|Dislike|Eye|EyeOff|Lock|Unlock|Key|Shield|ShieldCheck|ShieldAlert|ShieldOff|ShieldX|ShieldQuestion|ShieldPlus|ShieldMinus|ShieldBan|ShieldCheckmark|ShieldExclamation|ShieldLock|ShieldUnlock|ShieldKey|ShieldStar|ShieldHeart|ShieldThumbsUp|ShieldThumbsDown|ShieldLike|ShieldDislike|ShieldEye|ShieldEyeOff|ShieldBell|ShieldMail|ShieldMessage|ShieldPhone|ShieldCalendar|ShieldClock|ShieldImage|ShieldVideo|ShieldMusic|ShieldPlay|ShieldPause|ShieldStop|ShieldSkipForward|ShieldSkipBack|ShieldRewind|ShieldFastForward|ShieldVolume|ShieldMute|ShieldFile|ShieldFolder|ShieldDownload|ShieldUpload|ShieldShare|ShieldCopy|ShieldSave|ShieldEdit|ShieldTrash|ShieldPlus|ShieldMinus|ShieldSearch|ShieldFilter|ShieldSettings|ShieldHome|ShieldUser|ShieldLogOut|ShieldMenu|ShieldCheck|ShieldX|ShieldAlert|ShieldInfo|ShieldWarning|ShieldError|ShieldSuccess|ShieldClose|Background|ReactFlow|MiniMap|Controls|Panel|Handle|Edge|Node|Marker|MarkerStart|MarkerEnd|ArrowHead|ArrowHeadClosed|ArrowHeadOpen)\\s+[^>]*color\\s*=")) or
 
   # 15) CSS property syntax in markdown that's actual CSS (not TypeScript interfaces)
   (.context | test("^[[:space:]]*color:\\s*(var\\(|rgba?\\()")) or
