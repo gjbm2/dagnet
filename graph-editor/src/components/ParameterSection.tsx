@@ -6,6 +6,7 @@ import ProbabilityInput from './ProbabilityInput';
 import { AutomatableField } from './AutomatableField';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { GraphData } from '../types';
+import { useTabContext } from '../contexts/TabContext';
 import './ParameterSection.css';
 
 interface ParameterSectionProps {
@@ -77,6 +78,7 @@ export function ParameterSection({
   isUnbalanced = false,
   disabled = false
 }: ParameterSectionProps) {
+  const { tabs, operations: tabOps } = useTabContext();
   // Local state for immediate input feedback
   const [localQuery, setLocalQuery] = useState(param?.query || '');
   // Note: isSettingsModalOpen state moved into ConnectionControl component
@@ -100,6 +102,49 @@ export function ParameterSection({
             onUpdate({ id: undefined });
           } else {
             onUpdate({ id: newParamId });
+          }
+        }}
+        onOpenConnected={() => {
+          const id = param?.id;
+          if (!id) return;
+
+          const fileId = `parameter-${id}`;
+          const existingTab = tabs.find(tab => tab.fileId === fileId);
+
+          if (existingTab) {
+            tabOps.switchTab(existingTab.id);
+          } else {
+            tabOps.openTab(
+              {
+                id,
+                type: 'parameter',
+                name: id,
+                path: `parameter/${id}`,
+              } as any,
+              'interactive',
+              false
+            );
+          }
+        }}
+        onOpenItem={(itemId) => {
+          if (!itemId) return;
+
+          const fileId = `parameter-${itemId}`;
+          const existingTab = tabs.find(tab => tab.fileId === fileId);
+
+          if (existingTab) {
+            tabOps.switchTab(existingTab.id);
+          } else {
+            tabOps.openTab(
+              {
+                id: itemId,
+                type: 'parameter',
+                name: itemId,
+                path: `parameter/${itemId}`,
+              } as any,
+              'interactive',
+              false
+            );
           }
         }}
         disabled={disabled}

@@ -1187,10 +1187,10 @@ export class UpdateManager {
     // Note: When creating a new case file, we pre-populate it with helpful defaults from the graph
     // User will then edit the form and save. After that, case file and node metadata are independent.
     this.addMapping('graph_to_file', 'CREATE', 'case', [
-      { sourceField: 'case.id', targetField: 'id' },  // case ID
+      { sourceField: 'case.id', targetField: 'case.id' },  // case.id (inside case object, not root level)
       { sourceField: 'label', targetField: 'name' },  // Initialize case name from node label
       { sourceField: 'description', targetField: 'description' },  // Initialize case description from node
-      { sourceField: 'case.variants', targetField: 'variants' }
+      { sourceField: 'case.variants', targetField: 'case.variants' }  // Variants go inside case object
     ]);
     
     // Flow C.UPDATE: Graph → File/Case (UPDATE current case metadata + variant weights)
@@ -3462,8 +3462,33 @@ export class UpdateManager {
           }
         }
 
-        // Update edge-level parameters
+        // Update edge-level queries & conditions that reference this node id
         if (searchTokens.length > 0) {
+          for (const token of searchTokens) {
+            // Edge-level query string
+            if (edge.query && typeof edge.query === 'string') {
+              const updatedEdgeQuery = this.replaceNodeToken(edge.query, token, newId);
+              if (updatedEdgeQuery !== edge.query) {
+                edge.query = updatedEdgeQuery;
+                queriesUpdated++;
+              }
+            }
+
+            // Edge-level conditional_p conditions
+            if (Array.isArray(edge.conditional_p)) {
+              edge.conditional_p.forEach((cond: any) => {
+                if (cond && typeof cond.condition === 'string') {
+                  const updatedCond = this.replaceNodeToken(cond.condition, token, newId);
+                  if (updatedCond !== cond.condition) {
+                    cond.condition = updatedCond;
+                    conditionsUpdated++;
+                  }
+                }
+              });
+            }
+          }
+
+          // Update edge-level parameters
           updateParamQueries(edge.p);
           updateParamQueries(edge.cost_gbp);
           updateParamQueries(edge.cost_time);

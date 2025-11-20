@@ -16,6 +16,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { ObjectType, RepositoryItem, ViewMode } from '../types';
 import { db } from '../db/appDatabase';
 import { credentialsManager } from '../lib/credentials';
+import { getSchemaFile } from '../config/fileTypeRegistry';
 
 export interface CreateFileOptions {
   openInTab?: boolean;
@@ -42,6 +43,7 @@ class FileOperationsService {
   private tabOps: any = null;
   private dialogOps: any = null;
   private getWorkspaceState: (() => { repo: string; branch: string }) | null = null;
+  private schemaExampleCache: Map<ObjectType, any | null> = new Map();
 
   /**
    * Initialize the service with required dependencies
@@ -57,6 +59,54 @@ class FileOperationsService {
     this.tabOps = deps.tabOps;
     this.dialogOps = deps.dialogOps;
     this.getWorkspaceState = deps.getWorkspaceState || null;
+  }
+
+  /**
+   * Load a default example object for a given type from its schema's examples array.
+   * This lets schemas own their own "default" shape instead of hard-coding it here.
+   */
+  private async loadSchemaExample(type: ObjectType): Promise<any | null> {
+    if (this.schemaExampleCache.has(type)) {
+      return this.schemaExampleCache.get(type) || null;
+    }
+
+    try {
+      const schemaPath = getSchemaFile(type);
+      if (!schemaPath) {
+        this.schemaExampleCache.set(type, null);
+        return null;
+      }
+
+      const response = await fetch(schemaPath);
+      if (!response.ok) {
+        console.warn(`FileOperationsService: Failed to fetch schema for ${type}: ${response.status}`);
+        this.schemaExampleCache.set(type, null);
+        return null;
+      }
+
+      const contentType = response.headers.get('content-type');
+      let schema: any;
+
+      if (contentType?.includes('yaml') || schemaPath.endsWith('.yaml') || schemaPath.endsWith('.yml')) {
+        const yaml = await import('js-yaml');
+        const text = await response.text();
+        schema = yaml.load(text);
+      } else {
+        schema = await response.json();
+      }
+
+      let example: any | null = null;
+      if (schema && Array.isArray(schema.examples) && schema.examples.length > 0 && typeof schema.examples[0] === 'object') {
+        example = structuredClone(schema.examples[0]);
+      }
+
+      this.schemaExampleCache.set(type, example);
+      return example;
+    } catch (error) {
+      console.warn(`FileOperationsService: Error loading schema example for ${type}:`, error);
+      this.schemaExampleCache.set(type, null);
+      return null;
+    }
   }
 
   /**
@@ -99,6 +149,7 @@ class FileOperationsService {
     if (!defaultData) {
       // Create new default data
       if (type === 'graph') {
+        // Graphs remain hand-crafted due to complex layout requirements
         const now = new Date().toISOString();
         const startUuid = crypto.randomUUID();
 
@@ -132,76 +183,97 @@ class FileOperationsService {
             ...metadata,
           },
         };
-      } else if (type === 'event') {
-        defaultData = {
-          id: name,
-          name,
-          description: '',
-          event_type: 'conversion',
-          properties: [],
-          metadata: {
-            created_at: new Date().toISOString(),
-            author: 'user',
-            version: '1.0.0',
-            status: 'active',
-            ...metadata
-          }
-        };
-      } else if (type === 'parameter') {
-        // Use parameterType from metadata if creating from registry, else default to probability
-        const parameterType = metadata?.parameterType || 'probability';
-
-        defaultData = {
-          id: name,
-          name,
-          type: parameterType, // From registry item or default to probability
-          description: '',
-          query_overridden: false,
-          values: [
-            { mean: 1 } // Array with one value object (schema requires array, not object)
-          ],
-          metadata: {
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            author: 'user',
-            version: '1.0.0',
-            status: 'draft',
-            ...(metadata || {})
-          }
-        };
-      } else if (type === 'case') {
-        // Create case file with proper structure per case-parameter-schema
-        defaultData = {
-          parameter_id: `case-${name}`,
-          parameter_type: 'case',
-          id: name,
-          name,
-          description: '',
-          case: {
-            id: name,
-            status: 'active',
-            variants: [
-              { name: 'control', weight: 0.5 },
-              { name: 'treatment', weight: 0.5 }
-            ],
-            schedules: []
-          },
-          metadata: {
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            author: 'user',
-            version: '1.0.0',
-            status: 'active',
-            ...(metadata || {})
-          }
-        };
       } else {
-        defaultData = {
-          id: name,
-          name,
-          description: '',
-          ...metadata
-        };
+        // For registry-backed types, prefer schema examples so defaults live in the schema
+        const example = await this.loadSchemaExample(type);
+        if (example) {
+          defaultData = structuredClone(example);
+        } else {
+          // Fallback minimal structures (kept for robustness if schemas lack examples)
+          if (type === 'parameter') {
+            const parameterType = metadata?.parameterType || 'probability';
+            defaultData = {
+              id: name,
+              name,
+              type: parameterType,
+              description: '',
+              query_overridden: false,
+              values: [{ mean: 1 }],
+              metadata: {
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                author: 'user',
+                version: '1.0.0',
+                status: 'draft',
+                ...(metadata || {}),
+              },
+            };
+          } else if (type === 'case') {
+            defaultData = {
+              parameter_id: `case-${name}`,
+              parameter_type: 'case',
+              id: name,
+              name,
+              description: '',
+              case: {
+                id: name,
+                status: 'active',
+                variants: [
+                  { name: 'control', weight: 0.5 },
+                  { name: 'treatment', weight: 0.5 },
+                ],
+                schedules: [],
+              },
+              metadata: {
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                author: 'user',
+                version: '1.0.0',
+                status: 'active',
+                ...(metadata || {}),
+              },
+            };
+          } else {
+            defaultData = {
+              id: name,
+              name,
+              description: '',
+              ...metadata,
+            };
+          }
+        }
+
+        // CRITICAL: Always override id, created_at, updated_at (these are automatic, never from schema)
+        defaultData.id = name;
+        defaultData.name = name;
+
+        // Ensure metadata block exists where schema expects it
+        if (!defaultData.metadata) {
+          defaultData.metadata = {};
+        }
+        const nowIso = new Date().toISOString();
+        // Always set timestamps (override any from schema example)
+        defaultData.metadata.created_at = nowIso;
+        defaultData.metadata.updated_at = nowIso;
+        
+        // Set other metadata fields only if not already present (allow schema defaults for these)
+        if (!defaultData.metadata.author) {
+          defaultData.metadata.author = 'user';
+        }
+        if (!defaultData.metadata.version) {
+          defaultData.metadata.version = '1.0.0';
+        }
+        
+        // Parameter-specific override: ensure type field reflects requested subtype
+        if (type === 'parameter') {
+          const parameterType = metadata?.parameterType || defaultData.type || 'probability';
+          defaultData.type = parameterType;
+        }
+        
+        // Case-specific: ensure parameter_id matches id
+        if (type === 'case' && defaultData.parameter_id) {
+          defaultData.parameter_id = `case-${name}`;
+        }
       }
     }
 
@@ -293,11 +365,13 @@ class FileOperationsService {
     const file = fileRegistry.getFile(fileId);
 
     if (file && file.viewTabs && file.viewTabs.length > 0 && switchIfExists) {
-      // Switch to existing tab
+      // Switch to existing tab via TabContext operations
       const existingTabId = file.viewTabs[0];
-      this.tabOps.setActiveTab(existingTabId);
-      console.log(`FileOperationsService: Switched to existing tab ${existingTabId}`);
-      return existingTabId;
+      if (this.tabOps.switchTab) {
+        await this.tabOps.switchTab(existingTabId);
+        console.log(`FileOperationsService: Switched to existing tab ${existingTabId}`);
+        return existingTabId;
+      }
     }
 
     // Open new tab
@@ -844,6 +918,9 @@ class FileOperationsService {
     return true;
   }
 }
+
+// Export class for testing
+export { FileOperationsService };
 
 // Export singleton instance
 export const fileOperationsService = new FileOperationsService();

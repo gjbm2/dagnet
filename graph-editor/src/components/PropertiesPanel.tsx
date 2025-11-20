@@ -126,7 +126,7 @@ export default function PropertiesPanel({
   // Local state for edge query (to prevent eager updates during editing)
   const [localEdgeQuery, setLocalEdgeQuery] = useState<string>('');
 
-  // Helper to open a file by type and ID
+  // Helper to open a file by type and ID (reuse existing tab if open)
   const openFileById = useCallback((type: 'case' | 'node' | 'parameter' | 'context' | 'event', id: string) => {
     const fileId = `${type}-${id}`;
     
@@ -240,7 +240,7 @@ export default function PropertiesPanel({
     if (selectedNodeId && graph && lastLoadedNodeRef.current === selectedNodeId) {
       const node = graph.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
       if (node) {
-        console.log('PropertiesPanel: Reloading node data after graph change, id:', node.id);
+        console.log('PropertiesPanel: Reloading node data after graph change, id:', node.id, 'event_id:', node.event_id);
         setLocalNodeData({
           label: node.label || '',
           id: node.id || '',

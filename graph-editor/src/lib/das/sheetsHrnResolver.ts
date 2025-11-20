@@ -84,65 +84,63 @@ export function parseSheetsRange(values: unknown[][]): SheetsParseResult {
     };
   }
 
-  // Pattern C: Name/value pairs over an even number of cells
-  const flatCells: SheetsCellValue[] = cells.filter(
-    (c) => c.value !== null && c.value !== undefined && String(c.value).trim() !== '',
-  );
+  // Pattern C: Name/value pairs - process row by row, pair by pair
+  // Don't filter out empty cells upfront, as we need to preserve pairing structure
+  const paramPack: Record<string, unknown> = {};
+  
+  // Process cells in pairs, row by row
+  for (let r = 0; r < values.length; r++) {
+    const row = values[r] ?? [];
+    for (let c = 0; c + 1 < row.length; c += 2) {
+      const nameValue = row[c];
+      const valueValue = row[c + 1];
+      
+      // Skip if both are empty/null
+      if ((nameValue === null || nameValue === undefined || String(nameValue).trim() === '') &&
+          (valueValue === null || valueValue === undefined || String(valueValue).trim() === '')) {
+        continue;
+      }
+      
+      const name = nameValue !== null && nameValue !== undefined ? String(nameValue).trim() : '';
+      if (!name) {
+        errors.push({
+          row: r,
+          col: c,
+          message: 'Empty DSL/HRN name cell in name/value pair',
+        });
+        continue; // Skip this pair but continue processing
+      }
+      
+      // Process the value
+      const rawValue = valueValue;
+      let value: unknown = rawValue;
 
-  if (flatCells.length === 0) {
-    errors.push({
-      row: 0,
-      col: 0,
-      message: 'Range has no non-empty cells',
-    });
-    return {
-      mode: 'param-pack',
-      cells,
-      paramPack: {},
-      errors,
-    };
+      const numeric = parseNumericValue(rawValue);
+      if (numeric !== null) {
+        value = numeric;
+      } else {
+        const asObject = tryParseObject(rawValue);
+        if (asObject && typeof asObject === 'object') {
+          // Preserve nested objects as-is; they will be handled by DSL/param logic
+          value = asObject;
+        }
+      }
+
+      paramPack[name] = value;
+    }
   }
 
-  if (flatCells.length % 2 !== 0) {
+  // Check if we have an odd number of non-empty cells (which would indicate a pairing issue)
+  const nonEmptyCells = cells.filter(
+    (c) => c.value !== null && c.value !== undefined && String(c.value).trim() !== '',
+  );
+  if (nonEmptyCells.length > 0 && nonEmptyCells.length % 2 !== 0) {
     errors.push({
       row: 0,
       col: 0,
       message:
         'Name/value pairs pattern requires an even number of non-empty cells (DSL name, value, DSL name, value, ...)',
     });
-  }
-
-  const paramPack: Record<string, unknown> = {};
-
-  for (let i = 0; i + 1 < flatCells.length; i += 2) {
-    const nameCell = flatCells[i];
-    const valueCell = flatCells[i + 1];
-
-    const name = String(nameCell.value).trim();
-    if (!name) {
-      errors.push({
-        row: nameCell.row,
-        col: nameCell.col,
-        message: 'Empty DSL/HRN name cell in name/value pair',
-      });
-      continue;
-    }
-
-    const rawValue = valueCell.value;
-    let value: unknown = rawValue;
-
-    const numeric = parseNumericValue(rawValue);
-    if (numeric !== null) {
-      value = numeric;
-    } else {
-      const asObject = tryParseObject(rawValue);
-      if (asObject && typeof asObject === 'object') {
-        // Preserve nested objects as-is; they will be handled by DSL/param logic
-        value = asObject;
-      }
-    }
-
-    paramPack[name] = value;
   }
 
   return {

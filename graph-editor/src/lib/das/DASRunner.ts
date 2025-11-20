@@ -506,6 +506,11 @@ export class DASRunner {
       try {
         const expression = jsonata(spec.jsonata);
 
+        // Register dasHelpers functions for JSONata
+        expression.registerFunction('parseSheetsRange', (values: unknown[][]) => {
+          return parseSheetsRange(values);
+        });
+
         // Bind context variables (JSONata can reference these)
         expression.assign('extracted', extracted);
         expression.assign('dsl', context.dsl);

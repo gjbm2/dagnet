@@ -4146,10 +4146,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis]);
 
+  // Track whether the current drag actually moved the node (vs. a simple click)
+  const hasNodeMovedRef = useRef(false);
+
   // Handle node drag start - set flag and start failsafe timeout
   const onNodeDragStart = useCallback(() => {
-    console.log(`🎯 Node drag started - blocking sync during drag [frame=${renderFrameRef.current}]`);
+    console.log(`🎯 Node drag started [frame=${renderFrameRef.current}] (pending movement detection)`);
     
+    // Reset movement flag; we only treat this as a "real" drag if movement occurs
+    hasNodeMovedRef.current = false;
+
     // Block Graph→ReactFlow sync during drag to prevent interruption
     isDraggingNodeRef.current = true;
     setIsDraggingNode(true);
@@ -4168,9 +4174,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 5000);
   }, []);
 
+  // Mark drag as "moved" only when ReactFlow reports an actual position change
+  const onNodeDrag = useCallback(() => {
+    if (!hasNodeMovedRef.current) {
+      hasNodeMovedRef.current = true;
+      console.log(`🎯 Node drag movement detected [frame=${renderFrameRef.current}]`);
+    }
+  }, []);
+
   // Handle node drag stop - save final position to history
   const onNodeDragStop = useCallback(() => {
-    console.log(`🎯 Node drag stopped - saving final position to history [frame=${renderFrameRef.current}]`);
+    console.log(`🎯 Node drag stopped [frame=${renderFrameRef.current}] (hasMoved=${hasNodeMovedRef.current})`);
     
     // Keep drag flag set - it will be cleared by the sync effect when it takes the fast path
     // Use double requestAnimationFrame to ensure ReactFlow has finished updating node positions
@@ -4179,9 +4193,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       requestAnimationFrame(() => {
         setIsDraggingNode(false);
         
-        // Explicitly sync positions from ReactFlow to graph store immediately
-        // The useEffect might not run immediately, so we do it manually here
-        if (graph && nodes.length > 0) {
+        // Only sync positions & save history if the node actually moved.
+        if (hasNodeMovedRef.current && graph && nodes.length > 0) {
           const updatedGraph = fromFlow(nodes, edges, graph);
           if (updatedGraph) {
             const updatedJson = JSON.stringify(updatedGraph);
@@ -4204,16 +4217,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             // No graph update, clear flag immediately
             isDraggingNodeRef.current = false;
           }
+          
+          // Save the FINAL position to history after the ReactFlow→Store sync completes
+          // Use setTimeout to ensure sync completes first
+          setTimeout(() => {
+            saveHistoryState('Move node');
+          }, 0);
         } else {
-          // No graph/nodes, clear flag immediately
+          // Click-only (no movement) - just clear drag flag, no graph update or history entry
           isDraggingNodeRef.current = false;
         }
-        
-        // Save the FINAL position to history after the ReactFlow→Store sync completes
-        // Use setTimeout to ensure sync completes first
-        setTimeout(() => {
-          saveHistoryState('Move node');
-        }, 0);
       });
     });
   }, [saveHistoryState, graph, nodes, edges, setGraph]);
@@ -5098,7 +5111,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             hasMovedRef.current = false;
           }
         }}
-        onNodeDragStart={onNodeDragStart} 
+        onNodeDragStart={onNodeDragStart}
+        onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         onNodeDoubleClick={(event, node) => {
           event.preventDefault();

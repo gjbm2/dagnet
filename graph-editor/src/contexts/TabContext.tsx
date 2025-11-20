@@ -171,6 +171,36 @@ class FileRegistry {
     const oldDataStr = JSON.stringify(file.data);
     const newDataStr = JSON.stringify(newData);
     const originalDataStr = JSON.stringify(file.originalData);
+
+    // Detect dangerous logical ID changes for registry-backed types
+    try {
+      const w = (typeof window !== 'undefined') ? (window as any) : null;
+      const logicalTypes = new Set(['parameter', 'context', 'case', 'node', 'event']);
+      const oldId = file.data?.id;
+      const newId = newData?.id;
+
+      if (
+        w &&
+        logicalTypes.has(file.type as string) &&
+        !file.isInitializing &&           // Skip controlled initialization/creation flows
+        oldId &&
+        newId &&
+        oldId !== newId
+      ) {
+        w.dispatchEvent(
+          new CustomEvent('dagnet:logicalIdChanged', {
+            detail: {
+              fileId,
+              type: file.type,
+              oldId,
+              newId,
+            },
+          }),
+        );
+      }
+    } catch {
+      // Best-effort only; never block updates on listener issues
+    }
     
     file.data = newData;
     const wasDirty = file.isDirty;
