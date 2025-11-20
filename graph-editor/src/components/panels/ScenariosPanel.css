@@ -67,42 +67,62 @@
   margin-top: -1px;
 }
 
-/* Base and Current special styling - italic titles only */
+/* Base and Current special styling - italic titles only, no hover */
 .scenario-row.scenario-base .scenario-name,
 .scenario-row.scenario-current .scenario-name {
   font-style: italic;
 }
 
-/* Drag Handle */
-.scenario-drag-handle {
+/* Current label group - keeps "Current" and "What if" together on left */
+.current-label-group {
   display: flex;
   align-items: center;
-  color: #9CA3AF;
-  cursor: grab;
-  transition: color 0.2s;
-  width: 20px;
-  flex-shrink: 0;
-  pointer-events: none; /* Don't block drag events */
+  gap: 8px;
+  flex: 1; /* Take available space, push action buttons to right */
+  min-width: 0; /* Allow flex to shrink */
 }
 
-.scenario-drag-handle:active {
-  cursor: grabbing;
+/* Override scenario-name flex in Current row */
+.scenario-row.scenario-current .scenario-name {
+  flex: 0 0 auto; /* Don't expand, just fit content, don't shrink */
+  white-space: nowrap; /* Prevent wrapping */
 }
 
-.scenario-row:hover .scenario-drag-handle {
-  color: #6B7280;
+/* Base and Current rows - remove hover state (not interactive) */
+.scenario-row.scenario-base:hover,
+.scenario-row.scenario-current:hover {
+  background: white; /* No hover change */
+  border-color: #E5E7EB; /* No hover change */
 }
 
-/* Drag Handle Placeholder (for Current and Base) */
-.scenario-drag-placeholder {
-  width: 20px;
-  flex-shrink: 0;
-}
+/* Drag Handle Placeholder - removed, swatches are now draggable */
 
-/* Colour Swatch - clickable to change colour */
+/* Colour Swatch - draggable and clickable to change colour */
 .scenario-colour-swatch-wrapper {
   flex-shrink: 0;
   pointer-events: auto; /* Clickable for colour picker */
+  cursor: grab; /* Show grab cursor for dragging */
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  border-radius: 3px;
+}
+
+/* Hover hint for draggable swatches (exclude Current and Original) */
+.scenario-colour-swatch-wrapper:hover {
+  transform: translateY(-2px); /* Slight lift on hover */
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* Subtle shadow hint */
+}
+
+/* Suppress hover hint on non-draggable layers */
+.scenario-row.scenario-current .scenario-colour-swatch-wrapper:hover,
+.scenario-row.scenario-base .scenario-colour-swatch-wrapper:hover {
+  transform: none;
+  box-shadow: none;
+  cursor: pointer; /* Just pointer, not grab */
+}
+
+.scenario-colour-swatch-wrapper:active {
+  cursor: grabbing;
+  transform: translateY(0); /* Return to normal position when dragging */
 }
 
 .scenario-colour-swatch {
@@ -340,6 +360,13 @@
   flex: 0 0 auto; /* Don't grow, don't shrink, auto width */
   width: auto;
   min-width: 120px; /* Narrower than the other button */
+  background: transparent !important; /* Less prominent - no white background */
+  border-color: #E5E7EB; /* Lighter border */
+}
+
+.scenarios-control-btn-flatten:hover:not(:disabled) {
+  background: #F9FAFB !important; /* Very subtle hover */
+  border-color: #D1D5DB;
 }
 
 /* Scrollbar styling */
@@ -358,5 +385,120 @@
 
 .scenarios-list::-webkit-scrollbar-thumb:hover {
   background: #9CA3AF;
+}
+
+/* ===== What-If Chip/Tab Integration ===== */
+
+/* Chip state - collapsed, no panel */
+.current-whatif-button.chip {
+  padding: 3px 8px;
+  background: #F3F4F6; /* Subtle grey in collapsed state */
+  border: 1px solid #E5E7EB;
+  border-radius: 12px; /* Fully rounded pill */
+  font-size: 13px; /* Match "Current" label (scenario-name) font size */
+  font-weight: normal; /* Match scenario-name, not bold */
+  color: #374151;
+  cursor: pointer;
+  transition: all 200ms ease;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0; /* Don't shrink */
+  position: relative; /* Normal flow, not absolute */
+}
+
+.current-whatif-button.chip:hover {
+  background: #E5E7EB; /* Slightly darker on hover */
+}
+
+/* Tab state - expanded, visual indicator */
+.current-whatif-button.tab {
+  padding: 4px 8px;
+  background: #F3F4F6; /* Light grey - same as panel */
+  border: none !important; /* No border when expanded */
+  border-radius: 6px 6px 0 0; /* Rounded top, flat bottom */
+  font-size: 13px;
+  font-weight: normal; /* Match scenario-name, not bold */
+  color: #374151;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: default; /* Tab text not clickable */
+  position: relative; /* Normal flow, not absolute */
+  margin-bottom: 0; /* No overlap - let them touch naturally */
+  flex-shrink: 0; /* Don't shrink */
+  z-index: 0; /* Same level as panel */
+  outline: none !important; /* Suppress outline */
+}
+
+/* Tab text - non-interactive */
+.current-whatif-button.tab .tab-text {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Close button in tab - only this is clickable */
+.tab-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #9CA3AF;
+  transition: all 150ms ease;
+  margin: -3px;
+}
+
+.tab-close-btn:hover {
+  background: #FEE2E2; /* Light red background */
+  color: #DC2626; /* Red icon to indicate deletion */
+}
+
+.tab-close-btn:active {
+  transform: scale(0.9);
+}
+
+/* Current row needs to be flex column when panel is expanded */
+.scenario-row.scenario-current {
+  flex-direction: row; /* Default horizontal layout */
+  flex-wrap: wrap; /* Allow panel to wrap to next line */
+}
+
+/* What-If panel - uses variant-card class, only override for tab connection */
+.current-whatif-panel.variant-card {
+  /* Full width of parent card */
+  width: 100%;
+  flex-basis: 100%; /* Force to new line */
+  margin-top: -7px; /* Compensate for scenario-row gap: 8px + extra to ensure touch */
+  margin-left: 0; /* No negative margin - let padding work naturally */
+  margin-right: 0; /* No negative margin */
+  margin-bottom: 5px; /* Normal margin */
+  padding: 12px !important; /* Explicit padding like variant-card */
+  padding-top: 12px !important; /* Ensure top padding is visible */
+  background: #F3F4F6 !important; /* Light grey - same as tab */
+  border: 0px solid #e9ecef !important; /* Explicit border */
+  border-top: none !important; /* No top border - seamless with tab */
+  border-radius: 4px 4px 4px 4px !important; /* Round bottom corners to match parent card */
+  animation: slideDown 200ms ease-out;
+  box-sizing: border-box !important; /* Ensure padding is included in width */
+  outline: none !important; /* Suppress outline */
+  position: relative; /* Ensure it's in normal flow */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important; /* Light drop shadow */
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 

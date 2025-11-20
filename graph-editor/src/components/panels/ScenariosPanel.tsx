@@ -13,7 +13,7 @@
  * - Flatten all overlays into Base
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useTabContext } from '../../contexts/TabContext';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
@@ -21,18 +21,19 @@ import { Scenario } from '../../types/scenarios';
 import { ScenarioEditorModal } from '../modals/ScenarioEditorModal';
 import { ContextMenu, ContextMenuItem } from '../ContextMenu';
 import { ColourSelector } from '../ColourSelector';
+import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
+import { parseConstraints } from '@/lib/queryDSL';
 import { 
   Eye, 
   EyeOff, 
   Edit2, 
   Trash2, 
-  GripVertical, 
-  Plus, 
+  Plus,
+  X, 
   Camera,
   ChevronDown,
   FileText,
   Check,
-  X,
   ArrowDownToLine
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -110,6 +111,10 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; scenarioId: string } | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   
+  // What-If panel expansion state (independent of DSL)
+  const [whatIfPanelExpanded, setWhatIfPanelExpanded] = useState(false);
+  const userManuallyClosed = useRef(false);
+  
   // Close menu on click outside
   useEffect(() => {
     if (!showCreateMenu) return;
@@ -132,6 +137,22 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   
   // Get tab's scenario state - use tabs directly to ensure reactivity
   const currentTab = tabs.find(t => t.id === tabId);
+  const whatIfDSL = currentTab?.editorState?.whatIfDSL;
+  
+  // Count active what-if conditions
+  const whatIfConditionCount = useMemo(() => {
+    if (!whatIfDSL || whatIfDSL.trim().length === 0) return 0;
+    try {
+      const parsed = parseConstraints(whatIfDSL);
+      const caseCount = parsed.cases?.length || 0;
+      const visitedCount = parsed.visited?.length || 0;
+      const excludeCount = parsed.exclude?.length || 0;
+      return caseCount + visitedCount + excludeCount;
+    } catch (e) {
+      return 0;
+    }
+  }, [whatIfDSL]);
+  
   const scenarioState = currentTab?.editorState?.scenarioState as any;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
@@ -179,6 +200,20 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     }
   }, [setCurrentColour, setBaseColour, updateScenarioColour]);
   
+  // Auto-expand What-If panel when DSL is applied from elsewhere (e.g., window bar)
+  // But don't auto-expand if user manually closed it
+  useEffect(() => {
+    if (whatIfDSL && whatIfDSL.trim().length > 0 && !whatIfPanelExpanded && !userManuallyClosed.current) {
+      console.log('[ScenariosPanel] Auto-expanding panel due to DSL from elsewhere');
+      setWhatIfPanelExpanded(true);
+      userManuallyClosed.current = false; // Reset flag after auto-expanding
+    }
+    // Reset flag when DSL becomes empty
+    if (!whatIfDSL || whatIfDSL.trim().length === 0) {
+      userManuallyClosed.current = false;
+    }
+  }, [whatIfDSL, whatIfPanelExpanded]);
+  
   /**
    * Toggle scenario visibility
    */
@@ -192,6 +227,35 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       toast.error('Failed to toggle visibility');
     }
   }, [tabId, operations]);
+  
+  /**
+   * Open What-If panel
+   */
+  const handleOpenWhatIfPanel = useCallback(() => {
+    console.log('[ScenariosPanel] Opening What-If panel');
+    setWhatIfPanelExpanded(true);
+  }, []);
+  
+  /**
+   * Clear What-If DSL (if any) and close panel
+   */
+  const handleClearWhatIf = useCallback(async () => {
+    console.log('[ScenariosPanel] X clicked - clearing DSL and closing panel');
+    
+    // Always close panel
+    setWhatIfPanelExpanded(false);
+    
+    // Clear DSL if it exists
+    if (tabId && whatIfDSL) {
+      try {
+        console.log('[ScenariosPanel] Clearing DSL');
+        await operations.updateTabState(tabId, { whatIfDSL: null });
+      } catch (error) {
+        console.error('[ScenariosPanel] Failed to clear What-If:', error);
+        toast.error('Failed to clear What-If');
+      }
+    }
+  }, [tabId, whatIfDSL, operations]);
   
   /**
    * Start editing scenario name
@@ -773,9 +837,6 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
       >
         {/* Current (pinned at TOP, non-draggable, toggleable) */}
         <div className="scenario-row scenario-current">
-          {/* Empty space for drag handle placeholder */}
-          <div className="scenario-drag-placeholder"></div>
-          
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {currentVisible ? (
             <div className="scenario-colour-swatch-wrapper">
@@ -789,11 +850,63 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
             <div className="scenario-colour-swatch-placeholder"></div>
           )}
           
-          <div 
-            className="scenario-name"
-            onContextMenu={(e) => handleContextMenu(e, 'current')}
-          >
-            Current
+          {/* Current label and What-If chip/tab grouped together */}
+          <div className="current-label-group">
+            <div 
+              className="scenario-name"
+              onContextMenu={(e) => handleContextMenu(e, 'current')}
+            >
+              Current
+            </div>
+            
+            {/* What-If chip/tab button */}
+            {whatIfPanelExpanded ? (
+              <div 
+                className="current-whatif-button tab"
+                onClick={(e) => {
+                  // Only toggle if clicking the text, not the X button
+                  if ((e.target as HTMLElement).closest('.tab-close-btn')) {
+                    return; // X button handles its own click
+                  }
+                  e.stopPropagation();
+                  console.log('[ScenariosPanel] Tab clicked, toggling panel');
+                  userManuallyClosed.current = true; // Mark as manually closed
+                  setWhatIfPanelExpanded(false);
+                }}
+                style={{ cursor: 'pointer' }}
+              >
+                <span 
+                  className="tab-text"
+                  style={{ fontWeight: (whatIfPanelExpanded || whatIfConditionCount > 0) ? '600' : 'normal' }}
+                >
+                  + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
+                </span>
+                <button
+                  className="tab-close-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    console.log('[ScenariosPanel] X button clicked, clearing What-If');
+                    handleClearWhatIf();
+                  }}
+                  title="Clear What-If and close panel"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ) : (
+              <button
+                className="current-whatif-button chip"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  console.log('[ScenariosPanel] Chip clicked, opening panel');
+                  handleOpenWhatIfPanel();
+                }}
+                title="Open What-If panel"
+                style={{ fontWeight: whatIfConditionCount > 0 ? '600' : 'normal' }}
+              >
+                + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
+              </button>
+            )}
           </div>
           
           {/* Right-aligned action buttons */}
@@ -811,6 +924,15 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
           >
             {currentVisible ? <Eye size={14} /> : <EyeOff size={14} />}
           </button>
+          
+          {/* What-If Panel (rendered INSIDE Current card when expanded) */}
+          {whatIfPanelExpanded && (
+            <div className="variant-card current-whatif-panel" style={{ padding: '12px', boxSizing: 'border-box' }}>
+              <div style={{ margin: 0, padding: 0 }}>
+                <WhatIfAnalysisControl tabId={tabId} />
+              </div>
+            </div>
+          )}
         </div>
         
         {/* Divider before inline controls */}
@@ -910,28 +1032,24 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
                   transform,
                   transition: isDragging ? 'none' : 'transform 0.15s ease'
                 }}
+                onDragOver={(e) => handleDragOverRow(e, index)}
+                onContextMenu={(e) => handleContextMenu(e, scenario.id)}
+            >
+              {/* Swatch - draggable, always show, faded if not visible, clickable to change colour */}
+              <div
+                className="scenario-colour-swatch-wrapper"
+                style={{ opacity: isVisible ? 1 : 0.3 }}
+                title="Drag to reorder, click to change colour"
                 draggable={!isEditing}
                 onDragStart={(e) => {
                   if (isEditing) {
                     e.preventDefault();
                     return;
                   }
+                  e.stopPropagation();
                   handleDragStart(e, scenario.id);
                 }}
-                onDragOver={(e) => handleDragOverRow(e, index)}
-              onDragEnd={handleDragEnd}
-                onContextMenu={(e) => handleContextMenu(e, scenario.id)}
-            >
-              {/* Left-aligned: Drag handle */}
-              <div className="scenario-drag-handle">
-                <GripVertical size={14} />
-              </div>
-              
-              {/* Swatch - always show, faded if not visible, clickable to change colour */}
-              <div
-                className="scenario-colour-swatch-wrapper"
-                style={{ opacity: isVisible ? 1 : 0.3 }}
-                title="Click to change colour"
+                onDragEnd={handleDragEnd}
               >
                 <ColourSelector
                   compact={true}
@@ -1018,9 +1136,6 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
         
         {/* Original (base) - pinned at BOTTOM, non-draggable, toggleable */}
         <div className="scenario-row scenario-base">
-          {/* Empty space for drag handle placeholder */}
-          <div className="scenario-drag-placeholder"></div>
-          
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {baseVisible ? (
             <div className="scenario-colour-swatch-wrapper">
