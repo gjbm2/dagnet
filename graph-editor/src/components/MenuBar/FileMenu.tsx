@@ -10,6 +10,8 @@ import { NewFileModal } from '../NewFileModal';
 import { gitService } from '../../services/gitService';
 import { ObjectType } from '../../types';
 import { fileOperationsService } from '../../services/fileOperationsService';
+import { IndexRebuildService } from '../../services/indexRebuildService';
+import toast from 'react-hot-toast';
 
 /**
  * File Menu
@@ -21,6 +23,7 @@ import { fileOperationsService } from '../../services/fileOperationsService';
  * - Revert
  * - Export (Download, Share URL)
  * - Close Tab
+ * - Rebuild Indexes
  * - Settings
  */
 export function FileMenu() {
@@ -390,6 +393,55 @@ export function FileMenu() {
     }
   };
 
+  const handleRebuildIndexes = async () => {
+    const confirmed = await showConfirm({
+      title: 'Rebuild All Indexes',
+      message: 
+        'Rebuild all registry indexes?\n\n' +
+        'This will:\n' +
+        '• Scan all files in IndexedDB\n' +
+        '• Ensure each file has a corresponding index entry\n' +
+        '• Add missing entries to index files\n' +
+        '• Generate a detailed log report\n\n' +
+        'Index files will be marked as dirty and need to be committed.',
+      confirmLabel: 'Rebuild Indexes',
+      cancelLabel: 'Cancel',
+      confirmVariant: 'primary'
+    });
+    
+    if (!confirmed) return;
+
+    try {
+      console.log('Rebuilding all indexes...');
+      
+      const toastId = toast.loading('Rebuilding indexes...');
+      
+      const result = await IndexRebuildService.rebuildAllIndexes(operations, true);
+      
+      toast.dismiss(toastId);
+      
+      if (result.success) {
+        const added = result.results.filter(r => r.action === 'added').length;
+        const updated = result.results.filter(r => r.action === 'updated').length;
+        const errors = result.results.filter(r => r.action === 'error').length;
+        
+        const parts: string[] = [];
+        if (added > 0) parts.push(`${added} added`);
+        if (updated > 0) parts.push(`${updated} updated`);
+        if (errors > 0) parts.push(`${errors} failed`);
+        
+        const message = parts.length > 0 
+          ? `Index rebuild complete: ${parts.join(', ')}`
+          : 'All indexes up to date';
+        
+        toast.success(message, { duration: 3000 });
+      }
+    } catch (error) {
+      console.error('Failed to rebuild indexes:', error);
+      toast.error('Failed to rebuild indexes: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
+  };
+
   return (
     <>
       <Menubar.Menu>
@@ -541,6 +593,15 @@ export function FileMenu() {
             >
               Close Tab
               <div className="menubar-right-slot">⌘W</div>
+            </Menubar.Item>
+
+            <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleRebuildIndexes}
+            >
+              Rebuild Indexes...
             </Menubar.Item>
 
             <Menubar.Separator className="menubar-separator" />

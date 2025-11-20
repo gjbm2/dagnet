@@ -85,6 +85,9 @@ export default defineConfig(({ mode }) => {
           drop_debugger: true,
         },
       } : undefined,
+    },
+    optimizeDeps: {
+      include: ['jose'], // Pre-bundle jose for dynamic imports
     }
   };
 });

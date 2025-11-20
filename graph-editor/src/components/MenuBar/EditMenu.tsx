@@ -3,6 +3,8 @@ import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext } from '../../contexts/TabContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
 import { useValidationMode } from '../../contexts/ValidationContext';
+import { copyVarsToClipboard } from '../../services/copyVarsService';
+import toast from 'react-hot-toast';
 
 /**
  * Edit Menu
@@ -10,6 +12,7 @@ import { useValidationMode } from '../../contexts/ValidationContext';
  * Context-sensitive operations based on active editor
  * - Undo/Redo
  * - Cut/Copy/Paste
+ * - Copy Vars (for graph editor with selection)
  * - Find/Replace (for raw views)
  */
 export function EditMenu() {
@@ -193,6 +196,61 @@ export function EditMenu() {
     console.log('Replace');
   };
 
+  const handleCopyVars = async () => {
+    if (!isGraphEditor || !activeTab?.fileId) {
+      toast.error('Copy Vars is only available in graph editor');
+      return;
+    }
+
+    try {
+      // Get the graph store to access current state
+      const store = getGraphStore(activeTab.fileId);
+      if (!store) {
+        toast.error('Graph not loaded');
+        return;
+      }
+
+      const state = store.getState();
+      const graph = state.graph;
+      
+      // Query for selected nodes and edges using existing mechanism
+      const detail = {
+        selectedNodeUuids: [] as string[],
+        selectedEdgeUuids: [] as string[]
+      };
+      
+      // Dispatch synchronous event - GraphCanvas listener will populate detail
+      window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
+      
+      // Use the copyVarsService
+      const result = await copyVarsToClipboard(
+        graph,
+        detail.selectedNodeUuids,
+        detail.selectedEdgeUuids
+      );
+      
+      if (result.success) {
+        const parts: string[] = [];
+        if (result.nodeCount > 0) {
+          parts.push(`${result.nodeCount} node${result.nodeCount !== 1 ? 's' : ''}`);
+        }
+        if (result.edgeCount > 0) {
+          parts.push(`${result.edgeCount} edge${result.edgeCount !== 1 ? 's' : ''}`);
+        }
+        
+        toast.success(
+          `Copied ${result.count} variable${result.count !== 1 ? 's' : ''} ` +
+          `from ${parts.join(' and ')} to clipboard`
+        );
+      } else {
+        toast.error(result.error || 'Failed to copy variables');
+      }
+    } catch (error) {
+      console.error('Failed to copy vars:', error);
+      toast.error('Failed to copy variables');
+    }
+  };
+
   return (
     <Menubar.Menu>
       <Menubar.Trigger className="menubar-trigger">Edit</Menubar.Trigger>
@@ -244,6 +302,20 @@ export function EditMenu() {
             Paste
             <div className="menubar-right-slot">⌘V</div>
           </Menubar.Item>
+
+          {isGraphEditor && (
+            <>
+              <Menubar.Separator className="menubar-separator" />
+
+              <Menubar.Item 
+                className="menubar-item" 
+                onSelect={handleCopyVars}
+              >
+                Copy Vars
+                <div className="menubar-right-slot">⌘⇧C</div>
+              </Menubar.Item>
+            </>
+          )}
 
           {isRawView && (
             <>

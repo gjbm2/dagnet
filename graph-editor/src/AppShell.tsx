@@ -380,6 +380,10 @@ function AppShellContent() {
     };
     if (currentLayout.dockbox) updatePanelMap(currentLayout.dockbox);
 
+    // Set flag to prevent switchTab calls during batch updates
+    isUpdatingTabsRef.current = true;
+    isProgrammaticSwitchRef.current = true;
+
     tabs.forEach(tab => {
       const isInLayout = currentTabIds.includes(tab.id);
       const hasBeenAdded = addedTabs.has(tab.id);
@@ -536,6 +540,13 @@ function AppShellContent() {
         }, 50);
       }
     });
+
+    // Clear flags after batch update completes
+    // Use setTimeout to ensure all updateTab calls have finished
+    setTimeout(() => {
+      isUpdatingTabsRef.current = false;
+      isProgrammaticSwitchRef.current = false;
+    }, 100);
   }, [tabs, dockLayoutRef, addedTabs, tabOperations, extractTabIds]);
 
   // Listen for "open in same panel" events
@@ -834,7 +845,11 @@ function AppShellContent() {
       
     const tab = tabs.find(t => t.id === tabId);
     if (!tab) {
-        console.warn(`loadTab: Tab ${tabId} not found in TabContext (have ${tabs.length} tabs), will be added later`);
+        // This is expected during initial load - layout restores before tabs are loaded
+        // Only log in development to avoid noise
+        if (import.meta.env.DEV) {
+          console.debug(`[AppShell.loadTab] Tab ${tabId} not yet loaded (have ${tabs.length} tabs), returning placeholder`);
+        }
         // Return minimal tab data to prevent crash
         // The actual tab will be added when TabContext loads it
         return {

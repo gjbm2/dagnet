@@ -12,18 +12,21 @@
 import React, { useState, useRef } from 'react';
 import { ParameterEditor } from './ParameterEditor';
 import { DataOperationsMenu } from './DataOperationsMenu';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Copy } from 'lucide-react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils';
 import { getAllDataSections, type DataOperationSection } from './DataOperationsSections';
 import { DataSectionSubmenu } from './DataSectionSubmenu';
+import { copyVarsToClipboard } from '../services/copyVarsService';
+import toast from 'react-hot-toast';
 
 interface EdgeContextMenuProps {
   x: number;
   y: number;
   edgeId: string;
   edgeData: any;
+  edges: any[]; // ReactFlow edges to check for selection
   graph: any;
   onClose: () => void;
   onUpdateGraph: (graph: any, historyLabel?: string, nodeId?: string) => void;
@@ -35,6 +38,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   y,
   edgeId,
   edgeData,
+  edges,
   graph,
   onClose,
   onUpdateGraph,
@@ -95,6 +99,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const edge = React.useMemo(() => {
     return graph?.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
   }, [graph, edgeId]);
+  
+  // Get selected edges (including the current edge)
+  const selectedEdges = edges.filter(e => e.selected || e.id === edgeId);
+  const selectedEdgeUuids = selectedEdges.map(e => e.id); // ReactFlow IDs are UUIDs
+  const isMultiSelect = selectedEdgeUuids.length > 1;
   
   // Sync localData when edge changes (e.g., after rebalance)
   React.useEffect(() => {
@@ -170,6 +179,21 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         conditionalIndex: section.conditionalIndex,
       });
     });
+  };
+
+  const handleCopyVars = async () => {
+    const result = await copyVarsToClipboard(graph, [], selectedEdgeUuids);
+    
+    if (result.success) {
+      toast.success(
+        `Copied ${result.count} variable${result.count !== 1 ? 's' : ''} ` +
+        `from ${result.edgeCount} edge${result.edgeCount !== 1 ? 's' : ''} to clipboard`
+      );
+    } else {
+      toast.error(result.error || 'Failed to copy variables');
+    }
+    
+    onClose();
   };
   
   // Check if it's a case edge with variants
@@ -651,6 +675,30 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       </div>
 
       <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
+
+      {/* Copy vars */}
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          handleCopyVars();
+        }}
+        style={{
+          padding: '8px 12px',
+          cursor: 'pointer',
+          fontSize: '13px',
+          borderRadius: '2px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+      >
+        <Copy size={14} />
+        <span>Copy vars{isMultiSelect ? ` (${selectedEdges.length} edges)` : ''}</span>
+      </div>
+
+      <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
 
       {/* Properties */}
       <div

@@ -267,8 +267,36 @@ class WorkspaceService {
     console.log(`📦 WorkspaceService: Loaded ${files.length} files from IndexedDB`);
 
     // Load all files into FileRegistry memory
+    // Group by actualFileId to handle duplicates (keep most recent)
+    const fileMap = new Map<string, typeof files[0]>();
+    
     for (const file of files) {
       // Strip workspace prefix from fileId (format: "repo-branch-actualFileId")
+      const prefix = `${repository}-${branch}-`;
+      const actualFileId = file.fileId.startsWith(prefix) 
+        ? file.fileId.substring(prefix.length)
+        : file.fileId;
+      
+      // If we already have this fileId, keep the one with the most recent timestamp
+      const existing = fileMap.get(actualFileId);
+      if (existing) {
+        // Compare timestamps - prefer updated_at, then lastModified
+        const existingTime = existing.data?.updated_at || existing.lastModified || 0;
+        const currentTime = file.data?.updated_at || file.lastModified || 0;
+        
+        if (currentTime > existingTime) {
+          console.log(`📦 loadWorkspaceFromIDB: Replacing older ${actualFileId} (${new Date(existingTime).toISOString()}) with newer version (${new Date(currentTime).toISOString()})`);
+          fileMap.set(actualFileId, file);
+        } else {
+          console.log(`📦 loadWorkspaceFromIDB: Skipping older duplicate ${actualFileId} (${new Date(currentTime).toISOString()} vs ${new Date(existingTime).toISOString()})`);
+        }
+      } else {
+        fileMap.set(actualFileId, file);
+      }
+    }
+    
+    // Now load the deduplicated files into FileRegistry
+    for (const file of fileMap.values()) {
       const prefix = `${repository}-${branch}-`;
       const actualFileId = file.fileId.startsWith(prefix) 
         ? file.fileId.substring(prefix.length)

@@ -87,12 +87,40 @@ export function extractSheetsUpdateDataForEdge(
     }
   }
 
+  console.log('[extractSheetsUpdateDataForEdge] Debug:', {
+    mode,
+    scalarValue,
+    paramPack,
+    paramPackKeys: paramPack ? Object.keys(paramPack) : [],
+    paramPackSize: paramPack ? Object.keys(paramPack).length : 0,
+    hasParamPack,
+    shouldUseParamPack,
+    shouldUseScalar,
+    mergedFlat,
+    mergedFlatKeys: Object.keys(mergedFlat),
+    hasGraph: !!graph,
+    targetId,
+    rawErrors: raw?.errors,
+    rawParsedResult: raw?.parsed_result,
+  });
+
   if (Object.keys(mergedFlat).length === 0 || !graph || !targetId) {
+    console.warn('[extractSheetsUpdateDataForEdge] Early return:', {
+      mergedFlatEmpty: Object.keys(mergedFlat).length === 0,
+      noGraph: !graph,
+      noTargetId: !targetId,
+    });
     return update;
   }
 
   const edge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
+  console.log('[extractSheetsUpdateDataForEdge] Edge lookup:', {
+    targetId,
+    foundEdge: edge ? { uuid: edge.uuid, id: edge.id } : null,
+    allEdgeIds: graph.edges?.map((e: any) => ({ uuid: e.uuid, id: e.id })) || [],
+  });
   if (!edge) {
+    console.warn('[extractSheetsUpdateDataForEdge] Edge not found for targetId:', targetId);
     return update;
   }
 
@@ -145,7 +173,17 @@ export function extractSheetsUpdateDataForEdge(
 
     const edgeKey = edge.id || edge.uuid;
     const edgeParams = scopedParams.edges?.[edgeKey];
+    
+    console.log('[extractSheetsUpdateDataForEdge] Scoped params:', {
+      edgeKey,
+      edgeParams,
+      scopedParamsKeys: Object.keys(scopedParams),
+      edgesKeys: scopedParams.edges ? Object.keys(scopedParams.edges) : [],
+      slot,
+    });
+    
     if (!edgeParams) {
+      console.warn('[extractSheetsUpdateDataForEdge] No edgeParams found for edgeKey:', edgeKey);
       return update;
     }
 
@@ -158,6 +196,7 @@ export function extractSheetsUpdateDataForEdge(
 
     if (slot === 'p' && edgeParams.p) {
       const p = edgeParams.p as any;
+      console.log('[extractSheetsUpdateDataForEdge] Extracting from p:', p);
       apply('mean', p.mean);
       apply('stdev', p.stdev);
       apply('n', p.n);
@@ -166,9 +205,17 @@ export function extractSheetsUpdateDataForEdge(
       apply('mean', (edgeParams.cost_gbp as any).mean);
     } else if (slot === 'cost_time' && edgeParams.cost_time) {
       apply('mean', (edgeParams.cost_time as any).mean);
+    } else {
+      console.warn('[extractSheetsUpdateDataForEdge] No matching slot found:', {
+        slot,
+        hasP: !!edgeParams.p,
+        hasCostGbp: !!edgeParams.cost_gbp,
+        hasCostTime: !!edgeParams.cost_time,
+      });
     }
   }
 
+  console.log('[extractSheetsUpdateDataForEdge] Final update:', update);
   return update;
 }
 
@@ -1938,48 +1985,75 @@ class DataOperationsService {
           const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
           const { paramRegistryService } = await import('./paramRegistryService');
           
-          // Get connection to extract provider
+          // Get connection to extract provider and check if it requires event_ids
           const { createDASRunner } = await import('../lib/das');
           const tempRunner = createDASRunner();
           try {
             const connection = await (tempRunner as any).connectionProvider.getConnection(connectionName);
             connectionProvider = connection.provider;
+            
+            // Skip DSL building for connections that don't require event_ids
+            // This is specified in the connection definition (requires_event_ids: false)
+            const requiresEventIds = connection.requires_event_ids !== false; // Default to true if not specified
+            if (!requiresEventIds) {
+              console.log(`[DataOperationsService] Skipping DSL build for ${connectionName} (requires_event_ids=false)`);
+              dsl = {};  // Empty DSL is fine for connections that don't need event_ids
+            } else {
+              // Event loader that reads from IDB
+              const eventLoader = async (eventId: string) => {
+                const fileId = `event-${eventId}`;
+                const file = fileRegistry.getFile(fileId);
+                
+                if (file && file.data) {
+                  console.log(`Loaded event "${eventId}" from IDB:`, file.data);
+                  return file.data;
+                }
+                
+                // Fallback: return minimal event without mapping
+                console.warn(`Event "${eventId}" not found in IDB, using fallback`);
+                return {
+                  id: eventId,
+                  name: eventId,
+                  provider_event_names: {}
+                };
+              };
+              
+              // Build DSL with event mapping for analytics-style connections (e.g., Amplitude)
+              dsl = await buildDslFromEdge(
+                targetEdge,
+                graph,
+                connectionProvider,
+                eventLoader
+              );
+              console.log('Built DSL from edge with event mapping:', dsl);
+            }
           } catch (e) {
             console.warn('Could not load connection for provider mapping:', e);
-          }
-          
-          try {
-            // Event loader that reads from IDB
-            const eventLoader = async (eventId: string) => {
-              const fileId = `event-${eventId}`;
-              const file = fileRegistry.getFile(fileId);
-              
-              if (file && file.data) {
-                console.log(`Loaded event "${eventId}" from IDB:`, file.data);
-                return file.data;
-              }
-              
-              // Fallback: return minimal event without mapping
-              console.warn(`Event "${eventId}" not found in IDB, using fallback`);
-              return {
-                id: eventId,
-                name: eventId,
-                provider_event_names: {}
+            // If we can't determine provider, try building DSL anyway (will fail gracefully if event_ids missing)
+            try {
+              const eventLoader = async (eventId: string) => {
+                const fileId = `event-${eventId}`;
+                const file = fileRegistry.getFile(fileId);
+                if (file && file.data) {
+                  return file.data;
+                }
+                return {
+                  id: eventId,
+                  name: eventId,
+                  provider_event_names: {}
+                };
               };
-            };
-            
-            // Build DSL with event mapping for analytics-style connections (e.g., Amplitude)
-            dsl = await buildDslFromEdge(
-              targetEdge,
-              graph,
-              connectionProvider,
-              eventLoader
-            );
-            console.log('Built DSL from edge with event mapping:', dsl);
-          } catch (error) {
-            console.error('Error building DSL from edge:', error);
-            toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-            return;
+              dsl = await buildDslFromEdge(
+                targetEdge,
+                graph,
+                connectionProvider,
+                eventLoader
+              );
+            } catch (error) {
+              console.error('Error building DSL from edge:', error);
+              toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+              return;
+            }
           }
         }
       }
@@ -2298,11 +2372,26 @@ class DataOperationsService {
                   targetId
                 );
 
+                const parsedResult = result.raw?.parsed_result as any;
                 console.log('[DataOperationsService] Sheets (parameter) scalar/param_pack extracted:', {
                   sheetsUpdate,
                   raw: result.raw,
+                  rawValues: result.raw?.values,
+                  rawValuesStringified: JSON.stringify(result.raw?.values),
+                  rawParsedResult: parsedResult,
+                  rawParsedResultStringified: JSON.stringify(parsedResult),
+                  rawParsedResultMode: parsedResult?.mode,
+                  rawParsedResultParamPack: parsedResult?.paramPack,
+                  rawParsedResultParamPackKeys: parsedResult?.paramPack ? Object.keys(parsedResult.paramPack) : [],
+                  rawParsedResultParamPackStringified: parsedResult?.paramPack ? JSON.stringify(parsedResult.paramPack) : 'null/undefined',
+                  rawParamPack: result.raw?.param_pack,
+                  rawParamPackKeys: result.raw?.param_pack ? Object.keys(result.raw?.param_pack) : [],
+                  rawScalarValue: result.raw?.scalar_value,
+                  rawErrors: result.raw?.errors,
+                  rawErrorsStringified: JSON.stringify(result.raw?.errors),
                   connection_string: connectionString,
                   conditionalIndex,
+                  targetId,
                 });
 
                 Object.assign(updateData, sheetsUpdate);
