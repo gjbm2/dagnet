@@ -209,14 +209,13 @@ class FileOperationsService {
               },
             };
           } else if (type === 'case') {
+            // New case files use a single root-level id, consistent with other var types.
             defaultData = {
-              parameter_id: `case-${name}`,
-              parameter_type: 'case',
               id: name,
+              parameter_type: 'case',
               name,
               description: '',
               case: {
-                id: name,
                 status: 'active',
                 variants: [
                   { name: 'control', weight: 0.5 },
@@ -270,10 +269,7 @@ class FileOperationsService {
           defaultData.type = parameterType;
         }
         
-        // Case-specific: ensure parameter_id matches id
-        if (type === 'case' && defaultData.parameter_id) {
-          defaultData.parameter_id = `case-${name}`;
-        }
+        // No additional case-specific id normalization needed: root id is canonical.
       }
     }
 

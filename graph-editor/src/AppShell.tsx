@@ -40,6 +40,7 @@ function AppShellContent() {
   const { updateFromLayout } = useVisibleTabs();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
+  const isProgrammaticSwitchRef = useRef(false); // Track when WE trigger rc-dock updates
 
   // Keep a ref to navState for the fileOperationsService callback
   const navStateRef = useRef(navState);
@@ -491,7 +492,6 @@ function AppShellContent() {
           ),
           content: (
             <div 
-              onClick={() => tabOperations.switchTab(tab.id)}
               style={{ width: '100%', height: '100%' }}
             >
               <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} onChange={() => {}} />
@@ -694,21 +694,37 @@ function AppShellContent() {
 
   // Sync activeTabId FROM React TO rc-dock (when programmatically changed)
   useEffect(() => {
-    if (!dockLayoutRef || !activeTabId) return;
+    console.log(`[AppShell useEffect] activeTabId changed to: ${activeTabId}, dockLayoutRef exists: ${!!dockLayoutRef}`);
     
-    console.log(`AppShell: Syncing activeTabId to rc-dock: ${activeTabId}`);
+    if (!dockLayoutRef || !activeTabId) {
+      console.log(`[AppShell useEffect] Skipping - missing dockLayoutRef or activeTabId`);
+      return;
+    }
+    
+    console.log(`[AppShell useEffect] Syncing activeTabId to rc-dock: ${activeTabId}`);
     
     // Find the tab in rc-dock layout
     const tabData = dockLayoutRef.find(activeTabId);
+    console.log(`[AppShell useEffect] dockLayoutRef.find result:`, tabData ? 'FOUND' : 'NOT FOUND');
+    
     if (!tabData || !('title' in tabData && 'content' in tabData)) {
-      console.log(`AppShell: Tab ${activeTabId} not found in rc-dock layout`);
+      console.log(`[AppShell useEffect] ⚠️ Tab ${activeTabId} not found in rc-dock layout or invalid structure`);
       return;
     }
     
     // Use rc-dock's updateTab to force it to be active
     // This is the proper way to programmatically select a tab in rc-dock
+    // Set flag to prevent onLayoutChange from fighting us
+    isProgrammaticSwitchRef.current = true;
+    console.log(`[AppShell useEffect] Calling dockLayoutRef.updateTab(${activeTabId}, tabData, true)`);
     dockLayoutRef.updateTab(activeTabId, tabData, true);
-    console.log(`AppShell: ✅ Selected tab ${activeTabId} in rc-dock`);
+    console.log(`[AppShell useEffect] ✅ updateTab completed for ${activeTabId}`);
+    
+    // Clear flag after a short delay to allow rc-dock's events to settle
+    setTimeout(() => {
+      isProgrammaticSwitchRef.current = false;
+      console.log(`[AppShell useEffect] Cleared isProgrammaticSwitchRef flag`);
+    }, 100);
   }, [activeTabId, dockLayoutRef]);
   
   // Update data-is-focused and data-is-dirty attributes via DOM
@@ -967,9 +983,16 @@ function AppShellContent() {
   // Save layout to IndexedDB when it changes
   const handleLayoutChange = React.useCallback((newLayout: LayoutData, currentTabId?: string) => {
     console.log(`[${new Date().toISOString()}] [AppShell] onLayoutChange called, currentTabId:`, currentTabId);
+    console.log(`[${new Date().toISOString()}] [AppShell] isProgrammaticSwitch:`, isProgrammaticSwitchRef.current);
     
     // Update visible tabs tracking (Phase 1: Visibility optimization)
     updateFromLayout(newLayout);
+    
+    // IGNORE if this is triggered by our own programmatic updateTab call
+    if (isProgrammaticSwitchRef.current) {
+      console.log(`[${new Date().toISOString()}] [AppShell] Ignoring layout change - triggered by our own updateTab`);
+      return;
+    }
     
     // Update active tab when rc-dock changes active tab (when user clicks tabs)
     // BUT don't do this if we're in the middle of updating tabs (prevents infinite loop)
@@ -978,6 +1001,8 @@ function AppShellContent() {
       tabOperations.switchTab(currentTabId);
     } else if (isUpdatingTabsRef.current) {
       console.log(`[${new Date().toISOString()}] [AppShell] Ignoring layout change during tab update (preventing loop)`);
+    } else if (currentTabId === activeTabId) {
+      console.log(`[${new Date().toISOString()}] [AppShell] Ignoring: currentTabId ${currentTabId} already matches activeTabId`);
     }
 
     if (!prevLayoutRef.current) {

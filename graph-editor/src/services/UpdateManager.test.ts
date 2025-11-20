@@ -487,7 +487,7 @@ describe('UpdateManager', () => {
         label: 'Old Label',
         description: 'Old Description',
         p: {
-          parameter_id: 'checkout-conversion',
+          id: 'checkout-conversion',
           mean: 0.40,
           stdev: 0.06,
           mean_overridden: false,

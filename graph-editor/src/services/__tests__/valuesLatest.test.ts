@@ -430,7 +430,7 @@ describe('values[latest] Timestamp Resolution', () => {
   describe('Case schedules[latest] Resolution', () => {
     it('finds most recent schedule by window_from', async () => {
       const caseFile = createTestCaseFile({
-        parameter_id: 'case-test',
+        id: 'case-test',
         case: {
           id: 'test',
           status: 'active',

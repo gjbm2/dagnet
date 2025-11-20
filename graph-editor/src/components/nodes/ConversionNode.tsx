@@ -20,7 +20,6 @@ interface ConversionNodeData {
   type?: 'normal' | 'case';
   case?: {
     id: string;
-    parameter_id?: string;
     status: 'active' | 'paused' | 'completed';
     variants: Array<{
       name: string;
@@ -285,9 +284,6 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     if (data.type === 'case' && data.case) {
       lines.push(`\nCase Info:`);
       lines.push(`  Status: ${data.case.status}`);
-      if (data.case.parameter_id) {
-        lines.push(`  Parameter ID: ${data.case.parameter_id}`);
-      }
       lines.push(`  Variants:`);
       data.case.variants.forEach(variant => {
         lines.push(`    • ${variant.name}: ${(variant.weight * 100).toFixed(1)}%`);

@@ -1420,9 +1420,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             data: {
               ...prevEdge.data,
               id: graphEdge.id,
-              parameter_id: (graphEdge as any).parameter_id, // Probability parameter ID
-              cost_gbp_parameter_id: (graphEdge as any).cost_gbp_parameter_id, // GBP cost parameter ID
-              cost_time_parameter_id: (graphEdge as any).cost_time_parameter_id, // Time cost parameter ID
               probability: graphEdge.p?.mean ?? 0.5,
               stdev: graphEdge.p?.stdev,
               locked: graphEdge.p?.locked,

@@ -323,7 +323,7 @@ describe('Connection ID Preservation', () => {
       });
       
       const caseFile = createTestCaseFile({
-        parameter_id: 'case-checkout-test-2025',
+        id: 'checkout-test-2025',
         case: {
           id: 'checkout-test-2025',
           status: 'paused',
@@ -368,7 +368,7 @@ describe('Connection ID Preservation', () => {
       });
       
       const caseFile = createTestCaseFile({
-        parameter_id: 'case-my-case',
+        id: 'my-case',
         case: {
           id: 'my-case',
           status: 'active',

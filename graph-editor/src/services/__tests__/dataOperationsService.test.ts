@@ -142,7 +142,7 @@ describe('DataOperationsService', () => {
         return {
           fileId,
           data: {
-            parameter_id: 'product-variants',
+            id: 'product-variants',
             case: {
               id: 'product-variants',
               status: 'active',

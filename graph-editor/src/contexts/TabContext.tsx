@@ -405,10 +405,31 @@ class FileRegistry {
       callbacks.forEach(callback => callback(null as any));
     }
     
-    // Remove from registry and IDB
+    // Remove from in-memory registry
     this.files.delete(fileId);
     this.listeners.delete(fileId);
-    await db.files.delete(fileId);
+    
+    // Delete from IndexedDB.
+    // Files cloned from a workspace are stored with a workspace‑prefixed ID
+    //   `${repository}-${branch}-${fileId}`
+    // while many in‑app operations have historically written unprefixed IDs.
+    // To keep behaviour correct (and avoid "zombie" files reloading from IDB),
+    // we delete BOTH the plain and prefixed IDs when workspace metadata exists.
+    const repo = file.source?.repository;
+    const branch = file.source?.branch;
+    const idbIds = new Set<string>();
+    idbIds.add(fileId);
+    if (repo && branch) {
+      idbIds.add(`${repo}-${branch}-${fileId}`);
+    }
+    
+    for (const idbId of idbIds) {
+      try {
+        await db.files.delete(idbId);
+      } catch (error) {
+        console.warn(`FileRegistry: Failed to delete IDB record ${idbId} (non‑fatal):`, error);
+      }
+    }
     
     // Update index file to remove entry
     const [type] = fileId.split('-');
@@ -1242,11 +1263,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
    * Switch to a tab
    */
   const switchTab = useCallback(async (tabId: string): Promise<void> => {
+    console.log(`[TabContext.switchTab] Called with tabId=${tabId}`);
+    console.log(`[TabContext.switchTab] Current activeTabId=${activeTabId}`);
+    console.log(`[TabContext.switchTab] Tab exists=${!!tabs.find(t => t.id === tabId)}`);
+    console.log(`[TabContext.switchTab] Call stack:`, new Error().stack);
+    
     if (tabs.find(t => t.id === tabId)) {
+      console.log(`[TabContext.switchTab] Setting activeTabId to ${tabId}`);
       setActiveTabId(tabId);
       await db.saveAppState({ activeTabId: tabId });
+      console.log(`[TabContext.switchTab] ✅ Done`);
+    } else {
+      console.warn(`[TabContext.switchTab] ⚠️ Tab ${tabId} not found in tabs array`);
     }
-  }, [tabs]);
+  }, [tabs, activeTabId]);
 
   /**
    * Update tab data

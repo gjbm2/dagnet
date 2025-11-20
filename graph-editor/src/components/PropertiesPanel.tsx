@@ -130,14 +130,20 @@ export default function PropertiesPanel({
   const openFileById = useCallback((type: 'case' | 'node' | 'parameter' | 'context' | 'event', id: string) => {
     const fileId = `${type}-${id}`;
     
+    console.log(`[PropertiesPanel] openFileById: type=${type}, id=${id}, fileId=${fileId}`);
+    console.log(`[PropertiesPanel] Current tabs:`, tabs.map(t => ({ id: t.id, fileId: t.fileId, viewMode: t.viewMode })));
+    console.log(`[PropertiesPanel] tabId:`, tabId);
+    
     // Check if file is already open in a tab
     const existingTab = tabs.find(tab => tab.fileId === fileId);
     
     if (existingTab) {
       // Navigate to existing tab
+      console.log(`[PropertiesPanel] Found existing tab ${existingTab.id}, calling switchTab`);
       tabOps.switchTab(existingTab.id);
     } else {
       // Open new tab
+      console.log(`[PropertiesPanel] No existing tab found, opening new tab`);
       const item = {
         id,
         type,
@@ -146,7 +152,7 @@ export default function PropertiesPanel({
       };
       tabOps.openTab(item, 'interactive', false);
     }
-  }, [tabs, tabOps]);
+  }, [tabs, tabOps, tabId]);
   
 
   // Track the last loaded node to prevent reloading on every graph change

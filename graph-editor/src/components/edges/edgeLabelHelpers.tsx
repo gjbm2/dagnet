@@ -51,11 +51,10 @@ export interface LabelSegment {
     mean?: number;
     stdev?: number;
   };
-  
-  // Parameter connections
-  parameter_id?: string;
-  cost_gbp_parameter_id?: string;
-  cost_time_parameter_id?: string;
+  // Parameter connections (derived from nested ids)
+  hasProbabilityParam?: boolean;
+  hasCostGbpParam?: boolean;
+  hasCostTimeParam?: boolean;
   
   // Display info
   color: string;
@@ -178,9 +177,9 @@ export function getEdgeInfoForLayer(
       edgeProbability: caseInfo?.edgeProbability,
       cost_gbp: edge?.cost_gbp,
       cost_time: edge?.cost_time,
-      parameter_id: edge?.parameter_id,
-      cost_gbp_parameter_id: edge?.cost_gbp_parameter_id,
-      cost_time_parameter_id: edge?.cost_time_parameter_id,
+      hasProbabilityParam: !!edge?.p?.id,
+      hasCostGbpParam: !!edge?.cost_gbp?.id,
+      hasCostTimeParam: !!edge?.cost_time?.id,
     };
   } else if (layerId === 'base') {
     // Base layer: ONLY use baseParams (frozen snapshot)
@@ -202,9 +201,9 @@ export function getEdgeInfoForLayer(
       edgeProbability: caseInfo ? (scenariosContext.baseParams.edges?.[edgeKey]?.p?.mean ?? 1.0) : undefined,
       cost_gbp: scenariosContext.baseParams.edges?.[edgeKey]?.cost_gbp,
       cost_time: scenariosContext.baseParams.edges?.[edgeKey]?.cost_time,
-      parameter_id: edge?.parameter_id,
-      cost_gbp_parameter_id: edge?.cost_gbp_parameter_id,
-      cost_time_parameter_id: edge?.cost_time_parameter_id,
+      hasProbabilityParam: !!edge?.p?.id,
+      hasCostGbpParam: !!edge?.cost_gbp?.id,
+      hasCostTimeParam: !!edge?.cost_time?.id,
     };
   } else {
     // Scenario layer: look up in scenario params (with compositing)
@@ -212,9 +211,9 @@ export function getEdgeInfoForLayer(
     if (!scenario) {
       return {
         probability: 0,
-        parameter_id: edge?.parameter_id,
-        cost_gbp_parameter_id: edge?.cost_gbp_parameter_id,
-        cost_time_parameter_id: edge?.cost_time_parameter_id,
+        hasProbabilityParam: !!edge?.p?.id,
+        hasCostGbpParam: !!edge?.cost_gbp?.id,
+        hasCostTimeParam: !!edge?.cost_time?.id,
       };
     }
     
@@ -252,9 +251,9 @@ export function getEdgeInfoForLayer(
       edgeProbability: caseInfo ? (composedParams.edges?.[edgeKey]?.p?.mean ?? 1.0) : undefined,
       cost_gbp: composedParams.edges?.[edgeKey]?.cost_gbp,
       cost_time: composedParams.edges?.[edgeKey]?.cost_time,
-      parameter_id: edge?.parameter_id,
-      cost_gbp_parameter_id: edge?.cost_gbp_parameter_id,
-      cost_time_parameter_id: edge?.cost_time_parameter_id,
+      hasProbabilityParam: !!edge?.p?.id,
+      hasCostGbpParam: !!edge?.cost_gbp?.id,
+      hasCostTimeParam: !!edge?.cost_time?.id,
     };
   }
 }
@@ -292,9 +291,9 @@ export function buildCompositeLabel(
         edgeProbability: caseInfo?.edgeProbability,
         cost_gbp: edge?.cost_gbp,
         cost_time: edge?.cost_time,
-        parameter_id: edge?.parameter_id,
-        cost_gbp_parameter_id: edge?.cost_gbp_parameter_id,
-        cost_time_parameter_id: edge?.cost_time_parameter_id,
+        hasProbabilityParam: !!edge?.p?.id,
+        hasCostGbpParam: !!edge?.cost_gbp?.id,
+        hasCostTimeParam: !!edge?.cost_time?.id,
         color: '#000',
         isHidden: false
       }],
@@ -480,7 +479,7 @@ export function formatSegmentValue(segment: LabelSegment, includeFields: {
     let probPart = '';
     
     // Add plug icon if parameter connected
-    if (segment.parameter_id) {
+    if (segment.hasProbabilityParam) {
       probPart += '🔌 ';
     }
     
@@ -504,7 +503,7 @@ export function formatSegmentValue(segment: LabelSegment, includeFields: {
   if (includeFields.cost_gbp && segment.cost_gbp?.mean !== undefined) {
     let costPart = '';
     
-    if (segment.cost_gbp_parameter_id) {
+    if (segment.hasCostGbpParam) {
       costPart += '🔌 ';
     }
     
@@ -521,7 +520,7 @@ export function formatSegmentValue(segment: LabelSegment, includeFields: {
   if (includeFields.cost_time && segment.cost_time?.mean !== undefined) {
     let timePart = '';
     
-    if (segment.cost_time_parameter_id) {
+    if (segment.hasCostTimeParam) {
       timePart += '🔌 ';
     }
     
@@ -633,7 +632,7 @@ export function renderCompositeLabel(
           
           if (includeProb) {
             let probPart = '';
-            if (segment.parameter_id) {
+            if (segment.hasProbabilityParam) {
               probPart += '🔌 ';
             }
             probPart += `${Math.round(segment.variantWeight * 100)}%/${Math.round(segment.edgeProbability * 100)}%`;
@@ -645,7 +644,7 @@ export function renderCompositeLabel(
           
           if (includeCostGbp && segment.cost_gbp?.mean !== undefined) {
             let costPart = '';
-            if (segment.cost_gbp_parameter_id) {
+            if (segment.hasCostGbpParam) {
               costPart += '🔌 ';
             }
             costPart += `£${segment.cost_gbp.mean.toFixed(2)}`;
@@ -657,7 +656,7 @@ export function renderCompositeLabel(
           
           if (includeCostTime && segment.cost_time?.mean !== undefined) {
             let timePart = '';
-            if (segment.cost_time_parameter_id) {
+            if (segment.hasCostTimeParam) {
               timePart += '🔌 ';
             }
             timePart += `${segment.cost_time.mean.toFixed(1)}d`;
@@ -724,7 +723,7 @@ export function renderCompositeLabel(
           const parts: string[] = [];
           
           let probPart = '';
-          if (segment.parameter_id) {
+          if (segment.hasProbabilityParam) {
             probPart += '🔌 ';
           }
           probPart += `${Math.round(segment.variantWeight * 100)}%/${Math.round(segment.edgeProbability * 100)}%`;
@@ -735,7 +734,7 @@ export function renderCompositeLabel(
           
           if (segment.cost_gbp?.mean !== undefined) {
             let costPart = '';
-            if (segment.cost_gbp_parameter_id) {
+            if (segment.hasCostGbpParam) {
               costPart += '🔌 ';
             }
             costPart += `£${segment.cost_gbp.mean.toFixed(2)}`;
@@ -747,7 +746,7 @@ export function renderCompositeLabel(
           
           if (segment.cost_time?.mean !== undefined) {
             let timePart = '';
-            if (segment.cost_time_parameter_id) {
+            if (segment.hasCostTimeParam) {
               timePart += '🔌 ';
             }
             timePart += `${segment.cost_time.mean.toFixed(1)}d`;

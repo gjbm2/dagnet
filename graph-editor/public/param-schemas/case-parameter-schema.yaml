@@ -4,18 +4,19 @@ description: Schema for case/experiment parameters
 
 type: object
 required:
-  - parameter_id
+  - id
   - parameter_type
   - name
   - case
   - metadata
 
 properties:
-  parameter_id:
+  # Canonical case identifier (single source of truth for cases)
+  id:
     type: string
-    pattern: ^case-[a-z0-9-]+$
-    description: Unique identifier for the case parameter
-    
+    pattern: '^[a-z0-9-]+$'
+    description: Unique identifier for the case (used in graphs, registry and filenames)
+  
   parameter_type:
     type: string
     const: case
@@ -38,7 +39,6 @@ properties:
   case:
     type: object
     required:
-      - id
       - status
       - variants
     properties:
@@ -230,11 +230,10 @@ properties:
 
 examples:
   # Minimal example for new case creation (used as default template)
-  - parameter_id: case-example
+  - id: example-case
     parameter_type: case
     name: "Example Case"
     case:
-      id: example
       status: active
       variants:
         - name: control
