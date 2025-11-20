@@ -34,13 +34,15 @@ import {
   ChevronDown,
   FileText,
   Check,
-  ArrowDownToLine
+  ArrowDownToLine,
+  Layers
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import './ScenariosPanel.css';
 
 interface ScenariosPanelProps {
   tabId?: string;
+  hideHeader?: boolean; // Hide header when used in hover preview
 }
 
 /**
@@ -79,7 +81,7 @@ function getScenarioTooltip(scenario: Scenario): string {
   return parts.join('\n');
 }
 
-export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
+export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosPanelProps) {
   const scenariosContext = useScenariosContextOptional();
   const { operations, tabs } = useTabContext();
   const graphStore = useGraphStore();
@@ -89,9 +91,12 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
   if (!scenariosContext) {
     return (
       <div className="scenarios-panel">
-        <div className="scenarios-header">
-          <h3 className="scenarios-title">Scenarios</h3>
-        </div>
+        {!hideHeader && (
+          <div className="scenarios-header">
+            <Layers size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
+            <h3 className="scenarios-title">Scenarios</h3>
+          </div>
+        )}
         <div style={{ padding: '16px', color: '#9CA3AF', fontSize: '13px' }}>
           Loading scenarios...
         </div>
@@ -827,9 +832,12 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
     <>
       <div className="scenarios-panel">
       {/* Header */}
-      <div className="scenarios-header">
-        <h3 className="scenarios-title">Scenarios</h3>
-      </div>
+      {!hideHeader && (
+        <div className="scenarios-header">
+          <Layers size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <h3 className="scenarios-title">Scenarios</h3>
+        </div>
+      )}
       
       {/* Scenario List */}
       <div 
@@ -894,18 +902,35 @@ export default function ScenariosPanel({ tabId }: ScenariosPanelProps) {
                 </button>
               </div>
             ) : (
-              <button
+              <div 
                 className="current-whatif-button chip"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  console.log('[ScenariosPanel] Chip clicked, opening panel');
-                  handleOpenWhatIfPanel();
-                }}
-                title="Open What-If panel"
-                style={{ fontWeight: whatIfConditionCount > 0 ? '600' : 'normal' }}
+                style={{ fontWeight: whatIfConditionCount > 0 ? '600' : 'normal', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
               >
-                + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
-              </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    console.log('[ScenariosPanel] Chip clicked, opening panel');
+                    handleOpenWhatIfPanel();
+                  }}
+                  title="Open What-If panel"
+                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                >
+                  + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
+                </button>
+                {whatIfConditionCount > 0 && (
+                  <button
+                    className="tab-close-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      console.log('[ScenariosPanel] X button clicked on chip, clearing What-If');
+                      handleClearWhatIf();
+                    }}
+                    title="Clear What-If conditions"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
             )}
           </div>
           

@@ -1,6 +1,7 @@
 import React from 'react';
 import PropertiesPanel from '../PropertiesPanel';
 import { useSelectionContext } from '../editors/GraphEditor';
+import { FileText } from 'lucide-react';
 import './PropertiesPanelWrapper.css';
 
 interface PropertiesPanelWrapperProps {
@@ -26,6 +27,7 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
   return (
     <div className="properties-panel-wrapper">
       <div className="panel-header">
+        <FileText size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
         <h3>{title}</h3>
       </div>
       <div className="panel-body">
