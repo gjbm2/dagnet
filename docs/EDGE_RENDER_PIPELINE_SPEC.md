@@ -746,3 +746,4 @@ Therefore, any refactor of edge widths / geometry should:
 This document is descriptive, not prescriptive; it captures the **current behavior and invariants** so that any future refactor can be checked against the actual scenario semantics before changing code paths.
 
 
+
