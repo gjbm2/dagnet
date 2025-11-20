@@ -50,6 +50,9 @@
   font-size: 14px;
   color: #374151;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Preview body - scrollable content */
@@ -58,89 +61,5 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 16px;
-}
-
-/* Tools Panel Styling */
-.tools-section {
-  margin-bottom: 24px;
-}
-
-.tools-section h3 {
-  font-size: 12px;
-  font-weight: 600;
-  color: #6B7280;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin: 0 0 12px 0;
-}
-
-.tool-button {
-  width: 100%;
-  padding: 8px 12px;
-  margin-bottom: 8px;
-  background: white;
-  border: 1px solid #D1D5DB;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  color: #374151;
-  transition: all 0.2s;
-}
-
-.tool-button:hover {
-  background: #F3F4F6;
-  border-color: #9CA3AF;
-}
-
-.tool-button:active {
-  background: #E5E7EB;
-}
-
-.tool-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.tool-control label {
-  font-size: 13px;
-  color: #6B7280;
-  white-space: nowrap;
-}
-
-.tool-control input[type="range"] {
-  flex: 1;
-}
-
-.tool-control span {
-  font-size: 12px;
-  color: #9CA3AF;
-  font-weight: 500;
-  min-width: 40px;
-  text-align: right;
-}
-
-.tool-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 8px;
-  border-radius: 4px;
-  transition: background 0.2s;
-}
-
-.tool-checkbox:hover {
-  background: #F9FAFB;
-}
-
-.tool-checkbox input[type="checkbox"] {
-  cursor: pointer;
-}
-
-.tool-checkbox span {
-  font-size: 14px;
-  color: #374151;
 }
 

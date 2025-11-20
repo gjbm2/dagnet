@@ -1983,6 +1983,13 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               selectedEdgeId={selectedEdgeId}
               onSelectedNodeChange={handleNodeSelection}
               onSelectedEdgeChange={handleEdgeSelection}
+              onAutoLayout={(dir) => autoLayoutRef.current?.(dir || 'LR')}
+              onSankeyLayout={() => sankeyLayoutRef.current?.()}
+              onForceReroute={() => forceRerouteRef.current?.()}
+              onHideUnselected={() => hideUnselectedRef.current?.()}
+              onShowAll={() => {
+                window.dispatchEvent(new CustomEvent('dagnet:showAll'));
+              }}
             />
           </div>
         )}
