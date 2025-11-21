@@ -205,6 +205,8 @@ function calculateBetaConfidenceBounds(
   // Solving for α,β:
   const variance = stdev * stdev;
   
+  console.log(`[Beta Bounds] mean=${mean}, stdev=${stdev}, variance=${variance}, level=${confidenceLevel}`);
+  
   // Clamp mean away from 0 and 1 to avoid numerical issues
   const clampedMean = Math.max(0.001, Math.min(0.999, mean));
   
@@ -229,6 +231,8 @@ function calculateBetaConfidenceBounds(
   // Calculate quantiles using incomplete beta function approximation
   const lowerBound = betaQuantile(tailProb, alpha, beta);
   const upperBound = betaQuantile(1 - tailProb, alpha, beta);
+  
+  console.log(`[Beta Bounds] alpha=${alpha.toFixed(2)}, beta=${beta.toFixed(2)}, bounds=[${lowerBound.toFixed(3)}, ${upperBound.toFixed(3)}]`);
   
   return {
     upper: Math.min(1, Math.max(0, upperBound)),

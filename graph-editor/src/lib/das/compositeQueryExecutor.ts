@@ -13,14 +13,18 @@ export interface SubQueryResult {
   from_count: number;
   to_count: number;
   coefficient: number;
-  raw_response: any;
+  raw: any;  // Full raw result (includes time_series, from_count, to_count, etc.)
 }
 
 export interface CombinedResult {
   n: number;
   k: number;
   p_mean: number;
-  evidence: { n: number; k: number };
+  evidence: { 
+    n: number; 
+    k: number;
+    time_series?: Array<{ date: string; n: number; k: number; p: number }>;
+  };
 }
 
 /**
@@ -36,19 +40,41 @@ export async function executeCompositeQuery(
 ): Promise<CombinedResult> {
   console.log(`[CompositeQuery] Parsing: ${queryString}`);
   
-  // Parse the composite query
-  const parsed = parseCompositeQuery(queryString);
-  const terms = getExecutionTerms(parsed);
+  try {
+    // Parse the composite query
+    const parsed = parseCompositeQuery(queryString);
+    console.log(`[CompositeQuery] Parsed successfully:`, {
+      baseFrom: parsed.base.from,
+      baseTo: parsed.base.to,
+      minusTermsCount: parsed.minusTerms.length,
+      plusTermsCount: parsed.plusTerms.length,
+      minusTerms: parsed.minusTerms,
+      plusTerms: parsed.plusTerms
+    });
+    
+    const terms = getExecutionTerms(parsed);
+    console.log(`[CompositeQuery] Generated ${terms.length} execution terms:`, terms.map(t => ({id: t.id, coeff: t.coefficient, from: t.funnel.from, to: t.funnel.to, visited: t.funnel.visited})));
+    
+    console.log(`[CompositeQuery] Executing ${terms.length} terms (1 base + ${terms.length-1} minus/plus)`);
   
-  console.log(`[CompositeQuery] Executing ${terms.length} terms (1 base + ${terms.length-1} minus/plus)`);
-  
-  // Execute all terms in parallel
-  const results = await Promise.all(
-    terms.map(term => executeSubQuery(term, baseDsl, connectionName, runner))
-  );
-  
-  // Combine with weighted coefficients
-  return combineInclusionExclusionResults(results);
+    // Execute all terms in parallel
+    const results = await Promise.all(
+      terms.map(term => executeSubQuery(term, baseDsl, connectionName, runner))
+    );
+    
+    console.log(`[CompositeQuery] All sub-queries completed, combining results...`);
+    
+    // Combine with weighted coefficients
+    const combined = combineInclusionExclusionResults(results);
+    console.log(`[CompositeQuery] Combined result:`, combined);
+    return combined;
+    
+  } catch (error) {
+    console.error(`[CompositeQuery] PARSING/EXECUTION FAILED:`, error);
+    console.error(`[CompositeQuery] Query string was:`, queryString);
+    console.error(`[CompositeQuery] baseDsl was:`, baseDsl);
+    throw error; // Re-throw to be caught by dataOperationsService
+  }
 }
 
 /**
@@ -62,22 +88,47 @@ async function executeSubQuery(
 ): Promise<SubQueryResult> {
   const { funnel, coefficient, id } = term;
   
+  // Map node IDs to provider event names for visited nodes
+  // (baseDsl already has from/to mapped, so we only need to map visited)
+  const mappedVisited: string[] = [];
+  if (funnel.visited && funnel.visited.length > 0) {
+    const { fileRegistry } = await import('../../contexts/TabContext');
+    const provider = connectionName?.includes('amplitude') ? 'amplitude' : 'statsig';
+    
+    for (const nodeId of funnel.visited) {
+      try {
+        const eventFile = fileRegistry.getFile(`event-${nodeId}`);
+        const event = eventFile?.data;
+        const providerEventName = event?.provider_event_names?.[provider] || nodeId;
+        mappedVisited.push(providerEventName);
+        console.log(`[SubQuery ${id}] Mapped visited node: ${nodeId} → ${providerEventName}`);
+      } catch (error) {
+        console.warn(`[SubQuery ${id}] Failed to load event ${nodeId}, using raw ID:`, error);
+        mappedVisited.push(nodeId);
+      }
+    }
+  }
+  
   // Build DSL for this funnel
+  // CRITICAL: DON'T override from/to (they're already correct in baseDsl with provider event names)
+  // Only update visited if we have minus/plus terms
   const dsl = {
     ...baseDsl,
-    from: funnel.from,
-    to: funnel.to,
-    visited: funnel.visited || [],
+    visited: mappedVisited,
     visitedAny: funnel.visitedAny || [],
-    // Inherit window, mode, filters from base
+    // Explicitly preserve window and mode
     window: baseDsl.window,
     mode: baseDsl.mode || 'ordered'
   };
   
-  console.log(`[SubQuery ${id}] Executing: from(${funnel.from}).to(${funnel.to}) [coeff=${coefficient>0?'+':''}${coefficient}]`);
+  console.log(`[SubQuery ${id}] Executing: from(${baseDsl.from}).to(${baseDsl.to})${mappedVisited.length > 0 ? `.visited(${mappedVisited.join(',')})` : ''} [coeff=${coefficient>0?'+':''}${coefficient}] (mode=${dsl.mode})`);
   
   try {
-    const result = await runner.execute(connectionName, dsl, {});
+    // CRITICAL: Pass window and context mode so sub-queries can return daily time-series
+    const result = await runner.execute(connectionName, dsl, {
+      window: baseDsl.window,
+      context: { mode: dsl.mode }  // Pass 'daily' or 'aggregate' mode to adapter
+    });
     
     if (!result.success) {
       throw new Error(result.error || 'Query execution failed');
@@ -86,17 +137,31 @@ async function executeSubQuery(
     // TypeScript narrows to ExecutionSuccess after success check
     const successResult = result as { success: true; raw: Record<string, unknown> };
     const raw = successResult.raw || {};
-    const extracted = raw.extracted as any;
+    
+    // DIAGNOSTIC: Show what we actually received
+    console.log(`[SubQuery ${id}] Raw result structure:`, {
+      hasRaw: !!raw,
+      rawKeys: Object.keys(raw),
+      from_count_in_raw: raw.from_count,
+      to_count_in_raw: raw.to_count,
+      hasExtracted: !!raw.extracted,
+      from_count_in_extracted: (raw.extracted as any)?.from_count
+    });
+    
+    // CRITICAL FIX: DASRunner puts counts directly in raw, NOT under raw.extracted
+    // Try raw.from_count first, fall back to raw.extracted.from_count for compatibility
+    const from_count = (raw.from_count as number) || (raw.extracted as any)?.from_count || 0;
+    const to_count = (raw.to_count as number) || (raw.extracted as any)?.to_count || 0;
     
     const subResult: SubQueryResult = {
       id,
-      from_count: extracted?.from_count || 0,
-      to_count: extracted?.to_count || 0,
+      from_count,
+      to_count,
       coefficient,
-      raw_response: raw.raw_response
+      raw  // Store FULL raw result (includes time_series, from_count, to_count, etc.)
     };
     
-    console.log(`[SubQuery ${id}] Result: from=${subResult.from_count}, to=${subResult.to_count}`);
+    console.log(`[SubQuery ${id}] Result: from=${subResult.from_count}, to=${subResult.to_count}, hasTimeSeries=${!!raw.time_series}`);
     
     return subResult;
   } catch (error) {
@@ -155,11 +220,71 @@ function combineInclusionExclusionResults(results: SubQueryResult[]): CombinedRe
     `[Combine] Final: n=${n}, k=${k} (adjustment=${k_adjustment>0?'+':''}${k_adjustment}), p=${p_mean.toFixed(4)}`
   );
   
+  // CRITICAL: Combine time-series data (if present in all sub-queries)
+  let time_series: Array<{ date: string; n: number; k: number; p: number }> | undefined;
+  
+  // Check if ALL sub-queries have time-series
+  const allHaveTimeSeries = results.every(r => 
+    r.raw?.time_series && Array.isArray(r.raw.time_series) && r.raw.time_series.length > 0
+  );
+  
+  if (allHaveTimeSeries) {
+    console.log(`[Combine] Combining time-series from ${results.length} sub-queries`);
+    
+    // Extract base time-series (from first query)
+    const baseTimeSeries: Array<{ date: string; n: number; k: number }> = base.raw.time_series;
+    
+    // Build date map: date -> {n, k}
+    const dateMap = new Map<string, { n: number; k: number }>();
+    
+    // Start with base time-series
+    for (const point of baseTimeSeries) {
+      dateMap.set(point.date, { n: point.n, k: point.k });
+    }
+    
+    // Apply inclusion-exclusion to each date's k value
+    for (const result of results.slice(1)) {
+      const timeSeries = result.raw.time_series as Array<{ date: string; n: number; k: number }>;
+      
+      for (const point of timeSeries) {
+        const existing = dateMap.get(point.date);
+        if (existing) {
+          // Apply coefficient to k (inclusion-exclusion)
+          // k_adjusted = k_base + coefficient * k_term
+          existing.k = existing.k + (result.coefficient * point.k);
+        }
+      }
+    }
+    
+    // Convert map back to array, clamping k to valid range [0, n]
+    time_series = Array.from(dateMap.entries()).map(([date, data]) => {
+      const k_clamped = Math.max(0, Math.min(data.n, data.k));
+      const p = data.n > 0 ? k_clamped / data.n : 0;
+      return {
+        date,
+        n: data.n,
+        k: k_clamped,
+        p
+      };
+    });
+    
+    // Sort by date
+    time_series.sort((a, b) => a.date.localeCompare(b.date));
+    
+    console.log(`[Combine] Combined time-series: ${time_series.length} days`);
+  } else {
+    console.log(`[Combine] No time-series to combine (not all sub-queries returned daily data)`);
+  }
+  
   return {
     n,
     k,
     p_mean,
-    evidence: { n, k }
+    evidence: { 
+      n, 
+      k,
+      time_series // Include combined time-series (if available)
+    }
   };
 }
 

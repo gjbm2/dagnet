@@ -33,6 +33,7 @@ export interface DataOperationSection {
     getFromSource: boolean;      // hasFileConnection
     getFromSourceDirect: boolean; // hasConnection
     putToFile: boolean;          // canPutToFile
+    clearCache: boolean;         // hasFile && objectType === 'parameter'
   };
 }
 
@@ -68,6 +69,7 @@ export function getNodeDataSections(
         getFromSource: false,
         getFromSourceDirect: false,
         putToFile: true,
+        clearCache: false, // Nodes don't have cached data
       },
     });
   }
@@ -98,6 +100,7 @@ export function getNodeDataSections(
         getFromSource: hasFileConnection,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
+        clearCache: hasFile, // Cases have schedules cache
       },
     });
   }
@@ -143,6 +146,7 @@ export function getEdgeDataSections(
         getFromSource: hasFileConnection,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
+        clearCache: hasFile, // Parameters have time-series cache
       },
     });
   }
@@ -185,6 +189,7 @@ export function getEdgeDataSections(
             getFromSource: hasFileConnection,
             getFromSourceDirect: hasAnyConnection,
             putToFile: canPutToFile,
+            clearCache: hasFile, // Parameters have time-series cache
           },
         });
       }
@@ -217,6 +222,7 @@ export function getEdgeDataSections(
         getFromSource: hasFileConnection,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
+        clearCache: hasFile, // Parameters have time-series cache
       },
     });
   }
@@ -247,6 +253,7 @@ export function getEdgeDataSections(
         getFromSource: hasFileConnection,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
+        clearCache: hasFile, // Parameters have time-series cache
       },
     });
   }

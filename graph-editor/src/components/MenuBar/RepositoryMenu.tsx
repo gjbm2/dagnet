@@ -1,10 +1,18 @@
 import React, { useState } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
-import { useTabContext } from '../../contexts/TabContext';
+import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
+import { useDialog } from '../../contexts/DialogContext';
 import { SwitchRepositoryModal } from '../modals/SwitchRepositoryModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
+import { MergeConflictModal, ConflictFile } from '../modals/MergeConflictModal';
+import { CommitModal } from '../CommitModal';
 import { repositoryOperationsService } from '../../services/repositoryOperationsService';
+import { workspaceService } from '../../services/workspaceService';
+import { gitService } from '../../services/gitService';
+import { credentialsManager } from '../../lib/credentials';
+import toast from 'react-hot-toast';
+import YAML from 'yaml';
 
 /**
  * Repository Menu
@@ -21,9 +29,13 @@ import { repositoryOperationsService } from '../../services/repositoryOperations
 export function RepositoryMenu() {
   const { operations, activeTabId } = useTabContext();
   const { state, operations: navOps } = useNavigatorContext();
+  const { showConfirm } = useDialog();
   
   const [isSwitchRepoModalOpen, setIsSwitchRepoModalOpen] = useState(false);
   const [isSwitchBranchModalOpen, setIsSwitchBranchModalOpen] = useState(false);
+  const [isMergeConflictModalOpen, setIsMergeConflictModalOpen] = useState(false);
+  const [mergeConflicts, setMergeConflicts] = useState<ConflictFile[]>([]);
+  const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
 
   const dirtyTabs = operations.getDirtyTabs();
   const hasDirtyTabs = dirtyTabs.length > 0;
@@ -37,30 +49,159 @@ export function RepositoryMenu() {
     setIsSwitchBranchModalOpen(true);
   };
 
-  const handleForceClone = () => {
-    repositoryOperationsService.forceFullReload(state.selectedRepo, state.selectedBranch);
+  const handleForceClone = async () => {
+    // Warn if there are dirty files
+    if (hasDirtyTabs) {
+      const confirmed = await showConfirm({
+        title: 'Force Full Reload',
+        message: 
+          `You have ${dirtyTabs.length} uncommitted file(s).\n\n` +
+          'Force Full Reload will:\n' +
+          '• Delete your local workspace\n' +
+          '• Re-clone from remote repository\n' +
+          '• DISCARD ALL LOCAL CHANGES\n\n' +
+          'This cannot be undone. Continue?',
+        confirmLabel: 'Force Reload',
+        cancelLabel: 'Cancel',
+        confirmVariant: 'danger'
+      });
+      
+      if (!confirmed) return;
+    }
+    
+    try {
+      const toastId = toast.loading('Force reloading workspace...');
+      await repositoryOperationsService.forceFullReload(state.selectedRepo, state.selectedBranch, true);
+      toast.dismiss(toastId);
+      toast.success('Workspace reloaded');
+    } catch (error) {
+      console.error('Failed to force reload:', error);
+      toast.error(`Force reload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   };
 
   const handlePullLatest = async () => {
     try {
-      await repositoryOperationsService.pullLatest(state.selectedRepo, state.selectedBranch);
-      console.log(`✅ Pull complete`);
+      const toastId = toast.loading('Pulling latest changes...');
+      const result = await repositoryOperationsService.pullLatest(state.selectedRepo, state.selectedBranch);
+      toast.dismiss(toastId);
+      
+      if (result.conflicts && result.conflicts.length > 0) {
+        // Show conflict resolution modal
+        setMergeConflicts(result.conflicts);
+        setIsMergeConflictModalOpen(true);
+        toast.error(`Pull completed with ${result.conflicts.length} conflict(s)`, { duration: 5000 });
+      } else {
+        toast.success('Successfully pulled latest changes');
+      }
     } catch (error) {
       console.error('Failed to pull latest:', error);
+      toast.error(`Pull failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
-  const handlePushChanges = async () => {
+  const handleResolveConflicts = async (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => {
+    const { conflictResolutionService } = await import('../../services/conflictResolutionService');
+    
+    const resolvedCount = await conflictResolutionService.applyResolutions(mergeConflicts, resolutions);
+    
+    // Refresh navigator to show updated state
+    await refreshItems();
+    
+    if (resolvedCount > 0) {
+      toast.success(`Resolved ${resolvedCount} conflict${resolvedCount !== 1 ? 's' : ''}`);
+    }
+  };
+
+  const handleCommitChanges = async () => {
     try {
-      const message = prompt('Commit message:') || 'Update files';
-      const count = await repositoryOperationsService.pushChanges(
-        state.selectedRepo,
-        state.selectedBranch,
-        message
-      );
-      console.log(`✅ Pushed ${count} files`);
+      // Check if remote is ahead before committing
+      const credsResult = await credentialsManager.loadCredentials();
+      
+      if (credsResult.success && credsResult.credentials) {
+        const gitCreds = credsResult.credentials.git.find(cred => cred.name === state.selectedRepo);
+        
+        if (gitCreds) {
+          const toastId = toast.loading('Checking remote status...');
+          const remoteStatus = await workspaceService.checkRemoteAhead(
+            state.selectedRepo,
+            state.selectedBranch,
+            gitCreds
+          );
+          toast.dismiss(toastId);
+          
+          if (remoteStatus.isAhead) {
+            const confirmed = await showConfirm({
+              title: 'Remote Has Changes',
+              message: 
+                `The remote repository has changes you don't have:\n\n` +
+                `• ${remoteStatus.filesChanged} file(s) changed\n` +
+                `• ${remoteStatus.filesAdded} file(s) added\n` +
+                `• ${remoteStatus.filesDeleted} file(s) deleted\n\n` +
+                `It's recommended to pull first to avoid conflicts.\n\n` +
+                `Commit anyway?`,
+              confirmLabel: 'Commit Anyway',
+              cancelLabel: 'Pull First',
+              confirmVariant: 'danger'
+            });
+            
+            if (!confirmed) return;
+          }
+        }
+      }
+      
+      // Open commit modal
+      setIsCommitModalOpen(true);
     } catch (error) {
-      console.error('Failed to push changes:', error);
+      console.error('Failed to check remote status:', error);
+      toast.error(`Failed to check remote: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleCommitFiles = async (files: any[], message: string, branch: string) => {
+    try {
+      const credsResult = await credentialsManager.loadCredentials();
+      
+      if (!credsResult.success || !credsResult.credentials) {
+        throw new Error('No credentials available. Please configure credentials first.');
+      }
+
+      const gitCreds = credsResult.credentials.git.find(cred => cred.name === state.selectedRepo);
+      
+      if (!gitCreds) {
+        throw new Error(`No credentials found for repository ${state.selectedRepo}`);
+      }
+
+      // Set credentials on gitService
+      const credentialsWithRepo = {
+        ...credsResult.credentials,
+        defaultGitRepo: state.selectedRepo
+      };
+      gitService.setCredentials(credentialsWithRepo);
+
+      // Prepare files with proper paths
+      const filesToCommit = files.map(file => {
+        const basePath = gitCreds.basePath || '';
+        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
+        return {
+          path: fullPath,
+          content: file.content,
+          sha: file.sha
+        };
+      });
+
+      const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
+      if (result.success) {
+        // Mark files as saved
+        for (const file of files) {
+          await fileRegistry.markSaved(file.fileId);
+        }
+        toast.success(`Committed ${files.length} file(s)`);
+      } else {
+        throw new Error(result.error || 'Failed to commit files');
+      }
+    } catch (error) {
+      throw error; // Re-throw to be handled by CommitModal
     }
   };
 
@@ -136,10 +277,10 @@ export function RepositoryMenu() {
 
             <Menubar.Item 
               className="menubar-item" 
-              onSelect={handlePushChanges}
+              onSelect={handleCommitChanges}
               disabled={!hasDirtyTabs}
             >
-              Push Changes
+              Commit Changes...
               {hasDirtyTabs && <div className="menubar-right-slot">{dirtyTabs.length}</div>}
             </Menubar.Item>
 
@@ -182,6 +323,18 @@ export function RepositoryMenu() {
       <SwitchBranchModal
         isOpen={isSwitchBranchModalOpen}
         onClose={() => setIsSwitchBranchModalOpen(false)}
+      />
+      <MergeConflictModal
+        isOpen={isMergeConflictModalOpen}
+        onClose={() => setIsMergeConflictModalOpen(false)}
+        conflicts={mergeConflicts}
+        onResolve={handleResolveConflicts}
+      />
+      <CommitModal
+        isOpen={isCommitModalOpen}
+        onClose={() => setIsCommitModalOpen(false)}
+        onCommit={handleCommitFiles}
+        preselectedFiles={[]}
       />
     </>
   );

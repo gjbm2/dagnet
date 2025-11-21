@@ -217,7 +217,14 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       handleGetCaseFromSourceVersioned();
     }
   };
-
+  
+  const handleSectionClearCache = (section: DataOperationSection) => {
+    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
+      dataOperationsService.clearCache(section.objectType, section.objectId);
+    });
+    onClose();
+  };
+  
   const handleShowInNewGraph = async () => {
     try {
       // Get selected node UUIDs (ReactFlow uses 'id' field which contains the UUID)
@@ -443,6 +450,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
               onPutToFile={handleSectionPutToFile}
               onGetFromSource={handleSectionGetFromSource}
               onGetFromSourceDirect={handleSectionGetFromSourceDirect}
+              onClearCache={handleSectionClearCache}
             />
           ))}
         </>

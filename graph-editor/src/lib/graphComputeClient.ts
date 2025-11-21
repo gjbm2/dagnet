@@ -159,7 +159,9 @@ export class GraphComputeClient {
     graph: any,
     downstreamOf?: string,
     literalWeights?: { visited: number; exclude: number },
-    preserveCondition?: boolean
+    preserveCondition?: boolean,
+    edgeId?: string,  // Optional: filter to specific edge
+    conditionalIndex?: number  // Optional: filter to specific conditional (requires edgeId)
   ): Promise<{ parameters: ParameterQuery[] }> {
     if (this.useMock) {
       return { parameters: [] };
@@ -172,7 +174,9 @@ export class GraphComputeClient {
         graph,
         downstream_of: downstreamOf,
         literal_weights: literalWeights,
-        preserve_condition: preserveCondition
+        preserve_condition: preserveCondition,
+        edge_id: edgeId,
+        conditional_index: conditionalIndex
       }),
     });
 

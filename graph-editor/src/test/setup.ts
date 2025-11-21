@@ -1,216 +1,27 @@
 /**
- * Vitest Setup File
- * 
- * Global test configuration and mocks
+ * Test setup file
+ * Configures global test environment
  */
 
-import { expect, afterEach, vi } from 'vitest';
-import { cleanup } from '@testing-library/react';
+import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom';
+import { beforeAll, afterEach, vi } from 'vitest';
 
-// Cleanup after each test
-afterEach(() => {
-  cleanup();
-  vi.clearAllMocks();
+// Mock console methods to reduce noise in tests
+beforeAll(() => {
+  global.console = {
+    ...console,
+    // Keep error and warn for debugging
+    error: console.error,
+    warn: console.warn,
+    // Suppress info and log in tests
+    info: vi.fn(),
+    log: vi.fn(),
+    debug: vi.fn(),
+  };
 });
 
-// Mock window.matchMedia (used by many UI components)
-// Only in jsdom environment
-if (typeof window !== 'undefined') {
-  Object.defineProperty(window, 'matchMedia', {
-    writable: true,
-    value: vi.fn().mockImplementation((query) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })),
-  });
-}
-
-// Mock ResizeObserver (used by ReactFlow and other UI libs)
-if (typeof global.ResizeObserver === 'undefined') {
-  global.ResizeObserver = vi.fn().mockImplementation(() => ({
-    observe: vi.fn(),
-    unobserve: vi.fn(),
-    disconnect: vi.fn(),
-  }));
-}
-
-// Mock IntersectionObserver
-if (typeof global.IntersectionObserver === 'undefined') {
-  global.IntersectionObserver = vi.fn().mockImplementation(() => ({
-    observe: vi.fn(),
-    unobserve: vi.fn(),
-    disconnect: vi.fn(),
-  }));
-}
-
-// Mock IndexedDB for happy-dom environment
-if (typeof global.indexedDB === 'undefined') {
-  // Create a minimal IndexedDB mock
-  const mockIDBFactory = {
-    open: vi.fn(() => {
-      const mockDB = {
-        objectStoreNames: { contains: vi.fn(() => false), length: 0 },
-        transaction: vi.fn(() => ({
-          objectStore: vi.fn(() => ({
-            get: vi.fn(() => Promise.resolve(undefined)),
-            put: vi.fn(() => Promise.resolve(undefined)),
-            add: vi.fn(() => Promise.resolve(undefined)),
-            delete: vi.fn(() => Promise.resolve(undefined)),
-            getAll: vi.fn(() => Promise.resolve([])),
-            count: vi.fn(() => Promise.resolve(0)),
-          })),
-          oncomplete: null,
-          onerror: null,
-        })),
-        createObjectStore: vi.fn(),
-        deleteObjectStore: vi.fn(),
-        close: vi.fn(),
-        onversionchange: null,
-      };
-      const request: {
-        result: any;
-        error: null;
-        onsuccess: ((event: any) => void) | null;
-        onerror: ((event: any) => void) | null;
-        onblocked: ((event: any) => void) | null;
-        onupgradeneeded: ((event: any) => void) | null;
-      } = {
-        result: mockDB,
-        error: null,
-        onsuccess: null,
-        onerror: null,
-        onblocked: null,
-        onupgradeneeded: null,
-      };
-      // Simulate async success
-      setTimeout(() => {
-        if (request.onsuccess) request.onsuccess({ target: request } as any);
-      }, 0);
-      return request as any;
-    }),
-    deleteDatabase: vi.fn(() => {
-      const request: {
-        result: any;
-        error: null;
-        onsuccess: ((event: any) => void) | null;
-        onerror: ((event: any) => void) | null;
-        onblocked: ((event: any) => void) | null;
-      } = {
-        result: undefined,
-        error: null,
-        onsuccess: null,
-        onerror: null,
-        onblocked: null,
-      };
-      setTimeout(() => {
-        if (request.onsuccess) request.onsuccess({ target: request } as any);
-      }, 0);
-      return request as any;
-    }),
-    databases: vi.fn(() => Promise.resolve([])),
-    cmp: vi.fn(() => 0),
-  };
-
-  (global as any).indexedDB = mockIDBFactory;
-  (global as any).IDBKeyRange = {
-    bound: vi.fn(),
-    lowerBound: vi.fn(),
-    upperBound: vi.fn(),
-    only: vi.fn(),
-  };
-}
-
-// Mock Monaco Editor (used by QueryExpressionEditor)
-vi.mock('@monaco-editor/react', () => ({
-  __esModule: true,
-  default: ({ value, onChange }: any) => null, // Minimal mock - component doesn't render Monaco in tests
-  Editor: vi.fn(),
-  DiffEditor: vi.fn(),
-  useMonaco: vi.fn(() => null),
-}));
-
-// Mock @vercel/node to avoid webidl-conversions/whatwg-url dependency conflicts
-// Tests don't need Vercel serverless function types
-vi.mock('@vercel/node', () => ({
-  VercelRequest: {} as any,
-  VercelResponse: {} as any,
-}));
-
-// Note: whatwg-url is aliased in vitest.config.ts to use Node.js built-in URL
-// This prevents webidl-conversions errors
-
-// Note: whatwg-url dependency conflict exists between jsdom@27 and @vercel/node
-// Mocking both @vercel/node and whatwg-url prevents the conflict from occurring during test runs
-
-// Suppress unhandled errors from webidl-conversions (all tests pass, this is a dependency issue)
-// This error occurs during module initialization and doesn't affect test results
-const originalError = console.error;
-console.error = (...args: any[]) => {
-  const message = args.join(' ');
-  if (message.includes('webidl-conversions') || message.includes('Cannot read properties of undefined')) {
-    // Suppress webidl-conversions errors - all tests pass, this is a known dependency conflict
-    return;
-  }
-  originalError.apply(console, args);
-};
-
-// Handle unhandled errors and promise rejections from webidl-conversions
-if (typeof process !== 'undefined') {
-  // Handle unhandled promise rejections
-  const originalUnhandledRejection = process.listeners('unhandledRejection');
-  process.removeAllListeners('unhandledRejection');
-  process.on('unhandledRejection', (reason: any) => {
-    const message = reason?.message || String(reason) || '';
-    const stack = reason?.stack || '';
-    if (
-      message.includes('webidl-conversions') ||
-      message.includes('Cannot read properties of undefined') ||
-      stack.includes('webidl-conversions')
-    ) {
-      // Suppress webidl-conversions errors - all tests pass, this is a known dependency conflict
-      return;
-    }
-    // Re-emit other unhandled rejections
-    originalUnhandledRejection.forEach((listener: any) => {
-      listener(reason);
-    });
-  });
-
-  // Handle uncaught exceptions (synchronous errors during module load)
-  // WARNING: Only suppress errors that are specifically from webidl-conversions
-  // This is a known dependency conflict that doesn't affect test results
-  // All other errors should still be reported
-  const originalUncaughtException = process.listeners('uncaughtException');
-  process.removeAllListeners('uncaughtException');
-  process.on('uncaughtException', (error: Error) => {
-    const message = error?.message || '';
-    const stack = error?.stack || '';
-    // Only suppress if it's specifically the webidl-conversions error pattern
-    const isWebidlError =
-      (message.includes('webidl-conversions') ||
-        message.includes('Cannot read properties of undefined')) &&
-      (stack.includes('webidl-conversions') || stack.includes('node_modules/webidl-conversions'));
-    
-    if (isWebidlError) {
-      // Suppress webidl-conversions errors - all tests pass, this is a known dependency conflict
-      // This error occurs during module initialization and doesn't affect test execution
-      return;
-    }
-    // Re-emit all other uncaught exceptions - we don't want to hide real errors
-    originalUncaughtException.forEach((listener: any) => {
-      listener(error);
-    });
-  });
-}
-
-// Suppress console errors in tests (optional - comment out if debugging)
-// vi.spyOn(console, 'error').mockImplementation(() => {});
-// vi.spyOn(console, 'warn').mockImplementation(() => {});
-
+// Clean up after each test
+afterEach(() => {
+  vi.clearAllMocks();
+});

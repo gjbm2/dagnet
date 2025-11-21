@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Info } from 'lucide-react';
+import { Info, RefreshCcw } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { EnhancedSelector } from './EnhancedSelector';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
@@ -115,6 +116,51 @@ export function ConditionalProbabilityEditor({
     const newConditions = [...conditions];
     newConditions[index] = { ...newConditions[index], ...updates };
     onChange(newConditions);
+  };
+
+  // Regenerate query for a specific conditional using MSMDC
+  const regenerateConditionalQuery = async (conditionalIndex: number) => {
+    if (!edgeId || !graph) return;
+    
+    const loadingToast = toast.loading(`Regenerating query for conditional ${conditionalIndex + 1}...`);
+    
+    try {
+      const { graphComputeClient } = await import('../lib/graphComputeClient');
+      const { queryRegenerationService } = await import('../services/queryRegenerationService');
+      
+      // Transform graph to backend schema before sending
+      const transformedGraph = queryRegenerationService.transformGraphForBackend(graph);
+      
+      // Call MSMDC to generate query for this specific conditional
+      const response = await graphComputeClient.generateAllParameters(
+        transformedGraph,
+        undefined,  // downstreamOf
+        undefined,  // literalWeights
+        undefined,  // preserveCondition
+        edgeId,     // edgeId
+        conditionalIndex  // conditionalIndex - filter to this specific conditional
+      );
+      
+      // Should only have one param for this conditional
+      const conditionalQuery = response.parameters.find((param: any) => 
+        param.paramType === 'edge_conditional_p'
+      );
+      
+      if (conditionalQuery) {
+        // Update the conditional with the new query
+        updateCondition(conditionalIndex, {
+          query: conditionalQuery.query,
+          query_overridden: false  // Mark as auto-generated
+        });
+        
+        toast.success('Query regenerated', { id: loadingToast });
+      } else {
+        toast.error('No query generated for this conditional', { id: loadingToast });
+      }
+    } catch (error) {
+      console.error('Failed to regenerate conditional query:', error);
+      toast.error(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: loadingToast });
+    }
   };
 
   return (
@@ -235,9 +281,30 @@ export function ConditionalProbabilityEditor({
                   <AutomatableField
                     label="Data Retrieval Query (full path)"
                     labelExtra={
-                      <span title="Full query expression for retrieving data from external sources. Usually auto-generated from condition + edge topology via MSMDC algorithm.">
-                        <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span title="Full query expression for retrieving data from external sources. Usually auto-generated from condition + edge topology via MSMDC algorithm.">
+                          <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => regenerateConditionalQuery(index)}
+                          title="Regenerate query for this conditional using MSMDC"
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: '2px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            color: '#6B7280',
+                            transition: 'color 0.2s'
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.color = '#3B82F6'}
+                          onMouseLeave={(e) => e.currentTarget.style.color = '#6B7280'}
+                        >
+                          <RefreshCcw size={14} />
+                        </button>
+                      </div>
                     }
                     layout="label-above"
                     value={localConditions[index]?.query !== undefined ? localConditions[index].query : (condition.query || '')}

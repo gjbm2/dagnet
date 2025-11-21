@@ -72,7 +72,7 @@ export interface ParsedFullQuery extends ParsedConstraints {
  * Basic query pattern for validation.
  * Must start with from() or to(), then have any number of functions.
  */
-export const QUERY_PATTERN = /^(from|to)\([a-z0-9_-]+\)\.(from|to|visited|visitedAny|exclude|context|case|minus|plus)\([^)]*\)(\.(visited|visitedAny|exclude|context|case|minus|plus)\([^)]*\))*$/;
+export const QUERY_PATTERN = /^(from|to)\([a-zA-Z0-9_-]+\)\.(from|to|visited|visitedAny|exclude|context|case|minus|plus)\([^)]*\)(\.(visited|visitedAny|exclude|context|case|minus|plus)\([^)]*\))*$/;
 
 /**
  * Validate query string structure.

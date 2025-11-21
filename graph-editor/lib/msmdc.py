@@ -71,7 +71,9 @@ def generate_query_for_edge(
     max_checks: int = 200,
     literal_weights: Optional[Dict[str, float]] = None,
     preserve_condition: bool = True,
-    preserve_case_context: bool = True
+    preserve_case_context: bool = True,
+    connection_name: Optional[str] = None,
+    provider: Optional[str] = None
 ) -> MSMDCResult:
     """
     Generate minimal discriminating query for a specific edge (DATA RETRIEVAL).
@@ -81,6 +83,8 @@ def generate_query_for_edge(
         edge: Target edge to generate query for
         condition: Optional constraint string (visited/exclude/case/context clauses only)
         max_checks: Safety cap on reachability checks
+        connection_name: Optional connection name (e.g., "amplitude-prod") for capability lookup
+        provider: Optional provider type (e.g., "amplitude") as fallback for capability lookup
     
     Returns:
         MSMDCResult with query string and diagnostics
@@ -296,8 +300,43 @@ def generate_query_for_edge(
     final_cases = cond_cases if preserve_case_context else []
     final_contexts = cond_contexts if preserve_case_context else []
     constraints = QueryConstraints(from_node, to_node, L_vis_sorted, L_exc_sorted, L_vany, final_cases, final_contexts)
+    
+    # PROVIDER CAPABILITY CHECK: If exclude() is needed but provider doesn't support it,
+    # compile to inclusion-exclusion (minus/plus terms)
+    query_string = constraints.to_query_string()
+    
+    if L_exc_sorted:  # Only check if we have excludes
+        from connection_capabilities import supports_native_exclude as check_native_exclude
+        
+        if not check_native_exclude(connection_name, provider):
+            # Provider doesn't support native exclude - compile to minus()/plus()
+            print(f"[MSMDC] Provider doesn't support native exclude; compiling to inclusion-exclusion")
+            print(f"[MSMDC] Excludes to compile: {L_exc_sorted}")
+            
+            try:
+                # Import NEW MSMDC inclusion-exclusion algorithm
+                import sys
+                from pathlib import Path
+                msmdc_algorithms_path = Path(__file__).parent.parent.parent / 'msmdc' / 'algorithms'
+                sys.path.insert(0, str(msmdc_algorithms_path))
+                
+                from optimized_inclusion_exclusion import compile_optimized_inclusion_exclusion
+                
+                # Call NEW algorithm
+                compiled_query, terms = compile_optimized_inclusion_exclusion(
+                    G, from_node, to_node, to_node, L_exc_sorted
+                )
+                
+                query_string = compiled_query
+                print(f"[MSMDC] Compiled query: {query_string}")
+                
+            except Exception as e:
+                print(f"[MSMDC ERROR] Failed to compile inclusion-exclusion: {e}")
+                print(f"[MSMDC] Falling back to exclude() query (will fail at runtime)")
+                # Keep original query_string with exclude()
+    
     return MSMDCResult(
-        query_string=constraints.to_query_string(),
+        query_string=query_string,
         constraints=constraints,
         satisfying_found=True,
         coverage_stats={"checks": stats_checks, "literals": len(L_vis_sorted) + len(L_exc_sorted)}
@@ -587,6 +626,93 @@ def _build_networkx_graph(graph: Graph) -> Tuple[nx.DiGraph, Dict[str, str]]:
 # Comprehensive Parameter Query Generation
 # ============================================================================
 
+def _extract_connection_info(edge: Edge) -> Tuple[Optional[str], Optional[str], bool]:
+    """
+    Extract connection info from ALL parameters on edge and determine if native exclude is supported.
+    
+    PESSIMISTIC POLICY: If ANY parameter uses a provider that doesn't support native exclude,
+    we generate minus()/plus() queries for the entire edge.
+    
+    Rationale:
+    - Single query string per edge (stored in edge.query)
+    - Query must work for ALL parameters on that edge
+    - User-visible query should reflect what actually executes
+    
+    Args:
+        edge: Edge object
+    
+    Returns:
+        Tuple of (connection_name, provider, supports_exclude)
+        - connection_name: First non-None connection found (for logging)
+        - provider: First non-None provider found (for capability lookup)
+        - supports_exclude: True only if ALL data sources support native exclude
+    """
+    import json
+    from connection_capabilities import supports_native_exclude as check_supports
+    
+    all_data_sources = []
+    
+    # Collect all data sources on this edge
+    if hasattr(edge, 'p') and edge.p:
+        ds = getattr(edge.p, 'data_source', None)
+        if ds:
+            all_data_sources.append(ds)
+    
+    # Conditional probabilities
+    if hasattr(edge, 'conditional_p') and edge.conditional_p:
+        for cond_p in edge.conditional_p:
+            if hasattr(cond_p, 'p') and cond_p.p:
+                ds = getattr(cond_p.p, 'data_source', None)
+                if ds:
+                    all_data_sources.append(ds)
+    
+    # Cost parameters
+    if hasattr(edge, 'cost_gbp') and edge.cost_gbp:
+        ds = getattr(edge.cost_gbp, 'data_source', None)
+        if ds:
+            all_data_sources.append(ds)
+    
+    if hasattr(edge, 'cost_time') and edge.cost_time:
+        ds = getattr(edge.cost_time, 'data_source', None)
+        if ds:
+            all_data_sources.append(ds)
+    
+    # If no data sources, assume exclude is NOT supported (conservative)
+    if not all_data_sources:
+        return None, None, False
+    
+    # Check each data source's capability
+    all_support_exclude = True
+    first_connection_name = None
+    first_provider = None
+    
+    for ds in all_data_sources:
+        # Extract connection name
+        connection_name = None
+        if hasattr(ds, 'connection_settings') and ds.connection_settings:
+            try:
+                settings = json.loads(ds.connection_settings)
+                connection_name = settings.get('connection_name')
+            except:
+                pass
+        
+        # Extract provider
+        provider = getattr(ds, 'source_type', None)
+        
+        # Remember first non-None values for return
+        if not first_connection_name and connection_name:
+            first_connection_name = connection_name
+        if not first_provider and provider:
+            first_provider = provider
+        
+        # Check if this provider supports exclude
+        if not check_supports(connection_name, provider):
+            all_support_exclude = False
+            # Don't break - we still want to collect connection info
+    
+    return first_connection_name, first_provider, all_support_exclude
+
+
 @dataclass
 class ParameterQuery:
     """A parameter requiring data retrieval with its generated query."""
@@ -604,7 +730,9 @@ def generate_all_parameter_queries(
     downstream_of: Optional[str] = None,
     literal_weights: Optional[Dict[str, float]] = None,
     preserve_condition: bool = True,
-    preserve_case_context: bool = True
+    preserve_case_context: bool = True,
+    edge_uuid: Optional[str] = None,  # Filter to specific edge (uuid)
+    conditional_index: Optional[int] = None  # Filter to specific conditional (requires edge_uuid)
 ) -> List[ParameterQuery]:
     """
     Generate MSMDC queries for ALL parameters in a graph.
@@ -650,6 +778,10 @@ def generate_all_parameter_queries(
     
     # Process each edge
     for edge in graph.edges:
+        # Skip if filtering by edge_uuid and this isn't the target edge
+        if edge_uuid is not None and edge.uuid != edge_uuid:
+            continue
+        
         # Resolve edge nodes to IDs for query generation
         from_id = id_by_uuid.get(edge.from_node, edge.from_node)
         to_id = id_by_uuid.get(edge.to, edge.to)
@@ -663,11 +795,15 @@ def generate_all_parameter_queries(
             if from_id not in downstream_nodes:
                 continue
         
+        # Extract connection info ONCE per edge (pessimistic: checks ALL params)
+        connection_name, provider, _ = _extract_connection_info(edge)
+        
         # 1. Base probability (edge.p) - unconditional
-        if edge.p:
+        # Skip if filtering by conditional_index (only want conditional, not base)
+        if edge.p and conditional_index is None:
             # Use real param_id if exists, otherwise generate synthetic ID
             param_id = getattr(edge.p, 'id', None) or f"synthetic:{edge.uuid}:p"
-            result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
+            result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
             parameters.append(ParameterQuery(
                 param_type="edge_base_p",
                 param_id=param_id,
@@ -680,10 +816,14 @@ def generate_all_parameter_queries(
         # 2. Conditional probabilities (edge.conditional_p[])
         if edge.conditional_p:
             for idx, cond_p in enumerate(edge.conditional_p):
+                # Skip if filtering by conditional_index and this isn't the target
+                if conditional_index is not None and idx != conditional_index:
+                    continue
+                
                 # Use real param_id if exists, otherwise generate synthetic ID
                 param_id = getattr(cond_p.p, 'id', None) or f"synthetic:{edge.uuid}:conditional_p[{idx}]"
                 condition_str = cond_p.condition
-                result = generate_query_for_edge(graph, edge, condition=condition_str, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
+                result = generate_query_for_edge(graph, edge, condition=condition_str, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
                 parameters.append(ParameterQuery(
                     param_type="edge_conditional_p",
                     param_id=param_id,
@@ -695,10 +835,12 @@ def generate_all_parameter_queries(
         
         # 3. Cost parameters (edge.cost_gbp, edge.cost_time)
         # These use same query as base probability (unconditional)
-        if edge.cost_gbp:
+        # Note: connection_name/provider already extracted above (pessimistic check)
+        # Skip if filtering by conditional_index (only want conditional, not costs)
+        if edge.cost_gbp and conditional_index is None:
             # Use real param_id if exists, otherwise generate synthetic ID
             param_id = getattr(edge.cost_gbp, 'id', None) or f"synthetic:{edge.uuid}:cost_gbp"
-            result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
+            result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
             parameters.append(ParameterQuery(
                 param_type="edge_cost_gbp",
                 param_id=param_id,
@@ -708,10 +850,10 @@ def generate_all_parameter_queries(
                 stats=result.coverage_stats
             ))
         
-        if edge.cost_time:
+        if edge.cost_time and conditional_index is None:
             # Use real param_id if exists, otherwise generate synthetic ID
             param_id = getattr(edge.cost_time, 'id', None) or f"synthetic:{edge.uuid}:cost_time"
-            result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
+            result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
             parameters.append(ParameterQuery(
                 param_type="edge_cost_time",
                 param_id=param_id,
@@ -738,7 +880,8 @@ def generate_all_parameter_queries(
                     edge_key = f"{edge.from_node}->{edge.to}"
                     # Each case edge needs case(case_id:variant) in query
                     condition_str = f"case({case_id}:{variant_name})"
-                    result = generate_query_for_edge(graph, edge, condition=condition_str, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context)
+                    connection_name, provider, _ = _extract_connection_info(edge)
+                    result = generate_query_for_edge(graph, edge, condition=condition_str, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
                     
                     parameters.append(ParameterQuery(
                         param_type="case_variant_edge",

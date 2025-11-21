@@ -7,9 +7,13 @@ import { db } from '../../db/appDatabase';
 import { encodeStateToUrl } from '../../lib/shareUrl';
 import { CommitModal } from '../CommitModal';
 import { NewFileModal } from '../NewFileModal';
+import { MergeConflictModal, ConflictFile } from '../modals/MergeConflictModal';
 import { gitService } from '../../services/gitService';
+import { gitConfig } from '../../config/gitConfig';
 import { ObjectType } from '../../types';
 import { fileOperationsService } from '../../services/fileOperationsService';
+import { repositoryOperationsService } from '../../services/repositoryOperationsService';
+import { workspaceService } from '../../services/workspaceService';
 import { IndexRebuildService } from '../../services/indexRebuildService';
 import toast from 'react-hot-toast';
 
@@ -45,6 +49,10 @@ export function FileMenu() {
   // New file modal state
   const [isNewFileModalOpen, setIsNewFileModalOpen] = useState(false);
   const [newFileType, setNewFileType] = useState<ObjectType | undefined>(undefined);
+  
+  // Merge conflict modal state
+  const [isMergeConflictModalOpen, setIsMergeConflictModalOpen] = useState(false);
+  const [mergeConflicts, setMergeConflicts] = useState<ConflictFile[]>([]);
   
   // Track dirty tabs - update when tabs or files change
   const [hasDirtyTabs, setHasDirtyTabs] = useState(false);
@@ -106,29 +114,100 @@ export function FileMenu() {
   };
 
 
-  const handleCommitChanges = () => {
-    // Open commit modal for dirty files
-    setCommitModalPreselectedFiles([]); // Empty means select all dirty files
-    setIsCommitModalOpen(true);
+  const handleCommitChanges = async () => {
+    try {
+      // Check if remote is ahead before committing
+      const { credentialsManager } = await import('../../lib/credentials');
+      const credsResult = await credentialsManager.loadCredentials();
+      
+      if (credsResult.success && credsResult.credentials) {
+        const gitCreds = credsResult.credentials.git.find(cred => cred.name === navState.selectedRepo);
+        
+        if (gitCreds) {
+          const toastId = toast.loading('Checking remote status...');
+          const remoteStatus = await workspaceService.checkRemoteAhead(
+            navState.selectedRepo,
+            navState.selectedBranch,
+            gitCreds
+          );
+          toast.dismiss(toastId);
+          
+          if (remoteStatus.isAhead) {
+            const confirmed = await showConfirm({
+              title: 'Remote Has Changes',
+              message: 
+                `The remote repository has changes you don't have:\n\n` +
+                `• ${remoteStatus.filesChanged} file(s) changed\n` +
+                `• ${remoteStatus.filesAdded} file(s) added\n` +
+                `• ${remoteStatus.filesDeleted} file(s) deleted\n\n` +
+                `It's recommended to pull first to avoid conflicts.\n\n` +
+                `Commit anyway?`,
+              confirmLabel: 'Commit Anyway',
+              cancelLabel: 'Pull First',
+              confirmVariant: 'danger'
+            });
+            
+            if (!confirmed) return;
+          }
+        }
+      }
+      
+      // Open commit modal for dirty files
+      setCommitModalPreselectedFiles([]); // Empty means select all dirty files
+      setIsCommitModalOpen(true);
+    } catch (error) {
+      console.error('Failed to check remote status:', error);
+      toast.error(`Failed to check remote: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   };
 
-  const handleCommitAllChanges = () => {
-    // Open commit modal with all dirty files
-    setCommitModalPreselectedFiles([]); // Empty means select all dirty files
-    setIsCommitModalOpen(true);
+  const handleCommitAllChanges = async () => {
+    // Same as handleCommitChanges - they both commit all dirty files
+    await handleCommitChanges();
   };
 
   const handlePullLatest = async () => {
     try {
-      const result = await gitService.pullLatest();
-      if (result.success) {
-        console.log('Pull successful:', result.message);
-        // TODO: Refresh navigator content - for now just log success
+      const selectedRepo = navState.selectedRepo;
+      const selectedBranch = navState.selectedBranch || gitConfig.branch;
+      
+      if (!selectedRepo) {
+        throw new Error('No repository selected. Please select a repository in the navigator.');
+      }
+
+      // Show loading toast
+      const toastId = toast.loading('Pulling latest changes...');
+
+      // Use repositoryOperationsService which does incremental pull with merge
+      const result = await repositoryOperationsService.pullLatest(selectedRepo, selectedBranch);
+
+      toast.dismiss(toastId);
+
+      if (result.conflicts && result.conflicts.length > 0) {
+        // Show conflict resolution modal
+        setMergeConflicts(result.conflicts);
+        setIsMergeConflictModalOpen(true);
+        toast.error(`Pull completed with ${result.conflicts.length} conflict(s)`, { duration: 5000 });
       } else {
-        alert(`Pull failed: ${result.error}`);
+        toast.success('Successfully pulled latest changes');
       }
     } catch (error) {
-      alert(`Pull failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('Pull failed:', errorMessage);
+      toast.error(`Pull failed: ${errorMessage}`);
+    }
+  };
+
+  const handleResolveConflicts = async (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => {
+    const { conflictResolutionService } = await import('../../services/conflictResolutionService');
+    
+    const resolvedCount = await conflictResolutionService.applyResolutions(mergeConflicts as any, resolutions);
+    
+    // Refresh navigator to show updated state
+    await navOps.refreshItems();
+    
+    if (resolvedCount > 0) {
+      toast.success(`Resolved ${resolvedCount} conflict${resolvedCount !== 1 ? 's' : ''}`);
     }
   };
 
@@ -637,6 +716,14 @@ export function FileMenu() {
         onClose={() => setIsNewFileModalOpen(false)}
         onCreate={handleCreateFile}
         fileType={newFileType}
+      />
+
+      {/* Merge Conflict Modal */}
+      <MergeConflictModal
+        isOpen={isMergeConflictModalOpen}
+        onClose={() => setIsMergeConflictModalOpen(false)}
+        conflicts={mergeConflicts}
+        onResolve={handleResolveConflicts}
       />
     </>
   );

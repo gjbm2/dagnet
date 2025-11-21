@@ -10,6 +10,12 @@ connections:
     description: "Production Amplitude analytics for conversion funnel data"
     enabled: true
     credsRef: amplitude
+    # Provider capabilities for MSMDC query generation
+    capabilities:
+      supports_native_exclude: false  # Amplitude requires minus()/plus() for exclusion logic
+      supports_visited: true
+      supports_ordered: true
+      max_funnel_length: 10
     # NOTE: Demo/test credentials - events may not exist in the test project
     # For real data, configure actual Amplitude project credentials
     defaults:
@@ -69,21 +75,33 @@ connections:
           const events = [];
           const eventFilters = dsl.event_filters || {};
           
-          // Add visited events to funnel (if any)
+          // WARN: Check for exclude() - NOT SUPPORTED by Amplitude API
+          if (dsl.exclude && dsl.exclude.length > 0) {
+            console.warn('[Amplitude Adapter] WARNING: exclude() is not supported by Amplitude API!');
+            console.warn('[Amplitude Adapter] Excluded events are being IGNORED:', dsl.exclude);
+            console.warn('[Amplitude Adapter] To fix: use minus() instead of exclude() in your query');
+            console.warn('[Amplitude Adapter] Example: from(A).to(C).minus(from(A).to(C).visited(B))');
+          }
+          
+          // Build funnel in correct order: from → visited → to
+          // CRITICAL: Start with 'from' to maintain correct denominator for pathway subtraction
+          events.push(buildEventStep(dsl.from, eventFilters[dsl.from]));
+          
+          // Add visited events (middle steps)
           if (dsl.visited && dsl.visited.length > 0) {
             events.push(...dsl.visited.map(eventName => 
               buildEventStep(eventName, eventFilters[eventName])
             ));
           }
           
-          // Add from → to events
-          events.push(buildEventStep(dsl.from, eventFilters[dsl.from]));
+          // End with 'to'
           events.push(buildEventStep(dsl.to, eventFilters[dsl.to]));
           
           // Convert window to Amplitude date format (YYYYMMDD)
           const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
-          const startDate = formatDate(window.start);
-          const endDate = formatDate(window.end);
+          // CRITICAL: Use dsl.window, not global window object!
+          const startDate = formatDate(dsl.window.start);
+          const endDate = formatDate(dsl.window.end);
           
           // Build segmentation parameter for cohort exclusions AND case filtering
           // Amplitude API expects: s=[{"prop":"...", "op":"...", "values":[...]}]
@@ -148,8 +166,8 @@ connections:
           ].filter(p => p).join('&');  // Filter out empty strings
           
           dsl.query_params = eventParams + '&' + otherParams;
-          dsl.from_step_index = events.length - 2;  // Index of from_event in results
-          dsl.to_step_index = events.length - 1;    // Index of to_event in results
+          dsl.from_step_index = 0;  // 'from' is always first step
+          dsl.to_step_index = events.length - 1;  // 'to' is always last step
           
           console.log('[Amplitude Adapter] Built funnel:', {
             events: events,
@@ -244,6 +262,10 @@ connections:
     enabled: true
     credsRef: google-sheets
     requires_event_ids: false  # Google Sheets reads from spreadsheet ranges, doesn't need node event_ids
+    capabilities:
+      supports_native_exclude: false  # Sheets doesn't process queries (data is static)
+      supports_visited: false
+      supports_ordered: false
     defaults:
       api_version: "v4"
     connection_string_schema:
@@ -336,6 +358,10 @@ connections:
     description: "Production Statsig for experiment variant allocations"
     enabled: true
     credsRef: statsig
+    capabilities:
+      supports_native_exclude: false  # Statsig returns variant allocations (static)
+      supports_visited: false
+      supports_ordered: false
     defaults:
       base_url: "https://statsigapi.net/console/v1"
       environment: production
@@ -456,6 +482,10 @@ connections:
     description: "PostgreSQL analytics database (example - configure credentials to enable)"
     enabled: false
     credsRef: postgres
+    capabilities:
+      supports_native_exclude: true  # SQL can use NOT IN / EXCEPT clauses
+      supports_visited: true
+      supports_ordered: true
     defaults:
       schema: public
     connection_string_schema:
