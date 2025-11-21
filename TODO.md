@@ -1,7 +1,7 @@
 # TODO
 
 ## Nasty glitches
-- what-if funky and fussy (render path...)
+- finish tests
 
 ## Current query DSL
 - whatifdsl is becoming (gradually) a more powerful general statement of the current query applied to the graph.

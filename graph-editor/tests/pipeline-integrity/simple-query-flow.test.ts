@@ -10,20 +10,32 @@ import { createTestGraph, createLinearGraph } from '../helpers/test-graph-builde
 import { MockFileRegistry, createMockParameterFile } from '../helpers/mock-file-registry';
 import { MockDASRunner, createMockAmplitudeResponse } from '../helpers/mock-das-runner';
 
+// Create mock instances that will be used across tests
+let mockFileRegistry: MockFileRegistry;
+let mockDASRunner: MockDASRunner;
+
+// Mock the TabContext at the top level (required for Vitest hoisting)
+vi.mock('../../src/contexts/TabContext', async () => {
+  const actual = await vi.importActual('../../src/contexts/TabContext');
+  return {
+    ...actual,
+    get fileRegistry() {
+      return mockFileRegistry;
+    }
+  };
+});
+
 describe('Pipeline Integrity: Simple Query Flow', () => {
-  let mockFileRegistry: MockFileRegistry;
-  let mockDASRunner: MockDASRunner;
   let dataOperationsService: any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Initialize fresh mock instances for each test
     mockFileRegistry = new MockFileRegistry();
     mockDASRunner = new MockDASRunner();
     
-    vi.mock('../../src/contexts/TabContext', () => ({
-      fileRegistry: mockFileRegistry
-    }));
-
-    dataOperationsService = require('../../src/services/dataOperationsService').dataOperationsService;
+    // Dynamically import the service after mocks are set up
+    const serviceModule = await import('../../src/services/dataOperationsService');
+    dataOperationsService = serviceModule.dataOperationsService;
   });
 
   afterEach(() => {
@@ -34,6 +46,7 @@ describe('Pipeline Integrity: Simple Query Flow', () => {
 
   /**
    * BASELINE TEST: Simple from().to() query
+   * Tests the full pipeline from query → DAS → file → graph
    */
   test('simple query: basic funnel execution', async () => {
     const graph = createLinearGraph();
