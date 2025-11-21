@@ -180,7 +180,14 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       });
     });
   };
-
+  
+  const handleSectionClearCache = (section: DataOperationSection) => {
+    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
+      dataOperationsService.clearCache(section.objectType, section.objectId);
+    });
+    onClose();
+  };
+  
   const handleCopyVars = async () => {
     const result = await copyVarsToClipboard(graph, [], selectedEdgeUuids);
     
@@ -544,7 +551,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onPutToFile={handleSectionPutToFile}
               onGetFromSource={handleSectionGetFromSource}
               onGetFromSourceDirect={handleSectionGetFromSourceDirect}
-                  />
+              onClearCache={handleSectionClearCache}
+            />
           ))}
         </>
       )}

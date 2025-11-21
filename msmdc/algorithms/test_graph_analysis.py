@@ -170,32 +170,44 @@ def test_complex_multi_path_graph():
 def test_simple_diamond():
     """
     Simple diamond: A → B → C, A → D → C
-    Want to isolate A→B
+    Edge-level vs branch-level behaviour.
     """
     G = nx.DiGraph()
     G.add_edges_from([
         ('a', 'b'), ('b', 'c'),
         ('a', 'd'), ('d', 'c')
     ])
-    
-    query = compile_query_for_edge(
+
+    # 1) Edge-level: a→b has a single path from a to b, so no exclusion needed.
+    query_ab = compile_query_for_edge(
         G,
         ('a', 'b'),
         provider='amplitude',
         supports_native_exclude=False
     )
-    
-    print("\n=== Simple Diamond Test ===")
-    print(f"Edge to isolate: a→b")
-    print(f"Generated query: {query}")
-    
-    # Should be: from(a).to(c).minus(from(a).to(d).visited(d))
-    # or: from(a).to(c).minus(from(a).to(c).visited(d))
-    assert query.startswith("from(a).to(c)")
-    assert "minus" in query
-    assert "visited(d)" in query
-    
-    return query
+
+    print("\n=== Simple Diamond (edge a→b) ===")
+    print(f"Generated query_ab: {query_ab}")
+
+    assert query_ab == "from(a).to(b)"
+    assert "minus" not in query_ab
+    assert "exclude" not in query_ab
+
+    # 2) Branch-level to merge node: a→c has two competing paths via b and d.
+    query_ac = compile_query_for_edge(
+        G,
+        ('a', 'c'),
+        provider='amplitude',
+        supports_native_exclude=False
+    )
+
+    print("\n=== Simple Diamond (edge a→c) ===")
+    print(f"Generated query_ac: {query_ac}")
+
+    assert query_ac.startswith("from(a).to(c)")
+    assert "minus" in query_ac
+
+    return query_ac
 
 
 def test_native_exclude_provider():

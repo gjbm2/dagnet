@@ -3,6 +3,34 @@ import { gitService } from './gitService';
 import { fileRegistry } from '../contexts/TabContext';
 import { WorkspaceState, FileState, ObjectType } from '../types';
 import YAML from 'yaml';
+import { merge3Way } from './mergeService';
+
+export interface RemoteStatus {
+  isAhead: boolean;
+  filesChanged: number;
+  filesAdded: number;
+  filesDeleted: number;
+  changedPaths: string[];
+}
+
+export interface MergeConflict {
+  fileId: string;
+  fileName: string;
+  path: string;
+  type: ObjectType;
+  localContent: string;
+  remoteContent: string;
+  baseContent: string;
+  mergedContent: string;
+  hasConflicts: boolean;
+}
+
+export interface PullResult {
+  success: boolean;
+  conflicts: MergeConflict[];
+  filesUpdated?: number;
+  filesDeleted?: number;
+}
 
 /**
  * Workspace Service
@@ -26,6 +54,117 @@ class WorkspaceService {
   async getWorkspace(repository: string, branch: string): Promise<WorkspaceState | undefined> {
     const workspaceId = `${repository}-${branch}`;
     return await db.workspaces.get(workspaceId);
+  }
+
+  /**
+   * Check if remote has changes we don't have (is ahead of us)
+   * Returns true if pull would fetch new changes
+   * 
+   * This should be called before commit to warn user to pull first
+   */
+  async checkRemoteAhead(repository: string, branch: string, gitCreds: any): Promise<RemoteStatus> {
+    console.log(`🔍 WorkspaceService: Checking if remote is ahead for ${repository}/${branch}`);
+
+    // Configure git service
+    const fullCredentials = {
+      version: '1.0.0',
+      defaultGitRepo: gitCreds.name,
+      git: [gitCreds]
+    };
+    gitService.setCredentials(fullCredentials);
+
+    try {
+      // Get local file SHAs
+      const localFiles = await db.files
+        .where('source.repository').equals(repository)
+        .and(file => file.source?.branch === branch)
+        .toArray();
+
+      const localShaMap = new Map<string, string>();
+      for (const file of localFiles) {
+        if (file.source?.path && file.sha) {
+          localShaMap.set(file.source.path, file.sha);
+        }
+      }
+
+      // Get remote tree
+      const treeResult = await gitService.getRepositoryTree(branch, true);
+      if (!treeResult.success || !treeResult.data) {
+        throw new Error('Failed to fetch remote tree');
+      }
+
+      const { tree } = treeResult.data;
+
+      // Filter relevant remote files
+      const basePath = gitCreds.basePath || '';
+      const directories = [
+        { path: gitCreds.graphsPath || 'graphs', type: 'graph' as ObjectType, extension: 'json' },
+        { path: gitCreds.paramsPath || 'parameters', type: 'parameter' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' },
+        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' }
+      ];
+
+      const remoteFiles: any[] = [];
+      for (const dir of directories) {
+        const fullPath = basePath ? `${basePath}/${dir.path}` : dir.path;
+        const matchingFiles = tree.filter((item: any) => {
+          if (item.type !== 'blob') return false;
+          if (!item.path.startsWith(fullPath + '/')) return false;
+          if (!item.path.endsWith(`.${dir.extension}`)) return false;
+          const relativePath = item.path.substring((fullPath + '/').length);
+          return !relativePath.includes('/');
+        });
+        remoteFiles.push(...matchingFiles);
+      }
+
+      // Compare SHAs
+      let changed = 0;
+      let added = 0;
+      let deleted = 0;
+      const changedPaths: string[] = [];
+
+      for (const remoteFile of remoteFiles) {
+        const localSha = localShaMap.get(remoteFile.path);
+        if (!localSha) {
+          added++;
+          changedPaths.push(remoteFile.path);
+        } else if (localSha !== remoteFile.sha) {
+          changed++;
+          changedPaths.push(remoteFile.path);
+        }
+        localShaMap.delete(remoteFile.path);
+      }
+
+      // Remaining local files were deleted remotely
+      deleted = localShaMap.size;
+      for (const path of localShaMap.keys()) {
+        changedPaths.push(path);
+      }
+
+      const isAhead = changed > 0 || added > 0 || deleted > 0;
+
+      console.log(`🔍 Remote status: ahead=${isAhead}, changed=${changed}, added=${added}, deleted=${deleted}`);
+
+      return {
+        isAhead,
+        filesChanged: changed,
+        filesAdded: added,
+        filesDeleted: deleted,
+        changedPaths
+      };
+    } catch (error) {
+      console.error('❌ WorkspaceService: Failed to check remote status:', error);
+      // On error, assume remote might be ahead (safer)
+      return {
+        isAhead: true,
+        filesChanged: 0,
+        filesAdded: 0,
+        filesDeleted: 0,
+        changedPaths: []
+      };
+    }
   }
 
   /**
@@ -325,8 +464,9 @@ class WorkspaceService {
    * Similar to git pull - fetches changes and updates local workspace.
    * 
    * NEW: Uses SHA comparison to only fetch changed files (5x faster than re-clone)
+   * Returns conflicts if 3-way merge fails for any files with local changes
    */
-  async pullLatest(repository: string, branch: string, gitCreds: any): Promise<void> {
+  async pullLatest(repository: string, branch: string, gitCreds: any): Promise<PullResult> {
     const workspaceId = `${repository}-${branch}`;
     console.log(`🔄 WorkspaceService: Pulling latest for ${workspaceId} (smart diff)...`);
 
@@ -334,7 +474,7 @@ class WorkspaceService {
     if (!workspace) {
       console.log(`⚠️ WorkspaceService: Workspace doesn't exist, cloning instead...`);
       await this.cloneWorkspace(repository, branch, gitCreds);
-      return;
+      return { success: true, conflicts: [] };
     }
 
     // Configure git service with full credentials
@@ -470,10 +610,13 @@ class WorkspaceService {
         console.log(`⚡ WorkspaceService: Pull complete in ${elapsed}ms - no changes!`);
         workspace.lastSynced = Date.now();
         await db.workspaces.put(workspace);
-        return;
+        return { success: true, conflicts: [], filesUpdated: 0, filesDeleted: 0 };
       }
 
-      // STEP 6: Fetch changed files in parallel
+      // STEP 6: Fetch changed files and perform 3-way merge if needed
+      const conflicts: MergeConflict[] = [];
+      let updatedCount = 0;
+      
       if (toFetch.length > 0) {
         console.log(`📦 WorkspaceService: Fetching ${toFetch.length} changed files in parallel...`);
         
@@ -495,45 +638,121 @@ class WorkspaceService {
               data = YAML.parse(contentStr);
             }
 
-            // Create FileState
+            // Create FileState identifiers
             const fileName = treeItem.path.split('/').pop();
             const fileNameWithoutExt = fileName.replace(/\.(yaml|yml|json)$/, '');
             const fileId = dirConfig.isIndex 
               ? `${dirConfig.type}-index`
               : `${dirConfig.type}-${fileNameWithoutExt}`;
 
-            const fileState: FileState = {
-              fileId,
-              type: dirConfig.type,
-              name: fileName,
-              path: treeItem.path,
-              data,
-              originalData: structuredClone(data),
-              isDirty: false,
-              source: {
-                repository,
-                path: treeItem.path,
-                branch,
-                commitHash: treeItem.sha
-              },
-              isLoaded: true,
-              isLocal: false,
-              viewTabs: [],
-              lastModified: Date.now(),
-              sha: treeItem.sha,
-              lastSynced: Date.now()
-            };
+            // Check if local file exists and is dirty
+            const localFileState = localFileMap.get(treeItem.path);
+            
+            if (localFileState && localFileState.isDirty) {
+              // Local changes exist - perform 3-way merge
+              console.log(`🔀 WorkspaceService: 3-way merge needed for ${treeItem.path} (local changes detected)`);
+              
+              // Convert to strings for merge
+              const remoteContent = contentStr;
+              const baseContent = localFileState.originalData 
+                ? (dirConfig.type === 'graph' 
+                    ? JSON.stringify(localFileState.originalData, null, 2)
+                    : YAML.stringify(localFileState.originalData))
+                : '';
+              const localContent = localFileState.data
+                ? (dirConfig.type === 'graph'
+                    ? JSON.stringify(localFileState.data, null, 2)
+                    : YAML.stringify(localFileState.data))
+                : '';
 
-            // Update in IndexedDB
-            await db.files.put(fileState);
-            
-            // Update in FileRegistry if it's loaded
-            if (fileRegistry.getFile(fileId)) {
-              (fileRegistry as any).files.set(fileId, fileState);
-              (fileRegistry as any).notifyListeners(fileId, fileState);
+              // Perform 3-way merge
+              const mergeResult = merge3Way(baseContent, localContent, remoteContent);
+
+              if (mergeResult.hasConflicts) {
+                // Conflict detected - preserve local and notify user
+                console.warn(`⚠️ WorkspaceService: CONFLICT detected for ${treeItem.path}`);
+                conflicts.push({
+                  fileId,
+                  fileName,
+                  path: treeItem.path,
+                  type: dirConfig.type,
+                  localContent,
+                  remoteContent,
+                  baseContent,
+                  mergedContent: mergeResult.merged || '',
+                  hasConflicts: true
+                });
+                
+                // Keep local version in IndexedDB for now, user will resolve via modal
+                return;
+              } else {
+                // Auto-merge successful
+                console.log(`✅ WorkspaceService: Auto-merged ${treeItem.path}`);
+                
+                // Parse merged content back to object
+                const mergedContent = mergeResult.merged || remoteContent;
+                const mergedData = dirConfig.type === 'graph'
+                  ? JSON.parse(mergedContent)
+                  : YAML.parse(mergedContent);
+
+                // Update file state with merged content
+                localFileState.data = mergedData;
+                localFileState.originalData = structuredClone(mergedData);
+                localFileState.isDirty = false;
+                localFileState.sha = treeItem.sha;
+                localFileState.lastSynced = Date.now();
+                localFileState.source = {
+                  repository,
+                  path: treeItem.path,
+                  branch,
+                  commitHash: treeItem.sha
+                };
+
+                await db.files.put(localFileState);
+                
+                // Update in FileRegistry if loaded
+                if (fileRegistry.getFile(fileId)) {
+                  (fileRegistry as any).files.set(fileId, localFileState);
+                  (fileRegistry as any).notifyListeners(fileId, localFileState);
+                }
+                
+                updatedCount++;
+              }
+            } else {
+              // No local changes - safe to update
+              const fileState: FileState = {
+                fileId,
+                type: dirConfig.type,
+                name: fileName,
+                path: treeItem.path,
+                data,
+                originalData: structuredClone(data),
+                isDirty: false,
+                source: {
+                  repository,
+                  path: treeItem.path,
+                  branch,
+                  commitHash: treeItem.sha
+                },
+                isLoaded: true,
+                isLocal: false,
+                viewTabs: localFileState?.viewTabs || [],
+                lastModified: Date.now(),
+                sha: treeItem.sha,
+                lastSynced: Date.now()
+              };
+
+              await db.files.put(fileState);
+              
+              // Update in FileRegistry if loaded
+              if (fileRegistry.getFile(fileId)) {
+                (fileRegistry as any).files.set(fileId, fileState);
+                (fileRegistry as any).notifyListeners(fileId, fileState);
+              }
+              
+              console.log(`✅ WorkspaceService: Updated ${treeItem.path}`);
+              updatedCount++;
             }
-            
-            console.log(`✅ WorkspaceService: Updated ${treeItem.path}`);
           } catch (error) {
             console.error(`❌ WorkspaceService: Failed to update ${treeItem.path}:`, error);
           }
@@ -571,14 +790,23 @@ class WorkspaceService {
       await db.workspaces.put(workspace);
 
       const elapsed = Date.now() - startTime;
-      console.log(`⚡ WorkspaceService: Pull complete in ${elapsed}ms! Updated ${toFetch.length}, deleted ${toDelete.length}`);
+      
+      if (conflicts.length > 0) {
+        console.log(`⚠️ WorkspaceService: Pull complete in ${elapsed}ms with ${conflicts.length} conflicts! Updated ${updatedCount}, deleted ${toDelete.length}`);
+        return { success: true, conflicts, filesUpdated: updatedCount, filesDeleted: toDelete.length };
+      }
+      
+      console.log(`⚡ WorkspaceService: Pull complete in ${elapsed}ms! Updated ${updatedCount}, deleted ${toDelete.length}`);
+      return { success: true, conflicts: [], filesUpdated: updatedCount, filesDeleted: toDelete.length };
 
     } catch (error) {
       console.error(`❌ WorkspaceService: Pull failed, falling back to full re-clone:`, error);
       
       // Fallback: Delete and re-clone
       await this.deleteWorkspace(repository, branch);
-    await this.cloneWorkspace(repository, branch, gitCreds);
+      await this.cloneWorkspace(repository, branch, gitCreds);
+      
+      return { success: true, conflicts: [] };
     }
   }
 

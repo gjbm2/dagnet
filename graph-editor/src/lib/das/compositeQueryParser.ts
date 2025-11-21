@@ -54,8 +54,9 @@ function extractTerms(dsl: string): {
 } {
   // Match .minus(node-list) and .plus(node-list)
   // Compact form: just comma-separated nodes, no from/to/visited wrappers
-  const minusRegex = /\.minus\(([a-z0-9_,-]+)\)/g;
-  const plusRegex = /\.plus\(([a-z0-9_,-]+)\)/g;
+  // ALLOW UPPERCASE LETTERS in event IDs
+  const minusRegex = /\.minus\(([a-zA-Z0-9_,-]+)\)/g;
+  const plusRegex = /\.plus\(([a-zA-Z0-9_,-]+)\)/g;
   
   const minusStrings: string[] = [];
   const plusStrings: string[] = [];
@@ -85,16 +86,16 @@ function extractTerms(dsl: string): {
  * Parse a single funnel expression (from...to...visited...).
  */
 function parseSingleFunnel(funnelStr: string): ParsedFunnel {
-  // Extract from() and to()
-  const fromMatch = funnelStr.match(/from\(([a-z0-9_-]+)\)/);
-  const toMatch = funnelStr.match(/to\(([a-z0-9_-]+)\)/);
+  // Extract from() and to() - ALLOW UPPERCASE LETTERS in event IDs
+  const fromMatch = funnelStr.match(/from\(([a-zA-Z0-9_-]+)\)/);
+  const toMatch = funnelStr.match(/to\(([a-zA-Z0-9_-]+)\)/);
   
   if (!fromMatch || !toMatch) {
     throw new Error(`Invalid funnel syntax: ${funnelStr}`);
   }
   
-  // Extract visited() nodes
-  const visitedMatches = [...funnelStr.matchAll(/visited\(([a-z0-9_-]+)\)/g)];
+  // Extract visited() nodes - ALLOW UPPERCASE LETTERS in event IDs
+  const visitedMatches = [...funnelStr.matchAll(/visited\(([a-zA-Z0-9_-]+)\)/g)];
   const visited = visitedMatches.map(m => m[1]);
   
   // Extract visitedAny() groups

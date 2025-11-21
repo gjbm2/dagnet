@@ -288,6 +288,14 @@ export async function buildDslFromEdge(
     console.log('DSL with event filters:', dsl.event_filters);
   }
   
+  // ===== DIAGNOSTIC: Show final DSL and what was NOT preserved =====
+  console.log('[buildDslFromEdge] Final DSL:', dsl);
+  console.log('[buildDslFromEdge] Original query had minus():', edge.query?.includes('.minus('));
+  console.log('[buildDslFromEdge] Original query had plus():', edge.query?.includes('.plus('));
+  console.log('[buildDslFromEdge] WARNING: minus()/plus() terms are NOT preserved in DSL object');
+  console.log('[buildDslFromEdge] Composite query execution must check edge.query BEFORE calling buildDslFromEdge');
+  // ================================================================
+  
   return dsl;
 }
 

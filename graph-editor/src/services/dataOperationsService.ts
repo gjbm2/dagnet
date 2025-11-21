@@ -31,6 +31,7 @@ import toast from 'react-hot-toast';
 import { fileRegistry } from '../contexts/TabContext';
 import { UpdateManager } from './UpdateManager';
 import type { Graph, DateRange } from '../types';
+import type { CombinedResult } from '../lib/das/compositeQueryExecutor';
 import {
   WindowAggregationService,
   parameterToTimeSeries,
@@ -301,6 +302,7 @@ async function computeQuerySignature(
     
     // Create a canonical representation of the query
     // Include both node IDs (for backward compatibility) and event_ids (for change detection)
+    // CRITICAL: Also include the ORIGINAL query string to detect minus()/plus() changes
     const canonical = JSON.stringify({
       connection: connectionName || '',
       // Provider-specific event names (from DSL)
@@ -316,6 +318,9 @@ async function computeQuerySignature(
       event_filters: dsl.event_filters || {},
       context: (dsl.context || []).sort(),
       case: (dsl.case || []).sort(),
+      // IMPORTANT: Include original query string to capture minus()/plus() terms
+      // which are NOT preserved in the DSL object by buildDslFromEdge
+      original_query: edge?.query || '',
     });
     
     // Compute SHA-256 hash
@@ -324,6 +329,17 @@ async function computeQuerySignature(
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    
+    // ===== DIAGNOSTIC: Show what went into the signature =====
+    console.log('[computeQuerySignature] Signature computed:', {
+      signature: hashHex.substring(0, 12) + '...',
+      originalQuery: edge?.query || 'N/A',
+      hasMinus: (edge?.query || '').includes('.minus('),
+      hasPlus: (edge?.query || '').includes('.plus('),
+      canonicalKeys: Object.keys(JSON.parse(canonical)),
+    });
+    // =========================================================
+    
     return hashHex;
   } catch (error) {
     console.warn('[DataOperationsService] Failed to compute query signature:', error);
@@ -579,23 +595,31 @@ class DataOperationsService {
                   }
                 }
                 
-                // Filter to only use entries matching the latest/expected signature
-                // Only filter if we have entries with signatures (otherwise use all entries as legacy data)
-                if (signatureToUse && hasAnySignatures) {
+                // CRITICAL: Always filter to ONLY signed values matching the signature
+                // Unsigned values (from "Unsign cache") are treated as non-existent
+                // This ensures unsigned cache doesn't pollute aggregation results
+                if (signatureToUse) {
                   const beforeFilter = valuesWithDaily.length;
-                  // Only include entries that match the signature (exclude entries with different signatures)
-                  // Entries without query_signature are excluded if we're filtering by signature
+                  // Only include entries that match the signature
+                  // Unsigned entries (no query_signature) are ALWAYS excluded
                   const filteredValues = valuesWithDaily.filter(v => 
                     v.query_signature === signatureToUse
                   );
                   
                   if (filteredValues.length < beforeFilter) {
-                    const excludedCount = beforeFilter - filteredValues.length;
-                    console.log(`[DataOperationsService] Filtered ${beforeFilter} entries to ${filteredValues.length} matching signature ${signatureToUse} (excluded ${excludedCount} entries with different/missing signatures)`);
+                    const unsignedCount = valuesWithDaily.filter(v => !v.query_signature).length;
+                    const differentSignatureCount = beforeFilter - filteredValues.length - unsignedCount;
+                    
+                    console.log(`[DataOperationsService] Filtered ${beforeFilter} entries to ${filteredValues.length} matching signature ${signatureToUse}`);
+                    console.log(`[DataOperationsService] Excluded: ${unsignedCount} unsigned values + ${differentSignatureCount} with different signatures`);
                     // Replace valuesWithDaily with filtered list
                     valuesWithDaily.length = 0;
                     valuesWithDaily.push(...filteredValues);
                   }
+                } else if (!hasAnySignatures) {
+                  // No signatures found at all (all unsigned) - treat as empty
+                  console.log(`[DataOperationsService] No signatures found - ignoring all ${valuesWithDaily.length} unsigned values`);
+                  valuesWithDaily.length = 0;
                 }
               } catch (error) {
                 console.warn('[DataOperationsService] Failed to validate query signature:', error);
@@ -1977,6 +2001,12 @@ class DataOperationsService {
         const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
         
         if (targetEdge && targetEdge.query) {
+          // ===== DIAGNOSTIC LOGGING FOR COMPOSITE QUERIES =====
+          console.log('[DataOps:COMPOSITE] Edge query string:', targetEdge.query);
+          console.log('[DataOps:COMPOSITE] Contains minus():', targetEdge.query.includes('.minus('));
+          console.log('[DataOps:COMPOSITE] Contains plus():', targetEdge.query.includes('.plus('));
+          // ===================================================
+          
           // Parse query string (format: "from(nodeA).to(nodeB)")
           // For now, pass the edge with query string to buildDslFromEdge
           // which will parse node references and resolve event names
@@ -2084,12 +2114,28 @@ class DataOperationsService {
       let querySignature: string | undefined;
       let shouldSkipFetch = false;
       
-      if (dailyMode && objectType === 'parameter' && objectId) {
+      // CRITICAL: ALWAYS compute query signature for dailyMode (even on first fetch)
+      // We need it to sign the data we're writing to the parameter file
+      if (dailyMode && objectType === 'parameter') {
+        const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
+        querySignature = await computeQuerySignature(dsl, connectionName, graph, targetEdge);
+        console.log('[DataOperationsService] Computed query signature for storage:', {
+          signature: querySignature?.substring(0, 16) + '...',
+          dailyMode,
+          objectType
+        });
+      }
+      
+      // IMPORTANT: Only check for incremental fetch if bustCache is NOT set
+      // When user explicitly chooses "Get from Source (direct)", we should ALWAYS fetch
+      // The dailyMode flag controls whether we SAVE to file, not whether we check cache
+      const shouldCheckIncrementalFetch = dailyMode && !bustCache && objectType === 'parameter' && objectId;
+      
+      if (shouldCheckIncrementalFetch) {
         const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
         if (paramFile && paramFile.data) {
-          // Compute query signature for consistency checking (include event_ids from nodes)
-          const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
-          querySignature = await computeQuerySignature(dsl, connectionName, graph, targetEdge);
+          // Query signature was already computed above for signing purposes
+          // Now use it for incremental fetch logic
           
           // Filter parameter file values to latest signature before calculating incremental fetch
           // This ensures we only consider dates from matching signature when determining what to fetch
@@ -2127,21 +2173,45 @@ class DataOperationsService {
               // Use latest signature if found, otherwise use expected signature
               const signatureToUse = latestQuerySignature || querySignature;
               
-              // Filter values to only those matching the signature
-              // Only filter if we have entries with signatures (otherwise use all entries as legacy data)
-              if (signatureToUse && hasAnySignatures) {
+              // CRITICAL: Always filter to ONLY signed values
+              // Unsigned values (from "Unsign cache") are treated as non-existent
+              // This ensures that unsigned cache is effectively cleared for incremental fetch logic
+              if (signatureToUse) {
                 const filteredValues = paramFile.data.values.filter((v: ParameterValue) => 
                   v.query_signature === signatureToUse
                 );
                 
                 if (filteredValues.length < paramFile.data.values.length) {
+                  const unsignedCount = paramFile.data.values.filter((v: ParameterValue) => !v.query_signature).length;
+                  const differentSignatureCount = paramFile.data.values.length - filteredValues.length - unsignedCount;
+                  
                   console.log(`[DataOperationsService] Filtered ${paramFile.data.values.length} values to ${filteredValues.length} matching signature ${signatureToUse} before incremental fetch`);
-                  console.log(`[DataOperationsService] This ensures we only fetch missing dates for the latest query signature (event definitions may have changed)`);
+                  console.log(`[DataOperationsService] Excluded: ${unsignedCount} unsigned values + ${differentSignatureCount} with different signatures`);
+                  
+                  // ===== DIAGNOSTIC: Show WHY signatures matched/mismatched =====
+                  console.log('[DataOperationsService] Signature comparison:', {
+                    expectedSignature: querySignature?.substring(0, 12) + '...',
+                    latestSignature: latestQuerySignature?.substring(0, 12) + '...',
+                    signatureToUse: signatureToUse?.substring(0, 12) + '...',
+                    signaturesMatch: querySignature === latestQuerySignature,
+                    allSignaturesInFile: Array.from(signatureTimestamps.keys()).map(s => s.substring(0, 12) + '...'),
+                    hasAnySignatures,
+                    unsignedValuesIgnored: unsignedCount,
+                  });
+                  // ==============================================================
+                  
                   filteredParamData = {
                     ...paramFile.data,
                     values: filteredValues
                   };
                 }
+              } else if (!hasAnySignatures) {
+                // No signatures found at all (all unsigned) - treat as empty
+                console.log(`[DataOperationsService] No signatures found - treating all ${paramFile.data.values.length} unsigned values as non-existent`);
+                filteredParamData = {
+                  ...paramFile.data,
+                  values: []
+                };
               }
             }
           }
@@ -2162,6 +2232,7 @@ class DataOperationsService {
             needsFetch: incrementalResult.needsFetch,
             fetchWindows: incrementalResult.fetchWindows,
             fetchWindow: incrementalResult.fetchWindow, // Combined window for backward compat
+            bustCache: bustCache, // Show if cache bust is active
           });
           
           if (!incrementalResult.needsFetch && !bustCache) {
@@ -2233,12 +2304,26 @@ class DataOperationsService {
       let fullQueryForStorage: string | undefined = undefined;
       
       // Check if query uses composite operators (minus/plus for inclusion-exclusion)
-      const queryString = dsl.query || '';
+      // CRITICAL: Check the ORIGINAL edge query string, NOT dsl.query (which doesn't exist after buildDslFromEdge)
+      const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
+      const queryString = targetEdge?.query || '';
       const isComposite = /\.(minus|plus)\(/.test(queryString);
       
+      // ===== DIAGNOSTIC LOGGING FOR COMPOSITE QUERY DETECTION =====
+      console.log('[DataOps:COMPOSITE] Query detection:', {
+        hasTargetEdge: !!targetEdge,
+        queryString: queryString,
+        isComposite: isComposite,
+        dslHasQuery: !!(dsl as any).query,
+        dslKeys: Object.keys(dsl),
+      });
+      // ===========================================================
+      
       // Capture query info for storage (same for all gaps)
+      // CRITICAL: Store the DSL STRING (from graph edge), not the DSL object
+      // The DSL object has provider event names; we want the original query string
       if (dailyMode) {
-        queryParamsForStorage = dsl;
+        queryParamsForStorage = queryString || dsl; // Use query string first, fall back to DSL object
         fullQueryForStorage = queryString || JSON.stringify(dsl);
       }
       
@@ -2270,24 +2355,36 @@ class DataOperationsService {
           const { executeCompositeQuery } = await import('../lib/das/compositeQueryExecutor');
           
           try {
-            const combined = await executeCompositeQuery(
+            // CRITICAL: Pass context mode to sub-queries (daily or aggregate)
+            const combined: CombinedResult = await executeCompositeQuery(
               queryString,
-              { ...dsl, window: fetchWindow },
+              { ...dsl, window: fetchWindow, mode: contextMode },
               connectionName,
               runner
             );
             
-            // Map combined result to update format (use latest result for non-daily mode)
-            // Use schema terminology: mean, n, k (not external API terminology)
-            if (!dailyMode) {
+            console.log(`[DataOperationsService] Composite query result for gap ${gapIndex + 1}:`, combined);
+            
+            // Extract results based on mode
+            if (dailyMode) {
+              // CRITICAL: Extract time-series data from composite result
+              if (combined.evidence?.time_series && Array.isArray(combined.evidence.time_series)) {
+                const timeSeries = combined.evidence.time_series;
+                console.log(`[DataOperationsService] Extracted ${timeSeries.length} days from composite query (gap ${gapIndex + 1})`);
+                allTimeSeriesData.push(...timeSeries);
+              } else {
+                console.warn(`[DataOperationsService] No time-series in composite result for gap ${gapIndex + 1}`, combined);
+                toast.error(`Composite query returned no daily data for gap ${gapIndex + 1}`, { id: 'das-fetch' });
+                return;
+              }
+            } else {
+              // Non-daily mode: use aggregated results
               updateData = {
                 mean: combined.p_mean,
                 n: combined.n,
                 k: combined.k
               };
             }
-            
-            console.log(`[DataOperationsService] Composite query result for gap ${gapIndex + 1}:`, combined);
             
           } catch (error) {
             toast.error(`Composite query failed for gap ${gapIndex + 1}: ${error instanceof Error ? error.message : String(error)}`, { id: 'das-fetch' });
@@ -2548,9 +2645,32 @@ class DataOperationsService {
             const updatedFileData = structuredClone(paramFile.data);
             updatedFileData.values = existingValues;
             
+            // CRITICAL: Push graph's query string to parameter file (graph is master for queries)
+            // This is the ONE place where graph→file update happens (when fetching from source)
+            if (queryString) {
+              updatedFileData.query = queryString;
+              console.log('[DataOperationsService] Updated parameter file query from graph:', {
+                paramId: objectId,
+                query: queryString
+              });
+            }
+            
             await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);
             
             toast.success(`✓ Added ${allTimeSeriesData.length} new days across ${actualFetchWindows.length} gap${actualFetchWindows.length > 1 ? 's' : ''}`, { duration: 2000 });
+            
+            // CRITICAL: After writing daily time-series to file, load it back into the graph
+            // This is the "versioned path" that applies File→Graph (see comment at line ~2909)
+            if (graph && setGraph && targetId) {
+              console.log('[DataOperationsService] Loading newly written parameter data from file into graph');
+              await this.getParameterFromFile({
+                paramId: objectId,
+                edgeId: targetId,
+                graph,
+                setGraph,
+                window: requestedWindow // Aggregate across the full requested window
+              });
+            }
           } else {
             console.warn('[DataOperationsService] Parameter file not found, skipping time-series storage');
           }
@@ -2962,6 +3082,114 @@ class DataOperationsService {
       viewMode: 'interactive',
       switchIfExists: true
     });
+  }
+  
+  /**
+   * Unsign cache for a parameter, case, or node file
+   * 
+   * For parameters: Removes query_signature from all cached values[] entries
+   *   - Data stays intact (less destructive)
+   *   - Signatures don't match, so next fetch will re-retrieve
+   * For cases: Removes signatures from schedule data
+   * For nodes: Currently no-op (nodes don't have cached data)
+   * 
+   * Use this when:
+   * - Implementation bugs were fixed (e.g., adapter query generation)
+   * - You suspect cached data is stale
+   * - Query signature doesn't detect the change but data is wrong
+   */
+  async clearCache(objectType: 'parameter' | 'case' | 'node', objectId: string): Promise<void> {
+    try {
+      if (objectType === 'parameter') {
+        const fileId = `parameter-${objectId}`;
+        const file = fileRegistry.getFile(fileId);
+        
+        if (!file) {
+          toast.error(`Parameter file not found: ${objectId}`);
+          return;
+        }
+        
+        // Count how many values have signatures
+        const signedCount = file.data.values?.filter((v: any) => v.query_signature).length || 0;
+        
+        if (signedCount === 0) {
+          toast('No signed cache entries to unsign', { icon: 'ℹ️', duration: 2000 });
+          return;
+        }
+        
+        // Remove query_signature from all values (keep the data itself)
+        const updatedValues = file.data.values?.map((v: any) => {
+          const { query_signature, ...rest } = v;
+          return rest;
+        }) || [];
+        
+        const updatedData = {
+          ...file.data,
+          values: updatedValues
+        };
+        
+        await fileRegistry.updateFile(fileId, updatedData);
+        
+        toast.success(`Unsigned ${signedCount} cached value${signedCount !== 1 ? 's' : ''} in ${objectId}`, {
+          duration: 3000
+        });
+        
+        console.log('[DataOperationsService] Unsigned cache:', {
+          objectType,
+          objectId,
+          signedCount
+        });
+        
+      } else if (objectType === 'case') {
+        const fileId = `case-${objectId}`;
+        const file = fileRegistry.getFile(fileId);
+        
+        if (!file) {
+          toast.error(`Case file not found: ${objectId}`);
+          return;
+        }
+        
+        // For cases, remove signature if present
+        // (Case schema may vary - adjust as needed)
+        const scheduleCount = Array.isArray(file.data.schedules) 
+          ? file.data.schedules.length 
+          : file.data.case?.schedules?.length || 0;
+        
+        if (scheduleCount === 0) {
+          toast('No cached schedules to unsign', { icon: 'ℹ️', duration: 2000 });
+          return;
+        }
+        
+        // Remove signatures from schedules if they have them
+        const updatedSchedules = (file.data.schedules || file.data.case?.schedules || []).map((s: any) => {
+          const { query_signature, ...rest } = s;
+          return rest;
+        });
+        
+        const updatedData = {
+          ...file.data,
+          schedules: updatedSchedules,
+          case: {
+            ...file.data.case,
+            schedules: updatedSchedules
+          }
+        };
+        
+        await fileRegistry.updateFile(fileId, updatedData);
+        
+        toast.success(`Unsigned ${scheduleCount} cached schedule${scheduleCount !== 1 ? 's' : ''} in ${objectId}`, {
+          duration: 3000
+        });
+        
+      } else {
+        // Nodes don't have cached data (yet)
+        toast('Nodes don\'t have cached data to unsign', { icon: 'ℹ️', duration: 2000 });
+      }
+      
+    } catch (error) {
+      console.error('[DataOperationsService] Failed to unsign cache:', error);
+      toast.error(`Failed to unsign cache: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   
   /**

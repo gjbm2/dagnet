@@ -287,6 +287,10 @@ export function DataMenu() {
     });
   };
   
+  const handleSectionClearCache = (section: DataOperationSection) => {
+    dataOperationsService.clearCache(section.objectType, section.objectId);
+  };
+  
   // Get all data operation sections using single source of truth
   const dataOperationSections = getAllDataSections(selectedNodeId, selectedEdgeId, graph);
   
@@ -455,6 +459,23 @@ export function DataMenu() {
                         <Folders size={12} />
                       </div>
           </Menubar.Item>
+                  )}
+                  {section.operations.clearCache && (
+                    <>
+                      <Menubar.Separator className="menubar-separator" style={{ margin: '4px 0' }} />
+                      <Menubar.Item 
+                        className="menubar-item" 
+                        onSelect={() => handleSectionClearCache(section)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px'
+                        }}
+                      >
+                        <span>Unsign file cache</span>
+                      </Menubar.Item>
+                    </>
                   )}
                 </Menubar.SubContent>
               </Menubar.Sub>

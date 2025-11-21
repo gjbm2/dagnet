@@ -198,8 +198,10 @@ export class QueryRegenerationService {
   /**
    * Transform graph to backend schema: convert data_source.type to data_source.source_type
    * Backend expects source_type, but frontend uses type
+   * 
+   * Public method - can be used by any component that needs to send graph to Python API
    */
-  private transformGraphForBackend(graph: Graph): Graph {
+  transformGraphForBackend(graph: Graph): Graph {
     const transformed = structuredClone(graph);
     
     // Transform all edges

@@ -2354,11 +2354,13 @@ export class UpdateManager {
     const sourceId = sourceNode.id || sourceNode.uuid || connection.source;
     const targetId = targetNode.id || targetNode.uuid || connection.target;
     
-    // Generate unique edge ID
+    // Generate unique edge ID (human-readable)
     const baseId = options?.id || `${sourceId}-to-${targetId}`;
     const existingIds = nextGraph.edges.map((e: any) => e.id || e.uuid).filter(Boolean);
     const edgeId = options?.id || generateUniqueId(baseId, existingIds);
-    const edgeUuid = options?.uuid || edgeId;
+    
+    // Generate UUID (proper UUID, not human-readable ID)
+    const edgeUuid = options?.uuid || crypto.randomUUID();
     
     // Calculate smart default probability based on existing outgoing edges
     const existingOutgoingEdges = nextGraph.edges.filter((e: any) => 
