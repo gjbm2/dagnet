@@ -9,10 +9,12 @@ import { MergeConflictModal, ConflictFile } from '../modals/MergeConflictModal';
 import { CommitModal } from '../CommitModal';
 import { repositoryOperationsService } from '../../services/repositoryOperationsService';
 import { workspaceService } from '../../services/workspaceService';
+import type { MergeConflict } from '../../services/workspaceService';
 import { gitService } from '../../services/gitService';
 import { credentialsManager } from '../../lib/credentials';
 import toast from 'react-hot-toast';
 import YAML from 'yaml';
+import type { ObjectType } from '../../types';
 
 /**
  * Repository Menu
@@ -103,10 +105,23 @@ export function RepositoryMenu() {
   const handleResolveConflicts = async (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => {
     const { conflictResolutionService } = await import('../../services/conflictResolutionService');
     
-    const resolvedCount = await conflictResolutionService.applyResolutions(mergeConflicts, resolutions);
+    // Convert ConflictFile[] to MergeConflict[]
+    const mergeConflictsConverted: MergeConflict[] = mergeConflicts.map(cf => ({
+      fileId: cf.fileId,
+      fileName: cf.fileName,
+      path: cf.path,
+      type: cf.type as ObjectType,
+      localContent: cf.localContent,
+      remoteContent: cf.remoteContent,
+      baseContent: cf.baseContent,
+      mergedContent: cf.mergedContent,
+      hasConflicts: cf.hasConflicts
+    }));
+    
+    const resolvedCount = await conflictResolutionService.applyResolutions(mergeConflictsConverted, resolutions);
     
     // Refresh navigator to show updated state
-    await refreshItems();
+    await navOps.refreshItems();
     
     if (resolvedCount > 0) {
       toast.success(`Resolved ${resolvedCount} conflict${resolvedCount !== 1 ? 's' : ''}`);

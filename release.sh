@@ -60,15 +60,15 @@ if [[ "$RUN_TESTS" == true ]]; then
   print_blue "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
   
-  # Run npm tests (unit tests only - integration tests TODO)
-  print_yellow "[1/2] Running npm tests (116 unit tests)..."
-  if ! (cd graph-editor && npm run test:unit); then
+  # Run all npm tests (unit + integration)
+  print_yellow "[1/2] Running npm tests (127 tests)..."
+  if ! (cd graph-editor && npm run test:all); then
     echo ""
     print_red "✗ npm tests failed!"
     print_red "Release aborted."
     exit 1
   fi
-  print_green "✓ npm tests passed (116 tests)"
+  print_green "✓ npm tests passed (127 tests)"
   echo ""
   
   # Run Python tests
