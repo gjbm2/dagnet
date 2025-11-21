@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.93b
+**Released:** November 21, 2025
+
+Fairly significant debugging. Amplitude retrieve now works for complex multi-parental nodes. Also resolved a number of dsync defects, cleaned up caching signatures and fixed a ton of smaller data pipeline bugs. 
+
+---
+
 ## Version 0.92.4-beta
 **Released:** November 20, 2025
 
