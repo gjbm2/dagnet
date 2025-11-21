@@ -182,8 +182,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   };
   
   const handleSectionClearCache = (section: DataOperationSection) => {
+    if (section.objectType === 'event') {
+      // Events don't have cache clearing support
+      return;
+    }
     import('../services/dataOperationsService').then(({ dataOperationsService }) => {
-      dataOperationsService.clearCache(section.objectType, section.objectId);
+      dataOperationsService.clearCache(section.objectType as 'parameter' | 'case' | 'node', section.objectId);
     });
     onClose();
   };

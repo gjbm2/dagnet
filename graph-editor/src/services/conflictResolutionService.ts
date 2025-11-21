@@ -72,7 +72,7 @@ export class ConflictResolutionService {
       } else if (resolution === 'manual') {
         // Manual merge - file will be edited by user
         console.log(`✏️ ConflictResolutionService: Manual merge required for ${conflict.fileId}`);
-        toast.info(`Please manually edit ${conflict.fileName} to resolve conflicts`);
+        toast(`Please manually edit ${conflict.fileName} to resolve conflicts`, { icon: 'ℹ️' });
         currentFile.isDirty = true;
         (fileRegistry as any).notifyListeners(conflict.fileId, currentFile);
         resolvedCount++;
