@@ -32,12 +32,15 @@ class RepositoryOperationsService {
   }
 
   /**
-   * Pull latest changes from remote
-   * - Delete local workspace
-   * - Re-clone from Git
+   * Pull latest changes from remote (incremental with 3-way merge)
+   * - Compare local SHAs with remote SHAs
+   * - Only fetch changed/new files
+   * - Perform 3-way merge for files with local changes
+   * - Delete files removed remotely
+   * - Return conflict info if any
    * - Reload Navigator
    */
-  async pullLatest(repository: string, branch: string): Promise<void> {
+  async pullLatest(repository: string, branch: string): Promise<{ success: boolean; conflicts?: any[] }> {
     console.log(`🔄 RepositoryOperationsService: Pulling latest for ${repository}/${branch}`);
 
     // Get git credentials
@@ -54,16 +57,21 @@ class RepositoryOperationsService {
       throw new Error(`Repository "${repository}" not found in credentials`);
     }
 
-    // Delete and re-clone
-    await workspaceService.deleteWorkspace(repository, branch);
-    await workspaceService.cloneWorkspace(repository, branch, gitCreds);
+    // Use workspaceService.pullLatest which does incremental SHA comparison + merge
+    const result = await workspaceService.pullLatest(repository, branch, gitCreds);
 
-    // Reload Navigator
+    // Reload Navigator to show updated files
     if (this.navigatorOps) {
       await this.navigatorOps.refreshItems();
     }
 
+    if (result.conflicts && result.conflicts.length > 0) {
+      console.log(`⚠️ RepositoryOperationsService: Pull completed with ${result.conflicts.length} conflicts`);
+      return { success: true, conflicts: result.conflicts };
+    }
+
     console.log(`✅ RepositoryOperationsService: Pulled latest successfully`);
+    return { success: true };
   }
 
   /**

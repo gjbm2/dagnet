@@ -239,15 +239,20 @@ export function DataOperationsMenu({
     });
   };
   
+  const handleClearCache = () => {
+    if (onClose) onClose();
+    dataOperationsService.clearCache(objectType as 'parameter' | 'case' | 'node', objectId);
+  };
+  
   const handleGetFromSourceDirect = () => {
     if (onClose) onClose();
     if (objectType === 'event') {
       // Events don't support external data connections
       return;
     }
-    // dailyMode should only be true when fetching to a parameter file (objectId exists)
-    // When fetching directly to graph (no file), use aggregate mode
-    const hasParameterFile = !!objectId && objectId.trim() !== '';
+    // CRITICAL: "Get from Source (direct)" should ALWAYS use dailyMode: false
+    // This applies the result directly to the graph WITHOUT saving to a file
+    // Even if a parameter file exists, "direct" mode bypasses it entirely
     dataOperationsService.getFromSourceDirect({ 
       objectType: objectType as 'parameter' | 'case' | 'node', 
       objectId, 
@@ -257,7 +262,8 @@ export function DataOperationsMenu({
       paramSlot,
       conditionalIndex,
       window: window ?? undefined,
-      dailyMode: hasParameterFile // Only enable daily mode when fetching to file
+      dailyMode: false, // CRITICAL: Always false for direct mode (no file save)
+      bustCache: true // ALWAYS fetch fresh when "Get from Source (direct)" is clicked
     });
   };
   
@@ -359,6 +365,17 @@ export function DataOperationsMenu({
       
       {/* Divider (only in dropdown mode) */}
       {mode === 'dropdown' && <div className="lightning-menu-divider" />}
+      
+      {/* Unsign Cache - only show for parameters (only they have time-series cache) */}
+      {objectType === 'parameter' && actualFileExists && (
+        <button
+          className={itemClassName}
+          onClick={handleClearCache}
+          title="Remove query signatures from cached data (forces re-fetch without deleting data)"
+        >
+          <span>Unsign file cache</span>
+        </button>
+      )}
       
       {/* Connection Settings (only for param and case, and only if showConnectionSettings is true) */}
       {showConnectionSettings && (objectType === 'parameter' || objectType === 'case') && (

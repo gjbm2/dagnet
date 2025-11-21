@@ -19,6 +19,8 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
             - graph: Graph data (required)
             - paramTypes: Optional filter by type
             - downstream_of: Optional incremental updates
+            - edge_id: Optional filter to single edge (returns base p, cost_gbp, cost_time)
+            - conditional_index: Optional filter to specific conditional (requires edge_id)
             - maxChecks: Optional (default 200)
             - literal_weights: Optional
             - preserve_condition: Optional (default True)
@@ -30,6 +32,8 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
     graph_data = data.get('graph')
     param_types = data.get('paramTypes')  # Optional: filter by type
     downstream_of = data.get('downstream_of')  # Optional: incremental updates
+    edge_id = data.get('edge_id')  # Optional: filter to single edge
+    conditional_index = data.get('conditional_index')  # Optional: filter to specific conditional
     max_checks = data.get('maxChecks', 200)
     literal_weights = data.get('literal_weights')
     preserve_condition = data.get('preserve_condition', True)
@@ -43,7 +47,8 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
     
     graph = Graph.model_validate(graph_data)
     
-    # Generate all parameters or filter by type/downstream
+    # Generate all parameters or filter by type/downstream/edge
+    # Pass edge_id and conditional_index directly to MSMDC for efficiency
     if param_types:
         params_by_type = generate_queries_by_type(
             graph, param_types, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context
@@ -53,7 +58,9 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
             all_params.extend(params)
     else:
         all_params = generate_all_parameter_queries(
-            graph, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context
+            graph, max_checks, downstream_of, literal_weights, preserve_condition, preserve_case_context,
+            edge_uuid=edge_id,  # Pass edge filter directly to MSMDC
+            conditional_index=conditional_index  # Pass conditional filter directly to MSMDC
         )
     
     # Format response

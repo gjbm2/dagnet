@@ -167,7 +167,7 @@ export function QueryExpressionEditor({
     }
     
     const errors: string[] = [];
-    const validQueryPattern = /^[a-z_-]+\([a-z0-9_:,\s-]*\)(\.([a-z_-]+\([a-z0-9_:,\s-]*\)))*$/;
+    const validQueryPattern = /^[a-z_-]+\([a-zA-Z0-9_:,\s-]*\)(\.([a-z_-]+\([a-zA-Z0-9_:,\s-]*\)))*$/;
     const patternMatches = validQueryPattern.test(cleanValue);
     console.log('[QueryExpressionEditor] Pattern test:', { cleanValue, patternMatches });
     
@@ -670,7 +670,7 @@ export function QueryExpressionEditor({
       
       // 5. Check for overall query structure and invalid tokens
       // Valid queries: functionName(args) followed by optional .functionName(args)
-      const validQueryPattern = /^[a-z_-]+\([a-z0-9_:,\s-]*\)(\.([a-z_-]+\([a-z0-9_:,\s-]*\)))*$/;
+      const validQueryPattern = /^[a-z_-]+\([a-zA-Z0-9_:,\s-]*\)(\.([a-z_-]+\([a-zA-Z0-9_:,\s-]*\)))*$/;
       if (!validQueryPattern.test(text.trim())) {
         markers.push({
           severity: monaco.MarkerSeverity.Error,

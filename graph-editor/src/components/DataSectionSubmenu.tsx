@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { ChevronRight, Database, DatabaseZap, Folders, TrendingUpDown } from 'lucide-react';
+import { ChevronRight, Database, DatabaseZap, Folders, TrendingUpDown, X } from 'lucide-react';
 import type { DataOperationSection } from './DataOperationsSections';
 
 interface DataSectionSubmenuProps {
@@ -20,6 +20,7 @@ interface DataSectionSubmenuProps {
   onPutToFile: (section: DataOperationSection) => void;
   onGetFromSource: (section: DataOperationSection) => void;
   onGetFromSourceDirect: (section: DataOperationSection) => void;
+  onClearCache: (section: DataOperationSection) => void;
 }
 
 export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
@@ -33,6 +34,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
   onPutToFile,
   onGetFromSource,
   onGetFromSourceDirect,
+  onClearCache,
 }) => {
   return (
     <div
@@ -178,6 +180,33 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
                 <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
                 <Folders size={12} />
               </div>
+            </div>
+          )}
+          
+          {/* Divider before Unsign cache */}
+          {section.operations.clearCache && (
+            <div style={{ height: '1px', background: '#eee', margin: '6px 0' }} />
+          )}
+          
+          {/* Unsign cache - only show for parameters with files */}
+          {section.operations.clearCache && (
+            <div
+              onClick={() => onClearCache(section)}
+              style={{
+                padding: '6px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                borderRadius: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '16px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              <span>Unsign file cache</span>
+              <X size={12} style={{ color: '#666' }} />
             </div>
           )}
         </div>

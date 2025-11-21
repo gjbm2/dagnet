@@ -525,6 +525,9 @@ export default function ConversionEdge({
     !viewPrefs?.useUniformScaling && // Skip if uniform scaling is enabled
     !data?.useSankeyView; // Skip in Sankey view
   
+  // DEBUG: Log confidence interval state
+  console.log(`[CI Debug ${id}] confidenceIntervalLevel=${confidenceIntervalLevel}, stdev=${stdev}, hasStdev=${hasStdev}, shouldShow=${shouldShowConfidenceIntervals}, fullEdge.p.stdev=${fullEdge?.p?.stdev}, data.stdev=${data?.stdev}, useUniformScaling=${viewPrefs?.useUniformScaling}, useSankeyView=${data?.useSankeyView}`);
+  
   // Helper function to convert hex to RGB (must be defined before useMemo)
   const hexToRgb = (hex: string) => {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -587,6 +590,7 @@ export default function ConversionEdge({
 
   // Calculate confidence bounds and colours if needed
   const confidenceData = useMemo(() => {
+    console.log(`[CI Data ${id}] Computing confidenceData, shouldShow=${shouldShowConfidenceIntervals}`);
     if (!shouldShowConfidenceIntervals) return null;
     
     // For scenario overlays, use scenario-specific probability (do NOT bleed from current layer)
@@ -620,13 +624,34 @@ export default function ConversionEdge({
       widthMiddle = strokeWidth;
       widthLower = strokeWidth * (bounds.lower / mean);
     } else {
+      // FIX: Mass generosity compresses visual differences via power transformation
+      // To compensate, we amplify the probability ratios BEFORE applying the transformation
+      // This effectively gives CIs more "room" in the visual space
+      
+      // Calculate the CI spread amplification factor
+      // Higher mass generosity = more compression = need more amplification
+      // g=0 (linear): amplify 1x (no compression)
+      // g=0.5 (sqrt): amplify ~1.5x 
+      // g=0.8 (5th root): amplify ~2x
+      const amplificationFactor = 1 + massGenerosity;
+      
+      // Amplify the probability ratios around the mean
+      const upperRatio = bounds.upper / mean;
+      const lowerRatio = bounds.lower / mean;
+      const amplifiedUpperRatio = 1 + (upperRatio - 1) * amplificationFactor;
+      const amplifiedLowerRatio = 1 - (1 - lowerRatio) * amplificationFactor;
+      
+      // Clamp to reasonable bounds (don't let it go too extreme)
+      const clampedUpperRatio = Math.min(2.0, Math.max(1.0, amplifiedUpperRatio));
+      const clampedLowerRatio = Math.max(0.3, Math.min(1.0, amplifiedLowerRatio));
+      
       // Reverse the scaling to get actual mass
       const displayMass = (strokeWidth - MIN_WIDTH) / (MAX_WIDTH - MIN_WIDTH);
       const actualMass = Math.pow(displayMass, 1 / (1 - massGenerosity));
       
-      // Calculate actual masses for upper and lower bounds
-      const actualMassUpper = actualMass * (bounds.upper / mean);
-      const actualMassLower = actualMass * (bounds.lower / mean);
+      // Calculate actual masses using amplified ratios
+      const actualMassUpper = actualMass * clampedUpperRatio;
+      const actualMassLower = actualMass * clampedLowerRatio;
       
       // Apply log scaling to each bound
       const displayMassUpper = Math.pow(actualMassUpper, 1 - massGenerosity);
@@ -638,12 +663,14 @@ export default function ConversionEdge({
       widthLower = MIN_WIDTH + displayMassLower * (MAX_WIDTH - MIN_WIDTH);
     }
     
-    // Debug logging (remove after testing)
-    if (id.includes('test') || id.includes('project')) {
-      console.log(`[CI ${id}] mean=${mean.toFixed(3)}, stdev=${stdev.toFixed(3)}, bounds=`, bounds, 
-        `widths=`, {upper: widthUpper.toFixed(1), middle: widthMiddle.toFixed(1), lower: widthLower.toFixed(1)},
-        `opacities=`, opacities);
-    }
+    // Debug logging for all edges
+    console.log(`[CI ${id}] mean=${mean.toFixed(3)}, stdev=${stdev.toFixed(3)}, level=${confidenceIntervalLevel}, distribution=${distribution}`);
+    console.log(`[CI ${id}] bounds=`, bounds);
+    console.log(`[CI ${id}] massGenerosity=${massGenerosity.toFixed(2)}, strokeWidth=${strokeWidth.toFixed(1)}`);
+    console.log(`[CI ${id}] widths=`, {upper: widthUpper.toFixed(1), middle: widthMiddle.toFixed(1), lower: widthLower.toFixed(1)});
+    console.log(`[CI ${id}] width ratios=`, {upper: (widthUpper/widthMiddle).toFixed(3), lower: (widthLower/widthMiddle).toFixed(3)});
+    console.log(`[CI ${id}] probability ratios=`, {upper: (bounds.upper/mean).toFixed(3), lower: (bounds.lower/mean).toFixed(3)});
+    console.log(`[CI ${id}] opacities=`, opacities);
     
     return {
       bounds,

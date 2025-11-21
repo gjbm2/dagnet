@@ -230,13 +230,14 @@ def compile_query_for_edge(
         Complete DSL query string (or tuple of (query, terms) if returning coefficients)
     """
     source, target = edge
-    
-    # For edge discrimination, merge is ALWAYS the target
-    # We're measuring P(a→b) = users who go from event a to event b
+
+    # For edge discrimination, the merge node is the direct target.
+    # Semantics: "construct a query that uniquely discriminates traffic
+    # that went from source→target", assuming both endpoints are tracked.
     merge_node = target
-    
+
     # Determine if this edge needs exclusion logic
-    # (i.e., are there competing branches from source that can reach target?)
+    # (i.e., are there competing branches from source that can reach target / merge_node?)
     competing = get_competing_first_hops(graph, source, target, merge_node)
     
     if not competing:
