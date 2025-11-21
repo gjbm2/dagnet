@@ -288,7 +288,11 @@ export function DataMenu() {
   };
   
   const handleSectionClearCache = (section: DataOperationSection) => {
-    dataOperationsService.clearCache(section.objectType, section.objectId);
+    if (section.objectType === 'event') {
+      // Events don't have cache clearing support
+      return;
+    }
+    dataOperationsService.clearCache(section.objectType as 'parameter' | 'case' | 'node', section.objectId);
   };
   
   // Get all data operation sections using single source of truth
