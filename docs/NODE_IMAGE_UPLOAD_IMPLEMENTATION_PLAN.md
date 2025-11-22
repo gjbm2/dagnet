@@ -238,14 +238,17 @@
 ### 7.1 Create Deletion Service
 **New File**: `graph-editor/src/services/deleteOperationsService.ts`
 - [ ] Implement `deleteNodeFile(nodeId)` method
-- [ ] Implement `scanAllFilesForImageReferences(imageIds)` method
+- [ ] Implement `scanAllFilesForImageReferences(imageIds)` method (SHARED utility)
 - [ ] Check ALL node files from IDB for image refs
 - [ ] Check ALL graph files from IDB for image refs
 - [ ] Stage file deletion via `fileRegistry.registerFileDeletion()`
 - [ ] Stage orphaned image deletions only
+- [ ] Export `scanAllFilesForImageReferences` for use by UpdateManager
 - [ ] Add logging for staged deletions
 
 **Design Ref**: Node Deletion from Graph vs. Node File Deletion § Scenario B
+
+**Note**: The `scanAllFilesForImageReferences()` utility is used by BOTH graph-node deletion (UpdateManager) and node-file deletion (this service) to ensure consistent GC behavior.
 
 ### 7.2 Update Navigator Context Menu
 **File**: `graph-editor/src/components/NavigatorItemContextMenu.tsx`
@@ -287,19 +290,27 @@
 
 ### 8.3 Update Delete Node Method
 **File**: `graph-editor/src/services/UpdateManager.ts`
-- [ ] Enhance `deleteNode()` to check if node file exists
-- [ ] If no node file: register image deletions
-- [ ] If node file exists: keep images
+- [ ] Enhance `deleteNode()` to use full reference scanning
+- [ ] For each image on deleted node, call `scanAllFilesForImageReferences([image_id])`
+- [ ] Only register image for deletion if zero references remain in ALL files (node + graph)
 - [ ] Add `registerImageDeletions()` helper method
-- [ ] Test both scenarios
+- [ ] Test scenarios: graph-only images (deleted) vs file-backed images (kept)
 
 **Design Ref**: Node Deletion Cascade § Smart Image Deletion Logic
+
+**Note**: This uses the same comprehensive GC logic as node-file deletion (Phase 7.1), ensuring images are never deleted while any file references them.
 
 ### 8.4 Update Data Operations Service
 **File**: `graph-editor/src/services/dataOperationsService.ts`
 - [ ] Verify `getNodeFromFile()` includes URL and images in sync
 - [ ] Verify `putNodeToFile()` includes URL and images in sync
 - [ ] Test get/put operations with new fields
+
+### 8.5 Wire UpdateManager to Deletion Service
+**File**: `graph-editor/src/services/UpdateManager.ts`
+- [ ] Import `scanAllFilesForImageReferences` from deleteOperationsService
+- [ ] Use shared scanning logic in `deleteNode()` method
+- [ ] Ensure graph-node delete uses same GC as node-file delete
 
 ---
 
@@ -348,8 +359,9 @@
 - [ ] Test upload → IDB → commit → Git flow
 - [ ] Test delete → staging → commit → Git flow
 - [ ] Test override pattern (registry sync)
-- [ ] Test node deletion cascade (graph-only vs file-backed)
-- [ ] Test node file deletion with image GC
+- [ ] Test graph-node deletion GC (scans all files, deletes only orphaned images)
+- [ ] Test node-file deletion GC (scans all files, deletes only orphaned images)
+- [ ] Test GC correctness: image shared by 2 nodes, delete 1 node → image kept
 - [ ] Test Git pull fetches images into IDB
 
 ### 10.3 Manual Testing
@@ -432,10 +444,13 @@ Execute phases sequentially in order 1-12. Each phase builds on the previous.
 - Phase 2 (storage) required before Phase 4 (upload modal)
 - Phase 4 (upload) required before Phase 5 (Properties Panel)
 - Phase 5 (Properties Panel) required before Phase 6 (node face display)
+- Phase 7 (deletion service) required before Phase 8.5 (UpdateManager uses shared GC)
 - Phase 7 (deletion service) required before Phase 9 (commit flow)
-- Phase 8 (UpdateManager) can run parallel with Phase 6-7
+- Phase 8.1-8.4 (UpdateManager mappings) can run parallel with Phase 6
 
-**Critical Path**: Phases 2 → 4 → 5 → 9 → 10
+**Critical Path**: Phases 2 → 4 → 5 → 7 → 8.5 → 9 → 10
+
+**Key Ordering Constraint**: Phase 7 must complete before Phase 8.5 so that `scanAllFilesForImageReferences()` exists for UpdateManager to import.
 
 ---
 
