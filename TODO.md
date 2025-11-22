@@ -55,18 +55,16 @@
 ### Analytics / Model Fitting (Future)
 - add moving arrow effect, speed of animation scale on log lag
 
-### Medium Priority
+### Medium 
+- confidence internals on Sankey view
 - Events that can fire several times we may need to build Amplitude funnels further one step further upstream in order to ensure we know that it's this specific event we care about 
-- Add UI schemas for common forms (params, cases, etc.)
 - Zap drop down menu:
   - 'Connection settings' on zap drop down menu isn't working
   - Sync status' on zap drop down should show last sync, source, etc. from files/graph
 - Edit: copy & paste
-- fix tools panel view options (Again)
 - Graph integrity checker report
 - Minus autocomplete not working in query/selector
-- Let's add a bool 'Force retrieve' to 'Get all data' modal, which ignores current values check and gets a new slab of dailies anyway. 
-  - Also add a 'Force updates' which ignores 'overridden' flags and 
+- 'Clear overrides' at context & Data menu level  
 - Let's add a rename on File menu, nav bar context menu which (a) renames the file (b) reviews registry and updates any ids in any graphs/files to match
 - Polish "Get from Source" UX (success feedback, animations -- apply to graph elements as well as sidebar)
 - docs to cover: MSMDC, connections
