@@ -198,6 +198,14 @@ export interface Node {
     title?: string;
     description?: string;
   }>;
+  url?: string;
+  images?: Array<{
+    image_id: string;
+    caption: string;
+    file_extension: 'png' | 'jpg' | 'jpeg';
+    uploaded_at?: string;
+    uploaded_by?: string;
+  }>;
   metadata?: any;
 }
 

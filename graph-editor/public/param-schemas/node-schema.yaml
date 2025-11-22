@@ -60,6 +60,40 @@ properties:
         description:
           type: string
           description: Optional description of the resource
+  
+  url:
+    type: string
+    format: uri
+    description: External URL for this node (e.g., Notion page, documentation)
+  
+  images:
+    type: array
+    description: Images attached to this node
+    items:
+      type: object
+      required:
+        - image_id
+        - caption
+      properties:
+        image_id:
+          type: string
+          pattern: ^[a-z0-9-]+$
+          description: Unique identifier for the image (used as filename)
+        caption:
+          type: string
+          maxLength: 256
+          description: Caption/description for the image
+        file_extension:
+          type: string
+          enum: [png, jpg, jpeg]
+          description: Image file extension
+        uploaded_at:
+          type: string
+          format: date-time
+          description: When this image was uploaded
+        uploaded_by:
+          type: string
+          description: User who uploaded the image
           
   metadata:
     type: object

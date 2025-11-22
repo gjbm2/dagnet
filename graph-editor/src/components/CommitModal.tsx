@@ -44,6 +44,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   
   // Track if we've initialized the selected files
   const initializedRef = useRef(false);
+  const [forceUpdate, setForceUpdate] = useState(0);
 
   // Get dirty files that can be committed - calculate directly to avoid infinite loops
   const getCommittableFiles = () => {
@@ -79,6 +80,16 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   };
   
   const commitableFiles = getCommittableFiles();
+  
+  // Get pending deletions
+  const pendingDeletions = isOpen ? fileRegistry.getPendingDeletions() : [];
+  
+  // Listen for pending deletion changes
+  useEffect(() => {
+    const handlePendingChange = () => setForceUpdate(prev => prev + 1);
+    window.addEventListener('dagnet:pendingDeletionChanged', handlePendingChange);
+    return () => window.removeEventListener('dagnet:pendingDeletionChanged', handlePendingChange);
+  }, []);
 
   // Initialize selected files when modal opens - use a separate effect for modal state
   useEffect(() => {
@@ -283,19 +294,26 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
               overflowY: 'auto',
               padding: '8px'
             }}>
-              {commitableFiles.length === 0 ? (
+              {commitableFiles.length === 0 && pendingDeletions.length === 0 ? (
                 <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-                  No files to commit
+                  No changes to commit
                 </div>
               ) : (
-                commitableFiles.map(file => (
-                  <label
-                    key={file.fileId}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      padding: '8px',
-                      cursor: 'pointer',
+                <>
+                  {/* Modified Files */}
+                  {commitableFiles.length > 0 && (
+                    <>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b', marginBottom: '8px' }}>
+                        Modified Files ({commitableFiles.length})
+                      </div>
+                      {commitableFiles.map(file => (
+                        <label
+                          key={file.fileId}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            padding: '8px',
+                            cursor: 'pointer',
                       borderRadius: '4px',
                       marginBottom: '2px'
                     }}
@@ -316,7 +334,52 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
                       {file.name} ({file.type})
                     </span>
                   </label>
-                ))
+                ))}
+                    </>
+                  )}
+                  
+                  {/* Pending Deletions */}
+                  {pendingDeletions.length > 0 && (
+                    <>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#dc2626', marginTop: '16px', marginBottom: '8px' }}>
+                        Files to Delete ({pendingDeletions.length})
+                      </div>
+                      {pendingDeletions.map(deletion => (
+                        <div
+                          key={deletion.fileId}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '8px',
+                            background: '#fee2e2',
+                            borderRadius: '4px',
+                            marginBottom: '4px'
+                          }}
+                        >
+                          <span style={{ fontSize: '14px', color: '#dc2626' }}>
+                            {deletion.fileId.replace(/^[^-]+-/, '')} ({deletion.type})
+                          </span>
+                          <button
+                            onClick={() => fileRegistry.clearPendingDeletion(deletion.fileId)}
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: '12px',
+                              border: '1px solid #fca5a5',
+                              borderRadius: '4px',
+                              background: 'white',
+                              color: '#dc2626',
+                              cursor: 'pointer'
+                            }}
+                            title="Unstage deletion"
+                          >
+                            Unstage
+                          </button>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </>
               )}
             </div>
           </div>
