@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import toast from 'react-hot-toast';
 import YAML from 'yaml';
 import { useTabContext } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
@@ -125,36 +126,14 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   
   const handleDeleteFile = async (message: string) => {
     try {
-      // Load credentials
-      const { credentialsManager } = await import('../lib/credentials');
-      const credentialsResult = await credentialsManager.loadCredentials();
+      // Check if this is a node file (has special image GC logic)
+      const isNodeFile = item.type === 'node';
       
-      if (!credentialsResult.success || !credentialsResult.credentials) {
-        throw new Error('No credentials available. Please configure credentials first.');
-      }
-
-      // Get credentials for selected repo
-      const selectedRepo = navState.selectedRepo;
-      const selectedBranch = navState.selectedBranch || 'main';
-      const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
-      
-      if (!gitCreds) {
-        throw new Error(`No credentials found for repository ${selectedRepo}`);
-      }
-
-      // Set credentials on gitService
-      const credentialsWithRepo = {
-        ...credentialsResult.credentials,
-        defaultGitRepo: selectedRepo
-      };
-      gitService.setCredentials(credentialsWithRepo);
-
-      // Use item.path directly - it already includes the full path from repo root
-      console.log(`Deleting file from repository: ${item.path}`);
-      const result = await gitService.deleteFile(item.path, message, selectedBranch);
-      
-      if (result.success) {
-        console.log('Delete successful:', result.message);
+      if (isNodeFile) {
+        // Use deleteOperationsService for smart image GC
+        const { deleteOperationsService } = await import('../services/deleteOperationsService');
+        const nodeId = item.id.replace(/^node-/, '');
+        await deleteOperationsService.deleteNodeFile(nodeId);
         
         // Close any open tabs for this file
         for (const tab of openTabs) {
@@ -164,7 +143,22 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
         // Refresh navigator to remove deleted item
         await navOps.refreshItems();
       } else {
-        throw new Error(result.error || 'Failed to delete file');
+        // For non-node files, use standard file deletion (but still staged, not immediate Git)
+        // Close any open tabs for this file
+        for (const tab of openTabs) {
+          await operations.closeTab(tab.id, true); // Force close
+        }
+        
+        // Stage file deletion (don't delete from Git immediately)
+        fileRegistry.registerFileDeletion(item.id, item.path, item.type);
+        
+        // Remove from local FileRegistry
+        await fileRegistry.deleteFile(item.id);
+        
+        // Refresh navigator
+        await navOps.refreshItems();
+        
+        toast.success(`File deletion staged: ${item.id} (commit to sync to Git)`);
       }
     } catch (error) {
       throw error; // Re-throw to be handled by DeleteModal

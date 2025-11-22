@@ -1119,9 +1119,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       hasMetadata: !!graph.metadata
     });
     
-    // Use UpdateManager to delete node and clean up edges
+    // Use UpdateManager to delete node and clean up edges (now async for image GC)
     const { updateManager } = await import('../services/UpdateManager');
-    const nextGraph = updateManager.deleteNode(graph, nodeUuid);
+    const nextGraph = await updateManager.deleteNode(graph, nodeUuid);
     
     console.log('AFTER DELETE:', {
       nodes: nextGraph.nodes.length,

@@ -1470,6 +1470,27 @@ function AppShellContent() {
                   sha: file.sha
                 };
               });
+              
+              // Add pending image operations (uploads + image deletions)
+              const imageFiles = await fileRegistry.commitPendingImages();
+              filesToCommit.push(...imageFiles.map(img => ({
+                ...img,
+                path: basePath ? `${basePath}/${img.path}` : img.path
+              })));
+              
+              // Add pending file deletions
+              const fileDeletions = await fileRegistry.commitPendingFileDeletions();
+              filesToCommit.push(...fileDeletions.map(del => ({
+                ...del,
+                path: basePath ? `${basePath}/${del.path}` : del.path
+              })));
+              
+              console.log('[AppShell] Committing:', {
+                modifiedFiles: files.length,
+                imageOps: imageFiles.length,
+                fileDeletions: fileDeletions.length,
+                total: filesToCommit.length
+              });
 
               const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
               if (result.success) {

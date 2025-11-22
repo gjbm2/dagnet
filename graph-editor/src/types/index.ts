@@ -505,6 +505,15 @@ export interface CaseVariant {
   edges?: string[]; // Graph-only: edges that use this variant
 }
 
+export interface NodeImage {
+  image_id: string;
+  caption: string;
+  caption_overridden?: boolean;  // Graph-level only
+  file_extension: 'png' | 'jpg' | 'jpeg';
+  uploaded_at?: string;  // Registry-level only
+  uploaded_by?: string;  // Registry-level only
+}
+
 export interface GraphNode {
   uuid: UUID;       // System-generated UUID
   id: HumanId;      // Human-readable identifier
@@ -523,6 +532,10 @@ export interface GraphNode {
   costs?: Costs;
   residual_behavior?: ResidualBehavior;
   layout?: NodeLayout;
+  url?: string;
+  url_overridden?: boolean;
+  images?: NodeImage[];
+  images_overridden?: boolean;
   case?: {
     id: string; // Reference to case file (FK to case-{id}.yaml)
     status: CaseStatus;

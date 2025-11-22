@@ -654,6 +654,148 @@ class FileRegistry {
     }
     return null;
   }
+  
+  // ============================================================
+  // PENDING OPERATIONS TRACKING (for Git staging)
+  // ============================================================
+  
+  private pendingImageOps: Array<{
+    type: 'upload' | 'delete';
+    image_id: string;
+    path: string;
+    data?: Uint8Array;
+  }> = [];
+  
+  private pendingFileDeletions: Array<{
+    fileId: string;
+    path: string;
+    type: string;
+  }> = [];
+  
+  /**
+   * Register a pending image upload
+   */
+  registerImageUpload(imageId: string, path: string, data: Uint8Array): void {
+    this.pendingImageOps.push({
+      type: 'upload',
+      image_id: imageId,
+      path,
+      data
+    });
+    console.log(`FileRegistry: Registered image upload: ${imageId}`);
+  }
+  
+  /**
+   * Register a pending image deletion
+   */
+  registerImageDelete(imageId: string, path: string): void {
+    // Remove any pending upload for this image
+    this.pendingImageOps = this.pendingImageOps.filter(
+      op => op.image_id !== imageId
+    );
+    
+    // Add delete operation
+    this.pendingImageOps.push({
+      type: 'delete',
+      image_id: imageId,
+      path
+    });
+    console.log(`FileRegistry: Registered image deletion: ${imageId}`);
+  }
+  
+  /**
+   * Collect all pending image operations for commit
+   * Returns array of GitFileToCommit objects
+   */
+  async commitPendingImages(): Promise<Array<{
+    path: string;
+    content?: string;
+    binaryContent?: Uint8Array;
+    encoding?: 'utf-8' | 'base64';
+    delete?: boolean;
+  }>> {
+    const filesToCommit: Array<any> = [];
+    
+    for (const op of this.pendingImageOps) {
+      if (op.type === 'upload') {
+        filesToCommit.push({
+          path: op.path,
+          binaryContent: op.data!,
+          encoding: 'base64'
+        });
+      } else if (op.type === 'delete') {
+        filesToCommit.push({
+          path: op.path,
+          delete: true
+        });
+      }
+    }
+    
+    // Clear pending operations
+    this.pendingImageOps = [];
+    
+    console.log(`FileRegistry: Collected ${filesToCommit.length} pending image operations for commit`);
+    return filesToCommit;
+  }
+  
+  /**
+   * Register a pending file deletion
+   */
+  registerFileDeletion(fileId: string, path: string, type: string): void {
+    this.pendingFileDeletions.push({
+      fileId,
+      path,
+      type
+    });
+    console.log(`FileRegistry: Registered file deletion: ${fileId}`);
+    window.dispatchEvent(new CustomEvent('dagnet:pendingDeletionChanged'));
+  }
+  
+  /**
+   * Get all pending file deletions
+   */
+  getPendingDeletions(): Array<{ fileId: string; path: string; type: string }> {
+    return [...this.pendingFileDeletions];
+  }
+  
+  /**
+   * Clear (unstage) a pending deletion
+   */
+  clearPendingDeletion(fileId: string): void {
+    this.pendingFileDeletions = this.pendingFileDeletions.filter(
+      op => op.fileId !== fileId
+    );
+    console.log(`FileRegistry: Cleared pending deletion: ${fileId}`);
+    window.dispatchEvent(new CustomEvent('dagnet:pendingDeletionChanged'));
+  }
+  
+  /**
+   * Collect all pending file deletions for commit
+   */
+  async commitPendingFileDeletions(): Promise<Array<{
+    path: string;
+    delete: boolean;
+  }>> {
+    const filesToCommit = this.pendingFileDeletions.map(op => ({
+      path: op.path,
+      delete: true
+    }));
+    
+    // Clear pending deletions
+    this.pendingFileDeletions = [];
+    
+    console.log(`FileRegistry: Collected ${filesToCommit.length} pending file deletions for commit`);
+    return filesToCommit;
+  }
+  
+  /**
+   * Store an image in IDB
+   */
+  async storeImage(imageFileState: FileState): Promise<void> {
+    await db.files.put(imageFileState);
+    this.files.set(imageFileState.fileId, imageFileState);
+    console.log(`FileRegistry: Stored image ${imageFileState.fileId} in IDB`);
+  }
 }
 
 // Create singleton instance

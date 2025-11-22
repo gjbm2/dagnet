@@ -361,6 +361,49 @@ class WorkspaceService {
       console.log(`⚡ WorkspaceService: Clone complete in ${elapsed}ms! ${fileIds.length} files loaded`);
       console.log(`📊 WorkspaceService: FileRegistry now has ${registryCount} files in memory`);
 
+      // STEP 4: Fetch and store images
+      console.log(`🖼️ WorkspaceService: Fetching images...`);
+      const images = await this.fetchAllImagesFromGit(repository, branch, gitCreds);
+      
+      for (const image of images) {
+        const imageId = image.name.replace(/\.(png|jpg|jpeg)$/i, '');
+        const ext = image.name.match(/\.(png|jpg|jpeg)$/i)?.[1].toLowerCase() as 'png' | 'jpg' | 'jpeg';
+        
+        const imageFileState: FileState = {
+          fileId: `image-${imageId}`,
+          type: 'image' as any,
+          name: image.name,
+          path: `nodes/images/${image.name}`,
+          data: {
+            image_id: imageId,
+            file_extension: ext,
+            binaryData: image.binaryData
+          },
+          originalData: null,
+          isDirty: false,
+          source: {
+            repository,
+            path: `nodes/images/${image.name}`,
+            branch,
+            commitHash: commitSha
+          },
+          isLoaded: true,
+          isLocal: false,
+          viewTabs: [],
+          lastModified: Date.now(),
+          lastSynced: Date.now()
+        };
+        
+        // Save to IDB with workspace prefix
+        const idbFileId = `${repository}-${branch}-${imageFileState.fileId}`;
+        await db.files.put({ ...imageFileState, fileId: idbFileId });
+        
+        // Also add to FileRegistry memory cache
+        (fileRegistry as any).files.set(imageFileState.fileId, imageFileState);
+      }
+      
+      console.log(`✅ WorkspaceService: Stored ${images.length} images in IDB`);
+
       // Update workspace record
       workspace.fileIds = fileIds;
       workspace.isCloning = false;
@@ -779,7 +822,45 @@ class WorkspaceService {
         }
       }
 
-      // STEP 8: Update workspace metadata
+      // STEP 8: Fetch and store images
+      console.log(`🖼️ WorkspaceService: Fetching images...`);
+      const images = await this.fetchAllImagesFromGit(repository, branch, gitCreds);
+      
+      for (const image of images) {
+        const imageId = image.name.replace(/\.(png|jpg|jpeg)$/i, '');
+        const ext = image.name.match(/\.(png|jpg|jpeg)$/i)?.[1].toLowerCase() as 'png' | 'jpg' | 'jpeg';
+        
+        const imageFileState: FileState = {
+          fileId: `image-${imageId}`,
+          type: 'image' as any,
+          name: image.name,
+          path: `nodes/images/${image.name}`,
+          data: {
+            image_id: imageId,
+            file_extension: ext,
+            binaryData: image.binaryData
+          },
+          originalData: null,
+          isDirty: false,
+          source: {
+            repository,
+            path: `nodes/images/${image.name}`,
+            branch,
+            commitHash: commitSha
+          },
+          isLoaded: true,
+          isLocal: false,
+          viewTabs: [],
+          lastModified: Date.now(),
+          lastSynced: Date.now()
+        };
+        
+        await db.files.put(imageFileState);
+      }
+      
+      console.log(`✅ WorkspaceService: Stored ${images.length} images in IDB`);
+
+      // STEP 9: Update workspace metadata
       const updatedFiles = await db.files
         .where('source.repository').equals(repository)
         .and(file => file.source?.branch === branch)
@@ -867,6 +948,99 @@ class WorkspaceService {
         : file.fileId;
       return { ...file, fileId: actualFileId };
     });
+  }
+  
+  /**
+   * Fetch all images from Git repository nodes/images/ directory
+   * Used during clone and pull operations
+   */
+  async fetchAllImagesFromGit(
+    repository: string,
+    branch: string,
+    gitCreds: any
+  ): Promise<Array<{ name: string; binaryData: Uint8Array }>> {
+    try {
+      const basePath = gitCreds.basePath || '';
+      const imagesPath = basePath ? `${basePath}/nodes/images` : 'nodes/images';
+      
+      // List all files in nodes/images/
+      const response = await gitService.listDirectory(imagesPath, branch);
+      
+      if (!response.success || !response.data) {
+        console.log(`WorkspaceService: No images directory found at ${imagesPath}`);
+        return [];
+      }
+      
+      const files = response.data.filter((item: any) =>
+        item.type === 'file' && /\.(png|jpg|jpeg)$/i.test(item.name)
+      );
+      
+      console.log(`WorkspaceService: Found ${files.length} images to fetch`);
+      
+      // Fetch each image
+      const results = await Promise.all(
+        files.map(async (file: any) => {
+          try {
+            const fileResponse = await fetch(file.download_url);
+            if (!fileResponse.ok) {
+              throw new Error(`Failed to fetch ${file.name}`);
+            }
+            const arrayBuffer = await fileResponse.arrayBuffer();
+            return {
+              name: file.name,
+              binaryData: new Uint8Array(arrayBuffer)
+            };
+          } catch (error) {
+            console.error(`Failed to fetch image ${file.name}:`, error);
+            return null;
+          }
+        })
+      );
+      
+      return results.filter((r): r is { name: string; binaryData: Uint8Array } => r !== null);
+    } catch (error) {
+      console.error('Failed to fetch images from Git:', error);
+      return [];
+    }
+  }
+  
+  /**
+   * Get all node files from IDB for current workspace
+   */
+  async getAllNodeFilesFromIDB(): Promise<Array<{ fileId: string; data: any }>> {
+    const files = await db.files
+      .where('type')
+      .equals('node')
+      .toArray();
+    
+    return files.map(f => ({ fileId: f.fileId, data: f.data }));
+  }
+  
+  /**
+   * Get all graph files from IDB for current workspace
+   */
+  async getAllGraphFilesFromIDB(): Promise<Array<{ fileId: string; data: any }>> {
+    const files = await db.files
+      .where('type')
+      .equals('graph')
+      .toArray();
+    
+    return files.map(f => ({ fileId: f.fileId, data: f.data }));
+  }
+  
+  /**
+   * Get all image IDs from IDB
+   * Used for ensuring image ID uniqueness on upload
+   */
+  async getAllImageIdsFromIDB(): Promise<string[]> {
+    const imageFiles = await db.files
+      .where('type')
+      .equals('image')
+      .toArray();
+    
+    return imageFiles
+      .map(f => f.data?.image_id)
+      .filter((id): id is string => typeof id === 'string');
   }
 }
 

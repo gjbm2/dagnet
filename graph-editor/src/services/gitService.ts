@@ -290,11 +290,19 @@ class GitService {
     content: string, 
     message: string,
     branch: string = this.config.branch,
-    sha?: string
+    sha?: string,
+    encoding: 'utf-8' | 'base64' = 'utf-8'
   ): Promise<GitOperationResult> {
     try {
-      // Encode content to base64 - handle UTF-8 properly
-      const encodedContent = btoa(unescape(encodeURIComponent(content)));
+      // Encode content to base64
+      let encodedContent: string;
+      if (encoding === 'base64') {
+        // Already base64 or binary data encoded as base64
+        encodedContent = content;
+      } else {
+        // UTF-8 text - handle properly
+        encodedContent = btoa(unescape(encodeURIComponent(content)));
+      }
       
       const body = {
         message,
@@ -417,7 +425,14 @@ class GitService {
 
   // Commit and push multiple files
   async commitAndPushFiles(
-    files: Array<{ path: string; content: string; sha?: string }>,
+    files: Array<{
+      path: string;
+      content?: string;
+      binaryContent?: Uint8Array;
+      encoding?: 'utf-8' | 'base64';
+      sha?: string;
+      delete?: boolean;
+    }>,
     message: string,
     branch: string = this.config.branch
   ): Promise<GitOperationResult> {
@@ -434,18 +449,32 @@ class GitService {
         console.log(`Committing ${files.length} files with message: ${message}`);
       }
 
-      // For now, we'll commit files one by one
-      // In a more sophisticated implementation, we could use GitHub's tree API
-      // to create a single commit with multiple files
       const results: GitOperationResult[] = [];
       
       for (const file of files) {
+        // Handle deletions
+        if (file.delete) {
+          console.log(`🔵 GitService.commitAndPushFiles: Deleting ${file.path}`);
+          const result = await this.deleteFile(file.path, message, branch);
+          
+          if (!result.success) {
+            return {
+              success: false,
+              error: result.error,
+              message: `Failed to delete file ${file.path}: ${result.error}`
+            };
+          }
+          
+          results.push(result);
+          continue;
+        }
+        
+        // Handle create/update
         // Always fetch the current file SHA from GitHub to ensure we have the latest
         // This prevents 409 conflicts from stale SHAs
         let fileSha: string | undefined = undefined;
         
         try {
-          // Use the raw GitHub API to get file metadata
           const fileInfoResponse = await this.makeRequest(`/contents/${file.path}?ref=${branch}`, {
             method: 'GET'
           });
@@ -465,14 +494,27 @@ class GitService {
           }
         }
         
-        console.log(`🔵 GitService.commitAndPushFiles: Committing ${file.path}, content length: ${file.content.length}, SHA: ${fileSha?.substring(0, 8) || 'new file'}`);
+        // Prepare content
+        let contentToCommit: string;
+        let encoding: 'utf-8' | 'base64' = file.encoding || 'utf-8';
+        
+        if (file.binaryContent) {
+          // Binary data - convert Uint8Array to base64
+          contentToCommit = btoa(String.fromCharCode(...file.binaryContent));
+          encoding = 'base64';
+        } else {
+          contentToCommit = file.content!;
+        }
+        
+        console.log(`🔵 GitService.commitAndPushFiles: Committing ${file.path}, content length: ${contentToCommit.length}, encoding: ${encoding}, SHA: ${fileSha?.substring(0, 8) || 'new file'}`);
         
         const result = await this.createOrUpdateFile(
           file.path,
-          file.content,
+          contentToCommit,
           message,
           branch,
-          fileSha
+          fileSha,
+          encoding
         );
         
         if (!result.success) {

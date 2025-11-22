@@ -31,6 +31,9 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       layout: n.layout, // Add layout object (includes colour!)
       event_id: n.event_id, // Add event_id for DAS queries
       event_id_overridden: n.event_id_overridden, // Override flag
+      url: n.url, // Add URL field
+      images: n.images, // Add images array
+      useSankeyView: useSankeyView, // Add Sankey view flag
       onUpdate: callbacks?.onUpdateNode,
       onDelete: callbacks?.onDeleteNode,
       onDoubleClick: callbacks?.onDoubleClickNode,
