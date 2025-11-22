@@ -7,6 +7,10 @@ import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
 import { getObjectTypeTheme } from '@/theme/objectTypeTheme';
 import { fileRegistry } from '@/contexts/TabContext';
+import { ExternalLink } from 'lucide-react';
+import { ImageStackIndicator } from '../ImageStackIndicator';
+import { ImageHoverPreview } from '../ImageHoverPreview';
+import { ImageLoupeView } from '../ImageLoupeView';
 import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE, CONVEX_HANDLE_OFFSET_MULTIPLIER, CONCAVE_HANDLE_OFFSET_MULTIPLIER, FLAT_HANDLE_OFFSET_MULTIPLIER } from '@/lib/nodeEdgeConstants';
 
 interface ConversionNodeData {
@@ -18,6 +22,13 @@ interface ConversionNodeData {
   description?: string;
   entry?: { is_start?: boolean; entry_weight?: number };
   type?: 'normal' | 'case';
+  url?: string;
+  images?: Array<{
+    image_id: string;
+    caption: string;
+    file_extension: 'png' | 'jpg' | 'jpeg';
+    caption_overridden?: boolean;
+  }>;
   case?: {
     id: string;
     status: 'active' | 'paused' | 'completed';
@@ -62,6 +73,11 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   
   // Track hover state
   const [isHovered, setIsHovered] = useState(false);
+  
+  // Image preview/loupe state
+  const [showImagePreview, setShowImagePreview] = useState(false);
+  const [showImageLoupe, setShowImageLoupe] = useState(false);
+  const [imagePreviewPosition, setImagePreviewPosition] = useState({ x: 0, y: 0 });
   
   // Check if user is currently connecting (creating a new edge)
   const isConnecting = useStore((state) => state.connectionNodeId !== null);
@@ -865,6 +881,92 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         )}
       </div>
 
+      {/* Bottom-right URL icon and image preview */}
+      <div
+        style={{
+          position: 'absolute',
+          right: data.useSankeyView ? 10 : 20,
+          bottom: data.useSankeyView ? 10 : 20,
+          display: 'flex',
+          gap: 4,
+          alignItems: 'center',
+          pointerEvents: 'auto'
+        }}
+      >
+        {/* URL icon (left of images) */}
+        {data.url && (
+          <Tooltip content={data.url} position="top" delay={200}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const url = data.url?.startsWith('http://') || data.url?.startsWith('https://') 
+                  ? data.url 
+                  : `https://${data.url}`;
+                window.open(url, '_blank', 'noopener,noreferrer');
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 12,
+                height: 12,
+                borderRadius: 3,
+                backgroundColor: '#f8fafc',
+                border: '1px solid #94a3b8',
+                cursor: 'pointer',
+                padding: 0,
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#e2e8f0';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = '#f8fafc';
+              }}
+              title={data.url}
+            >
+              <ExternalLink size={8} strokeWidth={2} style={{ color: '#64748b' }} />
+            </button>
+          </Tooltip>
+        )}
+        
+        {/* Image preview (right of URL) */}
+        {data.images && data.images.length > 0 && (
+          <div
+            style={{ cursor: 'pointer' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowImageLoupe(true);
+            }}
+            onMouseEnter={(e) => {
+              e.stopPropagation();
+              const rect = e.currentTarget.getBoundingClientRect();
+              // Position preview above the indicator, centered horizontally
+              setImagePreviewPosition({ 
+                x: rect.left + rect.width / 2, 
+                y: rect.top 
+              });
+              setShowImagePreview(true);
+            }}
+            onMouseMove={(e) => {
+              e.stopPropagation();
+              // Update position to follow mouse, but keep it above
+              const rect = e.currentTarget.getBoundingClientRect();
+              setImagePreviewPosition({ 
+                x: e.clientX, 
+                y: rect.top 
+              });
+            }}
+            onMouseLeave={(e) => {
+              e.stopPropagation();
+              setShowImagePreview(false);
+            }}
+          >
+            <ImageStackIndicator images={data.images} />
+          </div>
+        )}
+      </div>
+
       {/* Case node status indicator - outside content wrapper to avoid rotation (well inside visible node area) */}
       {isCaseNode && data.case && (
         <div style={{ 
@@ -1051,6 +1153,30 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         </div>
       )}
     </div>
+    {/* Hover preview popup */}
+    {showImagePreview && data.images && data.images[0] && (
+      <ImageHoverPreview
+        image={data.images[0]}
+        position={imagePreviewPosition}
+      />
+    )}
+
+    {/* Full loupe view modal */}
+    {showImageLoupe && data.images && data.images.length > 0 && (
+      <ImageLoupeView
+        images={data.images}
+        onClose={() => setShowImageLoupe(false)}
+        onDelete={(imageId) => {
+          // Delete via graph update (this will be handled by the graph mutation system)
+          console.log('Delete image from node face:', imageId);
+          setShowImageLoupe(false);
+        }}
+        onCaptionEdit={(imageId, newCaption) => {
+          // Edit caption via graph update
+          console.log('Edit caption from node face:', imageId, newCaption);
+        }}
+      />
+    )}
     </Tooltip>
   );
 }

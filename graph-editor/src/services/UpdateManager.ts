@@ -1283,7 +1283,30 @@ export class UpdateManager {
     this.addMapping('graph_to_file', 'UPDATE', 'node', [
       { sourceField: 'label', targetField: 'name' },
       { sourceField: 'description', targetField: 'description' },
-      { sourceField: 'event_id', targetField: 'event_id' }
+      { sourceField: 'event_id', targetField: 'event_id' },
+      { 
+        sourceField: 'url', 
+        targetField: 'url',
+        overrideField: 'url_overridden'
+      },
+      { 
+        sourceField: 'images', 
+        targetField: 'images',
+        overrideField: 'images_overridden',
+        transform: (images) => {
+          // When syncing graph → registry:
+          // - Keep image_id, caption, file_extension
+          // - Remove caption_overridden (graph-only field)
+          // - Add uploaded_at, uploaded_by (registry fields)
+          return images?.map((img: any) => ({
+            image_id: img.image_id,
+            caption: img.caption,
+            file_extension: img.file_extension,
+            uploaded_at: img.uploaded_at || new Date().toISOString(),
+            uploaded_by: img.uploaded_by || 'unknown'
+          }));
+        }
+      }
     ]);
     
     // Flow E.CREATE: Graph → File/Context (CREATE new registry entry)
@@ -1627,6 +1650,28 @@ export class UpdateManager {
         sourceField: 'event_id', 
         targetField: 'event_id',
         overrideFlag: 'event_id_overridden'
+      },
+      { 
+        sourceField: 'url', 
+        targetField: 'url',
+        overrideFlag: 'url_overridden'
+      },
+      { 
+        sourceField: 'images', 
+        targetField: 'images',
+        overrideFlag: 'images_overridden',
+        transform: (images: any) => {
+          // When syncing registry → graph:
+          // - Keep image_id, caption, file_extension
+          // - Remove uploaded_at, uploaded_by (registry-only fields)
+          // - Add caption_overridden: false
+          return images?.map((img: any) => ({
+            image_id: img.image_id,
+            caption: img.caption,
+            file_extension: img.file_extension,
+            caption_overridden: false
+          }));
+        }
       }
     ]);
     
@@ -2525,12 +2570,13 @@ export class UpdateManager {
   
   /**
    * Delete a node from the graph and clean up associated edges.
+   * Uses smart image GC - only deletes images with zero references across all files.
    * 
    * @param graph - Current graph
    * @param nodeUuid - UUID of the node to delete
    * @returns Updated graph with node and associated edges removed
    */
-  deleteNode(graph: any, nodeUuid: string): any {
+  async deleteNode(graph: any, nodeUuid: string): Promise<any> {
     const nextGraph = structuredClone(graph);
     
     // Find the node to verify it exists
@@ -2546,8 +2592,41 @@ export class UpdateManager {
     console.log('[UpdateManager] Deleting node:', {
       uuid: nodeUuid,
       humanId: humanId,
-      label: node.label
+      label: node.label,
+      hasImages: !!node.images?.length
     });
+    
+    // Smart image deletion using full GC scan
+    if (node.images && node.images.length > 0) {
+      // Import deleteOperationsService for shared GC utility
+      const { deleteOperationsService } = await import('./deleteOperationsService');
+      
+      const imageIds = node.images.map((img: any) => img.image_id);
+      const referencedImages = await deleteOperationsService.scanAllFilesForImageReferences(imageIds);
+      
+      const imagesToDelete = imageIds.filter((id: string) => !referencedImages.has(id));
+      
+      if (imagesToDelete.length > 0) {
+        console.log('[UpdateManager] Registering images for deletion (no refs in any file):', {
+          nodeId: humanId,
+          imageCount: imagesToDelete.length
+        });
+        
+        for (const imageId of imagesToDelete) {
+          const img = node.images.find((i: any) => i.image_id === imageId);
+          if (img) {
+            this.registerImageDeletion(imageId, `nodes/images/${imageId}.${img.file_extension}`);
+          }
+        }
+      }
+      
+      if (imagesToDelete.length < imageIds.length) {
+        console.log('[UpdateManager] Keeping images (still referenced elsewhere):', {
+          nodeId: humanId,
+          imageCount: imageIds.length - imagesToDelete.length
+        });
+      }
+    }
     
     // Remove the node
     nextGraph.nodes = nextGraph.nodes.filter((n: any) => n.uuid !== nodeUuid);
@@ -2584,6 +2663,14 @@ export class UpdateManager {
     });
     
     return nextGraph;
+  }
+  
+  /**
+   * Register an image for deletion
+   * Called by deleteNode when images are orphaned
+   */
+  private registerImageDeletion(imageId: string, path: string): void {
+    fileRegistry.registerImageDelete(imageId, path);
   }
 
   /**

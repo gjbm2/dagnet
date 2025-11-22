@@ -1,7 +1,13 @@
 # TODO
 
 ## Nasty glitches
-- finish tests
+URLs now showing / storing properly 
+
+hover not working on image on node face
+
+overwritten flags in props panel have been done in a bespoke way rather than following hte standard pattern elsewhere in props panel
+
+- we need to be careful about overrides -- if user 'puts to file' I wonder whether we sohuld clear overrides so that file is now master as appropriate?
 
 ## Current query DSL
 - whatifdsl is becoming (gradually) a more powerful general statement of the current query applied to the graph.

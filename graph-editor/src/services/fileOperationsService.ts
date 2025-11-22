@@ -509,66 +509,39 @@ class FileOperationsService {
       if (!confirm) return false;
     }
 
-    // 5. Delete from repository if committed
-    if (isCommitted && file.path) {
+    // 5. Handle deletion with staging (no immediate Git changes)
+    const isNodeFile = type === 'node';
+    
+    if (isNodeFile) {
+      // Use deleteOperationsService for smart image GC
+      const { deleteOperationsService } = await import('./deleteOperationsService');
+      const nodeId = fileId.replace(/^node-/, '');
+      await deleteOperationsService.deleteNodeFile(nodeId);
+    } else {
+      // For all file types: stage deletion (don't delete from Git immediately)
+      if (isCommitted && file.path) {
+        fileRegistry.registerFileDeletion(fileId, file.path, type);
+        console.log(`FileOperationsService: Staged file deletion for Git commit: ${fileId}`);
+      }
+      
+      // AUTO-REMOVE from index file (before deleting file itself)
+      await this.removeFromIndexFile(file);
+      
+      // Delete from local FileRegistry
       try {
-        const credsResult = await credentialsManager.loadCredentials();
-        if (!credsResult.success || !credsResult.credentials?.git) {
-          throw new Error('No credentials available');
-        }
-
-        const repoName = file.source?.repository;
-        const gitCreds = credsResult.credentials.git.find((r: any) => r.name === repoName);
-
-        if (!gitCreds) {
-          throw new Error(`Repository "${repoName}" not found in credentials`);
-        }
-
-        // Delete from Git
-        const gitService = await import('./gitService').then(m => m.gitService);
-        const deleteResult = await gitService.deleteFile(
-          file.path,
-          `Delete ${file.name || fileId}`,
-          file.source?.branch || 'main'
-        );
-
-        if (!deleteResult.success) {
-          throw new Error(deleteResult.error || 'Failed to delete from repository');
-        }
-
-        console.log(`FileOperationsService: Deleted ${fileId} from repository`);
+        await fileRegistry.deleteFile(fileId);
       } catch (error) {
-        console.error(`FileOperationsService: Failed to delete ${fileId} from repository:`, error);
-        if (this.dialogOps) {
-          const continueAnyway = await this.dialogOps.showConfirm({
-            title: 'Repository delete failed',
-            message: `Failed to delete from repository: ${error instanceof Error ? error.message : 'Unknown error'}. Continue with local delete?`,
-            confirmLabel: 'Continue',
-            cancelLabel: 'Cancel'
-          });
-          if (!continueAnyway) return false;
-        }
-        // Continue with local delete even if repo delete fails
+        console.error(`FileOperationsService: Failed to delete ${fileId}:`, error);
+        return false;
       }
     }
 
-    // 6. AUTO-REMOVE from index file (before deleting file itself)
-    await this.removeFromIndexFile(file);
-
-    // 7. Delete from FileRegistry
-    try {
-      await fileRegistry.deleteFile(fileId);
-    } catch (error) {
-      console.error(`FileOperationsService: Failed to delete ${fileId}:`, error);
-      return false;
-    }
-
-    // 8. Remove from Navigator
+    // 6. Remove from Navigator
     if (this.navigatorOps) {
       await this.navigatorOps.refreshItems();
     }
 
-    console.log(`FileOperationsService: Deleted ${fileId} successfully`);
+    console.log(`FileOperationsService: Deleted ${fileId} successfully (staged for Git commit)`);
     return true;
   }
 

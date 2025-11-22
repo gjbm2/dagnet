@@ -142,6 +142,43 @@
             "group": { "type": "string", "maxLength": 128 },
             "colour": { "type": "string", "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" }
           }
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "External URL for this node (can override registry node)"
+        },
+        "url_overridden": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, URL was manually edited and should not auto-sync from registry"
+        },
+        "images": {
+          "type": "array",
+          "description": "Images attached to this node (can override registry node)",
+          "items": {
+            "type": "object",
+            "required": ["image_id", "caption"],
+            "additionalProperties": false,
+            "properties": {
+              "image_id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+              "caption": { "type": "string", "maxLength": 256 },
+              "caption_overridden": { 
+                "type": "boolean", 
+                "default": false,
+                "description": "If true, caption was manually edited at graph level"
+              },
+              "file_extension": { 
+                "type": "string", 
+                "enum": ["png", "jpg", "jpeg"] 
+              }
+            }
+          }
+        },
+        "images_overridden": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, images array was manually modified and should not auto-sync from registry"
         }
       }
     },
