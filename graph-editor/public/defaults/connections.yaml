@@ -99,9 +99,9 @@ connections:
           
           // Convert window to Amplitude date format (YYYYMMDD)
           const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
-          // CRITICAL: Use dsl.window, not global window object!
-          const startDate = formatDate(dsl.window.start);
-          const endDate = formatDate(dsl.window.end);
+          // CRITICAL: Use window variable from execution context (not dsl.window)!
+          const startDate = formatDate(window.start);
+          const endDate = formatDate(window.end);
           
           // Build segmentation parameter for cohort exclusions AND case filtering
           // Amplitude API expects: s=[{"prop":"...", "op":"...", "values":[...]}]
