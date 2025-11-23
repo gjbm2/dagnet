@@ -72,6 +72,7 @@ class DeleteOperationsService {
       
       // Get image IDs from this node file
       const imageIds = nodeFile.data?.images?.map((img: any) => img.image_id) || [];
+      let imagesToDelete: string[] = [];
       
       if (imageIds.length > 0) {
         console.log(`[DeleteOperationsService] Node file has ${imageIds.length} images, checking references...`);
@@ -80,7 +81,7 @@ class DeleteOperationsService {
         const referencedImages = await this.scanAllFilesForImageReferences(imageIds);
         
         // Determine which images to delete (no refs anywhere)
-        const imagesToDelete = imageIds.filter((id: string) => !referencedImages.has(id));
+        imagesToDelete = imageIds.filter((id: string) => !referencedImages.has(id));
         
         if (imagesToDelete.length > 0) {
           // Stage images for deletion (don't delete immediately)
@@ -110,8 +111,8 @@ class DeleteOperationsService {
       
       console.log('[DeleteOperationsService] Staged node file deletion:', {
         nodeId,
-        imagesStaged: imageIds.length > 0 ? imagesToDelete.length : 0,
-        imagesKept: imageIds.length > 0 ? imageIds.length - imagesToDelete.length : 0
+        imagesStaged: imagesToDelete.length,
+        imagesKept: imageIds.length - imagesToDelete.length
       });
     } catch (error) {
       console.error('Failed to delete node file:', error);

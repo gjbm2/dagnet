@@ -1218,7 +1218,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Delete selected nodes (this will also delete their connected edges via UpdateManager)
     const selectedNodeUUIDs = selectedNodes.map(n => n.id); // ReactFlow IDs are UUIDs
     for (const nodeUuid of selectedNodeUUIDs) {
-      nextGraph = updateManager.deleteNode(nextGraph, nodeUuid);
+      nextGraph = await updateManager.deleteNode(nextGraph, nodeUuid);
     }
     
     // Delete selected edges (that weren't already deleted with nodes)

@@ -361,22 +361,46 @@
 
 ## Phase 10: Testing (3-4 hours)
 
-### 10.1 Unit Tests
-**New File**: `graph-editor/src/services/__tests__/imageOperations.test.ts`
-- [ ] Test `generateImageId()` uniqueness (NOT CREATED - deferred to manual testing)
-- [ ] Test `validateImage()` size/type checks (NOT CREATED - deferred to manual testing)
-- [ ] Test `compressImage()` scaling and compression (NOT CREATED - deferred to manual testing)
-- [ ] Test `scanAllFilesForImageReferences()` accuracy (NOT CREATED - deferred to manual testing)
+### 10.1 Comprehensive Test Suite
+**File**: `graph-editor/src/services/__tests__/nodeImageFeature.test.ts`
+**Status**: ✅ Test suite created (see README.md in same directory)
 
-### 10.2 Integration Tests
-**New File**: `graph-editor/src/services/__tests__/imageSync.integration.test.ts`
-- [ ] Test upload → IDB → commit → Git flow (NOT CREATED - deferred to manual testing)
-- [ ] Test delete → staging → commit → Git flow (NOT CREATED - deferred to manual testing)
-- [ ] Test override pattern (registry sync) (NOT CREATED - deferred to manual testing)
-- [ ] Test graph-node deletion GC (scans all files, deletes only orphaned images) (NOT CREATED - deferred to manual testing)
-- [ ] Test node-file deletion GC (scans all files, deletes only orphaned images) (NOT CREATED - deferred to manual testing)
-- [ ] Test GC correctness: image shared by 2 nodes, delete 1 node → image kept (NOT CREATED - deferred to manual testing)
-- [ ] Test Git pull fetches images into IDB (NOT CREATED - deferred to manual testing)
+**Test Coverage**:
+- ✅ Image compression & validation
+- ✅ Image service (blob URL management)
+- ✅ Image operations service (upload/delete/caption)
+- ✅ Delete operations service (garbage collection)
+- ✅ Error handling
+- ✅ Performance tests
+- ⚠️ Undo/redo tests (BLOCKED - see TODO.md § Image Undo/Redo Broken)
+- ⚠️ Git sync tests (TODO - require GitHub API mocks)
+- ⚠️ UI component tests (TODO - require React testing library setup)
+- ⚠️ UpdateManager integration tests (TODO - require full integration test setup)
+
+**Running Tests**:
+```bash
+# Run all tests
+npm test
+
+# Run only image feature tests
+npm test nodeImageFeature.test.ts
+
+# Run with coverage
+npm test -- --coverage nodeImageFeature.test.ts
+```
+
+**Key Test Cases Implemented**:
+1. Image validation (file size, type)
+2. Blob URL creation and caching
+3. Image upload with unique ID generation
+4. Image deletion and cleanup
+5. Caption editing with React immutability
+6. Garbage collection for node deletion
+7. Scanning all files for image references
+8. Shared vs orphaned image detection
+
+**Critical Gap - Undo/Redo Tests**:
+All undo/redo tests are marked TODO and blocked by a critical bug where history system doesn't properly track image binary data and pending operations. See `/TODO.md` § Image Undo/Redo Broken for details and proposed solutions.
 
 ### 10.3 Manual Testing
 **Checklist**: Follow testing checklist in design doc

@@ -1287,12 +1287,12 @@ export class UpdateManager {
       { 
         sourceField: 'url', 
         targetField: 'url',
-        overrideField: 'url_overridden'
+        overrideFlag: 'url_overridden'
       },
       { 
         sourceField: 'images', 
         targetField: 'images',
-        overrideField: 'images_overridden',
+        overrideFlag: 'images_overridden',
         transform: (images) => {
           // When syncing graph → registry:
           // - Keep image_id, caption, file_extension
@@ -2670,7 +2670,13 @@ export class UpdateManager {
    * Called by deleteNode when images are orphaned
    */
   private registerImageDeletion(imageId: string, path: string): void {
-    fileRegistry.registerImageDelete(imageId, path);
+    // Use dynamic import to avoid circular dependency
+    // Note: This is async but we don't await - image deletion registration is fire-and-forget
+    import('../contexts/TabContext').then((module) => {
+      module.fileRegistry.registerImageDelete(imageId, path);
+    }).catch((err) => {
+      console.error('[UpdateManager] Failed to register image deletion:', err);
+    });
   }
 
   /**

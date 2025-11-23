@@ -964,7 +964,7 @@ class WorkspaceService {
       const imagesPath = basePath ? `${basePath}/nodes/images` : 'nodes/images';
       
       // List all files in nodes/images/
-      const response = await gitService.listDirectory(imagesPath, branch);
+      const response = await gitService.getDirectoryContents(imagesPath, branch);
       
       if (!response.success || !response.data) {
         console.log(`WorkspaceService: No images directory found at ${imagesPath}`);

@@ -7,9 +7,10 @@
  * - Paste from clipboard
  */
 
-import React, { useState } from 'react';
+import * as React from 'react';
+import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { File, Globe, Clipboard, X } from 'lucide-react';
+import { File as FileIcon, Globe, Clipboard, X } from 'lucide-react';
 import { validateImage, compressImage } from '../utils/imageCompression';
 
 interface ImageUploadModalProps {
@@ -24,10 +25,38 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  // Check clipboard API support
-  const clipboardSupported = typeof navigator !== 'undefined' && 
-    navigator.clipboard && 
-    typeof navigator.clipboard.read === 'function';
+  // Preview state
+  const [previewData, setPreviewData] = useState<Uint8Array | null>(null);
+  const [previewExtension, setPreviewExtension] = useState<string>('png');
+  const [previewSource, setPreviewSource] = useState<string>('local');
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  
+  // Clipboard paste is always supported via paste event
+  const clipboardSupported = true;
+  
+  // Handlers for preview actions
+  const handleConfirmUpload = () => {
+    if (!previewData) return;
+    onUpload(previewData, previewExtension as 'png' | 'jpg' | 'jpeg', previewSource, caption.trim() || undefined);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    onClose();
+  };
+  
+  const handleCancelPreview = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewData(null);
+    setPreviewExtension('png');
+    setPreviewUrl(null);
+    setError(null);
+    setCaption('');
+  };
+  
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
   
   const handleLocalFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -53,8 +82,15 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
       const data = new Uint8Array(arrayBuffer);
       const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
       
-      onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'local', caption.trim() || undefined);
-      onClose();
+      // Show preview instead of immediately uploading
+      const blob = new Blob([data], { type: `image/${ext}` });
+      const blobUrl = URL.createObjectURL(blob);
+      
+      setPreviewData(data);
+      setPreviewExtension(ext);
+      setPreviewSource('local');
+      setPreviewUrl(blobUrl);
+      setIsLoading(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process image');
       setIsLoading(false);
@@ -97,8 +133,15 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
       const data = new Uint8Array(arrayBuffer);
       const ext = blob.type.split('/')[1] || 'png';
       
-      onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'url', caption.trim() || undefined);
-      onClose();
+      // Show preview instead of immediately uploading
+      const previewBlob = new Blob([data], { type: `image/${ext}` });
+      const blobUrl = URL.createObjectURL(previewBlob);
+      
+      setPreviewData(data);
+      setPreviewExtension(ext);
+      setPreviewSource('url');
+      setPreviewUrl(blobUrl);
+      setIsLoading(false);
     } catch (err) {
       if (err instanceof TypeError) {
         // Network/CORS error
@@ -110,46 +153,50 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
     }
   };
   
-  const handleClipboardPaste = async () => {
-    if (!clipboardSupported) {
-      setError('Clipboard API not supported in this browser');
-      return;
-    }
-    
+  const handleClipboardPaste = async (e: ClipboardEvent) => {
     setIsLoading(true);
     setError(null);
     
     try {
-      const items = await navigator.clipboard.read();
+      const items = e.clipboardData?.items;
+      if (!items) {
+        throw new Error('No clipboard data available');
+      }
       
-      for (const item of items) {
-        for (const type of item.types) {
-          if (type.startsWith('image/')) {
-            const blob = await item.getType(type);
-            const file = new File([blob], 'pasted-image.png', { type });
-            
-            // Validate and compress
-            const validation = validateImage(file);
-            if (!validation.valid) {
-              throw new Error(validation.error!);
-            }
-            
-            const compressed = await compressImage(file);
-            const arrayBuffer = await compressed.arrayBuffer();
-            const data = new Uint8Array(arrayBuffer);
-            const ext = type.split('/')[1] || 'png';
-            
-            onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'clipboard', caption.trim() || undefined);
-            onClose();
-            return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          if (!blob) continue;
+          
+          // Validate and compress
+          const validation = validateImage(blob);
+          if (!validation.valid) {
+            throw new Error(validation.error!);
           }
+          
+          const compressed = await compressImage(blob);
+          const arrayBuffer = await compressed.arrayBuffer();
+          const data = new Uint8Array(arrayBuffer);
+          const ext = item.type.split('/')[1] || 'png';
+          
+          // Show preview instead of immediately uploading
+          const previewBlob = new Blob([data], { type: `image/${ext}` });
+          const blobUrl = URL.createObjectURL(previewBlob);
+          
+          setPreviewData(data);
+          setPreviewExtension(ext);
+          setPreviewSource('clipboard');
+          setPreviewUrl(blobUrl);
+          setIsLoading(false);
+          return;
         }
       }
       
-      setError('No image found in clipboard');
+      setError('No image found in clipboard. Copy an image first.');
       setIsLoading(false);
     } catch (err) {
-      setError('Failed to read clipboard. Please use Ctrl+V or paste manually.');
+      setError(err instanceof Error ? err.message : 'Failed to paste image');
       setIsLoading(false);
     }
   };
@@ -184,9 +231,14 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Upload Image</h3>
+          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>
+            {previewData ? 'Confirm Image' : 'Upload Image'}
+          </h3>
           <button
-            onClick={onClose}
+            onClick={() => {
+              if (previewUrl) URL.revokeObjectURL(previewUrl);
+              onClose();
+            }}
             style={{
               background: 'none',
               border: 'none',
@@ -201,8 +253,91 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
           </button>
         </div>
         
-        {/* Tabs */}
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '1px solid #e2e8f0' }}>
+        {/* Show preview if image is loaded, otherwise show tabs */}
+        {previewData && previewUrl ? (
+          <>
+            {/* Image Preview */}
+            <div style={{
+              width: '100%',
+              marginBottom: '20px',
+              border: '1px solid #e2e8f0',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              background: '#f8fafc'
+            }}>
+              <img
+                src={previewUrl}
+                alt="Preview"
+                style={{
+                  width: '100%',
+                  maxHeight: '400px',
+                  objectFit: 'contain',
+                  display: 'block'
+                }}
+              />
+            </div>
+            
+            {/* Caption Input (below preview) */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#555', marginBottom: '6px' }}>
+                Caption (optional)
+              </label>
+              <input
+                type="text"
+                value={caption}
+                onChange={(e) => setCaption(e.target.value)}
+                placeholder="Image caption..."
+                autoFocus
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontFamily: 'inherit'
+                }}
+              />
+              <p style={{ marginTop: '6px', fontSize: '12px', color: '#64748b' }}>
+                Leave empty to use default caption (Image 1, Image 2, etc.)
+              </p>
+            </div>
+            
+            {/* Ok/Cancel Buttons */}
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={handleCancelPreview}
+                style={{
+                  padding: '8px 16px',
+                  background: 'white',
+                  color: '#64748b',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontWeight: 500
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmUpload}
+                style={{
+                  padding: '8px 16px',
+                  background: '#3b82f6',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontWeight: 500
+                }}
+              >
+                Ok
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '1px solid #e2e8f0' }}>
           <button
             onClick={() => setActiveTab('local')}
             style={{
@@ -219,7 +354,7 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
               transition: 'all 0.2s'
             }}
           >
-            <File size={16} /> Local File
+            <FileIcon size={16} /> Local File
           </button>
           <button
             onClick={() => setActiveTab('url')}
@@ -260,31 +395,6 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
           >
             <Clipboard size={16} /> Paste from Clipboard
           </button>
-        </div>
-        
-        {/* Caption Input (common to all tabs) */}
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#555', marginBottom: '6px' }}>
-            Caption (optional)
-          </label>
-          <input
-            type="text"
-            value={caption}
-            onChange={(e) => setCaption(e.target.value)}
-            placeholder="Image caption..."
-            disabled={isLoading}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid #cbd5e1',
-              borderRadius: '6px',
-              fontSize: '14px',
-              fontFamily: 'inherit'
-            }}
-          />
-          <p style={{ marginTop: '6px', fontSize: '12px', color: '#64748b' }}>
-            Leave empty to use default caption (Image 1, Image 2, etc.)
-          </p>
         </div>
         
         {/* Tab Content */}
@@ -353,28 +463,49 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
           
           {activeTab === 'clipboard' && (
             <div>
-              <button 
-                onClick={handleClipboardPaste}
-                disabled={isLoading}
+              <div
+                tabIndex={0}
+                onPaste={(e) => handleClipboardPaste(e.nativeEvent)}
                 style={{
+                  width: '100%',
+                  minHeight: '120px',
+                  border: '2px dashed #cbd5e1',
+                  borderRadius: '8px',
                   display: 'flex',
+                  flexDirection: 'column',
                   alignItems: 'center',
-                  gap: '8px',
-                  padding: '12px 20px',
-                  background: '#3b82f6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: isLoading ? 'not-allowed' : 'pointer',
-                  opacity: isLoading ? 0.5 : 1,
-                  fontWeight: 500,
-                  fontSize: '14px'
+                  justifyContent: 'center',
+                  gap: '12px',
+                  padding: '24px',
+                  background: '#f8fafc',
+                  cursor: 'text',
+                  outline: 'none',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f1f5f9';
+                  e.currentTarget.style.borderColor = '#94a3b8';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#f8fafc';
+                  e.currentTarget.style.borderColor = '#cbd5e1';
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#3b82f6';
+                  e.currentTarget.style.background = '#eff6ff';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#cbd5e1';
+                  e.currentTarget.style.background = '#f8fafc';
                 }}
               >
-                <Clipboard size={16} /> Paste from Clipboard
-              </button>
+                <Clipboard size={32} style={{ color: '#94a3b8' }} />
+                <p style={{ fontSize: '14px', color: '#64748b', textAlign: 'center', margin: 0 }}>
+                  Click here and press <strong>Ctrl+V</strong> (or <strong>Cmd+V</strong>) to paste an image
+                </p>
+              </div>
               <p style={{ marginTop: '12px', fontSize: '13px', color: '#64748b' }}>
-                Click the button above or press Ctrl+V / Cmd+V to paste an image from your clipboard.
+                Copy an image (from browser, screenshot, etc.) then paste it here.
               </p>
             </div>
           )}
@@ -395,19 +526,21 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
           </div>
         )}
         
-        {/* Loading Indicator */}
-        {isLoading && (
-          <div style={{
-            marginTop: '16px',
-            padding: '12px',
-            background: '#eff6ff',
-            border: '1px solid #93c5fd',
-            borderRadius: '6px',
-            color: '#1e40af',
-            fontSize: '13px'
-          }}>
-            Processing image...
-          </div>
+            {/* Loading Indicator */}
+            {isLoading && (
+              <div style={{
+                marginTop: '16px',
+                padding: '12px',
+                background: '#eff6ff',
+                border: '1px solid #93c5fd',
+                borderRadius: '6px',
+                color: '#1e40af',
+                fontSize: '13px'
+              }}>
+                Processing image...
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

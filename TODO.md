@@ -1,14 +1,5 @@
 # TODO
 
-## Nasty glitches
-URLs now showing / storing properly 
-
-hover not working on image on node face
-
-overwritten flags in props panel have been done in a bespoke way rather than following hte standard pattern elsewhere in props panel
-
-- we need to be careful about overrides -- if user 'puts to file' I wonder whether we sohuld clear overrides so that file is now master as appropriate?
-
 ## Current query DSL
 - whatifdsl is becoming (gradually) a more powerful general statement of the current query applied to the graph.
   - in current: some of this (e.g. window, contexts in due course) determins what data is retrieved in the first place; other parts (whatifs) determine what overlay is applied to that data before render
@@ -44,6 +35,8 @@ overwritten flags in props panel have been done in a bespoke way rather than fol
 
 **Priority:** Should be fixed before production release
 
+---
+
 ## Major components
 - Context support
 - Declarartive Analytics Module
@@ -57,11 +50,12 @@ overwritten flags in props panel have been done in a bespoke way rather than fol
 - node renaming, file renaming -- need to handle globally
 - systematically review that DELETE graph changes  go through UpdateManager
 
-
 ### Analytics / Model Fitting (Future)
 - add moving arrow effect, speed of animation scale on log lag
 
 ### Medium 
+
+- we need to be careful about overrides -- if user 'puts to file' I wonder whether we sohuld clear overrides so that file is now master as appropriate?
 - confidence internals on Sankey view
 - Events that can fire several times we may need to build Amplitude funnels further one step further upstream in order to ensure we know that it's this specific event we care about 
 - Zap drop down menu:
@@ -119,6 +113,7 @@ overwritten flags in props panel have been done in a bespoke way rather than fol
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- Image Undo/Redo Broken 
 - bead labels aren't updating when values change e.g. on data retrieval, revbalances, etc. 
 - make 'overridden' icons brighter
 - add icons to collapsed beads?
