@@ -1356,10 +1356,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       const caseColourChanged = node.data?.layout?.colour !== graphNode.layout?.colour;
       const caseTypeChanged = node.data?.type !== graphNode.type;
       const caseDataChanged = JSON.stringify(node.data?.case || {}) !== JSON.stringify(graphNode.case || {});
+      const urlChanged = node.data?.url !== graphNode.url;
+      const imagesChanged = JSON.stringify(node.data?.images || []) !== JSON.stringify(graphNode.images || []);
       
       const hasChanges = labelChanged || idChanged || descriptionChanged || absorbingChanged || 
                         outcomeTypeChanged || tagsChanged || entryStartChanged || entryWeightChanged ||
-                        caseColourChanged || caseTypeChanged || caseDataChanged;
+                        caseColourChanged || caseTypeChanged || caseDataChanged || urlChanged || imagesChanged;
       
       if (hasChanges) {
         console.log('Node property changes detected:', {
@@ -1504,7 +1506,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                 entry: graphNode.entry,
                 type: graphNode.type,
                 case: graphNode.case,
-                layout: graphNode.layout
+                layout: graphNode.layout,
+                url: graphNode.url,
+                images: graphNode.images
               }
             };
           });

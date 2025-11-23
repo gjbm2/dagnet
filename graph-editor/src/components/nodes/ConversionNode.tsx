@@ -1,7 +1,9 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import * as React from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Handle, Position, NodeProps, useReactFlow, useStore } from 'reactflow';
 import { useTabContext } from '../../contexts/TabContext';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
+import toast from 'react-hot-toast';
 import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
@@ -11,6 +13,8 @@ import { ExternalLink } from 'lucide-react';
 import { ImageStackIndicator } from '../ImageStackIndicator';
 import { ImageHoverPreview } from '../ImageHoverPreview';
 import { ImageLoupeView } from '../ImageLoupeView';
+import { ImageUploadModal } from '../ImageUploadModal';
+import { imageOperationsService } from '../../services/imageOperationsService';
 import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE, CONVEX_HANDLE_OFFSET_MULTIPLIER, CONCAVE_HANDLE_OFFSET_MULTIPLIER, FLAT_HANDLE_OFFSET_MULTIPLIER } from '@/lib/nodeEdgeConstants';
 
 interface ConversionNodeData {
@@ -64,7 +68,7 @@ interface ConversionNodeData {
 export default function ConversionNode({ data, selected }: NodeProps<ConversionNodeData>) {
   const { getEdges, getNodes, setNodes } = useReactFlow();
   const { activeTabId, operations, tabs } = useTabContext();
-  const { graph } = useGraphStore();
+  const { graph, setGraph, saveHistoryState } = useGraphStore();
   
   // Get current tab's what-if analysis state (NEW: unified DSL)
   const activeTab = tabs.find(tab => tab.id === activeTabId);
@@ -77,6 +81,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   // Image preview/loupe state
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [showImageLoupe, setShowImageLoupe] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const [imagePreviewPosition, setImagePreviewPosition] = useState({ x: 0, y: 0 });
   
   // Check if user is currently connecting (creating a new edge)
@@ -101,6 +106,17 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const handleDelete = useCallback(() => {
     data.onDelete(data.uuid);
   }, [data]);
+
+  // Image upload handler - using shared service
+  const handleImageUpload = useCallback(async (imageData: Uint8Array, extension: string, source: string, caption?: string) => {
+    if (!graph) return;
+    
+    await imageOperationsService.uploadImage(graph, imageData, extension, source, {
+      onGraphUpdate: setGraph,
+      onHistorySave: saveHistoryState,
+      getNodeId: () => data.uuid || data.id
+    }, caption);
+  }, [graph, data.uuid, data.id, setGraph, saveHistoryState]);
 
   // Calculate probability mass for outgoing edges
   // PMF validation ONLY applies to 'current' layer (live editable graph), not to snapshots
@@ -442,7 +458,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const eventTheme = getObjectTypeTheme('event');
 
   return (
-    <Tooltip content={getTooltipContent()} position="top" delay={300}>
+    <Tooltip content={getTooltipContent()} position="top" delay={800}>
       <div 
         className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''} ${isCaseNode ? 'case-node' : ''}`}
         onMouseEnter={() => setIsHovered(true)}
@@ -933,7 +949,14 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         {/* Image preview (right of URL) */}
         {data.images && data.images.length > 0 && (
           <div
-            style={{ cursor: 'pointer' }}
+            style={{ 
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 12,
+              height: 12
+            }}
             onClick={(e) => {
               e.stopPropagation();
               setShowImageLoupe(true);
@@ -1166,15 +1189,43 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       <ImageLoupeView
         images={data.images}
         onClose={() => setShowImageLoupe(false)}
-        onDelete={(imageId) => {
-          // Delete via graph update (this will be handled by the graph mutation system)
-          console.log('Delete image from node face:', imageId);
+        onAddImage={() => {
           setShowImageLoupe(false);
+          setShowUploadModal(true);
+        }}
+        onDelete={(imageId) => {
+          if (!graph) return;
+          
+          imageOperationsService.deleteImage(graph, imageId, {
+            onGraphUpdate: (updatedGraph) => {
+              setGraph(updatedGraph);
+              // Close loupe if no images left
+              const node = updatedGraph.nodes.find((n: any) => n.uuid === data.uuid || n.id === data.id);
+              if (node && (!node.images || node.images.length === 0)) {
+                setShowImageLoupe(false);
+              }
+            },
+            onHistorySave: saveHistoryState,
+            getNodeId: () => data.uuid || data.id
+          });
         }}
         onCaptionEdit={(imageId, newCaption) => {
-          // Edit caption via graph update
-          console.log('Edit caption from node face:', imageId, newCaption);
+          if (!graph) return;
+          
+          imageOperationsService.editCaption(graph, imageId, newCaption, {
+            onGraphUpdate: setGraph,
+            onHistorySave: saveHistoryState,
+            getNodeId: () => data.uuid || data.id
+          });
         }}
+      />
+    )}
+    
+    {/* Image Upload Modal */}
+    {showUploadModal && (
+      <ImageUploadModal
+        onClose={() => setShowUploadModal(false)}
+        onUpload={handleImageUpload}
       />
     )}
     </Tooltip>

@@ -5,7 +5,8 @@
  * if there are multiple images.
  */
 
-import React, { useState, useEffect } from 'react';
+import * as React from 'react';
+import { useState, useEffect } from 'react';
 import { imageService } from '../services/imageService';
 import type { NodeImage } from '../types';
 
@@ -32,40 +33,12 @@ export function ImageStackIndicator({ images }: ImageStackIndicatorProps) {
         imageService.revokeImageUrl(firstImage.image_id, firstImage.file_extension);
       }
     };
-  }, [firstImage?.image_id, firstImage?.file_extension]);
+  }, [firstImage?.image_id, firstImage?.file_extension, firstImage?.caption, images]);
   
   if (!firstImage) return null;
   
   return (
     <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', width: '12px', height: '12px' }}>
-      {/* Stack effect - show 2-3 overlapping squares */}
-      {hasMultiple && (
-        <>
-          <div style={{
-            position: 'absolute',
-            width: '12px',
-            height: '12px',
-            borderRadius: '3px',
-            background: '#fff',
-            border: '1px solid #cbd5e1',
-            top: '-2px',
-            left: '-2px',
-            zIndex: 1
-          }} />
-          <div style={{
-            position: 'absolute',
-            width: '12px',
-            height: '12px',
-            borderRadius: '3px',
-            background: '#fff',
-            border: '1px solid #cbd5e1',
-            top: '-1px',
-            left: '-1px',
-            zIndex: 2
-          }} />
-        </>
-      )}
-      
       {/* Front image */}
       <div style={{
         width: '12px',
@@ -103,6 +76,34 @@ export function ImageStackIndicator({ images }: ImageStackIndicatorProps) {
           }} />
         )}
       </div>
+      
+      {/* Stack effect - show 2-3 overlapping squares positioned right and down */}
+      {hasMultiple && (
+        <>
+          <div style={{
+            position: 'absolute',
+            width: '12px',
+            height: '12px',
+            borderRadius: '3px',
+            background: '#fff',
+            border: '1px solid #cbd5e1',
+            top: '2px',
+            left: '2px',
+            zIndex: 1
+          }} />
+          <div style={{
+            position: 'absolute',
+            width: '12px',
+            height: '12px',
+            borderRadius: '3px',
+            background: '#fff',
+            border: '1px solid #cbd5e1',
+            top: '1px',
+            left: '1px',
+            zIndex: 2
+          }} />
+        </>
+      )}
     </div>
   );
 }

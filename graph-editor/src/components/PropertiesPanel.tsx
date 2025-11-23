@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import * as React from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
@@ -22,6 +23,7 @@ import { ConnectionControl } from './ConnectionControl';
 import { ImageThumbnail } from './ImageThumbnail';
 import { ImageUploadModal } from './ImageUploadModal';
 import { ImageLoupeView } from './ImageLoupeView';
+import { imageOperationsService } from '../services/imageOperationsService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap } from 'lucide-react';
 import { normalizeConstraintString } from '@/lib/queryDSL';
@@ -205,6 +207,7 @@ export default function PropertiesPanel({
             outcome_type: node.outcome_type,
             tags: node.tags || [],
             entry: node.entry || {},
+            url: node.url || '',
           });
           
           // Handle case node data
@@ -270,6 +273,7 @@ export default function PropertiesPanel({
           outcome_type: node.outcome_type,
           tags: node.tags || [],
           entry: node.entry || {},
+          url: node.url || '',
         });
         
         // Handle case node data
@@ -511,158 +515,38 @@ export default function PropertiesPanel({
     }
   }, [selectedNodeId, graph, setGraph, saveHistoryState]);
   
-  // Image operation handlers
-  const handleImageUpload = useCallback(async (imageData: Uint8Array, extension: string, source: string) => {
+  // Image operation handlers - using shared service
+  const handleImageUpload = useCallback(async (imageData: Uint8Array, extension: string, source: string, caption?: string) => {
     if (!graph || !selectedNodeId) return;
     
-    try {
-      const node = graph.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-      if (!node) return;
-      
-      // Generate unique image_id
-      const existingImageIds = await workspaceService.getAllImageIdsFromIDB();
-      const baseId = node.id ? `${node.id}-img` : `node-img-${Date.now()}`;
-      let imageId = baseId;
-      let counter = 1;
-      while (existingImageIds.includes(imageId)) {
-        imageId = `${baseId}-${counter}`;
-        counter++;
-      }
-      
-      // Get next caption number
-      const imageCount = (node.images?.length || 0) + 1;
-      
-      // Get current workspace info for proper storage
-      const { db } = await import('../db/appDatabase');
-      const appState = await db.appState.get('app-state');
-      const repository = appState?.navigatorState?.selectedRepo || '';
-      const branch = appState?.navigatorState?.selectedBranch || 'main';
-      
-      // Store image in IDB FIRST, before updating graph
-      // Use same format as Git-loaded images:
-      // - IDB: prefixed fileId (repo-branch-image-id)
-      // - FileRegistry memory: unprefixed fileId (image-id)
-      const baseFileId = `image-${imageId}`;
-      const idbFileId = repository && branch ? `${repository}-${branch}-${baseFileId}` : baseFileId;
-      
-      const imageFileState: any = {
-        fileId: baseFileId, // FileRegistry uses unprefixed fileId
-        path: `nodes/images/${imageId}.${extension}`,
-        type: 'image' as any, // Images use 'image' type (not in ObjectType union, but used for storage)
-        data: {
-          image_id: imageId,
-          file_extension: extension,
-          binaryData: imageData
-        },
-        originalData: null,
-        isDirty: true,
-        lastModified: Date.now(),
-        source: { 
-          repository, 
-          branch, 
-          path: `nodes/images/${imageId}.${extension}` 
-        },
-        viewTabs: [],
-        isInitializing: false
-      };
-      
-      // Store in IDB with prefixed fileId (like Git-loaded images)
-      await db.files.put({ ...imageFileState, fileId: idbFileId });
-      
-      // Also store in FileRegistry memory with unprefixed fileId (so imageService can find it)
-      (fileRegistry as any).files.set(baseFileId, imageFileState);
-      
-      console.log(`[PropertiesPanel] Image stored in IDB: ${idbFileId}, FileRegistry: ${baseFileId} (repo: ${repository}, branch: ${branch})`);
-      
-      // Update graph with new image AFTER storage completes
-      const next = structuredClone(graph);
-      const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId);
-      if (nodeIndex >= 0) {
-        if (!next.nodes[nodeIndex].images) {
-          next.nodes[nodeIndex].images = [];
-        }
-        next.nodes[nodeIndex].images.push({
-          image_id: imageId,
-          caption: `Image ${imageCount}`,
-          file_extension: extension,
-          caption_overridden: false
-        });
-        next.nodes[nodeIndex].images_overridden = true;
-        if (next.metadata) {
-          next.metadata.updated_at = new Date().toISOString();
-        }
-        setGraph(next);
-        saveHistoryState('Upload image', selectedNodeId);
-        
-        // Register image for Git commit
-        fileRegistry.registerImageUpload(imageId, `nodes/images/${imageId}.${extension}`, imageData);
-        
-        toast.success(`Image uploaded: ${imageId}`);
-      }
-    } catch (error) {
-      console.error('Failed to upload image:', error);
-      toast.error('Failed to upload image');
-    }
+    await imageOperationsService.uploadImage(graph, imageData, extension, source, {
+      onGraphUpdate: setGraph,
+      onHistorySave: saveHistoryState,
+      getNodeId: () => selectedNodeId
+    }, caption);
   }, [graph, selectedNodeId, setGraph, saveHistoryState]);
   
   const handleDeleteImage = useCallback((imageId: string) => {
     if (!graph || !selectedNodeId) return;
     
-    const next = structuredClone(graph);
-    const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId);
-    if (nodeIndex >= 0) {
-      const node = next.nodes[nodeIndex];
-      if (!node.images) return;
-      
-      const imageToDelete = node.images.find((img: any) => img.image_id === imageId);
-      if (!imageToDelete) return;
-      
-      node.images = node.images.filter((img: any) => img.image_id !== imageId);
-      if (node.images.length === 0) {
-        delete node.images_overridden;
-      }
-      
-      if (next.metadata) {
-        next.metadata.updated_at = new Date().toISOString();
-      }
-      
-      setGraph(next);
-      saveHistoryState('Delete image', selectedNodeId);
-      
-      // Register image for deletion from Git
-      fileRegistry.registerImageDelete(imageId, `nodes/images/${imageId}.${imageToDelete.file_extension}`);
-      
-      toast.success('Image deleted');
-    }
+    imageOperationsService.deleteImage(graph, imageId, {
+      onGraphUpdate: setGraph,
+      onHistorySave: saveHistoryState,
+      getNodeId: () => selectedNodeId
+    });
   }, [graph, selectedNodeId, setGraph, saveHistoryState]);
   
   const handleEditCaption = useCallback((imageId: string, newCaption: string) => {
     if (!graph || !selectedNodeId) return;
     
-    const next = structuredClone(graph);
-    const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId);
-    if (nodeIndex >= 0) {
-      const node = next.nodes[nodeIndex];
-      if (!node.images) return;
-      
-      const imageIndex = node.images.findIndex((img: any) => img.image_id === imageId);
-      if (imageIndex >= 0) {
-        node.images[imageIndex].caption = newCaption;
-        node.images[imageIndex].caption_overridden = true;
-        
-        if (next.metadata) {
-          next.metadata.updated_at = new Date().toISOString();
-        }
-        
-        setGraph(next);
-        saveHistoryState('Edit image caption', selectedNodeId);
-        
-        toast.success('Caption updated');
-      }
-    }
+    imageOperationsService.editCaption(graph, imageId, newCaption, {
+      onGraphUpdate: setGraph,
+      onHistorySave: saveHistoryState,
+      getNodeId: () => selectedNodeId
+    });
   }, [graph, selectedNodeId, setGraph, saveHistoryState]);
 
-  const updateEdge = useCallback(async (field: string, value: any) => { 
+  const updateEdge = useCallback(async (field: string, value: any) => {
     console.log('[PropertiesPanel] updateEdge called:', { field, value, selectedEdgeId });
     if (!graph || !selectedEdgeId) return;
     const oldGraph = graph;
@@ -1020,7 +904,7 @@ export default function PropertiesPanel({
 
   // Debug: Log render
   console.log('[PropertiesPanel] Component render - showUploadModal:', showUploadModal);
-  
+
   return (
     <div className="properties-panel">
       {/* Content */}
@@ -1296,6 +1180,173 @@ export default function PropertiesPanel({
                   </AutomatableField>
                   </div>
 
+                  {/* URL */}
+                  <div className="property-section">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <label className="property-label">URL</label>
+                      {selectedNode?.url && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const url = selectedNode.url?.startsWith('http://') || selectedNode.url?.startsWith('https://') 
+                              ? selectedNode.url 
+                              : `https://${selectedNode.url}`;
+                            window.open(url, '_blank', 'noopener,noreferrer');
+                          }}
+                          style={{
+                            padding: '4px',
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0
+                          }}
+                          title={selectedNode.url}
+                        >
+                          <ExternalLink size={14} strokeWidth={2} style={{ color: '#64748b' }} />
+                        </button>
+                      )}
+                    </div>
+                    <AutomatableField
+                      label="URL"
+                      value={localNodeData.url || ''}
+                      overridden={selectedNode?.url_overridden || false}
+                      onClearOverride={() => {
+                        // Clear the override flag only
+                        updateNode('url_overridden', false);
+                      }}
+                    >
+                    <input
+                      className="property-input"
+                      data-field="url"
+                      value={localNodeData.url || ''}
+                        onChange={(e) => {
+                          const newUrl = e.target.value;
+                          setLocalNodeData({...localNodeData, url: newUrl});
+                        }}
+                      onBlur={() => {
+                        if (!graph || !selectedNodeId) return;
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                        if (nodeIndex >= 0) {
+                          next.nodes[nodeIndex].url = localNodeData.url;
+                            // Mark as overridden when user commits edit
+                            next.nodes[nodeIndex].url_overridden = true;
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                          saveHistoryState('Update node URL', selectedNodeId);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          if (!graph || !selectedNodeId) return;
+                          const next = structuredClone(graph);
+                          const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                          if (nodeIndex >= 0) {
+                            next.nodes[nodeIndex].url = localNodeData.url;
+                              // Mark as overridden when user commits edit
+                              next.nodes[nodeIndex].url_overridden = true;
+                            if (next.metadata) {
+                              next.metadata.updated_at = new Date().toISOString();
+                            }
+                            setGraph(next);
+                            saveHistoryState('Update node URL', selectedNodeId);
+                          }
+                        }
+                      }}
+                    />
+                    </AutomatableField>
+                  </div>
+
+                  {/* Images Section */}
+                  <div className="property-section" style={{ marginTop: '16px' }}>
+                    <AutomatableField
+                      label="Images"
+                      value={selectedNode?.images || []}
+                      overridden={selectedNode?.images_overridden || false}
+                      onClearOverride={() => {
+                        if (!graph || !selectedNodeId) return;
+                        const next = structuredClone(graph);
+                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
+                        if (nodeIndex >= 0) {
+                          next.nodes[nodeIndex].images_overridden = false;
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                          saveHistoryState('Clear images override', selectedNodeId);
+                        }
+                      }}
+                    >
+                      <div style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '8px',
+                        marginBottom: '8px'
+                      }}>
+                        {selectedNode?.images?.map((img: any, index: number) => (
+                          <ImageThumbnail
+                            key={img.image_id}
+                            image={img}
+                            onDelete={() => handleDeleteImage(img.image_id)}
+                            onCaptionEdit={(newCaption) => handleEditCaption(img.image_id, newCaption)}
+                            isOverridden={!!selectedNode.images_overridden}
+                            onClick={() => {
+                              setLoupeStartImageId(img.image_id);
+                              setShowImageLoupe(true);
+                            }}
+                          />
+                        ))}
+                        
+                        {/* Add New Image Button */}
+                        <button
+                          type="button"
+                          className="add-image-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            console.log('[PropertiesPanel] Add image button clicked, current showUploadModal:', showUploadModal);
+                            console.log('[PropertiesPanel] Calling setShowUploadModal(true)');
+                            setShowUploadModal(true);
+                            // Force immediate check
+                            setTimeout(() => {
+                              console.log('[PropertiesPanel] After setState, showUploadModal should be true');
+                            }, 0);
+                          }}
+                          style={{
+                            width: '80px',
+                            height: '80px',
+                            border: '2px dashed #cbd5e1',
+                            borderRadius: '8px',
+                            background: '#f8fafc',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '32px',
+                            color: '#94a3b8',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = '#f1f5f9';
+                            e.currentTarget.style.borderColor = '#94a3b8';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = '#f8fafc';
+                            e.currentTarget.style.borderColor = '#cbd5e1';
+                          }}
+                          title="Upload new image"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </AutomatableField>
+                  </div>
+
                   {/* Tags */}
                   <div className="property-section">
                     <label className="property-label">Tags</label>
@@ -1310,146 +1361,6 @@ export default function PropertiesPanel({
                       placeholder="tag1, tag2, tag3"
                     />
                     <div className="property-helper-text">Comma-separated tags</div>
-                  </div>
-
-                  {/* URL Field */}
-                  <div className="property-section" style={{ marginTop: '16px' }}>
-                    <label className="property-label">
-                      URL
-                      {selectedNode?.url_overridden && (
-                        <span className="overridden-indicator" style={{ marginLeft: '6px', display: 'inline-flex', alignItems: 'center' }} title="Modified from node file">
-                          <Zap size={12} strokeWidth={2} style={{ color: '#f59e0b' }} />
-                        </span>
-                      )}
-                    </label>
-                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                      <input
-                        type="text"
-                        className="property-input"
-                        value={localNodeData.url || ''}
-                        onChange={(e) => setLocalNodeData({...localNodeData, url: e.target.value})}
-                        onBlur={() => {
-                          if (!graph || !selectedNodeId) return;
-                          const next = structuredClone(graph);
-                          const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                          if (nodeIndex >= 0) {
-                            next.nodes[nodeIndex].url = localNodeData.url;
-                            next.nodes[nodeIndex].url_overridden = true;
-                            if (next.metadata) {
-                              next.metadata.updated_at = new Date().toISOString();
-                            }
-                            setGraph(next);
-                            saveHistoryState('Update node URL', selectedNodeId);
-                          }
-                        }}
-                        placeholder="https://..."
-                        style={{ 
-                          fontFamily: 'monospace', 
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: 'visible',
-                          textOverflow: 'clip'
-                        }}
-                      />
-                      {selectedNode?.url && (
-                        <button
-                          onClick={() => {
-                            const url = selectedNode.url?.startsWith('http://') || selectedNode.url?.startsWith('https://') 
-                              ? selectedNode.url 
-                              : `https://${selectedNode.url}`;
-                            window.open(url, '_blank', 'noopener,noreferrer');
-                          }}
-                          style={{
-                            padding: '6px',
-                            fontSize: '13px',
-                            border: '1px solid #cbd5e1',
-                            borderRadius: '6px',
-                            background: '#f8fafc',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                          }}
-                          title="Open URL"
-                        >
-                          <ExternalLink size={14} strokeWidth={2} style={{ color: '#64748b' }} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Images Section */}
-                  <div className="property-section" style={{ marginTop: '16px' }}>
-                    <label className="property-label">
-                      Images
-                      {selectedNode?.images_overridden && (
-                        <span className="overridden-indicator" style={{ marginLeft: '6px', display: 'inline-flex', alignItems: 'center' }} title="Modified from node file">
-                          <Zap size={12} strokeWidth={2} style={{ color: '#f59e0b' }} />
-                        </span>
-                      )}
-                    </label>
-                    <div style={{
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      gap: '8px',
-                      marginBottom: '8px'
-                    }}>
-                      {selectedNode?.images?.map((img: any, index: number) => (
-                        <ImageThumbnail
-                          key={img.image_id}
-                          image={img}
-                          onDelete={() => handleDeleteImage(img.image_id)}
-                          onCaptionEdit={(newCaption) => handleEditCaption(img.image_id, newCaption)}
-                          isOverridden={!!selectedNode.images_overridden}
-                          onClick={() => {
-                            setLoupeStartImageId(img.image_id);
-                            setShowImageLoupe(true);
-                          }}
-                        />
-                      ))}
-                      
-                      {/* Add New Image Button */}
-                      <button
-                        type="button"
-                        className="add-image-button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          console.log('[PropertiesPanel] Add image button clicked, current showUploadModal:', showUploadModal);
-                          console.log('[PropertiesPanel] Calling setShowUploadModal(true)');
-                          setShowUploadModal(true);
-                          // Force immediate check
-                          setTimeout(() => {
-                            console.log('[PropertiesPanel] After setState, showUploadModal should be true');
-                          }, 0);
-                        }}
-                        style={{
-                          width: '80px',
-                          height: '80px',
-                          border: '2px dashed #cbd5e1',
-                          borderRadius: '8px',
-                          background: '#f8fafc',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '32px',
-                          color: '#94a3b8',
-                          transition: 'all 0.2s'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = '#f1f5f9';
-                          e.currentTarget.style.borderColor = '#94a3b8';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = '#f8fafc';
-                          e.currentTarget.style.borderColor = '#cbd5e1';
-                        }}
-                        title="Upload new image"
-                      >
-                        +
-                      </button>
-                    </div>
                   </div>
 
               </CollapsibleSection>
@@ -2145,7 +2056,7 @@ export default function PropertiesPanel({
                               showBalanceButton={true}
                             />
                                 </AutomatableField>
-                              </div>
+                          </div>
                             )}
                           </div>
                         );
@@ -2688,6 +2599,10 @@ export default function PropertiesPanel({
           onClose={() => setShowImageLoupe(false)}
           onDelete={(imageId) => handleDeleteImage(imageId)}
           onCaptionEdit={(imageId, newCaption) => handleEditCaption(imageId, newCaption)}
+          onAddImage={() => {
+            setShowImageLoupe(false);
+            setShowUploadModal(true);
+          }}
         />
       )}
     </div>

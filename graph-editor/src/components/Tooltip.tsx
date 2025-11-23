@@ -24,11 +24,19 @@ export default function Tooltip({
   const triggerRef = useRef<HTMLDivElement>(null);
 
   const showTooltip = () => {
+    // Don't show tooltip if a modal is open
+    const hasModal = document.querySelector('.modal-overlay');
+    if (hasModal) return;
+    
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
     timeoutRef.current = setTimeout(() => {
-      setIsVisible(true);
+      // Double-check modal still not open
+      const stillHasModal = document.querySelector('.modal-overlay');
+      if (!stillHasModal) {
+        setIsVisible(true);
+      }
     }, delay);
   };
 
@@ -38,6 +46,30 @@ export default function Tooltip({
     }
     setIsVisible(false);
   };
+  
+  // Hide tooltip when modals open
+  useEffect(() => {
+    const handleModalOpen = () => {
+      hideTooltip();
+    };
+    
+    // Listen for modal overlays being added
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node instanceof Element && node.classList.contains('modal-overlay')) {
+            handleModalOpen();
+          }
+        });
+      });
+    });
+    
+    observer.observe(document.body, { childList: true, subtree: true });
+    
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const updatePosition = () => {
     if (!triggerRef.current) return;
@@ -91,7 +123,7 @@ export default function Tooltip({
       left: `${tooltipPosition.x}px`,
       top: `${tooltipPosition.y}px`,
       maxWidth: `${maxWidth}px`,
-      zIndex: 10000,
+      zIndex: 9990,
       pointerEvents: 'none',
     };
 

@@ -60,7 +60,7 @@ properties:
         description:
           type: string
           description: Optional description of the resource
-  
+          
   url:
     type: string
     format: uri

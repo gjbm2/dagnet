@@ -9,9 +9,10 @@
  * - Caption editing
  */
 
-import React, { useState, useEffect } from 'react';
+import * as React from 'react';
+import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ChevronLeft, ChevronRight, Pencil, Check } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Pencil, Check, Plus } from 'lucide-react';
 import { imageService } from '../services/imageService';
 import { ImageThumbnail } from './ImageThumbnail';
 import type { NodeImage } from '../types';
@@ -23,6 +24,7 @@ interface ImageLoupeViewProps {
   onClose: () => void;
   onDelete: (imageId: string) => void;
   onCaptionEdit: (imageId: string, newCaption: string) => void;
+  onAddImage?: () => void;
 }
 
 export function ImageLoupeView({
@@ -30,7 +32,8 @@ export function ImageLoupeView({
   initialImageId,
   onClose,
   onDelete,
-  onCaptionEdit
+  onCaptionEdit,
+  onAddImage
 }: ImageLoupeViewProps) {
   // Find initial index if initialImageId is provided
   const initialIndex = initialImageId 
@@ -41,6 +44,8 @@ export function ImageLoupeView({
   const [loading, setLoading] = useState(true);
   const [isEditingCaption, setIsEditingCaption] = useState(false);
   const [caption, setCaption] = useState('');
+  const [showPrevButton, setShowPrevButton] = useState(false);
+  const [showNextButton, setShowNextButton] = useState(false);
   
   // Update index when initialImageId changes
   useEffect(() => {
@@ -60,7 +65,7 @@ export function ImageLoupeView({
       setCaption(currentImage.caption);
       setIsEditingCaption(false);
     }
-  }, [currentImage?.image_id, currentImage?.caption]);
+  }, [currentImage?.image_id, currentImage?.caption, images]);
   
   // Load current image
   useEffect(() => {
@@ -115,8 +120,22 @@ export function ImageLoupeView({
     setIsEditingCaption(false);
   };
   
+  // Handle ESC key to close modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isEditingCaption) {
+        onClose();
+      }
+    };
+    
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose, isEditingCaption]);
+  
   const modalContent = (
-    <div className="modal-overlay" onClick={onClose} style={{ background: 'rgba(0,0,0,0.8)' }}>
+    <div className="modal-overlay" onClick={onClose} style={{ background: 'rgba(0,0,0,0.8)', zIndex: 10001 }}>
       <div
         className="modal-container"
         style={{
@@ -131,6 +150,15 @@ export function ImageLoupeView({
         <div className="modal-header" style={{ position: 'relative' }}>
           <h2 className="modal-title">Image Viewer</h2>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            {onAddImage && (
+              <button
+                onClick={onAddImage}
+                className="modal-btn modal-btn-secondary"
+                style={{ fontSize: '13px', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              >
+                <Plus size={14} strokeWidth={2} /> Add
+              </button>
+            )}
             <button
               onClick={handleDelete}
               className="modal-btn modal-btn-danger"
@@ -153,15 +181,132 @@ export function ImageLoupeView({
           padding: '20px',
           minHeight: 0
         }}>
-          {/* Image */}
-          <div style={{ 
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '100%',
-            minHeight: 0
-          }}>
+          {/* Image with hover navigation buttons */}
+          <div 
+            style={{ 
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '100%',
+              minHeight: 0,
+              position: 'relative'
+            }}
+            onMouseEnter={() => {
+              if (images.length > 1) {
+                setShowPrevButton(currentIndex > 0);
+                setShowNextButton(currentIndex < images.length - 1);
+              }
+            }}
+            onMouseLeave={() => {
+              setShowPrevButton(false);
+              setShowNextButton(false);
+            }}
+          >
+            {/* Previous button (left side) */}
+            {images.length > 1 && showPrevButton && currentIndex > 0 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePrevious();
+                }}
+                style={{
+                  position: 'absolute',
+                  left: '0',
+                  top: '0',
+                  bottom: '0',
+                  width: '120px',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-start',
+                  paddingLeft: '20px',
+                  zIndex: 10,
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  const icon = e.currentTarget.querySelector('div');
+                  if (icon) {
+                    icon.style.background = 'rgba(0, 0, 0, 0.8)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  const icon = e.currentTarget.querySelector('div');
+                  if (icon) {
+                    icon.style.background = 'rgba(0, 0, 0, 0.6)';
+                  }
+                }}
+              >
+                <div style={{
+                  width: '48px',
+                  height: '48px',
+                  borderRadius: '50%',
+                  background: 'rgba(0, 0, 0, 0.6)',
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s'
+                }}>
+                  <ChevronLeft size={24} strokeWidth={2} />
+                </div>
+              </button>
+            )}
+            
+            {/* Next button (right side) */}
+            {images.length > 1 && showNextButton && currentIndex < images.length - 1 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleNext();
+                }}
+                style={{
+                  position: 'absolute',
+                  right: '0',
+                  top: '0',
+                  bottom: '0',
+                  width: '120px',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  paddingRight: '20px',
+                  zIndex: 10,
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  const icon = e.currentTarget.querySelector('div');
+                  if (icon) {
+                    icon.style.background = 'rgba(0, 0, 0, 0.8)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  const icon = e.currentTarget.querySelector('div');
+                  if (icon) {
+                    icon.style.background = 'rgba(0, 0, 0, 0.6)';
+                  }
+                }}
+              >
+                <div style={{
+                  width: '48px',
+                  height: '48px',
+                  borderRadius: '50%',
+                  background: 'rgba(0, 0, 0, 0.6)',
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s'
+                }}>
+                  <ChevronRight size={24} strokeWidth={2} />
+                </div>
+              </button>
+            )}
+            
             {loading && (
               <div style={{
                 width: '100%',
@@ -274,30 +419,26 @@ export function ImageLoupeView({
           </div>
         </div>
         
-        {/* Footer with navigation */}
+        {/* Footer with image dots indicator */}
         {images.length > 1 && (
-          <div className="modal-footer">
-            <button
-              onClick={handlePrevious}
-              disabled={currentIndex === 0}
-              className="modal-btn modal-btn-secondary"
-              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-            >
-              <ChevronLeft size={16} /> Previous
-            </button>
-            
-            <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 500 }}>
-              {currentIndex + 1} / {images.length}
-            </span>
-            
-            <button
-              onClick={handleNext}
-              disabled={currentIndex === images.length - 1}
-              className="modal-btn modal-btn-primary"
-              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-            >
-              Next <ChevronRight size={16} />
-            </button>
+          <div className="modal-footer" style={{ justifyContent: 'center', gap: '8px' }}>
+            {images.map((_, index) => (
+              <button
+                key={index}
+                onClick={() => setCurrentIndex(index)}
+                style={{
+                  width: index === currentIndex ? '10px' : '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  border: 'none',
+                  background: index === currentIndex ? '#0066cc' : '#cbd5e1',
+                  cursor: 'pointer',
+                  padding: 0,
+                  transition: 'all 0.2s'
+                }}
+                title={`Image ${index + 1}`}
+              />
+            ))}
           </div>
         )}
       </div>
