@@ -104,7 +104,8 @@ class ImageOperationsService {
         }
 
         callbacks.onGraphUpdate(next);
-        callbacks.onHistorySave('Upload image', nodeId);
+        // NOTE: History not saved for image operations to prevent desync with IDB/pending ops
+        // TODO: Implement proper undo/redo support (see TODO.md § Image Undo/Redo Broken)
 
         // Register image for Git commit
         fileRegistry.registerImageUpload(imageId, `nodes/images/${imageId}.${extension}`, imageData);
@@ -147,7 +148,7 @@ class ImageOperationsService {
       }
 
       callbacks.onGraphUpdate(next);
-      callbacks.onHistorySave('Delete image', nodeId);
+      // NOTE: History not saved for image operations to prevent desync with IDB/pending ops
 
       // Register image for deletion from Git
       fileRegistry.registerImageDelete(imageId, `nodes/images/${imageId}.${imageToDelete.file_extension}`);
@@ -189,7 +190,7 @@ class ImageOperationsService {
         }
 
         callbacks.onGraphUpdate(next);
-        callbacks.onHistorySave('Edit image caption', nodeId);
+        // NOTE: History not saved for image operations to prevent desync with IDB/pending ops
 
         toast.success('Caption updated');
       }

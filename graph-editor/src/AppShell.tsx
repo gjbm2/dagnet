@@ -1435,7 +1435,14 @@ function AppShellContent() {
 
               // IMPORTANT: Update file timestamps BEFORE committing to Git
               const nowISO = new Date().toISOString();
-              const filesToCommit = files.map(file => {
+              const filesToCommit: Array<{
+                path: string;
+                content?: string;
+                binaryContent?: Uint8Array;
+                encoding?: 'utf-8' | 'base64';
+                sha?: string;
+                delete?: boolean;
+              }> = files.map(file => {
                 // Get the file from registry to update its metadata
                 const fileState = fileRegistry.getFile(file.fileId);
                 let content = file.content;
@@ -1471,18 +1478,22 @@ function AppShellContent() {
                 };
               });
 
+              const basePath = gitCreds.basePath || '';
+              
               // Add pending image operations (uploads + image deletions)
               const imageFiles = await fileRegistry.commitPendingImages();
               filesToCommit.push(...imageFiles.map(img => ({
-                ...img,
-                path: basePath ? `${basePath}/${img.path}` : img.path
+                path: basePath ? `${basePath}/${img.path}` : img.path,
+                binaryContent: img.binaryContent,
+                encoding: img.encoding,
+                delete: img.delete
               })));
               
               // Add pending file deletions
               const fileDeletions = await fileRegistry.commitPendingFileDeletions();
               filesToCommit.push(...fileDeletions.map(del => ({
-                ...del,
-                path: basePath ? `${basePath}/${del.path}` : del.path
+                path: basePath ? `${basePath}/${del.path}` : del.path,
+                delete: true
               })));
               
               console.log('[AppShell] Committing:', {
