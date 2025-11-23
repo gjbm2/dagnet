@@ -15,8 +15,21 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestGraph, createLinearGraph, cloneGraph, graphsEqual } from '../helpers/test-graph-builder';
 import { MockFileRegistry } from '../helpers/mock-file-registry';
 
+// Create mock instance that will be used across tests
+let mockFileRegistry: MockFileRegistry;
+
+// Mock the TabContext at the top level (required for Vitest hoisting)
+vi.mock('../../src/contexts/TabContext', async () => {
+  const actual = await vi.importActual('../../src/contexts/TabContext');
+  return {
+    ...actual,
+    get fileRegistry() {
+      return mockFileRegistry;
+    }
+  };
+});
+
 describe('State Synchronization: Sources of Truth', () => {
-  let mockFileRegistry: MockFileRegistry;
   let currentGraph: any = null;
   let historyStack: any[] = [];
 
@@ -24,11 +37,6 @@ describe('State Synchronization: Sources of Truth', () => {
     mockFileRegistry = new MockFileRegistry();
     currentGraph = createLinearGraph();
     historyStack = [cloneGraph(currentGraph)];
-
-    // Mock file registry
-    vi.mock('../../src/contexts/TabContext', () => ({
-      fileRegistry: mockFileRegistry
-    }));
   });
 
   afterEach(() => {

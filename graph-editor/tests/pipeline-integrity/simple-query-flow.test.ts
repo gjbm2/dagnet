@@ -25,6 +25,13 @@ vi.mock('../../src/contexts/TabContext', async () => {
   };
 });
 
+// Mock the DAS runner module to use our mock runner
+vi.mock('../../src/lib/das', async () => {
+  return {
+    createDASRunner: () => mockDASRunner
+  };
+});
+
 describe('Pipeline Integrity: Simple Query Flow', () => {
   let dataOperationsService: any;
 

@@ -16,11 +16,13 @@ import type { MergeConflict } from '../workspaceService';
 
 // Mock dependencies
 vi.mock('react-hot-toast', () => ({
-  default: {
-    info: vi.fn(),
-    error: vi.fn(),
-    success: vi.fn()
-  }
+  default: vi.fn((message, options) => {
+    // Mock toast function
+    return message;
+  }),
+  info: vi.fn(),
+  error: vi.fn(),
+  success: vi.fn()
 }));
 
 vi.mock('../../contexts/TabContext', () => {

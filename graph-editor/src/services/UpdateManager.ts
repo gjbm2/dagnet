@@ -2567,6 +2567,64 @@ export class UpdateManager {
     
     return nextGraph;
   }
+
+  /**
+   * Update edge with arbitrary properties (e.g., p.mean, p.stdev, etc.)
+   * This is a general-purpose method for updating any edge properties.
+   * 
+   * @param graph - Current graph
+   * @param edgeId - Edge UUID or ID
+   * @param properties - Properties to update (e.g., { p: { mean: 0.75 } })
+   * @returns Updated graph
+   */
+  updateEdge(
+    graph: any,
+    edgeId: string,
+    properties: Record<string, any>
+  ): any {
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const edge = nextGraph.edges[edgeIndex];
+    
+    // Deep merge properties into edge
+    const deepMerge = (target: any, source: any): any => {
+      const result = { ...target };
+      for (const key in source) {
+        if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+          result[key] = deepMerge(target[key] || {}, source[key]);
+        } else {
+          result[key] = source[key];
+        }
+      }
+      return result;
+    };
+    
+    nextGraph.edges[edgeIndex] = deepMerge(edge, properties);
+    
+    // Update metadata
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'updateEdge',
+      details: {
+        edgeId: edgeId,
+        properties: properties
+      }
+    });
+    
+    return nextGraph;
+  }
   
   /**
    * Delete a node from the graph and clean up associated edges.
