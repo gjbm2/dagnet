@@ -519,20 +519,20 @@ class FileOperationsService {
       await deleteOperationsService.deleteNodeFile(nodeId);
     } else {
       // For all file types: stage deletion (don't delete from Git immediately)
-      if (isCommitted && file.path) {
+    if (isCommitted && file.path) {
         fileRegistry.registerFileDeletion(fileId, file.path, type);
         console.log(`FileOperationsService: Staged file deletion for Git commit: ${fileId}`);
-      }
-      
+    }
+
       // AUTO-REMOVE from index file (before deleting file itself)
-      await this.removeFromIndexFile(file);
-      
+    await this.removeFromIndexFile(file);
+
       // Delete from local FileRegistry
-      try {
-        await fileRegistry.deleteFile(fileId);
-      } catch (error) {
-        console.error(`FileOperationsService: Failed to delete ${fileId}:`, error);
-        return false;
+    try {
+      await fileRegistry.deleteFile(fileId);
+    } catch (error) {
+      console.error(`FileOperationsService: Failed to delete ${fileId}:`, error);
+      return false;
       }
     }
 

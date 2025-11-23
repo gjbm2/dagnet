@@ -8,17 +8,19 @@
  */
 
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { File, Globe, Clipboard, X } from 'lucide-react';
 import { validateImage, compressImage } from '../utils/imageCompression';
 
 interface ImageUploadModalProps {
   onClose: () => void;
-  onUpload: (imageData: Uint8Array, extension: string, source: string) => void;
+  onUpload: (imageData: Uint8Array, extension: string, source: string, caption?: string) => void;
 }
 
 export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
   const [activeTab, setActiveTab] = useState<'local' | 'url' | 'clipboard'>('local');
   const [url, setUrl] = useState('');
+  const [caption, setCaption] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -51,7 +53,7 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
       const data = new Uint8Array(arrayBuffer);
       const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
       
-      onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'local');
+      onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'local', caption.trim() || undefined);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process image');
@@ -95,7 +97,7 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
       const data = new Uint8Array(arrayBuffer);
       const ext = blob.type.split('/')[1] || 'png';
       
-      onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'url');
+      onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'url', caption.trim() || undefined);
       onClose();
     } catch (err) {
       if (err instanceof TypeError) {
@@ -137,7 +139,7 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
             const data = new Uint8Array(arrayBuffer);
             const ext = type.split('/')[1] || 'png';
             
-            onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'clipboard');
+            onUpload(data, ext as 'png' | 'jpg' | 'jpeg', 'clipboard', caption.trim() || undefined);
             onClose();
             return;
           }
@@ -152,7 +154,7 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
     }
   };
   
-  return (
+  const modalContent = (
     <div 
       className="modal-overlay" 
       onClick={onClose}
@@ -166,7 +168,7 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 10000
+        zIndex: 10001
       }}
     >
       <div 
@@ -258,6 +260,31 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
           >
             <Clipboard size={16} /> Paste from Clipboard
           </button>
+        </div>
+        
+        {/* Caption Input (common to all tabs) */}
+        <div style={{ marginBottom: '20px' }}>
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#555', marginBottom: '6px' }}>
+            Caption (optional)
+          </label>
+          <input
+            type="text"
+            value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+            placeholder="Image caption..."
+            disabled={isLoading}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              border: '1px solid #cbd5e1',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontFamily: 'inherit'
+            }}
+          />
+          <p style={{ marginTop: '6px', fontSize: '12px', color: '#64748b' }}>
+            Leave empty to use default caption (Image 1, Image 2, etc.)
+          </p>
         </div>
         
         {/* Tab Content */}
@@ -385,5 +412,7 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
       </div>
     </div>
   );
+  
+  return createPortal(modalContent, document.body) as React.ReactElement;
 }
 

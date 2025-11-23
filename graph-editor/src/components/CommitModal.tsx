@@ -307,13 +307,13 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
                         Modified Files ({commitableFiles.length})
                       </div>
                       {commitableFiles.map(file => (
-                        <label
-                          key={file.fileId}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            padding: '8px',
-                            cursor: 'pointer',
+                  <label
+                    key={file.fileId}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '8px',
+                      cursor: 'pointer',
                       borderRadius: '4px',
                       marginBottom: '2px'
                     }}
