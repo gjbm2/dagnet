@@ -106,9 +106,23 @@ Minor details to finalize during implementation (not blocking design sign-off):
 
 ## Data Model & Schema Changes
 
+**Summary**: Schema updates required for contexts v1
+
+| Schema File | Status | Changes Needed |
+|-------------|--------|----------------|
+| `graph-schema.json` | Extend | Add `dataInterestsDSL`, `currentQueryDSL` fields |
+| `context-definition-schema.yaml` | **Extend** | Add `otherPolicy`, `sources` (with `field`, `filter`, `pattern`, `patternFlags`) |
+| `contexts-index-schema.yaml` | **Exists** | No changes needed |
+| `query-dsl-1.0.0.json` | Extend | Register `context`, `contextAny`, `window` functions |
+
+**Note**: Individual context definition files (e.g., `contexts/channel.yaml`) will be created following the extended `context-definition-schema.yaml`.
+
+---
+
 ### 1. Graph Schema Extensions
 
-**File**: `graph-editor/public/graph-schema.json` (or equivalent TypeScript types)
+**Schema authority**: `param-registry/schemas/conversion-graph-1.0.0.json` (remote config repo)  
+**Code mirror**: `graph-editor/src/types/index.ts` (`ConversionGraph` / `Graph` types)
 
 Add to graph object:
 
@@ -174,11 +188,11 @@ interface ParameterValue {
     fully-specified `context(key:value)` combinations **before** writing windows.
   - All aggregation / MECE logic assumes each window represents exactly one concrete
     `(key:value)` per context key.
-- **Backward compatible**: Existing vars without `sliceDSL` are treated as "uncontexted, all-time"
-- **Date format in sliceDSL**: Always `d-MMM-yy` after normalization (e.g., `1-Jan-25`)
-- **Existing time-series arrays**: Keep as-is (`n_daily`, `k_daily`, `dates` in YYYY-MM-DD)
-
-**Migration note**: Add `sliceDSL` field to schema as optional; existing data continues to work.
+- **Date format**: `d-MMM-yy` everywhere (canonical stored format, e.g., `1-Jan-25`)
+  - `sliceDSL` window dates: `d-MMM-yy`
+  - Time-series `dates` arrays: `d-MMM-yy`
+  - **New system from scratch**: No legacy YYYY-MM-DD to support or migrate
+- **Required field**: `sliceDSL` on all windows (empty string = uncontexted, all-time)
 
 ### 3. Edge Conditional Probability Schema
 
@@ -205,7 +219,7 @@ The existing `UpdateManager.rebalanceConditionalProbabilities` logic already gro
 
 **Files to update**:
 
-1. **`graph-editor/public/query-dsl-1.0.0.json`**:
+1. **`graph-editor/public/schemas/query-dsl-1.0.0.json`**:
 
 ```json
 {
@@ -477,38 +491,122 @@ Mirror all TypeScript changes:
 
 ## Context Registry Structure
 
-### 1. Registry File Format
+**Pattern**: Mirrors parameter registry (index file + individual definition files)
 
-**File**: `param-registry/contexts.yaml`
+### 1. Context Index File
+
+**File**: `param-registry/contexts-index.yaml`
+
+**Purpose**: Lightweight registry listing all available context keys (like `registry.yaml` for parameters)
 
 ```yaml
-# Example context definition
+version: "1.0.0"
+created_at: "2025-11-23T00:00:00Z"
+updated_at: "2025-11-23T00:00:00Z"
+
 contexts:
   - id: channel
-    name: Marketing Channel
-    description: Primary acquisition channel (paid, organic, direct, etc.)
+    file_path: "contexts/channel.yaml"
     type: categorical
-    
-    # "Other" policy controls how the catch-all bucket is handled
-    # This affects: MECE detection, UI value lists, aggregation logic, query building
-    otherPolicy: computed  # null | computed | explicit | undefined
-    # - null: No "other" exists; explicitly listed values are asserted to be MECE (complete coverage)
-    # - computed: "other" exists and is defined as ALL_RESULTS - sum(all explicitly listed values)
-    # - explicit: "other" is defined as a regular value below (with its own filter/mapping)
-    # - undefined: No "other" exists, and values are NOT asserted to be MECE (incomplete; can't aggregate)
-    
-    values:
-      - id: google
-        displayName: Google Ads
-        sources:
-          amplitude:
-            field: utm_source
-            filter: "utm_source == 'google'"
-          sheets:
-            # For Sheets, user manually provides context-labeled data; no source mapping needed
+    status: active
+    category: marketing
+    created_at: "2025-11-23T00:00:00Z"
+    version: "1.0.0"
+  
+  - id: browser_type
+    file_path: "contexts/browser-type.yaml"
+    type: categorical
+    status: active
+    category: technical
+    created_at: "2025-11-23T00:00:00Z"
+    version: "1.0.0"
+```
+
+**Schema**: `graph-editor/public/param-schemas/contexts-index-schema.yaml` (exists)
+
+**Loading**: ContextRegistry loads this index first, then loads individual context definitions on-demand or eagerly.
+
+---
+
+### 2. Individual Context Definition Files
+
+**Pattern**: One YAML file per context key (mirrors `params/*.yaml` structure)
+
+**File**: `param-registry/contexts/channel.yaml`
+
+**Schema**: `graph-editor/public/param-schemas/context-definition-schema.yaml` (EXISTS, needs extension)
+
+**Required schema additions**:
+
+```yaml
+# Add to context-definition-schema.yaml properties:
+
+otherPolicy:
+  type: string
+  enum: [null, computed, explicit, undefined]
+  description: |
+    Controls how the "other" catch-all bucket is handled:
+    - null: No "other"; values are asserted MECE (complete)
+    - computed: "other" = ALL - explicit values (computed dynamically)
+    - explicit: "other" is a regular value with explicit mappings
+    - undefined: No "other"; values NOT MECE (can't aggregate to total)
+  default: undefined
+
+# Add to values[].properties:
+
+sources:
+  type: object
+  description: "Source-specific mappings for this value"
+  additionalProperties:
+    type: object
+    properties:
+      field:
+        type: string
+        description: "Source property/field name"
+        examples: ["utm_source", "browser", "device_type"]
+      
+      filter:
+        type: string
+        description: "Explicit filter expression for this value"
+        examples: ["utm_source == 'google'", "browser in ['Chrome', 'Chromium']"]
+      
+      pattern:
+        type: string
+        description: "Regex pattern for matching raw values (alternative to filter)"
+        examples: ["^google", "^(facebook|fb|instagram|ig)_"]
+      
+      patternFlags:
+        type: string
+        description: "Regex flags (e.g., 'i' for case-insensitive)"
+        examples: ["i", "im"]
+```
+
+**Example context definition file** (`param-registry/contexts/channel.yaml`):
+
+```yaml
+id: channel
+name: Marketing Channel
+description: Primary acquisition channel (paid, organic, direct, etc.)
+type: categorical
+otherPolicy: computed  # NEW field
+# - null: No "other" exists; explicitly listed values are asserted to be MECE (complete coverage)
+# - computed: "other" exists and is defined as ALL_RESULTS - sum(all explicitly listed values)
+# - explicit: "other" is defined as a regular value below (with its own filter/mapping)
+# - undefined: No "other" exists, and values are NOT asserted to be MECE (incomplete; can't aggregate)
+
+values:
+  - id: google
+    label: Google Ads  # Schema uses 'label', not 'displayName'
+    description: "Google Ads campaigns"
+    sources:  # NEW field (add to schema)
+      amplitude:
+        field: utm_source
+        filter: "utm_source == 'google'"
+      sheets:
+        # For Sheets, user manually provides context-labeled data; no source mapping needed
             
-      - id: meta
-        displayName: Meta (Facebook/Instagram)
+  - id: meta
+    label: Meta (Facebook/Instagram)
         sources:
           amplitude:
             field: utm_source
@@ -516,21 +614,21 @@ contexts:
             # Note: regex support for collapsing many raw values
             
       - id: organic
-        displayName: Organic Search
+    label: Organic Search
         sources:
           amplitude:
             field: utm_source
             filter: "utm_source == 'organic'"
             
       - id: direct
-        displayName: Direct Traffic
+    label: Direct Traffic
         sources:
           amplitude:
             field: utm_source
             filter: "utm_source is null or utm_source == 'direct'"
             
       - id: other
-        displayName: Other Channels
+    label: Other Channels
         sources:
           amplitude:
             # If otherPolicy=computed: adapter generates "NOT (google OR facebook OR ...)" at query time
@@ -545,41 +643,126 @@ contexts:
     
     values:
       - id: chrome
-        displayName: Chrome
+    label: Chrome
         sources:
           amplitude:
             field: browser
             filter: "browser == 'Chrome'"
             
       - id: safari
-        displayName: Safari
+    label: Safari
         sources:
           amplitude:
             field: browser
             filter: "browser == 'Safari'"
             
       - id: firefox
-        displayName: Firefox
+    label: Firefox
         sources:
           amplitude:
             field: browser
             filter: "browser == 'Firefox'"
             
       - id: other
-        displayName: Other Browsers
+    label: Other Browsers
         sources:
           amplitude:
             # otherPolicy=computed means adapter will generate this automatically
 ```
 
+**File structure**:
+- `param-registry/contexts-index.yaml` — Index listing all context keys (lightweight, always loaded)
+- `param-registry/contexts/channel.yaml` — Full definition for "channel" key
+- `param-registry/contexts/browser-type.yaml` — Full definition for "browser-type" key
+- etc.
+
 **Key points**:
-- `otherPolicy` controls how "other" buckets are constructed per source (see detailed section below)
+- Follows same pattern as parameter registry (index + individual files)
+- `otherPolicy` controls how "other" buckets are constructed (see detailed section below)
 - `sources[amplitude].filter` is the Amplitude-specific query predicate
 - `sources[amplitude].pattern` provides regex support for high-cardinality raw values (see Regex Mapping section below)
 
 ---
 
-### 2. "Other" Policy: Detailed Specification
+### 2. Context Registry Loading
+
+**File**: `graph-editor/src/services/contextRegistry.ts`
+
+```typescript
+export class ContextRegistry {
+  private index: ContextsIndex | null = null;
+  private definitions: Map<string, ContextDefinition> = new Map();
+  
+  /**
+   * Load the contexts index (lightweight).
+   * Called on app startup.
+   */
+  async loadIndex(): Promise<void> {
+    const yaml = await fetchYaml('/param-schemas/contexts-index.yaml');
+    this.index = yaml;
+  }
+  
+  /**
+   * Load a specific context definition file.
+   * Called on-demand when a context key is first used.
+   */
+  async loadContextDefinition(contextId: string): Promise<ContextDefinition> {
+    // Check if already loaded
+    if (this.definitions.has(contextId)) {
+      return this.definitions.get(contextId)!;
+    }
+    
+    // Find in index
+    const indexEntry = this.index?.contexts.find(c => c.id === contextId);
+    if (!indexEntry) {
+      throw new Error(`Context '${contextId}' not found in registry index`);
+    }
+    
+    // Load definition file
+    const defPath = `/param-schemas/${indexEntry.file_path}`;
+    const yaml = await fetchYaml(defPath);
+    
+    // Validate against context-definition-schema.yaml
+    // (schema validation happens here)
+    
+    this.definitions.set(contextId, yaml);
+    return yaml;
+  }
+  
+  /**
+   * Get context definition (load if needed).
+   */
+  async getContext(id: string): Promise<ContextDefinition | undefined> {
+    if (!this.definitions.has(id)) {
+      try {
+        await this.loadContextDefinition(id);
+      } catch (error) {
+        console.error(`Failed to load context '${id}':`, error);
+        return undefined;
+      }
+    }
+    return this.definitions.get(id);
+  }
+  
+  /**
+   * Get all context keys from index (doesn't load full definitions).
+   */
+  getAllContextKeys(): Array<{ id: string; name?: string; type: string; status: string }> {
+    return this.index?.contexts || [];
+  }
+}
+
+export const contextRegistry = new ContextRegistry();
+```
+
+**Benefits**:
+- Fast startup (only index loads, ~1-2KB)
+- Lazy loading of context definitions (only load keys actually used)
+- Mirrors parameter registry pattern (familiar code structure)
+
+---
+
+### 3. "Other" Policy: Detailed Specification
 
 The `otherPolicy` field controls whether and how a catch-all "other" bucket is handled for a context key. This affects **multiple systems**:
 
@@ -755,7 +938,7 @@ contexts:
     
     values:
       - id: google
-        displayName: Google (All)
+    label: Google (All)
         sources:
           amplitude:
             field: utm_source
@@ -765,7 +948,7 @@ contexts:
             # Adapter will generate: utm_source matches '^google' (case-insensitive)
             
       - id: facebook
-        displayName: Facebook/Instagram
+    label: Facebook/Instagram
         sources:
           amplitude:
             field: utm_source
@@ -773,7 +956,7 @@ contexts:
             patternFlags: "i"
             
       - id: other
-        displayName: Other Sources
+    label: Other Sources
         sources:
           amplitude:
             # Computed: NOT (google OR facebook patterns)
@@ -849,14 +1032,30 @@ export interface ContextDefinition {
   name: string;
   description: string;
   type: 'categorical' | 'ordinal' | 'continuous';
-  otherPolicy: 'null' | 'computed' | 'explicit';
+  otherPolicy: 'null' | 'computed' | 'explicit' | 'undefined';  // NEW field (add to schema)
   values: ContextValue[];
+  comparison_support?: boolean;  // Existing schema field (for ordinal)
+  default_value?: string;         // Existing schema field
+  metadata: {                     // Existing schema field (required)
+    category?: string;
+    data_source?: string;
+    created_at: string;
+    updated_at?: string;
+    version: string;
+    status: 'active' | 'deprecated' | 'draft';
+    author?: string;
+    deprecation_notice?: string;
+    replacement_context_id?: string;
+  };
 }
 
 export interface ContextValue {
   id: string;
-  displayName: string;
-  sources: Record<string, SourceMapping>;
+  label: string;        // Schema field name (not displayName)
+  description?: string;
+  order?: number;       // For ordinal contexts
+  aliases?: string[];   // Alternative identifiers
+  sources: Record<string, SourceMapping>;  // NEW: source-specific mappings
 }
 
 export interface SourceMapping {
@@ -869,39 +1068,6 @@ export interface SourceMapping {
   // If pattern provided: adapter matches raw values against pattern, then builds appropriate filter
 }
 
-export class ContextRegistry {
-  private contexts: Map<string, ContextDefinition> = new Map();
-  
-  async load(): Promise<void> {
-    // Load from param-registry/contexts.yaml
-    const yaml = await fetchYaml('/param-schemas/contexts.yaml');
-    // Parse and validate against context-definition-schema.yaml
-    for (const ctx of yaml.contexts) {
-      this.contexts.set(ctx.id, ctx);
-    }
-  }
-  
-  getContext(id: string): ContextDefinition | undefined {
-    return this.contexts.get(id);
-  }
-  
-  getAllContexts(): ContextDefinition[] {
-    return Array.from(this.contexts.values());
-  }
-  
-  getValuesForContext(contextId: string): ContextValue[] {
-    return this.contexts.get(contextId)?.values || [];
-  }
-  
-  getSourceMapping(contextId: string, valueId: string, source: string): SourceMapping | undefined {
-    const ctx = this.contexts.get(contextId);
-    const value = ctx?.values.find(v => v.id === valueId);
-    return value?.sources[source];
-  }
-}
-
-export const contextRegistry = new ContextRegistry();
-```
 
 ---
 
@@ -1941,7 +2107,7 @@ contexts:
     
     values:
       - id: google
-        displayName: Google
+    label: Google
         sources:
           amplitude:
             field: utm_source
@@ -1949,7 +2115,7 @@ contexts:
             patternFlags: "i"        # Case-insensitive
             
       - id: facebook
-        displayName: Facebook/Instagram
+    label: Facebook/Instagram
         sources:
           amplitude:
             field: utm_source
@@ -1957,7 +2123,7 @@ contexts:
             patternFlags: "i"
             
       - id: organic
-        displayName: Organic
+    label: Organic
         sources:
           amplitude:
             field: utm_source
@@ -1965,7 +2131,7 @@ contexts:
             # No pattern; explicit filter for this case
             
       - id: other
-        displayName: Other
+    label: Other
         # Computed automatically: NOT (google OR facebook OR organic patterns)
 ```
 
@@ -2389,18 +2555,80 @@ This keeps var files from exploding with one window per (context, date-range) pa
 
 **Question**: Do we need an index for window lookup with contexts?
 
-**Answer**: NO for v1. Linear scan is acceptable because:
-- Typical var files have <100 windows (one per context combination, not one per date range)
-- With the daily grid model, we scan windows once to build per-context time series
-- Modern JS engines optimize array operations
-- Premature optimization adds complexity
+**Answer**: NO *persisted* index needed, but **in-memory indexing recommended** for acceptable query latency.
 
-**Future optimization** (if profiling shows need):
-- Simple Map<string, ParameterValue> keyed by context part of `sliceDSL`
-- Built lazily, invalidated on writes
-- But **not in v1 scope**
+**Performance requirements**:
+- Live queries in UI must complete in **<1s for aggregation** (excluding external API calls)
+- At scale (100 params, 16 slices/param, 365 days each), we have:
+  - ~1,600 total slices across all params
+  - Per param: ~16 windows, each with ~365 daily points
+  - Per query touching 10-20 params: scanning ~160-320 windows, aggregating over ~5K-10K daily points
+
+**In-memory optimization strategy** (v1):
+
+```typescript
+class VariableAggregationCache {
+  private contextIndexByVar: Map<string, Map<string, ParameterValue>> = new Map();
+  
+  /**
+   * Get window for a specific context combo (O(1) after first build).
+   */
+  getWindowForContext(
+    variable: Variable,
+    contextCombo: ContextCombination
+  ): ParameterValue | undefined {
+    
+    const varId = variable.id;
+    
+    // Build index lazily on first access
+    if (!this.contextIndexByVar.has(varId)) {
+      this.buildIndexForVariable(variable);
+    }
+    
+    const index = this.contextIndexByVar.get(varId)!;
+    const key = contextComboToKey(contextCombo); // e.g. "browser-type:chrome|channel:google"
+    
+    return index.get(key);
+  }
+  
+  private buildIndexForVariable(variable: Variable): void {
+    const index = new Map<string, ParameterValue>();
+    
+    for (const window of variable.windows || []) {
+      const parsed = parseConstraintString(window.sliceDSL || '');
+      const combo = contextConstraintsToCombo(parsed.contexts);
+      const key = contextComboToKey(combo);
+      
+      index.set(key, window);
+    }
+    
+    this.contextIndexByVar.set(variable.id, index);
+  }
+  
+  invalidate(variableId: string): void {
+    this.contextIndexByVar.delete(variableId);
+  }
+}
+```
+
+**Benefits**:
+- First aggregation for a variable: O(#windows) to build index (negligible)
+- Subsequent aggregations: O(1) context lookup, O(#days) time aggregation
+- No persistence, no sync complexity
+- Invalidate on write (when new windows added)
+
+**Estimated latency** (with in-memory index):
+- 20 params × 16 windows each × 365 days:
+  - Index build: <10ms total (happens once per param per session)
+  - Per-query aggregation: <50ms (mostly time-series summing)
+  - **Total latency**: <100ms for aggregation (well under 1s budget)
 
 **Daily series deduplication**: When merging, de-duplicate by date key with "latest write wins" policy (or error on conflict, TBD based on testing).
+
+**File loading optimization**:
+- Ensure `workspaceService` / `paramRegistryService` caches parsed param files in memory per tab/session
+- YAML → JSON parse happens once per file (or on change), not per query
+- Queries operate on in-memory `variable.windows` arrays, not IndexedDB/YAML
 
 ---
 
@@ -3054,143 +3282,133 @@ Test that `generateMissingSubqueries` correctly identifies gaps in the 2D grid:
 
 ---
 
-## Migration & Rollout
+## Rollout
 
-### Phase 1: Schema & DSL (non-breaking)
+**Note**: Contexts is a **new feature** built from scratch. No legacy data migration needed.
 
-- Add `dataInterestsDSL` and `currentQueryDSL` to graph schema (optional fields)
-- Add `sliceDSL` to window schema (optional field)
-- Extend DSL parser to handle `context(...)`, `contextAny(...)`, `window(...)`
-- **No breaking changes**: existing graphs and vars continue to work
+### Phase 1: Core Infrastructure
 
-### Phase 2: Registry & Adapters
+- Add `dataInterestsDSL` and `currentQueryDSL` to graph schema
+- Add `sliceDSL` to window schema (required field)
+- Implement `constraintParser.ts` (shared DSL parsing utility)
+- Deploy `contexts.yaml` with initial context definitions
+- All date handling uses `d-MMM-yy` format from day one
 
-- Deploy `contexts.yaml` with initial set of context definitions
-- Extend Amplitude adapter to build context-filtered queries
-- Extend Sheets adapter to parse context-labeled HRNs
-- **Backwards compatible**: if no contexts are used, behavior is unchanged
+### Phase 2: Adapters & Aggregation
+
+- Extend Amplitude adapter for context-filtered queries (with regex pattern support)
+- Extend Sheets adapter for context-labeled HRNs
+- Implement context-aware window aggregation (2D grid, MECE detection, otherPolicy)
+- Add in-memory `VariableAggregationCache` for performance
 
 ### Phase 3: UI Components
 
-- Add `ContextSelector` integration and DSL “unroll” control to the existing Window component
-- Integrate with existing query/window components (reuse Window Date Selector)
-- Add graph settings panel / modal for editing `dataInterestsDSL`
-- **Gradual rollout**: feature-flag the context UI until stable
+- Extend `WindowSelector.tsx` with context chips (using enhanced QueryExpressionEditor)
+- Implement `ContextValueSelector` component (shared for per-chip and Add Context dropdowns)
+- Add unroll state with full DSL editor
+- Implement Pinned Query modal with slice count/enumeration preview
+- Remove What-if button from WindowSelector (moved to Scenarios panel)
 
 ### Phase 4: Nightly Runner
 
-- Update runner to read `dataInterestsDSL` and explode into atomic slices
-- Schedule nightly runs for graphs with pinned contexts
-- Monitor query volume and API usage
-- **Opt-in**: only graphs with explicit `dataInterestsDSL` are affected
+- Implement `expand_clause()` logic with explosion cap (warn if >500 slices)
+- Schedule nightly runs for graphs with `dataInterestsDSL`
+- Monitor API usage and query volume
+- Implement graceful degradation (skip graph on errors, log warnings)
 
-### Phase 5: Migration of Legacy Data (if needed)
+### Phase 5: Validation & Polish
 
-- Script to add `sliceDSL` to existing windows (inferred from legacy metadata or set to default)
-- Validate all graphs can be opened and queried
-- **Low risk**: existing data is not modified, only augmented
-
----
-
-## Open Implementation Questions
-
-1. **Context UI Placement**  
-   Where exactly in the AppShell / window component does `ContextSelector` live? Integrate into existing query bar or separate panel?
-
-2. **ContextAny in Stored Windows**  
-   Do we ever store windows with `contextAny(...)` in their `sliceDSL`, or only fully-specified `context(...)` values? Likely only store specific values, use `contextAny` only for live queries.
-
-3. **Window Overlap vs Exact Match**  
-   For v1, do we require exact window match, or allow aggregation across overlapping windows? Decision: exact match only for simplicity; overlapping aggregation is future enhancement.
-
-4. **Performance / Caching**  
-   How many windows per var before index performance degrades? Consider periodic cleanup of old windows. Set retention policy (e.g., keep last 12 months).
-
-5. **Error Handling for Missing Mappings**  
-   If a context value has no Amplitude mapping, fail fast or skip gracefully? Decision: fail fast with clear error message; user must fix registry or use a different source.
-
-6. **Date Normalisation Edge Cases**  
-   Leap years, DST transitions, timezone handling for relative offsets. Use UTC throughout; dates in `d-MMM-yy` format are timezone-naive.
+- Graph-level validation of `dataInterestsDSL` against registry
+- AggregationResult status → UI behavior (toasts, badges, Fetch button logic)
+- Comprehensive test suite (all 7 daily grid scenarios + 4 otherPolicy variants + regex)
+- Performance profiling (confirm <1s aggregation latency)
 
 ---
 
-## Summary & Next Steps
+## Design Completeness
 
-### Resolved Design Questions
+### All Major Questions Resolved
 
-1. ✓ **Terminology**: `dataInterestsDSL` (graph) vs `sliceDSL` (window)
-2. ✓ **No redundant metadata**: Store only `sliceDSL` string, parse on-demand
-3. ✓ **Reuse existing code**: Extend ParamPackDSLService constraint parsing, extract to shared utility
-4. ✓ **No index**: Linear scan acceptable for v1 (optimize later if needed)
-5. ✓ **Sheets fallback**: Fallback to uncontexted with warning (Option B)
+1. ✓ **Terminology**: `dataInterestsDSL` (graph) vs `sliceDSL` (window) vs `currentQueryDSL` (UI state)
+2. ✓ **Data model**: `sliceDSL` only (no redundant metadata); `d-MMM-yy` date format everywhere
+3. ✓ **Stored slices are atomic**: No `contextAny(...)` in persisted `sliceDSL`
+4. ✓ **DSL parsing**: Extend existing ParamPackDSLService; extract to shared `constraintParser.ts`
+5. ✓ **otherPolicy**: 4 variants (null, computed, explicit, undefined) fully specified
+6. ✓ **Regex patterns**: For collapsing high-cardinality source values; in `SourceMapping.pattern`
+7. ✓ **MECE detection**: Respects otherPolicy; sets `canAggregate` flag
+8. ✓ **Mixed MECE keys**: Aggregate across MECE key only; ignore non-MECE keys
+9. ✓ **Daily grid model**: 2D (context × date); reuse existing daily points; incremental fetch
+10. ✓ **Window aggregation**: 7 scenarios documented; always aggregate what user asked for; MECE controls "complete" vs "partial" status
+11. ✓ **Amplitude adapter**: Property filters + regex; context → filter mapping via registry
+12. ✓ **Sheets fallback**: Fallback to uncontexted with warning
+13. ✓ **UI design**: See `CONTEXTS_UI_DESIGN.md` for complete visual spec
+14. ✓ **Performance**: In-memory index per variable (lazy build); target <1s aggregation latency
+15. ✓ **Error policy**: Never hard fail; graceful degradation with toasts/warnings
+16. ✓ **Pinned DSL validation**: Validate on Save; show slice count + enumeration; warn if >500 slices
+17. ✓ **Nightly explosion cap**: Warn (don't block) if expansion exceeds safe threshold
 
-### Open Questions Requiring Resolution
+### Implementation-Time Details (Defer to Code)
 
-1. **Amplitude API Research** (CRITICAL):
-   - Endpoint structure for property-filtered funnels
-   - Filter syntax for context mappings
-   - Response format and fields to store
-   - Rate limits and caching strategy
-   
-   **ACTION**: Research Amplitude Dashboard API before implementing adapter
+These are intentionally left to implementation (not blocking design sign-off):
 
-2. **MECE Aggregation Policy Refinement**:
-   - Cross-dimension MECE (channel × browser): always attempt or require explicit opt-in?
-   - Partial MECE: show data with warning or block until complete?
-   
-   **ACTION**: Review with stakeholders after initial prototype
-
-3. **Window Overlap Handling**:
-   - Partial temporal overlap: error strictly or attempt merge?
-   - Overlapping windows: when is this valid (re-fetch with updated data)?
-   
-   **ACTION**: Implement test cases for all 13 scenarios, refine logic based on results
+1. **Exact Amplitude API syntax**: Verify property filter and regex syntax with API docs during adapter implementation
+2. **UI polish**: Exact toast timing, badge styling, icon choices
+3. **Error message copy**: User-facing text for various warnings/errors
+4. **Performance tuning**: Profiling-driven optimization if <1s budget isn't met
+5. **Retention policy**: How long to keep old daily data (can add later based on usage patterns)
 
 ### Deliverables
 
-1. **Schema**: `dataInterestsDSL`, `currentQueryDSL` on graphs; `sliceDSL` on var windows
-2. **Shared constraint parser**: Extract from ParamPackDSLService, extend for `context`/`contextAny`/`window`
-3. **Context registry**: Loader, MECE detection, `otherPolicy` handling
-4. **Window aggregation**: Complete redesign with MECE logic, all overlap scenarios
-5. **Adapters**: 
-   - Amplitude: context filter generation (pending API research)
-   - Sheets: fallback policy implementation
-6. **UI**: `ContextSelector`, `WindowDateSelector`, integrated query builder
-7. **Nightly runner**: Explode `dataInterestsDSL` into atomic slices
-8. **Testing**: Comprehensive test suite for all 13 window scenarios + MECE detection
+1. **Schema**: `dataInterestsDSL`, `currentQueryDSL` on graphs; `sliceDSL` on var windows (all use `d-MMM-yy` dates)
+2. **Shared constraint parser**: `constraintParser.ts` with `context`/`contextAny`/`window` support
+3. **Context registry**: Loader, otherPolicy (4 variants), regex pattern support, MECE detection
+4. **Window aggregation**: 2D grid model, MECE logic, 7 daily-grid scenarios, mixed-otherPolicy handling
+5. **In-memory indexing**: `VariableAggregationCache` for <1s query latency
+6. **Adapters**: 
+   - Amplitude: context filter generation with regex pattern support
+   - Sheets: fallback policy (fallback with warning)
+7. **UI**: See `CONTEXTS_UI_DESIGN.md` (enhanced QueryExpressionEditor, ContextValueSelector, WindowSelector integration)
+8. **Nightly runner**: Explode `dataInterestsDSL` with cap/warning at 500 slices
+9. **Validation**: Graph-level DSL validation; graceful degradation on errors
+10. **Testing**: 7 daily grid + 4 otherPolicy + regex + mixed-MECE scenarios
 
 ### Implementation Priority
 
-**Phase 0: Research & Foundation** (REQUIRED FIRST)
-1. Research Amplitude API (endpoints, filter syntax, response format)
-2. Extract constraint parsing to shared utility (`constraintParser.ts`)
-3. Implement `normalizeConstraintString` with full test coverage
+**Phase 1: Core Infrastructure**
+1. Schema updates (`dataInterestsDSL`, `sliceDSL`, `currentQueryDSL`)
+2. `constraintParser.ts` (extract from ParamPackDSLService, add context/window support)
+3. Context registry loader with otherPolicy + regex support
+4. Monaco DSL schema updates (register `context`, `contextAny`, `window` functions)
 
-**Phase 1: Core Data Model**
-1. Add schema fields (`dataInterestsDSL`, `sliceDSL`)
-2. Implement context registry loader
-3. Extend constraint parser for `context`, `contextAny`, `window`
-
-**Phase 2: Window Aggregation**
-1. Implement MECE detection algorithm
-2. Implement window aggregation with all 13 scenarios
-3. Comprehensive test suite (all scenarios + MECE edge cases)
+**Phase 2: Window Aggregation (CRITICAL PATH)**
+1. MECE detection algorithm (with otherPolicy logic)
+2. Daily grid aggregation (`aggregateWindowsWithContexts`, `tryMECEAggregationAcrossContexts`)
+3. In-memory `VariableAggregationCache`
+4. Comprehensive test suite (daily grid scenarios, otherPolicy variants, mixed-MECE cases)
 
 **Phase 3: Adapters**
-1. Amplitude: context filter generation (after API research)
-2. Sheets: fallback policy
-3. Integration tests
+1. Amplitude adapter: context filter + regex pattern → Amplitude query
+2. Verify Amplitude API syntax (property filters, regex matching)
+3. Sheets adapter: context HRN parsing + fallback policy
+4. Integration tests (mock Amplitude/Sheets responses)
 
-**Phase 4: UI & Runner**
-1. Context selector component
-2. Window date selector
-3. Nightly runner explosion logic
-4. End-to-end integration
+**Phase 4: UI Components**
+1. Enhanced QueryExpressionEditor (add `▾` to context chips)
+2. ContextValueSelector component (shared for per-chip and Add Context)
+3. WindowSelector integration (chips, Add button, unroll state)
+4. Pinned Query modal (with slice count preview, enumeration, explosion warning)
+5. Remove What-if from WindowSelector
 
-**Phase 5: Refinement**
-1. Performance profiling (consider index if needed)
-2. Error messaging and warnings
-3. Documentation and user guide
+**Phase 5: Nightly Runner & Validation**
+1. Runner explosion logic (`expand_clause` with cap)
+2. Graph-level DSL validation (on Save, on load)
+3. AggregationResult → UI mapping (status → toasts/badges)
+4. End-to-end testing
+
+**Phase 6: Performance Validation**
+1. Profile aggregation with realistic data (100 params, 16 slices, 365 days)
+2. Confirm <1s latency budget
+3. Optimize if needed (likely already met with in-memory index)
 
 ---
 
