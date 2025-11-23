@@ -110,11 +110,11 @@ describe('Identity Consistency: IDs and Signatures', () => {
     );
 
     // All signatures should be UNIQUE
-    const uniqueSigs = new Set(signatures.map(s => s.signature?.signature));
+    const uniqueSigs = new Set(signatures.map(s => s.signature));
     expect(uniqueSigs.size).toBe(variations.length);
 
     console.log('Query signature variations:', signatures.map(s => 
-      `${s.desc}: ${s.signature?.signature?.substring(0, 8)}...`
+      `${s.desc}: ${s.signature?.substring(0, 8)}...`
     ));
   });
 
@@ -131,7 +131,7 @@ describe('Identity Consistency: IDs and Signatures', () => {
     const sig2 = await computeQuerySignature(dsl, 'postgres-analytics', null, targetEdge);
     
     // Different connections should produce different signatures
-    expect(sig1.signature).not.toBe(sig2.signature);
+    expect(sig1).not.toBe(sig2);
   });
 
   /**
@@ -155,8 +155,8 @@ describe('Identity Consistency: IDs and Signatures', () => {
   /**
    * TEST: Edge UUID not overwritten during creation
    */
-  test('edge creation: UUID preserved, not replaced with human-readable ID', () => {
-    const { UpdateManager } = require('../../src/services/UpdateManager');
+  test('edge creation: UUID preserved, not replaced with human-readable ID', async () => {
+    const { UpdateManager } = await import('../../src/services/UpdateManager');
     const updateManager = new UpdateManager();
     
     const graph = createLinearGraph();
@@ -171,16 +171,24 @@ describe('Identity Consistency: IDs and Signatures', () => {
     
     const updated = updateManager.createEdge(
       graph,
-      edgeData.from,
-      edgeData.to,
+      {
+        source: edgeData.from,
+        target: edgeData.to
+      },
       { 
-        ...edgeData,
         uuid: providedUuid 
       }
     );
     
+    // Then update the edge with the p property
+    const edgeWithP = updateManager.updateEdge(
+      updated,
+      providedUuid,
+      { p: edgeData.p }
+    );
+    
     // Find created edge
-    const createdEdge = updated.edges.find((e: any) => e.from === 'node-a' && e.to === 'node-b');
+    const createdEdge = edgeWithP.edges.find((e: any) => e.uuid === providedUuid);
     
     expect(createdEdge).toBeDefined();
     
@@ -323,17 +331,25 @@ describe('Identity Consistency: IDs and Signatures', () => {
   /**
    * REGRESSION TEST: UUID not replaced with from->to pattern
    */
-  test('regression: uuid stays uuid, not converted to from-to-to pattern', () => {
-    const { UpdateManager } = require('../../src/services/UpdateManager');
+  test('regression: uuid stays uuid, not converted to from-to-to pattern', async () => {
+    const { UpdateManager } = await import('../../src/services/UpdateManager');
     const updateManager = new UpdateManager();
     
-    const graph = { nodes: [], edges: [] };
+    const graph = { 
+      nodes: [
+        { id: 'viewed-coffee-screen', uuid: 'node-uuid-1' },
+        { id: 'straight-to-dashboard', uuid: 'node-uuid-2' }
+      ], 
+      edges: [] 
+    };
     
     // Create edge without explicit UUID
     const updated = updateManager.createEdge(
       graph,
-      'viewed-coffee-screen',
-      'straight-to-dashboard'
+      {
+        source: 'viewed-coffee-screen',
+        target: 'straight-to-dashboard'
+      }
     );
     
     const edge = updated.edges[0];

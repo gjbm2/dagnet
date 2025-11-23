@@ -24,9 +24,21 @@ export interface DASExecutionRecord {
 export class MockDASRunner {
   private executions: DASExecutionRecord[] = [];
   private config: MockDASConfig;
+  public connectionProvider: any;
 
   constructor(config: MockDASConfig = {}) {
     this.config = config;
+    // Mock connection provider
+    this.connectionProvider = {
+      getConnection: async (connectionName: string) => {
+        // Return a mock connection object
+        return {
+          name: connectionName,
+          type: 'amplitude',
+          // Add other connection properties as needed
+        };
+      }
+    };
   }
 
   /**
