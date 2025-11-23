@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.94b
+**Released:** November 23, 2025
+
+Images and URLs on nodes
+
+---
+
 ## Version 0.93b
 **Released:** November 21, 2025
 
