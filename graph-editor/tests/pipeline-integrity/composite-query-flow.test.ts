@@ -16,19 +16,34 @@ import { createTestGraph, createCompositeQueryGraph, cloneGraph } from '../helpe
 import { MockFileRegistry, createMockParameterFile } from '../helpers/mock-file-registry';
 import { MockDASRunner, createMockAmplitudeResponse } from '../helpers/mock-das-runner';
 
+// Create mock instances that will be used across tests
+let mockFileRegistry: MockFileRegistry;
+let mockDASRunner: MockDASRunner;
+
+// Mock the TabContext at the top level (required for Vitest hoisting)
+vi.mock('../../src/contexts/TabContext', async () => {
+  const actual = await vi.importActual('../../src/contexts/TabContext');
+  return {
+    ...actual,
+    get fileRegistry() {
+      return mockFileRegistry;
+    }
+  };
+});
+
+// Mock the DAS runner module to use our mock runner
+vi.mock('../../src/lib/das', async () => {
+  return {
+    createDASRunner: () => mockDASRunner
+  };
+});
+
 describe('Pipeline Integrity: Composite Query → Daily Data → Graph', () => {
-  let mockFileRegistry: MockFileRegistry;
-  let mockDASRunner: MockDASRunner;
   let dataOperationsService: any;
 
   beforeEach(async () => {
     mockFileRegistry = new MockFileRegistry();
     mockDASRunner = new MockDASRunner({ mode: 'daily' });
-    
-    // Mock the services
-    vi.doMock('../../src/contexts/TabContext', () => ({
-      fileRegistry: mockFileRegistry
-    }));
 
     // Import service after mocks are set up (dynamic import for ESM)
     const module = await import('../../src/services/dataOperationsService');
@@ -264,7 +279,7 @@ describe('Pipeline Integrity: Composite Query → Daily Data → Graph', () => {
    */
   test('node IDs mapped to provider events and back', async () => {
     // Mock event registry with provider mappings
-    const mockEventRegistry = {
+    const mockEventRegistry: Record<string, any> = {
       'saw-WA-details-page': {
         provider_event_names: {
           amplitude: 'Viewed WhatsApp details /onboarding/whatsApp-details Page'
@@ -277,7 +292,8 @@ describe('Pipeline Integrity: Composite Query → Daily Data → Graph', () => {
       }
     };
 
-    vi.mock('../../src/contexts/TabContext', () => ({
+    // Use doMock instead of mock to avoid hoisting issues
+    vi.doMock('../../src/contexts/TabContext', () => ({
       fileRegistry: {
         getFile: (id: string) => {
           const nodeId = id.replace('event-', '');

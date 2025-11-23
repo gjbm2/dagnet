@@ -240,7 +240,7 @@ export function extractSheetsUpdateData(
  * 
  * Includes event_ids from nodes to detect when event definitions change
  */
-async function computeQuerySignature(
+export async function computeQuerySignature(
   dsl: any, 
   connectionName?: string,
   graph?: Graph | null,
