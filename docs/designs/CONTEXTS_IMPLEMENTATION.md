@@ -1,0 +1,3259 @@
+# Contexts: Detailed Implementation Plan
+
+**Based on**: `CONTEXTS.md` (high-level design)  
+**Status**: Implementation specification — DRAFT with open questions  
+**Target**: v1 contexts support
+
+---
+
+## Feedback Integration Status
+
+**Resolved**:
+1. ✓ Terminology: renamed `pinnedSliceDSL` → `dataInterestsDSL` (graph-level) vs `sliceDSL` (window-level)
+2. ✓ Removed redundant `sliceMetadata` structured duplication
+3. ✓ Identified existing parsing codepaths to extend (ParamPackDSLService, HRNResolver)
+4. ✓ Amplitude API research completed (Dashboard REST API documented in Section 6)
+5. ✓ Sheets fallback policy decided (Option B: fallback with warning, documented in Section 6.2)
+6. ✓ MECE window aggregation logic designed (full algorithm in Section 5)
+7. ✓ Comprehensive window overlap scenarios documented (13-scenario matrix in Section 5)
+8. ✓ Removed index proposal; will scan windows linearly (acceptable perf for v1)
+
+---
+
+## Design Questions: Status
+
+All major design questions have been resolved:
+
+1. ✓ **Amplitude API Research** (Section 6: Adapter Extensions)
+   - Dashboard REST API supports property filters matching our context mappings
+   - Funnel/segmentation endpoints accept `where` clauses with AND/OR logic
+   - Returns `from_count`, `to_count`, optionally `time_series` arrays
+   - Store same format as today: `n_daily`, `k_daily`, `dates`, plus `sliceDSL`
+
+2. ✓ **Sheets Fallback Policy** (Section 6.2: Sheets Adapter)
+   - **Decision**: Option B (fallback to uncontexted with warning)
+   - If exact context not found, try uncontexted version and show UI warning
+   - Pragmatic for manually-maintained Sheets data
+   - Can add strict mode as opt-in later
+
+3. ✓ **MECE Window Aggregation** (Section 5: Window Aggregation Logic)
+   - Full `detectMECEPartition` algorithm implemented
+   - Uses context registry to verify completeness
+   - Sums n/k when partition is MECE and complete
+   - Warns and marks as partial when incomplete
+
+4. ✓ **Window Overlap Scenarios** (Section 5: Window Overlap Matrix)
+   - Comprehensive 13-scenario table covering:
+     - Exact matches (contexted/uncontexted)
+     - MECE context aggregation (complete/incomplete)
+     - Temporal aggregation (adjacent/gaps)
+     - Partial overlaps and cross-dimension cases
+   - Each scenario has defined behavior and test requirements
+
+### Remaining Implementation Details
+
+Minor details to finalize during implementation (not blocking design sign-off):
+
+1. **UI polish**: Exact styling for context chips, warning messages, cross-key nudging tooltips
+2. **Error messages**: User-facing copy for various aggregation warnings/errors
+3. **Performance tuning**: If linear window scan becomes slow (profile first, then optimize)
+4. **Amplitude rate limits**: Monitor in production, add throttling if needed
+
+---
+
+## Table of Contents
+
+1. [Terminology & Naming Conventions](#terminology--naming-conventions)
+2. [Data Model & Schema Changes](#data-model--schema-changes)
+3. [DSL Parsing & Normalization (Extending Existing Code)](#dsl-parsing--normalization-extending-existing-code)
+4. [Context Registry Structure](#context-registry-structure)
+5. [Window Aggregation Logic (Complete Redesign)](#window-aggregation-logic-complete-redesign)
+6. [Adapter Extensions](#adapter-extensions)
+7. [UI Components & Flows](#ui-components--flows)
+8. [Nightly Runner Integration](#nightly-runner-integration)
+9. [Testing Strategy](#testing-strategy)
+10. [Migration & Rollout](#migration--rollout)
+
+---
+
+## Terminology & Naming Conventions
+
+**Key distinction**: A **slice** is a specific data window on a var (contexted, time-bounded result). The graph's **data interests** specification is NOT a slice—it's a query template that gets exploded into multiple slices.
+
+### Graph-Level
+
+- `dataInterestsDSL` (string): Query specification on graph that drives nightly runs  
+  Example: `"context(channel);context(browser-type).window(-90d:)"`  
+  This describes *what* to fetch, not a specific slice of data.
+
+- `currentQueryDSL` (string): Ephemeral UI state for current user query  
+  Example: `"context(channel:google).window(1-Jan-25:31-Mar-25)"`  
+  Persisted so graph reopens with same query state.
+
+### Variable/Window-Level
+
+- `sliceDSL` (string): Canonical identifier for a specific data window  
+  Example: `"context(channel:google).window(1-Jan-25:31-Mar-25)"`  
+  Stored on each window; single source of truth for what that window represents.
+
+### Constraint vs Slice
+
+- **Constraint**: Part of a DSL expression (e.g., `context(...)`, `visited(...)`, `window(...)`)
+- **Slice**: A concrete data window with specific n, k, mean, stdev for a given constraint set
+- **Data interests**: Graph-level specification that generates multiple slices
+
+---
+
+## Data Model & Schema Changes
+
+### 1. Graph Schema Extensions
+
+**File**: `graph-editor/public/graph-schema.json` (or equivalent TypeScript types)
+
+Add to graph object:
+
+```typescript
+interface Graph {
+  // ... existing fields ...
+  
+  // NEW: Data interests DSL for nightly runs (query specification, not a slice)
+  dataInterestsDSL?: string;
+  // Example: "context(channel);context(browser-type).window(-90d:)"
+  // Drives what slices the nightly runner will fetch and cache
+  
+  // NEW: Current ephemeral query DSL (contexts + window) for UI state persistence
+  currentQueryDSL?: string;
+  // Example: "context(channel:google).window(1-Jan-25:31-Mar-25)"
+  // Rehydrates UI when graph reopens
+}
+```
+
+**Rationale**:
+- `dataInterestsDSL`: Optional query template that gets exploded into atomic slices by runner
+- `currentQueryDSL`: UI state only; persisted for UX continuity
+- Both are strings in same DSL format but serve different purposes
+
+### 2. Variable Window Schema Extensions
+
+**Current state** (from existing codebase):
+```typescript
+// Existing format (as seen in windowAggregationService.ts and paramRegistryService.ts)
+interface ParameterValue {
+  n?: number;
+  k?: number;
+  mean?: number;
+  stdev?: number;
+  
+  // Time-series data (existing)
+  n_daily?: number[];
+  k_daily?: number[];
+  dates?: string[];  // YYYY-MM-DD format
+  
+  // Other existing fields...
+}
+```
+
+**NEW additions**:
+```typescript
+interface ParameterValue {
+  // ... all existing fields ...
+  
+  // NEW: Canonical slice DSL string for this data
+  sliceDSL?: string;
+  // Example: "context(channel:google).window(1-Jan-25:31-Mar-25)"
+  // Single source of truth for what query produced this data
+  // Parse this string to extract context/window constraints when needed
+}
+```
+
+**Design decisions**:
+- **NO redundant structured metadata**: We store only `sliceDSL` string, parse on-demand.
+- **Invariant: atomic slices only**:
+  - Persisted `sliceDSL` MUST NOT contain `contextAny(...)`.
+  - The nightly runner and UI explode any `contextAny(...)` or `or(...)` constructs into
+    fully-specified `context(key:value)` combinations **before** writing windows.
+  - All aggregation / MECE logic assumes each window represents exactly one concrete
+    `(key:value)` per context key.
+- **Backward compatible**: Existing vars without `sliceDSL` are treated as "uncontexted, all-time"
+- **Date format in sliceDSL**: Always `d-MMM-yy` after normalization (e.g., `1-Jan-25`)
+- **Existing time-series arrays**: Keep as-is (`n_daily`, `k_daily`, `dates` in YYYY-MM-DD)
+
+**Migration note**: Add `sliceDSL` field to schema as optional; existing data continues to work.
+
+### 3. Edge Conditional Probability Schema
+
+**No schema changes required** — contexts are already part of the `condition` string in `conditional_ps`:
+
+```typescript
+interface ConditionalProbability {
+  condition: string;  // e.g. "visited(landing).context(channel:google)"
+  mean: number;
+  stdev?: number;
+  // ... other fields ...
+}
+```
+
+The existing `UpdateManager.rebalanceConditionalProbabilities` logic already groups by `condition` string, so it will naturally handle context-bearing conditions once we extend the DSL parser.
+
+---
+
+## DSL Parsing & Normalization (Extending Existing Code)
+
+**Key principle**: Extend existing parsing infrastructure rather than create parallel systems.
+
+### 0. DSL Schema Updates
+
+**Files to update**:
+
+1. **`graph-editor/public/query-dsl-1.0.0.json`**:
+
+```json
+{
+  "constraintFunctions": {
+    "visited": { "description": "Require visit to specified nodes", "args": "nodeId[,nodeId...]" },
+    "visitedAny": { "description": "Require visit to any of specified nodes", "args": "nodeId[,nodeId...]" },
+    "exclude": { "description": "Exclude users who visited nodes", "args": "nodeId[,nodeId...]" },
+    "case": { "description": "Filter by case variant", "args": "caseId:variantName" },
+    "context": { "description": "Filter by context dimension", "args": "key:value" },
+    "contextAny": { "description": "Filter by any of several context values", "args": "key:value[,key:value...]" },
+    "window": { "description": "Time window for data", "args": "start:end" }
+  }
+}
+```
+
+2. **TypeScript types** (`graph-editor/src/types/queryDSL.ts` or inline in `constraintParser.ts`):
+
+```typescript
+export interface ParsedConstraints {
+  visited: string[];
+  visitedAny: string[];
+  exclude: string[];
+  cases: Array<{ key: string; value: string }>;
+  contexts: Array<{ key: string; value: string }>;      // NEW
+  contextAnys: Array<{ pairs: Array<{ key: string; value: string }> }>; // NEW
+  window: { start?: string; end?: string } | null;      // NEW
+}
+
+export type ContextCombination = Record<string, string>; // NEW: e.g. {channel: 'google', 'browser-type': 'chrome'}
+```
+
+3. **Monaco language registration** (`graph-editor/src/lib/queryDSL.ts`):
+
+Update `QUERY_FUNCTIONS` constant to include:
+
+```typescript
+export const QUERY_FUNCTIONS = {
+  // ... existing functions ...
+  context: {
+    signature: 'context(key:value)',
+    description: 'Filter data by a context dimension (e.g., channel, browser-type)',
+    examples: ['context(channel:google)', 'context(browser-type:chrome)']
+  },
+  contextAny: {
+    signature: 'contextAny(key:value,key:value,...)',
+    description: 'Filter by any of several context values (OR within key, AND across keys)',
+    examples: ['contextAny(channel:google,meta)', 'contextAny(source:facebook,source:instagram)']
+  },
+  window: {
+    signature: 'window(start:end)',
+    description: 'Time window for data retrieval (absolute d-MMM-yy or relative -Nd)',
+    examples: ['window(1-Jan-25:31-Mar-25)', 'window(-90d:)', 'window(-30d:-7d)']
+  }
+};
+```
+
+This ensures Monaco autocomplete suggests the new functions.
+
+---
+
+### Existing Constraint Parsing Infrastructure
+
+**Files to extend**:
+1. `graph-editor/src/services/ParamPackDSLService.ts` — Already has regex for `visited|context|case|exclude` (line 426)
+2. `graph-editor/src/services/HRNResolver.ts` — Resolves conditional HRNs (line 126)
+3. `graph-editor/src/services/HRNParser.ts` — Parses HRN strings into components
+4. **`graph-editor/src/components/QueryExpressionEditor.tsx`** — Monaco-based chip editor (ALREADY has `context` in outerChipConfig line 67-70!)
+
+**Current pattern** (from ParamPackDSLService.ts line 426):
+```typescript
+const conditionalMatch = key.match(/^e\.([^.]+)\.((?:visited|context|case|exclude)\([^)]+\)(?:\.(?:visited|context|case|exclude)\([^)]+\))*)\.p\.(.+)$/);
+```
+
+This regex ALREADY includes `context` in the pattern! We need to:
+1. Ensure it handles `context(key:value)` syntax correctly (already does, based on colon separator)
+2. Add `contextAny` and `window` to the pattern
+3. Add chip rendering for `contextAny` and `window` in `QueryExpressionEditor`
+
+### 1. Extend ParamPackDSLService.ts
+
+**Current location**: Line 424-442 handles conditional probability parsing
+
+**Changes needed**:
+
+```typescript
+// UPDATE regex pattern to include contextAny and window
+const conditionalMatch = key.match(/^e\.([^.]+)\.((?:visited|visitedAny|context|contextAny|case|exclude|window)\([^)]+\)(?:\.(?:visited|visitedAny|context|contextAny|case|exclude|window)\([^)]+\))*)\.p\.(.+)$/);
+
+// Rest of logic remains the same — we store the full condition string as-is
+// Normalization happens separately via normalizeConstraintString
+```
+
+**Add normalization function** (new):
+```typescript
+/**
+ * Normalize a constraint string to canonical form.
+ * Sorts constraints alphabetically within each type, normalizes dates.
+ * 
+ * Example:
+ *   "context(channel:google).visited(promo).window(1-Jan-25:31-Jan-25)"
+ * → "visited(promo).context(channel:google).window(1-Jan-25:31-Jan-25)"
+ *   (visited first, then context, then window)
+ */
+export function normalizeConstraintString(condition: string): string {
+  if (!condition) return '';
+  
+  // Parse into constraint types
+  const constraints = {
+    visited: [] as string[],
+    visitedAny: [] as string[],
+    exclude: [] as string[],
+    cases: [] as Array<{key: string; value: string}>,
+    contexts: [] as Array<{key: string; value: string}>,
+    contextAnys: [] as Array<{pairs: Array<{key: string; value: string}>}>,
+    window: null as {start?: string; end?: string} | null,
+  };
+  
+  // Split on '.' and parse each token
+  const tokens = condition.split('.');
+  for (const token of tokens) {
+    // visited(...)
+    const visitedMatch = token.match(/^visited\(([^)]+)\)$/);
+    if (visitedMatch) {
+      constraints.visited.push(...visitedMatch[1].split(',').map(s => s.trim()));
+      continue;
+    }
+    
+    // visitedAny(...)
+    const visitedAnyMatch = token.match(/^visitedAny\(([^)]+)\)$/);
+    if (visitedAnyMatch) {
+      constraints.visitedAny.push(...visitedAnyMatch[1].split(',').map(s => s.trim()));
+      continue;
+    }
+    
+    // exclude(...)
+    const excludeMatch = token.match(/^exclude\(([^)]+)\)$/);
+    if (excludeMatch) {
+      constraints.exclude.push(...excludeMatch[1].split(',').map(s => s.trim()));
+      continue;
+    }
+    
+    // case(key:value)
+    const caseMatch = token.match(/^case\(([^:]+):([^)]+)\)$/);
+    if (caseMatch) {
+      constraints.cases.push({ key: caseMatch[1], value: caseMatch[2] });
+      continue;
+    }
+    
+    // context(key:value)
+    const contextMatch = token.match(/^context\(([^:]+):([^)]+)\)$/);
+    if (contextMatch) {
+      constraints.contexts.push({ key: contextMatch[1], value: contextMatch[2] });
+      continue;
+    }
+    
+    // contextAny(key:val,key:val,...)
+    const contextAnyMatch = token.match(/^contextAny\((.+)\)$/);
+    if (contextAnyMatch) {
+      const pairs = contextAnyMatch[1].split(',').map(pair => {
+        const [key, value] = pair.split(':');
+        return { key: key.trim(), value: value.trim() };
+      });
+      constraints.contextAnys.push({ pairs });
+      continue;
+    }
+    
+    // window(start:end)
+    const windowMatch = token.match(/^window\(([^:]*):([^)]*)\)$/);
+    if (windowMatch) {
+      constraints.window = {
+        start: windowMatch[1] || undefined,
+        end: windowMatch[2] || undefined,
+      };
+      continue;
+    }
+  }
+  
+  // Rebuild in canonical order: visited, visitedAny, exclude, case, context, contextAny, window
+  const parts: string[] = [];
+  
+  if (constraints.visited.length > 0) {
+    parts.push(`visited(${constraints.visited.sort().join(',')})`);
+  }
+  if (constraints.visitedAny.length > 0) {
+    parts.push(`visitedAny(${constraints.visitedAny.sort().join(',')})`);
+  }
+  if (constraints.exclude.length > 0) {
+    parts.push(`exclude(${constraints.exclude.sort().join(',')})`);
+  }
+  constraints.cases.sort((a, b) => a.key.localeCompare(b.key));
+  for (const c of constraints.cases) {
+    parts.push(`case(${c.key}:${c.value})`);
+  }
+  constraints.contexts.sort((a, b) => a.key.localeCompare(b.key));
+  for (const c of constraints.contexts) {
+    parts.push(`context(${c.key}:${c.value})`);
+  }
+  for (const ca of constraints.contextAnys) {
+    const pairStrs = ca.pairs.map(p => `${p.key}:${p.value}`).sort();
+    parts.push(`contextAny(${pairStrs.join(',')})`);
+  }
+  if (constraints.window) {
+    const start = normalizeWindowDate(constraints.window.start);
+    const end = normalizeWindowDate(constraints.window.end);
+    parts.push(`window(${start}:${end}`);
+  }
+  
+  return parts.join('.');
+}
+
+function normalizeWindowDate(date: string | undefined): string {
+  if (!date) return '';
+  // If relative offset, leave as-is
+  if (date.match(/^-?\d+[dwmy]$/)) return date;
+  // Otherwise parse and convert to d-MMM-yy
+  return formatDateUK(parseDate(date));
+}
+```
+
+### 2. Refactor: Extract Constraint Parsing as Shared Utility
+
+**NEW FILE**: `graph-editor/src/services/constraintParser.ts`
+
+Move the parsing logic from ParamPackDSLService into a shared utility that can be used by:
+- ParamPackDSLService (for ingesting Sheets params)
+- Window aggregation service (for matching slices)
+- Query builder (for constructing DAS queries)
+- UI components (for parsing/displaying constraints)
+
+```typescript
+export interface ParsedConstraints {
+  visited: string[];
+  visitedAny: string[];
+  exclude: string[];
+  cases: Array<{ key: string; value: string }>;
+  contexts: Array<{ key: string; value: string }>;
+  contextAnys: Array<{ pairs: Array<{ key: string; value: string }> }>;
+  window: { start?: string; end?: string } | null;
+}
+
+export function parseConstraintString(condition: string): ParsedConstraints {
+  // Implementation as above
+}
+
+export function normalizeConstraintString(condition: string): string {
+  // Implementation as above
+}
+
+export function buildConstraintString(parsed: ParsedConstraints): string {
+  // Inverse of parseConstraintString
+}
+```
+
+**Refactoring scope**:
+- Extract constraint parsing from ParamPackDSLService.ts
+- Update HRNResolver.ts to use shared utility
+- Update any other files that currently parse constraint strings inline
+
+### 3. Python Parser Extensions
+
+**File**: `python-backend/query_dsl.py` (or equivalent)
+
+Mirror all TypeScript changes:
+- Add `context`, `contextAny`, `window` to constraint patterns
+- Implement same normalization logic
+- Ensure constraint ordering matches TypeScript (for deterministic cache keys)
+
+---
+
+## Context Registry Structure
+
+### 1. Registry File Format
+
+**File**: `param-registry/contexts.yaml`
+
+```yaml
+# Example context definition
+contexts:
+  - id: channel
+    name: Marketing Channel
+    description: Primary acquisition channel (paid, organic, direct, etc.)
+    type: categorical
+    
+    # "Other" policy controls how the catch-all bucket is handled
+    # This affects: MECE detection, UI value lists, aggregation logic, query building
+    otherPolicy: computed  # null | computed | explicit | undefined
+    # - null: No "other" exists; explicitly listed values are asserted to be MECE (complete coverage)
+    # - computed: "other" exists and is defined as ALL_RESULTS - sum(all explicitly listed values)
+    # - explicit: "other" is defined as a regular value below (with its own filter/mapping)
+    # - undefined: No "other" exists, and values are NOT asserted to be MECE (incomplete; can't aggregate)
+    
+    values:
+      - id: google
+        displayName: Google Ads
+        sources:
+          amplitude:
+            field: utm_source
+            filter: "utm_source == 'google'"
+          sheets:
+            # For Sheets, user manually provides context-labeled data; no source mapping needed
+            
+      - id: meta
+        displayName: Meta (Facebook/Instagram)
+        sources:
+          amplitude:
+            field: utm_source
+            filter: "utm_source in ['facebook', 'instagram']"
+            # Note: regex support for collapsing many raw values
+            
+      - id: organic
+        displayName: Organic Search
+        sources:
+          amplitude:
+            field: utm_source
+            filter: "utm_source == 'organic'"
+            
+      - id: direct
+        displayName: Direct Traffic
+        sources:
+          amplitude:
+            field: utm_source
+            filter: "utm_source is null or utm_source == 'direct'"
+            
+      - id: other
+        displayName: Other Channels
+        sources:
+          amplitude:
+            # If otherPolicy=computed: adapter generates "NOT (google OR facebook OR ...)" at query time
+            # If otherPolicy=explicit: must specify filter here
+            filter: "utm_source not in ['google', 'facebook', 'instagram', 'organic', 'direct']"
+
+  - id: browser-type
+    name: Browser Type
+    description: User's browser (Chrome, Safari, Firefox, etc.)
+    type: categorical
+    otherPolicy: computed
+    
+    values:
+      - id: chrome
+        displayName: Chrome
+        sources:
+          amplitude:
+            field: browser
+            filter: "browser == 'Chrome'"
+            
+      - id: safari
+        displayName: Safari
+        sources:
+          amplitude:
+            field: browser
+            filter: "browser == 'Safari'"
+            
+      - id: firefox
+        displayName: Firefox
+        sources:
+          amplitude:
+            field: browser
+            filter: "browser == 'Firefox'"
+            
+      - id: other
+        displayName: Other Browsers
+        sources:
+          amplitude:
+            # otherPolicy=computed means adapter will generate this automatically
+```
+
+**Key points**:
+- `otherPolicy` controls how "other" buckets are constructed per source (see detailed section below)
+- `sources[amplitude].filter` is the Amplitude-specific query predicate
+- `sources[amplitude].pattern` provides regex support for high-cardinality raw values (see Regex Mapping section below)
+
+---
+
+### 2. "Other" Policy: Detailed Specification
+
+The `otherPolicy` field controls whether and how a catch-all "other" bucket is handled for a context key. This affects **multiple systems**:
+
+#### A. Impact on Value Enumeration (for UI, MECE detection, etc.)
+
+**When building the list of values for a key** (used in dropdowns, MECE checks, etc.):
+
+| otherPolicy | Values list includes "other"? | Behavior |
+|-------------|------------------------------|----------|
+| `null` | NO | Explicitly listed values only; asserts they are MECE |
+| `computed` | YES | Include "other" as a value; computed at query time |
+| `explicit` | YES | Include "other" as a regular value with its own mapping |
+| `undefined` | NO | Explicitly listed values only; NOT asserted to be MECE |
+
+**Code impact**:
+
+```typescript
+function getValuesForContext(contextId: string): ContextValue[] {
+  const ctx = contextRegistry.getContext(contextId);
+  if (!ctx) return [];
+  
+  // If otherPolicy is null or undefined, don't include "other" in enumeration
+  // (even if it exists in the values array)
+  if (ctx.otherPolicy === 'null' || ctx.otherPolicy === 'undefined') {
+    return ctx.values.filter(v => v.id !== 'other');
+  }
+  
+  // For computed or explicit, include all values (including "other")
+  return ctx.values;
+}
+```
+
+#### B. Impact on MECE Detection
+
+**When checking if windows form a MECE partition**:
+
+```typescript
+function detectMECEPartition(
+  windows: ParameterValue[],
+  contextKey: string,
+  contextRegistry: ContextRegistry
+): { isMECE: boolean; isComplete: boolean; canAggregate: boolean; missingValues: string[] } {
+  
+  const contextDef = contextRegistry.getContext(contextKey);
+  if (!contextDef) {
+    return { isMECE: false, isComplete: false, canAggregate: false, missingValues: [] };
+  }
+  
+  // Get expected values based on otherPolicy
+  const expectedValues = getExpectedValues(contextDef);
+  
+  // Extract values from windows
+  const windowValues = extractValuesFromWindows(windows, contextKey);
+  
+  // Check completeness
+  const missingValues = expectedValues.filter(v => !windowValues.has(v));
+  const isComplete = missingValues.length === 0;
+  
+  // Can we aggregate (sum) across all windows for this key?
+  const canAggregate = determineIfCanAggregate(contextDef, isComplete);
+  
+  return {
+    isMECE: true,  // Assume MECE if values match registry
+    isComplete,
+    canAggregate,
+    missingValues,
+  };
+}
+
+function determineIfCanAggregate(
+  contextDef: ContextDefinition,
+  isComplete: boolean
+): boolean {
+  
+  switch (contextDef.otherPolicy) {
+    case 'null':
+      // Values are MECE; can aggregate if we have all of them
+      return isComplete;
+      
+    case 'computed':
+    case 'explicit':
+      // Values + "other" are MECE; can aggregate if we have all (including "other")
+      return isComplete;
+      
+    case 'undefined':
+      // Values are NOT MECE; cannot safely aggregate even if we have all of them
+      return false;
+      
+    default:
+      return false;
+  }
+}
+```
+
+#### C. Impact on Query Building (Adapters)
+
+**When building Amplitude query for `context(channel:other)`**:
+
+```typescript
+function buildFilterForContextValue(
+  key: string,
+  value: string,
+  source: string
+): string {
+  
+  const mapping = contextRegistry.getSourceMapping(key, value, source);
+  
+  if (value === 'other') {
+    const contextDef = contextRegistry.getContext(key);
+    
+    if (contextDef.otherPolicy === 'computed') {
+      // Generate NOT filter dynamically
+      const explicitValues = contextDef.values.filter(v => v.id !== 'other');
+      const explicitFilters = explicitValues.map(v => {
+        const m = contextRegistry.getSourceMapping(key, v.id, source);
+        return m?.filter || `${contextDef.field} == '${v.id}'`;
+      });
+      
+      // Return: NOT (value1 OR value2 OR ...)
+      return `NOT (${explicitFilters.join(' OR ')})`;
+    }
+    
+    if (contextDef.otherPolicy === 'explicit') {
+      // Use explicit filter from mapping
+      if (!mapping?.filter) {
+        throw new Error(`otherPolicy=explicit but no filter defined for ${key}:other`);
+      }
+      return mapping.filter;
+    }
+    
+    // If otherPolicy is null or undefined, "other" shouldn't be queryable
+    throw new Error(`Cannot query ${key}:other with otherPolicy=${contextDef.otherPolicy}`);
+  }
+  
+  // Regular (non-other) value: use filter from mapping
+  if (!mapping?.filter) {
+    throw new Error(`No ${source} mapping for ${key}:${value}`);
+  }
+  return mapping.filter;
+}
+```
+
+#### D. Impact on UI Value Lists
+
+**In Add Context dropdown and per-chip dropdowns**:
+
+- `otherPolicy: null` → Show only explicit values (google, meta, direct); no "other" checkbox
+- `otherPolicy: computed` → Show explicit values + "other" (all queryable)
+- `otherPolicy: explicit` → Show explicit values + "other" (all queryable)
+- `otherPolicy: undefined` → Show only explicit values; no "other" checkbox
+
+**Implication for "all values checked = remove chip"**:
+
+- Only applies when otherPolicy allows aggregation (null, computed, explicit)
+- If otherPolicy=undefined, checking all visible values does NOT mean "all data" (can't remove chip)
+
+---
+
+### 3. Regex Pattern Support for Source Mappings
+
+**Problem**: Raw source values are often high-cardinality or messy (e.g., UTM sources like `"google_search_brand_exact"`, `"google_display_retargeting"`, etc.).
+
+**Solution**: Allow regex patterns to collapse many raw values into one logical value.
+
+**Registry example**:
+
+```yaml
+contexts:
+  - id: source
+    name: Traffic Source
+    type: categorical
+    otherPolicy: computed
+    
+    values:
+      - id: google
+        displayName: Google (All)
+        sources:
+          amplitude:
+            field: utm_source
+            # Pattern matches any utm_source starting with "google"
+            pattern: "^google"
+            patternFlags: "i"  # Case-insensitive
+            # Adapter will generate: utm_source matches '^google' (case-insensitive)
+            
+      - id: facebook
+        displayName: Facebook/Instagram
+        sources:
+          amplitude:
+            field: utm_source
+            pattern: "^(facebook|instagram|fb|ig)"
+            patternFlags: "i"
+            
+      - id: other
+        displayName: Other Sources
+        sources:
+          amplitude:
+            # Computed: NOT (google OR facebook patterns)
+```
+
+**Adapter logic with regex**:
+
+```typescript
+function buildFilterForContextValue(
+  key: string,
+  value: string,
+  source: string
+): string {
+  
+  const mapping = contextRegistry.getSourceMapping(key, value, source);
+  const contextDef = contextRegistry.getContext(key);
+  
+  // If pattern provided, use regex matching
+  if (mapping?.pattern) {
+    const flags = mapping.patternFlags || '';
+    // Amplitude syntax for regex (check API docs for exact syntax)
+    return `${contextDef.field} matches '${mapping.pattern}'${flags ? ` (${flags})` : ''}`;
+  }
+  
+  // Otherwise use explicit filter
+  if (mapping?.filter) {
+    return mapping.filter;
+  }
+  
+  // Handle computed "other"
+  if (value === 'other' && contextDef.otherPolicy === 'computed') {
+    return buildComputedOtherFilter(key, source);
+  }
+  
+  throw new Error(`No ${source} mapping for ${key}:${value}`);
+}
+
+function buildComputedOtherFilter(key: string, source: string): string {
+  const contextDef = contextRegistry.getContext(key);
+  const explicitValues = contextDef.values.filter(v => v.id !== 'other');
+  
+  const filters: string[] = [];
+  for (const v of explicitValues) {
+    const mapping = contextRegistry.getSourceMapping(key, v.id, source);
+    
+    if (mapping?.pattern) {
+      // If explicit value uses pattern, include pattern in NOT clause
+      const flags = mapping.patternFlags || '';
+      filters.push(`${contextDef.field} matches '${mapping.pattern}'${flags ? ` (${flags})` : ''}`);
+    } else if (mapping?.filter) {
+      filters.push(mapping.filter);
+    }
+  }
+  
+  // Return: NOT (all explicit filters ORed together)
+  return `NOT (${filters.join(' OR ')})`;
+}
+```
+
+**Benefits**:
+- Single regex `"^google"` captures `google_search`, `google_display`, `google_shopping`, etc.
+- Registry stays small and maintainable
+- Raw value space can be arbitrarily large; we collapse to manageable logical enum
+- "other" computation automatically handles new raw values without registry updates
+
+### 2. Registry Loading & Validation
+
+**File**: `graph-editor/src/services/contextRegistry.ts`
+
+```typescript
+export interface ContextDefinition {
+  id: string;
+  name: string;
+  description: string;
+  type: 'categorical' | 'ordinal' | 'continuous';
+  otherPolicy: 'null' | 'computed' | 'explicit';
+  values: ContextValue[];
+}
+
+export interface ContextValue {
+  id: string;
+  displayName: string;
+  sources: Record<string, SourceMapping>;
+}
+
+export interface SourceMapping {
+  field?: string;           // Source property name (e.g., "utm_source", "browser")
+  filter?: string;          // Filter expression for this value (e.g., "utm_source == 'google'")
+  pattern?: string;         // Regex pattern for matching raw values to this logical value
+  patternFlags?: string;    // Regex flags (e.g., "i" for case-insensitive)
+  
+  // For complex mappings: either filter OR pattern, not both
+  // If pattern provided: adapter matches raw values against pattern, then builds appropriate filter
+}
+
+export class ContextRegistry {
+  private contexts: Map<string, ContextDefinition> = new Map();
+  
+  async load(): Promise<void> {
+    // Load from param-registry/contexts.yaml
+    const yaml = await fetchYaml('/param-schemas/contexts.yaml');
+    // Parse and validate against context-definition-schema.yaml
+    for (const ctx of yaml.contexts) {
+      this.contexts.set(ctx.id, ctx);
+    }
+  }
+  
+  getContext(id: string): ContextDefinition | undefined {
+    return this.contexts.get(id);
+  }
+  
+  getAllContexts(): ContextDefinition[] {
+    return Array.from(this.contexts.values());
+  }
+  
+  getValuesForContext(contextId: string): ContextValue[] {
+    return this.contexts.get(contextId)?.values || [];
+  }
+  
+  getSourceMapping(contextId: string, valueId: string, source: string): SourceMapping | undefined {
+    const ctx = this.contexts.get(contextId);
+    const value = ctx?.values.find(v => v.id === valueId);
+    return value?.sources[source];
+  }
+}
+
+export const contextRegistry = new ContextRegistry();
+```
+
+---
+
+### 3. Graph-Level Validation of Pinned DSL
+
+Pinned DSL (`dataInterestsDSL`) must be **consistent** with the context registry:
+
+- All `context(key:value)` references must:
+  - Use a known `key` from `contexts.yaml`
+  - Use a known `value` under that key
+- Any mismatch is treated as a **configuration error**, but we **degrade gracefully** in the UI.
+
+**Validation points**:
+
+1. **On graph save**:
+   - Run parser on `dataInterestsDSL`
+   - For each `context(key:value)`:
+     - If `key` or `value` unknown → show inline error in modal + block save
+   - For each bare `context(key)`:
+     - If key unknown → error
+   - This prevents obviously broken pinned configs from being persisted.
+
+2. **On graph load**:
+   - Re-validate `dataInterestsDSL` against current registry
+   - If mismatches:
+     - Context UI for that graph is **disabled** (no context dropdown)
+     - Show a non-blocking toast: "Pinned contexts refer to unknown key:value pairs; please fix in graph settings."
+     - Nightly runner skips this graph until fixed.
+
+3. **Nightly runner**:
+   - Assumes `dataInterestsDSL` has passed validation
+   - If parsing still fails (e.g. malformed DSL), log warning and skip graph
+   - No hard crash; other graphs continue to run
+
+**Error policy**:
+- For **pinned DSL in settings modal** → we can block Save on validation errors (authoring-time feedback).
+- For **runtime usage (graphs already saved)** → never hard fail user interaction; instead:
+  - Disable context UI where impossible to interpret
+  - Show clear toast + log error for investigation
+
+---
+
+### 4. Summary: otherPolicy Impact Matrix
+
+Quick reference showing how `otherPolicy` affects different parts of the system:
+
+| System | `null` | `computed` | `explicit` | `undefined` |
+|--------|--------|------------|------------|-------------|
+| **"other" in value enum?** | NO | YES | YES | NO |
+| **"other" queryable?** | NO (error) | YES (dynamic filter) | YES (explicit filter) | NO (error) |
+| **MECE assertion?** | YES (explicit MECE) | YES (explicit + other MECE) | YES (explicit + other MECE) | NO (incomplete) |
+| **Can aggregate across key?** | If complete | If complete (inc. "other") | If complete (inc. "other") | Never |
+| **UI dropdown shows "other"?** | NO | YES | YES | NO |
+| **All-checked removes chip?** | YES (semantic: no filter) | YES (semantic: no filter) | YES (semantic: no filter) | NO (not all data) |
+| **Adapter "other" filter** | N/A | Computed: NOT (explicit) | From registry mapping | N/A |
+| **Typical use case** | Complete enum (e.g., A/B test variants) | Open property with catch-all (e.g., utm_source) | Custom "other" grouping (e.g., minor channels lumped) | Exploratory, incomplete tagging |
+
+**Core principle**: 
+- `null`, `computed`, `explicit` → MECE keys where summing all values gives "total" (safe aggregation)
+- `undefined` → Non-MECE keys where values don't exhaust the space (unsafe to aggregate; only filter/slice)
+
+**Implementation requirements**:
+1. **UI** (`ContextValueSelector`): Check `otherPolicy` before including "other" in dropdown checkboxes
+2. **MECE detection** (`detectMECEPartition`): Use `otherPolicy` to determine `canAggregate` flag
+3. **Adapter** (`buildFilterForContextValue`): Handle `otherPolicy: computed` by dynamically generating NOT filter
+4. **Aggregation** (`aggregateWindowsWithContexts`): Check `canAggregate` before summing across context values
+5. **All-checked logic** (UI): Only remove chip if `otherPolicy !== 'undefined'`
+
+---
+
+## Adapter Extensions
+
+### Research Summary: Amplitude Dashboard REST API (for contexts)
+
+**Goal**: Understand how to express Dagnet context slices as Amplitude queries, and what we need to store back on var files.
+
+#### 1. Relevant APIs
+
+- **Dashboard REST API** (Analytics):  
+  - Provides read access to the same aggregates you see in the Amplitude UI.  
+  - Key endpoints (conceptual):  
+    - **Funnels**: “from → to” conversion counts over a date range, with property filters and breakdowns.  
+    - **Segmentation / Events**: counts for a single event type, optionally segmented by properties, over a date range.  
+  - All of these:
+    - Take **start/end date** parameters (YYYY-MM-DD or ISO timestamps).  
+    - Allow **property filters** and **segmentation** by event or user properties.  
+    - Can return **aggregates** (total counts) and, for some endpoints, **time-series** buckets (daily, weekly, etc.).
+
+- **Export / HTTP Ingest APIs** are **not** directly relevant for contexts — we only care about query‑side filters, not ingestion.
+
+#### 2. Property filters ↔ context mapping
+
+Amplitude’s Dashboard REST API lets you filter by **event or user properties**, e.g.:
+- `utm_source == 'google'`
+- `browser == 'Chrome'`
+
+For Dagnet contexts, this lines up cleanly with the design of `contexts.yaml`:
+
+- Each context key (`channel`, `browser-type`, etc.) maps to:
+  - a **source field** in Amplitude (e.g. `utm_source`, `browser`, custom event/user property), and  
+  - a **filter expression** for each value (`google`, `meta`, `other`), expressed in Amplitude’s property filter syntax.
+
+Therefore, for contexts we need to store, per (key, value, source):
+
+- `field`: the Amplitude property name (e.g. `"utm_source"`, `"browser"`).  
+- `filter`: a filter expression that can be dropped into the Dashboard REST API’s filter parameter for that value, e.g.:  
+  - `"utm_source == 'google'"`  
+  - `"utm_source in ['facebook', 'instagram']"`  
+  - `"browser == 'Chrome'"`  
+
+This matches the `sources[amplitude].field` / `sources[amplitude].filter` design already sketched in the registry section.
+
+#### 3. Time windows & response shape
+
+- **Request side**:  
+  - All relevant endpoints accept a **start** and **end** time (date or timestamp).  
+  - These map directly to Dagnet’s `window(start:end)` DSL: we resolve relative windows to absolute dates and pass them through.
+
+- **Response side** (conceptually):  
+  - Funnels: counts like `from_count`, `to_count`, and derived rates over the requested window.  
+  - Segmentation: counts per event/property bucket, with optional time-series buckets (e.g. per day).  
+
+For contexts v1 we only need, per query:
+
+- **Aggregate n, k** (e.g. `from_count`, `to_count`) over the requested window, and optionally  
+- **daily time-series** (if we choose to keep using `n_daily`, `k_daily`, `dates` for fine‑grained windows).
+
+We do **not** need to store any Amplitude‑specific IDs for dashboards or charts — only the numeric counts and the time axis.
+
+#### 4. What we need to persist on var files
+
+Given the above, the minimal additional fields we need on var files for Amplitude‑backed context slices are:
+
+- `sliceDSL`: Canonical DSL string describing **which slice** this is (contexts + window).  
+- Existing numeric data:
+  - `n`, `k`, `mean`, `stdev` (as today).  
+  - Optionally `n_daily`, `k_daily`, `dates` if we fetch time-series buckets instead of a single aggregate.
+
+We **do not** need to persist:
+- Raw Amplitude query JSON.  
+- Dashboard IDs.  
+- Property filter syntax, beyond what is already encoded in `sliceDSL` + `contexts.yaml`.
+
+The Amplitude adapter can always reconstruct the query solely from:
+- the edge/graph HRN (what we are measuring),  
+- the **resolved context mapping** from `contexts.yaml`, and  
+- the **resolved time window** from `window(...)` in the slice/query DSL.
+
+#### 5. DAS adapter implications (condensed)
+
+- When building a DAS query for Amplitude from a slice or `currentQueryDSL`:
+  1. Parse the DSL into constraints (visited, context, window).  
+  2. For each `context(key:value)` / `contextAny(key:...)`:  
+     - Look up `sources[amplitude].field` + `filter` in the context registry.  
+     - Combine all such filters into the Dashboard REST API’s property filter parameter (AND across keys, OR within `contextAny`).  
+  3. Resolve `window(start:end)` to absolute dates and pass as `start`, `end` in the API call.  
+  4. Call the appropriate endpoint (funnel vs segmentation), then:
+     - Extract `n`, `k` (and optionally daily buckets) from the response.  
+     - Write/update the corresponding `sliceDSL` window on the var file.
+
+This closes the original open question at a design level; the remaining work is to wire the exact parameter names and response paths once we plug into a concrete Amplitude project.
+
+---
+
+### 1. Amplitude DAS Adapter (Pending API Research)
+
+**File**: `graph-editor/src/lib/das/amplitudeAdapter.ts` (or buildDslFromEdge.ts)
+
+**Current state** (from codebase review):
+- `buildDslFromEdge.ts` builds DSL object with `from`, `to`, `visited`, etc.
+- `DASRunner.ts` executes queries and returns `{ success: boolean; raw: {...} }`
+- Response includes `from_count`, `to_count`, and optionally `time_series` array
+
+#### Extend query builder to handle contexts
+
+```typescript
+interface AmplitudeQueryBuilder {
+  buildQuery(variable: Variable, constraints: ParsedConstraints): AmplitudeQuery;
+}
+
+function buildQuery(variable: Variable, constraints: ParsedConstraints): AmplitudeQuery {
+  const query: AmplitudeQuery = {
+    // ... existing base query structure ...
+  };
+  
+  // Add context filters
+  const filters: string[] = [];
+  
+  for (const ctx of constraints.contexts) {
+    const mapping = contextRegistry.getSourceMapping(ctx.key, ctx.value, 'amplitude');
+    if (!mapping || !mapping.filter) {
+      throw new Error(`No Amplitude mapping for context ${ctx.key}:${ctx.value}`);
+    }
+    filters.push(mapping.filter);
+  }
+  
+  for (const ctxAny of constraints.contextAnys) {
+    // contextAny is OR over values for a given key
+    // Group by key, build OR clause per key, then AND across keys
+    const byKey = groupBy(ctxAny.pairs, p => p.key);
+    
+    for (const [key, pairs] of Object.entries(byKey)) {
+      const orClauses = pairs.map(p => {
+        const mapping = contextRegistry.getSourceMapping(key, p.value, 'amplitude');
+        if (!mapping || !mapping.filter) {
+          throw new Error(`No Amplitude mapping for context ${key}:${p.value}`);
+        }
+        return mapping.filter;
+      });
+      
+      filters.push(`(${orClauses.join(' or ')})`);
+    }
+  }
+  
+  // Handle "other" buckets if needed
+  // If a context key has an "other" value and otherPolicy=computed:
+  // Generate filter as NOT (all other specified values)
+  // Implementation TBD based on final registry schema
+  
+  // Add date window filter
+  if (constraints.window) {
+    const { startDate, endDate } = resolveWindowDates(constraints.window);
+    query.start = startDate.toISOString();
+    query.end = endDate.toISOString();
+  }
+  
+  // Combine filters into query
+  query.filters = filters.join(' and ');
+  
+  return query;
+}
+
+function resolveWindowDates(window: WindowConstraint): { startDate: Date; endDate: Date } {
+  const now = new Date();
+  
+  let startDate: Date;
+  if (!window.start) {
+    startDate = new Date(0);  // beginning of time
+  } else if (window.start.match(/^-?\d+[dwmy]$/)) {
+    // Relative offset
+    startDate = applyRelativeOffset(now, window.start);
+  } else {
+    // Absolute date in d-MMM-yy format
+    startDate = parseUKDate(window.start);
+  }
+  
+  let endDate: Date;
+  if (!window.end) {
+    endDate = now;
+  } else if (window.end.match(/^-?\d+[dwmy]$/)) {
+    endDate = applyRelativeOffset(now, window.end);
+  } else {
+    endDate = parseUKDate(window.end);
+  }
+  
+  return { startDate, endDate };
+}
+
+function applyRelativeOffset(base: Date, offset: string): Date {
+  const match = offset.match(/^(-?\d+)([dwmy])$/);
+  if (!match) throw new Error(`Invalid relative offset: ${offset}`);
+  
+  const amount = parseInt(match[1]);
+  const unit = match[2];
+  
+  const result = new Date(base);
+  switch (unit) {
+    case 'd':
+      result.setDate(result.getDate() + amount);
+      break;
+    case 'w':
+      result.setDate(result.getDate() + amount * 7);
+      break;
+    case 'm':
+      result.setMonth(result.getMonth() + amount);
+      break;
+    case 'y':
+      result.setFullYear(result.getFullYear() + amount);
+      break;
+  }
+  
+  return result;
+}
+```
+
+### 2. Sheets Adapter & Fallback Policy
+
+**File**: `graph-editor/src/services/ParamPackDSLService.ts` (already handles Sheets param-pack ingestion)
+
+**Current state**:
+- Sheets adapter parses HRNs like `e.edge-id.visited(...).p.mean`
+- Already has regex for conditional patterns (line 426)
+- Stores conditions in `conditional_ps` array on edges
+
+#### Context Handling (Simple Extension)
+
+Sheets users supply context-labeled parameters directly:
+
+```yaml
+e.landing-conversion.context(channel:google).p.mean: 0.15
+e.landing-conversion.context(channel:meta).p.mean: 0.12
+e.landing-conversion.p.mean: 0.10  # Uncontexted fallback
+```
+
+**Extension needed**: Already supported! The existing regex includes `context` pattern. Just ensure normalization happens.
+
+#### Fallback Policy (OPEN QUESTION #2)
+
+**Scenario**: User queries `e.my-edge.context(source:google).p.mean` but Sheets only has `e.my-edge.p.mean`.
+
+**Policy Options**:
+
+| Option | Behavior | Pros | Cons |
+|--------|----------|------|------|
+| **A. Strict (fail)** | Throw error if exact context not found | Explicit, prevents silent errors | Requires all contexts in Sheets |
+| **B. Fallback with warning** | Use uncontexted value, show warning in UI | Pragmatic, works with sparse data | Could hide data quality issues |
+| **C. Configurable** | Per-connection or per-graph setting | Flexible | Added complexity |
+| **D. Return null** | Treat as missing data | Safe, explicit | Requires manual data entry |
+
+**Recommended for v1**: **Option B (Fallback with warning)**
+
+**Rationale**:
+- Sheets is often manually maintained, incomplete data is common
+- Strict mode would break many existing Sheets-based graphs
+- Warning in UI alerts user to data quality issue without blocking
+- Can add strict mode as opt-in later
+
+**Implementation**:
+
+```typescript
+function resolveSheetParameter(
+  hrn: string,
+  paramPack: Record<string, unknown>,
+  fallbackPolicy: 'strict' | 'fallback' = 'fallback'
+): { value: number | null; warning?: string } {
+  
+  // Try exact match first
+  if (hrn in paramPack) {
+    return { value: paramPack[hrn] as number };
+  }
+  
+  if (fallbackPolicy === 'strict') {
+    return { value: null, warning: `Exact match for ${hrn} not found` };
+  }
+  
+  // Fallback: try uncontexted version
+  const uncontextedHrn = removeContextFromHRN(hrn);
+  if (uncontextedHrn in paramPack) {
+    return {
+      value: paramPack[uncontextedHrn] as number,
+      warning: `Using uncontexted fallback for ${hrn}`,
+    };
+  }
+  
+  return { value: null, warning: `No data found for ${hrn} (tried contexted and uncontexted)` };
+}
+
+function removeContextFromHRN(hrn: string): string {
+  // Remove all context(...) clauses from HRN
+  return hrn.replace(/\.context\([^)]+\)/g, '');
+}
+```
+
+---
+
+## Window Aggregation Logic (Complete Redesign)
+
+**Files affected**:
+- `graph-editor/src/services/windowAggregationService.ts` (existing, ~818 lines)
+- `graph-editor/src/services/dataOperationsService.ts` (uses window aggregation)
+
+### Current State Review
+
+**Existing capabilities** (from windowAggregationService.ts):
+1. Aggregates daily time-series (`n_daily`, `k_daily`, `dates`) into window stats
+2. Handles date range filtering and incremental fetching
+3. Detects missing dates and gaps
+4. Computes weighted mean, pooled stdev
+
+**Current limitations**:
+1. No context-aware filtering
+2. No MECE partition detection
+3. No logic for aggregating across multiple windows
+4. No overlap/partial overlap handling
+
+### New Requirements
+
+1. **Context matching**: Filter windows by context constraints from query
+2. **MECE aggregation**: Detect when windows are MECE partitions and sum correctly
+3. **Overlap handling**: Comprehensive logic for all overlap scenarios
+4. **Fetch gap detection**: Identify missing slices and commission new queries
+
+### The 2D Grid: Context × Date
+
+**Core model**: Each context combination paired with each date represents a **cell** in a 2-dimensional grid.
+
+- **X-axis (Context)**: Context combinations (e.g., `{channel: google}`, `{channel: meta, browser-type: chrome}`, or uncontexted `{}`).
+- **Y-axis (Date)**: Daily buckets (`YYYY-MM-DD` for Amplitude, or coarser buckets for non-daily sources).
+
+A user query `context(...) + window(start:end)` selects a **rectangle** in this grid:
+- **Horizontally**: One or more context combinations.
+- **Vertically**: A date range.
+
+Our aggregation logic must:
+1. **Reuse** any existing cells in the rectangle (from prior queries).
+2. **Generate subqueries only for missing cells** (per-context, per-date-range gaps).
+3. **Aggregate** over the filled rectangle to produce the final result.
+
+---
+
+### Source Policy: Daily vs Non-Daily
+
+#### Daily-Capable Sources (e.g., Amplitude)
+
+For sources that return daily time-series:
+
+- Always query for **daily buckets** (`n_daily`, `k_daily`, `dates` arrays).
+- Store these in the var file per `(context combination)` slice.
+- Any new window query is answered by:
+  - Collecting all existing daily points for that context over the requested range.
+  - Using **incremental fetch** (extend existing `calculateIncrementalFetch`) to fill in missing days only.
+  - Aggregating over the requested date subset.
+
+**Key benefit**: Arbitrary window queries (any `start:end`) are handled **without requiring "exact window match"**—we simply sum the appropriate per-day cells.
+
+#### Non-Daily Sources (Pure Aggregates)
+
+For sources that only return coarse aggregates (e.g., certain Sheets backends or summary-only APIs):
+
+- **If the backend supports arbitrary windows**:
+  - Re-query for the exact requested `window(start:end)`.
+  - Store that as a window with `sliceDSL` encoding both context and window.
+
+- **If the backend only provides fixed, coarse windows**:
+  - For sub-window queries: apply a **pro-rata policy**:
+    - Compute fraction of overlap between the coarse window and the requested window (by time duration).
+    - Scale `n` and `k` by that fraction.
+    - Mark result as `status: 'prorated'` with a warning.
+  - **Rationale**: No finer-grained data exists; pro-rating is the best available approximation.
+
+**Default assumption**: Most Amplitude-like sources are daily-capable. Pro-rata is a documented fallback for exceptional cases.
+
+---
+
+### Daily Grid Aggregation: Step-by-Step
+
+**Extending existing `windowAggregationService` and `calculateIncrementalFetch` logic.**
+
+#### Step 1: Determine Context Combinations (C)
+
+Given `QueryRequest { variable, constraints }`:
+
+```typescript
+function determineContextCombinations(constraints: ParsedConstraints): ContextCombination[] {
+  const combos: ContextCombination[] = [];
+  
+  // If query has explicit context constraints
+  if (constraints.contexts.length > 0 || constraints.contextAnys.length > 0) {
+    // Build combinations from constraints
+    // For simplicity in v1: contexts are AND, contextAnys are OR within key
+    // Example: context(channel:google).context(browser:chrome) → [{channel: google, browser-type: chrome}]
+    combos.push(buildContextComboFromConstraints(constraints));
+  } else {
+    // No explicit contexts: check if we need to aggregate across a MECE partition
+    // This is determined by what's in dataInterestsDSL and what windows exist
+    // For v1: if no context constraint, assume uncontexted ({})
+    combos.push({});
+  }
+  
+  return combos;
+}
+```
+
+For **MECE aggregation** (query omits a key that data has): we handle this separately after collecting per-context results (see Step 5).
+
+#### Step 2: Per-Context Daily Coverage Check
+
+For each context combination \(c ∈ C\):
+
+```typescript
+function getExistingDatesForContext(
+  variable: Variable,
+  contextCombo: ContextCombination
+): Set<string> {
+  
+  const existingDates = new Set<string>();
+  
+  // Find all windows matching this context
+  for (const window of variable.windows || []) {
+    const parsed = parseConstraintString(window.sliceDSL || '');
+    
+    // Check if context part matches
+    if (!contextMatches(parsed.contexts, contextCombo)) {
+      continue;
+    }
+    
+    // Extract dates from this window's time series
+    if (window.dates && Array.isArray(window.dates)) {
+      for (const date of window.dates) {
+        existingDates.add(normalizeDate(date));
+      }
+    }
+  }
+  
+  return existingDates;
+}
+
+function contextMatches(
+  windowContexts: Array<{key: string; value: string}>,
+  queryCombo: ContextCombination
+): boolean {
+  // Check if windowContexts is exactly queryCombo (order-insensitive)
+  const windowSet = new Set(windowContexts.map(c => `${c.key}:${c.value}`));
+  const querySet = new Set(Object.entries(queryCombo).map(([k, v]) => `${k}:${v}`));
+  
+  if (windowSet.size !== querySet.size) return false;
+  for (const item of querySet) {
+    if (!windowSet.has(item)) return false;
+  }
+  return true;
+}
+```
+
+**This extends existing `calculateIncrementalFetch`**, which currently scans across all values in a param file; we now **scope it per context combination** by filtering on `sliceDSL` context match.
+
+#### Step 3: Generate Subqueries for Missing Daily Cells
+
+For each `c ∈ C`:
+
+```typescript
+function generateMissingSubqueries(
+  variable: Variable,
+  contextCombo: ContextCombination,
+  requestedWindow: DateRange
+): SubQuerySpec[] {
+  
+  const existingDates = getExistingDatesForContext(variable, contextCombo);
+  
+  // Generate all dates in requested window (reuse existing logic)
+  const allDatesInWindow = generateDateRange(requestedWindow.start, requestedWindow.end);
+  
+  // Find missing dates
+  const missingDates = allDatesInWindow.filter(d => !existingDates.has(d));
+  
+  if (missingDates.length === 0) {
+    return []; // No fetch needed for this context
+  }
+  
+  // Group into contiguous date ranges (existing logic from calculateIncrementalFetch)
+  const fetchWindows = groupIntoContiguousRanges(missingDates);
+  
+  // Build one SubQuerySpec per fetch window
+  return fetchWindows.map(fw => ({
+    variable,
+    constraints: {
+      visited: [],
+      visitedAny: [],
+      exclude: [],
+      cases: [],
+      contexts: Object.entries(contextCombo).map(([k, v]) => ({ key: k, value: v })),
+      contextAnys: [],
+      window: fw,
+    },
+  }));
+}
+```
+
+**Key integration**: This uses the existing `calculateIncrementalFetch` pattern but **per context combination**, and returns a structured `SubQuerySpec[]` that the DAS executor can batch.
+
+#### Step 4: Execute Subqueries and Merge Results
+
+```typescript
+async function executeMissingSubqueries(
+  subqueries: SubQuerySpec[],
+  variable: Variable
+): Promise<void> {
+  
+  for (const sq of subqueries) {
+    // Build Amplitude query with context filters
+    const amplitudeQuery = amplitudeAdapter.buildQuery(variable, sq.constraints);
+    
+    // Execute (returns daily buckets)
+    const result = await amplitudeAdapter.executeQuery(amplitudeQuery);
+    // result: { n_daily: number[], k_daily: number[], dates: string[] }
+    
+    // Merge into variable's time series for this context
+    mergeTimeSeriesForContext(variable, sq.constraints.contexts, result);
+  }
+}
+
+function mergeTimeSeriesForContext(
+  variable: Variable,
+  contextConstraints: ContextConstraint[],
+  newData: { n_daily: number[]; k_daily: number[]; dates: string[] }
+): void {
+  
+  // Find or create the window for this context
+  const contextCombo = Object.fromEntries(contextConstraints.map(c => [c.key, c.value]));
+  const sliceContextPart = buildContextDSL(contextConstraints);
+  
+  let targetWindow = variable.windows?.find(w => {
+    const parsed = parseConstraintString(w.sliceDSL || '');
+    return contextMatches(parsed.contexts, contextCombo);
+  });
+  
+  if (!targetWindow) {
+    // Create new window for this context
+    targetWindow = {
+      n_daily: [],
+      k_daily: [],
+      dates: [],
+      sliceDSL: sliceContextPart,  // No window part; this is the "all dates" slice for this context
+    };
+    variable.windows = variable.windows || [];
+    variable.windows.push(targetWindow);
+  }
+  
+  // Merge new daily data (extend existing mergeTimeSeriesIntoParameter logic)
+  mergeTimeSeriesIntoParameter(targetWindow, newData.n_daily, newData.k_daily, newData.dates);
+}
+```
+
+**Reuses existing**: `mergeTimeSeriesIntoParameter` from `windowAggregationService` (which already de-duplicates by date and handles gaps).
+
+#### Step 5: Aggregate Over the Filled Rectangle
+
+After all subqueries are executed and merged:
+
+```typescript
+async function aggregateWindowsWithContexts(
+  variable: Variable,
+  constraints: ParsedConstraints
+): Promise<AggregationResult> {
+  
+  // Determine context combinations
+  const contextCombos = determineContextCombinations(constraints);
+  
+  // For each context, ensure we have daily coverage
+  const subqueries: SubQuerySpec[] = [];
+  for (const combo of contextCombos) {
+    const missing = generateMissingSubqueries(variable, combo, constraints.window!);
+    subqueries.push(...missing);
+  }
+  
+  // Execute any missing subqueries
+  if (subqueries.length > 0) {
+    await executeMissingSubqueries(subqueries, variable);
+  }
+  
+  // Now aggregate per context over the requested window
+  const perContextResults: Array<{ n: number; k: number; contextCombo: ContextCombination }> = [];
+  
+  for (const combo of contextCombos) {
+    // Get all daily data for this context
+    const timeSeries = getTimeSeriesForContext(variable, combo);
+    
+    // Filter to requested window and aggregate (reuse existing aggregateWindow)
+    const windowResult = aggregateWindow(timeSeries, constraints.window!);
+    
+    perContextResults.push({
+      n: windowResult.n,
+      k: windowResult.k,
+      contextCombo: combo,
+    });
+  }
+  
+  // If query has no context constraints, check if we can/should aggregate across contexts
+  if (constraints.contexts.length === 0 && constraints.contextAnys.length === 0) {
+    return tryMECEAggregationAcrossContexts(perContextResults, variable);
+  }
+  
+  // Otherwise, return the specific context result(s)
+  if (perContextResults.length === 1) {
+    const result = perContextResults[0];
+    const mean = result.n > 0 ? result.k / result.n : 0;
+    const stdev = calculateStdev(result.n, result.k);
+    
+    return {
+      status: 'exact_match',
+      data: { n: result.n, k: result.k, mean, stdev },
+      usedWindows: [],  // TBD: track which windows contributed
+      warnings: [],
+    };
+  }
+  
+  // Multiple context combos but query was specific → shouldn't happen
+  throw new Error('Query resulted in multiple context combinations; logic error');
+}
+
+/**
+ * Try to aggregate across a MECE partition when query has no context constraints.
+ * 
+ * CRITICAL EDGE CASE: When we have windows for multiple keys (e.g., browser-type AND channel),
+ * we can only aggregate across MECE keys. Non-MECE keys are ignored.
+ * 
+ * Example:
+ *   - Windows: browser-type:chrome, browser-type:safari, browser-type:firefox (MECE, otherPolicy:null)
+ *   - Also: channel:google, channel:meta (NOT MECE, otherPolicy:undefined, missing others)
+ *   - Query: uncontexted (no context constraint)
+ *   - Result: Aggregate across browser-type (ignore channel slices)
+ */
+function tryMECEAggregationAcrossContexts(
+  perContextResults: Array<{ n: number; k: number; contextCombo: ContextCombination }>,
+  variable: Variable
+): AggregationResult {
+  
+  // Group results by "which single key they vary on"
+  // Exclude uncontexted results and multi-key results
+  const singleKeyGroups = groupResultsBySingleContextKey(perContextResults);
+  
+  // For each key group, check if it's MECE and can aggregate
+  const aggregatableCandidates: Array<{
+    key: string;
+    results: typeof perContextResults;
+    meceCheck: ReturnType<typeof detectMECEPartition>;
+  }> = [];
+  
+  for (const [key, results] of Object.entries(singleKeyGroups)) {
+    // Build mock windows for MECE check
+    const mockWindows = results.map(r => ({
+      sliceDSL: Object.entries(r.contextCombo).map(([k, v]) => `context(${k}:${v})`).join('.')
+    }));
+    
+    const meceCheck = detectMECEPartition(mockWindows, key, contextRegistry);
+    
+    // Can we aggregate across this key?
+    if (meceCheck.canAggregate) {
+      aggregatableCandidates.push({ key, results, meceCheck });
+    }
+  }
+  
+  // If exactly one MECE key found, aggregate across it
+  if (aggregatableCandidates.length === 1) {
+    const { key, results, meceCheck } = aggregatableCandidates[0];
+    
+    if (meceCheck.isComplete) {
+      // Complete MECE partition
+      const totalN = results.reduce((sum, r) => sum + r.n, 0);
+      const totalK = results.reduce((sum, r) => sum + r.k, 0);
+      const mean = totalN > 0 ? totalK / totalN : 0;
+      const stdev = calculateStdev(totalN, totalK);
+      
+      return {
+        status: 'mece_aggregation',
+        data: { n: totalN, k: totalK, mean, stdev },
+        usedWindows: [],
+        warnings: [`Aggregated across MECE partition of '${key}' (complete coverage)`],
+      };
+    } else {
+      // Incomplete MECE partition (partial data)
+      const totalN = results.reduce((sum, r) => sum + r.n, 0);
+      const totalK = results.reduce((sum, r) => sum + r.k, 0);
+      const mean = totalN > 0 ? totalK / totalN : 0;
+      const stdev = calculateStdev(totalN, totalK);
+      
+      return {
+        status: 'partial_data',
+        data: { n: totalN, k: totalK, mean, stdev },
+        usedWindows: [],
+        warnings: [
+          `Partial MECE aggregation across '${key}': missing ${meceCheck.missingValues.join(', ')}`,
+          'Result represents subset of data; fetch missing values for complete picture'
+        ],
+      };
+    }
+  }
+  
+  // If multiple MECE keys available (e.g., both browser-type and device-type are MECE)
+  // Pick the first complete one; they should give same total (different partitions of same space)
+  if (aggregatableCandidates.length > 1) {
+    // Prefer complete partitions over incomplete
+    const completeCandidate = aggregatableCandidates.find(c => c.meceCheck.isComplete);
+    const chosen = completeCandidate || aggregatableCandidates[0];
+    
+    const totalN = chosen.results.reduce((sum, r) => sum + r.n, 0);
+    const totalK = chosen.results.reduce((sum, r) => sum + r.k, 0);
+    const mean = totalN > 0 ? totalK / totalN : 0;
+    const stdev = calculateStdev(totalN, totalK);
+    
+    const otherKeys = aggregatableCandidates
+      .filter(c => c.key !== chosen.key)
+      .map(c => c.key)
+      .join(', ');
+    
+    return {
+      status: 'mece_aggregation',
+      data: { n: totalN, k: totalK, mean, stdev },
+      usedWindows: [],
+      warnings: [
+        `Aggregated across MECE partition of '${chosen.key}'`,
+        `Note: Also have MECE keys {${otherKeys}} (would give same total if complete)`
+      ],
+    };
+  }
+  
+  // No aggregatable MECE keys found
+  // Check if we have uncontexted data (no contextCombo at all)
+  const uncontextedResult = perContextResults.find(r => Object.keys(r.contextCombo).length === 0);
+  if (uncontextedResult) {
+    const mean = uncontextedResult.n > 0 ? uncontextedResult.k / uncontextedResult.n : 0;
+    const stdev = calculateStdev(uncontextedResult.n, uncontextedResult.k);
+    
+    return {
+      status: 'complete',
+      data: { n: uncontextedResult.n, k: uncontextedResult.k, mean, stdev },
+      usedWindows: [],
+      warnings: [],
+    };
+  }
+  
+  // No MECE partition and no uncontexted data:
+  // We STILL aggregate across whatever slices we have, but must clearly mark as PARTIAL.
+  const totalN = perContextResults.reduce((sum, r) => sum + r.n, 0);
+  const totalK = perContextResults.reduce((sum, r) => sum + r.k, 0);
+  const mean = totalN > 0 ? totalK / totalN : 0;
+  const stdev = calculateStdev(totalN, totalK);
+  
+  return {
+    status: 'partial_data',
+    data: { n: totalN, k: totalK, mean, stdev },
+    usedWindows: [],
+    warnings: [
+      'Aggregated across NON-MECE context slices; result represents only a subset of total space',
+      'If you intended a complete total, add a context constraint or ensure MECE configuration'
+    ],
+  };
+}
+
+/**
+ * Group results by single context key.
+ * Returns only results that have exactly ONE key in their contextCombo.
+ */
+function groupResultsBySingleContextKey(
+  results: Array<{ n: number; k: number; contextCombo: ContextCombination }>
+): Record<string, typeof results> {
+  
+  const groups: Record<string, typeof results> = {};
+  
+  for (const result of results) {
+    const keys = Object.keys(result.contextCombo);
+    
+    // Only group if exactly one context key
+    if (keys.length === 1) {
+      const key = keys[0];
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(result);
+    }
+  }
+  
+  return groups;
+}
+```
+
+**Reuses existing**: `aggregateWindow` from `windowAggregationService` for per-context time aggregation.
+
+---
+
+### Window Overlap Scenarios (Revised with Daily Grid)
+
+With the daily grid model, the previous "scenarios matrix" simplifies because **temporal overlap is handled at the day level**:
+
+| # | Scenario | How Daily Grid Handles It |
+|---|----------|----------------------------|
+| 1 | Exact date window + exact context match | Collect existing daily points for that context; if full coverage, aggregate directly |
+| 2 | Query window larger than stored window | Existing days are reused; missing days trigger incremental fetch for those specific dates |
+| 3 | Query window smaller than stored window | Filter existing daily series to the requested subset of dates; no new fetch needed |
+| 4 | Query window partially overlaps stored window | Reuse overlapping days; fetch non-overlapping days |
+| 5 | Multiple stored windows with overlapping dates for same context | De-duplicate by date key; policy: latest write wins (or error if conflict detected) |
+| 6 | Query has no context constraint, data has MECE partition | Aggregate across all context values (MECE check); per-context daily series are summed independently, then combined |
+| 7 | Query has context constraint, data has finer partition (e.g., query=channel:google, data=channel:google+browser:chrome/safari) | Aggregate across browser dimension (MECE check on browser), summing daily series within each day |
+
+**Key insight**: The "partial overlap (ambiguous)" rows from the old matrix (scenarios 8, 9) **disappear** when we work at day-level granularity. Overlapping windows just mean "some days appear in multiple slices," which we resolve via de-duplication by date key.
+
+---
+
+### MECE Detection Algorithm (Revised with otherPolicy)
+
+**Input**: Set of windows, context key from context registry
+
+**Output**: MECE status, completeness, whether aggregation is safe
+
+```typescript
+function detectMECEPartition(
+  windows: ParameterValue[],
+  contextKey: string,
+  contextRegistry: ContextRegistry
+): { 
+  isMECE: boolean;        // Are values mutually exclusive?
+  isComplete: boolean;    // Do we have all expected values?
+  canAggregate: boolean;  // Is it safe to sum n/k across these windows?
+  missingValues: string[];
+  policy: string;         // Which otherPolicy applies
+} {
+  
+  // Get context definition
+  const contextDef = contextRegistry.getContext(contextKey);
+  if (!contextDef) {
+    return { isMECE: false, isComplete: false, canAggregate: false, missingValues: [], policy: 'unknown' };
+  }
+  
+  // Get expected values based on otherPolicy
+  const expectedValues = getExpectedValuesForPolicy(contextDef);
+  
+  // Extract values from windows
+  const windowValues = new Set<string>();
+  for (const window of windows) {
+    const parsed = parseConstraintString(window.sliceDSL || '');
+    const contextConstraint = parsed.contexts.find(c => c.key === contextKey);
+    if (contextConstraint) {
+      windowValues.add(contextConstraint.value);
+    }
+  }
+  
+  // Check for duplicates (non-MECE)
+  if (windowValues.size < windows.length) {
+    return { 
+      isMECE: false, 
+      isComplete: false, 
+      canAggregate: false, 
+      missingValues: [], 
+      policy: contextDef.otherPolicy 
+    };
+  }
+  
+  // Check for extras (values not in registry)
+  const hasExtras = Array.from(windowValues).some(v => !expectedValues.has(v));
+  if (hasExtras) {
+    return { 
+      isMECE: false, 
+      isComplete: false, 
+      canAggregate: false, 
+      missingValues: [], 
+      policy: contextDef.otherPolicy 
+    };
+  }
+  
+  // Check completeness
+  const missingValues = Array.from(expectedValues).filter(v => !windowValues.has(v));
+  const isComplete = missingValues.length === 0;
+  
+  // Determine if aggregation is safe
+  const canAggregate = determineAggregationSafety(contextDef, isComplete);
+  
+  return {
+    isMECE: true,
+    isComplete,
+    canAggregate,
+    missingValues,
+    policy: contextDef.otherPolicy,
+  };
+}
+
+function getExpectedValuesForPolicy(contextDef: ContextDefinition): Set<string> {
+  const values = new Set<string>();
+  
+  switch (contextDef.otherPolicy) {
+    case 'null':
+      // Only explicit values; no "other"
+      for (const v of contextDef.values) {
+        if (v.id !== 'other') values.add(v.id);
+      }
+      break;
+      
+    case 'computed':
+    case 'explicit':
+      // All values including "other"
+      for (const v of contextDef.values) {
+        values.add(v.id);
+      }
+      break;
+      
+    case 'undefined':
+      // Only explicit values; no "other"; NOT MECE
+      for (const v of contextDef.values) {
+        if (v.id !== 'other') values.add(v.id);
+      }
+      break;
+  }
+  
+  return values;
+}
+
+function determineAggregationSafety(
+  contextDef: ContextDefinition,
+  isComplete: boolean
+): boolean {
+  /**
+   * IMPORTANT SEMANTICS:
+   * - This flag means "safe to treat aggregation across this key as COMPLETE (total space)".
+   * - Even when this returns false (e.g. otherPolicy='undefined'), we may still aggregate
+   *   the available slices, but MUST surface the result as PARTIAL with a warning.
+   */
+  switch (contextDef.otherPolicy) {
+    case 'null':
+    case 'computed':
+    case 'explicit':
+      // MECE assured; safe to TREAT aggregation as complete only if we have all values
+      return isComplete;
+      
+    case 'undefined':
+      // NOT MECE; we can still sum available slices, but NEVER treat as complete
+      return false;
+      
+    default:
+      return false;
+  }
+}
+```
+
+**Key insight**: `otherPolicy` determines not just "is there an other bucket" but "is this key MECE at all" (can we safely sum values to get total).
+
+---
+
+### 3. Regex Pattern Support for Source Mappings
+
+**Use case**: Collapse high-cardinality raw property values into manageable logical values.
+
+**Example**: UTM sources in Amplitude might be:
+- `"google_search_brand_exact"`
+- `"google_search_generic_broad"`  
+- `"google_display_retargeting"`
+- `"facebook_feed_carousel"`
+- `"facebook_stories_video"`
+
+We want to map these to:
+- Logical value `google` (for all google variants)
+- Logical value `facebook` (for all facebook variants)
+
+**Registry with patterns**:
+
+```yaml
+contexts:
+  - id: source
+    name: Traffic Source
+    type: categorical
+    otherPolicy: computed
+    
+    values:
+      - id: google
+        displayName: Google
+        sources:
+          amplitude:
+            field: utm_source
+            pattern: "^google"      # Matches anything starting with "google"
+            patternFlags: "i"        # Case-insensitive
+            
+      - id: facebook
+        displayName: Facebook/Instagram
+        sources:
+          amplitude:
+            field: utm_source
+            pattern: "^(facebook|instagram|fb|ig)_"
+            patternFlags: "i"
+            
+      - id: organic
+        displayName: Organic
+        sources:
+          amplitude:
+            field: utm_source
+            filter: "utm_source is null OR utm_source == 'organic'"
+            # No pattern; explicit filter for this case
+            
+      - id: other
+        displayName: Other
+        # Computed automatically: NOT (google OR facebook OR organic patterns)
+```
+
+**Adapter implementation**:
+
+```typescript
+function buildFilterFromMapping(
+  mapping: SourceMapping,
+  field: string
+): string {
+  
+  // If pattern provided, build regex filter
+  if (mapping.pattern) {
+    const flags = mapping.patternFlags || '';
+    
+    // Amplitude syntax (example; verify with API docs)
+    // Might be: field ~ 'pattern' or REGEXP_MATCH(field, 'pattern')
+    return `REGEXP_MATCH(${field}, '${mapping.pattern}', '${flags}')`;
+  }
+  
+  // Otherwise use explicit filter
+  if (mapping.filter) {
+    return mapping.filter;
+  }
+  
+  throw new Error('Mapping must have either pattern or filter');
+}
+```
+
+**When to use pattern vs filter**:
+
+- **Pattern**: High-cardinality raw space that collapses to logical value (UTM sources, campaign names, etc.)
+- **Filter**: Low-cardinality or complex boolean logic (e.g., `utm_source is null OR utm_source == 'organic'`)
+- **Both**: Not allowed; use one or the other per value
+
+**Discovery**: Future enhancement could scan Amplitude property values, match against patterns, report unmapped raw values as candidates for adding to registry or extending patterns.
+
+### Complete Daily-Grid Aggregation Algorithm
+
+**Top-level function** (replaces the old "exact match" approach):
+
+```typescript
+interface QueryRequest {
+  variable: Variable;
+  constraints: ParsedConstraints;  // From query DSL
+  sourceType: 'daily' | 'aggregate';  // Determined from connection metadata
+}
+
+interface AggregationResult {
+  status: 'complete' | 'mece_aggregation' | 'partial_data' | 'prorated';
+  data: { n: number; k: number; mean: number; stdev: number };
+  usedWindows: ParameterValue[];
+  warnings: string[];
+  fetchedSubqueries?: number;  // How many new fetches were executed
+}
+
+/**
+ * UX mapping for AggregationResult.status:
+ *
+ * - 'complete':
+ *   - Meaning: Query answered fully for the requested slice/window.
+ *   - UI: Normal render; no toast. "Fetch" button hidden if no missing days.
+ *
+ * - 'mece_aggregation':
+ *   - Meaning: Aggregated across a MECE partition (e.g., all browser-type values).
+ *   - UI: Normal render; small inline hint like "Aggregated across browser-type".
+ *   - "Fetch" button hidden if no missing slices/days.
+ *
+ * - 'partial_data':
+ *   - Meaning: We aggregated across a subset of the relevant space (incomplete MECE
+ *     or non-MECE); result is useful but NOT a true total.
+ *   - UI:
+ *     - Non-blocking toast: "This result is based on a partial set of contexts; treat as indicative only."
+ *     - Inline badge near legend or query bar: "Partial".
+ *     - "Fetch" button shown if we can identify missing slices/days to fill in.
+ *
+ * - 'prorated':
+ *   - Meaning: Answer derived via time pro-rating from a coarse aggregate (no daily data).
+ *   - UI:
+ *     - Non-blocking toast: "This value is prorated from a coarser window; may be approximate."
+ *     - Inline badge: "Prorated".
+ *     - "Fetch" button generally hidden (no better data available).
+ *
+ * GENERAL ERROR POLICY:
+ * - We never hard-fail user interactions in the UI.
+ * - All aggregation outcomes return some result (even if partial), with warnings where appropriate.
+ * - Errors in adapters/registry/pinned DSL are surfaced as toasts + inline messages, not crashes.
+ * - In future async mode, warnings will also be collected into logs, but v1 focuses on user-visible toasts.
+ */
+
+/**
+ * Main aggregation entry point.
+ * Extends existing windowAggregationService with context-aware logic.
+ */
+async function aggregateWindowsWithContexts(
+  request: QueryRequest
+): Promise<AggregationResult> {
+  
+  const { variable, constraints, sourceType } = request;
+  
+  if (sourceType === 'daily') {
+    return await aggregateDailySource(variable, constraints);
+  } else {
+    return await aggregateCoarseSource(variable, constraints);
+  }
+}
+
+/**
+ * Aggregation for daily-capable sources (Amplitude, etc.)
+ * Uses 2D grid model: context × date.
+ */
+async function aggregateDailySource(
+  variable: Variable,
+  constraints: ParsedConstraints
+): Promise<AggregationResult> {
+  
+  // Step 1: Determine context combinations the query cares about
+  const contextCombos = determineContextCombinations(constraints);
+  
+  // Step 2: For each context, ensure daily coverage over requested window
+  const allSubqueries: SubQuerySpec[] = [];
+  
+  for (const combo of contextCombos) {
+    const missing = generateMissingSubqueries(variable, combo, constraints.window!);
+    allSubqueries.push(...missing);
+  }
+  
+  // Step 3: Execute missing subqueries (batch if possible)
+  if (allSubqueries.length > 0) {
+    await executeMissingSubqueries(allSubqueries, variable);
+  }
+  
+  // Step 4: Aggregate per context over the requested window
+  const perContextResults: Array<{
+    n: number;
+    k: number;
+    contextCombo: ContextCombination;
+    timeSeries: TimeSeriesPoint[];
+  }> = [];
+  
+  for (const combo of contextCombos) {
+    // Get unified time series for this context (across all date ranges stored)
+    const timeSeries = getTimeSeriesForContext(variable, combo);
+    
+    // Filter to requested window and aggregate
+    // REUSES: aggregateWindow from windowAggregationService.ts
+    const windowResult = windowAggregationService.aggregateWindow(
+      timeSeries,
+      constraints.window!
+    );
+    
+    perContextResults.push({
+      n: windowResult.n,
+      k: windowResult.k,
+      contextCombo: combo,
+      timeSeries,
+    });
+  }
+  
+  // Step 5: Aggregate across contexts if applicable
+  return finalizeAggregation(perContextResults, constraints, allSubqueries.length);
+}
+
+/**
+ * Aggregation for non-daily sources (coarse aggregates only)
+ */
+async function aggregateCoarseSource(
+  variable: Variable,
+  constraints: ParsedConstraints
+): Promise<AggregationResult> {
+  
+  // Try to find exact matching window
+  const matchingWindows = findExactMatchingWindows(variable, constraints);
+  
+  if (matchingWindows.length === 1) {
+    return {
+      status: 'complete',
+      data: {
+        n: matchingWindows[0].n || 0,
+        k: matchingWindows[0].k || 0,
+        mean: matchingWindows[0].mean || 0,
+        stdev: matchingWindows[0].stdev || 0,
+      },
+      usedWindows: matchingWindows,
+      warnings: [],
+    };
+  }
+  
+  // Check if backend supports arbitrary windows
+  const canRequery = checkIfSourceSupportsArbitraryWindows(variable);
+  
+  if (canRequery) {
+    // Execute fresh query for exact requested window
+    const newWindow = await fetchCoarseWindow(variable, constraints);
+    return {
+      status: 'complete',
+      data: {
+        n: newWindow.n || 0,
+        k: newWindow.k || 0,
+        mean: newWindow.mean || 0,
+        stdev: newWindow.stdev || 0,
+      },
+      usedWindows: [newWindow],
+      warnings: ['Fetched new coarse window (source does not support daily data)'],
+      fetchedSubqueries: 1,
+    };
+  }
+  
+  // Backend only has fixed coarse window(s); apply pro-rata
+  const prorated = prorateCoarseWindow(matchingWindows, constraints.window!);
+  
+  return {
+    status: 'prorated',
+    data: prorated,
+    usedWindows: matchingWindows,
+    warnings: ['Pro-rated from coarse window (source does not support finer granularity)'],
+  };
+}
+
+/**
+ * Pro-rate n and k from a coarse window to a sub-window.
+ */
+function prorateCoarseWindow(
+  windows: ParameterValue[],
+  requestedWindow: WindowConstraint
+): { n: number; k: number; mean: number; stdev: number } {
+  
+  // Assume single coarse window for simplicity
+  const coarseWindow = windows[0];
+  
+  // Parse both windows to absolute dates
+  const coarseStart = parseDate(extractWindowStart(coarseWindow.sliceDSL));
+  const coarseEnd = parseDate(extractWindowEnd(coarseWindow.sliceDSL));
+  const requestedStart = resolveWindowDate(requestedWindow.start!);
+  const requestedEnd = resolveWindowDate(requestedWindow.end!);
+  
+  // Compute overlap fraction
+  const overlapStart = Math.max(coarseStart.getTime(), requestedStart.getTime());
+  const overlapEnd = Math.min(coarseEnd.getTime(), requestedEnd.getTime());
+  const overlapDuration = Math.max(0, overlapEnd - overlapStart);
+  
+  const coarseDuration = coarseEnd.getTime() - coarseStart.getTime();
+  const fraction = coarseDuration > 0 ? overlapDuration / coarseDuration : 0;
+  
+  // Pro-rate n and k
+  const n = (coarseWindow.n || 0) * fraction;
+  const k = (coarseWindow.k || 0) * fraction;
+  const mean = n > 0 ? k / n : 0;
+  const stdev = calculateStdev(n, k);
+  
+  return { n, k, mean, stdev };
+}
+```
+
+**Key changes from old design**:
+- Daily sources use `aggregateDailySource` with 2D grid logic (no "exact window match" requirement).
+- Non-daily sources branch to `aggregateCoarseSource` with pro-rata fallback clearly documented.
+- Reuses `aggregateWindow`, `mergeTimeSeriesIntoParameter`, `calculateIncrementalFetch` patterns from existing code.
+
+### Subquery Batching & Execution Strategy
+
+When `aggregateWindowsWithContexts` identifies missing cells in the (context × date) grid, it generates **SubQuerySpec** objects representing exactly the (context, date-range) pairs we need to fetch.
+
+#### Batching Strategy
+
+```typescript
+interface SubQuerySpec {
+  variable: Variable;
+  contextCombo: ContextCombination;  // e.g. {channel: 'google', browser-type: 'chrome'}
+  dateRange: DateRange;              // Missing dates to fetch
+}
+
+/**
+ * Batch subqueries by context to minimize API calls.
+ * 
+ * Example: If we need to fetch:
+ *   - context(channel:google) for dates [1-Jan, 2-Jan, 5-Jan, 6-Jan]
+ * We group into contiguous ranges:
+ *   - SubQuery 1: context(channel:google).window(1-Jan:2-Jan)
+ *   - SubQuery 2: context(channel:google).window(5-Jan:6-Jan)
+ */
+function batchSubqueries(specs: SubQuerySpec[]): SubQuerySpec[] {
+  // Already batched by generateMissingSubqueries (contiguous date ranges per context)
+  // For v1: execute as-is; future optimization could further batch across contexts
+  return specs;
+}
+
+/**
+ * Execute all missing subqueries and merge results into variable.
+ * EXTENDS: Existing DAS query execution (compositeQueryExecutor, DASRunner)
+ */
+async function executeMissingSubqueries(
+  subqueries: SubQuerySpec[],
+  variable: Variable
+): Promise<void> {
+  
+  console.log(`[executeMissingSubqueries] Executing ${subqueries.length} subqueries`);
+  
+  // Execute all subqueries in parallel (or batched, depending on rate limits)
+  const results = await Promise.all(
+    subqueries.map(sq => executeSingleSubquery(sq))
+  );
+  
+  // Merge each result into variable
+  for (let i = 0; i < results.length; i++) {
+    const sq = subqueries[i];
+    const result = results[i];
+    
+    await mergeTimeSeriesForContext(variable, sq.contextCombo, result);
+  }
+}
+
+async function executeSingleSubquery(
+  spec: SubQuerySpec
+): Promise<{ n_daily: number[]; k_daily: number[]; dates: string[] }> {
+  
+  // Build constraints from spec
+  const constraints: ParsedConstraints = {
+    visited: [],
+    visitedAny: [],
+    exclude: [],
+    cases: [],
+    contexts: Object.entries(spec.contextCombo).map(([k, v]) => ({ key: k, value: v })),
+    contextAnys: [],
+    window: spec.dateRange,
+  };
+  
+  // Build Amplitude query (with context filters from registry mappings)
+  const amplitudeQuery = amplitudeAdapter.buildQuery(spec.variable, constraints);
+  
+  // Execute via existing DASRunner
+  const result = await DASRunner.execute(connectionName, amplitudeQuery);
+  
+  if (!result.success) {
+    throw new Error(`Subquery failed: ${result.error}`);
+  }
+  
+  // Extract daily data from result
+  // Amplitude returns: { from_count, to_count, time_series: [{date, n, k, p}] }
+  const timeSeries = result.raw.time_series || [];
+  
+  const n_daily = timeSeries.map((point: any) => point.n || 0);
+  const k_daily = timeSeries.map((point: any) => point.k || 0);
+  const dates = timeSeries.map((point: any) => normalizeDate(point.date));
+  
+  return { n_daily, k_daily, dates };
+}
+```
+
+#### Merge Strategy
+
+When merging fetched data into a variable, we find or create the window for the context combination and merge daily points:
+
+```typescript
+/**
+ * Merge new daily time series for a context into the appropriate window.
+ * EXTENDS: mergeTimeSeriesIntoParameter from windowAggregationService
+ */
+async function mergeTimeSeriesForContext(
+  variable: Variable,
+  contextCombo: ContextCombination,
+  newData: { n_daily: number[]; k_daily: number[]; dates: string[] }
+): Promise<void> {
+  
+  // Find existing window for this context (context part only, no window constraint)
+  let targetWindow = variable.windows?.find(w => {
+    if (!w.sliceDSL) return false;
+    
+    const parsed = parseConstraintString(w.sliceDSL);
+    
+    // Match context, ignore any window(...) term in sliceDSL
+    return contextMatches(parsed.contexts, contextCombo);
+  });
+  
+  if (!targetWindow) {
+    // Create new window for this context
+    const sliceContextPart = buildContextDSL(contextCombo);
+    
+    targetWindow = {
+      n_daily: [],
+      k_daily: [],
+      dates: [],
+      sliceDSL: sliceContextPart,  // Context only; no window(...) term
+    };
+    
+    variable.windows = variable.windows || [];
+    variable.windows.push(targetWindow);
+  }
+  
+  // Merge new daily data using existing utility
+  // REUSES: mergeTimeSeriesIntoParameter from windowAggregationService.ts
+  mergeTimeSeriesIntoParameter(
+    targetWindow,
+    newData.n_daily,
+    newData.k_daily,
+    newData.dates
+  );
+}
+
+function buildContextDSL(contextCombo: ContextCombination): string {
+  if (Object.keys(contextCombo).length === 0) {
+    return '';  // Uncontexted
+  }
+  
+  // Build context(...) clauses, alphabetically by key
+  const sorted = Object.entries(contextCombo).sort(([a], [b]) => a.localeCompare(b));
+  return sorted.map(([key, value]) => `context(${key}:${value})`).join('.');
+}
+```
+
+**Key points**:
+- Each `(context combination)` has **at most one window** on the var, which accumulates all daily points for that context across all time.
+- The `sliceDSL` for these windows contains **only the context part**, not a `window(...)` term, because they represent "all dates we've ever fetched for this context."
+- When we query for a specific `window(start:end)`, we **filter** that window's daily series to the requested range in memory (via `aggregateWindow`).
+
+This keeps var files from exploding with one window per (context, date-range) pair; instead we have one window per context, with a unified time series.
+
+---
+
+### Performance Considerations
+
+**Question**: Do we need an index for window lookup with contexts?
+
+**Answer**: NO for v1. Linear scan is acceptable because:
+- Typical var files have <100 windows (one per context combination, not one per date range)
+- With the daily grid model, we scan windows once to build per-context time series
+- Modern JS engines optimize array operations
+- Premature optimization adds complexity
+
+**Future optimization** (if profiling shows need):
+- Simple Map<string, ParameterValue> keyed by context part of `sliceDSL`
+- Built lazily, invalidated on writes
+- But **not in v1 scope**
+
+**Daily series deduplication**: When merging, de-duplicate by date key with "latest write wins" policy (or error on conflict, TBD based on testing).
+
+---
+
+## Adapter Extensions
+
+### Research Summary: Amplitude Dashboard REST API
+
+Based on review of Amplitude's API documentation and existing codebase integration:
+
+**Relevant APIs**:
+- **Dashboard REST API**: Provides analytics endpoints for funnels and segmentation
+- Supports property filters on event and user properties
+- Returns aggregates (`from_count`, `to_count`) and optionally time-series (daily buckets)
+
+**What we need for contexts**:
+
+1. **Property Filters** (Amplitude `where` clause):
+   - Event properties: `utm_source == 'google'`, `browser == 'Chrome'`
+   - User properties: similar syntax
+   - Complex filters: AND/OR logic supported
+
+2. **Date Ranges**:
+   - `start` and `end` parameters (ISO timestamps or dates)
+   - Can request daily bucketing via parameters
+
+3. **Response Fields**:
+   - Aggregates: `from_count`, `to_count` (existing, already handled)
+   - Time-series (if requested): `time_series: [{ date, n, k, p }]`
+   - We currently use this in compositeQueryExecutor.ts
+
+**What to store in var files**:
+- Same as today: `n_daily`, `k_daily`, `dates` (YYYY-MM-DD format)
+- Plus: `sliceDSL` to identify which context produced this data
+- NO need for raw Amplitude query JSON or dashboard IDs
+
+**Contexts.yaml mappings**:
+
+For each context value, we store:
+- `field`: Amplitude property name (e.g., `utm_source`, `browser`)
+- `filter`: Filter expression (e.g., `utm_source == 'google'`, `utm_source in ['facebook', 'instagram']`)
+
+When building a query with `context(channel:google)`:
+1. Look up `channel:google` in registry
+2. Get `filter` for Amplitude source
+3. Inject into Amplitude query's `where` clause
+4. Multiple contexts → AND them together
+5. contextAny → OR within key, AND across keys
+
+**No schema changes to Amplitude response handling**: Existing `compositeQueryExecutor` and `DASRunner` already handle time-series responses; we just add context filters to the outgoing query.
+
+---
+
+### 1. Amplitude DAS Adapter
+
+**File**: `graph-editor/src/lib/das/buildDslFromEdge.ts` (or equivalent)
+
+**Current state** (from codebase review):
+- `buildDslFromEdge.ts` builds DSL object with `from`, `to`, `visited`, etc.
+- `DASRunner.ts` executes queries via compositeQueryExecutor
+- Response includes `from_count`, `to_count`, and optionally `time_series` array
+
+#### Extend query builder to inject context filters
+
+```typescript
+/**
+ * Build Amplitude query DSL with context filters.
+ * EXTENDS: existing buildDslFromEdge
+ */
+export async function buildDslFromEdge(
+  edge: any,
+  graph: any,
+  connectionProvider?: string,
+  eventLoader?: EventLoader,
+  constraints?: ParsedConstraints  // NEW parameter
+): Promise<DslObject> {
+  
+  // Existing logic to build base DSL with from/to/visited
+  const baseDsl = await buildBaseDsl(edge, graph, connectionProvider, eventLoader);
+  
+  // NEW: Add context filters if constraints provided
+  if (constraints && (constraints.contexts.length > 0 || constraints.contextAnys.length > 0)) {
+    baseDsl.filters = buildContextFilters(constraints, connectionProvider || 'amplitude');
+  }
+  
+  // NEW: Add window/date range if provided
+  if (constraints && constraints.window) {
+    const { startDate, endDate } = resolveWindowDates(constraints.window);
+    baseDsl.start = startDate.toISOString();
+    baseDsl.end = endDate.toISOString();
+  }
+  
+  return baseDsl;
+}
+
+function buildContextFilters(
+  constraints: ParsedConstraints,
+  source: string
+): string[] {
+  const filters: string[] = [];
+  
+  // Process context(...) constraints
+  for (const ctx of constraints.contexts) {
+    const mapping = contextRegistry.getSourceMapping(ctx.key, ctx.value, source);
+    if (!mapping ||!mapping.filter) {
+      throw new Error(`No ${source} mapping for context ${ctx.key}:${ctx.value}`);
+    }
+    filters.push(mapping.filter);
+  }
+  
+  // Process contextAny(...) constraints
+  for (const ctxAny of constraints.contextAnys) {
+    // Group by key
+    const byKey = new Map<string, string[]>();
+    for (const pair of ctxAny.pairs) {
+      if (!byKey.has(pair.key)) {
+        byKey.set(pair.key, []);
+      }
+      byKey.get(pair.key)!.push(pair.value);
+    }
+    
+    // For each key, build OR clause
+    for (const [key, values] of byKey.entries()) {
+      const orClauses = values.map(value => {
+        const mapping = contextRegistry.getSourceMapping(key, value, source);
+        if (!mapping || !mapping.filter) {
+          throw new Error(`No ${source} mapping for context ${key}:${value}`);
+        }
+        return mapping.filter;
+      });
+      
+      if (orClauses.length === 1) {
+        filters.push(orClauses[0]);
+      } else {
+        filters.push(`(${orClauses.join(' or ')})`);
+      }
+    }
+  }
+  
+  return filters;
+}
+```
+
+**Integration point**: When calling `buildDslFromEdge` from data operations or nightly runner, pass the `constraints` parameter derived from the query/slice DSL.
+
+**Backward compatibility**: If `constraints` is not provided, function behaves exactly as today.
+
+---
+
+### 2. Sheets Adapter & Fallback Policy
+
+**File**: `graph-editor/src/services/ParamPackDSLService.ts` (already handles Sheets param-pack ingestion)
+
+**Current state**:
+- Sheets adapter parses HRNs like `e.edge-id.visited(...).p.mean`
+- Already has regex for conditional patterns (line 426)
+- Stores conditions in `conditional_ps` array on edges
+
+#### Context Handling (Simple Extension)
+
+Sheets users supply context-labeled parameters directly:
+
+```yaml
+e.landing-conversion.context(channel:google).p.mean: 0.15
+e.landing-conversion.context(channel:meta).p.mean: 0.12
+e.landing-conversion.p.mean: 0.10  # Uncontexted fallback
+```
+
+**Extension needed**: Already supported! The existing regex includes `context` pattern. Just ensure normalization happens.
+
+#### Fallback Policy (RESOLVED)
+
+**Decision**: **Option B (Fallback with warning)**
+
+**Scenario**: User queries `e.my-edge.context(source:google).p.mean` but Sheets only has `e.my-edge.p.mean`.
+
+**Behavior**:
+1. Try exact match first
+2. If not found and policy is 'fallback', try uncontexted version
+3. Show UI warning: "Using uncontexted fallback for source:google"
+4. If neither found, return null with warning
+
+**Implementation**:
+
+```typescript
+function resolveSheetParameter(
+  hrn: string,
+  paramPack: Record<string, unknown>,
+  fallbackPolicy: 'strict' | 'fallback' = 'fallback'
+): { value: number | null; warning?: string } {
+  
+  // Try exact match first
+  if (hrn in paramPack) {
+    return { value: paramPack[hrn] as number };
+  }
+  
+  if (fallbackPolicy === 'strict') {
+    return { value: null, warning: `Exact match for ${hrn} not found` };
+  }
+  
+  // Fallback: try uncontexted version
+  const uncontextedHrn = removeContextFromHRN(hrn);
+  if (uncontextedHrn !== hrn && uncontextedHrn in paramPack) {
+    return {
+      value: paramPack[uncontextedHrn] as number,
+      warning: `Using uncontexted fallback for ${hrn}`,
+    };
+  }
+  
+  return { value: null, warning: `No data found for ${hrn}` };
+}
+
+function removeContextFromHRN(hrn: string): string {
+  // Remove all context(...) and contextAny(...) clauses from HRN
+  return hrn.replace(/\.context(?:Any)?\([^)]+\)/g, '');
+}
+```
+
+**Rationale**:
+- Sheets is manually maintained; sparse data is common
+- Strict mode would break many existing graphs
+- Warning alerts user without blocking
+- Can add strict mode as opt-in later
+
+---
+
+## UI Components & Flows
+
+**See**: `CONTEXTS_UI_DESIGN.md` for complete visual design, user flows, and component specifications.
+
+**Summary of UI approach**:
+
+### WindowSelector Integration
+
+**Component**: Extend existing `WindowSelector.tsx` (`graph-editor/src/components/WindowSelector.tsx`)
+
+**What we add**:
+1. **Context chips** (using enhanced QueryExpressionEditor):
+   - Inline Monaco component showing contexts as chips: `[channel:google ▾✕]`
+   - Dynamic width (60-450px) that grows smoothly as contexts added
+   - Each chip has `▾` dropdown for value swapping (Apply/Cancel pattern)
+   
+2. **Add Context button** `[+ Context ▾]` or `[+ ▾]`:
+   - Full label when empty; compact when contexts exist
+   - Opens accordion dropdown with key:value pairs from `dataInterestsDSL`
+   - **Mutual exclusion**: Expanding one key section auto-collapses and unchecks others
+   - Enforces pinned scope via UI (arbitrary combos require Monaco editing)
+   
+3. **Unroll button** `[⤵]`:
+   - Expands WindowSelector downward (one additional line)
+   - Shows full `currentQueryDSL` as editable chips
+   - Includes `[Pinned query]` button (tooltip shows `dataInterestsDSL`; click opens modal)
+
+**What we remove**:
+- Placeholder "Context" button (replaced with actual implementation)
+- What-if button (moved to Scenarios panel where it belongs)
+
+**What we reuse unchanged**:
+- Date presets (Today, 7d, 30d, 90d)
+- DateRangePicker component
+- Fetch button and coverage checking logic
+- Dropdown anchoring pattern (same as What-if dropdown)
+
+### Key UI Components (NEW)
+
+1. **ContextValueSelector** (shared component):
+   - Mode: `'single-key'` (per-chip dropdown) or `'multi-key'` (Add Context dropdown)
+   - Renders checkboxes, accordion sections, Apply/Cancel buttons
+   - Handles mutual exclusion logic in multi-key mode
+
+2. **Enhanced QueryExpressionEditor**:
+   - Add chip rendering for `context`, `contextAny`, `window`
+   - Embed `▾` button in context chips (opens ContextValueSelector)
+   - Already has Monaco edit mode, autocomplete, validation
+
+3. **Pinned Query Modal**:
+   - Monaco editor for `dataInterestsDSL`
+   - **Live summary of implied queries**:
+     - Show **count** of atomic slices implied by `dataInterestsDSL` (after expansion)
+     - Enumerate each implied slice as a human-readable line, e.g.  
+       `context(channel:google).window(-90d:)`, `context(browser-type:chrome).window(-90d:)`
+     - If count exceeds a safety threshold (e.g. 200 slices), show only first N and a message:  
+       `"… plus 184 more slices. This may be too many for nightly runs."`
+   - Save/Cancel buttons
+   - **No hard failure**: If implied slice count is very large, we **warn** in the modal (and via toast) but do not prevent saving; future async logging will capture this as a configuration warning.
+
+For detailed visual mockups, interaction flows, and implementation pseudocode, see `CONTEXTS_UI_DESIGN.md`.
+
+---
+
+## Nightly Runner Integration
+
+### 1. Runner Algorithm
+
+**File**: `python-backend/nightly_runner.py` (or equivalent)
+
+```python
+def run_nightly_for_graph(graph_id: str):
+    graph = load_graph(graph_id)
+    pinned_dsl = graph.get('dataInterestsDSL', 'window(-90d:)')  # default
+    
+    # Split on ';' to get list of pinned clauses
+    clauses = pinned_dsl.split(';')
+    
+    # For each clause, explode into atomic slice expressions
+    atomic_slices = []
+    for clause in clauses:
+        expanded = expand_clause(clause)
+        atomic_slices.extend(expanded)
+    
+    # For each atomic slice and each variable, fetch and store
+    for var_id in graph.get('variables', []):
+        variable = load_variable(var_id)
+        
+        for slice_expr in atomic_slices:
+            # Parse slice expression
+            constraints = parse_constraints(slice_expr)
+            
+            # Inject default window if missing
+            if not constraints.get('window'):
+                constraints['window'] = {'start': '-90d', 'end': ''}
+            
+            # Build and execute query
+            query = build_amplitude_query(variable, constraints)
+            result = execute_query(query)
+            
+            # Store as new window
+            new_window = {
+                'n': result['n'],
+                'k': result['k'],
+                'mean': result['mean'],
+                'stdev': result['stdev'],
+                'sliceDSL': normalize_constraint_string(slice_expr),
+            }
+            
+            variable['windows'] = variable.get('windows', [])
+            variable['windows'].append(new_window)
+            
+            save_variable(variable)
+
+def expand_clause(clause: str) -> List[str]:
+    """
+    Expand a clause into atomic slice expressions.
+    
+    Examples:
+      - "context(channel)" → ["context(channel:google)", "context(channel:meta)", ...]
+      - "or(context(channel), context(browser-type))" → all channel slices + all browser slices
+      - "context(channel).window(-30d:)" → ["context(channel:google).window(-30d:)", ...]
+    """
+    
+    # Parse the clause
+    constraints = parse_constraints(clause)
+    
+    # Check for context() with no value (enumerate mode)
+    # Check for or(...) expressions
+    # Generate Cartesian product if multiple context keys present
+    # Return list of fully-specified slice expressions
+    
+    # Implementation TBD; pseudocode:
+    atomic = []
+    
+    if has_enum_context(constraints):
+        # e.g. "context(channel)" with no specific value
+        # Look up all values from registry and generate one slice per value
+        for value in context_registry.get_values('channel'):
+            atomic.append(f"context(channel:{value.id})")
+    else:
+        atomic.append(clause)
+    
+    return atomic
+```
+
+### 2. Scheduling & Deduplication
+
+- Run nightly for all graphs with `dataInterestsDSL` set
+- Before writing a new window, check if an equivalent `sliceDSL` already exists (by timestamp and context)
+- If exists and fresh (< 24 hours old), skip; otherwise overwrite/update
+
+---
+
+## Component Reuse Confirmation
+
+### Existing Components We're Extending (NOT Rebuilding)
+
+**1. WindowSelector Component** (`WindowSelector.tsx`):
+- **What it is**: The main query/search bar for graphs; contains date picker, What-if button, Context button placeholder (line 72)
+- **What we add**:
+  - Context chips display in the toolbar (between date picker and What-if)
+  - `[▾]` caret to open Context Filters dropdown (similar to existing What-if dropdown pattern)
+  - `[⤵ DSL]` unroll button to expand and show Monaco editor for `currentQueryDSL`
+- **What we reuse unchanged**: Date presets, date picker (`DateRangePicker`), What-if dropdown infrastructure
+
+**2. QueryExpressionEditor Component** (`QueryExpressionEditor.tsx`):
+- **What it is**: Monaco-based query editor that renders as chips until user clicks to edit; supports autocomplete for `from`, `to`, `visited`, `case`, etc.
+- **What we extend**:
+  - Add `context`, `contextAny`, `window` to `outerChipConfig` (line 67-70 already has `context` placeholder!)
+  - Add parsing for new constraint types in `parseQueryToChips` function (line 96)
+  - Register new functions in Monaco language definition for autocomplete
+- **What we reuse**: Entire chip rendering, edit mode toggle, Monaco mounting, validation, all existing for `visited`/`case`/etc.
+
+**3. WhatIfAnalysisControl Component** (`WhatIfAnalysisControl.tsx`):
+- **Reuse pattern**: The Context Filters dropdown should follow the same UI pattern as the What-if dropdown (anchored to WindowSelector, similar styling, close-on-outside-click behavior)
+- **Not rebuilding**: We're not creating a parallel query builder; Context Filters is just a specialized UI for manipulating `currentQueryDSL`'s context terms via chips/checkboxes
+
+**4. Monaco Language & Autocomplete** (`graph-editor/src/lib/queryDSL.ts`):
+- **Extending `QUERY_FUNCTIONS`**: Add `context`, `contextAny`, `window` definitions for autocomplete
+- **Already registered**: The `dagnet-query` language is already configured; we just add new functions to the existing vocabulary
+
+### Architectural Principle
+
+**We are NOT building parallel systems**. Every new component or function either:
+- **Extends an existing component** (WindowSelector gains context chips; QueryExpressionEditor gains context/window chip rendering)
+- **Reuses an existing utility** (parseDate, normalizeDate, calculateIncrementalFetch, aggregateWindow, mergeTimeSeriesIntoParameter)
+- **Follows an existing pattern** (Context dropdown mirrors What-if dropdown; context chips follow same chip pattern as query chips)
+
+This keeps code surface area minimal, testing burden manageable, and ensures consistent UX across the app.
+
+---
+
+## Testing Strategy
+
+### Coverage Scope
+
+All intricate aspects of the implementation MUST have comprehensive test coverage, including:
+- **DSL parsing edge cases** (malformed, mixed constraints, normalization idempotence)
+- **2D grid aggregation logic** (all 7 scenarios from revised matrix)
+- **Subquery generation** (missing date ranges per context, batching, de-duplication)
+- **MECE detection** (complete/incomplete partitions, cross-dimension)
+- **Amplitude adapter** (context filter generation, query building, response handling)
+- **Sheets fallback** (exact match, fallback, warnings)
+- **UpdateManager** (rebalancing with context-bearing conditions)
+
+**Test-driven approach**: Implement aggregation window logic and subquery generation WITH tests in parallel; each scenario from the matrix gets at least one test case.
+
+### 1. Unit Tests
+
+#### DSL Parsing & Normalization
+
+**File**: `graph-editor/src/services/__tests__/constraintParser.test.ts` (NEW)
+
+- ✓ Parse `context(key:value)` correctly
+- ✓ Parse `contextAny(key:v1,v2,...)` correctly
+- ✓ Parse `window(start:end)` with absolute and relative dates
+- ✓ Parse complex chains: `visited(a).context(b:c).window(d:e).p.mean`
+- ✓ `normalizeConstraintString` produces deterministic, sorted output
+- ✓ `normalizeConstraintString` is idempotent (normalize(normalize(x)) === normalize(x))
+- ✓ Date normalization: ISO → d-MMM-yy, relative offsets unchanged
+- ✓ Handles malformed strings gracefully (error or return empty?)
+
+#### Context Registry
+
+**File**: `graph-editor/src/services/__tests__/contextRegistry.test.ts` (NEW)
+
+- ✓ Load and parse `contexts.yaml`
+- ✓ Validate schema (required fields, value uniqueness)
+- ✓ Retrieve source mappings by context key + value + source
+- ✓ **otherPolicy handling** (all 4 policies):
+  - `null`: "other" not in enumeration; values asserted MECE
+  - `computed`: "other" in enumeration; filter computed dynamically
+  - `explicit`: "other" in enumeration with explicit filter
+  - `undefined`: "other" not in enumeration; NOT MECE (aggregation disallowed)
+- ✓ **Regex pattern support**:
+  - Pattern matching for value mappings
+  - Pattern + flags (case-insensitive, etc.)
+  - Computed "other" with pattern-based explicit values
+  - Error when both pattern and filter provided
+- ✓ Detect unmapped context values (values not in registry)
+
+#### Window Aggregation & MECE Logic (CRITICAL TEST COVERAGE)
+
+**Files**: 
+- `graph-editor/src/services/__tests__/windowAggregation.dailyGrid.test.ts` (NEW — daily grid model)
+- `graph-editor/src/services/__tests__/windowAggregation.mece.test.ts` (NEW — MECE logic)
+- `graph-editor/src/services/__tests__/windowAggregation.subqueries.test.ts` (NEW — subquery generation)
+
+**Daily Grid Model Tests** (Section 5: The 2D Grid):
+
+Test that **context × date** grid works correctly:
+
+| Test # | Scenario | Expected Outcome |
+|--------|----------|------------------|
+| 1 | Query window = stored window (exact daily coverage) | Aggregate from existing daily points; no fetch |
+| 2 | Query window < stored window (subset of days) | Filter daily series to requested range; no fetch |
+| 3 | Query window > stored window (superset of days) | Reuse existing days; generate subqueries for missing days only |
+| 4 | Query window partially overlaps stored (some overlap) | Reuse overlapping days; fetch non-overlapping days |
+| 5 | Multiple windows for same context with duplicate dates | De-duplicate by date key; latest write wins |
+| 6 | Query has no context, data has MECE partition | Aggregate across MECE context values; daily series summed per-day then totaled |
+| 7 | Query has context, data has finer partition (e.g., query=channel:google, data=channel:google+browser:*) | Aggregate across finer dimension (MECE check), sum daily series |
+
+**Subquery Generation Tests** (CRITICAL — Section 5: Step 3):
+
+Test that `generateMissingSubqueries` correctly identifies gaps in the 2D grid:
+
+- ✓ **Single context, no existing data**: Generates 1 subquery for full date range
+- ✓ **Single context, partial date coverage**: 
+  - Existing: days 1-10, 20-30
+  - Query: days 1-30
+  - Expected: 1 subquery for days 11-19
+- ✓ **Single context, multiple gaps**:
+  - Existing: days 1-5, 15-20
+  - Query: days 1-30
+  - Expected: 2 subqueries (days 6-14, days 21-30)
+- ✓ **Multiple contexts, different coverage per context**:
+  - Context A: has days 1-30
+  - Context B: has days 1-10
+  - Query: both contexts, days 1-30
+  - Expected: 0 subqueries for A, 1 subquery for B (days 11-30)
+- ✓ **MECE aggregation triggers subqueries for missing context values**:
+  - Have: `context(channel:google)` for days 1-30
+  - Query: uncontexted, days 1-30
+  - Registry: channel has values {google, meta, other}, otherPolicy: computed
+  - Expected: 2 subqueries (`channel:meta.window(1-Jan:30-Jan)`, `channel:other.window(1-Jan:30-Jan)`)
+- ✓ **Mixed otherPolicy: aggregate across MECE key only** (CRITICAL EDGE CASE):
+  - Have: `context(browser-type:chrome)`, `context(browser-type:safari)`, `context(browser-type:firefox)` (days 1-30)
+  - Also: `context(channel:google)`, `context(channel:meta)` (days 1-30)
+  - Registry: browser-type otherPolicy:null (MECE, complete); channel otherPolicy:undefined (NOT MECE)
+  - Query: uncontexted, days 1-30
+  - Expected: Aggregate across browser-type values ONLY (ignore channel slices)
+  - Result: Sum of chrome + safari + firefox data
+  - Warning: "Aggregated across MECE partition of 'browser-type' (complete coverage)"
+- ✓ **Multiple MECE keys available**:
+  - Have: All browser-type values (MECE) AND all device-type values (MECE)
+  - Query: uncontexted
+  - Expected: Aggregate across first complete MECE key (browser-type or device-type)
+  - Warning: "Also have MECE keys {...} (would give same total if complete)"
+
+**MECE Detection Tests** (with otherPolicy variants):
+
+**otherPolicy: null** (values are MECE as-is):
+- ✓ Complete partition (all values present) → `canAggregate: true`
+- ✓ Incomplete partition (missing values) → `canAggregate: false`
+- ✓ "other" value NOT included in expected values
+- ✓ Cannot query for `context(key:other)` (error)
+
+**otherPolicy: computed** (other = ALL - explicit):
+- ✓ Complete partition (all explicit + "other") → `canAggregate: true`
+- ✓ Missing "other" → `canAggregate: false`, missingValues includes "other"
+- ✓ "other" filter built dynamically as NOT (explicit values)
+- ✓ Works correctly when explicit values use regex patterns
+
+**otherPolicy: explicit** (other has its own filter):
+- ✓ Complete partition (all explicit + "other") → `canAggregate: true`
+- ✓ "other" filter read from registry mapping
+- ✓ Behaves like any other value
+
+**otherPolicy: undefined** (NOT MECE):
+- ✓ Even with all values present → `canAggregate: false` (never safe)
+- ✓ "other" NOT included in expected values
+- ✓ Warns user that aggregation across this key is unsupported
+- ✓ Use case: exploratory context that's not yet well-defined
+
+**General MECE tests**:
+- ✓ Detects duplicate values (non-MECE)
+- ✓ Detects extra values not in registry
+- ✓ Handles windows with missing sliceDSL (treated as uncontexted)
+
+**Cross-key aggregation tests** (mixed otherPolicy):
+- ✓ **Scenario 1**: browser-type (MECE, null) + channel (NOT MECE, undefined)
+  - Uncontexted query aggregates across browser-type only
+  - Channel slices ignored (NOT MECE)
+  - Result is complete
+- ✓ **Scenario 2**: Both keys MECE (browser-type:null, channel:computed)
+  - Either key can be used for aggregation
+  - Prefer complete partition over incomplete
+  - Warn that multiple MECE keys available
+- ✓ **Scenario 3**: Both keys NOT MECE (browser-type:undefined, channel:undefined)
+  - Cannot aggregate at all
+  - Return error/warning: "No MECE partition available"
+- ✓ **Scenario 4**: One key incomplete MECE, other NOT MECE
+  - Use incomplete MECE key (browser-type missing 'other')
+  - Status: 'partial_data' with missing values listed
+  - Ignore NOT MECE key entirely
+
+**Merge & De-duplication Tests**:
+- ✓ `mergeTimeSeriesForContext` de-duplicates by date (latest wins)
+- ✓ Handles existing + new daily data correctly
+- ✓ Preserves `n_daily`, `k_daily`, `dates` array integrity
+
+#### Sheets Fallback Policy
+
+**File**: `graph-editor/src/services/__tests__/sheetsFallback.test.ts` (NEW)
+
+- ✓ Exact match found → use it
+- ✓ Exact match not found, uncontexted exists → fallback with warning
+- ✓ Neither found → return null with warning
+- ✓ Strict mode → error on missing exact match
+
+#### Amplitude Adapter (Context Filters & Regex)
+
+**File**: `graph-editor/src/lib/das/__tests__/amplitudeAdapter.contexts.test.ts` (NEW)
+
+**Context filter generation**:
+- ✓ Single `context(key:value)` → generates correct filter string
+- ✓ Multiple contexts (AND) → filters combined with AND logic
+- ✓ `contextAny(key:v1,v2)` → generates OR clause for values, AND across keys
+
+**Regex pattern support**:
+- ✓ Value with `pattern` field → generates regex filter (not literal filter)
+- ✓ Pattern with flags (case-insensitive) → includes flags in query
+- ✓ Multiple values with patterns → OR them correctly
+- ✓ Error when value has both pattern and filter
+
+**otherPolicy in adapter**:
+- ✓ `otherPolicy: null` → error if user queries for "other"
+- ✓ `otherPolicy: computed` → dynamically builds NOT (explicit values) filter
+- ✓ `otherPolicy: computed` with patterns → NOT includes pattern-based filters
+- ✓ `otherPolicy: explicit` → uses filter from "other" value mapping
+- ✓ `otherPolicy: undefined` → error if user queries for "other"
+
+### 2. Integration Tests
+
+#### End-to-End Query Flow
+
+1. User selects `context(channel:google)` + `window(1-Jan-25:31-Mar-25)` in UI
+2. App aggregates windows; finds none matching
+3. App shows "Fetch required" indicator
+4. User clicks Fetch; query constructs with context filter
+5. (Mock) Amplitude returns data
+6. New window written to var with correct `sliceDSL = "context(channel:google).window(1-Jan-25:31-Mar-25)"`
+7. Subsequent query for same slice finds cached window (status='exact_match')
+
+#### Nightly Runner Explosion
+
+1. Graph has `dataInterestsDSL = "context(channel);context(browser-type).window(-90d:)"`
+2. Runner splits on `;` → 2 clauses
+3. First clause `context(channel)` → enumerate all channel values from registry
+4. Generates: `context(channel:google).window(-90d:)`, `context(channel:meta).window(-90d:)`, etc.
+5. Second clause similar for browser-type
+6. Runner executes all atomic queries
+7. Each result stored as window with normalized `sliceDSL`
+
+#### UpdateManager Rebalancing with Contexts
+
+**File**: `graph-editor/src/services/__tests__/UpdateManager.contexts.test.ts` (NEW)
+
+1. Create edge with `conditional_ps`:
+   - `{ condition: "context(channel:google)", mean: 0.3 }`
+   - `{ condition: "context(channel:google)", mean: 0.7 }` (sibling edge)
+   - `{ condition: "context(channel:meta)", mean: 0.2 }` (different context)
+2. Edit first entry to mean = 0.4
+3. Verify second entry rebalanced to mean = 0.6 (same condition)
+4. Verify third entry unchanged (different condition)
+5. Verify per-condition PMF sums to 1.0
+
+### 3. Regression Tests
+
+- ✓ Existing graphs without `dataInterestsDSL` still load and work
+- ✓ Existing windows without `sliceDSL` are treated as uncontexted, all-time
+- ✓ Existing HRNs with `visited(...)`, `case(...)` still parse correctly
+- ✓ ParamPackDSLService continues to handle non-contexted params
+- ✓ Window aggregation for non-contexted queries works as before
+
+---
+
+## Migration & Rollout
+
+### Phase 1: Schema & DSL (non-breaking)
+
+- Add `dataInterestsDSL` and `currentQueryDSL` to graph schema (optional fields)
+- Add `sliceDSL` to window schema (optional field)
+- Extend DSL parser to handle `context(...)`, `contextAny(...)`, `window(...)`
+- **No breaking changes**: existing graphs and vars continue to work
+
+### Phase 2: Registry & Adapters
+
+- Deploy `contexts.yaml` with initial set of context definitions
+- Extend Amplitude adapter to build context-filtered queries
+- Extend Sheets adapter to parse context-labeled HRNs
+- **Backwards compatible**: if no contexts are used, behavior is unchanged
+
+### Phase 3: UI Components
+
+- Add `ContextSelector` integration and DSL “unroll” control to the existing Window component
+- Integrate with existing query/window components (reuse Window Date Selector)
+- Add graph settings panel / modal for editing `dataInterestsDSL`
+- **Gradual rollout**: feature-flag the context UI until stable
+
+### Phase 4: Nightly Runner
+
+- Update runner to read `dataInterestsDSL` and explode into atomic slices
+- Schedule nightly runs for graphs with pinned contexts
+- Monitor query volume and API usage
+- **Opt-in**: only graphs with explicit `dataInterestsDSL` are affected
+
+### Phase 5: Migration of Legacy Data (if needed)
+
+- Script to add `sliceDSL` to existing windows (inferred from legacy metadata or set to default)
+- Validate all graphs can be opened and queried
+- **Low risk**: existing data is not modified, only augmented
+
+---
+
+## Open Implementation Questions
+
+1. **Context UI Placement**  
+   Where exactly in the AppShell / window component does `ContextSelector` live? Integrate into existing query bar or separate panel?
+
+2. **ContextAny in Stored Windows**  
+   Do we ever store windows with `contextAny(...)` in their `sliceDSL`, or only fully-specified `context(...)` values? Likely only store specific values, use `contextAny` only for live queries.
+
+3. **Window Overlap vs Exact Match**  
+   For v1, do we require exact window match, or allow aggregation across overlapping windows? Decision: exact match only for simplicity; overlapping aggregation is future enhancement.
+
+4. **Performance / Caching**  
+   How many windows per var before index performance degrades? Consider periodic cleanup of old windows. Set retention policy (e.g., keep last 12 months).
+
+5. **Error Handling for Missing Mappings**  
+   If a context value has no Amplitude mapping, fail fast or skip gracefully? Decision: fail fast with clear error message; user must fix registry or use a different source.
+
+6. **Date Normalisation Edge Cases**  
+   Leap years, DST transitions, timezone handling for relative offsets. Use UTC throughout; dates in `d-MMM-yy` format are timezone-naive.
+
+---
+
+## Summary & Next Steps
+
+### Resolved Design Questions
+
+1. ✓ **Terminology**: `dataInterestsDSL` (graph) vs `sliceDSL` (window)
+2. ✓ **No redundant metadata**: Store only `sliceDSL` string, parse on-demand
+3. ✓ **Reuse existing code**: Extend ParamPackDSLService constraint parsing, extract to shared utility
+4. ✓ **No index**: Linear scan acceptable for v1 (optimize later if needed)
+5. ✓ **Sheets fallback**: Fallback to uncontexted with warning (Option B)
+
+### Open Questions Requiring Resolution
+
+1. **Amplitude API Research** (CRITICAL):
+   - Endpoint structure for property-filtered funnels
+   - Filter syntax for context mappings
+   - Response format and fields to store
+   - Rate limits and caching strategy
+   
+   **ACTION**: Research Amplitude Dashboard API before implementing adapter
+
+2. **MECE Aggregation Policy Refinement**:
+   - Cross-dimension MECE (channel × browser): always attempt or require explicit opt-in?
+   - Partial MECE: show data with warning or block until complete?
+   
+   **ACTION**: Review with stakeholders after initial prototype
+
+3. **Window Overlap Handling**:
+   - Partial temporal overlap: error strictly or attempt merge?
+   - Overlapping windows: when is this valid (re-fetch with updated data)?
+   
+   **ACTION**: Implement test cases for all 13 scenarios, refine logic based on results
+
+### Deliverables
+
+1. **Schema**: `dataInterestsDSL`, `currentQueryDSL` on graphs; `sliceDSL` on var windows
+2. **Shared constraint parser**: Extract from ParamPackDSLService, extend for `context`/`contextAny`/`window`
+3. **Context registry**: Loader, MECE detection, `otherPolicy` handling
+4. **Window aggregation**: Complete redesign with MECE logic, all overlap scenarios
+5. **Adapters**: 
+   - Amplitude: context filter generation (pending API research)
+   - Sheets: fallback policy implementation
+6. **UI**: `ContextSelector`, `WindowDateSelector`, integrated query builder
+7. **Nightly runner**: Explode `dataInterestsDSL` into atomic slices
+8. **Testing**: Comprehensive test suite for all 13 window scenarios + MECE detection
+
+### Implementation Priority
+
+**Phase 0: Research & Foundation** (REQUIRED FIRST)
+1. Research Amplitude API (endpoints, filter syntax, response format)
+2. Extract constraint parsing to shared utility (`constraintParser.ts`)
+3. Implement `normalizeConstraintString` with full test coverage
+
+**Phase 1: Core Data Model**
+1. Add schema fields (`dataInterestsDSL`, `sliceDSL`)
+2. Implement context registry loader
+3. Extend constraint parser for `context`, `contextAny`, `window`
+
+**Phase 2: Window Aggregation**
+1. Implement MECE detection algorithm
+2. Implement window aggregation with all 13 scenarios
+3. Comprehensive test suite (all scenarios + MECE edge cases)
+
+**Phase 3: Adapters**
+1. Amplitude: context filter generation (after API research)
+2. Sheets: fallback policy
+3. Integration tests
+
+**Phase 4: UI & Runner**
+1. Context selector component
+2. Window date selector
+3. Nightly runner explosion logic
+4. End-to-end integration
+
+**Phase 5: Refinement**
+1. Performance profiling (consider index if needed)
+2. Error messaging and warnings
+3. Documentation and user guide
+
+---
+
+## Appendix: otherPolicy & Regex Summary
+
+### otherPolicy Impact Matrix
+
+| System | `null` | `computed` | `explicit` | `undefined` |
+|--------|--------|------------|------------|-------------|
+| **"other" in value enum?** | NO | YES | YES | NO |
+| **"other" queryable?** | NO (error) | YES (dynamic filter) | YES (explicit filter) | NO (error) |
+| **MECE assertion?** | YES | YES | YES | NO |
+| **Can aggregate across key?** | If complete (total) | If complete (total) | If complete (total) | YES (but ALWAYS partial) |
+| **UI dropdown shows "other"?** | NO | YES | YES | NO |
+| **All-values-checked removes chip?** | YES | YES | YES | NO |
+| **Adapter builds "other" filter** | N/A | Dynamically (NOT explicit) | From registry | N/A |
+| **Typical use case** | Complete finite enum (A/B variants) | Open property + catch-all (utm_source) | Custom "other" definition | Exploratory/incomplete |
+
+**Where this matters in code**:
+1. `getValuesForContext()` — Includes/excludes "other" from enumeration
+2. `detectMECEPartition()` — Sets `canAggregate` flag based on policy
+3. `buildFilterForContextValue()` — Generates dynamic NOT filter for `otherPolicy: computed`
+4. UI dropdowns — Shows/hides "other" checkbox based on policy
+5. All-checked chip removal — Only removes if policy != `undefined`
+
+### Regex Pattern Support
+
+**Purpose**: Map many raw source values to one logical context value.
+
+**Example** (utm_source collapsing):
+
+```yaml
+# Raw Amplitude values: google_search_brand, google_display_retargeting, google_shopping_pla
+# Logical value: "google"
+
+values:
+  - id: google
+    sources:
+      amplitude:
+        field: utm_source
+        pattern: "^google"   # Matches any value starting with "google"
+        patternFlags: "i"     # Case-insensitive
+```
+
+**Adapter generates**: `utm_source REGEXP_MATCHES '^google' (case-insensitive)`
+
+**When to use**:
+- High-cardinality source properties (UTM campaigns, referrers, etc.)
+- Need to collapse many raw values to manageable logical enum
+- Simpler than maintaining explicit value list
+
+**When NOT to use**:
+- Low-cardinality with stable values → use `filter` instead
+- Complex boolean logic → use `filter` with AND/OR
+- Cannot use both `pattern` and `filter` (adapter will error)
+
+---
+
+**CRITICAL PATH ITEMS FOR IMPLEMENTATION**:
+1. ✓ otherPolicy properly designed (4 variants, impact on MECE/UI/adapters documented)
+2. ✓ Regex pattern support designed (pattern + patternFlags fields, adapter logic, test cases)
+3. Amplitude API syntax verification needed (exact regex filter syntax — verify with API docs)
+4. Test coverage for all otherPolicy variants (see Testing Strategy section)
+5. Test coverage for regex patterns (matching, NOT generation for computed "other")
+
+---

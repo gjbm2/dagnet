@@ -86,21 +86,19 @@ Separately, we will need to decide **how to discover and maintain the enum of va
 
 - **Input**: `graph_id`.
 - **Process**:
-  - Determine which **variables / params / cases / edges** in the graph need data.
-  - Read the graph’s **pinned context DSL string(s)** (e.g. expressions over `channel`, `browser-type`).
-  - For each pinned key:
-    - Go to its **context definition file** and enumerate all allowed values.
-    - Build a **set of queries per key**:
-      - For every variable `v` mentioned on the graph,
-      - For each context value of that key,
-      - Build a query for `v` in that context value.
-  - **Important**: at this stage we **do not** build full Cartesian products across context keys:
-    - We want: \(\forall x \in [\text{channels}]\) + \(\forall y \in [\text{browser types}]\).
-    - We do *not* want: \(\forall (x, y) \in [\text{channels}] \times [\text{browser types}]\).
-    - Rationale: avoid sparsity + API explosion.
-  - Query results are:
-    - Dropped into **windowed data blocks** on the relevant vars,
-    - With appropriate **context metadata** attached to each window (e.g. `{channel: google}`).
+  - Read the graph’s **pinned slice DSL string** (single string which may contain `context(...)`, `contextAny(...)`, `window(...)`, `or(...)`, etc.).
+  - Split the string on top-level `;` to get a list of **pinned clauses**.
+  - For each clause:
+    - Expand any `or(...)` expressions into a flat set of **atomic slice expressions**.
+    - Ensure each atomic expression has exactly one **window**:
+      - If no `window(...)` is present, inject a runner-level default (e.g. `window(-90d:)`).
+  - For each atomic slice expression and for every variable `v` mentioned on the graph:
+    - Construct a concrete query to the underlying source (Amplitude, Sheets, etc.).
+    - Execute the query and write the result into a new **window** on `v`, tagged with:
+      - the **canonical slice DSL string** for that atomic expression (contexts + window, fully normalised), and
+      - any additional metadata the adapter wants to cache (e.g. resolved absolute dates).
+  - **Important**: at this stage we **do not** build full Cartesian products across independent context keys unless the pinned DSL explicitly asks for them (e.g. via products in `context(...)` or specific `or(...)` forms).
+    - Default stance remains: avoid unnecessary Cartesian products to limit sparsity and API blow-up.
 
 #### B. Live in-graph exploration (multi-context AND queries)
 
@@ -119,22 +117,22 @@ Separately, we will need to decide **how to discover and maintain the enum of va
     - persisted graphs record the context + date slice they were last inspected under, and
     - when a graph is re-opened, we can pre-populate the context/date selector UI from that stored DSL.
 
-### DSL for Context Specification
+### DSL for Context & Window Specification
 
 We need a **DSL convention** for:
 
-- Encoding context on **windows** (in var files), *** DO WE NOT HAVE THIS ALREADY? I THINK WE MAY HAVE STUBBED IT... CHECK CURRENT GRAPH SCHEMA ***
-- Expressing context in **formulas / expressions** (similar to `case(...)` and other query constraints),
+- Encoding **contexts and time windows on data windows** (in var files) via a canonical slice string,
+- Expressing context and window filters in **formulas / expressions** (similar to `case(...)` and other query constraints),
 - Interoperating with **source-specific adapters**.
 
 Two important alignment points with the existing system:
 
-- **Colon syntax is canonical**: Everywhere we reference contexts in the query/condition DSL we use `key:value` pairs (e.g. `context(channel:google)`, `case(experiment:variant)`), matching `query-dsl-1.0.0.json` and `queryDSL.ts`. We do **not** introduce an `=` form.
-- **Condition placement is canonical in HRNs**: For edge probabilities and conditionals, the full constraint string (including any `context(...)`, `visited(...)`, etc.) lives **between** the edge identifier and `.p.<field>`:  
+- **Colon syntax is canonical for key/value pairs**: Everywhere we reference contexts or cases in the query/condition DSL we use `key:value` pairs (e.g. `context(channel:google)`, `case(experiment:variant)`), matching `query-dsl-1.0.0.json` and `queryDSL.ts`. We do **not** introduce an `=` form.
+- **Condition placement is canonical in HRNs**: For edge probabilities and conditionals, the full constraint string (including any `context(...)`, `visited(...)`, `window(...)`, etc.) lives **between** the edge identifier and `.p.<field>`:  
   - Canonical: `e.edge-id.context(channel:google).p.mean`  
   - Not supported today: `e.edge-id.p.mean.context(channel:google)` (would be treated as nested property, not a condition).
 
-#### Basic operations (first pass)
+#### Basic context operations
 
 - **Single-context filter**:
   - `context(key:value)`  
@@ -156,8 +154,42 @@ Two important alignment points with the existing system:
     - Single call with multiple key:value pairs; also interpreted as AND.
   - We should choose **one canonical internal representation** but likely **support both** syntaxes at the DSL level, mirroring what we already do for `visited(...)` vs `visited(a,b)`.
   - Note: because `,` is already used inside function arguments to imply a kind of **product / AND** (as with `visited(a,b)`), we **cannot** also use `,` to sequence “OR” clauses. We therefore need:
-    - an explicit `or()` operator to express unions of full expressions (e.g. `or(context(source), context(channel))`), and/or
-    - a higher-level interpretation of multiple expressions in pinned DSL as a union. In v1 we will introduce `or()` as the **user-facing** way to express OR; how or whether we additionally support raw `;` as lower-level sugar is an implementation detail.
+    - an explicit `or()` operator to express unions of full expressions (e.g. `or(context(source), context(channel))`), and
+    - a higher-level interpretation of multiple expressions in **pinned graph DSL** as a union when they are separated by `;`. In v1 we will:
+      - treat `or(expr1,expr2,...)` as the canonical *expression-level* OR, and  
+      - treat `;` as top-level sugar meaning “also run this other expression” when constructing pinned nightly runs.
+
+#### Window operations
+
+We introduce a `window(...)` function to encode the **time slice** associated with a query or stored data window. The same function is used both in:
+
+- pinned graph-level DSL (to drive nightly runs), and  
+- per-window slice strings stored on vars.
+
+Key points:
+
+- **Absolute windows (stored format)**:
+  - Canonical stored dates use an unambiguous UK-style `d-MMM-yy` format, e.g. `1-Jan-25`, `31-Dec-25`.
+  - Examples:  
+    - `window(1-Jan-25:31-Dec-25)`  
+    - `window(1-Jan-25:)` (from 1 Jan 2025 to “now”)  
+    - `window(:31-Dec-25)` (from beginning of time to 31 Dec 2025).
+  - We explicitly **do not** store ambiguous purely-numeric dates like `04-03-25` anywhere.
+
+- **Relative windows (anchored to “run date”)**:
+  - Relative endpoints are expressed as signed offsets from the evaluation time (e.g. nightly runner date or “now”), using units like days and months:
+    - `d` = days, `w` = weeks, `m` = calendar months (future: `y` for years if needed).
+  - Examples:  
+    - `window(-14d:)` → last 14 days up to now  
+    - `window(-90d:-30d)` → the 60‑day band between 90 and 30 days ago  
+    - `window(-2m:1m)` → from two months ago to one month in the future (for forward-looking projections).
+
+- **Mixed absolute/relative endpoints**:
+  - We allow one endpoint absolute and the other relative where this is useful (e.g. `window(1-Jan-25:-7d)`), but these should be rare; canonicalisation will typically convert to a purely absolute form once the relative bound is evaluated at run time.
+
+- **Input vs stored format**:
+  - The DSL **accepts any reasonable date input format** (including ISO) that the client can parse using the user’s regional settings.
+  - Before writing to disk (graph or var files), dates are normalised into the canonical stored form `d-MMM-yy` so that what lives in data files is always unambiguous and UK-style.
 
 #### Interaction with existing DSL (cases, visited, etc.)
 
@@ -298,13 +330,13 @@ Today’s `UpdateManager.rebalanceConditionalProbabilities(...)` already follows
   - We need error / warning strategies and maybe “graceful degradation” (e.g. `unknown` or `not-available` values).
 
 - **DSL ergonomics & discoverability**:
-  - How do we expose `context(...)` and `contextAny(...)` in editors so users don’t have to memorize syntax?
-    - In practice we can and should **reuse the existing Monaco / query selector pattern** used for conditional queries today: `context` / `contextAny` become first-class functions in the chip UI, with autocomplete, so users rarely type them manually.
+  - How do we expose `context(...)`, `contextAny(...)`, and `window(...)` in editors so users don’t have to memorize syntax?
+    - In practice we can and should **reuse the existing Monaco / query selector pattern** used for conditional queries today: `context` / `contextAny` / `window` become first-class functions in the chip UI, with autocomplete, so users rarely type them manually.
   - How does this interact with other modifiers like `case(...)`, `visited(...)`, etc. (ordering, precedence, parsing)?
 
 - **Context “stacking” and overrides (state model)**:
   - Conceptually there are two main layers:
-    - the **graph**, which may optionally carry a pinned context DSL string (used to nudge window defaults and to drive nightly runs), and
+    - the **graph**, which carries a pinned context+window DSL string (used to nudge window defaults and to drive nightly runs), and
     - the **window/query state**, which represents the current “inspection query” (contexts + dates) used to fetch/aggregate data into that graph.
   - We still need to pin down the precise precedence and composition rules between **pinned graph context** and **ephemeral window context** (e.g. does the window string override entirely, intersect, or layer on top?).
 
@@ -359,37 +391,29 @@ Today’s `UpdateManager.rebalanceConditionalProbabilities(...)` already follows
     - Internally it’s an implementation detail whether `or(...)` is desugared to a clause list (equivalent to a `;`-separated representation) before parsing, or handled directly in the DSL parser; at the DSL level `or()` is the canonical construct, chosen to avoid overloading punctuation and to feel familiar to spreadsheet users.
 
 - **Context metadata conventions**:
-  - Whether we reserve a specific label (e.g. `other`) and how strictly we validate against `contexts.yaml` for each source.
-
-*** WHAT ARE THE CIRCUMSTANCES IN WHICH WE TRULY CARE ABOUT THIS. LET'S PLAY IT OUT. I HAVE A KEY 'SOURCE' AND DEFINE VALUES 'GOOGLE' AND 'META'. THERE IS AN IMPLICIT 'OTHER' EVEN IF NOT MENTIOEND ON THE CONTEXT VAR FILE BECAUSE WHEN AMPLITUDE QUERIES ARE CONSTRUCTED, WE MUST RETRIEVE FOR (A) SOURCE:GOOGLE, (B) SOURCE:META AND (C) =ALL_RESULTS(A)-(B). NOW WE HAVE TO WRITE THOSE QUERY STRINGS ONTO THE VAR FILE SOMEHOW IN A DATA WINDOW OBJECT AND WE'VE SAID THAT WE'RE GOING TO USE DSL STRINGS TO DO THAT, SO WE NEED A CANONICAL WAY OF EXPRESSING NOT_ANY_OF *OR* 'OTHER'.
--- AND THEN WHEN USER IS INSPECTING THE DATA THEY MAY WANT COMFORT THAT THE VALUES ARE WELL CONFIGURED SO WILL WANT TO SPECIFY A QUERY SUCH AS SOURCE:<OTHER> IN ORDER TO CONFIRM THAT IT'S NOT ACTUALLY DARK MATTER. 
-
-SO. WE NEED AN UNAMBIGUOUS DSL EXRESSION WHICH IS INTERPRETED AS <OTHER>. WHAT ARE OUR OPTIONS? ***
-
-  - We care most when we:
-    - construct “everything-else” windows (e.g. `source:other` = ALL_RESULTS − known sources) at the adapter layer, and
-    - allow users to inspect that `other` bucket explicitly to confirm it isn’t just dark matter.
-  - v1 leaning:
-    - Keep a **registry-level catch-all** (likely `other`) with clearly defined adapter behavior (complement of explicitly enumerated values for that key and source).
+  - v1 stance:
+    - Keep a **registry-level catch-all** value (typically `other`) with clearly defined adapter behaviour (complement of explicitly enumerated values for that key and source).
+    - We care most when we:
+      - construct “everything-else” windows (e.g. `source:other` = ALL_RESULTS − known sources) at the adapter layer, and
+      - allow users to inspect that `other` bucket explicitly (e.g. `context(source:other)`) to confirm it is not just dark matter.
     - Treat a more general `contextNot(...)` form as a later enhancement if we need more nuanced complements.
+    - Allow a **per-context-file policy** for how `other` is constructed for a given source, with standard regimes such as:
+      - `OTHER = NULL` (assert that the configured enum is already MECE),
+      - `OTHER = ALL_RESULTS − all specified values`,
+      - `OTHER = explicit list` (for bespoke groupings).
+    - For very high-cardinality raw spaces (e.g. UTM strings), allow **regex/pattern-based mappings** in the registry / connection config so that many raw values can be collapsed into a small logical enum plus an `other` bucket.
 
-*** I THINK WE HAVE A POLICY PER CONTEXT FILE [DEFAULTS TO SOMETHING SENSIBLE] WHICH CONSTRUCTS OTHER FOR THE SELECTED SOURCE. STANGARD REGIMES MIGHT INCLUDE:
-- OTHER = NULL [I.E. ASSERT THAT VALUES ARE MECE]
-- OTHER = ALL RESULTS LESS ALL SPECIFIED VALUES
-- OTHER = THIS SPECIFIC SET OF ITEMS (LIST)
-
-ALSO NOTE FOR IMPLEMENTATION PURPOSES WE WILL NEED TO ALLOW THE CONNECTION STRING TO PERMIT REGEX FOR VALUES SO E.G. WE CAN COLLAPSE LARGE UTM STRING SPACES INTO A LIST WITH MANAGEABLE CARDINALITY 
-***
-
+ 
 - **Window/query persistence**:
-  - The precise shape and location of the “current query DSL” we store on graphs (contexts + date window) so that saved graphs can rehydrate the context/date selector state.
-
-*** WELL WE HAVE THE CONTEXT DSL FROM THIS WORK. THE ONLY THING WE LACK IS A DATE WINDOW DSL, NO? PROPOSE ONE ***
-
-- Contexts come from this design; the missing piece is a **date/window DSL**, for which a candidate is:
-    - `window(2025-01-01:2025-12-31)` (or ISO timestamps) alongside `context(...)` in the same DSL string.
-
-*** YES, BUT WE PROBABLY ALSO NEED A FORM OF WINDOW() EXPRESSION WHICH IS RELATIVE RATHER THAN ABOSLUTE SO WE CAN USE IT TO BUILD DYNAMIC SCENARIOS TOO. I'M THINKING E.G. WINDOW(-14D:-7D) OR WINDOW(-30D:). WE AREN'T GOING TO USE THAT YET, BUT WORTH DEFINING THE CONCEPT PROPERLY SO ITS EXTENSIBLE *** 
+  - v1 direction:
+    - Each graph stores a **single pinned context+window DSL string** (as described above) so that saved graphs can rehydrate the context/date selector state.
+    - The nightly runner **explodes** that pinned string into atomic slice expressions (splitting on `;`, expanding `or(...)`, injecting default `window(...)` where missing) and, for each atomic slice × var, issues a concrete query.
+    - Each data window written to a var carries:
+      - the **canonical slice DSL string** for that atomic expression (including `context(...)` / `contextAny(...)` and `window(...)`, with dates normalised into `d-MMM-yy`), and
+      - any additional cached metadata the adapter wants (e.g. parsed absolute start/end timestamps).
+    - Indexes and lookups in the app can either:
+      - work from the parsed form of this stored slice string (e.g. a `{contextKey: value}` map plus start/end dates), or
+      - use the canonical slice string itself as the cache key where appropriate.
 
 - **Pinned vs window precedence rules**:
   - Exact composition semantics when both pinned graph context and ephemeral window context are present.
