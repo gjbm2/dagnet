@@ -1470,7 +1470,7 @@ function AppShellContent() {
                   sha: file.sha
                 };
               });
-              
+
               // Add pending image operations (uploads + image deletions)
               const imageFiles = await fileRegistry.commitPendingImages();
               filesToCommit.push(...imageFiles.map(img => ({

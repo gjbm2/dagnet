@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { imageService } from '../services/imageService';
 import type { NodeImage } from '../types';
 
@@ -29,9 +30,9 @@ export function ImageHoverPreview({ image, position }: ImageHoverPreviewProps) {
     };
   }, [image.image_id, image.file_extension]);
   
-  if (!imageSrc || !position || position.x === 0 && position.y === 0) return null;
+  if (!imageSrc || !position || (position.x === 0 && position.y === 0)) return null;
   
-  return (
+  const previewContent = (
     <div
       style={{
         position: 'fixed',
@@ -69,5 +70,7 @@ export function ImageHoverPreview({ image, position }: ImageHoverPreviewProps) {
       </div>
     </div>
   );
+  
+  return createPortal(previewContent, document.body);
 }
 
