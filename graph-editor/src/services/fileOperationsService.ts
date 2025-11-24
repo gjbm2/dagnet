@@ -277,7 +277,7 @@ class FileOperationsService {
     const fileId = `${type}-${name}`;
 
     // Determine correct file path
-    // Index files go to repo root: parameter-index.yaml
+    // Index files go to repo root: parameters-index.yaml
     // Regular files go to subdirectories: parameters/my-param.yaml
     const filePath = fileId.endsWith('-index')
       ? `${fileId}.yaml`

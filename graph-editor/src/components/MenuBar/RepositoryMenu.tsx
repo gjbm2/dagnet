@@ -12,6 +12,7 @@ import { workspaceService } from '../../services/workspaceService';
 import type { MergeConflict } from '../../services/workspaceService';
 import { gitService } from '../../services/gitService';
 import { credentialsManager } from '../../lib/credentials';
+import { db } from '../../db/appDatabase';
 import toast from 'react-hot-toast';
 import YAML from 'yaml';
 import type { ObjectType } from '../../types';
@@ -40,8 +41,22 @@ export function RepositoryMenu() {
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
 
   const dirtyTabs = operations.getDirtyTabs();
-  const hasDirtyTabs = dirtyTabs.length > 0;
+  const [dirtyFiles, setDirtyFiles] = React.useState<any[]>([]);
+  const hasDirtyFiles = dirtyFiles.length > 0;
   const hasActiveTab = !!activeTabId;
+  
+  // Load dirty files from IndexedDB (not just FileRegistry)
+  React.useEffect(() => {
+    const loadDirtyFiles = async () => {
+      const files = await db.getDirtyFiles();
+      setDirtyFiles(files);
+    };
+    loadDirtyFiles();
+    
+    const handleDirtyChange = () => loadDirtyFiles();
+    window.addEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
+    return () => window.removeEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
+  }, []);
 
   const handleSwitchRepository = () => {
     setIsSwitchRepoModalOpen(true);
@@ -53,11 +68,11 @@ export function RepositoryMenu() {
 
   const handleForceClone = async () => {
     // Warn if there are dirty files
-    if (hasDirtyTabs) {
+    if (hasDirtyFiles) {
       const confirmed = await showConfirm({
         title: 'Force Full Reload',
         message: 
-          `You have ${dirtyTabs.length} uncommitted file(s).\n\n` +
+          `You have ${dirtyFiles.length} uncommitted file(s).\n\n` +
           'Force Full Reload will:\n' +
           '• Delete your local workspace\n' +
           '• Re-clone from remote repository\n' +
@@ -293,10 +308,10 @@ export function RepositoryMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handleCommitChanges}
-              disabled={!hasDirtyTabs}
+              disabled={!hasDirtyFiles}
             >
               Commit Changes...
-              {hasDirtyTabs && <div className="menubar-right-slot">{dirtyTabs.length}</div>}
+              {hasDirtyFiles && <div className="menubar-right-slot">{dirtyFiles.length}</div>}
             </Menubar.Item>
 
             <Menubar.Separator className="menubar-separator" />
@@ -311,10 +326,10 @@ export function RepositoryMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handleShowDirtyFiles}
-              disabled={!hasDirtyTabs}
+              disabled={!hasDirtyFiles}
             >
               Show Dirty Files
-              {hasDirtyTabs && <div className="menubar-right-slot">{dirtyTabs.length}</div>}
+              {hasDirtyFiles && <div className="menubar-right-slot">{dirtyFiles.length}</div>}
             </Menubar.Item>
 
             <Menubar.Separator className="menubar-separator" />
@@ -322,7 +337,7 @@ export function RepositoryMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handleDiscardLocalChanges}
-              disabled={!hasDirtyTabs}
+              disabled={!hasDirtyFiles}
             >
               Discard Local Changes...
             </Menubar.Item>

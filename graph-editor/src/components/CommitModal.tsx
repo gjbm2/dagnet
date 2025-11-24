@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { gitService } from '../services/gitService';
+import { db } from '../db/appDatabase';
 import { ObjectType } from '../types';
 
 interface CommitModalProps {
@@ -46,25 +47,52 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   const initializedRef = useRef(false);
   const [forceUpdate, setForceUpdate] = useState(0);
 
-  // Get dirty files that can be committed - calculate directly to avoid infinite loops
+  // Get dirty files that can be committed - from IndexedDB (not just FileRegistry)
+  const [dirtyFiles, setDirtyFiles] = useState<any[]>([]);
+  
+  useEffect(() => {
+    if (!isOpen) {
+      setDirtyFiles([]);
+      return;
+    }
+    
+    const loadDirtyFiles = async () => {
+      const filesFromDB = await db.getDirtyFiles();
+      setDirtyFiles(filesFromDB);
+    };
+    
+    loadDirtyFiles();
+  }, [isOpen, forceUpdate]);
+  
   const getCommittableFiles = () => {
     if (!isOpen) return [];
-    
-    const dirtyFiles = fileRegistry.getDirtyFiles();
     return dirtyFiles
       .filter(file => {
-        const type = file.fileId.split('-')[0] as ObjectType;
-        // Allow graph, parameter, context, case, node, and event files
-        return ['graph', 'parameter', 'context', 'case', 'node', 'event'].includes(type);
+        // Allow all git-committable files (data files + index files + connections)
+        // Exclude ONLY: credentials, settings, temporary files
+        return file.type !== 'credentials' && 
+               file.type !== 'settings' &&
+               file.source?.repository !== 'temporary';
       })
       .map(file => {
         const fileId = file.fileId;
-        const type = fileId.split('-')[0] as ObjectType;
-        const name = fileId.split('-').slice(1).join('-');
+        const type = file.type;
         
-        // Determine file extension and path
+        // Handle index files specially
+        if (fileId.endsWith('-index')) {
+          return {
+            fileId,
+            name: `${type}s-index`,
+            type,
+            path: file.path || `${type}s-index.yaml`,
+            content: file.data ? JSON.stringify(file.data, null, 2) : '',
+            sha: file.sha
+          };
+        }
+        
+        // Regular data files
+        const name = fileId.split('-').slice(1).join('-');
         const extension = type === 'graph' ? 'json' : 'yaml';
-        // Remove extension from name if it already has one
         const nameWithoutExt = name.replace(/\.(json|yaml|yml)$/, '');
         const fileName = `${nameWithoutExt}.${extension}`;
         
@@ -72,7 +100,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
           fileId,
           name: nameWithoutExt,
           type,
-          path: `${type}s/${fileName}`,
+          path: file.path || `${type}s/${fileName}`,
           content: file.data ? JSON.stringify(file.data, null, 2) : '',
           sha: file.sha
         };

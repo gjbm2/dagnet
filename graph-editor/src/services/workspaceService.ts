@@ -119,6 +119,24 @@ class WorkspaceService {
         remoteFiles.push(...matchingFiles);
       }
 
+      // Add index files
+      const indexFiles = [
+        { fileName: 'parameters-index.yaml', type: 'parameter' as ObjectType },
+        { fileName: 'contexts-index.yaml', type: 'context' as ObjectType },
+        { fileName: 'cases-index.yaml', type: 'case' as ObjectType },
+        { fileName: 'nodes-index.yaml', type: 'node' as ObjectType },
+        { fileName: 'events-index.yaml', type: 'event' as ObjectType }
+      ];
+
+      for (const indexFile of indexFiles) {
+        const fullPath = basePath ? `${basePath}/${indexFile.fileName}` : indexFile.fileName;
+        const indexTreeItem = tree.find((item: any) => item.path === fullPath && item.type === 'blob');
+        
+        if (indexTreeItem) {
+          remoteFiles.push(indexTreeItem);
+        }
+      }
+
       // Compare SHAs
       let changed = 0;
       let added = 0;
@@ -293,8 +311,15 @@ class WorkspaceService {
             }
 
             // Create FileState
-          const fileName = treeItem.path.split('/').pop(); // Get filename from path
+          const fileName = treeItem.path.split('/').pop() || ''; // Get filename from path
           const fileNameWithoutExt = fileName.replace(/\.(yaml|yml|json)$/, '');
+          
+          // Validate filename extraction
+          if (!fileName || !fileNameWithoutExt) {
+            console.error(`❌ WorkspaceService: Invalid path ${treeItem.path} - filename extraction failed`);
+            return null;
+          }
+          
           const fileId = dirConfig.isIndex 
             ? `${dirConfig.type}-index`
             : `${dirConfig.type}-${fileNameWithoutExt}`;
@@ -682,8 +707,15 @@ class WorkspaceService {
             }
 
             // Create FileState identifiers
-            const fileName = treeItem.path.split('/').pop();
+            const fileName = treeItem.path.split('/').pop() || '';
             const fileNameWithoutExt = fileName.replace(/\.(yaml|yml|json)$/, '');
+            
+            // Validate filename extraction
+            if (!fileName || !fileNameWithoutExt) {
+              console.error(`❌ WorkspaceService: Invalid path ${treeItem.path} - filename extraction failed`);
+              return null;
+            }
+            
             const fileId = dirConfig.isIndex 
               ? `${dirConfig.type}-index`
               : `${dirConfig.type}-${fileNameWithoutExt}`;

@@ -150,8 +150,9 @@ export class IndexRebuildService {
   
   /**
    * Ensure a single file has a corresponding entry in its index
+   * Made public for testing
    */
-  private static async ensureFileInIndex(
+  static async ensureFileInIndex(
     file: any,
     type: 'parameter' | 'context' | 'case' | 'node' | 'event'
   ): Promise<RebuildResult> {
@@ -173,23 +174,32 @@ export class IndexRebuildService {
     const indexFileId = `${type}-index`;
     const arrayKey = `${type}s` as 'parameters' | 'contexts' | 'cases' | 'nodes' | 'events';
     
+    // Determine workspace prefix from file's fileId
+    const repository = file.source?.repository || 'local';
+    const branch = file.source?.branch || 'main';
+    const workspacePrefix = `${repository}-${branch}-`;
+    const idbIndexFileId = file.fileId.startsWith(workspacePrefix)
+      ? `${workspacePrefix}${indexFileId}`  // Use workspace prefix for IDB
+      : indexFileId;  // No prefix for local files
+    
     // Get index file from FileRegistry (load into memory if needed)
     let indexFile = fileRegistry.getFile(indexFileId);
     
     if (!indexFile) {
-      // Try to load from IndexedDB
-      const indexFromDb = await db.files.get(indexFileId);
+      // Try to load from IndexedDB with workspace prefix
+      const indexFromDb = await db.files.get(idbIndexFileId);
       if (indexFromDb) {
-        // Load into FileRegistry
-        (fileRegistry as any).files.set(indexFileId, indexFromDb);
-        indexFile = indexFromDb;
+        // Load into FileRegistry with NON-prefixed ID
+        const cleanIndexFile = { ...indexFromDb, fileId: indexFileId };
+        (fileRegistry as any).files.set(indexFileId, cleanIndexFile);
+        indexFile = cleanIndexFile;
       } else {
         // Create new index file
         indexFile = {
           fileId: indexFileId,
           type: type,
-          name: `${indexFileId}.yaml`,
-          path: `${indexFileId}.yaml`,
+          name: `${arrayKey}-index.yaml`,
+          path: `${arrayKey}-index.yaml`,
           data: {
             version: '1.0.0',
             created_at: new Date().toISOString(),
@@ -200,22 +210,17 @@ export class IndexRebuildService {
           viewTabs: [],
           lastModified: Date.now(),
           source: {
-            repository: file.source?.repository || 'local',
-            branch: file.source?.branch || 'main',
-            path: `${indexFileId}.yaml`
+            repository,
+            branch,
+            path: `${arrayKey}-index.yaml`
           }
         };
         
-        // Add to FileRegistry and save to IndexedDB
+        // Add to FileRegistry with non-prefixed ID
         (fileRegistry as any).files.set(indexFileId, indexFile);
-        await db.files.put(indexFile);
         
-        return {
-          fileId,
-          type,
-          action: 'added',
-          message: `Created index file and added entry for ${itemId}`
-        };
+        // DON'T return yet - we need to add the entry below!
+        // Initial save will happen after adding the entry
       }
     }
     
@@ -265,10 +270,14 @@ export class IndexRebuildService {
         indexFile.isDirty = true;
         indexFile.lastModified = Date.now();
         
-        // Save to IndexedDB
-        await db.files.put(indexFile);
+        // Update FileRegistry copy (critical - must update before notifying!)
+        (fileRegistry as any).files.set(indexFileId, indexFile);
         
-        // Notify listeners
+        // Save to IndexedDB with workspace prefix
+        const idbIndexFile = { ...indexFile, fileId: idbIndexFileId };
+        await db.files.put(idbIndexFile);
+        
+        // Notify listeners (with non-prefixed fileId)
         (fileRegistry as any).notifyListeners(indexFileId, indexFile);
         
         return {
@@ -296,11 +305,20 @@ export class IndexRebuildService {
     };
     
     // Add optional fields
-    if (file.data.name) newEntry.name = file.data.name;
-    if (file.data.description) newEntry.description = file.data.description;
-    if (file.data.type) newEntry.type = file.data.type;
-    if (file.data.tags) newEntry.tags = file.data.tags;
-    if (file.data.category) newEntry.category = file.data.category;
+    // CRITICAL: Use name from file.data, fallback to itemId if missing
+    newEntry.name = file.data?.name || itemId;
+    
+    if (file.data?.description) newEntry.description = file.data.description;
+    if (file.data?.type) newEntry.type = file.data.type;
+    if (file.data?.tags) newEntry.tags = file.data.tags;
+    if (file.data?.category) newEntry.category = file.data.category;
+    
+    // Log what we're adding for debugging
+    console.log(`📝 IndexRebuildService: Adding index entry for ${itemId}:`, {
+      'file.data.name': file.data?.name,
+      'newEntry.name': newEntry.name,
+      'fallbackUsed': !file.data?.name
+    });
     
     // Type-specific fields
     if (type === 'node') {
@@ -321,10 +339,14 @@ export class IndexRebuildService {
     indexFile.isDirty = true;
     indexFile.lastModified = Date.now();
     
-    // Save to IndexedDB
-    await db.files.put(indexFile);
+    // Update FileRegistry copy (critical - must update before notifying!)
+    (fileRegistry as any).files.set(indexFileId, indexFile);
     
-    // Notify listeners
+    // Save to IndexedDB with workspace prefix
+    const idbIndexFile = { ...indexFile, fileId: idbIndexFileId };
+    await db.files.put(idbIndexFile);
+    
+    // Notify listeners (with non-prefixed fileId)
     (fileRegistry as any).notifyListeners(indexFileId, indexFile);
     
     return {
@@ -405,4 +427,5 @@ export class IndexRebuildService {
     return lines.join('\n');
   }
 }
+
 
