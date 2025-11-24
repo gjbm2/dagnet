@@ -1,0 +1,131 @@
+{
+  "ui:order": ["id", "name", "description", "type", "otherPolicy", "values", "metadata"],
+  "id": {
+    "ui:description": "Unique identifier (snake_case)"
+  },
+  "name": {
+    "ui:description": "Human-readable name for UI display"
+  },
+  "description": {
+    "ui:widget": "textarea",
+    "ui:options": {
+      "rows": 2
+    },
+    "ui:description": "What this context represents"
+  },
+  "type": {
+    "ui:widget": "select",
+    "ui:description": "Context type classification"
+  },
+  "otherPolicy": {
+    "ui:widget": "select",
+    "ui:description": "How to handle 'other' catch-all bucket",
+    "ui:help": "null=no other (MECE), computed=dynamic NOT filter, explicit=explicit filter, undefined=not MECE"
+  },
+  "values": {
+    "ui:options": {
+      "orderable": true,
+      "tabField": "label"
+    },
+    "items": {
+      "ui:title": " ",
+      "id": {
+        "ui:description": "Value identifier (kebab-case)"
+      },
+      "label": {
+        "ui:description": "Display label"
+      },
+      "description": {
+        "ui:widget": "textarea",
+        "ui:options": {
+          "rows": 2
+        }
+      },
+      "order": {
+        "ui:description": "Order value (for ordinal contexts)"
+      },
+      "aliases": {
+        "ui:options": {
+          "orderable": true
+        }
+      },
+      "sources": {
+        "ui:options": {
+          "accordion": true
+        },
+        "ui:description": "Source-specific mappings for this value",
+        "amplitude": {
+          "ui:options": {
+            "accordion": false
+          },
+          "field": {
+            "ui:description": "Amplitude property name (e.g., utm_source)"
+          },
+          "filter": {
+            "ui:widget": "textarea",
+            "ui:options": {
+              "rows": 2
+            },
+            "ui:description": "Filter expression (e.g., utm_source == 'google')"
+          },
+          "pattern": {
+            "ui:description": "Regex pattern (alternative to filter)"
+          },
+          "patternFlags": {
+            "ui:description": "Regex flags (e.g., 'i' for case-insensitive)"
+          }
+        },
+        "sheets": {
+          "ui:options": {
+            "accordion": false
+          },
+          "field": {},
+          "filter": {
+            "ui:widget": "textarea",
+            "ui:options": {
+              "rows": 2
+            }
+          }
+        }
+      }
+    }
+  },
+  "metadata": {
+    "ui:options": {
+      "accordion": true
+    },
+    "category": {
+      "ui:widget": "select",
+      "ui:description": "Category for grouping in UI"
+    },
+    "data_source": {
+      "ui:description": "Where this context data comes from"
+    },
+    "created_at": {
+      "ui:description": "When this context was created"
+    },
+    "updated_at": {
+      "ui:description": "When last updated"
+    },
+    "version": {
+      "ui:description": "Semantic version"
+    },
+    "status": {
+      "ui:widget": "select",
+      "ui:description": "Current status"
+    },
+    "author": {
+      "ui:description": "Author or team"
+    },
+    "deprecation_notice": {
+      "ui:widget": "textarea",
+      "ui:options": {
+        "rows": 2
+      }
+    },
+    "replacement_context_id": {
+      "ui:description": "Replacement context if deprecated"
+    }
+  }
+}
+

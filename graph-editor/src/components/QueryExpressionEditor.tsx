@@ -1,9 +1,12 @@
 import React, { useRef, useEffect, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, Settings } from 'lucide-react';
+import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, Settings, ChevronDown } from 'lucide-react';
+import toast from 'react-hot-toast';
 import './QueryExpressionEditor.css';
 import { QUERY_FUNCTIONS } from '../lib/queryDSL';
+import { ContextValueSelector } from './ContextValueSelector';
+import { contextRegistry } from '../services/contextRegistry';
 
 interface QueryExpressionEditorProps {
   value: string;
@@ -24,7 +27,7 @@ interface QueryExpressionEditorProps {
 }
 
 interface ParsedQueryChip {
-  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'minus' | 'plus';
+  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'contextAny' | 'window' | 'minus' | 'plus';
   values: string[];
   rawText: string;
 }
@@ -68,6 +71,14 @@ const outerChipConfig = {
     label: 'context',
     icon: Settings
   },
+  contextAny: {
+    label: 'contextAny',
+    icon: Settings
+  },
+  window: {
+    label: 'window',
+    icon: Settings
+  },
   minus: {
     label: 'minus',
     icon: MapPinXInside  // Reuse exclude icon or import Minus from lucide-react
@@ -99,16 +110,16 @@ function parseQueryToChips(query: string): ParsedQueryChip[] {
   const chips: ParsedQueryChip[] = [];
   
   // Match ALL function calls in order they appear
-  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context|minus|plus)\(([^)]+)\)/g;
+  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context|contextAny|window|minus|plus)\(([^)]+)\)/g;
   let match;
   
   while ((match = functionRegex.exec(query)) !== null) {
-    const funcType = match[1] as 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'minus' | 'plus';
+    const funcType = match[1] as ParsedQueryChip['type'];
     const content = match[2];
     
     chips.push({
       type: funcType,
-      values: (funcType === 'exclude' || funcType === 'visited') 
+      values: (funcType === 'exclude' || funcType === 'visited' || funcType === 'visitedAny' || funcType === 'contextAny') 
         ? content.split(',').map(s => s.trim())
         : [content],
       rawText: match[0]
@@ -137,6 +148,17 @@ export function QueryExpressionEditor({
   
   // Helper to update both state and ref together
   const updateIsEditing = (editing: boolean) => {
+    // Capture current width before entering edit mode
+    if (editing && !isEditing && chipContainerRef.current) {
+      const currentWidth = chipContainerRef.current.offsetWidth;
+      setWidthBeforeEdit(currentWidth);
+    }
+    
+    // Reset width after exiting edit mode
+    if (!editing && isEditing) {
+      setWidthBeforeEdit(null);
+    }
+    
     setIsEditing(editing);
     isEditingRef.current = editing;
   };
@@ -147,6 +169,27 @@ export function QueryExpressionEditor({
   const [editorHeight, setEditorHeight] = useState(height);
   const [valueBeforeEdit, setValueBeforeEdit] = useState<string>('');
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [chipDropdownOpen, setChipDropdownOpen] = useState<number | null>(null);
+  const [chipDropdownValues, setChipDropdownValues] = useState<any[]>([]);
+  const [chipDropdownAnchor, setChipDropdownAnchor] = useState<HTMLElement | null>(null);
+  const [widthBeforeEdit, setWidthBeforeEdit] = useState<number | null>(null);
+  const chipDropdownRef = useRef<HTMLDivElement>(null);
+  const chipRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const chipContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Close chip dropdown when clicking outside
+  useEffect(() => {
+    if (chipDropdownOpen === null) return;
+    
+    const handleClickOutside = (event: MouseEvent) => {
+      if (chipDropdownRef.current && !chipDropdownRef.current.contains(event.target as Node)) {
+        setChipDropdownOpen(null);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [chipDropdownOpen]);
   
     // Validate value whenever it changes (for chip mode warning)
   useEffect(() => {
@@ -167,13 +210,16 @@ export function QueryExpressionEditor({
     }
     
     const errors: string[] = [];
+    // Allow more flexible patterns for contextAny with multiple key:value pairs
     const validQueryPattern = /^[a-z_-]+\([a-zA-Z0-9_:,\s-]*\)(\.([a-z_-]+\([a-zA-Z0-9_:,\s-]*\)))*$/;
     const patternMatches = validQueryPattern.test(cleanValue);
     console.log('[QueryExpressionEditor] Pattern test:', { cleanValue, patternMatches });
     
-    if (!patternMatches) {
-      errors.push('Invalid query structure');
-    }
+    // Skip pattern validation - let parseConstraints handle it
+    // (Monaco's built-in validation will catch syntax errors)
+    // if (!patternMatches) {
+    //   errors.push('Invalid query structure');
+    // }
     
     // Check for empty function calls
     if (/\(\s*\)/.test(cleanValue)) {
@@ -443,6 +489,43 @@ export function QueryExpressionEditor({
           }
         }
         
+        // After context( → suggest context keys
+        // TODO: Load from contextRegistry asynchronously
+        // For now, no suggestions (user types manually)
+        
+        // After context(key: → suggest values for that key
+        // TODO: Load values from contextRegistry.getValuesForContext(key)
+        // For now, no suggestions (user types manually)
+        
+        // After window( → suggest date formats
+        if (/window\([^)]*$/.test(textUntilPosition)) {
+          return {
+            suggestions: [
+              {
+                label: 'Relative: last 90 days',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-90d:',
+                documentation: 'Last 90 days to now',
+                range
+              },
+              {
+                label: 'Relative: last 30 days',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-30d:',
+                documentation: 'Last 30 days to now',
+                range
+              },
+              {
+                label: 'Relative: last 7 days',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-7d:',
+                documentation: 'Last 7 days to now',
+                range
+              }
+            ]
+          };
+        }
+        
         // After . (dot) → suggest constraint types OR from/to/case
         if (/\.$/.test(textUntilPosition) || /\)\.$/.test(textUntilPosition)) {
           const hasSuggestions: any[] = [];
@@ -516,6 +599,36 @@ export function QueryExpressionEditor({
               detail: '.case(case-id:variant-name)',
               range,
               sortText: '4'
+            },
+            {
+              label: 'context',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'context($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Filter by context dimension',
+              detail: '.context(key:value)',
+              range,
+              sortText: '5'
+            },
+            {
+              label: 'contextAny',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'contextAny($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Filter by any of several context values (OR within key)',
+              detail: '.contextAny(key:val1,val2,...)',
+              range,
+              sortText: '6'
+            },
+            {
+              label: 'window',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'window($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Time window for data retrieval',
+              detail: '.window(start:end) - dates as d-MMM-yy or relative like -90d',
+              range,
+              sortText: '7'
             },
             {
               label: 'minus',
@@ -669,18 +782,8 @@ export function QueryExpressionEditor({
       }
       
       // 5. Check for overall query structure and invalid tokens
-      // Valid queries: functionName(args) followed by optional .functionName(args)
-      const validQueryPattern = /^[a-z_-]+\([a-zA-Z0-9_:,\s-]*\)(\.([a-z_-]+\([a-zA-Z0-9_:,\s-]*\)))*$/;
-      if (!validQueryPattern.test(text.trim())) {
-        markers.push({
-          severity: monaco.MarkerSeverity.Error,
-          message: 'Invalid query structure. Expected: function(args).function(args)...',
-          startLineNumber: 1,
-          startColumn: 1,
-          endLineNumber: 1,
-          endColumn: text.length + 1
-        });
-      }
+      // Skip strict pattern validation - parseConstraints will validate semantics
+      // (This allows flexible contextAny formats like contextAny(key:v1,key:v2))
       
       // 6. Check for trailing tokens without parentheses (like "oasdf" in ".visited(a).oasdf")
       const trailingTokenPattern = /\.([a-z_-]+)\s*$/;
@@ -1093,6 +1196,72 @@ export function QueryExpressionEditor({
     // Don't enter edit mode - just remove the chip
   };
   
+  const [chipDropdownOtherPolicy, setChipDropdownOtherPolicy] = useState<'null' | 'computed' | 'explicit' | 'undefined' | undefined>();
+  
+  const handleChipDropdownOpen = async (chipIndex: number, chip: ParsedQueryChip, e: React.MouseEvent, anchorEl: HTMLElement) => {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    // Only for context and contextAny chips
+    if (chip.type !== 'context' && chip.type !== 'contextAny') return;
+    
+    // Extract context key from first value (format: "key:value")
+    const firstValue = chip.values[0];
+    const contextKey = firstValue?.split(':')[0];
+    if (!contextKey) return;
+    
+    // Load context definition and values
+    try {
+      const context = await contextRegistry.getContext(contextKey);
+      const values = await contextRegistry.getValuesForContext(contextKey);
+      setChipDropdownValues(values);
+      setChipDropdownOtherPolicy(context?.otherPolicy);
+      setChipDropdownAnchor(anchorEl);
+      setChipDropdownOpen(chipIndex);
+    } catch (err) {
+      console.error('Failed to load context values:', err);
+    }
+  };
+  
+  const handleChipDropdownApply = async (key: string, selectedValues: string[]) => {
+    if (chipDropdownOpen === null) return;
+    
+    const chip = chips[chipDropdownOpen];
+    const otherChips = chips.filter((_, i) => i !== chipDropdownOpen);
+    
+    // Check if all values are selected AND key is MECE (should remove chip)
+    const allValues = chipDropdownValues;
+    const allSelected = allValues.length > 0 && selectedValues.length === allValues.length;
+    const isMECE = chipDropdownOtherPolicy !== 'undefined';
+    
+    let newChipText: string;
+    if (selectedValues.length === 0 || (allSelected && isMECE)) {
+      // Remove chip entirely (no values OR all values selected for MECE key = no filter)
+      const newValue = otherChips.map(c => c.rawText).join('.');
+      onChange(newValue);
+      setChipDropdownOpen(null);
+      
+      if (allSelected && isMECE) {
+        toast.success('All values selected = no filter (chip removed)', { duration: 2000 });
+      }
+      return;
+    } else if (selectedValues.length === 1) {
+      // Single value: context(key:value)
+      newChipText = `context(${key}:${selectedValues[0]})`;
+    } else {
+      // Multiple values: contextAny(key:val1,val2,...)
+      const pairs = selectedValues.map(v => `${key}:${v}`).join(',');
+      newChipText = `contextAny(${pairs})`;
+    }
+    
+    // Rebuild query with updated chip
+    const newChips = [...otherChips];
+    newChips.splice(chipDropdownOpen, 0, parseQueryToChips(newChipText)[0]);
+    const newValue = newChips.map(c => c.rawText).join('.');
+    onChange(newValue);
+    setChipDropdownOpen(null);
+  };
+  
   // Click outer chip to select the whole term in Monaco
   const handleOuterChipClick = (chip: ParsedQueryChip, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1289,6 +1458,7 @@ export function QueryExpressionEditor({
                 }, 50);
               }
             }}
+            ref={chipContainerRef}
             style={{
               padding: '6px',
               display: 'flex',
@@ -1297,7 +1467,9 @@ export function QueryExpressionEditor({
               cursor: readonly ? 'default' : 'text',
               minHeight: '42px',
               alignItems: 'center',
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+              maxWidth: '100%',
+              wordBreak: 'normal'
             }}
           >
         {chips.map((chip, index) => {
@@ -1312,12 +1484,16 @@ export function QueryExpressionEditor({
           return (
             <div
               key={index}
+              ref={(el) => {
+                if (el) chipRefs.current.set(index, el);
+              }}
               onMouseEnter={() => setHoveredChipIndex(index)}
               onMouseLeave={() => setHoveredChipIndex(null)}
               onClick={(e) => handleOuterChipClick(chip, e)}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
+                flexWrap: 'wrap',
                 gap: '4px',
                 padding: '5px 8px',
                 backgroundColor: '#F9FAFB',  // Neutral light grey
@@ -1327,7 +1503,8 @@ export function QueryExpressionEditor({
                 fontWeight: '500',
                 position: 'relative',
                 transition: 'all 0.15s ease',
-                cursor: readonly ? 'default' : 'pointer'
+                cursor: readonly ? 'default' : 'pointer',
+                maxWidth: '100%'
               }}
             >
               <Icon size={13} style={{ color: '#6B7280' }} />
@@ -1353,10 +1530,11 @@ export function QueryExpressionEditor({
                       fontSize: '11px',
                       fontWeight: '500',
                       cursor: readonly ? 'default' : 'pointer',
-                      position: 'relative'
+                      position: 'relative',
+                      whiteSpace: 'nowrap'
                     }}
                   >
-                    <span style={{ color: innerConfig.textColour }}>
+                    <span style={{ color: innerConfig.textColour, whiteSpace: 'nowrap' }}>
                       {val}
                     </span>
                   </div>
@@ -1368,13 +1546,42 @@ export function QueryExpressionEditor({
               
               <span style={{ color: '#6B7280' }}>)</span>
               
+              {/* Dropdown button for context chips */}
+              {!readonly && (chip.type === 'context' || chip.type === 'contextAny') && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    const chipEl = chipRefs.current.get(index);
+                    if (chipEl) {
+                      handleChipDropdownOpen(index, chip, e, chipEl);
+                    }
+                  }}
+                  style={{
+                    marginLeft: '4px',
+                    padding: '2px 4px',
+                    border: 'none',
+                    background: 'transparent',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: '#9CA3AF',
+                    transition: 'color 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.color = '#374151'}
+                  onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
+                  title="Change values"
+                >
+                  <ChevronDown size={12} />
+                </button>
+              )}
+              
               {/* Delete button for entire outer chip - always visible */}
               {!readonly && (
                 <button
                   type="button"
                   onClick={(e) => handleDeleteChip(chip, e)}
                   style={{
-                    marginLeft: '4px',
+                    marginLeft: '2px',
                     padding: '2px',
                     border: 'none',
                     background: 'transparent',
@@ -1407,8 +1614,33 @@ export function QueryExpressionEditor({
       overflow: 'visible',  // Allow autocomplete to overflow
       backgroundColor: '#ffffff',
       position: 'relative',
-      zIndex: 'auto'  // Don't create a stacking context - let Monaco widgets (appended to body) use global z-index
+      zIndex: 'auto',  // Don't create a stacking context - let Monaco widgets (appended to body) use global z-index
+      minWidth: widthBeforeEdit ? `${widthBeforeEdit}px` : 'auto',
+      width: isEditing && widthBeforeEdit ? `${widthBeforeEdit}px` : 'auto'
     }}>
+      {/* Per-chip dropdown for context value selection */}
+      {chipDropdownOpen !== null && chipDropdownValues.length > 0 && chipDropdownAnchor && (
+        <div 
+          ref={chipDropdownRef}
+          style={{
+            position: 'fixed',
+            top: `${chipDropdownAnchor.getBoundingClientRect().bottom + 4}px`,
+            left: `${chipDropdownAnchor.getBoundingClientRect().left}px`,
+            zIndex: 1000
+          }}
+        >
+          <ContextValueSelector
+            mode="single-key"
+            contextKey={chips[chipDropdownOpen]?.values[0]?.split(':')[0] || ''}
+            availableValues={chipDropdownValues}
+            currentValues={chips[chipDropdownOpen]?.values.map(v => v.split(':')[1]) || []}
+            onApply={handleChipDropdownApply}
+            onCancel={() => setChipDropdownOpen(null)}
+            anchorEl={chipDropdownAnchor}
+            otherPolicy={chipDropdownOtherPolicy}
+          />
+        </div>
+      )}
       {/* Show chip view when not editing, Monaco when editing */}
       {!isEditing && !readonly ? (
         renderChipView()

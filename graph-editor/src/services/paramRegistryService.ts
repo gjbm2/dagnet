@@ -46,8 +46,15 @@ export interface ParameterValue {
   k_daily?: number[]; // Daily successes
   dates?: string[]; // Dates (YYYY-MM-DD) corresponding to n_daily/k_daily
   
-  // Query signature (for consistency checking)
+  // Slice identification (PRIMARY INDEX KEY for data lookup)
+  sliceDSL?: string; // Canonical DSL for this data slice (e.g., "context(channel:google)")
+                     // Empty string or undefined = uncontexted, all-time slice
+                     // Used for filtering to specific context/window combinations
+  
+  // Query signature (for consistency checking - NOT for indexing)
   query_signature?: string; // SHA-256 hash of query configuration
+                            // Used to detect if query config changed (topology, connection, mappings)
+                            // Multiple slices can share same signature
   
   window_from?: string; // ISO 8601 timestamp
   window_to?: string; // ISO 8601 timestamp

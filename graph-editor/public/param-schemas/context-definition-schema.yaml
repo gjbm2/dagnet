@@ -1,5 +1,10 @@
 # Individual Context Definition Schema
 # This schema defines the structure for a single context definition file
+# in the Dagnet parameter registry system.
+
+$schema: http://json-schema.org/draft-07/schema#
+title: Context Definition
+description: Contexts are categorical or ordinal dimensions used to slice and filter conversion data (e.g., marketing channel, device type, browser). They enable multi-dimensional analysis with MECE aggregation support.
 
 type: object
 required: [id, name, type, values, metadata]
@@ -35,6 +40,17 @@ properties:
       - categorical: Discrete unordered values (e.g., channel, browser)
       - ordinal: Discrete ordered values (e.g., browser_version, time_of_day)
       - continuous: Numeric range (future: not yet implemented)
+  
+  otherPolicy:
+    type: string
+    enum: [null, computed, explicit, undefined]
+    description: |
+      Controls how the "other" catch-all bucket is handled:
+      - null: No "other"; values are asserted MECE (complete)
+      - computed: "other" = ALL - explicit values (computed dynamically)
+      - explicit: "other" is a regular value with explicit mappings
+      - undefined: No "other"; values NOT MECE (can't aggregate to total)
+    default: undefined
   
   values:
     type: array
@@ -76,16 +92,33 @@ properties:
             pattern: '^[a-z0-9_-]+$'
           uniqueItems: true
           description: "Alternative identifiers for this value"
+        
+        sources:
+          type: object
+          description: "Source-specific mappings for this value"
+          additionalProperties:
+            type: object
+            properties:
+              field:
+                type: string
+                description: "Source property/field name"
+                examples: ["utm_source", "browser", "device_type"]
+              
+              filter:
+                type: string
+                description: "Explicit filter expression for this value"
+                examples: ["utm_source == 'google'", "browser in ['Chrome', 'Chromium']"]
+              
+              pattern:
+                type: string
+                description: "Regex pattern for matching raw values (alternative to filter)"
+                examples: ["^google", "^(facebook|fb|instagram|ig)_"]
+              
+              patternFlags:
+                type: string
+                description: "Regex flags (e.g., 'i' for case-insensitive)"
+                examples: ["i", "im"]
     description: "Valid values for this context"
-  
-  comparison_support:
-    type: boolean
-    default: false
-    description: "Whether this context supports comparison operators (>, <, >=, <=)"
-  
-  default_value:
-    type: string
-    description: "Default value ID if none specified (optional)"
   
   metadata:
     type: object
@@ -147,14 +180,4 @@ allOf:
         values:
           items:
             required: [order]
-  
-  # If comparison_support is true, type must be ordinal
-  - if:
-      properties:
-        comparison_support:
-          const: true
-    then:
-      properties:
-        type:
-          enum: [ordinal]
 

@@ -2,7 +2,12 @@
  * Composite Query Parser for Inclusion-Exclusion
  * 
  * Parses DSL queries with minus() and plus() operators for subtractive funnel logic.
+ * 
+ * Note: This parser handles minus/plus operators. For context/window constraints,
+ * it delegates to parseConstraints() from queryDSL.ts (single source of truth).
  */
+
+import { parseConstraints } from '../queryDSL';
 
 export interface ParsedFunnel {
   from: string;

@@ -45,6 +45,7 @@ import { statisticalEnhancementService } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
+import { isolateSlice } from './sliceIsolation';
 
 // Shared UpdateManager instance
 const updateManager = new UpdateManager();
@@ -425,8 +426,9 @@ class DataOperationsService {
     setGraph: (graph: Graph | null) => void;
     setAutoUpdating?: (updating: boolean) => void;
     window?: DateRange; // Optional: if provided, aggregate daily data for this window
+    targetSlice?: string; // Optional: DSL for specific slice (default '' = uncontexted)
   }): Promise<void> {
-    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window } = options;
+    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window, targetSlice = '' } = options;
     
     // Set auto-updating flag to enable animations
     if (setAutoUpdating) {
@@ -471,8 +473,11 @@ class DataOperationsService {
       let aggregatedData = paramFile.data;
       if (window && paramFile.data?.values) {
         // Collect ALL value entries with daily data
-        const valuesWithDaily = (paramFile.data.values as ParameterValue[])
+        const allValuesWithDaily = (paramFile.data.values as ParameterValue[])
           .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
+        
+        // CRITICAL: Isolate to target slice to prevent cross-slice aggregation
+        const valuesWithDaily = isolateSlice(allValuesWithDaily, targetSlice);
         
         if (valuesWithDaily.length > 0) {
           try {
@@ -596,30 +601,18 @@ class DataOperationsService {
                 }
                 
                 // CRITICAL: Always filter to ONLY signed values matching the signature
-                // Unsigned values (from "Unsign cache") are treated as non-existent
-                // This ensures unsigned cache doesn't pollute aggregation results
+                // Signature validation: check staleness, but don't filter
+                // (Filtering by slice already done via isolateSlice above)
                 if (signatureToUse) {
-                  const beforeFilter = valuesWithDaily.length;
-                  // Only include entries that match the signature
-                  // Unsigned entries (no query_signature) are ALWAYS excluded
-                  const filteredValues = valuesWithDaily.filter(v => 
-                    v.query_signature === signatureToUse
+                  const staleValues = valuesWithDaily.filter(v => 
+                    v.query_signature && v.query_signature !== signatureToUse
                   );
                   
-                  if (filteredValues.length < beforeFilter) {
-                    const unsignedCount = valuesWithDaily.filter(v => !v.query_signature).length;
-                    const differentSignatureCount = beforeFilter - filteredValues.length - unsignedCount;
-                    
-                    console.log(`[DataOperationsService] Filtered ${beforeFilter} entries to ${filteredValues.length} matching signature ${signatureToUse}`);
-                    console.log(`[DataOperationsService] Excluded: ${unsignedCount} unsigned values + ${differentSignatureCount} with different signatures`);
-                    // Replace valuesWithDaily with filtered list
-                    valuesWithDaily.length = 0;
-                    valuesWithDaily.push(...filteredValues);
+                  if (staleValues.length > 0) {
+                    console.warn(`[DataOperationsService] ${staleValues.length} values have stale signatures (query config may have changed)`);
                   }
-                } else if (!hasAnySignatures) {
-                  // No signatures found at all (all unsigned) - treat as empty
-                  console.log(`[DataOperationsService] No signatures found - ignoring all ${valuesWithDaily.length} unsigned values`);
-                  valuesWithDaily.length = 0;
+                  
+                  // Note: We still USE the data (keyed by sliceDSL), but warn about staleness
                 }
               } catch (error) {
                 console.warn('[DataOperationsService] Failed to validate query signature:', error);
@@ -1628,8 +1621,9 @@ class DataOperationsService {
     conditionalIndex?: number;
     window?: DateRange;
     bustCache?: boolean; // If true, ignore existing dates and re-fetch everything
+    targetSlice?: string; // Optional: DSL for specific slice (default '' = uncontexted)
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, bustCache } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, bustCache, targetSlice = '' } = options;
     
     try {
       if (objectType === 'parameter') {
@@ -2138,14 +2132,17 @@ class DataOperationsService {
           // Now use it for incremental fetch logic
           
           // Filter parameter file values to latest signature before calculating incremental fetch
-          // This ensures we only consider dates from matching signature when determining what to fetch
+          // Isolate to target slice, then check signatures
           let filteredParamData = paramFile.data;
-          if (querySignature && paramFile.data.values && Array.isArray(paramFile.data.values)) {
-            // Find latest signature by timestamp (same logic as in getParameterFromFile)
-            const valuesWithDaily = (paramFile.data.values as ParameterValue[])
+          if (paramFile.data.values && Array.isArray(paramFile.data.values)) {
+            // First: collect all values with daily data
+            const allValuesWithDaily = (paramFile.data.values as ParameterValue[])
               .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
             
-            if (valuesWithDaily.length > 0) {
+            // CRITICAL: Isolate to target slice to prevent cross-slice date contamination
+            const valuesWithDaily = isolateSlice(allValuesWithDaily, targetSlice);
+            
+            if (valuesWithDaily.length > 0 && querySignature) {
               const signatureTimestamps = new Map<string, string>();
               let hasAnySignatures = false;
               
@@ -2173,46 +2170,22 @@ class DataOperationsService {
               // Use latest signature if found, otherwise use expected signature
               const signatureToUse = latestQuerySignature || querySignature;
               
-              // CRITICAL: Always filter to ONLY signed values
-              // Unsigned values (from "Unsign cache") are treated as non-existent
-              // This ensures that unsigned cache is effectively cleared for incremental fetch logic
+              // Check signature staleness (but use slice-isolated data)
               if (signatureToUse) {
-                const filteredValues = paramFile.data.values.filter((v: ParameterValue) => 
-                  v.query_signature === signatureToUse
+                const staleValues = valuesWithDaily.filter(v => 
+                  v.query_signature && v.query_signature !== signatureToUse
                 );
                 
-                if (filteredValues.length < paramFile.data.values.length) {
-                  const unsignedCount = paramFile.data.values.filter((v: ParameterValue) => !v.query_signature).length;
-                  const differentSignatureCount = paramFile.data.values.length - filteredValues.length - unsignedCount;
-                  
-                  console.log(`[DataOperationsService] Filtered ${paramFile.data.values.length} values to ${filteredValues.length} matching signature ${signatureToUse} before incremental fetch`);
-                  console.log(`[DataOperationsService] Excluded: ${unsignedCount} unsigned values + ${differentSignatureCount} with different signatures`);
-                  
-                  // ===== DIAGNOSTIC: Show WHY signatures matched/mismatched =====
-                  console.log('[DataOperationsService] Signature comparison:', {
-                    expectedSignature: querySignature?.substring(0, 12) + '...',
-                    latestSignature: latestQuerySignature?.substring(0, 12) + '...',
-                    signatureToUse: signatureToUse?.substring(0, 12) + '...',
-                    signaturesMatch: querySignature === latestQuerySignature,
-                    allSignaturesInFile: Array.from(signatureTimestamps.keys()).map(s => s.substring(0, 12) + '...'),
-                    hasAnySignatures,
-                    unsignedValuesIgnored: unsignedCount,
-                  });
-                  // ==============================================================
-                  
-                  filteredParamData = {
-                    ...paramFile.data,
-                    values: filteredValues
-                  };
+                if (staleValues.length > 0) {
+                  console.warn(`[DataOperationsService] ${staleValues.length} values in slice have stale signatures`);
                 }
-              } else if (!hasAnySignatures) {
-                // No signatures found at all (all unsigned) - treat as empty
-                console.log(`[DataOperationsService] No signatures found - treating all ${paramFile.data.values.length} unsigned values as non-existent`);
-                filteredParamData = {
-                  ...paramFile.data,
-                  values: []
-                };
               }
+              
+              // Use slice-isolated values for incremental fetch
+              filteredParamData = {
+                ...paramFile.data,
+                values: valuesWithDaily
+              };
             }
           }
           

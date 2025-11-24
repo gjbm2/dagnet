@@ -259,6 +259,19 @@ class WorkspaceService {
         });
 
         console.log(`📂 WorkspaceService: Found ${matchingFiles.length} ${dir.type} files in ${fullPath}/`);
+        if (matchingFiles.length > 0) {
+          console.log(`📂 WorkspaceService: ${dir.type} files found:`, matchingFiles.map((f: any) => f.path));
+        } else {
+          // Debug: show what files ARE in the tree that might match
+          const potentialMatches = tree.filter((item: any) => 
+            item.type === 'blob' && 
+            item.path.includes(dir.path) && 
+            item.path.endsWith(`.${dir.extension}`)
+          );
+          if (potentialMatches.length > 0) {
+            console.log(`⚠️ WorkspaceService: Found ${potentialMatches.length} potential ${dir.type} files but path mismatch:`, potentialMatches.map((f: any) => f.path));
+          }
+        }
         
         for (const file of matchingFiles) {
           filesToFetch.push({ treeItem: file, dirConfig: dir });
@@ -289,6 +302,24 @@ class WorkspaceService {
         }
       }
 
+      // Log summary of what we're about to fetch
+      const filesByTypeBeforeFetch = new Map<string, number>();
+      for (const { dirConfig } of filesToFetch) {
+        filesByTypeBeforeFetch.set(dirConfig.type, (filesByTypeBeforeFetch.get(dirConfig.type) || 0) + 1);
+      }
+      const typeSummaryBefore = Array.from(filesByTypeBeforeFetch.entries())
+        .map(([type, count]) => `${type}: ${count}`)
+        .join(', ');
+      console.log(`📦 WorkspaceService: About to fetch ${filesToFetch.length} files (${typeSummaryBefore})`);
+      
+      // Warn if any expected file type has zero files
+      for (const dir of directories) {
+        const count = filesByTypeBeforeFetch.get(dir.type) || 0;
+        if (count === 0) {
+          console.warn(`⚠️ WorkspaceService: No ${dir.type} files found in ${basePath ? `${basePath}/` : ''}${dir.path}/ - check path configuration`);
+        }
+      }
+      
       console.log(`📦 WorkspaceService: Fetching ${filesToFetch.length} files in parallel...`);
 
       // STEP 3: Fetch all file contents in parallel (HUGE PERF WIN!)
@@ -343,6 +374,7 @@ class WorkspaceService {
               data,
               originalData: structuredClone(data),
               isDirty: false,
+              isInitializing: true, // Allow editor normalization without marking dirty
               source: {
                 repository,
               path: treeItem.path,
@@ -383,7 +415,18 @@ class WorkspaceService {
 
       const elapsed = Date.now() - startTime;
       const registryCount = (fileRegistry as any).files.size;
+      
+      // Log summary by file type
+      const filesByType = new Map<string, number>();
+      for (const fileId of fileIds) {
+        const type = fileId.split('-')[0];
+        filesByType.set(type, (filesByType.get(type) || 0) + 1);
+      }
+      const typeSummary = Array.from(filesByType.entries())
+        .map(([type, count]) => `${type}: ${count}`)
+        .join(', ');
       console.log(`⚡ WorkspaceService: Clone complete in ${elapsed}ms! ${fileIds.length} files loaded`);
+      console.log(`📊 WorkspaceService: Files by type: ${typeSummary}`);
       console.log(`📊 WorkspaceService: FileRegistry now has ${registryCount} files in memory`);
 
       // STEP 4: Fetch and store images
@@ -471,7 +514,13 @@ class WorkspaceService {
       .and(file => file.source?.branch === branch)
       .toArray();
 
-    console.log(`📦 WorkspaceService: Loaded ${files.length} files from IndexedDB`);
+    console.log(`📦 WorkspaceService: Loaded ${files.length} files from IndexedDB for ${workspaceId}`);
+    console.log(`📦 WorkspaceService: Files in IDB:`, files.map(f => ({
+      fileId: f.fileId,
+      type: f.type,
+      path: f.source?.path,
+      isDirty: f.isDirty
+    })));
 
     // Load all files into FileRegistry memory
     // Group by actualFileId to handle duplicates (keep most recent)
@@ -503,6 +552,8 @@ class WorkspaceService {
     }
     
     // Now load the deduplicated files into FileRegistry
+    console.log(`📦 WorkspaceService: Loading ${fileMap.size} deduplicated files into FileRegistry...`);
+    
     for (const file of fileMap.values()) {
       const prefix = `${repository}-${branch}-`;
       const actualFileId = file.fileId.startsWith(prefix) 
@@ -512,16 +563,12 @@ class WorkspaceService {
       // Create clean FileState with original fileId for FileRegistry
       const cleanFileState = { ...file, fileId: actualFileId };
       
-      console.log(`📦 loadWorkspaceFromIDB: Loaded file ${actualFileId}`, {
-        lastModified: cleanFileState.lastModified,
-        'data.metadata.updated': cleanFileState.data?.metadata?.updated,
-        'data.updated_at': cleanFileState.data?.updated_at
-      });
-      
       // Use the internal map directly since files are already in IDB
       (fileRegistry as any).files.set(actualFileId, cleanFileState);
-      console.log(`📦 WorkspaceService: Loaded ${actualFileId} into FileRegistry`);
+      console.log(`✅ WorkspaceService: Loaded ${actualFileId} into FileRegistry (type: ${file.type}, path: ${file.source?.path})`);
     }
+    
+    console.log(`✅ WorkspaceService: FileRegistry now has ${(fileRegistry as any).files.size} files loaded`);
 
     return workspace;
   }
@@ -636,9 +683,11 @@ class WorkspaceService {
       console.log(`🔄 WorkspaceService: Remote has ${remoteFileMap.size} relevant files`);
 
       // STEP 4: Compare SHAs and determine what changed
-      const toFetch: Array<{ treeItem: any; dirConfig: any }> = [];
+      const toFetch: Array<{ treeItem: any; dirConfig: any; isNew: boolean }> = [];
       const toDelete: string[] = [];
       const unchanged: string[] = [];
+      const newFiles: string[] = [];
+      const changedFiles: string[] = [];
 
       // Check each remote file
       for (const [remotePath, { treeItem, dirConfig }] of remoteFileMap.entries()) {
@@ -647,11 +696,13 @@ class WorkspaceService {
         if (!localSha) {
           // New file
           console.log(`📄 WorkspaceService: NEW file: ${remotePath}`);
-          toFetch.push({ treeItem, dirConfig });
+          toFetch.push({ treeItem, dirConfig, isNew: true });
+          newFiles.push(remotePath);
         } else if (localSha !== treeItem.sha) {
           // Changed file
           console.log(`📝 WorkspaceService: CHANGED file: ${remotePath} (${localSha.substring(0, 8)} -> ${treeItem.sha.substring(0, 8)})`);
-          toFetch.push({ treeItem, dirConfig });
+          toFetch.push({ treeItem, dirConfig, isNew: false });
+          changedFiles.push(remotePath);
         } else {
           // Unchanged file
           unchanged.push(remotePath);
@@ -668,9 +719,23 @@ class WorkspaceService {
       }
 
       console.log(`🔄 WorkspaceService: Changes detected:`);
-      console.log(`   📄 New/Changed: ${toFetch.length}`);
+      console.log(`   📄 New: ${newFiles.length}`);
+      console.log(`   📝 Changed: ${changedFiles.length}`);
       console.log(`   🗑️ Deleted: ${toDelete.length}`);
       console.log(`   ✓ Unchanged: ${unchanged.length}`);
+      
+      if (newFiles.length > 0) {
+        console.log(`\n📄 NEW FILES ADDED:`);
+        newFiles.forEach(path => console.log(`   + ${path}`));
+      }
+      if (changedFiles.length > 0) {
+        console.log(`\n📝 FILES CHANGED:`);
+        changedFiles.forEach(path => console.log(`   ~ ${path}`));
+      }
+      if (toDelete.length > 0) {
+        console.log(`\n🗑️ FILES DELETED:`);
+        toDelete.forEach(path => console.log(`   - ${path}`));
+      }
 
       // STEP 5: If no changes, we're done!
       if (toFetch.length === 0 && toDelete.length === 0) {
@@ -686,9 +751,9 @@ class WorkspaceService {
       let updatedCount = 0;
       
       if (toFetch.length > 0) {
-        console.log(`📦 WorkspaceService: Fetching ${toFetch.length} changed files in parallel...`);
+        console.log(`📦 WorkspaceService: Fetching ${toFetch.length} files in parallel...`);
         
-        const fetchPromises = toFetch.map(async ({ treeItem, dirConfig }) => {
+        const fetchPromises = toFetch.map(async ({ treeItem, dirConfig, isNew }) => {
           try {
             const blobResult = await gitService.getBlobContent(treeItem.sha);
             if (!blobResult.success || !blobResult.data) {
@@ -774,6 +839,7 @@ class WorkspaceService {
                 localFileState.data = mergedData;
                 localFileState.originalData = structuredClone(mergedData);
                 localFileState.isDirty = false;
+                localFileState.isInitializing = true; // Allow editor normalization without marking dirty
                 localFileState.sha = treeItem.sha;
                 localFileState.lastSynced = Date.now();
                 localFileState.source = {
@@ -783,12 +849,24 @@ class WorkspaceService {
                   commitHash: treeItem.sha
                 };
 
+                // Save both unprefixed (for FileRegistry) and prefixed (for workspace isolation)
                 await db.files.put(localFileState);
+                
+                const prefixedId = `${repository}-${branch}-${fileId}`;
+                const prefixedFile = { ...localFileState, fileId: prefixedId };
+                await db.files.put(prefixedFile);
+                
+                console.log(`✅ WorkspaceService: AUTO-MERGED ${treeItem.path}`);
+                console.log(`   → fileId: ${fileId}`);
+                console.log(`   → prefixed: ${prefixedId}`);
+                console.log(`   → New SHA: ${treeItem.sha.substring(0, 8)}`);
+                console.log(`   → Saved to IDB: unprefixed + prefixed`);
                 
                 // Update in FileRegistry if loaded
                 if (fileRegistry.getFile(fileId)) {
                   (fileRegistry as any).files.set(fileId, localFileState);
                   (fileRegistry as any).notifyListeners(fileId, localFileState);
+                  console.log(`   → Updated in FileRegistry`);
                 }
                 
                 updatedCount++;
@@ -803,6 +881,7 @@ class WorkspaceService {
                 data,
                 originalData: structuredClone(data),
                 isDirty: false,
+                isInitializing: true, // Allow editor normalization without marking dirty
                 source: {
                   repository,
                   path: treeItem.path,
@@ -817,7 +896,12 @@ class WorkspaceService {
                 lastSynced: Date.now()
               };
 
+              // Save both unprefixed (for FileRegistry) and prefixed (for workspace isolation)
               await db.files.put(fileState);
+              
+              const prefixedId = `${repository}-${branch}-${fileId}`;
+              const prefixedFile = { ...fileState, fileId: prefixedId };
+              await db.files.put(prefixedFile);
               
               // Update in FileRegistry if loaded
               if (fileRegistry.getFile(fileId)) {
@@ -825,7 +909,13 @@ class WorkspaceService {
                 (fileRegistry as any).notifyListeners(fileId, fileState);
               }
               
-              console.log(`✅ WorkspaceService: Updated ${treeItem.path}`);
+              const action = isNew ? 'ADDED' : 'UPDATED';
+              const icon = isNew ? '📄➕' : '✅';
+              console.log(`${icon} WorkspaceService: ${action} ${treeItem.path}`);
+              console.log(`   → fileId: ${fileId}`);
+              console.log(`   → prefixed: ${prefixedId}`);
+              console.log(`   → SHA: ${treeItem.sha.substring(0, 8)}`);
+              console.log(`   → Saved to IDB: unprefixed + prefixed`);
               updatedCount++;
             }
           } catch (error) {
@@ -904,12 +994,36 @@ class WorkspaceService {
 
       const elapsed = Date.now() - startTime;
       
+      // DETAILED Summary logging
+      console.log(`\n🎯 WorkspaceService: Pull complete in ${elapsed}ms`);
+      console.log(`   New files: ${newFiles.length}`);
+      console.log(`   Changed files: ${changedFiles.length}`);
+      console.log(`   Deleted files: ${toDelete.length}`);
+      console.log(`   Total files now in workspace: ${updatedFiles.length}`);
+      console.log(`   Conflicts: ${conflicts.length}`);
+      
+      // Log all files now in IndexedDB
+      console.log(`\n📊 FILES IN INDEXEDDB AFTER PULL:`);
+      const filesByType = updatedFiles.reduce((acc, f) => {
+        const key = f.type || 'unknown';
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(f);
+        return acc;
+      }, {} as Record<string, typeof updatedFiles>);
+      
+      for (const [type, files] of Object.entries(filesByType)) {
+        console.log(`   ${type}: ${files.length} files`);
+        files.forEach(f => {
+          console.log(`      - ${f.fileId} (path: ${f.source?.path}, SHA: ${f.sha?.substring(0, 8)})`);
+        });
+      }
+      
       if (conflicts.length > 0) {
-        console.log(`⚠️ WorkspaceService: Pull complete in ${elapsed}ms with ${conflicts.length} conflicts! Updated ${updatedCount}, deleted ${toDelete.length}`);
+        console.log(`⚠️ WorkspaceService: Pull completed with conflicts`);
         return { success: true, conflicts, filesUpdated: updatedCount, filesDeleted: toDelete.length };
       }
       
-      console.log(`⚡ WorkspaceService: Pull complete in ${elapsed}ms! Updated ${updatedCount}, deleted ${toDelete.length}`);
+      console.log(`✅ WorkspaceService: Pull successful - all files synced`);
       return { success: true, conflicts: [], filesUpdated: updatedCount, filesDeleted: toDelete.length };
 
     } catch (error) {
