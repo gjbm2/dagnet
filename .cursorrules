@@ -1,0 +1,310 @@
+# DagNet Development Guidelines for AI Assistants
+
+## Core Principles
+
+### 1. NO LOGIC IN UI/MENU FILES
+**CRITICAL**: Menu files, context menus, and UI components are ACCESS POINTS ONLY.
+
+- ✅ **DO**: Call centralized service methods
+- ❌ **DON'T**: Implement business logic inline
+- ❌ **DON'T**: Duplicate logic across multiple call sites
+- ❌ **DON'T**: Put git operations, file operations, validation, or data transformations in UI files
+
+**Example - WRONG**:
+```typescript
+// FileMenu.tsx - BAD!
+const handleCommit = async () => {
+  const credsResult = await credentialsManager.loadCredentials();
+  const gitCreds = credsResult.credentials.git.find(...);
+  const result = await gitService.commitAndPushFiles(...);
+  // 50 more lines of logic...
+}
+```
+
+**Example - CORRECT**:
+```typescript
+// FileMenu.tsx - GOOD!
+const handleCommit = async () => {
+  await repositoryOperationsService.commitFiles(files, message, branch, repo, showConfirm);
+}
+```
+
+### 2. FIND EXISTING CODE PATHS FIRST
+Before creating new functionality:
+
+1. **Search for existing implementations** - Use `grep` or `codebase_search` to find similar functionality
+2. **Reuse and extend** - Modify existing services rather than creating duplicate code
+3. **Check all call sites** - If updating a service method, check ALL places it's called
+4. **Trace the full path** - Understand the complete flow from UI → Service → Storage
+
+**Required checks before writing new code**:
+- [ ] Searched codebase for similar functionality
+- [ ] Checked if a service already handles this operation
+- [ ] Identified all existing call sites
+- [ ] Verified no duplicate implementations exist
+
+### 3. CENTRALIZE SHARED CODE
+**Services are the single source of truth** for business logic:
+
+- `repositoryOperationsService.ts` - Git operations (pull, push, commit, clone, status)
+- `fileOperationsService.ts` - File CRUD (create, open, delete, duplicate, rename)
+- `dataOperationsService.ts` - Data sync (Get/Put between files ↔ graph ↔ external sources)
+- `workspaceService.ts` - IndexedDB workspace management
+- `gitService.ts` - Direct GitHub API calls
+- `indexRebuildService.ts` - Index file management
+
+**If logic is used in multiple places**, it MUST be in a service, NOT duplicated.
+
+### 4. ALWAYS UPDATE TESTS
+When modifying functionality:
+
+1. **Update existing tests** - Don't leave tests broken or outdated
+2. **Add new tests** - For new functionality or bug fixes
+3. **Run tests** - Verify changes don't break existing functionality
+4. **Check integration tests** - Ensure end-to-end flows still work
+
+Test files are in:
+- `graph-editor/src/services/__tests__/` - Service integration tests
+- `graph-editor/tests/` - Higher-level integration tests
+
+### 5. DATA SOURCES OF TRUTH
+
+**IndexedDB is the source of truth** for:
+- File content and dirty state
+- Git SHAs and metadata
+- Workspace state
+
+**FileRegistry is an in-memory cache**:
+- Used for performance (open tabs)
+- NOT the source of truth for dirty files or git operations
+- Must sync with IndexedDB
+
+**Critical**: Always use `db.getDirtyFiles()` for git operations, NOT `fileRegistry.getDirtyFiles()`.
+
+## Architecture Patterns
+
+### Service Layer Pattern
+```typescript
+// 1. UI calls service (no business logic in UI)
+const handleAction = async () => {
+  await someService.doOperation(params, callbacks);
+};
+
+// 2. Service contains all business logic
+class SomeService {
+  async doOperation(params, callbacks) {
+    // Load data
+    // Validate
+    // Transform
+    // Show dialogs (via callback)
+    // Execute operation
+    // Update state
+    // Notify listeners
+  }
+}
+```
+
+### Callback Pattern for UI Interactions
+Services should NOT import UI components or dialogs directly.
+Instead, accept callbacks:
+
+```typescript
+// Service
+async commitFiles(
+  files: any[],
+  message: string,
+  branch: string,
+  repository: string,
+  showConfirmDialog: (options: any) => Promise<boolean>  // ← Callback
+): Promise<void>
+
+// UI calls service with its own showConfirm
+await repositoryOperationsService.commitFiles(
+  files, message, branch, repo, 
+  showConfirm  // ← From useDialog() hook
+);
+```
+
+### Index File Requirements
+- Index files MUST be at root: `nodes-index.yaml`, `parameters-index.yaml` (plural names)
+- Data files MUST be in subdirectories: `nodes/my-node.yaml`, `parameters/my-param.yaml`
+- Index files use workspace-prefixed IDs in IndexedDB: `repo-branch-node-index`
+- Index files must be marked `isDirty: true` when modified
+
+## Common Pitfalls to Avoid
+
+1. **Don't put git/file operations in menu files**
+   - Move to `repositoryOperationsService` or `fileOperationsService`
+
+2. **Don't duplicate validation logic**
+   - Create a centralized validation function
+
+3. **Don't trust FileRegistry for dirty state in git operations**
+   - Use `db.getDirtyFiles()` which queries IndexedDB
+
+4. **Don't forget workspace prefixes for IndexedDB**
+   - Files in IDB: `repo-branch-fileId`
+   - Files in FileRegistry: `fileId` (unprefixed)
+
+5. **Don't skip updating tests when changing functionality**
+   - Update existing tests
+   - Add new tests for bug fixes
+   - Run full test suite
+
+6. **Don't create helper scripts for testing**
+   - Use proper Vitest integration tests
+   - Mock external APIs (GitHub)
+   - Use real internal components (IndexedDB, FileRegistry)
+
+## Testing Standards
+
+### Integration Test Structure
+```typescript
+describe('Feature Integration Tests', () => {
+  beforeEach(async () => {
+    // Setup mocks
+    vi.clearAllMocks();
+    // Reset state
+  });
+
+  it('should handle complete flow end-to-end', async () => {
+    // Arrange: Setup test data
+    // Act: Execute operation
+    // Assert: Verify all side effects
+  });
+});
+```
+
+### Critical Test Coverage
+- Git operations (clone, pull, push, commit)
+- File operations (create, open, delete, dirty tracking)
+- Index operations (create, rebuild, add entries)
+- Data sync (file ↔ graph ↔ external sources)
+- Merge conflicts (3-way merge, resolution)
+
+## File Structure Requirements
+
+- Services: `graph-editor/src/services/`
+- Tests: `graph-editor/src/services/__tests__/` and `graph-editor/tests/`
+- UI Components: `graph-editor/src/components/`
+- Contexts: `graph-editor/src/contexts/`
+- Types: `graph-editor/src/types/`
+
+## Documentation Structure
+
+### User-Facing Documentation
+**Location:** `graph-editor/public/docs/`
+
+User guides, references, and changelogs accessible in-app and on GitHub:
+- `user-guide.md` - Getting started and core concepts
+- `query-expressions.md` - Query DSL reference
+- `api-reference.md` - Programmatic access
+- `keyboard-shortcuts.md` - Productivity tips
+- `CHANGELOG.md` - Release history
+
+### Technical Documentation
+**Location:** `docs/`
+
+Developer and architecture documentation:
+
+1. **Current Docs** (`docs/current/`)
+   - Active technical specs
+   - Architecture decisions
+   - **Project Contexts** (`docs/current/project-contexts/`) - ALWAYS check here for current work plans and system status
+
+2. **Component Docs** (`graph-editor/docs/`)
+   - Component-specific technical documentation
+   - Setup guides (e.g., `AMPLITUDE_CREDENTIALS_SETUP.md`)
+   - Testing guides (`INTEGRATION_TESTING_GUIDE.md`, `TESTING_STRATEGY.md`)
+
+3. **Archive** (`docs/archive/`)
+   - Historical documentation
+   - Completed work - useful for understanding design decisions
+
+### When Making System Changes
+
+**ALWAYS check relevant docs BEFORE making changes:**
+1. Check `docs/current/project-contexts/` for current project status
+2. Search `docs/current/` for architecture decisions
+3. Search `docs/archive/` for historical context on design decisions
+4. Update `graph-editor/public/docs/` if user-facing behavior changes
+
+## Code Quality Checklist
+
+Before submitting changes:
+- [ ] No business logic in UI/menu files
+- [ ] All shared logic centralized in services
+- [ ] Tests updated and passing
+- [ ] No duplicate code paths
+- [ ] IndexedDB is source of truth for git operations
+- [ ] Index files use correct paths (root, plural names)
+- [ ] Workspace prefixes handled correctly
+- [ ] All call sites updated consistently
+
+## When Making Changes
+
+1. **Understand the full context**
+   - Trace the complete code path
+   - Identify all call sites
+   - Check for existing implementations
+
+2. **Centralize first**
+   - Move logic to services
+   - Update all call sites to use the service
+   - Remove duplicate implementations
+
+3. **Test thoroughly**
+   - Update existing tests
+   - Add new tests for changes
+   - Run full test suite
+   - Verify no regressions
+
+4. **Verify consistency**
+   - Check all UI entry points use same code path
+   - Ensure dialogs show same information
+   - Verify all file operations update IndexedDB
+
+## Key Lessons from Recent Bugs
+
+1. **Index files were being built in wrong locations**
+   - Root cause: Inconsistent path handling across services
+   - Fix: Single source of truth for index file paths
+   - Tests: Added integration tests for index operations
+
+2. **Commit not showing dirty index files**
+   - Root cause: Using FileRegistry instead of IndexedDB
+   - Fix: `db.getDirtyFiles()` everywhere for git operations
+   - Tests: Added critical tests for workspace-prefixed files
+
+3. **Logic duplicated across menu files**
+   - Root cause: Putting business logic in UI files
+   - Fix: Centralized in `repositoryOperationsService`
+   - Tests: Ensured all call sites work consistently
+
+## Testing and Build Guidelines
+
+### Running Tests
+When asked to "run tests":
+- **Frontend**: Run `npm test` (Vitest)
+- **Python**: Run `pytest tests/` (from `graph-editor/` directory with venv activated)
+- Run BOTH unless context clearly indicates one or the other
+
+### Building
+- **DO NOT** run `npm run build` unless explicitly instructed
+- Build is slow and usually unnecessary during development
+- Only build when user asks to verify production readiness
+
+### Test Updates Are Mandatory
+- **ALWAYS** update tests when changing functionality
+- **NEVER** leave tests broken
+- **ALWAYS** run relevant tests after changes
+
+## Remember
+
+> "Menus are access points. Services are logic. Tests are proof."
+
+If you're writing business logic in a menu file, STOP and move it to a service.
+If you're duplicating code, STOP and centralize it.
+If you're changing functionality, UPDATE THE TESTS.
+Check architectural docs BEFORE making system changes.
+
