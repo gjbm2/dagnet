@@ -12,7 +12,7 @@ import { db } from '../../db/appDatabase';
 // Mock IndexedDB
 vi.mock('../../db/appDatabase', () => ({
   db: {
-    getDirtyFiles: vi.fn(async function() {
+    getDirtyFiles: vi.fn(async function(this: any) {
       const allFiles = await this.files.toArray();
       return allFiles.filter((f: any) => f.isDirty);
     }),
@@ -49,8 +49,8 @@ describe('CommitModal - Critical Tests', () => {
       // db.getDirtyFiles() returns workspace-prefixed IDs
       const dirtyFilesFromDB = [
         {
-          fileId: 'test-repo-main-node-index', // Workspace-prefixed!
           ...indexFile,
+          fileId: 'test-repo-main-node-index', // Workspace-prefixed!
         },
       ];
       
@@ -82,8 +82,8 @@ describe('CommitModal - Critical Tests', () => {
 
       const dirtyFilesFromDB = [
         {
-          fileId: 'test-repo-main-parameter-test', // Workspace-prefixed!
           ...paramFile,
+          fileId: 'test-repo-main-parameter-test', // Workspace-prefixed!
         },
       ];
       
@@ -110,8 +110,8 @@ describe('CommitModal - Critical Tests', () => {
 
       const dirtyFilesFromDB = [
         {
-          fileId: 'test-repo-main-credentials-credentials',
           ...credentialsFile,
+          fileId: 'test-repo-main-credentials-credentials',
         },
       ];
       
