@@ -94,14 +94,16 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
       });
     }
     
-    // Git operations
-    items.push({ label: '', onClick: () => {}, divider: true });
-    items.push({
-      label: 'Commit This File...',
-      onClick: () => {
-        onRequestCommit([tab.fileId]);
-      }
-    });
+    // Git operations - only show if file is committable
+    if (fileRegistry.isFileCommittableById(tab.fileId)) {
+      items.push({ label: '', onClick: () => {}, divider: true });
+      items.push({
+        label: 'Commit This File...',
+        onClick: () => {
+          onRequestCommit([tab.fileId]);
+        }
+      });
+    }
     items.push({
       label: 'Commit All Changes...',
       onClick: () => {

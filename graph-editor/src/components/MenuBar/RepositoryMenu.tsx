@@ -144,6 +144,7 @@ export function RepositoryMenu() {
   };
 
   const handleCommitChanges = async () => {
+    // Commit ALL dirty files (Repository menu version)
     try {
       // Check if remote is ahead before committing
       const credsResult = await credentialsManager.loadCredentials();
@@ -180,7 +181,7 @@ export function RepositoryMenu() {
         }
       }
       
-      // Open commit modal
+      // Open commit modal for ALL dirty files
       setIsCommitModalOpen(true);
     } catch (error) {
       console.error('Failed to check remote status:', error);
@@ -310,7 +311,7 @@ export function RepositoryMenu() {
               onSelect={handleCommitChanges}
               disabled={!hasDirtyFiles}
             >
-              Commit Changes...
+              Commit All Changes...
               {hasDirtyFiles && <div className="menubar-right-slot">{dirtyFiles.length}</div>}
             </Menubar.Item>
 

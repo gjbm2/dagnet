@@ -57,6 +57,7 @@ export function FileMenu() {
   // Track dirty files - update when tabs or files change
   // NOTE: Check IndexedDB for ALL dirty files (not just in-memory FileRegistry)
   const [hasDirtyFiles, setHasDirtyFiles] = useState(false);
+  const [hasCurrentFileDirty, setHasCurrentFileDirty] = useState(false);
   
   // Listen for file dirty state changes
   React.useEffect(() => {
@@ -64,6 +65,13 @@ export function FileMenu() {
       // Check IndexedDB for ALL dirty files (includes files not in FileRegistry)
       const dirtyFiles = await db.getDirtyFiles();
       setHasDirtyFiles(dirtyFiles.length > 0);
+      
+      // Check if current file is committable (centralized logic)
+      if (activeTab) {
+        setHasCurrentFileDirty(fileRegistry.isFileCommittableById(activeTab.fileId));
+      } else {
+        setHasCurrentFileDirty(false);
+      }
     };
     
     // Update immediately
@@ -76,7 +84,7 @@ export function FileMenu() {
     
     window.addEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
     return () => window.removeEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
-  }, [tabs, operations]);
+  }, [tabs, operations, activeTab]);
 
   const handleNew = (type: ObjectType) => {
     setNewFileType(type);
@@ -118,6 +126,12 @@ export function FileMenu() {
 
 
   const handleCommitChanges = async () => {
+    // Commit ONLY the current active file
+    if (!activeTab) return;
+    
+    // Use centralized logic to check if file is committable
+    if (!fileRegistry.isFileCommittableById(activeTab.fileId)) return;
+    
     try {
       // Check if remote is ahead before committing
       const { credentialsManager } = await import('../../lib/credentials');
@@ -155,8 +169,8 @@ export function FileMenu() {
         }
       }
       
-      // Open commit modal for dirty files
-      setCommitModalPreselectedFiles([]); // Empty means select all dirty files
+      // Open commit modal with ONLY current file pre-selected
+      setCommitModalPreselectedFiles([activeTab.fileId]);
       setIsCommitModalOpen(true);
     } catch (error) {
       console.error('Failed to check remote status:', error);
@@ -165,8 +179,51 @@ export function FileMenu() {
   };
 
   const handleCommitAllChanges = async () => {
-    // Same as handleCommitChanges - they both commit all dirty files
-    await handleCommitChanges();
+    // Commit ALL dirty files
+    try {
+      // Check if remote is ahead before committing
+      const { credentialsManager } = await import('../../lib/credentials');
+      const credsResult = await credentialsManager.loadCredentials();
+      
+      if (credsResult.success && credsResult.credentials) {
+        const gitCreds = credsResult.credentials.git.find(cred => cred.name === navState.selectedRepo);
+        
+        if (gitCreds) {
+          const toastId = toast.loading('Checking remote status...');
+          const remoteStatus = await workspaceService.checkRemoteAhead(
+            navState.selectedRepo,
+            navState.selectedBranch,
+            gitCreds
+          );
+          toast.dismiss(toastId);
+          
+          if (remoteStatus.isAhead) {
+            const confirmed = await showConfirm({
+              title: 'Remote Has Changes',
+              message: 
+                `The remote repository has changes you don't have:\n\n` +
+                `• ${remoteStatus.filesChanged} file(s) changed\n` +
+                `• ${remoteStatus.filesAdded} file(s) added\n` +
+                `• ${remoteStatus.filesDeleted} file(s) deleted\n\n` +
+                `It's recommended to pull first to avoid conflicts.\n\n` +
+                `Commit anyway?`,
+              confirmLabel: 'Commit Anyway',
+              cancelLabel: 'Pull First',
+              confirmVariant: 'danger'
+            });
+            
+            if (!confirmed) return;
+          }
+        }
+      }
+      
+      // Open commit modal for ALL dirty files
+      setCommitModalPreselectedFiles([]); // Empty means select all dirty files
+      setIsCommitModalOpen(true);
+    } catch (error) {
+      console.error('Failed to check remote status:', error);
+      toast.error(`Failed to check remote: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   };
 
   const handlePullLatest = async () => {
@@ -617,7 +674,7 @@ export function FileMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handleCommitChanges}
-              disabled={!hasDirtyFiles}
+              disabled={!hasCurrentFileDirty}
             >
               Commit Changes...
               <div className="menubar-right-slot">⌘K</div>
