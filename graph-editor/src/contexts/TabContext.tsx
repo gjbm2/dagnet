@@ -635,6 +635,35 @@ class FileRegistry {
   }
 
   /**
+   * Check if a file is git-committable
+   * Centralized logic used by all UI entry points (menus, context menus, shortcuts)
+   * 
+   * Works on FileState object directly (from db.getDirtyFiles()) - no lookup needed
+   */
+  static isFileCommittable(file: any): boolean {
+    if (!file) return false;
+    
+    // Must be dirty
+    if (!file.isDirty) return false;
+    
+    // Exclude local-only system files
+    if (file.type === 'credentials') return false;
+    if (file.type === 'settings') return false;
+    if (file.source?.repository === 'temporary') return false;
+    
+    return true;
+  }
+
+  /**
+   * Check if a file is committable by fileId (looks up in FileRegistry)
+   * Use this for UI state checks when you only have the fileId
+   */
+  isFileCommittableById(fileId: string): boolean {
+    const file = this.files.get(fileId);
+    return FileRegistry.isFileCommittable(file);
+  }
+
+  /**
    * Get file by ID
    */
   getFile(fileId: string): FileState | undefined {

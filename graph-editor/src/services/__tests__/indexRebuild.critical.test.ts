@@ -29,6 +29,10 @@ vi.mock('../../db/appDatabase', () => ({
         lastSynced: Date.now(),
       }),
     },
+    getDirtyFiles: vi.fn(async function() {
+      const allFiles = await this.files.toArray();
+      return allFiles.filter((f: any) => f.isDirty);
+    }),
   },
 }));
 
@@ -237,6 +241,28 @@ describe('Index Rebuild - Critical Bug Fixes', () => {
       expect(dirtyFiles).toHaveLength(1);
       expect(dirtyFiles[0].fileId).toBe('node-index');
       expect(dirtyFiles[0].viewTabs).toHaveLength(0); // No tabs, but still dirty!
+    });
+    
+    it('should retrieve dirty files from IndexedDB via db.getDirtyFiles()', async () => {
+      // This is the critical test that was missing!
+      const dirtyIndexInIDB = {
+        fileId: 'test-repo-main-parameter-index',
+        type: 'parameter' as const,
+        data: { version: '1.0.0', parameters: [{ id: 'test' }] },
+        isDirty: true, // Boolean true, not 1
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+      };
+
+      // Mock toArray to return all files, then we filter by isDirty
+      (db.files.toArray as any).mockResolvedValue([dirtyIndexInIDB]);
+
+      const dirtyFiles = await db.getDirtyFiles();
+
+      expect(dirtyFiles).toHaveLength(1);
+      expect(dirtyFiles[0].fileId).toBe('test-repo-main-parameter-index');
+      expect(dirtyFiles[0].isDirty).toBe(true); // Boolean, not number
     });
   });
 

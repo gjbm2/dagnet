@@ -215,16 +215,18 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     });
     items.push({ label: '', onClick: () => {}, divider: true });
     
-    // Git actions
-    items.push({
-      label: 'Commit This File...',
-      onClick: () => {
-        // Open commit modal for this specific file
-        setCommitModalPreselectedFiles([fileId]);
-        setIsCommitModalOpen(true);
-      },
-      keepMenuOpen: true // Keep menu open so modal can render
-    });
+    // Git actions - only show if file is committable
+    if (fileRegistry.isFileCommittableById(fileId)) {
+      items.push({
+        label: 'Commit This File...',
+        onClick: () => {
+          // Open commit modal for this specific file
+          setCommitModalPreselectedFiles([fileId]);
+          setIsCommitModalOpen(true);
+        },
+        keepMenuOpen: true // Keep menu open so modal can render
+      });
+    }
     items.push({
       label: 'Commit All Changes...',
       onClick: () => {

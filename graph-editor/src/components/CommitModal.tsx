@@ -67,13 +67,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   const getCommittableFiles = () => {
     if (!isOpen) return [];
     return dirtyFiles
-      .filter(file => {
-        // Allow all git-committable files (data files + index files + connections)
-        // Exclude ONLY: credentials, settings, temporary files
-        return file.type !== 'credentials' && 
-               file.type !== 'settings' &&
-               file.source?.repository !== 'temporary';
-      })
+      .filter(file => (fileRegistry.constructor as any).isFileCommittable(file))
       .map(file => {
         const fileId = file.fileId;
         const type = file.type;

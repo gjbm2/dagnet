@@ -157,7 +157,9 @@ export class AppDatabase extends Dexie {
    * Get all dirty files
    */
   async getDirtyFiles(): Promise<FileState[]> {
-    return await this.files.where('isDirty').equals(1).toArray();
+    // Check for truthy isDirty (handles both boolean true and number 1)
+    const allFiles = await this.files.toArray();
+    return allFiles.filter(file => file.isDirty);
   }
 
   /**
