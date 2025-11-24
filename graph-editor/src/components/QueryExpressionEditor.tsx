@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, Settings, ChevronDown } from 'lucide-react';
+import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, FileText, Calendar, ChevronDown, Minus, Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import './QueryExpressionEditor.css';
 import { QUERY_FUNCTIONS } from '../lib/queryDSL';
@@ -69,23 +69,23 @@ const outerChipConfig = {
   },
   context: {
     label: 'context',
-    icon: Settings
+    icon: FileText  // Canonical context icon (matches Navigator)
   },
   contextAny: {
     label: 'contextAny',
-    icon: Settings
+    icon: FileText  // Same as context
   },
   window: {
     label: 'window',
-    icon: Settings
+    icon: Calendar  // Time window
   },
   minus: {
     label: 'minus',
-    icon: MapPinXInside  // Reuse exclude icon or import Minus from lucide-react
+    icon: Minus  // Lucide minus icon
   },
   plus: {
     label: 'plus',
-    icon: MapPinCheckInside  // Reuse visited icon or import Plus from lucide-react
+    icon: Plus  // Lucide plus icon
   }
 };
 
@@ -381,7 +381,7 @@ export function QueryExpressionEditor({
       
       // Autocomplete (CompletionItemProvider)
       monaco.languages.registerCompletionItemProvider('dagnet-query', {
-      triggerCharacters: ['.', '(', ',', ':'],
+      triggerCharacters: ['.', '(', ',', ':', ';'],
       
       provideCompletionItems: (model, position) => {
         const textUntilPosition = model.getValueInRange({
@@ -489,41 +489,124 @@ export function QueryExpressionEditor({
           }
         }
         
-        // After context( → suggest context keys
-        // TODO: Load from contextRegistry asynchronously
-        // For now, no suggestions (user types manually)
+        // After context( → suggest context keys (async)
+        if (/context\([^:)]*$/.test(textUntilPosition)) {
+          // Return a Promise - Monaco supports async completion
+          return contextRegistry.getAllContextKeys().then(keys => {
+            const suggestions = keys.map(key => ({
+              label: key.id,
+              kind: monaco.languages.CompletionItemKind.Value,
+              insertText: key.id,
+              documentation: `Context: ${key.id}`,
+              detail: key.id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+              range
+            }));
+            return { suggestions };
+          }).catch(err => {
+            console.error('Failed to load context keys:', err);
+            return { suggestions: [] };
+          });
+        }
         
-        // After context(key: → suggest values for that key
-        // TODO: Load values from contextRegistry.getValuesForContext(key)
-        // For now, no suggestions (user types manually)
+        // After context(key: → suggest values for that key (async)
+        if (/context\(([^:)]+):([^)]*)$/.test(textUntilPosition)) {
+          const match = textUntilPosition.match(/context\(([^:)]+):/);
+          if (match) {
+            const contextKey = match[1];
+            
+            // Return a Promise
+            return contextRegistry.getValuesForContext(contextKey).then(values => {
+              const suggestions = values.map(value => ({
+                label: value.id,
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: value.id,
+                documentation: value.description || value.label,
+                detail: value.label,
+                range
+              }));
+              return { suggestions };
+            }).catch(err => {
+              console.error('Failed to load context values:', err);
+              return { suggestions: [] };
+            });
+          }
+        }
         
-        // After window( → suggest date formats
+        // After window( → suggest date formats (async for current window)
         if (/window\([^)]*$/.test(textUntilPosition)) {
-          return {
-            suggestions: [
+          return (async () => {
+            const suggestions: any[] = [
               {
-                label: 'Relative: last 90 days',
-                kind: monaco.languages.CompletionItemKind.Value,
-                insertText: '-90d:',
-                documentation: 'Last 90 days to now',
-                range
-              },
-              {
-                label: 'Relative: last 30 days',
-                kind: monaco.languages.CompletionItemKind.Value,
-                insertText: '-30d:',
-                documentation: 'Last 30 days to now',
-                range
-              },
-              {
-                label: 'Relative: last 7 days',
+                label: '📅 Last 7 days (-7d:)',
                 kind: monaco.languages.CompletionItemKind.Value,
                 insertText: '-7d:',
                 documentation: 'Last 7 days to now',
-                range
+                range,
+                sortText: '1'
+              },
+              {
+                label: '📅 Last 14 days (-14d:)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-14d:',
+                documentation: 'Last 14 days to now',
+                range,
+                sortText: '2'
+              },
+              {
+                label: '📅 Last 30 days (-30d:)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-30d:',
+                documentation: 'Last 30 days to now',
+                range,
+                sortText: '3'
+              },
+              {
+                label: '📅 Last 90 days (-90d:)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-90d:',
+                documentation: 'Last 90 days to now',
+                range,
+                sortText: '4'
+              },
+              {
+                label: '📆 Last week, complete (-2w:-1w)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-2w:-1w',
+                documentation: 'From 2 weeks ago to 1 week ago (past range)',
+                range,
+                sortText: '5'
+              },
+              {
+                label: '📆 Last month, complete (-2m:-1m)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-2m:-1m',
+                documentation: 'From 2 months ago to 1 month ago (past range)',
+                range,
+                sortText: '6'
               }
-            ]
-          };
+            ];
+            
+            // Add example with absolute dates (shows d-MMM-yy format)
+            try {
+              const { formatDateUK } = await import('../lib/dateFormat');
+              const today = new Date();
+              const weekAgo = new Date(today);
+              weekAgo.setDate(today.getDate() - 7);
+              
+              suggestions.push({
+                label: `📆 Example absolute dates: ${formatDateUK(weekAgo)}:${formatDateUK(today)}`,
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: `${formatDateUK(weekAgo)}:${formatDateUK(today)}`,
+                documentation: 'Use d-MMM-yy format for specific dates (e.g., 1-Jan-25:31-Dec-25)',
+                range,
+                sortText: '8'
+              });
+            } catch (err) {
+              // Ignore if date formatting fails
+            }
+            
+            return { suggestions };
+          })();
         }
         
         // After . (dot) → suggest constraint types OR from/to/case
@@ -655,11 +738,12 @@ export function QueryExpressionEditor({
           return { suggestions: hasSuggestions };
         }
         
-        // At start of line or after ) → suggest from/to
-        if (/^$/.test(textUntilPosition) || /\)$/.test(textUntilPosition)) {
+        // At start of line, after ), or after ; → suggest from/to OR constraints
+        if (/^$/.test(textUntilPosition) || /\)$/.test(textUntilPosition) || /;$/.test(textUntilPosition)) {
           const suggestions: any[] = [];
           
-          if (!/^from\(/.test(textUntilPosition)) {
+          // Suggest from/to for full queries
+          if (!/^from\(/.test(textUntilPosition) && !/;/.test(textUntilPosition)) {
             suggestions.push({
               label: 'from',
               kind: monaco.languages.CompletionItemKind.Keyword,
@@ -667,7 +751,8 @@ export function QueryExpressionEditor({
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
               documentation: 'Start path at this node',
               detail: 'from(node-id)',
-              range
+              range,
+              sortText: '0'
             });
           }
           
@@ -679,9 +764,54 @@ export function QueryExpressionEditor({
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
               documentation: 'End path at this node',
               detail: '.to(node-id)',
-              range
+              range,
+              sortText: '1'
             });
           }
+          
+          // Also suggest constraints (for constraint-only expressions like pinned queries)
+          suggestions.push(
+            {
+              label: 'context',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'context($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Filter by context dimension',
+              detail: 'context(key:value) or context(key) for all values',
+              range,
+              sortText: '5'
+            },
+            {
+              label: 'contextAny',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'contextAny($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Filter by any of several context values',
+              detail: 'contextAny(key:val1,val2,...)',
+              range,
+              sortText: '6'
+            },
+            {
+              label: 'window',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'window($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Time window for data',
+              detail: 'window(start:end) - dates as d-MMM-yy or -90d',
+              range,
+              sortText: '7'
+            },
+            {
+              label: 'or',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'or($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Combine alternatives (OR operator)',
+              detail: 'or(expr1,expr2,...) - equivalent to expr1;expr2;...',
+              range,
+              sortText: '8'
+            }
+          );
           
           return { suggestions };
         }
@@ -1182,11 +1312,10 @@ export function QueryExpressionEditor({
       .trim();
     
     console.log('[QueryExpressionEditor] handleDeleteChip computed newQuery:', newQuery);
-    console.log('[QueryExpressionEditor] handleDeleteChip calling onChange');
+    console.log('[QueryExpressionEditor] handleDeleteChip calling onChange and onBlur');
     onChange(newQuery);
     
-    // Commit the change immediately
-    console.log('[QueryExpressionEditor] handleDeleteChip calling onBlur with:', newQuery);
+    // Commit the change immediately via onBlur
     if (onBlur) {
       onBlur(newQuery);
     }
@@ -1239,6 +1368,7 @@ export function QueryExpressionEditor({
       // Remove chip entirely (no values OR all values selected for MECE key = no filter)
       const newValue = otherChips.map(c => c.rawText).join('.');
       onChange(newValue);
+      if (onBlur) onBlur(newValue); // Also trigger onBlur to persist
       setChipDropdownOpen(null);
       
       if (allSelected && isMECE) {
@@ -1259,6 +1389,7 @@ export function QueryExpressionEditor({
     newChips.splice(chipDropdownOpen, 0, parseQueryToChips(newChipText)[0]);
     const newValue = newChips.map(c => c.rawText).join('.');
     onChange(newValue);
+    if (onBlur) onBlur(newValue); // Also trigger onBlur to persist
     setChipDropdownOpen(null);
   };
   
@@ -1460,12 +1591,12 @@ export function QueryExpressionEditor({
             }}
             ref={chipContainerRef}
             style={{
-              padding: '6px',
+              padding: '3px',
               display: 'flex',
               flexWrap: 'wrap',
-              gap: '6px',
+              gap: '4px',
               cursor: readonly ? 'default' : 'text',
-              minHeight: '42px',
+              minHeight: '32px',
               alignItems: 'center',
               fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
               maxWidth: '100%',
