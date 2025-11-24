@@ -85,18 +85,33 @@ This directory contains the complete implementation design for contexts support 
 
 **Read this** for complete visual design and UX specifications.
 
+### 7. [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) ⭐
+**Task-oriented implementation roadmap**
+
+- 5 implementation phases with detailed tasks
+- Task breakdown with owners, durations, and dependencies
+- Acceptance criteria for each task
+- Risk mitigation strategies
+- Testing and rollout plan
+- Success criteria and monitoring metrics
+
+**Start here** when ready to begin implementation. References all design docs without duplicating content.
+
 ---
 
 ## Quick Start Guide
 
 ### For Implementers
 
-1. **Start with architecture** → Read `CONTEXTS_ARCHITECTURE.md` to understand the data model
-2. **Understand contexts** → Read `CONTEXTS_REGISTRY.md` to learn about otherPolicy and MECE
-3. **Implement aggregation** → Follow `CONTEXTS_AGGREGATION.md` for the 2D grid logic
-4. **Extend adapters** → Use `CONTEXTS_ADAPTERS.md` to build query filters
-5. **Build UI components** → Follow `CONTEXTS_UI_DESIGN.md` for visual design and UX patterns
-6. **Test thoroughly** → Follow `CONTEXTS_TESTING_ROLLOUT.md` for comprehensive coverage
+**📋 Start with [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** — Task-by-task roadmap with owners, durations, and dependencies.
+
+Then consult design docs as needed:
+1. **Architecture** → `CONTEXTS_ARCHITECTURE.md` — Data model, terminology, query signatures
+2. **Registry** → `CONTEXTS_REGISTRY.md` — Context definitions, otherPolicy, MECE detection
+3. **Aggregation** → `CONTEXTS_AGGREGATION.md` — 2D grid logic, window aggregation algorithms
+4. **Adapters** → `CONTEXTS_ADAPTERS.md` — Amplitude/Sheets extensions, nightly runner
+5. **UI Design** → `CONTEXTS_UI_DESIGN.md` — Visual design, components, user flows
+6. **Testing** → `CONTEXTS_TESTING_ROLLOUT.md` — Test requirements, rollout phases
 
 ### For Reviewers
 
@@ -110,25 +125,33 @@ This directory contains the complete implementation design for contexts support 
 
 ---
 
-## Key Design Decisions
+## What Already Exists vs What's New
 
-### Resolved
+### Already Implemented ✓
+- Context schemas (`contexts-index-schema.yaml`, `context-definition-schema.yaml`)
+- `context(key:value)` parsing in `queryDSL.ts`
+- `paramRegistryService.loadContext()` and `loadContextsIndex()`
+- Navigator section for contexts
+- WindowSelector Context button with dropdown placeholder
+
+### What This Design Adds
+1. **Data layer**: `sliceDSL` field on ParameterValue for multi-slice support
+2. **Graph config**: `dataInterestsDSL` and `currentQueryDSL` fields
+3. **Schema extensions**: `otherPolicy` and `sources` in context definitions
+4. **DSL extensions**: `contextAny(...)` and `window(...)` parsing
+5. **Aggregation logic**: 2D grid model, MECE detection, window overlap handling
+6. **UI implementation**: Replace "Coming soon" with actual context selection dropdowns
+7. **Adapter integration**: Wire contexts into Amplitude/Sheets queries
+8. **Nightly runner**: Explode `dataInterestsDSL` into atomic slices
+
+### Key Design Decisions
 
 1. ✓ **Terminology**: `dataInterestsDSL` (graph) vs `sliceDSL` (window) vs `currentQueryDSL` (UI state)
-2. ✓ **Data model**: `sliceDSL` only (no redundant metadata); `d-MMM-yy` date format everywhere
-3. ✓ **Stored slices are atomic**: No `contextAny(...)` in persisted `sliceDSL`
-4. ✓ **DSL parsing**: Extend existing ParamPackDSLService; extract to shared `constraintParser.ts`
-5. ✓ **otherPolicy**: 4 variants (null, computed, explicit, undefined) fully specified
-6. ✓ **Regex patterns**: For collapsing high-cardinality source values; in `SourceMapping.pattern`
-7. ✓ **MECE detection**: Respects otherPolicy; sets `canAggregate` flag
-8. ✓ **Mixed MECE keys**: Aggregate across MECE key only; ignore non-MECE keys
-9. ✓ **Daily grid model**: 2D (context × date); reuse existing daily points; incremental fetch
-10. ✓ **Window aggregation**: 7 scenarios documented; always aggregate what user asked for
-11. ✓ **Amplitude adapter**: Property filters + regex; context → filter mapping via registry
-12. ✓ **Sheets fallback**: Fallback to uncontexted with warning
-13. ✓ **UI design**: See `CONTEXTS_UI_DESIGN.md` for complete visual spec
-14. ✓ **Performance**: In-memory index per variable (lazy build); target <1s aggregation latency
-15. ✓ **Error policy**: Never hard fail; graceful degradation with toasts/warnings
+2. ✓ **Data model**: `sliceDSL` as primary key (not query_signature); `d-MMM-yy` date format
+3. ✓ **otherPolicy**: 4 variants (null, computed, explicit, undefined) fully specified
+4. ✓ **MECE detection**: Respects otherPolicy; handles mixed MECE/non-MECE keys
+5. ✓ **Daily grid model**: 2D (context × date); reuse existing daily points; incremental fetch
+6. ✓ **Sheets fallback**: Fallback to uncontexted with warning
 
 ### Critical Paths
 

@@ -61,11 +61,13 @@ contexts:
 
 **Pattern**: One YAML file per context key (mirrors `params/*.yaml` structure)
 
-**File**: `param-registry/contexts/channel.yaml`
+**File**: `param-registry/contexts/channel.yaml` (NEW - instance file using existing schema)
 
-**Schema**: `graph-editor/public/param-schemas/context-definition-schema.yaml` (EXISTS, needs extension)
+**Schema**: `graph-editor/public/param-schemas/context-definition-schema.yaml` ✓ **EXISTS**
 
-### Required Schema Additions
+**Current schema supports**: id, name, description, type, values (with id/label), metadata
+
+### Schema Extensions Needed
 
 ```yaml
 # Add to context-definition-schema.yaml properties:
@@ -177,7 +179,11 @@ values:
 
 ## Context Registry Loading
 
-**File**: `graph-editor/src/services/contextRegistry.ts`
+**Existing**: `paramRegistryService.ts` already has `loadContext()` and `loadContextsIndex()`
+
+**What's new**: Wrapper service for context-specific operations
+
+**File**: `graph-editor/src/services/contextRegistry.ts` (NEW - wraps existing paramRegistryService)
 
 ```typescript
 export class ContextRegistry {

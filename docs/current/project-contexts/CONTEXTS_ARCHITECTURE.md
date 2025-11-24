@@ -242,6 +242,47 @@ const missingDates = findMissingDates(requestedWindow, existingDates);
 
 ---
 
+## Slice Isolation Helper (Risk Mitigation)
+
+**File**: `graph-editor/src/services/sliceIsolation.ts` (NEW)
+
+```typescript
+/**
+ * Helper to enforce slice isolation in aggregation functions.
+ * Returns filtered values for a specific slice, with validation.
+ */
+export function isolateSlice<T extends { sliceDSL?: string }>(
+  values: T[],
+  targetSlice: string
+): T[] {
+  const normalized = normalizeConstraintString(targetSlice);
+  const matched = values.filter(v => (v.sliceDSL ?? '') === normalized);
+  
+  // Validate: if file has contexts but we got nothing, that's likely a bug
+  const hasContexts = values.some(v => v.sliceDSL && v.sliceDSL !== '');
+  if (hasContexts && matched.length === 0 && normalized === '') {
+    throw new Error(
+      `Slice isolation error: file has contexted data but query requested uncontexted. ` +
+      `Use MECE aggregation if intentional.`
+    );
+  }
+  
+  return matched;
+}
+```
+
+**Usage pattern**:
+```typescript
+function aggregateWindow(allValues: ParameterValue[], targetSlice: string, window: DateRange) {
+  const values = isolateSlice(allValues, targetSlice);
+  // ... rest of logic operates only on isolated values
+}
+```
+
+**Integration**: Apply to `dataOperationsService.ts` and `windowAggregationService.ts` in Task 2.1/2.2.
+
+---
+
 ## Data Query Signature Service
 
 **Problem**: Signature generation is currently ad-hoc and risks inconsistency.
@@ -477,63 +518,38 @@ export const QUERY_FUNCTIONS = {
 
 ### Extending Existing Infrastructure
 
-**Files to extend**:
-1. `graph-editor/src/services/ParamPackDSLService.ts` — Already has regex for `visited|context|case|exclude` (line 426)
-2. `graph-editor/src/services/HRNResolver.ts` — Resolves conditional HRNs (line 126)
-3. `graph-editor/src/services/HRNParser.ts` — Parses HRN strings into components
-4. **`graph-editor/src/components/QueryExpressionEditor.tsx`** — Monaco-based chip editor (ALREADY has `context` in outerChipConfig line 67-70!)
+**Already implemented**:
+- ✓ `context(key:value)` parsing in `queryDSL.ts` (lines 173-177)
+- ✓ Context schemas (`contexts-index-schema.yaml`, `context-definition-schema.yaml`)
+- ✓ `paramRegistryService.loadContext()` and `loadContextsIndex()`
+- ✓ Navigator section for contexts (already shows in sidebar)
+- ✓ File type registry entry for contexts
 
-**Current pattern** (from ParamPackDSLService.ts line 426):
-```typescript
-const conditionalMatch = key.match(/^e\.([^.]+)\.((?:visited|context|case|exclude)\([^)]+\)(?:\.(?:visited|context|case|exclude)\([^)]+\))*)\.p\.(.+)$/);
-```
-
-This regex ALREADY includes `context` in the pattern! We need to:
-1. Ensure it handles `context(key:value)` syntax correctly (already does, based on colon separator)
-2. Add `contextAny` and `window` to the pattern
+**What's actually new**:
+1. Add `contextAny(...)` to `ParsedConstraints` interface (currently missing)
+2. Add `window(...)` to `ParsedConstraints` interface (currently missing)
 3. Add chip rendering for `contextAny` and `window` in `QueryExpressionEditor`
+4. Wire contexts into data aggregation (currently parsed but not used for data slicing)
 
-### Shared Constraint Parser
+### Constraint Parsing Extensions
 
-**NEW FILE**: `graph-editor/src/services/constraintParser.ts`
+**Existing**: `queryDSL.ts` already has:
+- `parseConstraints()` function
+- `ParsedConstraints` interface with `context: Array<{key, value}>`
+- `normalizeConstraintString()` function
 
-Move parsing logic from ParamPackDSLService into a shared utility that can be used by:
-- ParamPackDSLService (for ingesting Sheets params)
-- Window aggregation service (for matching slices)
-- Query builder (for constructing DAS queries)
-- UI components (for parsing/displaying constraints)
+**What to add**:
+1. Extend `ParsedConstraints` interface in `queryDSL.ts`:
+   - Add `contextAnys: Array<{ pairs: Array<{ key: string; value: string }> }>`
+   - Add `window: { start?: string; end?: string } | null`
 
-```typescript
-export interface ParsedConstraints {
-  visited: string[];
-  visitedAny: string[];
-  exclude: string[];
-  cases: Array<{ key: string; value: string }>;
-  contexts: Array<{ key: string; value: string }>;
-  contextAnys: Array<{ pairs: Array<{ key: string; value: string }> }>;
-  window: { start?: string; end?: string } | null;
-}
+2. Update `parseConstraints()` to handle:
+   - `contextAny(key:val,key:val,...)` → new regex pattern
+   - `window(start:end)` → new regex pattern
 
-export function parseConstraintString(condition: string): ParsedConstraints {
-  // Split on '.' and parse each token
-  // Returns structured constraint object
-}
+3. Update `normalizeConstraintString()` to include new constraint types in canonical order
 
-export function normalizeConstraintString(condition: string): string {
-  // Parse, sort alphabetically within each type, normalize dates
-  // Returns canonical string form
-  // MUST be idempotent: normalize(normalize(x)) === normalize(x)
-}
-
-export function buildConstraintString(parsed: ParsedConstraints): string {
-  // Inverse of parseConstraintString
-}
-```
-
-**Refactoring scope**:
-- Extract constraint parsing from ParamPackDSLService.ts
-- Update HRNResolver.ts to use shared utility
-- Update any other files that currently parse constraint strings inline
+**No major refactoring needed** - just extending existing utilities.
 
 ### Python Parser Extensions
 
@@ -594,8 +610,8 @@ Mirror all TypeScript changes:
 ### Existing Components We're Extending (NOT Rebuilding)
 
 **1. WindowSelector Component** (`WindowSelector.tsx`):
-- **What we add**: Dynamic-width Monaco display (60-450px), Add Context button, unroll button
-- **What we remove**: What-if button (moved to Scenarios panel)
+- **What we add**: Instance of extended QueryExpressionEditor (for context chips), `[+ Context ▾]` button, `[⤵]` unroll button
+- **What we remove**: Existing Context button placeholder, What-if button (moved to Scenarios panel)
 - **What we reuse unchanged**: Date presets, date picker, Fetch button
 - **Details**: `CONTEXTS_UI_DESIGN.md` → WindowSelector Toolbar section
 

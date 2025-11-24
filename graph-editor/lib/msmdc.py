@@ -314,11 +314,11 @@ def generate_query_for_edge(
             print(f"[MSMDC] Excludes to compile: {L_exc_sorted}")
             
             try:
-                # Import NEW MSMDC inclusion-exclusion algorithm
+                # Import MSMDC inclusion-exclusion algorithm (now in lib/algorithms/)
                 import sys
                 from pathlib import Path
-                msmdc_algorithms_path = Path(__file__).parent.parent.parent / 'msmdc' / 'algorithms'
-                sys.path.insert(0, str(msmdc_algorithms_path))
+                algorithms_path = Path(__file__).parent / 'algorithms'
+                sys.path.insert(0, str(algorithms_path))
                 
                 from optimized_inclusion_exclusion import compile_optimized_inclusion_exclusion
                 
