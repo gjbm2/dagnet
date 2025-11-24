@@ -11,7 +11,7 @@ interface TabContextMenuProps {
   x: number;
   y: number;
   onClose: () => void;
-  onRequestCommit: (preselectedFiles: string[]) => void;
+  onRequestCommit: (preselectedFiles: string[]) => void | Promise<void>;
 }
 
 /**

@@ -274,6 +274,12 @@ function AppShellContent() {
     preselectedFiles: string[];
   }>({ isOpen: false, preselectedFiles: [] });
 
+  // Centralized commit handler
+  const handleCommitFiles = async (files: any[], message: string, branch: string) => {
+    const { repositoryOperationsService } = await import('./services/repositoryOperationsService');
+    await repositoryOperationsService.commitFiles(files, message, branch, navState.selectedRepo, dialogOps.showConfirm);
+  };
+
   // Custom groups - NO panelExtra, we'll position Navigator separately
   const customGroups = useMemo(() => ({
     ...dockGroups
@@ -1410,7 +1416,19 @@ function AppShellContent() {
             x={contextMenu.x}
             y={contextMenu.y}
             onClose={() => setContextMenu(null)}
-            onRequestCommit={(preselectedFiles) => {
+            onRequestCommit={async (preselectedFiles) => {
+              // Check remote status first
+              const { repositoryOperationsService } = await import('./services/repositoryOperationsService');
+              const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
+                navState.selectedRepo,
+                navState.selectedBranch,
+                dialogOps.showConfirm,
+                toast.loading,
+                toast.dismiss
+              );
+              
+              if (!shouldProceed) return;
+              
               setCommitModalState({ isOpen: true, preselectedFiles });
               setContextMenu(null); // Close context menu
             }}
@@ -1422,108 +1440,7 @@ function AppShellContent() {
           <CommitModal
             isOpen={commitModalState.isOpen}
             onClose={() => setCommitModalState({ isOpen: false, preselectedFiles: [] })}
-            onCommit={async (files, message, branch) => {
-              // Load credentials and commit files
-              const { credentialsManager } = await import('./lib/credentials');
-              const credentialsResult = await credentialsManager.loadCredentials();
-              
-              if (!credentialsResult.success || !credentialsResult.credentials) {
-                throw new Error('No credentials available. Please configure credentials first.');
-              }
-
-              const selectedRepo = navState.selectedRepo;
-              const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
-              
-              if (!gitCreds) {
-                throw new Error(`No credentials found for repository ${selectedRepo}`);
-              }
-
-              const credentialsWithRepo = {
-                ...credentialsResult.credentials,
-                defaultGitRepo: selectedRepo
-              };
-              gitService.setCredentials(credentialsWithRepo);
-
-              // IMPORTANT: Update file timestamps BEFORE committing to Git
-              const nowISO = new Date().toISOString();
-              const filesToCommit: Array<{
-                path: string;
-                content?: string;
-                binaryContent?: Uint8Array;
-                encoding?: 'utf-8' | 'base64';
-                sha?: string;
-                delete?: boolean;
-              }> = files.map(file => {
-                // Get the file from registry to update its metadata
-                const fileState = fileRegistry.getFile(file.fileId);
-                let content = file.content;
-                
-                // Update timestamp in the file content itself (standardized metadata structure)
-                if (fileState?.data) {
-                  // All file types now use metadata.updated_at
-                  if (!fileState.data.metadata) {
-                    fileState.data.metadata = {
-                      created_at: nowISO,
-                      version: '1.0.0'
-                    };
-                  }
-                  fileState.data.metadata.updated_at = nowISO;
-                  
-                  // Set author from credentials userName if available
-                  if (gitCreds?.userName && !fileState.data.metadata.author) {
-                    fileState.data.metadata.author = gitCreds.userName;
-                  }
-                  
-                  // Re-serialize with updated timestamp
-                  content = fileState.type === 'graph' 
-                    ? JSON.stringify(fileState.data, null, 2)
-                    : YAML.stringify(fileState.data);
-                }
-                
-                const basePath = gitCreds.basePath || '';
-                const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
-                return {
-                  path: fullPath,
-                  content,
-                  sha: file.sha
-                };
-              });
-
-              const basePath = gitCreds.basePath || '';
-              
-              // Add pending image operations (uploads + image deletions)
-              const imageFiles = await fileRegistry.commitPendingImages();
-              filesToCommit.push(...imageFiles.map(img => ({
-                path: basePath ? `${basePath}/${img.path}` : img.path,
-                binaryContent: img.binaryContent,
-                encoding: img.encoding,
-                delete: img.delete
-              })));
-              
-              // Add pending file deletions
-              const fileDeletions = await fileRegistry.commitPendingFileDeletions();
-              filesToCommit.push(...fileDeletions.map(del => ({
-                path: basePath ? `${basePath}/${del.path}` : del.path,
-                delete: true
-              })));
-              
-              console.log('[AppShell] Committing:', {
-                modifiedFiles: files.length,
-                imageOps: imageFiles.length,
-                fileDeletions: fileDeletions.length,
-                total: filesToCommit.length
-              });
-
-              const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
-              if (result.success) {
-                console.log('Commit successful:', result.message);
-                for (const file of files) {
-                  await fileRegistry.markSaved(file.fileId);
-                }
-              } else {
-                throw new Error(result.error || 'Failed to commit files');
-              }
-            }}
+            onCommit={handleCommitFiles}
             preselectedFiles={commitModalState.preselectedFiles}
           />
         )}
