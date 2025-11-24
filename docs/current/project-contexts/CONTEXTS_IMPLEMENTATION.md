@@ -172,15 +172,23 @@ interface ParameterValue {
 interface ParameterValue {
   // ... all existing fields ...
   
-  // NEW: Canonical slice DSL string for this data
-  sliceDSL?: string;
+  // NEW: Canonical slice DSL string for this data (PRIMARY INDEX KEY)
+  sliceDSL: string;  // REQUIRED (empty string = uncontexted, all-time slice)
   // Example: "context(channel:google).window(1-Jan-25:31-Mar-25)"
-  // Single source of truth for what query produced this data
-  // Parse this string to extract context/window constraints when needed
+  // This is the PRIMARY KEY for data lookup - NOT query_signature
+  // All data operations MUST filter by sliceDSL before any other logic
+  
+  // EXISTING: Query signature (INTEGRITY TOKEN, not index key)
+  query_signature?: string;  // Optional hash for detecting stale config
+  // Only used to detect if query *configuration* changed (connection, source settings)
+  // NOT used for data lookup (multiple slices can share same signature)
 }
 ```
 
 **Design decisions**:
+- **Separation of concerns** (see "Query Signatures vs Slice Keys" section):
+  - `sliceDSL` = PRIMARY INDEX KEY (what data this is)
+  - `query_signature` = integrity token (is configuration still valid)
 - **NO redundant structured metadata**: We store only `sliceDSL` string, parse on-demand.
 - **Invariant: atomic slices only**:
   - Persisted `sliceDSL` MUST NOT contain `contextAny(...)`.
@@ -192,7 +200,8 @@ interface ParameterValue {
   - `sliceDSL` window dates: `d-MMM-yy`
   - Time-series `dates` arrays: `d-MMM-yy`
   - **New system from scratch**: No legacy YYYY-MM-DD to support or migrate
-- **Required field**: `sliceDSL` on all windows (empty string = uncontexted, all-time)
+- **Required field**: `sliceDSL` on all windows; empty string for uncontexted/all-time data
+- **Migration**: Existing data without `sliceDSL` treated as uncontexted slice (empty string)
 
 ### 3. Edge Conditional Probability Schema
 
@@ -1085,7 +1094,7 @@ Pinned DSL (`dataInterestsDSL`) must be **consistent** with the context registry
 1. **On graph save**:
    - Run parser on `dataInterestsDSL`
    - For each `context(key:value)`:
-     - If `key` or `value` unknown → show inline error in modal + block save
+     - If `key` or `value` unknown → show inline error in modal + WARN ON  save  [DO NOT BLOCK SAVE]
    - For each bare `context(key)`:
      - If key unknown → error
    - This prevents obviously broken pinned configs from being persisted.
@@ -1103,7 +1112,7 @@ Pinned DSL (`dataInterestsDSL`) must be **consistent** with the context registry
    - No hard crash; other graphs continue to run
 
 **Error policy**:
-- For **pinned DSL in settings modal** → we can block Save on validation errors (authoring-time feedback).
+- For **pinned DSL in settings modal** → we can WARN ON Save on validation errors (authoring-time feedback).
 - For **runtime usage (graphs already saved)** → never hard fail user interaction; instead:
   - Disable context UI where impossible to interpret
   - Show clear toast + log error for investigation
@@ -1374,7 +1383,7 @@ e.landing-conversion.p.mean: 0.10  # Uncontexted fallback
 
 **Extension needed**: Already supported! The existing regex includes `context` pattern. Just ensure normalization happens.
 
-#### Fallback Policy (OPEN QUESTION #2)
+#### Fallback Policy (Resolved)
 
 **Scenario**: User queries `e.my-edge.context(source:google).p.mean` but Sheets only has `e.my-edge.p.mean`.
 
@@ -1455,10 +1464,42 @@ function removeContextFromHRN(hrn: string): string {
 
 ### New Requirements
 
-1. **Context matching**: Filter windows by context constraints from query
-2. **MECE aggregation**: Detect when windows are MECE partitions and sum correctly
-3. **Overlap handling**: Comprehensive logic for all overlap scenarios
-4. **Fetch gap detection**: Identify missing slices and commission new queries
+1. **Slice isolation (CRITICAL)**: All functions MUST filter by `sliceDSL` before any logic
+   - First line: `const matchingValues = values.filter(v => v.sliceDSL === targetSlice)`
+   - Never aggregate across different slices
+   - Assertion: If `values` contains contexts data but no `targetSlice` specified → error
+2. **Context matching**: Filter windows by context constraints from query
+3. **MECE aggregation**: Detect when windows are MECE partitions and sum correctly
+4. **Overlap handling**: Comprehensive logic for all overlap scenarios
+5. **Fetch gap detection**: Identify missing slices and commission new queries
+
+### Data Lookup Pattern (MANDATORY)
+
+**Every aggregation/fetch function must follow this pattern**:
+
+```typescript
+function aggregateOrFetch(
+  paramFile: Parameter,
+  query: { sliceDSL: string; window: DateRange },
+  ...
+): Result {
+  // STEP 1: Isolate slice by PRIMARY KEY (sliceDSL)
+  const targetSlice = normalizeSliceDSL(query.sliceDSL);
+  const sliceValues = paramFile.values.filter(v => v.sliceDSL === targetSlice);
+  
+  // STEP 2: (Optional) Check integrity if needed
+  if (query.signature && sliceValues.some(v => v.query_signature !== query.signature)) {
+    warn('Query configuration changed; data may be stale');
+  }
+  
+  // STEP 3: Operate ONLY on sliceValues
+  const dates = extractDates(sliceValues);
+  const missing = findMissingDates(query.window, dates);
+  // ... rest of logic
+}
+```
+
+**Violations of this pattern will cause data corruption.**
 
 ### The 2D Grid: Context × Date
 
@@ -3096,6 +3137,31 @@ All intricate aspects of the implementation MUST have comprehensive test coverag
   - Error when both pattern and filter provided
 - ✓ Detect unmapped context values (values not in registry)
 
+#### Slice Isolation & Query Signatures (CRITICAL — Data Integrity)
+
+**File**: `graph-editor/src/services/__tests__/sliceIsolation.test.ts` (NEW)
+
+Test separation of indexing (sliceDSL) vs integrity (query_signature):
+
+- ✓ **Slice lookup by sliceDSL**:
+  - File contains 3 slices: `channel:google`, `channel:fb`, `channel:other`
+  - All share same `query_signature` (same base config)
+  - Lookup for `channel:google` returns ONLY that slice's data, not others
+- ✓ **Incremental fetch isolation**:
+  - `channel:google` has dates [1,2,5], `channel:fb` has dates [2,3,4]
+  - Query for `channel:google` + window [1-5] should request dates [3,4] ONLY
+  - NOT dates [1,5] (which would assume fb's data counts for google)
+- ✓ **Signature mismatch handling**:
+  - Slice has data with signature A
+  - New query has signature B (config changed)
+  - System warns but still uses slice (keyed by sliceDSL, not signature)
+- ✓ **Empty sliceDSL handling**:
+  - Legacy data without sliceDSL treated as empty string (uncontexted)
+  - Can coexist with contexted slices in same file
+- ✓ **Aggregation assertion**:
+  - Call aggregation on file with contexts but no targetSlice specified
+  - Should throw error, not silently aggregate mixed slices
+
 #### Window Aggregation & MECE Logic (CRITICAL TEST COVERAGE)
 
 **Files**: 
@@ -3288,18 +3354,54 @@ Test that `generateMissingSubqueries` correctly identifies gaps in the 2D grid:
 
 ### Phase 1: Core Infrastructure
 
+**Schema & Types**:
 - Add `dataInterestsDSL` and `currentQueryDSL` to graph schema
-- Add `sliceDSL` to window schema (required field)
-- Implement `constraintParser.ts` (shared DSL parsing utility)
-- Deploy `contexts.yaml` with initial context definitions
-- All date handling uses `d-MMM-yy` format from day one
+- Add `sliceDSL` to `ParameterValue` (required field; empty string for legacy)
+- Extend `context-definition-schema.yaml` (add `otherPolicy`, `sources` with `field`/`filter`/`pattern`)
 
-### Phase 2: Adapters & Aggregation
+**DSL Parsing**:
+- Implement `constraintParser.ts` (shared parsing utility for `context`, `contextAny`, `window`)
+- Update `query-dsl-1.0.0.json` schema (register new functions)
+- Mirror changes in Python `query_dsl.py`
 
-- Extend Amplitude adapter for context-filtered queries (with regex pattern support)
-- Extend Sheets adapter for context-labeled HRNs
+**Query Signature Service (NEW)**:
+- Implement `querySignatureService.ts` (centralized signature generation/validation)
+  - `buildDailySignature()` — excludes date bounds for daily-capable sources
+  - `buildAggregateSignature()` — includes date bounds for aggregate sources
+  - `validateSignature()` — checks if stored sig matches current spec
+- Define `DataQuerySpec` interface (normalized form of "what we'd send to external source")
+
+**Context Registry**:
+- Deploy `contexts-index.yaml` + individual context definition files
+- Implement `ContextRegistry.ts` (lazy-load definitions, validate against extended schema)
+
+**Date Handling**:
+- All date formatting uses `d-MMM-yy` format from day one (no YYYY-MM-DD anywhere)
+
+### Phase 2: Data Operations Refactoring (CRITICAL)
+
+**Existing Code Updates** (to fix signature/indexing conflation):
+
+1. **`dataOperationsService.ts`** (~200 lines affected, lines 2100-2300):
+   - Replace all `filter(v => v.query_signature === sig)` with `filter(v => v.sliceDSL === targetSlice)`
+   - Use `querySignatureService.validateSignature()` for staleness checks AFTER slice isolation
+   - Build `DataQuerySpec` from current graph state before signature comparison
+   - Add assertions: if file has contexts but no `targetSlice` specified, throw error
+
+2. **`windowAggregationService.ts`** (~100 lines affected):
+   - All functions accept `targetSlice: string` parameter
+   - First line of each function: `const sliceValues = values.filter(v => v.sliceDSL === targetSlice)`
+   - Replace ad-hoc signature checks with `querySignatureService.validateSignature()`
+   - Add safeguard: if `values` has contexts but no `targetSlice` → error
+
+3. **Amplitude/Sheets Adapters**:
+   - Replace inline signature generation with `querySignatureService.buildDailySignature()` or `buildAggregateSignature()`
+   - Build `DataQuerySpec` from adapter request parameters
+   - Store returned `query_signature` on fetched `ParameterValue` entries
+
+**New Aggregation Logic**:
 - Implement context-aware window aggregation (2D grid, MECE detection, otherPolicy)
-- Add in-memory `VariableAggregationCache` for performance
+- Add in-memory `VariableAggregationCache` for performance (<1s latency target)
 
 ### Phase 3: UI Components
 
@@ -3347,6 +3449,333 @@ Test that `generateMissingSubqueries` correctly identifies gaps in the 2D grid:
 16. ✓ **Pinned DSL validation**: Validate on Save; show slice count + enumeration; warn if >500 slices
 17. ✓ **Nightly explosion cap**: Warn (don't block) if expansion exceeds safe threshold
 
+### Terminology: Three Distinct "Queries"
+
+To avoid confusion, we explicitly distinguish three concepts that all use the word "query":
+
+| Term | What It Is | Where It Lives | Purpose | Example |
+|------|-----------|----------------|---------|---------|
+| **User DSL Query** | User-facing query expression in our DSL | Graph metadata (`dataInterestsDSL`, `currentQueryDSL`), UI inputs | Describes what the user wants to fetch/view; decomposed into slices | `"context(channel).window(-30d:)"` |
+| **Slice Key** (`sliceDSL`) | Canonical identifier for an atomic slice | `ParameterValue.sliceDSL` | PRIMARY INDEX KEY for data lookup | `"context(channel:google).window(1-Jan-25:31-Jan-25)"` |
+| **Data Query Spec** | Normalized specification of what we send to external source (Amplitude/Sheets) | Built dynamically from graph topology + slice + adapter config | Source of truth for `query_signature` integrity checking | `{connection: "amplitude-eu", event: "purchase", filters: ["utm_source=='google'"], granularity: "daily"}` |
+
+**Critical distinction**:
+- **User DSL queries** describe *user intent* and can span multiple slices
+- **Slice keys** identify *specific data chunks* stored in parameter files
+- **Data query specs** describe *external API calls* and determine data validity
+
+**Usage rules**:
+- Use **slice keys** for indexing (finding data)
+- Use **data query specs** for integrity checking (is data stale?)
+- User DSL queries are *never* used directly for indexing or signatures
+
+---
+
+### Query Signatures vs Slice Keys: Separation of Concerns
+
+**Problem Statement**: Current codebase conflates two orthogonal concerns:
+1. **Data Indexing**: "Which slice does this data represent?" 
+2. **Data Integrity**: "Is this data still valid given current config?"
+
+**Current Issues**:
+- `query_signature` is used for both purposes
+- Signature is a hash of *data query spec* (what we'd send to the source)
+- When query spec is identical but slice parameters differ (e.g., different contexts), signatures collide
+- This makes signatures unsuitable as primary index keys
+
+**Design Decision**:
+
+| Concern | Field | Type | Purpose | Example |
+|---------|-------|------|---------|---------|
+| **Indexing** | `sliceDSL` | String (canonical) | Primary key to identify which slice this data belongs to | `"context(channel:google).window(1-Jan-25:31-Jan-25)"` |
+| **Integrity** | `query_signature` | String (hash) | Detect if *data query spec* has changed (topology, connection, mappings) | `"a1b2c3..."` (SHA-256 of normalized data query spec) |
+
+**Usage Patterns**:
+
+1. **Finding data for a query**:
+   ```typescript
+   // CORRECT: Index by sliceDSL
+   const targetSlice = normalizeSliceDSL(userQuery);
+   const matchingValues = allValues.filter(v => v.sliceDSL === targetSlice);
+   
+   // WRONG: Index by signature (will return mixed slices)
+   const matchingValues = allValues.filter(v => v.query_signature === sig);
+   ```
+
+2. **Checking if data is stale**:
+   ```typescript
+   // CORRECT: After isolating slice, check signature
+   const sliceData = values.filter(v => v.sliceDSL === targetSlice);
+   const currentSpec = buildDataQuerySpec(slice, graph, contexts, adapter);
+   const currentSig = computeSignature(currentSpec);
+   
+   if (sliceData.some(v => v.query_signature !== currentSig)) {
+     warn('Data query spec changed; data may be stale');
+   }
+   ```
+
+3. **Incremental fetch logic**:
+   ```typescript
+   // CORRECT: Filter by slice FIRST, then analyze dates
+   const sliceData = values.filter(v => v.sliceDSL === targetSlice);
+   const existingDates = extractDates(sliceData);
+   const missingDates = findMissingDates(requestedWindow, existingDates);
+   
+   // CORRECT: Partial windows are valid if signature unchanged
+   // E.g., overnight fetched window(-30d:), user queries window(-7d:)
+   // Can reuse last 7 days from the 30-day fetch without new retrieval
+   ```
+
+**Implementation Requirements**:
+1. `sliceDSL` is REQUIRED on all `ParameterValue` entries (empty string = uncontexted, all-time)
+2. All data lookup/aggregation MUST filter by `sliceDSL` first
+3. `query_signature` is OPTIONAL and used only for staleness detection
+4. Signature generation MUST be consistent (deterministic hash of normalized data query spec)
+5. **For daily-capable sources**: Date ranges are EXCLUDED from signature (partial windows remain valid)
+6. **For aggregate-only sources**: Date ranges MAY be included in signature (depends on re-usability)
+
+**Migration Note**: Existing data has `query_signature` but not `sliceDSL`. During contexts implementation, add logic to handle legacy data (treat missing `sliceDSL` as uncontexted slice).
+
+---
+
+### Data Query Signature Service (NEW)
+
+**Problem**: Signature generation is currently ad-hoc and risks inconsistency.
+
+**Solution**: Centralize into `QuerySignatureService` that handles all signature logic.
+
+**File**: `graph-editor/src/services/querySignatureService.ts` (NEW)
+
+```typescript
+/**
+ * Query Signature Service
+ * 
+ * Centralizes data query signature generation and validation.
+ * Ensures consistency across adapters and incremental fetch logic.
+ * 
+ * CRITICAL: Signatures are for DATA QUERY SPECS, not user DSL queries or slice keys.
+ */
+
+export interface DataQuerySpec {
+  // Connection
+  connectionId: string;
+  connectionType: 'amplitude' | 'sheets' | 'statsig' | 'optimizely';
+  
+  // Graph topology (as seen by adapter)
+  fromNode: string;
+  toNode: string;
+  visited: string[];
+  excluded: string[];
+  cases: Array<{ key: string; value: string }>;
+  
+  // Context filters (as transformed for this source)
+  contextFilters: Array<{
+    key: string;
+    value: string;
+    sourceField: string;      // e.g., "utm_source"
+    sourcePredicate: string;  // e.g., "utm_source == 'google'"
+  }>;
+  
+  // Time handling
+  granularity: 'daily' | 'aggregate';
+  // For 'aggregate' mode: include window bounds
+  // For 'daily' mode: EXCLUDE window bounds (partial windows remain valid)
+  windowBounds?: { start: string; end: string };
+  
+  // Adapter-specific config
+  adapterOptions: Record<string, any>;  // Deterministically ordered
+}
+
+export class QuerySignatureService {
+  /**
+   * Build signature for a daily-capable query.
+   * Excludes date bounds so partial windows remain valid.
+   */
+  buildDailySignature(spec: Omit<DataQuerySpec, 'windowBounds'>): string {
+    const normalized = this.normalizeSpec({ ...spec, granularity: 'daily' });
+    return this.hashSpec(normalized);
+  }
+  
+  /**
+   * Build signature for an aggregate-only query.
+   * Includes date bounds since the slice is tied to that specific window.
+   */
+  buildAggregateSignature(spec: DataQuerySpec): string {
+    if (spec.granularity !== 'aggregate') {
+      throw new Error('buildAggregateSignature requires granularity: aggregate');
+    }
+    const normalized = this.normalizeSpec(spec);
+    return this.hashSpec(normalized);
+  }
+  
+  /**
+   * Check if stored signature matches current query spec.
+   * Returns { valid: boolean; reason?: string }
+   */
+  validateSignature(
+    storedSignature: string,
+    currentSpec: DataQuerySpec
+  ): { valid: boolean; reason?: string } {
+    const currentSig = currentSpec.granularity === 'daily'
+      ? this.buildDailySignature(currentSpec)
+      : this.buildAggregateSignature(currentSpec);
+    
+    if (storedSignature === currentSig) {
+      return { valid: true };
+    }
+    
+    return { 
+      valid: false, 
+      reason: 'Data query spec changed (topology, connection, or context mappings differ)' 
+    };
+  }
+  
+  /**
+   * Normalize spec to deterministic form for hashing.
+   * - Sort arrays (visited, excluded, contextFilters)
+   * - Remove undefined/null fields
+   * - Order object keys
+   */
+  private normalizeSpec(spec: Partial<DataQuerySpec>): Record<string, any> {
+    // Implementation: deep sort, remove nulls, canonical JSON
+    // ...
+  }
+  
+  /**
+   * Hash normalized spec using SHA-256.
+   */
+  private hashSpec(normalized: Record<string, any>): string {
+    const canonical = JSON.stringify(normalized);
+    // Use crypto.subtle.digest or equivalent
+    return sha256Hex(canonical);
+  }
+}
+
+export const querySignatureService = new QuerySignatureService();
+```
+
+**Usage in adapters**:
+
+```typescript
+// Amplitude adapter
+async fetch(edge, slice, window) {
+  const spec: DataQuerySpec = {
+    connectionId: this.connection.id,
+    connectionType: 'amplitude',
+    fromNode: edge.from,
+    toNode: edge.to,
+    visited: parseSliceDSL(slice).visited,
+    // ... build full spec from graph + slice + contexts
+    granularity: 'daily',
+    // NO windowBounds for daily mode
+  };
+  
+  const signature = querySignatureService.buildDailySignature(spec);
+  
+  // Fetch from Amplitude...
+  const data = await amplitudeAPI.query(/* ... */);
+  
+  return {
+    n_daily: data.n_daily,
+    k_daily: data.k_daily,
+    dates: data.dates,
+    sliceDSL: slice,
+    query_signature: signature,  // Store for future validation
+  };
+}
+```
+
+**Usage in incremental fetch**:
+
+```typescript
+// dataOperationsService.ts
+function shouldRefetch(storedValues: ParameterValue[], currentSpec: DataQuerySpec): boolean {
+  if (storedValues.length === 0) return true;
+  
+  // Check if any stored value has mismatched signature
+  const currentSig = currentSpec.granularity === 'daily'
+    ? querySignatureService.buildDailySignature(currentSpec)
+    : querySignatureService.buildAggregateSignature(currentSpec);
+  
+  const staleValues = storedValues.filter(v => 
+    v.query_signature && v.query_signature !== currentSig
+  );
+  
+  if (staleValues.length > 0) {
+    console.warn(`[DataOps] ${staleValues.length} values have stale signatures; considering refetch`);
+    // Policy: warn but allow reuse if dates are recent; OR force refetch
+  }
+  
+  return staleValues.length > 0; // Or more nuanced policy
+}
+```
+
+**Updates Required to Existing Code**:
+
+1. **`dataOperationsService.ts`** (lines ~2100-2300):
+   - Replace ad-hoc signature comparison with `querySignatureService.validateSignature()`
+   - Build `DataQuerySpec` from current graph state
+   - Use service for all signature checks
+
+2. **`amplitudeDASAdapter.ts`** (or equivalent):
+   - Replace inline signature generation with `querySignatureService.buildDailySignature()`
+   - Build `DataQuerySpec` from adapter request
+
+3. **`sheetsAdapter.ts`**:
+   - Use `querySignatureService.buildAggregateSignature()` (Sheets typically returns aggregates)
+   - Include window bounds in spec since Sheets data is often window-specific
+
+4. **`windowAggregationService.ts`**:
+   - When checking validity, use `querySignatureService.validateSignature()`
+   - No direct signature generation (that's adapter responsibility)
+
+**Testing**: 
+- `querySignatureService.test.ts` with cases:
+  - Same spec → same signature (deterministic)
+  - Spec + different window → same signature (daily mode)
+  - Spec + different window → different signature (aggregate mode)
+  - Spec + different topology → different signature
+  - Spec + different context mapping → different signature
+
+---
+
+### Implementation Risks & Critical Paths
+
+**1. Data Operations Service: Incremental Fetch Corruption**
+- **Risk**: Existing logic in `dataOperationsService.ts` (lines 2180+) filters parameter values by `query_signature` only.
+- **Problem**: Multiple context slices (e.g., `channel:google`, `channel:fb`) will share the same `query_signature` (derived from base query config). Filtering by signature alone will return a mixed bag of slices. `calculateIncrementalFetch` will then merge dates from different contexts, falsely believing data exists for a date when it only exists for a *different* context.
+- **Fix**: Filter MUST be updated to check `query_signature` **AND** `sliceDSL`. Only values matching the exact requested slice should be considered for incremental fetch analysis.
+
+**2. Window Aggregation: Time-Series Assumptions (CRITICAL)**
+- **Risk**: `windowAggregationService.ts` logic assumes the `values` array represents a single logical time-series.
+- **Problem**: With contexts, `values` will contain multiple disjoint time-series (one per slice). Naive iteration over `values` will aggregate disparate contexts.
+- **Fix**: 
+  1. All aggregation functions must accept a target `sliceDSL` parameter
+  2. First line of each function: `const matchingValues = values.filter(v => v.sliceDSL === targetSliceDSL)`
+  3. All subsequent logic operates only on `matchingValues`
+- **Safeguard**: Add assertion that fails if aggregation is called without a `sliceDSL` when `values.length > 0 && values.some(v => v.sliceDSL)` (i.e., if file has contexts data, must specify which slice to aggregate)
+
+**3. Condition String Parsing in UpdateManager & Edge References (REQUIRES WORK)**
+- **Current State**: 
+  - `UpdateManager.ts` uses `path.split('.')` to traverse object properties (for internal state paths like `nodes[id].data.x`)
+  - Graph files and user references DO key conditional_p by condition string (e.g., `"visited(a).context(b:c)"`)
+  - Current naive split on `.` will break when condition strings contain dots
+- **Required Changes**:
+  1. **Distinguish path types**: 
+     - State paths (internal): `nodes[0].case.variants` → safe to split on `.`
+     - Condition strings (user-facing): `visited(a).context(b:c)` → must parse via DSL parser
+  2. **New utility in `constraintParser.ts`**: 
+     ```typescript
+     parseConditionForLookup(condition: string): {
+       edgeId?: string;
+       groupId?: string;
+       condition: string;
+     }
+     ```
+  3. **UpdateManager pattern**: When path contains a condition reference, detect this (e.g., path starts with `edge:` or `group:`) and use DSL-aware parsing instead of naive split
+  4. **HRNResolver updates**: Already uses DSL parsing; ensure it's used consistently for all condition string lookups
+- **Testing**: Add test cases for condition strings containing dots in multiple constraint types
+
 ### Implementation-Time Details (Defer to Code)
 
 These are intentionally left to implementation (not blocking design sign-off):
@@ -3359,18 +3788,48 @@ These are intentionally left to implementation (not blocking design sign-off):
 
 ### Deliverables
 
-1. **Schema**: `dataInterestsDSL`, `currentQueryDSL` on graphs; `sliceDSL` on var windows (all use `d-MMM-yy` dates)
-2. **Shared constraint parser**: `constraintParser.ts` with `context`/`contextAny`/`window` support
-3. **Context registry**: Loader, otherPolicy (4 variants), regex pattern support, MECE detection
-4. **Window aggregation**: 2D grid model, MECE logic, 7 daily-grid scenarios, mixed-otherPolicy handling
-5. **In-memory indexing**: `VariableAggregationCache` for <1s query latency
-6. **Adapters**: 
+1. **Schema Extensions**:
+   - `dataInterestsDSL`, `currentQueryDSL` on graphs
+   - `sliceDSL` (required) on `ParameterValue`
+   - Extended `context-definition-schema.yaml` (otherPolicy, sources)
+   - All dates use `d-MMM-yy` format
+
+2. **Query Signature Service (NEW)**:
+   - `querySignatureService.ts` — centralized signature generation/validation
+   - `DataQuerySpec` interface — normalized form of external API calls
+   - `buildDailySignature()` — excludes dates for partial window reuse
+   - `buildAggregateSignature()` — includes dates for window-specific data
+   - Clear separation: signatures for *data query specs*, NOT for indexing
+
+3. **Existing Code Refactoring** (signature/indexing separation):
+   - `dataOperationsService.ts` — replace signature-based filtering with sliceDSL-based
+   - `windowAggregationService.ts` — add mandatory `targetSlice` parameter to all functions
+   - Adapters — use `querySignatureService` for signature generation
+   - Add safeguards: error if contexts present but no `targetSlice` specified
+
+4. **Shared constraint parser**: `constraintParser.ts` with `context`/`contextAny`/`window` support
+
+5. **Context registry**: Loader, otherPolicy (4 variants), regex pattern support, MECE detection
+
+6. **Window aggregation**: 2D grid model, MECE logic, 7 daily-grid scenarios, mixed-otherPolicy handling
+
+7. **In-memory indexing**: `VariableAggregationCache` for <1s query latency
+
+8. **Adapters**: 
    - Amplitude: context filter generation with regex pattern support
    - Sheets: fallback policy (fallback with warning)
-7. **UI**: See `CONTEXTS_UI_DESIGN.md` (enhanced QueryExpressionEditor, ContextValueSelector, WindowSelector integration)
-8. **Nightly runner**: Explode `dataInterestsDSL` with cap/warning at 500 slices
-9. **Validation**: Graph-level DSL validation; graceful degradation on errors
-10. **Testing**: 7 daily grid + 4 otherPolicy + regex + mixed-MECE scenarios
+   - Both: integrate `querySignatureService`
+
+9. **UI**: See `CONTEXTS_UI_DESIGN.md` (enhanced QueryExpressionEditor, ContextValueSelector, WindowSelector integration)
+
+10. **Nightly runner**: Explode `dataInterestsDSL` with cap/warning at 500 slices
+
+11. **Validation**: Graph-level DSL validation; graceful degradation on errors
+
+12. **Testing**: 
+    - Slice isolation tests (prevent cross-slice corruption)
+    - 7 daily grid + 4 otherPolicy + regex + mixed-MECE scenarios
+    - Signature service tests (deterministic, daily vs aggregate modes)
 
 ### Implementation Priority
 
