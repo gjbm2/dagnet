@@ -176,10 +176,21 @@ function AppShellContent() {
 
   // Detect whether user credentials have been configured
   useEffect(() => {
-    const credentialsFile = fileRegistry.getFile('credentials-credentials');
-    const gitArray = credentialsFile?.data?.git;
-    const hasCreds = Array.isArray(gitArray) && gitArray.length > 0;
-    setHasUserCredentials(hasCreds);
+    const checkCredentials = async () => {
+      // Check FileRegistry first (fast)
+      let credentialsFile = fileRegistry.getFile('credentials-credentials');
+      
+      // If not in FileRegistry, check IndexedDB
+      if (!credentialsFile) {
+        credentialsFile = await db.files.get('credentials-credentials');
+      }
+      
+      const gitArray = credentialsFile?.data?.git;
+      const hasCreds = Array.isArray(gitArray) && gitArray.length > 0;
+      setHasUserCredentials(hasCreds);
+    };
+    
+    checkCredentials();
   }, [tabs.length, navState.selectedRepo, navState.selectedBranch]);
 
   const handleInitCredentialsFromSecret = async () => {

@@ -137,6 +137,7 @@ export class AppDatabase extends Dexie {
     
     await this.tabs.clear();
     await this.appState.clear();
+    await this.workspaces.clear(); // BUGFIX: Clear workspace metadata too
     // Don't clear settings or credentials - user preferences should persist
     // Connections will be re-seeded from defaults (or git) on app reload
   }

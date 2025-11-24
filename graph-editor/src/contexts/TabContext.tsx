@@ -444,7 +444,7 @@ class FileRegistry {
    */
   async updateIndexOnCreate(type: 'parameter' | 'context' | 'case' | 'node', itemId: string, metadata?: any): Promise<void> {
     const indexFileId = `${type}-index`;
-    const indexFileName = `${indexFileId}.yaml`;  // parameter-index.yaml, not parameters-index.yaml
+    const indexFileName = `${type}s-index.yaml`;  // parameters-index.yaml (plural form at root)
     
     try {
       // Load or create index file
