@@ -89,18 +89,28 @@ python dev-server.py
 ```
 dagnet/
 ├── graph-editor/             # Frontend React/TypeScript app (Vercel deployment root)
+│   ├── src/                  # React/TypeScript source code
+│   ├── public/               # Static assets and public documentation
+│   │   └── docs/            # **PUBLIC USER DOCUMENTATION** (user-facing guides)
+│   ├── api/                  # Serverless functions (TS + Python)
 │   ├── lib/                  # Python graph computation libraries
 │   ├── tests/                # Python tests
-│   ├── api/                  # Serverless functions (TS + Python)
+│   ├── docs/                 # Component-specific technical documentation
 │   ├── dev-server.py         # Local Python dev server
 │   ├── requirements.txt      # Python dependencies
 │   ├── pytest.ini           # Pytest configuration
 │   └── venv/                 # Python virtual environment (local dev)
-├── PROJECT_CONNECT/          # Technical documentation
-│   ├── README.md            # Project roadmap
-│   └── CURRENT/             # Active work documentation
-├── dev-start.sh             # Quick-start script
-└── dev-stop.sh              # Stop all dev servers
+├── docs/                     # **TECHNICAL DOCUMENTATION** (developer/architecture docs)
+│   ├── current/              # Current technical documentation and specs
+│   │   └── project-contexts/ # Project context and status documents
+│   └── archive/              # Historical documentation and completed work
+│       └── project-perf/     # Performance testing and benchmarks (moved from /perf)
+├── msmdc/                    # MSMDC (Minimum Set of Marginal Distribution Cuts) utilities
+├── param-registry/           # Dev testing: app accesses git files here; create sample files for testing
+├── apps-script/              # Google Apps Script integrations
+├── dev-start.sh             # Quick-start script (starts frontend + backend)
+├── dev-stop.sh              # Stop all dev servers
+└── dev-restart.sh           # Restart development servers
 ```
 
 ## Features
@@ -118,25 +128,45 @@ dagnet/
 
 ## Documentation
 
-### User Documentation
+### 📚 Public User Documentation
+
+**Location:** [`graph-editor/public/docs/`](graph-editor/public/docs/)
+
+User-facing documentation accessible both in the app and on GitHub:
+
 - [User Guide](graph-editor/public/docs/user-guide.md) - Getting started and core concepts
 - [Data Connections & Adapters](graph-editor/public/docs/data-connections.md) - Connect to external data sources
 - [Query Expressions](graph-editor/public/docs/query-expressions.md) - Query DSL reference
 - [What-If Analysis](graph-editor/public/docs/what-ifs-with-conditionals.md) - Scenario modeling
+- [Scenarios](graph-editor/public/docs/scenarios.md) - Case variants and A/B testing
 - [API Reference](graph-editor/public/docs/api-reference.md) - Programmatic access
+- [Keyboard Shortcuts](graph-editor/public/docs/keyboard-shortcuts.md) - Productivity tips
+- [Query Algorithms White Paper](graph-editor/public/docs/query-algorithms-white-paper.md) - Technical deep dive
+- [CHANGELOG](graph-editor/public/docs/CHANGELOG.md) - Release history
 
-### Technical Documentation
-See [PROJECT_CONNECT/README.md](PROJECT_CONNECT/README.md) for:
-- Current project status and roadmap
-- Technical debt tracking
-- Architecture decisions
-- Phase-by-phase implementation plan
+### 🔧 Technical Documentation
 
-### Key Technical Docs
-- [Python Graph Compute Architecture](PROJECT_CONNECT/CURRENT/PYTHON_GRAPH_COMPUTE_ARCHITECTURE.md)
-- [Conditional Probability & Graph Updates](PROJECT_CONNECT/CURRENT/CONDITIONAL_P_AND_GRAPH_UPDATES.md)
-- [Schema Changes](PROJECT_CONNECT/CURRENT/SCHEMA_CHANGES_AND_TODO.md)
-- [Data Model Hierarchy](PROJECT_CONNECT/CURRENT/DATA_MODEL_HIERARCHY.md)
+**Location:** [`docs/`](docs/)
+
+Developer and architecture documentation:
+
+#### Current Documentation (`docs/current/`)
+Active technical specs, architecture decisions, and project contexts:
+- Check `docs/current/project-contexts/` for current project status and work plans
+
+#### Component-Specific Docs (`graph-editor/docs/`)
+- [Amplitude Credentials Setup](graph-editor/docs/AMPLITUDE_CREDENTIALS_SETUP.md)
+- [DAS CORS Explanation](graph-editor/docs/DAS_CORS_EXPLANATION.md)
+- [DAS DSL Excludes and Subtraction](graph-editor/docs/DAS_DSL_EXCLUDES_AND_SUBTRACTION.md)
+- [Proxy Local vs Production](graph-editor/docs/PROXY_LOCAL_VS_PRODUCTION.md)
+
+#### Testing Documentation (`graph-editor/`)
+- [Integration Testing Guide](graph-editor/INTEGRATION_TESTING_GUIDE.md)
+- [Testing Strategy](graph-editor/TESTING_STRATEGY.md)
+- [Test Quick Start](graph-editor/TEST_QUICK_START.md)
+
+#### Archive (`docs/archive/`)
+Historical documentation and completed work - useful for understanding design decisions and past implementations
 
 ## Tech Stack
 
@@ -275,10 +305,11 @@ This returns mock data for all Python API calls.
 
 ## Contributing
 
-1. Check [PROJECT_CONNECT/README.md](PROJECT_CONNECT/README.md) for current priorities
-2. Review technical debt in [CURRENT/](PROJECT_CONNECT/CURRENT/) docs
+1. Check `docs/current/project-contexts/` for current project status and priorities
+2. Review technical documentation in `docs/current/` and `docs/archive/`
 3. Write tests for new features
 4. Ensure both frontend and Python tests pass
+5. Update relevant documentation in `graph-editor/public/docs/` for user-facing changes
 
 ## License
 
