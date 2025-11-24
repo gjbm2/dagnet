@@ -1,67 +1,81 @@
-# Contexts: Detailed Implementation Plan
+# Contexts: Implementation Documentation (INDEX)
 
 **Based on**: `CONTEXTS.md` (high-level design)  
-**Status**: Implementation specification — DRAFT with open questions  
-**Target**: v1 contexts support
+**Status**: Implementation specification — COMPLETE  
+**Target**: v1 contexts support  
+**Last Updated**: 2025-11-24
 
 ---
 
-## Feedback Integration Status
+## ⚠️ This Document Has Been Decomposed
 
-**Resolved**:
-1. ✓ Terminology: renamed `pinnedSliceDSL` → `dataInterestsDSL` (graph-level) vs `sliceDSL` (window-level)
-2. ✓ Removed redundant `sliceMetadata` structured duplication
-3. ✓ Identified existing parsing codepaths to extend (ParamPackDSLService, HRNResolver)
-4. ✓ Amplitude API research completed (Dashboard REST API documented in Section 6)
-5. ✓ Sheets fallback policy decided (Option B: fallback with warning, documented in Section 6.2)
-6. ✓ MECE window aggregation logic designed (full algorithm in Section 5)
-7. ✓ Comprehensive window overlap scenarios documented (13-scenario matrix in Section 5)
-8. ✓ Removed index proposal; will scan windows linearly (acceptable perf for v1)
+This 3937-line implementation document has been split into **5 focused documents** for better readability and maintainability.
+
+**Please refer to the new documentation structure**:
+
+### 📚 [README.md](./README.md) — Start Here
+Overview and navigation guide for all contexts documentation.
+
+### 1. [CONTEXTS_ARCHITECTURE.md](./CONTEXTS_ARCHITECTURE.md)
+Core architecture, data model, and terminology.
+
+### 2. [CONTEXTS_REGISTRY.md](./CONTEXTS_REGISTRY.md)
+Context definitions, otherPolicy, and MECE detection.
+
+### 3. [CONTEXTS_AGGREGATION.md](./CONTEXTS_AGGREGATION.md)
+Window aggregation logic and 2D grid model.
+
+### 4. [CONTEXTS_ADAPTERS.md](./CONTEXTS_ADAPTERS.md)
+Data source integrations and nightly runner.
+
+### 5. [CONTEXTS_TESTING_ROLLOUT.md](./CONTEXTS_TESTING_ROLLOUT.md)
+Testing strategy, validation, and deployment.
 
 ---
 
-## Design Questions: Status
+## Quick Reference
+
+**For implementers**: Start with [README.md](./README.md) → [CONTEXTS_ARCHITECTURE.md](./CONTEXTS_ARCHITECTURE.md)
+
+**For reviewers**: See critical sections in [README.md](./README.md#key-design-decisions)
+
+**For specific topics**:
+- Data model and sliceDSL → [CONTEXTS_ARCHITECTURE.md](./CONTEXTS_ARCHITECTURE.md#data-model--schema-changes)
+- otherPolicy impact → [CONTEXTS_REGISTRY.md](./CONTEXTS_REGISTRY.md#otherpolicy-detailed-specification)
+- MECE aggregation → [CONTEXTS_AGGREGATION.md](./CONTEXTS_AGGREGATION.md#mece-aggregation-across-context-keys)
+- Amplitude adapter → [CONTEXTS_ADAPTERS.md](./CONTEXTS_ADAPTERS.md#amplitude-adapter-extensions)
+- Test requirements → [CONTEXTS_TESTING_ROLLOUT.md](./CONTEXTS_TESTING_ROLLOUT.md#unit-tests)
+
+---
+
+## Design Status
 
 All major design questions have been resolved:
 
-1. ✓ **Amplitude API Research** (Section 6: Adapter Extensions)
-   - Dashboard REST API supports property filters matching our context mappings
-   - Funnel/segmentation endpoints accept `where` clauses with AND/OR logic
-   - Returns `from_count`, `to_count`, optionally `time_series` arrays
-   - Store same format as today: `n_daily`, `k_daily`, `dates`, plus `sliceDSL`
-
-2. ✓ **Sheets Fallback Policy** (Section 6.2: Sheets Adapter)
-   - **Decision**: Option B (fallback to uncontexted with warning)
-   - If exact context not found, try uncontexted version and show UI warning
-   - Pragmatic for manually-maintained Sheets data
-   - Can add strict mode as opt-in later
-
-3. ✓ **MECE Window Aggregation** (Section 5: Window Aggregation Logic)
-   - Full `detectMECEPartition` algorithm implemented
-   - Uses context registry to verify completeness
-   - Sums n/k when partition is MECE and complete
-   - Warns and marks as partial when incomplete
-
-4. ✓ **Window Overlap Scenarios** (Section 5: Window Overlap Matrix)
-   - Comprehensive 13-scenario table covering:
-     - Exact matches (contexted/uncontexted)
-     - MECE context aggregation (complete/incomplete)
-     - Temporal aggregation (adjacent/gaps)
-     - Partial overlaps and cross-dimension cases
-   - Each scenario has defined behavior and test requirements
-
-### Remaining Implementation Details
-
-Minor details to finalize during implementation (not blocking design sign-off):
-
-1. **UI polish**: Exact styling for context chips, warning messages, cross-key nudging tooltips
-2. **Error messages**: User-facing copy for various aggregation warnings/errors
-3. **Performance tuning**: If linear window scan becomes slow (profile first, then optimize)
-4. **Amplitude rate limits**: Monitor in production, add throttling if needed
+1. ✓ **Terminology**: `dataInterestsDSL` (graph) vs `sliceDSL` (window) vs `currentQueryDSL` (UI)
+2. ✓ **Data model**: `sliceDSL` as PRIMARY KEY; query_signature as integrity token
+3. ✓ **Amplitude API**: Dashboard REST API with property filters documented
+4. ✓ **Sheets fallback**: Fallback to uncontexted with warning
+5. ✓ **MECE aggregation**: Full algorithm with otherPolicy support (4 variants)
+6. ✓ **Window overlap**: 7 scenarios for daily grid model
+7. ✓ **Performance**: In-memory index, <1s latency target
 
 ---
 
-## Table of Contents
+## Archive Notice
+
+The original 3937-line document content is preserved below for historical reference.
+**All sections below are superseded by the new decomposed documentation.**
+
+For current implementation guidance, please use the documents linked above.
+
+---
+
+# ARCHIVED CONTENT BELOW
+
+---
+
+## Table of Contents (ARCHIVED)
 
 1. [Terminology & Naming Conventions](#terminology--naming-conventions)
 2. [Data Model & Schema Changes](#data-model--schema-changes)

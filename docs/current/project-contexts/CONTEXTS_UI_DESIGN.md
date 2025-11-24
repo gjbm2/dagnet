@@ -1,8 +1,16 @@
 # Contexts UI Design — Final Proposal
 
-**Purpose**: Visual design for context selection in the WindowSelector component  
-**Status**: Proposal for review  
-**Date**: 23-Nov-2025
+**Part of**: Contexts v1 implementation  
+**Status**: Final design specification  
+**Date**: 23-Nov-2025  
+**Last Updated**: 24-Nov-2025
+
+**See also**:
+- `README.md` — Overview and navigation for all contexts documentation
+- `CONTEXTS_ARCHITECTURE.md` — Data model, terminology (sliceDSL, currentQueryDSL, dataInterestsDSL)
+- `CONTEXTS_REGISTRY.md` — otherPolicy impact on UI dropdowns and value lists
+- `CONTEXTS_AGGREGATION.md` — AggregationResult status mapping to UI behavior
+- `CONTEXTS_TESTING_ROLLOUT.md` — Phase 3: UI components implementation and testing
 
 ---
 
@@ -946,3 +954,175 @@ const [isUnrolled, setIsUnrolled] = useState(false);
 6. Full + Config → `[⤵]` → chips + pinned query access
 
 Everything on one line (or gracefully wraps if many contexts), maximum familiarity, minimal new code.
+
+---
+
+## Integration with Implementation Documents
+
+This UI design dovetails with the implementation specification as follows:
+
+### Terminology Alignment (see CONTEXTS_ARCHITECTURE.md)
+
+**Three types of DSL strings**:
+- **`currentQueryDSL`** (UI state) — What the context chips display and edit
+  - Example: `"context(channel:google).window(1-Jan-25:31-Mar-25)"`
+  - Stored in graph metadata; persisted for UI continuity
+  - Bound to WindowSelector toolbar chips
+  
+- **`dataInterestsDSL`** (graph config) — Edited in Pinned Query modal
+  - Example: `"context(channel);context(browser-type).window(-90d:)"`
+  - Controls which key:value pairs appear in Add Context dropdown
+  - Drives nightly runner to pre-fetch slices
+  
+- **`sliceDSL`** (data key) — Internal, not directly shown in UI
+  - Example: `"context(channel:google).window(1-Jan-25:31-Mar-25)"`
+  - Primary key for data lookup (backend concern)
+  - Not user-facing in this UI
+
+**UI binding**:
+- Context chips in toolbar → `currentQueryDSL` (context portion only)
+- Full query in unrolled state → `currentQueryDSL` (contexts + window)
+- Pinned Query modal → `dataInterestsDSL`
+
+### otherPolicy Impact on UI (see CONTEXTS_REGISTRY.md)
+
+The `otherPolicy` field in context definitions affects UI dropdowns:
+
+| otherPolicy | "other" in dropdown? | All-checked behavior |
+|-------------|---------------------|----------------------|
+| `null` | NO | Chip removed (all values = no filter) |
+| `computed` | YES | Chip removed (all values = no filter) |
+| `explicit` | YES | Chip removed (all values = no filter) |
+| `undefined` | NO | Chip NOT removed (incomplete coverage) |
+
+**Implementation**:
+- `ContextValueSelector` component queries `contextRegistry.getValuesForContext(key)`
+- Registry returns values based on otherPolicy
+- All-checked logic in Apply handler checks `canAggregate` flag from MECE detection
+
+### Aggregation Status → UI Feedback (see CONTEXTS_AGGREGATION.md)
+
+**After user clicks Apply in dropdown**, system checks data coverage:
+
+```typescript
+// Pseudocode for Apply handler
+async function handleApplyContextChange(newContexts: Contexts) {
+  // Update currentQueryDSL
+  updateCurrentQueryDSL(newContexts);
+  
+  // Check if we have data for this slice
+  const result = await aggregateWindowsWithContexts({
+    variable,
+    constraints: parseConstraintString(currentQueryDSL),
+    sourceType: 'daily' // or 'aggregate'
+  });
+  
+  // Map aggregation status to UI behavior
+  switch (result.status) {
+    case 'complete':
+    case 'mece_aggregation':
+      // Show data; hide Fetch button
+      displayData(result.data);
+      setFetchButtonVisible(false);
+      break;
+      
+    case 'partial_data':
+      // Show data with warning badge
+      displayData(result.data);
+      showToast('Partial data: ' + result.warnings.join('; '), 'warning');
+      setBadge('Partial');
+      setFetchButtonVisible(true); // Can fetch missing slices
+      break;
+      
+    case 'prorated':
+      // Show data with prorated badge
+      displayData(result.data);
+      showToast('Prorated from coarser window', 'info');
+      setBadge('Prorated');
+      setFetchButtonVisible(false); // No better data available
+      break;
+      
+    default:
+      // No data; show Fetch button
+      setFetchButtonVisible(true);
+  }
+}
+```
+
+**Key UI states**:
+1. **Data cached** → Instant display, no Fetch button
+2. **Data missing** → Show `[Fetch]` button (user must click)
+3. **Partial data** → Show with "Partial" badge + non-blocking toast
+4. **Prorated** → Show with "Prorated" badge + info toast
+
+### Component Architecture (see CONTEXTS_ARCHITECTURE.md)
+
+**Extending existing components** (not rebuilding):
+
+1. **QueryExpressionEditor** (extend)
+   - Add `▾` button to context chips
+   - Add chip rendering for `contextAny` and `window`
+   - Reuse existing chip patterns, Monaco integration, autocomplete
+
+2. **WindowSelector** (extend)
+   - Add context chips area (dynamic width)
+   - Add `[+ Context ▾]` button
+   - Add `[⤵]` unroll button
+   - Remove What-if button (moved to Scenarios panel)
+
+3. **ContextValueSelector** (NEW shared component)
+   - Used for per-chip dropdown (`mode: 'single-key'`)
+   - Used for Add Context dropdown (`mode: 'multi-key'`)
+   - Handles accordion sections, auto-uncheck, Apply/Cancel
+
+**Reuse patterns**:
+- Dropdown anchoring: Same as existing What-if dropdown
+- Chip styling: Same as existing query chips
+- Monaco language: Extend existing `dagnet-query` language definition
+
+### Testing Requirements (see CONTEXTS_TESTING_ROLLOUT.md)
+
+**UI components testing** (Phase 3):
+- Unit tests for `ContextValueSelector` (checkbox logic, accordion, auto-uncheck)
+- Unit tests for Apply/Cancel behavior (draft mode)
+- Integration tests for chip updates (DSL parsing round-trip)
+- Visual regression tests for chip rendering at various widths
+- E2E tests for user flows 1-10 (from this document)
+
+**Coverage targets**:
+- All otherPolicy variants (dropdown shows/hides "other" correctly)
+- All aggregation status values (correct badges and toasts)
+- Dynamic width behavior (smooth transitions, max-width clamping)
+- Unrolled state (correct separation of current vs pinned query)
+
+### Rollout Timeline (see CONTEXTS_TESTING_ROLLOUT.md)
+
+**Phase 3: UI Components** (Week 3 of rollout):
+1. Extend QueryExpressionEditor with per-chip `▾` dropdowns
+2. Implement ContextValueSelector component
+3. Add `[+ Context ▾]` button and accordion dropdown
+4. Add `[⤵]` unroll state and Pinned Query modal
+5. Remove What-if button from WindowSelector
+6. Test all user flows (1-10 from this document)
+
+---
+
+## Cross-Reference Summary
+
+**When implementing UI components, refer to**:
+- **Terminology** → `CONTEXTS_ARCHITECTURE.md` (sliceDSL vs currentQueryDSL vs dataInterestsDSL)
+- **Context definitions** → `CONTEXTS_REGISTRY.md` (otherPolicy, value lists)
+- **Data fetching** → `CONTEXTS_AGGREGATION.md` (AggregationResult status)
+- **Query building** → `CONTEXTS_ADAPTERS.md` (how Fetch button triggers queries)
+- **Testing** → `CONTEXTS_TESTING_ROLLOUT.md` (Phase 3 requirements)
+
+**When reviewing UI design, check**:
+- Does dropdown value list respect otherPolicy? → `CONTEXTS_REGISTRY.md`
+- Does Fetch button appear at correct times? → `CONTEXTS_AGGREGATION.md` (AggregationResult status)
+- Are badges/toasts correct for each status? → `CONTEXTS_AGGREGATION.md` (UX mapping)
+- Is terminology consistent? → `CONTEXTS_ARCHITECTURE.md` (Three types of "queries")
+
+---
+
+**Design Status**: Complete and aligned with implementation specification.  
+**Next Steps**: Begin Phase 3 implementation (see `CONTEXTS_TESTING_ROLLOUT.md`).
