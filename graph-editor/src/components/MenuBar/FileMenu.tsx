@@ -54,13 +54,16 @@ export function FileMenu() {
   const [isMergeConflictModalOpen, setIsMergeConflictModalOpen] = useState(false);
   const [mergeConflicts, setMergeConflicts] = useState<ConflictFile[]>([]);
   
-  // Track dirty tabs - update when tabs or files change
-  const [hasDirtyTabs, setHasDirtyTabs] = useState(false);
+  // Track dirty files - update when tabs or files change
+  // NOTE: Check IndexedDB for ALL dirty files (not just in-memory FileRegistry)
+  const [hasDirtyFiles, setHasDirtyFiles] = useState(false);
   
   // Listen for file dirty state changes
   React.useEffect(() => {
-    const updateDirtyState = () => {
-      setHasDirtyTabs(operations.getDirtyTabs().length > 0);
+    const updateDirtyState = async () => {
+      // Check IndexedDB for ALL dirty files (includes files not in FileRegistry)
+      const dirtyFiles = await db.getDirtyFiles();
+      setHasDirtyFiles(dirtyFiles.length > 0);
     };
     
     // Update immediately
@@ -614,7 +617,7 @@ export function FileMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handleCommitChanges}
-              disabled={!hasDirtyTabs}
+              disabled={!hasDirtyFiles}
             >
               Commit Changes...
               <div className="menubar-right-slot">⌘K</div>
@@ -623,7 +626,7 @@ export function FileMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handleCommitAllChanges}
-              disabled={!hasDirtyTabs}
+              disabled={!hasDirtyFiles}
             >
               Commit All Changes...
               <div className="menubar-right-slot">⌘⇧K</div>
