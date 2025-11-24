@@ -854,6 +854,43 @@ class GitService {
       };
     }
   }
+
+  /**
+   * Check which files have been changed on the remote
+   * Returns array of file paths that have different SHAs
+   */
+  async checkFilesChangedOnRemote(
+    files: Array<{ path: string; sha?: string }>,
+    branch: string,
+    basePath?: string
+  ): Promise<string[]> {
+    const changedFiles: string[] = [];
+    
+    for (const file of files) {
+      if (file.sha) {
+        // Only check files that exist remotely (have a SHA)
+        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
+        
+        try {
+          const fileResult = await this.getFile(fullPath, branch);
+          
+          if (fileResult.success && fileResult.data) {
+            const remoteSha = (fileResult.data as any).sha;
+            
+            if (remoteSha !== file.sha) {
+              // File has been changed on remote
+              changedFiles.push(file.path);
+            }
+          }
+        } catch (error) {
+          // File might not exist on remote, which is fine for new files
+          console.log(`File ${file.path} doesn't exist on remote, will create it`);
+        }
+      }
+    }
+    
+    return changedFiles;
+  }
 }
 
 // Export singleton instance

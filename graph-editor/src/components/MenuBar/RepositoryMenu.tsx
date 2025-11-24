@@ -146,40 +146,16 @@ export function RepositoryMenu() {
   const handleCommitChanges = async () => {
     // Commit ALL dirty files (Repository menu version)
     try {
-      // Check if remote is ahead before committing
-      const credsResult = await credentialsManager.loadCredentials();
+      // Check remote status (centralized in service)
+      const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
+        state.selectedRepo,
+        state.selectedBranch,
+        showConfirm,
+        toast.loading,
+        toast.dismiss
+      );
       
-      if (credsResult.success && credsResult.credentials) {
-        const gitCreds = credsResult.credentials.git.find(cred => cred.name === state.selectedRepo);
-        
-        if (gitCreds) {
-          const toastId = toast.loading('Checking remote status...');
-          const remoteStatus = await workspaceService.checkRemoteAhead(
-            state.selectedRepo,
-            state.selectedBranch,
-            gitCreds
-          );
-          toast.dismiss(toastId);
-          
-          if (remoteStatus.isAhead) {
-            const confirmed = await showConfirm({
-              title: 'Remote Has Changes',
-              message: 
-                `The remote repository has changes you don't have:\n\n` +
-                `• ${remoteStatus.filesChanged} file(s) changed\n` +
-                `• ${remoteStatus.filesAdded} file(s) added\n` +
-                `• ${remoteStatus.filesDeleted} file(s) deleted\n\n` +
-                `It's recommended to pull first to avoid conflicts.\n\n` +
-                `Commit anyway?`,
-              confirmLabel: 'Commit Anyway',
-              cancelLabel: 'Pull First',
-              confirmVariant: 'danger'
-            });
-            
-            if (!confirmed) return;
-          }
-        }
-      }
+      if (!shouldProceed) return;
       
       // Open commit modal for ALL dirty files
       setIsCommitModalOpen(true);
@@ -191,46 +167,8 @@ export function RepositoryMenu() {
 
   const handleCommitFiles = async (files: any[], message: string, branch: string) => {
     try {
-      const credsResult = await credentialsManager.loadCredentials();
-      
-      if (!credsResult.success || !credsResult.credentials) {
-        throw new Error('No credentials available. Please configure credentials first.');
-      }
-
-      const gitCreds = credsResult.credentials.git.find(cred => cred.name === state.selectedRepo);
-      
-      if (!gitCreds) {
-        throw new Error(`No credentials found for repository ${state.selectedRepo}`);
-      }
-
-      // Set credentials on gitService
-      const credentialsWithRepo = {
-        ...credsResult.credentials,
-        defaultGitRepo: state.selectedRepo
-      };
-      gitService.setCredentials(credentialsWithRepo);
-
-      // Prepare files with proper paths
-      const filesToCommit = files.map(file => {
-        const basePath = gitCreds.basePath || '';
-        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
-        return {
-          path: fullPath,
-          content: file.content,
-          sha: file.sha
-        };
-      });
-
-      const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
-      if (result.success) {
-        // Mark files as saved
-        for (const file of files) {
-          await fileRegistry.markSaved(file.fileId);
-        }
-        toast.success(`Committed ${files.length} file(s)`);
-      } else {
-        throw new Error(result.error || 'Failed to commit files');
-      }
+      await repositoryOperationsService.commitFiles(files, message, branch, state.selectedRepo, showConfirm);
+      toast.success(`Committed ${files.length} file(s)`);
     } catch (error) {
       throw error; // Re-throw to be handled by CommitModal
     }

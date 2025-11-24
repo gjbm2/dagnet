@@ -252,6 +252,205 @@ class RepositoryOperationsService {
   getDirtyFiles() {
     return fileRegistry.getDirtyFiles();
   }
+
+  /**
+   * Check remote status before committing
+   * Shows dialog if remote is ahead
+   * Returns true if should proceed, false if cancelled
+   */
+  async checkRemoteBeforeCommit(
+    repository: string,
+    branch: string,
+    showConfirmDialog: (options: any) => Promise<boolean>,
+    showLoadingToast: (message: string) => any,
+    dismissToast: (id: any) => void
+  ): Promise<boolean> {
+    try {
+      const credsResult = await credentialsManager.loadCredentials();
+      
+      if (!credsResult.success || !credsResult.credentials) {
+        return true; // No credentials, skip check
+      }
+
+      const gitCreds = credsResult.credentials.git.find(cred => cred.name === repository);
+      
+      if (!gitCreds) {
+        return true; // No credentials for this repo, skip check
+      }
+
+      const toastId = showLoadingToast('Checking remote status...');
+      const remoteStatus = await workspaceService.checkRemoteAhead(repository, branch, gitCreds);
+      dismissToast(toastId);
+      
+      if (remoteStatus.isAhead) {
+        const fileList = remoteStatus.changedPaths.length > 0 
+          ? '\n\nFiles:\n' + remoteStatus.changedPaths.map(path => `  • ${path}`).join('\n') + '\n'
+          : '';
+        const confirmed = await showConfirmDialog({
+          title: 'Remote Has Changes',
+          message: 
+            `The remote repository has changes you don't have:\n\n` +
+            `• ${remoteStatus.filesChanged} file(s) changed\n` +
+            `• ${remoteStatus.filesAdded} file(s) added\n` +
+            `• ${remoteStatus.filesDeleted} file(s) deleted` +
+            fileList +
+            `\nIt's recommended to pull first to avoid conflicts.`,
+          confirmLabel: 'Commit Anyway',
+          cancelLabel: 'Cancel',
+          confirmVariant: 'danger'
+        });
+        
+        return confirmed;
+      }
+      
+      return true; // Remote not ahead, proceed
+    } catch (error) {
+      console.error('Failed to check remote status:', error);
+      return true; // On error, allow commit to proceed
+    }
+  }
+
+  /**
+   * Commit and push files with pre-commit validation
+   * - Checks for files changed on remote
+   * - Shows warning dialog if needed
+   * - Updates file timestamps
+   * - Includes pending image operations
+   * - Includes pending file deletions
+   * - Commits and pushes to Git
+   * - Marks files as saved
+   * 
+   * This is the SINGLE entry point for all commit operations
+   */
+  async commitFiles(
+    files: any[],
+    message: string,
+    branch: string,
+    repository: string,
+    showConfirmDialog: (options: any) => Promise<boolean>
+  ): Promise<void> {
+    // Get git credentials
+    const credsResult = await credentialsManager.loadCredentials();
+    
+    if (!credsResult.success || !credsResult.credentials) {
+      throw new Error('No credentials available. Please configure credentials first.');
+    }
+
+    const gitCreds = credsResult.credentials.git.find(cred => cred.name === repository);
+    
+    if (!gitCreds) {
+      throw new Error(`No credentials found for repository ${repository}`);
+    }
+
+    // Set credentials on gitService
+    const credentialsWithRepo = {
+      ...credsResult.credentials,
+      defaultGitRepo: repository
+    };
+    gitService.setCredentials(credentialsWithRepo);
+
+    // Check for files changed on remote and warn user
+    const changedFiles = await gitService.checkFilesChangedOnRemote(files, branch, gitCreds.basePath);
+    if (changedFiles.length > 0) {
+      const fileList = changedFiles.map(path => `  • ${path}`).join('\n');
+      const confirmed = await showConfirmDialog({
+        title: 'Files Changed on Remote',
+        message: 
+          `The following file(s) have been changed on the remote:\n\n${fileList}\n\n` +
+          `Committing will overwrite the remote changes. Continue anyway?`,
+        confirmLabel: 'Commit Anyway',
+        cancelLabel: 'Cancel',
+        confirmVariant: 'danger'
+      });
+      
+      if (!confirmed) {
+        throw new Error('Commit cancelled by user');
+      }
+    }
+
+    // Update file timestamps BEFORE committing to Git
+    const nowISO = new Date().toISOString();
+    const YAML = await import('yaml');
+    
+    const filesToCommit: Array<{
+      path: string;
+      content?: string;
+      binaryContent?: Uint8Array;
+      encoding?: 'utf-8' | 'base64';
+      sha?: string;
+      delete?: boolean;
+    }> = files.map(file => {
+      // Get the file from registry to update its metadata
+      const fileState = fileRegistry.getFile(file.fileId);
+      let content = file.content;
+      
+      // Update timestamp in the file content itself (standardized metadata structure)
+      if (fileState?.data) {
+        // All file types now use metadata.updated_at
+        if (!fileState.data.metadata) {
+          fileState.data.metadata = {
+            created_at: nowISO,
+            version: '1.0.0'
+          };
+        }
+        fileState.data.metadata.updated_at = nowISO;
+        
+        // Set author from credentials userName if available
+        if (gitCreds?.userName && !fileState.data.metadata.author) {
+          fileState.data.metadata.author = gitCreds.userName;
+        }
+        
+        // Re-serialize with updated timestamp
+        content = fileState.type === 'graph' 
+          ? JSON.stringify(fileState.data, null, 2)
+          : YAML.stringify(fileState.data);
+      }
+      
+      const basePath = gitCreds.basePath || '';
+      const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
+      return {
+        path: fullPath,
+        content,
+        sha: file.sha
+      };
+    });
+
+    const basePath = gitCreds.basePath || '';
+    
+    // Add pending image operations (uploads + image deletions)
+    const imageFiles = await fileRegistry.commitPendingImages();
+    filesToCommit.push(...imageFiles.map(img => ({
+      path: basePath ? `${basePath}/${img.path}` : img.path,
+      binaryContent: img.binaryContent,
+      encoding: img.encoding,
+      delete: img.delete
+    })));
+    
+    // Add pending file deletions
+    const fileDeletions = await fileRegistry.commitPendingFileDeletions();
+    filesToCommit.push(...fileDeletions.map(del => ({
+      path: basePath ? `${basePath}/${del.path}` : del.path,
+      delete: true
+    })));
+    
+    console.log('[RepositoryOperationsService] Committing:', {
+      modifiedFiles: files.length,
+      imageOps: imageFiles.length,
+      fileDeletions: fileDeletions.length,
+      total: filesToCommit.length
+    });
+
+    // Commit and push
+    const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to commit files');
+    }
+
+    // Mark files as saved in FileRegistry
+    for (const file of files) {
+      await fileRegistry.markSaved(file.fileId);
+    }
+  }
 }
 
 // Export singleton instance
