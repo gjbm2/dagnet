@@ -80,6 +80,17 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const contextDropdownRef = useRef<HTMLDivElement>(null);
   const windowSelectorRef = useRef<HTMLDivElement>(null);
   
+  // Initialize currentQueryDSL with default window if not set
+  const isInitializedRef = useRef(false);
+  useEffect(() => {
+    if (graph && !graph.currentQueryDSL && !isInitializedRef.current && setGraph && window) {
+      // Set default using current window
+      const defaultDSL = `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
+      setGraph({ ...graph, currentQueryDSL: defaultDSL });
+      isInitializedRef.current = true;
+    }
+  }, [graph, window, setGraph]); // Dependencies
+  
   // Parse current context values and key from currentQueryDSL
   const currentContextValues = useMemo(() => {
     if (!graph?.currentQueryDSL) return [];
@@ -110,11 +121,28 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   
   // Update CSS variable for scenario legend positioning when height changes
   useEffect(() => {
+    const updatePosition = () => {
+      if (windowSelectorRef.current) {
+        const height = windowSelectorRef.current.offsetHeight;
+        const gap = 26; // Stable 16px gap between WindowSelector bottom and scenario legend top
+        document.documentElement.style.setProperty('--window-selector-bottom', `${height + gap}px`);
+      }
+    };
+    
+    // Update on mount and when dependencies change
+    updatePosition();
+    
+    // Use ResizeObserver to catch all size changes (context chips expanding, etc.)
+    const observer = new ResizeObserver(() => {
+      updatePosition();
+    });
+    
     if (windowSelectorRef.current) {
-      const height = windowSelectorRef.current.offsetHeight;
-      document.documentElement.style.setProperty('--window-selector-bottom', `${height + 20}px`);
+      observer.observe(windowSelectorRef.current);
     }
-  }, [isUnrolled, graph?.currentQueryDSL]);
+    
+    return () => observer.disconnect();
+  }, [isUnrolled, graph?.currentQueryDSL, showContextDropdown, needsFetch]);
   
   // Load context keys from graph.dataInterestsDSL when dropdown opens
   useEffect(() => {
@@ -592,8 +620,38 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     return () => clearTimeout(timeoutId);
   }, [currentWindow, window, setGraph, setLastAggregatedWindow, graph?.currentQueryDSL]); // Added currentQueryDSL to trigger check when context changes
   
-  const handleDateRangeChange = (start: string, end: string) => {
+  // Helper: Update both window state and currentQueryDSL
+  const updateWindowAndDSL = (start: string, end: string) => {
     setWindow({ start, end });
+    
+    // Update currentQueryDSL with new window
+    if (setGraph && graph) {
+      const parsed = parseConstraints(graph.currentQueryDSL || '');
+      
+      // Build context part
+      const contextParts: string[] = [];
+      for (const ctx of parsed.context) {
+        contextParts.push(`context(${ctx.key}:${ctx.value})`);
+      }
+      for (const ctxAny of parsed.contextAny) {
+        const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
+        contextParts.push(`contextAny(${pairs})`);
+      }
+      
+      // Build window part with d-MMM-yy format
+      const windowPart = `window(${formatDateUK(start)}:${formatDateUK(end)})`;
+      
+      // Combine
+      const newDSL = contextParts.length > 0 
+        ? `${contextParts.join('.')}.${windowPart}`
+        : windowPart;
+      
+      setGraph({ ...graph, currentQueryDSL: newDSL });
+    }
+  };
+  
+  const handleDateRangeChange = (start: string, end: string) => {
+    updateWindowAndDSL(start, end);
   };
   
   const handlePreset = (days: number | 'today') => {
@@ -914,27 +972,68 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           maxDate={new Date().toISOString().split('T')[0]}
         />
         
-        {/* Context chips area using QueryExpressionEditor */}
-        {graph?.currentQueryDSL && (
-          <div className="window-selector-context-chips" style={{ 
-            marginLeft: '12px', 
-            minWidth: '120px',
-            width: 'auto',
-            maxWidth: 'min(450px, 40vw)'
-          }}>
-            <QueryExpressionEditor
-              value={graph.currentQueryDSL}
-              onChange={(newDSL) => {
-                if (setGraph) {
-                  setGraph({ ...graph, currentQueryDSL: newDSL });
-                }
-              }}
-              graph={graph}
-              height="32px"
-              placeholder=""
-            />
-          </div>
-        )}
+        {/* Context chips area using QueryExpressionEditor - CONTEXTS ONLY (window shown in unrolled state) */}
+        {(() => {
+          const parsed = parseConstraints(graph?.currentQueryDSL || '');
+          const hasContexts = parsed.context.length > 0 || parsed.contextAny.length > 0;
+          
+          if (!hasContexts) return null;
+          
+          // Build context-only DSL (strip window)
+          const contextParts: string[] = [];
+          for (const ctx of parsed.context) {
+            contextParts.push(`context(${ctx.key}:${ctx.value})`);
+          }
+          for (const ctxAny of parsed.contextAny) {
+            const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
+            contextParts.push(`contextAny(${pairs})`);
+          }
+          const contextOnlyDSL = contextParts.join('.');
+          
+          return (
+            <div className="window-selector-context-chips" style={{ 
+              marginLeft: '12px', 
+              minWidth: '120px',
+              width: 'auto',
+              maxWidth: 'min(450px, 40vw)'
+            }}>
+              <QueryExpressionEditor
+                value={contextOnlyDSL}
+                onChange={(newContextDSL) => {
+                  if (!setGraph || !graph) return;
+                  
+                  // Parse to get new contexts
+                  const newParsed = parseConstraints(newContextDSL);
+                  const oldParsed = parseConstraints(graph.currentQueryDSL || '');
+                  
+                  // Rebuild DSL with new contexts + old window
+                  const newContextParts: string[] = [];
+                  for (const ctx of newParsed.context) {
+                    newContextParts.push(`context(${ctx.key}:${ctx.value})`);
+                  }
+                  for (const ctxAny of newParsed.contextAny) {
+                    const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
+                    newContextParts.push(`contextAny(${pairs})`);
+                  }
+                  
+                  // Preserve window
+                  let windowPart = '';
+                  if (oldParsed.window) {
+                    windowPart = `window(${oldParsed.window.start || ''}:${oldParsed.window.end || ''})`;
+                  } else if (window) {
+                    windowPart = `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
+                  }
+                  
+                  const fullDSL = [newContextParts.join('.'), windowPart].filter(p => p).join('.');
+                  setGraph({ ...graph, currentQueryDSL: fullDSL || undefined });
+                }}
+                graph={graph}
+                height="32px"
+                placeholder=""
+              />
+            </div>
+          );
+        })()}
         
         {/* Add Context button */}
         <div className="window-selector-toolbar-button" style={{ position: 'relative', marginLeft: '8px' }}>
@@ -960,34 +1059,44 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 onApply={async (key, values) => {
                   setShowContextDropdown(false);
                   
+                  if (!setGraph || !graph) return;
+                  
+                  // Parse existing DSL to preserve window
+                  const parsed = parseConstraints(graph.currentQueryDSL || '');
+                  const existingWindow = parsed.window;
+                  
                   // Check if all values selected AND key is MECE (should remove context)
                   const keySection = availableKeySections.find(s => s.id === key);
                   const allValues = keySection?.values || [];
                   const allSelected = allValues.length > 0 && values.length === allValues.length;
                   const isMECE = keySection?.otherPolicy !== 'undefined';
                   
-                  // Build context DSL from selected key and values
-                  if (values.length === 0 || (allSelected && isMECE)) {
-                    // No values OR all values for MECE key: remove context from DSL
-                    if (setGraph && graph) {
-                      setGraph({ ...graph, currentQueryDSL: '' });
+                  // Build new context part
+                  let contextPart = '';
+                  if (values.length > 0 && !(allSelected && isMECE)) {
+                    if (values.length === 1) {
+                      contextPart = `context(${key}:${values[0]})`;
+                    } else {
+                      const valuePairs = values.map(v => `${key}:${v}`).join(',');
+                      contextPart = `contextAny(${valuePairs})`;
                     }
-                    if (allSelected && isMECE) {
-                      toast.success('All values selected = no filter', { duration: 2000 });
-                    }
-                  } else if (values.length === 1) {
-                    // Single value: context(key:value)
-                    const dsl = `context(${key}:${values[0]})`;
-                    if (setGraph && graph) {
-                      setGraph({ ...graph, currentQueryDSL: dsl });
-                    }
-                  } else {
-                    // Multiple values: contextAny(key:val1,val2,...)
-                    const valuePairs = values.map(v => `${key}:${v}`).join(',');
-                    const dsl = `contextAny(${valuePairs})`;
-                    if (setGraph && graph) {
-                      setGraph({ ...graph, currentQueryDSL: dsl });
-                    }
+                  }
+                  
+                  // Build window part (preserve existing or use current window state)
+                  let windowPart = '';
+                  if (existingWindow) {
+                    windowPart = `window(${existingWindow.start || ''}:${existingWindow.end || ''})`;
+                  } else if (window) {
+                    windowPart = `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
+                  }
+                  
+                  // Combine
+                  const newDSL = [contextPart, windowPart].filter(p => p).join('.');
+                  
+                  setGraph({ ...graph, currentQueryDSL: newDSL || undefined });
+                  
+                  if (allSelected && isMECE) {
+                    toast.success('All values selected = no filter', { duration: 2000 });
                   }
                 }}
                 onCancel={() => setShowContextDropdown(false)}
@@ -1037,31 +1146,18 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       
       {/* Unrolled state - shows full DSL and pinned query access */}
       {isUnrolled && (
-        <div className="window-selector-extended">
+        <div 
+          className="window-selector-extended"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 500 }}>Full query:</span>
           <div style={{ flex: 1 }}>
             <QueryExpressionEditor
               value={(() => {
-                // Combine contexts + window
-                const contextPart = graph?.currentQueryDSL || '';
-                const windowPart = window 
-                  ? `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})` 
-                  : '';
+                // Parse current DSL to extract contexts (strip any window)
+                const parsed = parseConstraints(graph?.currentQueryDSL || '');
                 
-                if (contextPart && windowPart) {
-                  return `${contextPart}.${windowPart}`;
-                } else if (contextPart) {
-                  return contextPart;
-                } else if (windowPart) {
-                  return windowPart;
-                }
-                return '';
-              })()}
-              onChange={(newDSL) => {
-                // Parse out context and window parts
-                const parsed = parseConstraints(newDSL);
-                
-                // Extract context part
                 const contextParts: string[] = [];
                 for (const ctx of parsed.context) {
                   contextParts.push(`context(${ctx.key}:${ctx.value})`);
@@ -1071,13 +1167,27 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   contextParts.push(`contextAny(${pairs})`);
                 }
                 
-                const contextDSL = contextParts.join('.');
+                // Add current window
+                const windowPart = window 
+                  ? `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})` 
+                  : '';
                 
+                // Combine
+                const parts = [...contextParts, windowPart].filter(p => p);
+                return parts.join('.');
+              })()}
+              readonly={false}
+              onChange={(newDSL) => {
+                // During editing, just let it update (don't persist yet)
+              }}
+              onBlur={(finalDSL) => {
+                // On blur, persist the full DSL
                 if (setGraph && graph) {
-                  setGraph({ ...graph, currentQueryDSL: contextDSL });
+                  setGraph({ ...graph, currentQueryDSL: finalDSL });
                 }
                 
-                // Update window if changed (convert d-MMM-yy back to YYYY-MM-DD)
+                // Also update window state separately for DateRangePicker
+                const parsed = parseConstraints(finalDSL);
                 if (parsed.window && setWindow) {
                   try {
                     const startDate = parsed.window.start 

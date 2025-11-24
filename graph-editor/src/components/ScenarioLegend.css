@@ -6,7 +6,7 @@
 
 .scenario-legend {
   position: absolute;
-  top: var(--window-selector-bottom, 80px); /* Dynamic: adjusts when WindowSelector expands */
+  top: var(--window-selector-bottom, 84px); /* Dynamic: adjusts when WindowSelector expands. Fallback: 68px (WindowSelector) + 16px gap */
   left: 20px; /* Extra margin from left edge */
   display: flex;
   flex-wrap: wrap; /* Allow chips to wrap to new row */
@@ -16,7 +16,7 @@
   pointer-events: auto;
   width: auto; /* Allow natural width */
   max-width: 100%; /* Fallback - will be overridden by inline style */
-  transition: top 0.2s ease;
+  transition: top 0.2s ease-out; /* Smooth movement when WindowSelector resizes */
 }
 
 .scenario-legend-chip {

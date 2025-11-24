@@ -1,5 +1,7 @@
 # TODO
 
+- Not absolutely sure our condition_p logic works. If I set the prob of A-B conditionally on C to x, then the siblings must track the complement BUT we use the CONDITION to key the probability...that means the logic can never work???!!!
+
 ## Project Contexts
 - Context support
 
@@ -9,6 +11,8 @@
 - If user creates a DIFF scenario rather than an ALL scenario, we can also subtract this query FROM what is otherwise shown (compositing layer 2 and below) to construct a helpful Human Readable name
 - e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and user then added window(1-Jan-25:1-Jan-25).case(experiment:treament), then when they created a diff snapshot, it would calculate window(1-Jan-25:1-Jan-25).case(experiment:treament)-window(1-Jan-25:1-Jan-25)=case(experiment:treament) (noting we need a service for this query subtraction & addition logic, not to do it inline in the scenario editor) and write "case(experiment:treament) @ 9:24am, 13-Nov-25"  as the scenario name
 - crucially, this would allow dynamic layers / scenarios (useful for saved charts/reports)
+- (expand / contract scenario to show dsl string, and a 'generate' button on the right to 'run' that scenario)
+- then we need to persist scenarios to graph
 
 ### Form Field Duplicate ID Warnings
 **Issue:** Multiple form editors (parameters, events, etc.) open in different tabs generate identical DOM element IDs, causing browser warnings about duplicate IDs. This is a violation of HTML spec where IDs must be unique across the entire document.
@@ -51,7 +55,7 @@
 - add moving arrow effect, speed of animation scale on log lag
 
 ### Medium 
-
+- Some of our files (UpdateManager, GraphEditor, etc.) are becoming very long; we need to re-factor them down to be more manageable
 - **PMF Overflow/Underflow Policies** - Longer-term enhancement to rebalancing logic
   - Current: Edges with parameter references are excluded from auto-rebalancing (implemented)
   - Future: Add graph-level policy (overrideable at node level) to control PMF overflow/underflow behavior
