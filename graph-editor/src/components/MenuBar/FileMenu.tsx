@@ -359,6 +359,7 @@ export function FileMenu() {
         'This will:\n' +
         '• Close all tabs\n' +
         '• Clear all cached files\n' +
+        '• Delete workspace (will re-clone from repository on reload)\n' +
         '• Reset layout\n' +
         '• Reset connections to defaults\n' +
         '• Keep settings and credentials intact\n\n' +

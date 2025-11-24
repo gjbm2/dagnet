@@ -26,8 +26,8 @@ nodes:
     label: household-delegated
     absorbing: false
     layout:
-      x: -41
-      'y': -63
+      x: -40
+      'y': -33
     description: ''
     event_id: household-delegated
     event_id_overridden: true
@@ -36,8 +36,8 @@ nodes:
     label: Gave bds
     absorbing: false
     layout:
-      x: 660
-      'y': -429
+      x: 868
+      'y': -629
     event_id: gave-bds
     event_id_overridden: true
   - uuid: 61317e7f-54c9-4364-90d0-2b80e431b658
@@ -52,8 +52,8 @@ nodes:
     label: Saw WA details page
     absorbing: false
     layout:
-      x: 220
-      'y': -123
+      x: 129
+      'y': -314
     event_id: saw-wa-details-page
     event_id_overridden: true
   - uuid: 5788d308-a7a9-49ce-a755-07491315a603
@@ -61,25 +61,18 @@ nodes:
     label: Viewed coffee screen
     absorbing: false
     layout:
-      x: 451
-      'y': -325
+      x: 475
+      'y': -469
     event_id: viewed-coffee-screen
     event_id_overridden: true
-  - uuid: e6df1a0e-edfd-4843-a240-fadd24872bf6
-    id: user-sees-dashboard
-    label: User sees dashboard
-    absorbing: false
-    layout:
-      x: 147
-      'y': -449
   - uuid: 7515449a-4743-43fb-8fc0-66b9575c5b0c
-    id: straight-to-dashboard
-    label: Straight to dashboard
+    id: viewed-dashboard
+    label: Viewed dashboard
     absorbing: false
     layout:
-      x: 821
-      'y': -196
-    event_id: straight-to-dashboard
+      x: 928
+      'y': -254
+    event_id: viewed-dashboard
     event_id_overridden: true
 edges:
   - uuid: household-created-to-household-delegated
@@ -89,10 +82,10 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.53
+      mean: 0.531
       evidence:
-        'n': 4097
-        k: 2170
+        'n': 3799
+        k: 2019
         window_from: '2025-11-13T00:00:00Z'
         window_to: '2025-11-20T23:59:59Z'
         retrieved_at: '2025-11-20T01:46:43.434Z'
@@ -103,7 +96,7 @@ edges:
           DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any of","values":["ON"]}]}}
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-20T18:32:47.649Z'
+        retrieved_at: '2025-11-21T13:41:32.615Z'
         query:
           from: Household Created
           to: Household DelegationStatusChanged
@@ -117,14 +110,14 @@ edges:
                 values:
                   - 'ON'
           query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+            e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
         full_query: >-
           {"from":"Household Created","to":"Household
           DelegationStatusChanged","context":[],"case":[],"event_filters":{"Household Created":[],"Household
           DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any
-          of","values":["ON"]}]},"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+          of","values":["ON"]}]},"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
       connection: amplitude-prod
       id: household-delegation-rate
       stdev: 0.008
@@ -144,18 +137,18 @@ edges:
     id: household-delegated-to-saw-WA-details-page
     from: 16974652-b532-41ee-b4d5-a3ef5381591d
     to: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    fromHandle: right-out
-    toHandle: left
+    fromHandle: top-out
+    toHandle: bottom
     p:
-      mean: 0.942
+      mean: 0.943
       evidence:
         window_from: '2025-11-20T17:10:54.147Z'
         source: manual
-        'n': 2284
-        k: 2152
+        'n': 2118
+        k: 1998
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-20T18:32:48.663Z'
+        retrieved_at: '2025-11-21T13:41:33.574Z'
         query:
           from: Household DelegationStatusChanged
           to: Viewed WhatsApp details /onboarding/whatsApp-details Page
@@ -169,7 +162,7 @@ edges:
                   - 'ON'
             Viewed WhatsApp details /onboarding/whatsApp-details Page: []
           query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
         full_query: >-
@@ -177,7 +170,7 @@ edges:
           Page","context":[],"case":[],"event_filters":{"Household
           DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any of","values":["ON"]}],"Viewed
           WhatsApp details /onboarding/whatsApp-details
-          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
       id: delegation-to-wa-details
       connection: amplitude-prod
       connection_overridden: true
@@ -191,7 +184,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.05700000000000005
+      mean: 0.056
       connection_string: |-
         {
           "spreadsheet_id": "1dxRY7l2A4t27nY2Wqgr1oIqq1Q1i1rgFNG4fc9kMMr4",
@@ -201,45 +194,7 @@ edges:
       connection_overridden: true
     query: from(household-delegated).to(did-not-give-bds).exclude(saw-WA-details-page,viewed-coffee-screen)
     description: ''
-  - uuid: viewed-coffee-screen-to-gave-bds
-    id: viewed-coffee-screen-to-gave-bds
-    from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.2
-      id: coffee-to-bds
-      stdev: 0.016
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        window_from: '2025-11-20T17:47:10.360Z'
-        source: manual
-        'n': 934
-        k: 448
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-20T18:32:50.176Z'
-        query:
-          from: Viewed Coffee Promotion Page /onboarding/coffee Page
-          to: BankAccount DetailsEntryConfirmed
-          context: []
-          case: []
-          event_filters:
-            Viewed Coffee Promotion Page /onboarding/coffee Page: []
-            BankAccount DetailsEntryConfirmed: []
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"Viewed Coffee Promotion Page /onboarding/coffee Page","to":"BankAccount
-          DetailsEntryConfirmed","context":[],"case":[],"event_filters":{"Viewed Coffee Promotion Page
-          /onboarding/coffee Page":[],"BankAccount
-          DetailsEntryConfirmed":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(viewed-coffee-screen).to(gave-bds)
-    description: ''
+    query_overridden: false
   - uuid: viewed-coffee-screen-to-did-not-give-bds
     id: viewed-coffee-screen-to-did-not-give-bds
     from: 5788d308-a7a9-49ce-a755-07491315a603
@@ -247,37 +202,43 @@ edges:
     fromHandle: bottom-out
     toHandle: top
     p:
-      mean: 0.216
+      mean: 0.416
     query: from(viewed-coffee-screen).to(did-not-give-bds)
     description: ''
-  - uuid: saw-WA-details-page-to-did-not-give-bds
+  - uuid: 8b832619-b7fe-44ef-bc46-843aca29c517
     id: saw-WA-details-page-to-did-not-give-bds
     from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
     to: 61317e7f-54c9-4364-90d0-2b80e431b658
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.099
+      mean: 0
     query: from(saw-WA-details-page).to(did-not-give-bds).exclude(viewed-coffee-screen)
     description: ''
-  - uuid: saw-WA-details-page-to-viewed-coffee-screen
+  - uuid: c20c9bd4-0b4e-4042-8d54-30cb3f0c02f0
     id: saw-WA-details-page-to-viewed-coffee-screen
     from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
     to: 5788d308-a7a9-49ce-a755-07491315a603
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.332
+      mean: 0.427
       id: wa-to-coffee
-      connection: amplitude-prod
-      connection_overridden: true
       stdev: 0.011
       evidence:
-        'n': 2167
-        k: 919
+        'n': 2014
+        k: 860
+        window_from: '2025-11-20T18:58:06.435Z'
+        retrieved_at: '2025-11-20T18:32:51.222Z'
+        source: amplitude
+        full_query: >-
+          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"Viewed Coffee Promotion Page
+          /onboarding/coffee Page","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
+          /onboarding/whatsApp-details Page":[],"Viewed Coffee Promotion Page /onboarding/coffee
+          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-20T18:32:51.222Z'
+        retrieved_at: '2025-11-21T13:41:35.613Z'
         query:
           from: Viewed WhatsApp details /onboarding/whatsApp-details Page
           to: Viewed Coffee Promotion Page /onboarding/coffee Page
@@ -287,34 +248,42 @@ edges:
             Viewed WhatsApp details /onboarding/whatsApp-details Page: []
             Viewed Coffee Promotion Page /onboarding/coffee Page: []
           query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+            e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
         full_query: >-
           {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"Viewed Coffee Promotion Page
           /onboarding/coffee Page","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
           /onboarding/whatsApp-details Page":[],"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+      connection: amplitude-prod
     query: from(saw-WA-details-page).to(viewed-coffee-screen)
     description: ''
-  - uuid: saw-WA-details-page-to-straight-to-dashboard
-    id: 2810b6a8-7a7a-477d-b504-8714a8f22b68->7515449a-4743-43fb-8fc0-66b9575c5b0c
+  - uuid: 8520ab3d-ce8d-486d-8b9c-8dd527a2703c
+    id: saw-WA-details-page-to-viewed-dashboard
     from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
     to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.569
+      mean: 0.571
       id: wa-to-dashboard
-      connection: amplitude-prod
-      connection_overridden: true
       stdev: 0.011
       evidence:
-        'n': 2174
-        k: 1236
+        'n': 2014
+        k: 1150
+        window_from: '2025-11-20T19:03:08.357Z'
+        retrieved_at: '2025-11-20T18:44:47.506Z'
+        source: amplitude
+        full_query: >-
+          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"User sees
+          dashboard","exclude":["Viewed Coffee Promotion Page /onboarding/coffee
+          Page"],"context":[],"case":[],"event_filters":{"Viewed WhatsApp details /onboarding/whatsApp-details
+          Page":[],"User sees dashboard":[],"Viewed Coffee Promotion Page /onboarding/coffee
+          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-20T18:44:47.506Z'
+        retrieved_at: '2025-11-21T13:41:34.546Z'
         query:
           from: Viewed WhatsApp details /onboarding/whatsApp-details Page
           to: User sees dashboard
@@ -327,7 +296,7 @@ edges:
             User sees dashboard: []
             Viewed Coffee Promotion Page /onboarding/coffee Page: []
           query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+            e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
         full_query: >-
@@ -335,24 +304,34 @@ edges:
           dashboard","exclude":["Viewed Coffee Promotion Page /onboarding/coffee
           Page"],"context":[],"case":[],"event_filters":{"Viewed WhatsApp details /onboarding/whatsApp-details
           Page":[],"User sees dashboard":[],"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(saw-WA-details-page).to(straight-to-dashboard).exclude(viewed-coffee-screen)
+          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+      connection: amplitude-prod
+    query: from(saw-WA-details-page).to(viewed-dashboard).exclude(viewed-coffee-screen)
     description: ''
-  - uuid: viewed-coffee-screen-to-straight-to-dashboard
-    id: viewed-coffee-screen-to-straight-to-dashboard
+    query_overridden: false
+  - uuid: fdcf949f-4869-47d6-ab33-6473b46ec8cd
+    id: viewed-coffee-screen-to-viewed-dashboard
     from: 5788d308-a7a9-49ce-a755-07491315a603
     to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
     fromHandle: right-out
     toHandle: left
     p:
       mean: 0.584
-      id: coffee-to-dashboard
       connection: amplitude-prod
       connection_overridden: true
+      id: coffee-to-dashboard
       stdev: 0.016
       evidence:
         'n': 934
         k: 545
+        window_from: '2025-11-21T12:27:24.696Z'
+        retrieved_at: '2025-11-20T18:32:53.053Z'
+        source: amplitude
+        full_query: >-
+          {"from":"Viewed Coffee Promotion Page /onboarding/coffee Page","to":"User sees
+          dashboard","context":[],"case":[],"event_filters":{"Viewed Coffee Promotion Page /onboarding/coffee
+          Page":[],"User sees
+          dashboard":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
       data_source:
         type: amplitude
         retrieved_at: '2025-11-20T18:32:53.053Z'
@@ -361,19 +340,19 @@ edges:
           to: User sees dashboard
           context: []
           case: []
-          event_filters:
-            Viewed Coffee Promotion Page /onboarding/coffee Page: []
-            User sees dashboard: []
           query_params: >-
             e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
+          event_filters:
+            Viewed Coffee Promotion Page /onboarding/coffee Page: []
+            User sees dashboard: []
         full_query: >-
           {"from":"Viewed Coffee Promotion Page /onboarding/coffee Page","to":"User sees
           dashboard","context":[],"case":[],"event_filters":{"Viewed Coffee Promotion Page /onboarding/coffee
           Page":[],"User sees
           dashboard":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(viewed-coffee-screen).to(straight-to-dashboard)
+    query: from(viewed-coffee-screen).to(viewed-dashboard)
     description: ''
 policies:
   default_outcome: success
@@ -381,6 +360,6 @@ metadata:
   name: conversion-flow-v0-ezra
   description: ''
   created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-11-20T20:40:24.733Z'
+  updated_at: '2025-11-24T13:08:26.042Z'
   version: 1.0.0
-  updated: '2025-11-20T18:48:07.242Z'
+  updated: '2025-11-21T13:46:22.311Z'

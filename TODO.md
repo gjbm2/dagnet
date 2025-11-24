@@ -52,6 +52,11 @@
 
 ### Medium 
 
+- **PMF Overflow/Underflow Policies** - Longer-term enhancement to rebalancing logic
+  - Current: Edges with parameter references are excluded from auto-rebalancing (implemented)
+  - Future: Add graph-level policy (overrideable at node level) to control PMF overflow/underflow behavior
+  - Policy options: strict (error on imbalance), absorb (adjust free edges), ignore (allow imbalance)
+  - Would provide fine-grained control over probability mass distribution
 - need some 'check graph integrity' and 'check for orphansed image files', etc. admin features
 - we need to be careful about overrides -- if user 'puts to file' I wonder whether we sohuld clear overrides so that file is now master as appropriate?
 - confidence internals on Sankey view

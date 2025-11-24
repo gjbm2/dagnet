@@ -1,4 +1,4 @@
-import React, { useEffect, ReactNode } from 'react';
+import React, { useEffect, ReactNode, useRef, useState } from 'react';
 
 export interface ContextMenuItem {
   label: string;
@@ -21,6 +21,47 @@ interface ContextMenuProps {
  * Reusable for tabs, navigator items, etc.
  */
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: x, top: y });
+
+  // Calculate constrained position on mount
+  useEffect(() => {
+    if (menuRef.current) {
+      const rect = menuRef.current.getBoundingClientRect();
+      const menuWidth = rect.width;
+      const menuHeight = rect.height;
+      
+      let left = x;
+      let top = y;
+      
+      // Constrain horizontally
+      const viewportWidth = window.innerWidth;
+      if (left + menuWidth > viewportWidth - 20) {
+        left = Math.max(20, viewportWidth - menuWidth - 20);
+      }
+      if (left < 20) {
+        left = 20;
+      }
+      
+      // Constrain vertically
+      const viewportHeight = window.innerHeight;
+      if (top + menuHeight > viewportHeight - 20) {
+        // Try to show above the cursor position
+        const aboveY = y - menuHeight - 4;
+        if (aboveY > 20) {
+          top = aboveY;
+        } else {
+          top = Math.max(20, viewportHeight - menuHeight - 20);
+        }
+      }
+      if (top < 20) {
+        top = 20;
+      }
+      
+      setPosition({ left, top });
+    }
+  }, [x, y]);
+
   // Close on click outside or escape
   useEffect(() => {
     const handleClick = () => onClose();
@@ -101,10 +142,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
 
   return (
     <div
+      ref={menuRef}
       style={{
         position: 'fixed',
-        left: x,
-        top: y,
+        left: position.left,
+        top: position.top,
         background: '#fff',
         border: '1px solid #dee2e6',
         borderRadius: '6px',

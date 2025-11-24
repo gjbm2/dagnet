@@ -84,6 +84,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     displayName: 'Context',
     displayNamePlural: 'Contexts',
     schemaFile: '/param-schemas/context-definition-schema.yaml',
+    uiSchemaFile: '/ui-schemas/context-ui-schema.json',
     directory: 'contexts',
     indexFile: 'contexts-index.yaml',
     extensions: ['.yaml', '.yml', '.json'],

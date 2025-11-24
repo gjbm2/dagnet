@@ -145,6 +145,147 @@ export class UpdateManager {
   }
   
   /**
+   * Check if an edge parameter is locked (has external data source).
+   * Locked edges should not be rebalanced automatically (in normal mode).
+   * 
+   * An edge is considered locked if it has:
+   * - A parameter file reference (param.id)
+   * - A direct connection to a data source (param.connection)
+   * 
+   * @param edge - The edge to check
+   * @param paramSlot - Which parameter slot to check ('p', 'cost_gbp', 'cost_time')
+   * @returns true if the edge parameter is locked to external data
+   */
+  private isEdgeParameterLocked(edge: any, paramSlot: 'p' | 'cost_gbp' | 'cost_time' = 'p'): boolean {
+    const param = edge[paramSlot];
+    return !!(param?.id || param?.connection);
+  }
+  
+  /**
+   * Internal helper: Rebalance a list of sibling edges by distributing weight among them.
+   * This is the single code path for edge rebalancing - called by both force and normal modes.
+   * 
+   * @param nextGraph - The graph being modified
+   * @param edgesToRebalance - Array of edges that should be rebalanced
+   * @param remainingWeight - Total weight to distribute among these edges
+   * @param clearOverrides - If true, clear mean_overridden flags
+   */
+  private rebalanceSiblingEdges(
+    nextGraph: any,
+    edgesToRebalance: any[],
+    remainingWeight: number,
+    clearOverrides: boolean
+  ): void {
+    if (edgesToRebalance.length === 0) return;
+    
+    // Prepare sibling items with indices for distribution
+    const siblingItems = edgesToRebalance.map((sibling: any) => {
+      const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+        // Match by UUID (most reliable)
+        if (sibling.uuid && e.uuid === sibling.uuid) return true;
+        // Match by ID (only if both have id defined)
+        if (sibling.id && e.id && e.id === sibling.id) return true;
+        // Match by composite key as fallback
+        if (`${e.from}->${e.to}` === `${sibling.from}->${sibling.to}`) return true;
+        return false;
+      });
+      return { sibling, index: siblingIndex };
+    }).filter((item: any) => item.index >= 0);
+    
+    // Ensure p objects exist
+    siblingItems.forEach((item: any) => {
+      if (!nextGraph.edges[item.index].p) {
+        nextGraph.edges[item.index].p = {};
+      }
+    });
+    
+    // Calculate current total from nextGraph.edges (after ensuring p objects exist)
+    const currentTotal = siblingItems.reduce((sum: number, item: any) => {
+      return sum + (nextGraph.edges[item.index].p?.mean || 0);
+    }, 0);
+    
+    // Distribute with exact sum
+    this.distributeWithExactSum(
+      siblingItems,
+      (item: any) => nextGraph.edges[item.index].p?.mean || 0,
+      (item: any, value: number) => {
+        nextGraph.edges[item.index].p.mean = value;
+        if (clearOverrides) {
+          delete nextGraph.edges[item.index].p.mean_overridden;
+        }
+      },
+      remainingWeight,
+      currentTotal
+    );
+  }
+  
+  /**
+   * Internal helper: Rebalance conditional probabilities by distributing weight among siblings.
+   * Single code path for conditional probability rebalancing - called by both force and normal modes.
+   * 
+   * @param nextGraph - The graph being modified
+   * @param edgesToRebalance - Array of edges with matching conditional probabilities
+   * @param conditionStr - The condition string to match
+   * @param remainingWeight - Total weight to distribute
+   * @param clearOverrides - If true, clear mean_overridden flags
+   */
+  private rebalanceConditionalSiblings(
+    nextGraph: any,
+    edgesToRebalance: any[],
+    conditionStr: string,
+    remainingWeight: number,
+    clearOverrides: boolean
+  ): void {
+    if (edgesToRebalance.length === 0) return;
+    
+    // Prepare sibling items with indices and matching conditions
+    const siblingItems = edgesToRebalance.map((sibling: any) => {
+      const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+        // Match by UUID (most reliable)
+        if (sibling.uuid && e.uuid === sibling.uuid) return true;
+        // Match by ID (only if both have id defined)
+        if (sibling.id && e.id && e.id === sibling.id) return true;
+        // Match by composite key as fallback
+        if (`${e.from}->${e.to}` === `${sibling.from}->${sibling.to}`) return true;
+        return false;
+      });
+      
+      if (siblingIndex >= 0) {
+        const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
+          const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+          return cpConditionStr === conditionStr;
+        });
+        if (matchingCond) {
+          if (!matchingCond.p) {
+            matchingCond.p = {};
+          }
+          return { sibling, index: siblingIndex, cond: matchingCond };
+        }
+      }
+      return null;
+    }).filter((item: any) => item !== null);
+    
+    // Calculate current total
+    const currentTotal = siblingItems.reduce((sum: number, item: any) => {
+      return sum + (item.cond.p?.mean || 0);
+    }, 0);
+    
+    // Distribute with exact sum
+    this.distributeWithExactSum(
+      siblingItems,
+      (item: any) => item.cond.p?.mean || 0,
+      (item: any, value: number) => {
+        item.cond.p.mean = value;
+        if (clearOverrides) {
+          delete item.cond.p.mean_overridden;
+        }
+      },
+      remainingWeight,
+      currentTotal
+    );
+  }
+  
+  /**
    * Distribute remainingWeight proportionally among items, ensuring sum equals exactly remainingWeight.
    * Rounds all but the last item, then sets the last to make up the difference.
    * 
@@ -3011,48 +3152,26 @@ export class UpdateManager {
     });
     
     if (forceRebalance) {
-      // Force rebalance: ignore all override flags, distribute proportionally
-      // Prepare sibling items with indices for distribution
-      const siblingItems = siblings.map((sibling: any) => {
-        const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+      // Force rebalance: ignore ALL flags (overrides AND parameter locks)
+      // Rebalance ALL siblings - force means force!
+      console.log('[UpdateManager] Force rebalance:', {
+        totalSiblings: siblings.length,
+        remainingWeight
+      });
+      
+      this.rebalanceSiblingEdges(nextGraph, siblings, remainingWeight, true);
+      
+      // Verify final sum
+      const finalSum = siblings.reduce((sum, sibling) => {
+        const edgeIndex = nextGraph.edges.findIndex((e: any) => {
           const eId = e.uuid || e.id || `${e.from}->${e.to}`;
           const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
           return eId === sId;
         });
-        return { sibling, index: siblingIndex };
-      }).filter((item: any) => item.index >= 0);
-      
-      // Ensure p objects exist
-      siblingItems.forEach((item: any) => {
-        if (!nextGraph.edges[item.index].p) {
-          nextGraph.edges[item.index].p = {};
-        }
-      });
-      
-      // Calculate siblingsTotal from nextGraph.edges (after ensuring p objects exist)
-      const siblingsTotal = siblingItems.reduce((sum: number, item: any) => {
-        return sum + (nextGraph.edges[item.index].p?.mean || 0);
-      }, 0);
-      
-      // Distribute with exact sum
-      // IMPORTANT: Read from nextGraph.edges, not item.sibling, to get current values
-      this.distributeWithExactSum(
-        siblingItems,
-        (item: any) => nextGraph.edges[item.index].p?.mean || 0,
-        (item: any, value: number) => {
-          nextGraph.edges[item.index].p.mean = value;
-          delete nextGraph.edges[item.index].p.mean_overridden;
-        },
-        remainingWeight,
-        siblingsTotal
-      );
-      
-      // Verify final sum
-      const finalSum = siblingItems.reduce((sum, item) => {
-        return sum + (nextGraph.edges[item.index].p?.mean || 0);
+        return sum + (edgeIndex >= 0 ? (nextGraph.edges[edgeIndex].p?.mean || 0) : 0);
       }, 0);
       const totalWithOrigin = originValue + finalSum;
-      console.log('[UpdateManager] Rebalance verification:', {
+      console.log('[UpdateManager] Force rebalance verification:', {
         originValue,
         siblingsSum: finalSum,
         totalWithOrigin,
@@ -3060,69 +3179,51 @@ export class UpdateManager {
         diff: Math.abs(totalWithOrigin - 1.0)
       });
     } else {
-      // Normal rebalance: respect override flags
-      const overriddenEdges = siblings.filter((e: any) => e.p?.mean_overridden);
-      const nonOverriddenEdges = siblings.filter((e: any) => !e.p?.mean_overridden);
+      // Normal rebalance: respect both override flags AND parameter locks
+      const lockedEdges = siblings.filter((e: any) => this.isEdgeParameterLocked(e, subtype as any));
+      const overriddenEdges = siblings.filter((e: any) => e.p?.mean_overridden && !this.isEdgeParameterLocked(e, subtype as any));
+      const freeEdges = siblings.filter((e: any) => !e.p?.mean_overridden && !this.isEdgeParameterLocked(e, subtype as any));
       
+      // Calculate fixed edges total (locked + overridden)
+      const lockedTotal = lockedEdges.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
       const overriddenTotal = overriddenEdges.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
-      const remainingForNonOverridden = Math.max(0, remainingWeight - overriddenTotal);
+      const fixedTotal = lockedTotal + overriddenTotal;
+      const remainingForFree = Math.max(0, remainingWeight - fixedTotal);
       
-      if (nonOverriddenEdges.length > 0) {
-        // Prepare sibling items with indices for distribution
-        const siblingItems = nonOverriddenEdges.map((sibling: any) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => {
+      console.log('[UpdateManager] Normal rebalance with locks and overrides:', {
+        totalSiblings: siblings.length,
+        lockedCount: lockedEdges.length,
+        overriddenCount: overriddenEdges.length,
+        freeCount: freeEdges.length,
+        lockedTotal,
+        overriddenTotal,
+        remainingForFree
+      });
+      
+      if (freeEdges.length > 0) {
+        this.rebalanceSiblingEdges(nextGraph, freeEdges, remainingForFree, false);
+        
+        // Verify final sum
+        const finalSum = freeEdges.reduce((sum, sibling) => {
+          const edgeIndex = nextGraph.edges.findIndex((e: any) => {
             const eId = e.uuid || e.id || `${e.from}->${e.to}`;
             const sId = sibling.uuid || sibling.id || `${sibling.from}->${sibling.to}`;
             return eId === sId;
           });
-          return { sibling, index: siblingIndex };
-        }).filter((item: any) => item.index >= 0);
-        
-        // Ensure p objects exist
-        siblingItems.forEach((item: any) => {
-          if (!nextGraph.edges[item.index].p) {
-            nextGraph.edges[item.index].p = {};
-          }
-        });
-        
-        // Calculate nonOverriddenTotal from nextGraph.edges (after ensuring p objects exist)
-        const nonOverriddenTotal = siblingItems.reduce((sum: number, item: any) => {
-          return sum + (nextGraph.edges[item.index].p?.mean || 0);
-        }, 0);
-        
-        // Distribute with exact sum
-        // IMPORTANT: Read from nextGraph.edges, not item.sibling, to get current values
-        this.distributeWithExactSum(
-          siblingItems,
-          (item: any) => nextGraph.edges[item.index].p?.mean || 0,
-          (item: any, value: number) => {
-            nextGraph.edges[item.index].p.mean = value;
-          },
-          remainingForNonOverridden,
-          nonOverriddenTotal
-        );
-        
-        // Verify final sum
-        const finalSum = siblingItems.reduce((sum, item) => {
-          return sum + (nextGraph.edges[item.index].p?.mean || 0);
-        }, 0);
-        const overriddenSum = overriddenEdges.reduce((sum, e) => {
-          const edgeIndex = nextGraph.edges.findIndex((ge: any) => {
-            const eId = ge.uuid || ge.id || `${ge.from}->${ge.to}`;
-            const sId = e.uuid || e.id || `${e.from}->${e.to}`;
-            return eId === sId;
-          });
           return sum + (edgeIndex >= 0 ? (nextGraph.edges[edgeIndex].p?.mean || 0) : 0);
         }, 0);
-        const totalWithOrigin = originValue + overriddenSum + finalSum;
-        console.log('[UpdateManager] Rebalance verification (with overrides):', {
+        const totalWithOrigin = originValue + lockedTotal + overriddenTotal + finalSum;
+        console.log('[UpdateManager] Normal rebalance verification:', {
           originValue,
-          overriddenSum,
-          nonOverriddenSum: finalSum,
+          lockedSum: lockedTotal,
+          overriddenSum: overriddenTotal,
+          freeSum: finalSum,
           totalWithOrigin,
           expectedTotal: 1.0,
           diff: Math.abs(totalWithOrigin - 1.0)
         });
+      } else {
+        console.warn('[UpdateManager] No free edges to rebalance (all siblings are locked or overridden)');
       }
     }
     
@@ -3185,13 +3286,19 @@ export class UpdateManager {
     const conditionStr = typeof condition.condition === 'string' ? condition.condition : '';
     const originValue = this.roundTo3DP(condition.p?.mean ?? 0);
     
+    
     if (!conditionStr) return nextGraph;
     
     // Find all sibling edges with the same condition string (EXCLUDE the current edge)
     const currentEdgeId = currentEdge.uuid || currentEdge.id || `${currentEdge.from}->${currentEdge.to}`;
     const siblings = nextGraph.edges.filter((e: any) => {
       const eId = e.uuid || e.id || `${e.from}->${e.to}`;
-      if (eId === currentEdgeId) return false; // Exclude the current edge (origin)
+      // CRITICAL: Must exclude the origin edge that we're rebalancing FROM
+      // Compare by UUID first (most reliable), then by id, then by composite key
+      const isCurrentEdge = (currentEdge.uuid && e.uuid === currentEdge.uuid) ||
+                            (currentEdge.id && e.id === currentEdge.id) ||
+                            (eId === currentEdgeId);
+      if (isCurrentEdge) return false; // Exclude the current edge (origin)
       if (e.from !== sourceNodeId) return false;
       if (!e.conditional_p || e.conditional_p.length === 0) return false;
       return e.conditional_p.some((cp: any) => {
@@ -3203,111 +3310,64 @@ export class UpdateManager {
     // Calculate remaining weight (1 - origin condition value)
     const remainingWeight = Math.max(0, 1 - originValue);
     
+    // Helper to check if a conditional probability is locked
+    const isConditionalLocked = (edge: any, condStr: string): boolean => {
+      const matchingCond = edge.conditional_p?.find((cp: any) => {
+        const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
+        return cpConditionStr === condStr;
+      });
+      return !!(matchingCond?.p?.id || matchingCond?.p?.connection);
+    };
+    
     if (forceRebalance) {
-      // Force rebalance: ignore all override flags
-      const siblingsTotal = siblings.reduce((sum: number, e: any) => {
-        const matchingCond = e.conditional_p?.find((cp: any) => {
-          const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-          return cpConditionStr === conditionStr;
-        });
-        return sum + (matchingCond?.p?.mean || 0);
-      }, 0);
+      // Force rebalance: ignore ALL flags (overrides AND parameter locks)
+      // Rebalance ALL siblings - force means force!
       
-      // Prepare sibling items with indices and matching conditions for distribution
-      const siblingItems = siblings.map((sibling: any) => {
-        const siblingIndex = nextGraph.edges.findIndex((e: any) => 
-          e.uuid === sibling.uuid || e.id === sibling.id || `${e.from}->${e.to}` === `${sibling.from}->${sibling.to}`
-        );
-        if (siblingIndex >= 0) {
-          const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
-            const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-            return cpConditionStr === conditionStr;
-          });
-          if (matchingCond) {
-            if (!matchingCond.p) {
-              matchingCond.p = {};
-            }
-            return { sibling, index: siblingIndex, cond: matchingCond };
-          }
-        }
-        return null;
-      }).filter((item: any) => item !== null);
-      
-      // Distribute with exact sum
-      this.distributeWithExactSum(
-        siblingItems,
-        (item: any) => {
-          const matchingCond = item.sibling.conditional_p?.find((cp: any) => {
-            const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-            return cpConditionStr === conditionStr;
-          });
-          return matchingCond?.p?.mean || 0;
-        },
-        (item: any, value: number) => {
-          item.cond.p.mean = value;
-          delete item.cond.p.mean_overridden;
-        },
-        remainingWeight,
-        siblingsTotal
-      );
+      this.rebalanceConditionalSiblings(nextGraph, siblings, conditionStr, remainingWeight, true);
     } else {
-      // Normal rebalance: respect override flags
+      // Normal rebalance: respect both override flags AND parameter locks
+      const lockedSiblings: any[] = [];
       const overriddenSiblings: any[] = [];
-      const nonOverriddenSiblings: any[] = [];
+      const freeSiblings: any[] = [];
       
       siblings.forEach((sibling: any) => {
         const matchingCond = sibling.conditional_p?.find((cp: any) => {
           const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
           return cpConditionStr === conditionStr;
         });
-        if (matchingCond?.p?.mean_overridden) {
+        
+        if (isConditionalLocked(sibling, conditionStr)) {
+          lockedSiblings.push({ sibling, matchingCond });
+        } else if (matchingCond?.p?.mean_overridden) {
           overriddenSiblings.push({ sibling, matchingCond });
         } else {
-          nonOverriddenSiblings.push({ sibling, matchingCond });
+          freeSiblings.push({ sibling, matchingCond });
         }
       });
       
+      const lockedTotal = lockedSiblings.reduce((sum: number, item: any) => 
+        sum + (item.matchingCond?.p?.mean || 0), 0);
       const overriddenTotal = overriddenSiblings.reduce((sum: number, item: any) => 
         sum + (item.matchingCond?.p?.mean || 0), 0);
-      const remainingForNonOverridden = Math.max(0, remainingWeight - overriddenTotal);
+      const fixedTotal = lockedTotal + overriddenTotal;
+      const remainingForFree = Math.max(0, remainingWeight - fixedTotal);
       
-      if (nonOverriddenSiblings.length > 0) {
-        const nonOverriddenTotal = nonOverriddenSiblings.reduce((sum: number, item: any) => 
-          sum + (item.matchingCond?.p?.mean || 0), 0);
-        
-        // Prepare sibling items with indices and matching conditions for distribution
-        const siblingItems = nonOverriddenSiblings.map((item: any) => {
-          const siblingIndex = nextGraph.edges.findIndex((e: any) => 
-            e.uuid === item.sibling.uuid || e.id === item.sibling.id || `${e.from}->${e.to}` === `${item.sibling.from}->${item.sibling.to}`
-          );
-          if (siblingIndex >= 0) {
-            const matchingCond = nextGraph.edges[siblingIndex].conditional_p?.find((cp: any) => {
-              const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-              return cpConditionStr === conditionStr;
-            });
-            if (matchingCond) {
-              if (!matchingCond.p) {
-                matchingCond.p = {};
-              }
-              return { sibling: item.sibling, index: siblingIndex, cond: matchingCond };
-            }
-          }
-          return null;
-        }).filter((item: any) => item !== null);
-        
-        // Distribute with exact sum
-        this.distributeWithExactSum(
-          siblingItems,
-          (item: any) => item.sibling.conditional_p?.find((cp: any) => {
-            const cpConditionStr = typeof cp.condition === 'string' ? cp.condition : '';
-            return cpConditionStr === conditionStr;
-          })?.p?.mean || 0,
-          (item: any, value: number) => {
-            item.cond.p.mean = value;
-          },
-          remainingForNonOverridden,
-          nonOverriddenTotal
-        );
+      console.log('[UpdateManager] Normal rebalance conditional with locks and overrides:', {
+        totalSiblings: siblings.length,
+        lockedCount: lockedSiblings.length,
+        overriddenCount: overriddenSiblings.length,
+        freeCount: freeSiblings.length,
+        lockedTotal,
+        overriddenTotal,
+        remainingForFree
+      });
+      
+      if (freeSiblings.length > 0) {
+        // Extract just the sibling edges (without matchingCond wrapper)
+        const freeSiblingEdges = freeSiblings.map((item: any) => item.sibling);
+        this.rebalanceConditionalSiblings(nextGraph, freeSiblingEdges, conditionStr, remainingForFree, false);
+      } else {
+        console.warn('[UpdateManager] No free conditional siblings to rebalance (all are locked or overridden)');
       }
     }
     

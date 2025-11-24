@@ -45,6 +45,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   
   // Track if we've initialized the selected files
   const initializedRef = useRef(false);
+  const hasInitializedSelectionRef = useRef(false);
   const [forceUpdate, setForceUpdate] = useState(0);
 
   // Get dirty files that can be committed - from IndexedDB (not just FileRegistry)
@@ -117,9 +118,11 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   useEffect(() => {
     if (isOpen && !initializedRef.current) {
       initializedRef.current = true;
+      hasInitializedSelectionRef.current = false;
     } else if (!isOpen) {
       // Reset when modal closes
       initializedRef.current = false;
+      hasInitializedSelectionRef.current = false;
       setSelectedFiles(new Set());
       setCommitMessage('');
       setError(null);
@@ -127,9 +130,10 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
     }
   }, [isOpen]);
 
-  // Initialize selected files when commitableFiles change (but only if modal is open and not initialized)
+  // Initialize selected files when commitableFiles change (but only once on initial load)
   useEffect(() => {
-    if (isOpen && initializedRef.current && commitableFiles.length > 0 && selectedFiles.size === 0) {
+    if (isOpen && initializedRef.current && !hasInitializedSelectionRef.current && commitableFiles.length > 0) {
+      hasInitializedSelectionRef.current = true;
       if (preselectedFiles.length > 0) {
         setSelectedFiles(new Set(preselectedFiles));
       } else {
@@ -138,7 +142,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
         setSelectedFiles(new Set(fileIds));
       }
     }
-  }, [commitableFiles, preselectedFiles, isOpen, selectedFiles.size]);
+  }, [commitableFiles, preselectedFiles, isOpen]);
 
   // Load available branches
   useEffect(() => {

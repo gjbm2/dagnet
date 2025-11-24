@@ -13,12 +13,15 @@ import { dataOperationsService } from '../services/dataOperationsService';
 import { calculateIncrementalFetch } from '../services/windowAggregationService';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
-import { Sparkles, Database, Layers, X } from 'lucide-react';
-import WhatIfAnalysisControl from './WhatIfAnalysisControl';
-import WhatIfAnalysisHeader from './WhatIfAnalysisHeader';
-import { parseConstraints } from '@/lib/queryDSL';
+import { FileText, ArrowDownNarrowWide, ArrowUpNarrowWide } from 'lucide-react';
+import { parseConstraints } from '../lib/queryDSL';
+import { formatDateUK, parseUKDate } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
 import './WindowSelector.css';
+import { ContextValueSelector } from './ContextValueSelector';
+import { contextRegistry } from '../services/contextRegistry';
+import { QueryExpressionEditor } from './QueryExpressionEditor';
+import { PinnedQueryModal } from './modals/PinnedQueryModal';
 
 interface BatchItem {
   id: string;
@@ -67,42 +70,124 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const [showButton, setShowButton] = useState(false); // Track button visibility for animations
   const [showShimmer, setShowShimmer] = useState(false); // Track shimmer animation
   
-  // What-If and Context dropdown states
-  const [showWhatIfDropdown, setShowWhatIfDropdown] = useState(false);
+  // Context dropdown and unroll states
   const [showContextDropdown, setShowContextDropdown] = useState(false);
+  const [availableKeySections, setAvailableKeySections] = useState<any[]>([]);
+  const [isUnrolled, setIsUnrolled] = useState(false);
+  const [showPinnedQueryModal, setShowPinnedQueryModal] = useState(false);
   
-  // Get what-if DSL and count conditions
-  const currentTab = tabs.find(t => t.id === tabId);
-  const whatIfDSL = currentTab?.editorState?.whatIfDSL;
-  const whatIfConditionCount = useMemo(() => {
-    if (!whatIfDSL || whatIfDSL.trim().length === 0) return 0;
-    try {
-      const parsed = parseConstraints(whatIfDSL);
-      const caseCount = parsed.cases?.length || 0;
-      const visitedCount = parsed.visited?.length || 0;
-      const excludeCount = parsed.exclude?.length || 0;
-      return caseCount + visitedCount + excludeCount;
-    } catch (e) {
-      return 0;
-    }
-  }, [whatIfDSL]);
-  
-  const handleClearWhatIf = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (tabId && whatIfDSL) {
-      try {
-        await operations.updateTabState(tabId, { whatIfDSL: null });
-        setShowWhatIfDropdown(false);
-      } catch (error) {
-        console.error('[WindowSelector] Failed to clear What-If:', error);
-        toast.error('Failed to clear What-If');
-      }
-    }
-  };
-  const whatIfButtonRef = useRef<HTMLButtonElement>(null);
-  const whatIfDropdownRef = useRef<HTMLDivElement>(null);
   const contextButtonRef = useRef<HTMLButtonElement>(null);
   const contextDropdownRef = useRef<HTMLDivElement>(null);
+  const windowSelectorRef = useRef<HTMLDivElement>(null);
+  
+  // Parse current context values and key from currentQueryDSL
+  const currentContextValues = useMemo(() => {
+    if (!graph?.currentQueryDSL) return [];
+    const parsed = parseConstraints(graph.currentQueryDSL);
+    
+    const valueIds: string[] = [];
+    for (const ctx of parsed.context) {
+      valueIds.push(ctx.value);
+    }
+    for (const ctxAny of parsed.contextAny) {
+      for (const pair of ctxAny.pairs) {
+        valueIds.push(pair.value);
+      }
+    }
+    return valueIds;
+  }, [graph?.currentQueryDSL]);
+  
+  const currentContextKey = useMemo(() => {
+    if (!graph?.currentQueryDSL) return undefined;
+    const parsed = parseConstraints(graph.currentQueryDSL);
+    
+    if (parsed.context.length > 0) return parsed.context[0].key;
+    if (parsed.contextAny.length > 0 && parsed.contextAny[0].pairs.length > 0) {
+      return parsed.contextAny[0].pairs[0].key;
+    }
+    return undefined;
+  }, [graph?.currentQueryDSL]);
+  
+  // Update CSS variable for scenario legend positioning when height changes
+  useEffect(() => {
+    if (windowSelectorRef.current) {
+      const height = windowSelectorRef.current.offsetHeight;
+      document.documentElement.style.setProperty('--window-selector-bottom', `${height + 20}px`);
+    }
+  }, [isUnrolled, graph?.currentQueryDSL]);
+  
+  // Load context keys from graph.dataInterestsDSL when dropdown opens
+  useEffect(() => {
+    if (showContextDropdown && availableKeySections.length === 0) {
+      const loadContextsFromPinnedQuery = async () => {
+        // Parse dataInterestsDSL to get pinned context keys
+        const pinnedDSL = graph?.dataInterestsDSL || '';
+        console.log('[WindowSelector] Pinned DSL:', pinnedDSL);
+        
+        if (!pinnedDSL) {
+          console.warn('[WindowSelector] No dataInterestsDSL set on graph - showing all available contexts');
+          // Fall back to showing all available contexts
+          const keys = await contextRegistry.getAllContextKeys();
+          console.log('[WindowSelector] All available context keys:', keys);
+          const sections = await Promise.all(
+            keys.map(async key => {
+              const context = await contextRegistry.getContext(key.id);
+              const values = await contextRegistry.getValuesForContext(key.id);
+              return {
+                id: key.id,
+                name: key.id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                values,
+                otherPolicy: context?.otherPolicy
+              };
+            })
+          );
+          setAvailableKeySections(sections);
+          return;
+        }
+        
+        // Parse pinned DSL to extract context keys
+        const { parseConstraints } = await import('../lib/queryDSL');
+        const clauses = pinnedDSL.split(';').map(c => c.trim()).filter(c => c);
+        const contextKeySet = new Set<string>();
+        
+        for (const clause of clauses) {
+          const parsed = parseConstraints(clause);
+          for (const ctx of parsed.context) {
+            contextKeySet.add(ctx.key);
+          }
+          for (const ctxAny of parsed.contextAny) {
+            for (const pair of ctxAny.pairs) {
+              contextKeySet.add(pair.key);
+            }
+          }
+        }
+        
+        console.log('[WindowSelector] Context keys from pinned DSL:', Array.from(contextKeySet));
+        
+        // Load values for each pinned key
+        const sections = await Promise.all(
+          Array.from(contextKeySet).map(async keyId => {
+            const context = await contextRegistry.getContext(keyId);
+            const values = await contextRegistry.getValuesForContext(keyId);
+            console.log(`[WindowSelector] Loaded values for ${keyId}:`, values);
+            return {
+              id: keyId,
+              name: keyId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+              values,
+              otherPolicy: context?.otherPolicy
+            };
+          })
+        );
+        
+        console.log('[WindowSelector] Sections from pinned query:', sections);
+        setAvailableKeySections(sections);
+      };
+      
+      loadContextsFromPinnedQuery().catch(err => {
+        console.error('Failed to load contexts from pinned query:', err);
+      });
+    }
+  }, [showContextDropdown, availableKeySections.length, graph?.dataInterestsDSL]);
   
   const isInitialMountRef = useRef(true);
   const isAggregatingRef = useRef(false); // Track if we're currently aggregating to prevent loops
@@ -110,19 +195,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const graphRef = useRef<typeof graph>(graph); // Track graph to avoid dependency loop
   const prevWindowRef = useRef<string | null>(null); // Track previous window for shimmer trigger
   
-  // Close dropdowns when clicking outside
+  // Close context dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (
-        showWhatIfDropdown &&
-        whatIfButtonRef.current &&
-        whatIfDropdownRef.current &&
-        !whatIfButtonRef.current.contains(event.target as Node) &&
-        !whatIfDropdownRef.current.contains(event.target as Node)
-      ) {
-        setShowWhatIfDropdown(false);
-      }
-      
       if (
         showContextDropdown &&
         contextButtonRef.current &&
@@ -136,7 +211,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showWhatIfDropdown, showContextDropdown]);
+  }, [showContextDropdown]);
   
   // Sync refs with state (separate effects to avoid triggering aggregation)
   useEffect(() => {
@@ -372,7 +447,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               if (paramFile?.data) {
                 const incrementalResult = calculateIncrementalFetch(
                   paramFile.data,
-                  normalizedWindow
+                  normalizedWindow,
+                  undefined, // querySignature
+                  false, // bustCache
+                  currentGraph.currentQueryDSL || '' // targetSlice
                 );
                 
                 // Strict: if ANY days are missing, require fetch
@@ -512,7 +590,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     // Debounce coverage check
     const timeoutId = setTimeout(checkDataCoverageAndAggregate, 300);
     return () => clearTimeout(timeoutId);
-  }, [currentWindow, window, setGraph, setLastAggregatedWindow]); // Removed graph and lastAggregatedWindow from dependencies - using refs instead to prevent loop
+  }, [currentWindow, window, setGraph, setLastAggregatedWindow, graph?.currentQueryDSL]); // Added currentQueryDSL to trigger check when context changes
   
   const handleDateRangeChange = (start: string, end: string) => {
     setWindow({ start, end });
@@ -653,7 +731,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
             // File exists - check if data is missing for this window
             const incrementalResult = calculateIncrementalFetch(
               paramFile.data,
-              normalizedWindow
+              normalizedWindow,
+              undefined, // querySignature
+              false, // bustCache  
+              graph?.currentQueryDSL || '' // targetSlice
             );
             needsFetchForThis = incrementalResult.needsFetch;
           }
@@ -738,6 +819,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               },
               paramSlot: item.paramSlot,
               window: normalizedWindow,
+              targetSlice: graph?.currentQueryDSL || ''
             });
             successCount++;
           } else if (item.type === 'case') {
@@ -789,35 +871,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   };
   
   return (
-    <div className={`window-selector ${!needsFetch ? 'window-selector-compact' : ''}`}>
+    <div ref={windowSelectorRef} className={`window-selector ${!needsFetch ? 'window-selector-compact' : ''}`}>
       <div className="window-selector-content">
-        {/* Context Button - Far Left */}
-        <div className="window-selector-toolbar-button">
-          <button
-            ref={contextButtonRef}
-            className={`window-selector-preset ${showContextDropdown ? 'active' : ''}`}
-            onClick={() => {
-              setShowContextDropdown(!showContextDropdown);
-              setShowWhatIfDropdown(false);
-            }}
-            title="Context Selection"
-          >
-            <Database size={14} />
-            <span>Context</span>
-          </button>
-          
-          {showContextDropdown && (
-            <div ref={contextDropdownRef} className="window-selector-dropdown context-dropdown">
-              <div className="dropdown-message">
-                Coming soon
-              </div>
-            </div>
-          )}
-        </div>
-        
-        {/* Separator after Context */}
-        <div className="window-selector-separator-line"></div>
-        
         <div className="window-selector-presets">
           <button
             type="button"
@@ -858,11 +913,115 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           onChange={handleDateRangeChange}
           maxDate={new Date().toISOString().split('T')[0]}
         />
+        
+        {/* Context chips area using QueryExpressionEditor */}
+        {graph?.currentQueryDSL && (
+          <div className="window-selector-context-chips" style={{ 
+            marginLeft: '12px', 
+            minWidth: '120px',
+            width: 'auto',
+            maxWidth: 'min(450px, 40vw)'
+          }}>
+            <QueryExpressionEditor
+              value={graph.currentQueryDSL}
+              onChange={(newDSL) => {
+                if (setGraph) {
+                  setGraph({ ...graph, currentQueryDSL: newDSL });
+                }
+              }}
+              graph={graph}
+              height="32px"
+              placeholder=""
+            />
+          </div>
+        )}
+        
+        {/* Add Context button */}
+        <div className="window-selector-toolbar-button" style={{ position: 'relative', marginLeft: '8px' }}>
+          <button
+            ref={contextButtonRef}
+            className="window-selector-preset"
+            onClick={() => setShowContextDropdown(!showContextDropdown)}
+            title="Add context filter"
+            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            <span>+</span>
+            <FileText size={14} />
+            {!graph?.currentQueryDSL && <span>Context</span>}
+          </button>
+          
+          {showContextDropdown && availableKeySections.length > 0 && (
+            <div ref={contextDropdownRef} className="window-selector-dropdown context-dropdown">
+              <ContextValueSelector
+                mode="multi-key"
+                availableKeys={availableKeySections}
+                currentValues={currentContextValues}
+                currentContextKey={currentContextKey}
+                onApply={async (key, values) => {
+                  setShowContextDropdown(false);
+                  
+                  // Check if all values selected AND key is MECE (should remove context)
+                  const keySection = availableKeySections.find(s => s.id === key);
+                  const allValues = keySection?.values || [];
+                  const allSelected = allValues.length > 0 && values.length === allValues.length;
+                  const isMECE = keySection?.otherPolicy !== 'undefined';
+                  
+                  // Build context DSL from selected key and values
+                  if (values.length === 0 || (allSelected && isMECE)) {
+                    // No values OR all values for MECE key: remove context from DSL
+                    if (setGraph && graph) {
+                      setGraph({ ...graph, currentQueryDSL: '' });
+                    }
+                    if (allSelected && isMECE) {
+                      toast.success('All values selected = no filter', { duration: 2000 });
+                    }
+                  } else if (values.length === 1) {
+                    // Single value: context(key:value)
+                    const dsl = `context(${key}:${values[0]})`;
+                    if (setGraph && graph) {
+                      setGraph({ ...graph, currentQueryDSL: dsl });
+                    }
+                  } else {
+                    // Multiple values: contextAny(key:val1,val2,...)
+                    const valuePairs = values.map(v => `${key}:${v}`).join(',');
+                    const dsl = `contextAny(${valuePairs})`;
+                    if (setGraph && graph) {
+                      setGraph({ ...graph, currentQueryDSL: dsl });
+                    }
+                  }
+                }}
+                onCancel={() => setShowContextDropdown(false)}
+                anchorEl={contextButtonRef.current}
+              />
+            </div>
+          )}
+          
+          {showContextDropdown && availableKeySections.length === 0 && (
+            <div ref={contextDropdownRef} className="window-selector-dropdown context-dropdown">
+              <div className="dropdown-message">
+                Loading contexts...
+              </div>
+            </div>
+          )}
+        </div>
+        
+        {/* Unroll button */}
+        <button
+          className="window-selector-preset"
+          onClick={() => setIsUnrolled(!isUnrolled)}
+          title={isUnrolled ? "Hide full query" : "Show full query DSL"}
+          style={{ marginLeft: '4px', display: 'flex', alignItems: 'center' }}
+        >
+          {isUnrolled ? <ArrowUpNarrowWide size={14} /> : <ArrowDownNarrowWide size={14} />}
+        </button>
+        
+        {/* Fetch button - positioned at far right */}
         {showButton && (
           <button
             onClick={handleFetchData}
             disabled={isCheckingCoverage || isFetching || batchItemsToFetch.length === 0}
             className={`window-selector-button ${showShimmer ? 'shimmer' : ''}`}
+            style={{ marginLeft: '8px' }}
             title={
               isCheckingCoverage
                 ? "Checking data coverage..."
@@ -874,62 +1033,101 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
             {isCheckingCoverage ? 'Checking...' : isFetching ? 'Fetching...' : 'Fetch data'}
           </button>
         )}
-        
-        {/* Visual separator */}
-        <div className="window-selector-separator-line"></div>
-        
-        {/* What-If Button */}
-        <div className="window-selector-toolbar-button">
-          <button
-            ref={whatIfButtonRef}
-            className={`window-selector-preset ${showWhatIfDropdown ? 'active' : ''}`}
-            onClick={() => {
-              setShowWhatIfDropdown(!showWhatIfDropdown);
-              setShowContextDropdown(false);
-            }}
-            title={whatIfConditionCount > 0 ? `What-If Analysis (${whatIfConditionCount} active)` : "What-If Analysis"}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: whatIfConditionCount > 0 ? '600' : 'normal' }}
-          >
-            <Sparkles size={14} />
-            <span>What-If{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}</span>
-            {whatIfConditionCount > 0 && (
-              <button
-                onClick={handleClearWhatIf}
-                title="Clear What-If conditions"
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  padding: '2px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  marginLeft: '4px'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = '#FEE2E2';
-                  e.currentTarget.style.borderRadius = '3px';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'none';
-                }}
-              >
-                <X size={12} style={{ color: '#DC2626' }} />
-              </button>
-            )}
-          </button>
-          
-          {showWhatIfDropdown && (
-            <div ref={whatIfDropdownRef} className="window-selector-dropdown whatif-dropdown">
-              <div className="dropdown-header">
-                <WhatIfAnalysisHeader tabId={tabId} />
-              </div>
-              <div className="dropdown-body">
-                <WhatIfAnalysisControl tabId={tabId} />
-              </div>
-            </div>
-          )}
-        </div>
       </div>
+      
+      {/* Unrolled state - shows full DSL and pinned query access */}
+      {isUnrolled && (
+        <div className="window-selector-extended">
+          <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 500 }}>Full query:</span>
+          <div style={{ flex: 1 }}>
+            <QueryExpressionEditor
+              value={(() => {
+                // Combine contexts + window
+                const contextPart = graph?.currentQueryDSL || '';
+                const windowPart = window 
+                  ? `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})` 
+                  : '';
+                
+                if (contextPart && windowPart) {
+                  return `${contextPart}.${windowPart}`;
+                } else if (contextPart) {
+                  return contextPart;
+                } else if (windowPart) {
+                  return windowPart;
+                }
+                return '';
+              })()}
+              onChange={(newDSL) => {
+                // Parse out context and window parts
+                const parsed = parseConstraints(newDSL);
+                
+                // Extract context part
+                const contextParts: string[] = [];
+                for (const ctx of parsed.context) {
+                  contextParts.push(`context(${ctx.key}:${ctx.value})`);
+                }
+                for (const ctxAny of parsed.contextAny) {
+                  const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
+                  contextParts.push(`contextAny(${pairs})`);
+                }
+                
+                const contextDSL = contextParts.join('.');
+                
+                if (setGraph && graph) {
+                  setGraph({ ...graph, currentQueryDSL: contextDSL });
+                }
+                
+                // Update window if changed (convert d-MMM-yy back to YYYY-MM-DD)
+                if (parsed.window && setWindow) {
+                  try {
+                    const startDate = parsed.window.start 
+                      ? parseUKDate(parsed.window.start).toISOString().split('T')[0]
+                      : window?.start || '';
+                    const endDate = parsed.window.end
+                      ? parseUKDate(parsed.window.end).toISOString().split('T')[0]
+                      : window?.end || '';
+                    setWindow({ start: startDate, end: endDate });
+                  } catch (err) {
+                    console.error('Failed to parse window dates:', err);
+                  }
+                }
+              }}
+              graph={graph}
+              height="32px"
+              placeholder="No filters applied"
+            />
+          </div>
+          <span style={{ color: '#ccc', fontSize: '18px' }}>│</span>
+          <button
+            className="window-selector-preset"
+            onClick={() => setShowPinnedQueryModal(true)}
+            title={graph?.dataInterestsDSL || 'Click to set pinned query'}
+            style={{
+              padding: '4px 12px',
+              background: graph?.dataInterestsDSL ? '#e3f2fd' : '#f5f5f5',
+              border: graph?.dataInterestsDSL ? '1px solid #90caf9' : '1px solid #d0d0d0',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            Pinned query {graph?.dataInterestsDSL && '✓'}
+          </button>
+        </div>
+      )}
+      
+      {/* Pinned Query Modal */}
+      <PinnedQueryModal
+        isOpen={showPinnedQueryModal}
+        currentDSL={graph?.dataInterestsDSL || ''}
+        onSave={(newDSL) => {
+          if (setGraph && graph) {
+            setGraph({ ...graph, dataInterestsDSL: newDSL });
+            toast.success('Pinned query updated');
+            // Reload context sections if dropdown is open
+            setAvailableKeySections([]);
+          }
+        }}
+        onClose={() => setShowPinnedQueryModal(false)}
+      />
     </div>
   );
 }

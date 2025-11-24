@@ -1,0 +1,52 @@
+id: channel
+name: Marketing Channel
+description: Primary acquisition channel (paid, organic, direct, etc.)
+type: categorical
+otherPolicy: computed  # "other" = ALL - (google + meta + organic + direct)
+
+values:
+  - id: google
+    label: Google Ads
+    description: Google Ads campaigns
+    sources:
+      amplitude:
+        field: utm_source
+        filter: "utm_source == 'google'"
+        
+  - id: meta
+    label: Meta (Facebook/Instagram)
+    description: Facebook and Instagram campaigns
+    sources:
+      amplitude:
+        field: utm_source
+        filter: "utm_source in ['facebook', 'instagram']"
+        
+  - id: organic
+    label: Organic Search
+    description: Organic traffic from search engines
+    sources:
+      amplitude:
+        field: utm_source
+        filter: "utm_source == 'organic'"
+        
+  - id: direct
+    label: Direct Traffic
+    description: Direct navigation or bookmarks
+    sources:
+      amplitude:
+        field: utm_source
+        filter: "utm_source is null or utm_source == 'direct'"
+        
+  - id: other
+    label: Other Channels
+    description: All other traffic sources
+    # otherPolicy=computed: adapter generates NOT filter dynamically
+
+metadata:
+  category: marketing
+  data_source: utm_parameters
+  created_at: "2025-11-24T00:00:00Z"
+  version: "1.0.0"
+  status: active
+  author: Dagnet Team
+
