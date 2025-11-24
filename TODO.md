@@ -1,13 +1,11 @@
 # TODO
 
+## Project Contexts
+- Context support
+
 ## Current query DSL
-- whatifdsl is becoming (gradually) a more powerful general statement of the current query applied to the graph.
-  - in current: some of this (e.g. window, contexts in due course) determins what data is retrieved in the first place; other parts (whatifs) determine what overlay is applied to that data before render
-- ideally we would build a single dsl string to express all of this, such that the top control set (context/window/whatif) interact with that dsl string, but it is the string that controls the graph.
-- is our dsl expessive enough already? we need:
-    case(<case_id>:<variant).visited(noda).excludes(nodeb).visitedAny(nodec,noded).context(<context_id>:<context_value>).window(<fromdate>:<todate>)
-- once we have ensured it is adequately expressive, we can expose the 'current query string' to the user inside the window control [we may later hide, but is useful for debugging purposes]
-- This query string is then also a natural candidate for what to use to populate the name of newly created scenarios, poss. along with timestamp.
+
+- This query string is now a natural candidate for what to use to populate the name of newly created scenarios, poss. along with timestamp.
 - If user creates a DIFF scenario rather than an ALL scenario, we can also subtract this query FROM what is otherwise shown (compositing layer 2 and below) to construct a helpful Human Readable name
 - e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and user then added window(1-Jan-25:1-Jan-25).case(experiment:treament), then when they created a diff snapshot, it would calculate window(1-Jan-25:1-Jan-25).case(experiment:treament)-window(1-Jan-25:1-Jan-25)=case(experiment:treament) (noting we need a service for this query subtraction & addition logic, not to do it inline in the scenario editor) and write "case(experiment:treament) @ 9:24am, 13-Nov-25"  as the scenario name
 - crucially, this would allow dynamic layers / scenarios (useful for saved charts/reports)
@@ -38,7 +36,6 @@
 ---
 
 ## Major components
-- Context support
 - Declarartive Analytics Module
 - Latency/lag management
 - Dashboarding views
@@ -55,6 +52,7 @@
 
 ### Medium 
 
+- need some 'check graph integrity' and 'check for orphansed image files', etc. admin features
 - we need to be careful about overrides -- if user 'puts to file' I wonder whether we sohuld clear overrides so that file is now master as appropriate?
 - confidence internals on Sankey view
 - Events that can fire several times we may need to build Amplitude funnels further one step further upstream in order to ensure we know that it's this specific event we care about 

@@ -88,6 +88,38 @@ With the daily grid model, temporal overlap is handled at the day level:
 
 **Key insight**: The "partial overlap (ambiguous)" scenarios disappear when we work at day-level granularity. Overlapping windows just mean "some days appear in multiple slices," which we resolve via de-duplication by date key.
 
+### Key Test Cases
+
+**Test Case: Mixed MECE Keys** (validates most complex edge case)
+
+```typescript
+// Setup: Have both MECE and non-MECE keys
+const windows = [
+  { sliceDSL: 'context(browser-type:chrome)', n_daily: [100], k_daily: [20], dates: ['1-Jan-25'] },
+  { sliceDSL: 'context(browser-type:safari)', n_daily: [80], k_daily: [12], dates: ['1-Jan-25'] },
+  { sliceDSL: 'context(channel:google)', n_daily: [50], k_daily: [8], dates: ['1-Jan-25'] }
+];
+
+// Registry: browser-type otherPolicy='null' (MECE), channel otherPolicy='undefined' (not MECE)
+// Query: uncontexted (no context constraint)
+
+// Expected: n=180 (chrome + safari only, channel ignored)
+// NOT: n=230 (would incorrectly include channel)
+```
+
+**Test Case: Slice Isolation**
+
+```typescript
+// Setup: Multiple slices with same query_signature
+const values = [
+  { sliceDSL: 'context(channel:google)', dates: ['1-Jan-25', '2-Jan-25'], query_signature: 'abc' },
+  { sliceDSL: 'context(channel:meta)', dates: ['2-Jan-25', '3-Jan-25'], query_signature: 'abc' }
+];
+
+// Query: channel:google, window 1-Jan to 3-Jan
+// Expected missing dates: ['3-Jan-25'] only (not ['1-Jan-25'] from meta slice)
+```
+
 ---
 
 ## Source Policy: Daily vs Non-Daily

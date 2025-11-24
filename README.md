@@ -88,12 +88,18 @@ python dev-server.py
 
 ```
 dagnet/
-├── graph-editor/             # Frontend React/TypeScript app (Vercel deployment root)
+├── graph-editor/             # Frontend React/TypeScript app (**Vercel deployment root**)
 │   ├── src/                  # React/TypeScript source code
 │   ├── public/               # Static assets and public documentation
 │   │   └── docs/            # **PUBLIC USER DOCUMENTATION** (user-facing guides)
 │   ├── api/                  # Serverless functions (TS + Python)
-│   ├── lib/                  # Python graph computation libraries
+│   ├── lib/                  # **ALL PYTHON LIBRARIES** (graph computation, MSMDC, queries)
+│   │   ├── algorithms/       # MSMDC algorithms (inclusion-exclusion, graph analysis)
+│   │   ├── msmdc.py          # MSMDC query generation
+│   │   ├── query_dsl.py      # Query DSL parser
+│   │   ├── graph_types.py    # Graph data models
+│   │   ├── graph_select.py   # Graph topology filtering
+│   │   └── stats_enhancement.py  # Statistical enhancements
 │   ├── tests/                # Python tests
 │   ├── docs/                 # Component-specific technical documentation
 │   ├── dev-server.py         # Local Python dev server
@@ -105,7 +111,6 @@ dagnet/
 │   │   └── project-contexts/ # Project context and status documents
 │   └── archive/              # Historical documentation and completed work
 │       └── project-perf/     # Performance testing and benchmarks (moved from /perf)
-├── msmdc/                    # MSMDC (Minimum Set of Marginal Distribution Cuts) utilities
 ├── param-registry/           # Dev testing: app accesses git files here; create sample files for testing
 ├── apps-script/              # Google Apps Script integrations
 ├── dev-start.sh             # Quick-start script (starts frontend + backend)
