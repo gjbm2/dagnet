@@ -9,7 +9,7 @@
  * - Properties & Delete options
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ParameterEditor } from './ParameterEditor';
 import { DataOperationsMenu } from './DataOperationsMenu';
 import { ChevronRight, Copy } from 'lucide-react';
@@ -47,8 +47,48 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const [localData, setLocalData] = useState(edgeData);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: x, top: y });
   const { window } = useGraphStore();
   const viewPrefs = useViewPreferencesContext();
+
+  // Calculate constrained position on mount
+  useEffect(() => {
+    if (menuRef.current) {
+      const rect = menuRef.current.getBoundingClientRect();
+      const menuWidth = rect.width;
+      const menuHeight = rect.height;
+      
+      let left = x;
+      let top = y;
+      
+      // Constrain horizontally
+      const viewportWidth = globalThis.innerWidth;
+      if (left + menuWidth > viewportWidth - 20) {
+        left = Math.max(20, viewportWidth - menuWidth - 20);
+      }
+      if (left < 20) {
+        left = 20;
+      }
+      
+      // Constrain vertically
+      const viewportHeight = globalThis.innerHeight;
+      if (top + menuHeight > viewportHeight - 20) {
+        // Try to show above the cursor position
+        const aboveY = y - menuHeight - 4;
+        if (aboveY > 20) {
+          top = aboveY;
+        } else {
+          top = Math.max(20, viewportHeight - menuHeight - 20);
+        }
+      }
+      if (top < 20) {
+        top = 20;
+      }
+      
+      setPosition({ left, top });
+    }
+  }, [x, y]);
   
   // Helper to handle submenu open/close with delay to prevent closing when hovering over disabled items
   const handleSubmenuEnter = (submenuName: string) => {
@@ -440,10 +480,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
 
   return (
     <div
+      ref={menuRef}
       style={{
         position: 'fixed',
-        left: x,
-        top: y,
+        left: position.left,
+        top: position.top,
         background: 'white',
         border: '1px solid #ddd',
         borderRadius: '4px',

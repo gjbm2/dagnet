@@ -45,16 +45,88 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   
-  // Update dropdown position when opened
+  // Update dropdown position when opened (with viewport constraints)
   useEffect(() => {
     if (isOpen && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
-      setDropdownPosition({
-        top: rect.bottom + 4,
-        left: rect.right
-      });
+      
+      // Initial position
+      let top = rect.bottom + 4;
+      let left = rect.right;
+      
+      // If menu is already rendered, apply viewport constraints
+      if (menuRef.current) {
+        const menuRect = menuRef.current.getBoundingClientRect();
+        const menuWidth = menuRect.width;
+        const menuHeight = menuRect.height;
+        
+        // Account for the translateX(-100%) transform
+        const actualLeft = left - menuWidth;
+        
+        // Constrain horizontally (menu is right-aligned to button)
+        // Use globalThis to avoid shadowing from window prop
+        if (actualLeft < 20) {
+          // Not enough space on left, position to right of button instead
+          left = rect.left;
+        } else if (left > globalThis.innerWidth - 20) {
+          // Button too far right
+          left = globalThis.innerWidth - 20;
+        }
+        
+        // Constrain vertically
+        if (top + menuHeight > globalThis.innerHeight - 20) {
+          // Not enough space below, show above button
+          const aboveY = rect.top - menuHeight - 4;
+          if (aboveY > 20) {
+            top = aboveY;
+          } else {
+            top = Math.max(20, globalThis.innerHeight - menuHeight - 20);
+          }
+        }
+      }
+      
+      setDropdownPosition({ top, left });
     }
   }, [isOpen]);
+  
+  // Recalculate position after menu renders (to apply viewport constraints)
+  useEffect(() => {
+    if (isOpen && buttonRef.current && menuRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      const menuRect = menuRef.current.getBoundingClientRect();
+      const menuWidth = menuRect.width;
+      const menuHeight = menuRect.height;
+      
+      let top = rect.bottom + 4;
+      let left = rect.right;
+      
+      // Account for the translateX(-100%) transform
+      const actualLeft = left - menuWidth;
+      
+      // Constrain horizontally (menu is right-aligned to button)
+      // Use globalThis to avoid shadowing from window prop
+      if (actualLeft < 20) {
+        // Not enough space on left, position to right of button instead
+        left = rect.left;
+      } else if (left > globalThis.innerWidth - 20) {
+        // Button too far right
+        left = globalThis.innerWidth - 20;
+      }
+      
+      // Constrain vertically
+      if (top + menuHeight > globalThis.innerHeight - 20) {
+        // Not enough space below, show above button
+        const aboveY = rect.top - menuHeight - 4;
+        if (aboveY > 20) {
+          top = aboveY;
+        } else {
+          top = Math.max(20, globalThis.innerHeight - menuHeight - 20);
+        }
+      }
+      
+      setDropdownPosition({ top, left });
+    }
+  }, [isOpen, menuRef.current]);
   
   // Close menu when clicking outside
   useEffect(() => {

@@ -1,11 +1,23 @@
 /**
- * Query DSL Constants
+ * Query DSL Parsing - SINGLE SOURCE OF TRUTH
  * 
  * Schema Authority: /public/schemas/query-dsl-1.0.0.json
  * 
- * This file defines constants derived from the schema.
- * ALL query DSL parsing, validation, and Monaco configuration MUST use these constants.
+ * This file provides the core DSL parsing functions used throughout the codebase:
+ * - parseConstraints(): Parse atomic expressions (visited, context, window, etc.)
+ * - normalizeConstraintString(): Canonical form for comparison/storage
+ * - parseDSL(): Parse full queries (from/to + constraints)
+ * 
+ * For compound expressions (;, or(), parentheses), use dslExplosion.ts which
+ * calls parseConstraints() on each atomic slice.
+ * 
+ * DSL Parsing Architecture:
+ * - queryDSL.ts: Atomic expression parsing (ONE parser for all atomic DSL)
+ * - dslExplosion.ts: Compound → atomic explosion (uses queryDSL.parseConstraints)
+ * - compositeQueryParser.ts: minus/plus handling (uses queryDSL.parseConstraints)
  */
+
+import { formatDateUK } from './dateFormat';
 
 /**
  * Valid query DSL function names.
@@ -19,7 +31,9 @@ export const QUERY_FUNCTIONS = [
   'visitedAny',
   'exclude',
   'context',
+  'contextAny',
   'case',
+  'window',
   'minus',
   'plus'
 ] as const;
@@ -56,7 +70,11 @@ export interface ParsedConstraints {
   context: Array<{key: string; value: string}>;
   cases: Array<{key: string; value: string}>;
   visitedAny: string[][];
+  contextAny: Array<{ pairs: Array<{key: string; value: string}> }>;  // NEW: OR over values within/across keys
+  window: { start?: string; end?: string } | null;  // NEW: Time window for data retrieval
 }
+
+export type ContextCombination = Record<string, string>; // NEW: e.g. {channel: 'google', 'browser-type': 'chrome'}
 
 /**
  * Parsed full query (extends constraints with from/to).
@@ -145,7 +163,9 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
       exclude: [],
       context: [],
       cases: [],
-      visitedAny: []
+      visitedAny: [],
+      contextAny: [],
+      window: null
     };
   }
   
@@ -155,6 +175,8 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
   const context: Array<{key: string; value: string}> = [];
   const cases: Array<{key: string; value: string}> = [];
   const visitedAny: string[][] = [];
+  const contextAny: Array<{ pairs: Array<{key: string; value: string}> }> = [];
+  let window: { start?: string; end?: string } | null = null;
   
   // Match visited(...) - can appear multiple times
   const visitedMatches = constraint.matchAll(/visited\(([^)]+)\)/g);
@@ -170,10 +192,13 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
     exclude.push(...nodes);
   }
   
-  // Match context(key:value)
-  const contextMatches = constraint.matchAll(/context\(([^:]+):([^)]+)\)/g);
+  // Match context(key:value) or context(key) - bare key allowed
+  const contextMatches = constraint.matchAll(/context\(([^:)]+)(?::([^)]+))?\)/g);
   for (const match of contextMatches) {
-    context.push({ key: match[1].trim(), value: match[2].trim() });
+    context.push({ 
+      key: match[1].trim(), 
+      value: match[2] ? match[2].trim() : '' // Empty string if no value (bare key)
+    });
   }
   
   // Match case(key:value)
@@ -200,6 +225,34 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
         visitedAny.push(group);
       }
     }
+  }
+  
+  // Match contextAny(key:val,key:val,...)
+  const contextAnyMatches = constraint.matchAll(/contextAny\(([^)]+)\)/g);
+  for (const match of contextAnyMatches) {
+    const pairStrs = match[1].split(',').map(s => s.trim()).filter(s => s);
+    const pairs: Array<{key: string; value: string}> = [];
+    for (const pairStr of pairStrs) {
+      const colonIndex = pairStr.indexOf(':');
+      if (colonIndex > 0) {
+        pairs.push({
+          key: pairStr.substring(0, colonIndex).trim(),
+          value: pairStr.substring(colonIndex + 1).trim()
+        });
+      }
+    }
+    if (pairs.length > 0) {
+      contextAny.push({ pairs });
+    }
+  }
+  
+  // Match window(start:end)
+  const windowMatch = constraint.match(/window\(([^:]*):([^)]*)\)/);
+  if (windowMatch) {
+    window = {
+      start: windowMatch[1].trim() || undefined,
+      end: windowMatch[2].trim() || undefined
+    };
   }
   
   // Deduplicate visited/exclude preserving order
@@ -247,7 +300,9 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
     exclude: excludeDeduped,
     context: contextDeduped,
     cases: casesDeduped,
-    visitedAny
+    visitedAny,
+    contextAny,
+    window
   };
 }
 
@@ -362,17 +417,18 @@ export function normalizeConstraintString(constraint: string): string {
   const parsed = parseConstraints(constraint);
   const parts: string[] = [];
   
+  // Canonical order: visited, visitedAny, exclude, case, context, contextAny, window
   if (parsed.visited.length > 0) {
     parts.push(`visited(${parsed.visited.sort().join(', ')})`);
   }
+  if (parsed.visitedAny.length > 0) {
+    const visitedAnyParts = parsed.visitedAny.map(group =>
+      `visitedAny(${group.sort().join(', ')})`
+    );
+    parts.push(...visitedAnyParts);
+  }
   if (parsed.exclude.length > 0) {
     parts.push(`exclude(${parsed.exclude.sort().join(', ')})`);
-  }
-  if (parsed.context.length > 0) {
-    const contextParts = parsed.context
-      .sort((a, b) => a.key.localeCompare(b.key))
-      .map(({key, value}) => `context(${key}:${value})`);
-    parts.push(...contextParts);
   }
   if (parsed.cases.length > 0) {
     const caseParts = parsed.cases
@@ -380,11 +436,37 @@ export function normalizeConstraintString(constraint: string): string {
       .map(({key, value}) => `case(${key}:${value})`);
     parts.push(...caseParts);
   }
-  if (parsed.visitedAny.length > 0) {
-    const visitedAnyParts = parsed.visitedAny.map(group =>
-      `visitedAny(${group.sort().join(', ')})`
-    );
-    parts.push(...visitedAnyParts);
+  if (parsed.context.length > 0) {
+    const contextParts = parsed.context
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(({key, value}) => `context(${key}:${value})`);
+    parts.push(...contextParts);
+  }
+  if (parsed.contextAny.length > 0) {
+    for (const ca of parsed.contextAny) {
+      const pairStrs = ca.pairs
+        .map(p => `${p.key}:${p.value}`)
+        .sort();
+      parts.push(`contextAny(${pairStrs.join(',')})`);
+    }
+  }
+  if (parsed.window) {
+    // Normalize dates to d-MMM-yy format (if not relative like -90d)
+    const normalizeWindowDate = (date: string | undefined): string => {
+      if (!date) return '';
+      // If relative offset (e.g., -90d, -30d), keep as-is
+      if (date.match(/^-?\d+[dwmy]$/)) return date;
+      // Otherwise convert to d-MMM-yy
+      try {
+        return formatDateUK(date);
+      } catch {
+        return date; // If parse fails, keep original
+      }
+    };
+    
+    const start = normalizeWindowDate(parsed.window.start);
+    const end = normalizeWindowDate(parsed.window.end);
+    parts.push(`window(${start}:${end})`);
   }
   
   return parts.join('.');
@@ -431,33 +513,46 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
     arr.findIndex(kv2 => kv2.key === kv.key && kv2.value === kv.value) === idx
   );
   const mergedVisitedAny = [...existing.visitedAny, ...newParsed.visitedAny];
+  const mergedContextAny = [...existing.contextAny, ...newParsed.contextAny];
+  // For window: new value replaces existing (last wins)
+  const mergedWindow = newParsed.window || existing.window;
   
-  // Rebuild DSL
+  // Rebuild DSL using normalize (ensures canonical order)
+  const merged: ParsedConstraints = {
+    visited: mergedVisited,
+    exclude: mergedExclude,
+    context: mergedContext,
+    cases: mergedCases,
+    visitedAny: mergedVisitedAny,
+    contextAny: mergedContextAny,
+    window: mergedWindow
+  };
+  
+  // Use normalizeConstraintString to rebuild (ensures canonical order)
   const parts: string[] = [];
   
-  if (mergedCases.length > 0) {
-    const caseParts = mergedCases
-      .sort((a, b) => a.key.localeCompare(b.key))
-      .map(({key, value}) => `case(${key}:${value})`);
-    parts.push(...caseParts);
+  if (merged.visited.length > 0) {
+    parts.push(`visited(${merged.visited.sort().join(', ')})`);
   }
-  if (mergedVisited.length > 0) {
-    parts.push(`visited(${mergedVisited.sort().join(', ')})`);
+  if (merged.visitedAny.length > 0) {
+    parts.push(...merged.visitedAny.map(g => `visitedAny(${g.sort().join(', ')})`));
   }
-  if (mergedExclude.length > 0) {
-    parts.push(`exclude(${mergedExclude.sort().join(', ')})`);
+  if (merged.exclude.length > 0) {
+    parts.push(`exclude(${merged.exclude.sort().join(', ')})`);
   }
-  if (mergedContext.length > 0) {
-    const contextParts = mergedContext
-      .sort((a, b) => a.key.localeCompare(b.key))
-      .map(({key, value}) => `context(${key}:${value})`);
-    parts.push(...contextParts);
+  if (merged.cases.length > 0) {
+    parts.push(...merged.cases.sort((a,b) => a.key.localeCompare(b.key)).map(c => `case(${c.key}:${c.value})`));
   }
-  if (mergedVisitedAny.length > 0) {
-    const visitedAnyParts = mergedVisitedAny.map(group =>
-      `visitedAny(${group.sort().join(', ')})`
-    );
-    parts.push(...visitedAnyParts);
+  if (merged.context.length > 0) {
+    parts.push(...merged.context.sort((a,b) => a.key.localeCompare(b.key)).map(c => `context(${c.key}:${c.value})`));
+  }
+  if (merged.contextAny.length > 0) {
+    for (const ca of merged.contextAny) {
+      parts.push(`contextAny(${ca.pairs.map(p => `${p.key}:${p.value}`).sort().join(',')})`);
+    }
+  }
+  if (merged.window) {
+    parts.push(`window(${merged.window.start || ''}:${merged.window.end || ''})`);
   }
   
   return parts.join('.');

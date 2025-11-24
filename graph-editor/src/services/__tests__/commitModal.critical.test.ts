@@ -141,6 +141,167 @@ describe('CommitModal - Critical Tests', () => {
       
       expect(isCommittable).toBe(true);
     });
+
+    it('should recognize workspace-prefixed event files as committable', async () => {
+      const eventFile = {
+        fileId: 'event-test',
+        type: 'event' as const,
+        data: { id: 'test', name: 'Test Event', event_type: 'user_action' },
+        isDirty: true,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'events/test.yaml' },
+      };
+      
+      (fileRegistry as any).files.set('event-test', eventFile);
+
+      const dirtyFilesFromDB = [
+        {
+          ...eventFile,
+          fileId: 'test-repo-main-event-test', // Workspace-prefixed!
+        },
+      ];
+      
+      (db.files.toArray as any).mockResolvedValue(dirtyFilesFromDB);
+
+      const dirtyFile = dirtyFilesFromDB[0];
+      const isCommittable = (fileRegistry.constructor as any).isFileCommittable(dirtyFile);
+      
+      expect(isCommittable).toBe(true);
+    });
+
+    it('should recognize workspace-prefixed event-index as committable', async () => {
+      const eventIndexFile = {
+        fileId: 'event-index',
+        type: 'event' as const,
+        data: { version: '1.0.0', events: [{ id: 'test', name: 'Test Event' }] },
+        isDirty: true,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'events-index.yaml' },
+      };
+      
+      (fileRegistry as any).files.set('event-index', eventIndexFile);
+
+      const dirtyFilesFromDB = [
+        {
+          ...eventIndexFile,
+          fileId: 'test-repo-main-event-index', // Workspace-prefixed!
+        },
+      ];
+      
+      (db.files.toArray as any).mockResolvedValue(dirtyFilesFromDB);
+
+      const dirtyFile = dirtyFilesFromDB[0];
+      const isCommittable = (fileRegistry.constructor as any).isFileCommittable(dirtyFile);
+      
+      expect(isCommittable).toBe(true);
+    });
+  });
+
+  describe('BUG FIX: updateFile must sync workspace-prefixed version to IndexedDB', () => {
+    it('should update both unprefixed and workspace-prefixed versions when file is edited', async () => {
+      const eventFile = {
+        fileId: 'event-test',
+        type: 'event' as const,
+        data: { id: 'test', name: 'Test Event', event_type: 'user_action' },
+        originalData: { id: 'test', name: 'Test Event', event_type: 'user_action' },
+        isDirty: false,
+        isLoaded: true,
+        isInitializing: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'events/test.yaml' },
+      };
+      
+      (fileRegistry as any).files.set('event-test', eventFile);
+
+      // Simulate editing the file
+      const updatedData = { id: 'test', name: 'Updated Event', event_type: 'conversion' };
+      await fileRegistry.updateFile('event-test', updatedData);
+
+      // Verify db.files.put was called TWICE (unprefixed + prefixed)
+      expect(db.files.put).toHaveBeenCalledTimes(2);
+      
+      // First call: unprefixed version
+      const call1 = (db.files.put as any).mock.calls[0][0];
+      expect(call1.fileId).toBe('event-test');
+      expect(call1.isDirty).toBe(true);
+      
+      // Second call: workspace-prefixed version
+      const call2 = (db.files.put as any).mock.calls[1][0];
+      expect(call2.fileId).toBe('test-repo-main-event-test');
+      expect(call2.isDirty).toBe(true);
+    });
+
+    it('should update both versions when event-index is edited', async () => {
+      const indexFile = {
+        fileId: 'event-index',
+        type: 'event' as const,
+        data: { version: '1.0.0', events: [] },
+        originalData: { version: '1.0.0', events: [] },
+        isDirty: false,
+        isLoaded: true,
+        isInitializing: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'events-index.yaml' },
+      };
+      
+      (fileRegistry as any).files.set('event-index', indexFile);
+
+      // Simulate updating the index
+      const updatedData = { 
+        version: '1.0.0', 
+        events: [{ id: 'test', name: 'Test Event', file_path: 'events/test.yaml' }] 
+      };
+      await fileRegistry.updateFile('event-index', updatedData);
+
+      // Verify db.files.put was called TWICE
+      expect(db.files.put).toHaveBeenCalledTimes(2);
+      
+      // Both versions should be marked dirty
+      const call1 = (db.files.put as any).mock.calls[0][0];
+      expect(call1.fileId).toBe('event-index');
+      expect(call1.isDirty).toBe(true);
+      
+      const call2 = (db.files.put as any).mock.calls[1][0];
+      expect(call2.fileId).toBe('test-repo-main-event-index');
+      expect(call2.isDirty).toBe(true);
+    });
+
+    it('should update both versions even for local repo files', async () => {
+      const localFile = {
+        fileId: 'event-local',
+        type: 'event' as const,
+        data: { id: 'local', name: 'Local Event' },
+        originalData: { id: 'local', name: 'Local Event' },
+        isDirty: false,
+        isLoaded: true,
+        isInitializing: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'local', branch: 'main', path: 'events/local.yaml' },
+      };
+      
+      (fileRegistry as any).files.set('event-local', localFile);
+
+      const updatedData = { id: 'local', name: 'Updated Local Event' };
+      await fileRegistry.updateFile('event-local', updatedData);
+
+      // Should call db.files.put TWICE (even 'local' repo uses workspace prefixing)
+      expect(db.files.put).toHaveBeenCalledTimes(2);
+      
+      const call1 = (db.files.put as any).mock.calls[0][0];
+      expect(call1.fileId).toBe('event-local');
+      expect(call1.isDirty).toBe(true);
+      
+      const call2 = (db.files.put as any).mock.calls[1][0];
+      expect(call2.fileId).toBe('local-main-event-local');
+      expect(call2.isDirty).toBe(true);
+    });
   });
 });
 

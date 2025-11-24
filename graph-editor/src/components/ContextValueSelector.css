@@ -1,0 +1,128 @@
+.context-value-selector {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 280px;
+  max-width: 400px;
+}
+
+.context-selector-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f8f8f8;
+}
+
+.context-selector-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #374151;
+}
+
+.context-selector-body {
+  padding: 4px;
+  max-height: 450px;
+  overflow-y: auto;
+}
+
+.context-value-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background-color 0.15s;
+  margin: 2px 0;
+}
+
+.context-value-option:hover {
+  background: #f3f4f6;
+}
+
+.context-value-option input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+.context-value-label {
+  font-size: 13px;
+  color: #374151;
+  user-select: none;
+}
+
+.context-selector-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid #e0e0e0;
+  justify-content: flex-end;
+}
+
+.context-selector-apply,
+.context-selector-cancel {
+  padding: 6px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.context-selector-apply {
+  background: #1976d2;
+  color: white;
+  border: 1px solid #1976d2;
+}
+
+.context-selector-apply:hover {
+  background: #1565c0;
+}
+
+.context-selector-cancel {
+  background: white;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
+
+.context-selector-cancel:hover {
+  background: #f3f4f6;
+}
+
+/* Accordion sections for multi-key mode */
+.context-key-section {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.context-key-section:last-child {
+  border-bottom: none;
+}
+
+.context-key-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: white;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  transition: background-color 0.15s;
+  text-align: left;
+}
+
+.context-key-header:hover {
+  background: #f9fafb;
+}
+
+.context-key-header.expanded {
+  background: #f3f4f6;
+}
+
+.context-key-values {
+  padding: 4px 0 4px 28px;
+}
+

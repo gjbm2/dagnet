@@ -25,8 +25,8 @@ describe('Query DSL Constants', () => {
   // ============================================================
 
   describe('Schema Authority', () => {
-    it('should have exactly 9 functions', () => {
-      expect(QUERY_FUNCTIONS).toHaveLength(9);
+    it('should have exactly 11 functions', () => {
+      expect(QUERY_FUNCTIONS).toHaveLength(11);
     });
 
     it('should contain all required functions in correct order', () => {
@@ -37,7 +37,9 @@ describe('Query DSL Constants', () => {
         'visitedAny',
         'exclude',
         'context',
+        'contextAny',
         'case',
+        'window',
         'minus',
         'plus'
       ]);
@@ -49,7 +51,7 @@ describe('Query DSL Constants', () => {
       // This test just verifies the array exists and has the right type
       const arr: readonly string[] = QUERY_FUNCTIONS;
       expect(arr).toBeDefined();
-      expect(arr.length).toBe(9);
+      expect(arr.length).toBe(11);
     });
 
     it('should match schema definition exactly', () => {
@@ -62,7 +64,7 @@ describe('Query DSL Constants', () => {
       const schemaFunctions = schema.$defs?.QueryFunction?.properties?.name?.enum;
       
       expect(schemaFunctions).toBeDefined();
-      expect(schemaFunctions).toHaveLength(9);
+      expect(schemaFunctions).toHaveLength(11); // Updated: added contextAny and window
       
       // Check that all schema functions are in QUERY_FUNCTIONS
       schemaFunctions.forEach((func: string) => {
@@ -120,7 +122,7 @@ describe('Query DSL Constants', () => {
       
       expect(functionSet.has('from')).toBe(true);
       expect(functionSet.has('invalid' as any)).toBe(false);
-      expect(functionSet.size).toBe(9);
+      expect(functionSet.size).toBe(11);
       
       const filtered = functionsCopy.filter(f => f.startsWith('c'));
       expect(filtered).toContain('context');
@@ -141,16 +143,18 @@ describe('Query DSL Constants', () => {
       expect(QUERY_FUNCTIONS[3]).toBe('visitedAny');
       expect(QUERY_FUNCTIONS[4]).toBe('exclude');
       expect(QUERY_FUNCTIONS[5]).toBe('context');
-      expect(QUERY_FUNCTIONS[6]).toBe('case');
-      expect(QUERY_FUNCTIONS[7]).toBe('minus');
-      expect(QUERY_FUNCTIONS[8]).toBe('plus');
+      expect(QUERY_FUNCTIONS[6]).toBe('contextAny');
+      expect(QUERY_FUNCTIONS[7]).toBe('case');
+      expect(QUERY_FUNCTIONS[8]).toBe('window');
+      expect(QUERY_FUNCTIONS[9]).toBe('minus');
+      expect(QUERY_FUNCTIONS[10]).toBe('plus');
     });
 
     it('should be importable consistently', () => {
       // Verify the constant can be imported and used
       expect(QUERY_FUNCTIONS).toBeDefined();
       expect(Array.isArray(QUERY_FUNCTIONS)).toBe(true);
-      expect(QUERY_FUNCTIONS.length).toBe(9);
+      expect(QUERY_FUNCTIONS.length).toBe(11);
     });
   });
 
@@ -334,14 +338,18 @@ describe('DSL Parsing Functions', () => {
         exclude: [],
         context: [],
         cases: [],
-        visitedAny: []
+        visitedAny: [],
+        contextAny: [],
+        window: null
       });
       expect(parseConstraints(undefined)).toEqual({
         visited: [],
         exclude: [],
         context: [],
         cases: [],
-        visitedAny: []
+        visitedAny: [],
+        contextAny: [],
+        window: null
       });
     });
 

@@ -226,8 +226,16 @@ class FileRegistry {
       }
     }
 
-    // Update in IndexedDB
+    // Update in IndexedDB - need to update BOTH prefixed and unprefixed versions
+    // Unprefixed version (used by FileRegistry)
     await db.files.put(file);
+    
+    // Also update prefixed version if it exists (used by workspace loading/commit)
+    if (file.source?.repository && file.source?.branch) {
+      const prefixedId = `${file.source.repository}-${file.source.branch}-${fileId}`;
+      const prefixedFile = { ...file, fileId: prefixedId };
+      await db.files.put(prefixedFile);
+    }
 
     // Notify all listeners
     this.notifyListeners(fileId, file);
@@ -251,8 +259,16 @@ class FileRegistry {
     console.log(`FileRegistry: Completing initialization for ${fileId}`);
     file.isInitializing = false;
     
-    // Update in IndexedDB
+    // Update in IndexedDB - need to update BOTH prefixed and unprefixed versions
+    // Unprefixed version (used by FileRegistry)
     await db.files.put(file);
+    
+    // Also update prefixed version if it exists (used by workspace loading/commit)
+    if (file.source?.repository && file.source?.branch) {
+      const prefixedId = `${file.source.repository}-${file.source.branch}-${fileId}`;
+      const prefixedFile = { ...file, fileId: prefixedId };
+      await db.files.put(prefixedFile);
+    }
     
     // Notify listeners of state change
     this.notifyListeners(fileId, file);
@@ -279,7 +295,7 @@ class FileRegistry {
     if (file.data) {
       if (file.type === 'graph' && file.data.metadata) {
         file.data.metadata.updated = nowISO;
-      } else if (file.type === 'parameter' || file.type === 'context' || file.type === 'case' || file.type === 'node') {
+      } else if (file.type === 'parameter' || file.type === 'context' || file.type === 'case' || file.type === 'node' || file.type === 'event') {
         file.data.updated_at = nowISO;
       }
     }

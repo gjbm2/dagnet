@@ -12,6 +12,7 @@
 
 import type { TimeSeriesPoint, DateRange } from '../types';
 import type { ParameterValue } from './paramRegistryService';
+import { isolateSlice } from './sliceIsolation';
 
 export interface RawAggregation {
   method: 'naive';
@@ -616,7 +617,8 @@ export function calculateIncrementalFetch(
   paramFileData: { values?: ParameterValue[] },
   requestedWindow: DateRange,
   querySignature?: string,
-  bustCache: boolean = false
+  bustCache: boolean = false,
+  targetSlice: string = ''  // NEW: Slice DSL to isolate (default '' = uncontexted)
 ): IncrementalFetchResult {
   // Normalize requested window dates
   const normalizedWindow: DateRange = {
@@ -629,12 +631,10 @@ export function calculateIncrementalFetch(
   
   // If bustCache is true, skip checking existing dates
   if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
-    for (const value of paramFileData.values) {
-      // If query signature is provided, only consider matching values
-      if (querySignature && value.query_signature !== querySignature) {
-        continue;
-      }
-      
+    // CRITICAL: Isolate to target slice first
+    const sliceValues = isolateSlice(paramFileData.values, targetSlice);
+    
+    for (const value of sliceValues) {
       // Extract dates from this value entry
       if (value.dates && Array.isArray(value.dates)) {
         for (const date of value.dates) {

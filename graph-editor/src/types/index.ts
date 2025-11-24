@@ -605,6 +605,14 @@ export interface ConversionGraph {
   policies: Policies;
   metadata: Metadata;
   postits?: PostIt[];
+  
+  // Contexts: Data interests specification for nightly runner
+  dataInterestsDSL?: string; // Query template (e.g., "context(channel);context(browser-type).window(-90d:)")
+                              // Drives which slices the nightly runner will fetch and cache
+  
+  // Contexts: Current query state for UI persistence
+  currentQueryDSL?: string; // Current user query (e.g., "context(channel:google).window(1-Jan-25:31-Mar-25)")
+                             // Persisted so graph reopens with same query state
 }
 
 export type Graph = ConversionGraph;

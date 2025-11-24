@@ -439,11 +439,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
     // Clear FileRegistry before loading new workspace to prevent file ID collisions
     // Files from different repos can have same IDs (e.g. parameter-checkout-duration)
-    console.log(`🧹 WorkspaceService: Clearing FileRegistry before loading ${repo}/${branch}`);
+    console.log(`🧹 NavigatorContext: Clearing FileRegistry before loading ${repo}/${branch}`);
     const registrySize = (fileRegistry as any).files.size;
+    const filesBefore = Array.from((fileRegistry as any).files.keys());
     (fileRegistry as any).files.clear();
     (fileRegistry as any).listeners.clear();
-    console.log(`🧹 WorkspaceService: Cleared ${registrySize} files from FileRegistry`);
+    console.log(`🧹 NavigatorContext: Cleared ${registrySize} files from FileRegistry:`, filesBefore);
 
     try {
       // Get credentials
@@ -490,12 +491,14 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
       // Check if workspace exists
       const workspaceExists = await workspaceService.workspaceExists(repo, branch);
+      console.log(`🔍 NavigatorContext: Workspace ${repo}/${branch} exists: ${workspaceExists}`);
 
       if (!workspaceExists) {
-        console.log(`🔄 WorkspaceService: Workspace ${repo}/${branch} doesn't exist, cloning...`);
+        console.log(`🔄 NavigatorContext: Workspace ${repo}/${branch} doesn't exist, cloning from repository...`);
         await workspaceService.cloneWorkspace(repo, branch, gitCreds);
+        console.log(`✅ NavigatorContext: Clone complete for ${repo}/${branch}`);
       } else {
-        console.log(`📦 WorkspaceService: Workspace ${repo}/${branch} exists, loading from IDB...`);
+        console.log(`📦 NavigatorContext: Workspace ${repo}/${branch} exists, loading from IDB...`);
         await workspaceService.loadWorkspaceFromIDB(repo, branch);
       }
 

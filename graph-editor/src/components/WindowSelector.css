@@ -4,21 +4,28 @@
   left: 16px;
   z-index: 55; /* Above scenario legend chips (z-index: 50) but below sidebar (z-index: 100) */
   pointer-events: auto;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  border: 1px solid #e0e0e0;
 }
 
 .window-selector-content {
   display: flex;
   align-items: center;
   gap: 8px; /* Constant gap - never changes */
-  background: white;
   padding: 8px 12px;
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  border: 1px solid #e0e0e0;
   transition: padding 0.3s ease, max-width 0.3s ease;
   overflow: visible; /* Allow date picker dropdown to show */
-  width: fit-content; /* Allow width to grow/shrink smoothly */
-  max-width: fit-content; /* Ensure it can shrink */
+}
+
+.window-selector-extended {
+  border-top: 1px solid #e0e0e0;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fafafa;
 }
 
 .window-selector-compact .window-selector-content {
