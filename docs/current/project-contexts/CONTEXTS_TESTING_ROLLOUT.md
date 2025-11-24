@@ -347,6 +347,11 @@ Test that `generateMissingSubqueries` correctly identifies gaps in the 2D grid:
 
 ### Phase 2: Data Operations Refactoring (CRITICAL) ⚠️
 
+**Risk Mitigation**: Phase 2 blocks Phase 3. To reduce delay risk:
+- Break into sub-releases: Tasks 2.1-2.2 (refactoring) merge separately from 2.4 (new aggregation)
+- Phase 3 can start after 2.1-2.2 complete (basic chip rendering doesn't need full MECE logic)
+- Allocate 2-3 senior engineers to Phase 2 exclusively
+
 **Existing Code Updates** (to fix signature/indexing conflation):
 
 1. **`dataOperationsService.ts`** (~200 lines affected, lines 2100-2300):
