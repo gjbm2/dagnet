@@ -120,11 +120,21 @@
 - whatif layer: prob needs is own layer in the palette really for clarity...
 - auto-reroute still stubborn
 - let's change the paramster keycolour to pink and nodes from blue to...something else that isn't orange or bright blue...cyan? That will help oragne and blue for dirty/open.
-- flickering when moving nodes (chevrons render a frame later)
-- 'show travel' chevrons along edges moving at log lag speed
 - put outbound probs. left aligned in edge; arriving prob mix. right aligned in edge
 - main app tabs are showing maximise button even when they're maximised, it seems
 - maxmised tabs are appearing on top (zorder) of navigator button (incorrect)
 - maximised tabs in main app are not reflecting padding
 - somewhere along the line we lose animations on edge width changes, which is sad
 - Sankey mode and normal view use diff code paths for mass infernece; hence sankey requires start node to work -- weird glitch
+
+
+
+Post Its:
+
+Need some mild 'is selected' state visual treatment
+let's have text inside the post-it in a script font 
+but not the text inside the Text field on the Post It props panel (there is hould be normal sans serif)
+Let's add font size for Post Its S M L XL; default to Medium which should be a bit smaller than what we currently have. We can expose that on Post It props
+handle needs to be dragable
+a light drop shadow prob. appropriate
+

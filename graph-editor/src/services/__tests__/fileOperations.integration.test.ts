@@ -319,7 +319,6 @@ describe('File Operations Integration Tests', () => {
 
       const result = await fileOperationsService.openFile({
         id: 'missing',
-        fileId: 'parameter-missing',
         type: 'parameter',
         name: 'missing.yaml',
         path: 'parameters/missing.yaml',

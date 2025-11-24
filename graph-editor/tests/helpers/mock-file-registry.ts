@@ -37,20 +37,28 @@ export class MockFileRegistry {
   /**
    * Create or update a file
    */
-  async updateFile(fileId: string, data: any): Promise<void> {
+  async updateFile(fileId: string, data: any, isDirty?: boolean): Promise<void> {
     const existing = this.files.get(fileId);
+    
+    // Extract isDirty from data if it's there (for test convenience)
+    // Otherwise use the parameter, or default to true
+    const dirtyFlag = isDirty !== undefined ? isDirty : (data.isDirty !== undefined ? data.isDirty : true);
+    
+    // Remove isDirty from data if it was there (it's not part of file data)
+    const cleanData = { ...data };
+    delete cleanData.isDirty;
     
     const file: MockFile = {
       fileId,
       type: this.inferType(fileId),
-      data,
-      originalData: existing?.originalData || data,
-      isDirty: true,
+      data: cleanData,
+      originalData: existing?.originalData || cleanData,
+      isDirty: dirtyFlag,
       lastModified: new Date().toISOString()
     };
 
     this.files.set(fileId, file);
-    this.recordOperation('update', fileId, data);
+    this.recordOperation('update', fileId, cleanData);
     this.notifyListeners(fileId, file);
   }
 

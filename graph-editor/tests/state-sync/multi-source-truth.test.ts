@@ -124,6 +124,7 @@ describe('State Synchronization: Sources of Truth', () => {
       fileId: 'parameter-test-param',
       data: {
         id: 'test-param',
+        type: 'probability',
         query: 'from(a).to(b)',
         values: [{
           date: '2025-01-13',

@@ -29,7 +29,7 @@ vi.mock('../../db/appDatabase', () => ({
         lastSynced: Date.now(),
       }),
     },
-    getDirtyFiles: vi.fn(async function() {
+    getDirtyFiles: vi.fn(async function(this: any) {
       const allFiles = await this.files.toArray();
       return allFiles.filter((f: any) => f.isDirty);
     }),
