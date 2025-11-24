@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import YAML from 'yaml';
 import { useTabContext } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
+import { useDialog } from '../contexts/DialogContext';
 import { RepositoryItem, ObjectType } from '../types';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { CommitModal } from './CommitModal';
@@ -11,6 +12,7 @@ import { NewFileModal } from './NewFileModal';
 import { gitService } from '../services/gitService';
 import { fileRegistry } from '../contexts/TabContext';
 import { fileOperationsService } from '../services/fileOperationsService';
+import { repositoryOperationsService } from '../services/repositoryOperationsService';
 
 interface NavigatorItemContextMenuProps {
   item: RepositoryItem;
@@ -25,6 +27,7 @@ interface NavigatorItemContextMenuProps {
 export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemContextMenuProps) {
   const { tabs, operations } = useTabContext();
   const { state: navState, operations: navOps } = useNavigatorContext();
+  const { showConfirm } = useDialog();
   
   // Check if this item has any open tabs
   const fileId = `${item.type}-${item.id}`;
@@ -46,79 +49,8 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
 
   const handleCommitFiles = async (files: any[], message: string, branch: string) => {
     try {
-      // Load credentials to get repo info
-      const { credentialsManager } = await import('../lib/credentials');
-      const credentialsResult = await credentialsManager.loadCredentials();
-      
-      if (!credentialsResult.success || !credentialsResult.credentials) {
-        throw new Error('No credentials available. Please configure credentials first.');
-      }
-
-      // Get credentials for selected repo
-      const selectedRepo = navState.selectedRepo;
-      const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
-      
-      if (!gitCreds) {
-        throw new Error(`No credentials found for repository ${selectedRepo}`);
-      }
-
-      // Set credentials on gitService with selected repo as default
-      const credentialsWithRepo = {
-        ...credentialsResult.credentials,
-        defaultGitRepo: selectedRepo
-      };
-      gitService.setCredentials(credentialsWithRepo);
-
-      // IMPORTANT: Update file timestamps BEFORE committing to Git
-      const nowISO = new Date().toISOString();
-      const filesToCommit = files.map(file => {
-        // Get the file from registry to update its metadata
-        const fileState = fileRegistry.getFile(file.fileId);
-        let content = file.content;
-        
-        // Update timestamp in the file content itself (standardized metadata structure)
-        if (fileState?.data) {
-          // All file types now use metadata.updated_at
-          if (!fileState.data.metadata) {
-            fileState.data.metadata = {
-              created_at: nowISO,
-              version: '1.0.0'
-            };
-          }
-          fileState.data.metadata.updated_at = nowISO;
-          
-          // Set author from credentials userName if available
-          if (gitCreds?.userName && !fileState.data.metadata.author) {
-            fileState.data.metadata.author = gitCreds.userName;
-          }
-          
-          // Re-serialize with updated timestamp
-          content = fileState.type === 'graph' 
-            ? JSON.stringify(fileState.data, null, 2)
-            : YAML.stringify(fileState.data);
-        }
-        
-        const basePath = gitCreds.basePath || '';
-        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
-        return {
-          path: fullPath,
-          content,
-          sha: file.sha
-        };
-      });
-
-      const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
-      if (result.success) {
-        console.log('Commit successful:', result.message);
-        // Mark files as saved
-        for (const file of files) {
-          const fileId = file.fileId;
-          await fileRegistry.markSaved(fileId);
-        }
-        // TODO: Refresh navigator - for now just log success
-      } else {
-        throw new Error(result.error || 'Failed to commit files');
-      }
+      const { repositoryOperationsService } = await import('../services/repositoryOperationsService');
+      await repositoryOperationsService.commitFiles(files, message, branch, navState.selectedRepo, showConfirm);
     } catch (error) {
       throw error; // Re-throw to be handled by CommitModal
     }
@@ -219,7 +151,18 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     if (fileRegistry.isFileCommittableById(fileId)) {
       items.push({
         label: 'Commit This File...',
-        onClick: () => {
+        onClick: async () => {
+          // Check remote status first
+          const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
+            navState.selectedRepo,
+            navState.selectedBranch,
+            showConfirm,
+            toast.loading,
+            toast.dismiss
+          );
+          
+          if (!shouldProceed) return;
+          
           // Open commit modal for this specific file
           setCommitModalPreselectedFiles([fileId]);
           setIsCommitModalOpen(true);
@@ -229,7 +172,18 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     }
     items.push({
       label: 'Commit All Changes...',
-      onClick: () => {
+      onClick: async () => {
+        // Check remote status first
+        const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
+          navState.selectedRepo,
+          navState.selectedBranch,
+          showConfirm,
+          toast.loading,
+          toast.dismiss
+        );
+        
+        if (!shouldProceed) return;
+        
         // Open commit modal for all dirty files
         setCommitModalPreselectedFiles([]);
         setIsCommitModalOpen(true);

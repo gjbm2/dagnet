@@ -133,41 +133,16 @@ export function FileMenu() {
     if (!fileRegistry.isFileCommittableById(activeTab.fileId)) return;
     
     try {
-      // Check if remote is ahead before committing
-      const { credentialsManager } = await import('../../lib/credentials');
-      const credsResult = await credentialsManager.loadCredentials();
+      // Check remote status (centralized in service)
+      const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
+        navState.selectedRepo,
+        navState.selectedBranch,
+        showConfirm,
+        toast.loading,
+        toast.dismiss
+      );
       
-      if (credsResult.success && credsResult.credentials) {
-        const gitCreds = credsResult.credentials.git.find(cred => cred.name === navState.selectedRepo);
-        
-        if (gitCreds) {
-          const toastId = toast.loading('Checking remote status...');
-          const remoteStatus = await workspaceService.checkRemoteAhead(
-            navState.selectedRepo,
-            navState.selectedBranch,
-            gitCreds
-          );
-          toast.dismiss(toastId);
-          
-          if (remoteStatus.isAhead) {
-            const confirmed = await showConfirm({
-              title: 'Remote Has Changes',
-              message: 
-                `The remote repository has changes you don't have:\n\n` +
-                `• ${remoteStatus.filesChanged} file(s) changed\n` +
-                `• ${remoteStatus.filesAdded} file(s) added\n` +
-                `• ${remoteStatus.filesDeleted} file(s) deleted\n\n` +
-                `It's recommended to pull first to avoid conflicts.\n\n` +
-                `Commit anyway?`,
-              confirmLabel: 'Commit Anyway',
-              cancelLabel: 'Pull First',
-              confirmVariant: 'danger'
-            });
-            
-            if (!confirmed) return;
-          }
-        }
-      }
+      if (!shouldProceed) return;
       
       // Open commit modal with ONLY current file pre-selected
       setCommitModalPreselectedFiles([activeTab.fileId]);
@@ -181,41 +156,16 @@ export function FileMenu() {
   const handleCommitAllChanges = async () => {
     // Commit ALL dirty files
     try {
-      // Check if remote is ahead before committing
-      const { credentialsManager } = await import('../../lib/credentials');
-      const credsResult = await credentialsManager.loadCredentials();
+      // Check remote status (centralized in service)
+      const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
+        navState.selectedRepo,
+        navState.selectedBranch,
+        showConfirm,
+        toast.loading,
+        toast.dismiss
+      );
       
-      if (credsResult.success && credsResult.credentials) {
-        const gitCreds = credsResult.credentials.git.find(cred => cred.name === navState.selectedRepo);
-        
-        if (gitCreds) {
-          const toastId = toast.loading('Checking remote status...');
-          const remoteStatus = await workspaceService.checkRemoteAhead(
-            navState.selectedRepo,
-            navState.selectedBranch,
-            gitCreds
-          );
-          toast.dismiss(toastId);
-          
-          if (remoteStatus.isAhead) {
-            const confirmed = await showConfirm({
-              title: 'Remote Has Changes',
-              message: 
-                `The remote repository has changes you don't have:\n\n` +
-                `• ${remoteStatus.filesChanged} file(s) changed\n` +
-                `• ${remoteStatus.filesAdded} file(s) added\n` +
-                `• ${remoteStatus.filesDeleted} file(s) deleted\n\n` +
-                `It's recommended to pull first to avoid conflicts.\n\n` +
-                `Commit anyway?`,
-              confirmLabel: 'Commit Anyway',
-              cancelLabel: 'Pull First',
-              confirmVariant: 'danger'
-            });
-            
-            if (!confirmed) return;
-          }
-        }
-      }
+      if (!shouldProceed) return;
       
       // Open commit modal for ALL dirty files
       setCommitModalPreselectedFiles([]); // Empty means select all dirty files
@@ -278,52 +228,7 @@ export function FileMenu() {
 
   const handleCommitFiles = async (files: any[], message: string, branch: string) => {
     try {
-      // Load credentials to get repo info
-      const { credentialsManager } = await import('../../lib/credentials');
-      const credentialsResult = await credentialsManager.loadCredentials();
-      
-      if (!credentialsResult.success || !credentialsResult.credentials) {
-        throw new Error('No credentials available. Please configure credentials first.');
-      }
-
-      // Get credentials for selected repo
-      const selectedRepo = navState.selectedRepo;
-      const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
-      
-      if (!gitCreds) {
-        throw new Error(`No credentials found for repository ${selectedRepo}`);
-      }
-
-      // Set credentials on gitService with selected repo as default
-      const credentialsWithRepo = {
-        ...credentialsResult.credentials,
-        defaultGitRepo: selectedRepo
-      };
-      gitService.setCredentials(credentialsWithRepo);
-
-      // Prepare files with proper paths including basePath
-      const filesToCommit = files.map(file => {
-        const basePath = gitCreds.basePath || '';
-        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
-        return {
-          path: fullPath,
-          content: file.content,
-          sha: file.sha
-        };
-      });
-
-      const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
-      if (result.success) {
-        console.log('Commit successful:', result.message);
-        // Mark files as saved
-        for (const file of files) {
-          const fileId = file.fileId;
-          await fileRegistry.markSaved(fileId);
-        }
-        // TODO: Refresh navigator - for now just log success
-      } else {
-        throw new Error(result.error || 'Failed to commit files');
-      }
+      await repositoryOperationsService.commitFiles(files, message, branch, navState.selectedRepo, showConfirm);
     } catch (error) {
       throw error; // Re-throw to be handled by CommitModal
     }
