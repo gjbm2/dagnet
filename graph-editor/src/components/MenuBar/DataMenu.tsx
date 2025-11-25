@@ -4,6 +4,7 @@ import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
 import { BatchOperationsModal } from '../modals/BatchOperationsModal';
+import { AllSlicesModal } from '../modals/AllSlicesModal';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import type { BatchOperationType } from '../modals/BatchOperationsModal';
@@ -158,6 +159,18 @@ export function DataMenu() {
   // Batch operations state
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchOperationType, setBatchOperationType] = useState<BatchOperationType | null>(null);
+  
+  // All slices modal state
+  const [allSlicesModalOpen, setAllSlicesModalOpen] = useState(false);
+  
+  // All Slices handler
+  const handleRetrieveAllSlices = () => {
+    if (!graph?.dataInterestsDSL) {
+      toast.error('No pinned data interests DSL defined. Set one via the Window Selector.');
+      return;
+    }
+    setAllSlicesModalOpen(true);
+  };
   
   // Batch operations handlers
   const handleGetAllFromFiles = () => {
@@ -336,33 +349,44 @@ export function DataMenu() {
         </Menubar.Trigger>
         <Menubar.Portal>
           <Menubar.Content className="menubar-content" align="start">
-          {/* Batch operations */}
+          {/* Retrieve All Slices - at top */}
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={handleRetrieveAllSlices}
+            disabled={!isGraphTab || !graph?.dataInterestsDSL}
+          >
+            Retrieve All Slices...
+          </Menubar.Item>
+          
+          <Menubar.Separator className="menubar-separator" />
+          
+          {/* Batch operations for current slice */}
           <Menubar.Item 
             className="menubar-item" 
             onSelect={handleGetAllFromFiles}
           >
-            Get All from Files...
+            Get all for current slice from Files...
           </Menubar.Item>
           
           <Menubar.Item 
             className="menubar-item" 
             onSelect={handleGetAllFromSources}
           >
-            Get All from Sources...
+            Get all for current slice from Sources...
           </Menubar.Item>
           
           <Menubar.Item 
             className="menubar-item" 
             onSelect={handleGetAllFromSourcesDirect}
           >
-            Get All from Sources (direct)...
+            Get all for current slice from Sources (direct)...
           </Menubar.Item>
           
           <Menubar.Item 
             className="menubar-item" 
             onSelect={handlePutAllToFiles}
           >
-            Put All to Files...
+            Put all for current slice to Files...
           </Menubar.Item>
           
           <Menubar.Separator className="menubar-separator" />
@@ -523,6 +547,17 @@ export function DataMenu() {
           setBatchOperationType(null);
         }}
         operationType={batchOperationType}
+        graph={graph || null}
+        setGraph={handleSetGraph}
+        window={windowState}
+      />
+    )}
+    
+    {/* All Slices Modal - only render when open */}
+    {allSlicesModalOpen && (
+      <AllSlicesModal
+        isOpen={allSlicesModalOpen}
+        onClose={() => setAllSlicesModalOpen(false)}
         graph={graph || null}
         setGraph={handleSetGraph}
         window={windowState}

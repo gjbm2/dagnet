@@ -9,6 +9,7 @@ import { db } from '../db/appDatabase';
 import YAML from 'yaml';
 import toast from 'react-hot-toast';
 import type { MergeConflict } from './workspaceService';
+import { sessionLogService } from './sessionLogService';
 
 export class ConflictResolutionService {
   /**
@@ -23,6 +24,8 @@ export class ConflictResolutionService {
     resolutions: Map<string, 'local' | 'remote' | 'manual'>
   ): Promise<number> {
     console.log('🔀 ConflictResolutionService: Applying resolutions:', resolutions);
+    sessionLogService.info('merge', 'MERGE_RESOLVE', `Resolving ${conflicts.length} merge conflict(s)`,
+      undefined, { conflicts: conflicts.map(c => c.fileName) });
     
     let resolvedCount = 0;
     
@@ -80,6 +83,17 @@ export class ConflictResolutionService {
     }
 
     console.log(`✅ ConflictResolutionService: Resolved ${resolvedCount} conflicts`);
+    
+    if (resolvedCount > 0) {
+      // Count resolution types
+      const localCount = Array.from(resolutions.values()).filter(r => r === 'local').length;
+      const remoteCount = Array.from(resolutions.values()).filter(r => r === 'remote').length;
+      const manualCount = Array.from(resolutions.values()).filter(r => r === 'manual').length;
+      
+      sessionLogService.success('merge', 'MERGE_RESOLVE_SUCCESS', `Resolved ${resolvedCount} conflict(s)`,
+        `Local: ${localCount}, Remote: ${remoteCount}, Manual: ${manualCount}`);
+    }
+    
     return resolvedCount;
   }
 }

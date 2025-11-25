@@ -4,6 +4,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { WorkspaceState, FileState, ObjectType } from '../types';
 import YAML from 'yaml';
 import { merge3Way } from './mergeService';
+import { sessionLogService } from './sessionLogService';
 
 export interface RemoteStatus {
   isAhead: boolean;
@@ -196,6 +197,15 @@ class WorkspaceService {
   async cloneWorkspace(repository: string, branch: string, gitCreds: any): Promise<WorkspaceState> {
     const workspaceId = `${repository}-${branch}`;
     console.log(`🚀 WorkspaceService: Cloning workspace ${workspaceId} (using Tree API)...`);
+    
+    // Start hierarchical log for clone operation
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'git',
+      'GIT_CLONE',
+      `Cloning workspace ${repository}/${branch} from GitHub`,
+      { repository, branch }
+    );
 
     // Create workspace record
     const workspace: WorkspaceState = {
@@ -428,6 +438,19 @@ class WorkspaceService {
       console.log(`⚡ WorkspaceService: Clone complete in ${elapsed}ms! ${fileIds.length} files loaded`);
       console.log(`📊 WorkspaceService: Files by type: ${typeSummary}`);
       console.log(`📊 WorkspaceService: FileRegistry now has ${registryCount} files in memory`);
+      
+      // Log each file type as child operations
+      for (const [type, count] of filesByType.entries()) {
+        const filesOfType = fileIds.filter(id => id.startsWith(`${type}-`));
+        sessionLogService.addChild(
+          logOpId,
+          'success',
+          `CLONE_${type.toUpperCase()}`,
+          `Cloned ${count} ${type} file(s)`,
+          filesOfType.join(', '),
+          { fileType: type, filesAffected: filesOfType }
+        );
+      }
 
       // STEP 4: Fetch and store images
       console.log(`🖼️ WorkspaceService: Fetching images...`);
@@ -471,6 +494,17 @@ class WorkspaceService {
       }
       
       console.log(`✅ WorkspaceService: Stored ${images.length} images in IDB`);
+      
+      if (images.length > 0) {
+        sessionLogService.addChild(
+          logOpId,
+          'success',
+          'CLONE_IMAGES',
+          `Cloned ${images.length} image(s)`,
+          images.map(img => img.name).join(', '),
+          { fileType: 'image', filesAffected: images.map(img => img.name) }
+        );
+      }
 
       // Update workspace record
       workspace.fileIds = fileIds;
@@ -479,15 +513,26 @@ class WorkspaceService {
       delete workspace.cloneError;
       
       await db.workspaces.put(workspace);
+      
+      // End hierarchical log
+      sessionLogService.endOperation(
+        logOpId,
+        'success',
+        `Clone complete: ${fileIds.length} files + ${images.length} images in ${elapsed}ms`,
+        { repository, branch, filesAffected: fileIds, duration: elapsed }
+      );
 
       return workspace;
 
     } catch (error) {
       console.error(`❌ WorkspaceService: Clone failed:`, error);
       
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      sessionLogService.endOperation(logOpId, 'error', `Clone failed: ${errorMessage}`);
+      
       // Update workspace with error
       workspace.isCloning = false;
-      workspace.cloneError = error instanceof Error ? error.message : 'Unknown error';
+      workspace.cloneError = errorMessage;
       await db.workspaces.put(workspace);
       
       throw error;
@@ -502,9 +547,19 @@ class WorkspaceService {
   async loadWorkspaceFromIDB(repository: string, branch: string): Promise<WorkspaceState> {
     const workspaceId = `${repository}-${branch}`;
     console.log(`📦 WorkspaceService: Loading workspace ${workspaceId} from IndexedDB...`);
+    
+    // Start hierarchical log for workspace load
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'workspace',
+      'WORKSPACE_LOAD_CACHE',
+      `Loading workspace ${repository}/${branch} from local cache`,
+      { repository, branch }
+    );
 
     const workspace = await db.workspaces.get(workspaceId);
     if (!workspace) {
+      sessionLogService.endOperation(logOpId, 'error', `Workspace ${workspaceId} not found in cache`);
       throw new Error(`Workspace ${workspaceId} not found in IndexedDB`);
     }
 
@@ -521,6 +576,26 @@ class WorkspaceService {
       path: f.source?.path,
       isDirty: f.isDirty
     })));
+    
+    // Group files by type for logging
+    const filesByType: Record<string, string[]> = {};
+    for (const file of files) {
+      const type = file.type || 'unknown';
+      if (!filesByType[type]) filesByType[type] = [];
+      filesByType[type].push(file.source?.path || file.fileId);
+    }
+    
+    // Log each file type group
+    for (const [type, paths] of Object.entries(filesByType)) {
+      sessionLogService.addChild(
+        logOpId,
+        'info',
+        `LOAD_${type.toUpperCase()}`,
+        `Loaded ${paths.length} ${type} file(s)`,
+        paths.join(', '),
+        { fileType: type, filesAffected: paths }
+      );
+    }
 
     // Load all files into FileRegistry memory
     // Group by actualFileId to handle duplicates (keep most recent)
@@ -569,6 +644,18 @@ class WorkspaceService {
     }
     
     console.log(`✅ WorkspaceService: FileRegistry now has ${(fileRegistry as any).files.size} files loaded`);
+    
+    // End hierarchical log
+    sessionLogService.endOperation(
+      logOpId,
+      'success',
+      `Loaded ${fileMap.size} files from cache into FileRegistry`,
+      { 
+        filesAffected: Array.from(fileMap.keys()),
+        repository,
+        branch
+      }
+    );
 
     return workspace;
   }

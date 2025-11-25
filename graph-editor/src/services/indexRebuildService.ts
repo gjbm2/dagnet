@@ -3,6 +3,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { ObjectType } from '../types';
 import { LogFileService } from './logFileService';
 import type { TabOperations } from '../types';
+import { sessionLogService } from './sessionLogService';
 
 interface RebuildResult {
   fileId: string;
@@ -36,6 +37,7 @@ export class IndexRebuildService {
   }> {
     const results: RebuildResult[] = [];
     const startTime = new Date();
+    sessionLogService.info('index', 'INDEX_REBUILD', 'Starting index rebuild');
     
     try {
       // Get all files from IndexedDB
@@ -136,6 +138,25 @@ export class IndexRebuildService {
         }
       }
       
+      // Session log summary
+      const added = results.filter(r => r.action === 'added').length;
+      const updated = results.filter(r => r.action === 'updated').length;
+      const errors = results.filter(r => r.action === 'error').length;
+      
+      if (errors > 0) {
+        sessionLogService.warning('index', 'INDEX_REBUILD_COMPLETE', 
+          `Index rebuild completed with ${errors} error(s)`,
+          `Added: ${added}, Updated: ${updated}, Errors: ${errors}`,
+          { added, updated, errors });
+      } else if (added > 0 || updated > 0) {
+        sessionLogService.success('index', 'INDEX_REBUILD_COMPLETE', 
+          `Index rebuild completed`,
+          `Added: ${added}, Updated: ${updated}`,
+          { added, updated });
+      } else {
+        sessionLogService.success('index', 'INDEX_REBUILD_COMPLETE', 'All indexes up to date');
+      }
+
       return {
         success: true,
         totalFiles: allFiles.length,
@@ -144,6 +165,8 @@ export class IndexRebuildService {
       };
     } catch (error) {
       console.error('[IndexRebuildService] Failed to rebuild indexes:', error);
+      sessionLogService.error('index', 'INDEX_REBUILD_ERROR', 'Index rebuild failed', 
+        error instanceof Error ? error.message : String(error));
       throw error;
     }
   }

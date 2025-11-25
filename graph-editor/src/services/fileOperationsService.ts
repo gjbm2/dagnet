@@ -17,6 +17,7 @@ import { ObjectType, RepositoryItem, ViewMode } from '../types';
 import { db } from '../db/appDatabase';
 import { credentialsManager } from '../lib/credentials';
 import { getSchemaFile } from '../config/fileTypeRegistry';
+import { sessionLogService } from './sessionLogService';
 
 export interface CreateFileOptions {
   openInTab?: boolean;
@@ -130,6 +131,9 @@ class FileOperationsService {
     } = options;
 
     console.log(`FileOperationsService: Creating ${type} file: ${name}`);
+    sessionLogService.info('file', 'FILE_CREATE', `Creating new ${type}: ${name}`, 
+      basedOn ? `Based on: ${basedOn}` : undefined,
+      { fileId: `${type}-${name}`, fileType: type });
 
     // 1. Create default data based on type
     let defaultData: any;
@@ -327,6 +331,14 @@ class FileOperationsService {
     // refreshItems would reload from workspace and wipe out local items!
 
     console.log(`FileOperationsService: Created ${fileId} successfully`);
+    
+    // Log with file content summary
+    const contentSummary = type === 'graph' 
+      ? `${defaultData?.nodes?.length || 0} nodes, ${defaultData?.edges?.length || 0} edges`
+      : `id: ${defaultData?.id || name}`;
+    sessionLogService.success('file', 'FILE_CREATE_SUCCESS', `Created ${type}: ${name}`, 
+      contentSummary,
+      { fileId, fileType: type, filePath: item.path });
 
     return { fileId, item };
   }
@@ -394,6 +406,9 @@ class FileOperationsService {
     const { force = false, skipConfirm = false } = options;
 
     console.log(`FileOperationsService: Deleting file ${fileId}`);
+    const [type] = fileId.split('-');
+    sessionLogService.info('file', 'FILE_DELETE', `Deleting ${type} file: ${fileId}`, undefined, 
+      { fileId, fileType: type });
     console.log(`FileOperationsService: All files in registry:`, Array.from((fileRegistry as any).files.keys()));
 
     let file = fileRegistry.getFile(fileId);
@@ -412,7 +427,6 @@ class FileOperationsService {
       }
     }
 
-    const [type] = fileId.split('-');
     const isIndexOnlyEntry = !file && ['parameter', 'context', 'case', 'node'].includes(type);
 
     // Handle index-only entries (no file yet)
@@ -542,6 +556,9 @@ class FileOperationsService {
     }
 
     console.log(`FileOperationsService: Deleted ${fileId} successfully (staged for Git commit)`);
+    sessionLogService.success('file', 'FILE_DELETE_SUCCESS', `Deleted ${type} file: ${fileId}`,
+      file?.path ? `Path: ${file.path}` : undefined,
+      { fileId, fileType: type, filePath: file?.path });
     return true;
   }
 
