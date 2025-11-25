@@ -156,7 +156,7 @@ export class IndexRebuildService {
       } else {
         sessionLogService.success('index', 'INDEX_REBUILD_COMPLETE', 'All indexes up to date');
       }
-
+      
       return {
         success: true,
         totalFiles: allFiles.length,

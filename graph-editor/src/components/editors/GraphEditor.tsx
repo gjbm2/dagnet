@@ -1272,25 +1272,30 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   });
 
   // Bidirectional sync with loop prevention
-  const syncingRef = React.useRef(false);
+  // Track the last synced content to detect actual changes vs reference changes
+  const lastSyncedContentRef = React.useRef<string>('');
   const initialHistorySavedRef = React.useRef(false);
   
   // Track data object reference to detect changes
   const prevDataRef = React.useRef(data);
   
-  // Sync file data TO graph store when file changes (from JSON editor, etc.)
+  // Sync file data TO graph store when file changes (from JSON editor, revert, etc.)
+  // This effect ONLY runs when `data` changes (external file changes)
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#12: Sync file→store triggered`);
     if (Date.now() < suspendLayoutUntilRef.current) {
       console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (suspended)`);
       return;
     }
+    
+    const dataStr = data ? JSON.stringify(data) : '';
+    
     console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: useEffect([data]) triggered`, {
       hasData: !!data,
       hasNodes: !!data?.nodes,
       nodeCount: data?.nodes?.length,
       dataRefChanged: prevDataRef.current !== data,
-      syncingRef: syncingRef.current
+      contentChanged: dataStr !== lastSyncedContentRef.current
     });
     
     prevDataRef.current = data;
@@ -1300,12 +1305,15 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       return;
     }
     
-    if (syncingRef.current) {
-      console.log(`GraphEditor[${fileId}]: syncingRef is true, skipping to prevent loop`);
+    // Skip if content matches what we last synced (prevents loops)
+    // This handles both: file→store sync and store→file sync that updated data
+    if (dataStr === lastSyncedContentRef.current) {
+      console.log(`GraphEditor[${fileId}]: data matches lastSyncedContent, skipping file→store sync`);
       return;
     }
     
-    syncingRef.current = true;
+    // Update sync tracking and sync to store
+    lastSyncedContentRef.current = dataStr;
     console.log(`[${new Date().toISOString()}] [GraphEditor] File→Store: SYNCING (nodes: ${data.nodes.length})`);
     setGraph(data);
     
@@ -1324,14 +1332,10 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         saveHistoryState();
       }, 150);
     }
-    
-    setTimeout(() => { 
-      syncingRef.current = false;
-      console.log(`[${new Date().toISOString()}] [GraphEditor] File→Store: Sync complete, flag reset`);
-    }, 100);
   }, [data, setGraph, saveHistoryState, fileId]);
 
   // Sync graph store changes BACK to file (from interactive edits)
+  // This effect runs when `graph` changes (user edits in canvas)
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#13: Sync store→file triggered`);
     if (Date.now() < suspendLayoutUntilRef.current) {
@@ -1343,41 +1347,34 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       return;
     }
     
-    if (syncingRef.current) {
-      console.log(`[${new Date().toISOString()}] GraphEditor: Store→file sync skipped (syncingRef is true)`);
+    const graphStr = JSON.stringify(graph);
+    
+    // Skip if content matches what we last synced (prevents loops)
+    if (graphStr === lastSyncedContentRef.current) {
+      console.log(`[${new Date().toISOString()}] GraphEditor: Store→file sync skipped (matches lastSyncedContent)`);
       return;
     }
     
-    const graphStr = JSON.stringify(graph);
-    const dataStr = data ? JSON.stringify(data) : '';
-    
-    if (graphStr !== dataStr) {
-      syncingRef.current = true;
-      console.log(`[${new Date().toISOString()}] [GraphEditor] Store→File: SYNCING (nodes: ${graph.nodes.length})`);
-      updateData(graph);
-      setTimeout(() => { 
-        syncingRef.current = false;
-        console.log(`[${new Date().toISOString()}] [GraphEditor] Store→File: Sync complete, flag reset`);
-      }, 100);
-    } else {
-      console.log(`[${new Date().toISOString()}] [GraphEditor] Store→File: Skipped (data matches)`);
-    }
-  }, [graph, data, updateData]);
+    // Update sync tracking and sync to file
+    lastSyncedContentRef.current = graphStr;
+    console.log(`[${new Date().toISOString()}] [GraphEditor] Store→File: SYNCING (nodes: ${graph.nodes.length})`);
+    updateData(graph);
+  }, [graph, updateData]);
 
   // Listen for suppress store→file sync event (for programmatic updates from file pulls)
+  // When this fires, update lastSyncedContentRef to match current data to prevent spurious syncs
   useEffect(() => {
     const handler = (e: any) => {
       const duration = e?.detail?.duration ?? 200;
-      console.log(`[${new Date().toISOString()}] [GraphEditor] EVENT: dagnet:suppressStoreToFileSync received, suppressing for ${duration}ms`);
-      syncingRef.current = true;
-      setTimeout(() => {
-        syncingRef.current = false;
-        console.log(`[${new Date().toISOString()}] [GraphEditor] Suppression period ended, sync re-enabled`);
-      }, duration);
+      console.log(`[${new Date().toISOString()}] [GraphEditor] EVENT: dagnet:suppressStoreToFileSync received`);
+      // Update the sync tracker to match current data, preventing store→file sync
+      if (data) {
+        lastSyncedContentRef.current = JSON.stringify(data);
+      }
     };
     window.addEventListener('dagnet:suppressStoreToFileSync' as any, handler);
     return () => window.removeEventListener('dagnet:suppressStoreToFileSync' as any, handler);
-  }, []);
+  }, [data]);
 
   // Phase 4: Use refs for values only checked inside handlers to avoid unnecessary effect re-runs
   const activeTabIdRef = useRef(activeTabId);

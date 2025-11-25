@@ -877,13 +877,13 @@ class GitService {
     }
     
     console.log(`GitService.checkFilesChangedOnRemote: Checking ${filesToCheck.length} files...`);
-    
-    try {
+        
+        try {
       // Fetch the entire tree in ONE API call
       const treeFetchStart = performance.now();
       const treeResult = await this.getRepositoryTree(branch, true);
       console.log(`GitService.checkFilesChangedOnRemote: Tree fetch took ${(performance.now() - treeFetchStart).toFixed(0)}ms`);
-      
+          
       if (!treeResult.success || !treeResult.data?.tree) {
         console.warn('GitService.checkFilesChangedOnRemote: Could not fetch tree, skipping remote check');
         return [];
@@ -907,16 +907,16 @@ class GitService {
         const remoteSha = remoteShaMap.get(file.path);
         
         if (remoteSha && remoteSha !== file.sha) {
-          // File has been changed on remote
-          changedFiles.push(file.path);
-        }
+              // File has been changed on remote
+              changedFiles.push(file.path);
+            }
         // If remoteSha is undefined, file doesn't exist on remote (will be created)
-      }
+          }
       
       const elapsed = performance.now() - startTime;
       console.log(`GitService.checkFilesChangedOnRemote: Checked ${filesToCheck.length} files, ${changedFiles.length} changed (total: ${elapsed.toFixed(0)}ms)`);
       
-    } catch (error) {
+        } catch (error) {
       console.error('GitService.checkFilesChangedOnRemote: Error fetching tree:', error);
       // Fall back gracefully - don't block commit
       return [];

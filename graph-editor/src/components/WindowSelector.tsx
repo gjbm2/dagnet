@@ -81,16 +81,37 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const contextDropdownRef = useRef<HTMLDivElement>(null);
   const windowSelectorRef = useRef<HTMLDivElement>(null);
   
+  // Calculate default window dates (last 7 days) - needed early for initialization
+  const defaultWindowDates = useMemo(() => {
+    const defaultEnd = new Date();
+    const defaultStart = new Date();
+    defaultStart.setDate(defaultEnd.getDate() - 7);
+    return {
+      start: defaultStart.toISOString().split('T')[0],
+      end: defaultEnd.toISOString().split('T')[0]
+    };
+  }, []);
+  
+  // Initialize window state in store if not set
+  useEffect(() => {
+    if (!window && setWindow) {
+      console.log('[WindowSelector] Initializing default window:', defaultWindowDates);
+      setWindow(defaultWindowDates);
+    }
+  }, [window, setWindow, defaultWindowDates]);
+  
   // Initialize currentQueryDSL with default window if not set
   const isInitializedRef = useRef(false);
   useEffect(() => {
-    if (graph && !graph.currentQueryDSL && !isInitializedRef.current && setGraph && window) {
-      // Set default using current window
-      const defaultDSL = `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
+    if (graph && !graph.currentQueryDSL && !isInitializedRef.current && setGraph) {
+      // Use window from store if set, otherwise use defaults
+      const windowToUse = window || defaultWindowDates;
+      const defaultDSL = `window(${formatDateUK(windowToUse.start)}:${formatDateUK(windowToUse.end)})`;
+      console.log('[WindowSelector] Initializing default DSL:', defaultDSL);
       setGraph({ ...graph, currentQueryDSL: defaultDSL });
       isInitializedRef.current = true;
     }
-  }, [graph, window, setGraph]); // Dependencies
+  }, [graph, window, setGraph, defaultWindowDates]); // Dependencies
   
   // Parse current context values and key from currentQueryDSL
   const currentContextValues = useMemo(() => {
@@ -340,13 +361,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   
   // Always show - window selector is useful for any parameter-based aggregation
   
-  // Default to last 7 days if no window set
-  const defaultEnd = new Date();
-  const defaultStart = new Date();
-  defaultStart.setDate(defaultEnd.getDate() - 7);
-  
-  const startDate = window?.start || defaultStart.toISOString().split('T')[0];
-  const endDate = window?.end || defaultEnd.toISOString().split('T')[0];
+  // Use window from store, falling back to defaults calculated earlier
+  const startDate = window?.start || defaultWindowDates.start;
+  const endDate = window?.end || defaultWindowDates.end;
   
   const currentWindow: DateRange = useMemo(() => ({
     start: startDate,

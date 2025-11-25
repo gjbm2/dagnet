@@ -31,6 +31,9 @@ export interface PullResult {
   conflicts: MergeConflict[];
   filesUpdated?: number;
   filesDeleted?: number;
+  newFiles?: string[];      // File paths that were newly added
+  changedFiles?: string[];  // File paths that were changed
+  deletedFiles?: string[];  // File paths that were deleted
 }
 
 /**
@@ -676,7 +679,8 @@ class WorkspaceService {
     if (!workspace) {
       console.log(`⚠️ WorkspaceService: Workspace doesn't exist, cloning instead...`);
       await this.cloneWorkspace(repository, branch, gitCreds);
-      return { success: true, conflicts: [] };
+      // After initial clone, we don't have granular file info
+      return { success: true, conflicts: [], newFiles: [], changedFiles: [], deletedFiles: [] };
     }
 
     // Configure git service with full credentials
@@ -830,7 +834,7 @@ class WorkspaceService {
         console.log(`⚡ WorkspaceService: Pull complete in ${elapsed}ms - no changes!`);
         workspace.lastSynced = Date.now();
         await db.workspaces.put(workspace);
-        return { success: true, conflicts: [], filesUpdated: 0, filesDeleted: 0 };
+        return { success: true, conflicts: [], filesUpdated: 0, filesDeleted: 0, newFiles: [], changedFiles: [], deletedFiles: [] };
       }
 
       // STEP 6: Fetch changed files and perform 3-way merge if needed
@@ -1107,11 +1111,11 @@ class WorkspaceService {
       
       if (conflicts.length > 0) {
         console.log(`⚠️ WorkspaceService: Pull completed with conflicts`);
-        return { success: true, conflicts, filesUpdated: updatedCount, filesDeleted: toDelete.length };
+        return { success: true, conflicts, filesUpdated: updatedCount, filesDeleted: toDelete.length, newFiles, changedFiles, deletedFiles: toDelete };
       }
       
       console.log(`✅ WorkspaceService: Pull successful - all files synced`);
-      return { success: true, conflicts: [], filesUpdated: updatedCount, filesDeleted: toDelete.length };
+      return { success: true, conflicts: [], filesUpdated: updatedCount, filesDeleted: toDelete.length, newFiles, changedFiles, deletedFiles: toDelete };
 
     } catch (error) {
       console.error(`❌ WorkspaceService: Pull failed, falling back to full re-clone:`, error);
@@ -1120,7 +1124,8 @@ class WorkspaceService {
       await this.deleteWorkspace(repository, branch);
       await this.cloneWorkspace(repository, branch, gitCreds);
       
-      return { success: true, conflicts: [] };
+      // After full re-clone, we don't have granular file info
+      return { success: true, conflicts: [], newFiles: [], changedFiles: [], deletedFiles: [] };
     }
   }
 

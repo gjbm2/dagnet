@@ -301,7 +301,7 @@ class GraphMutationService {
         setGraph(updatedGraph);
         
         // Notify user
-        toast.success(`✓ Regenerated ${applyResult.graphUpdates} queries`, { duration: 3000 });
+          toast.success(`✓ Regenerated ${applyResult.graphUpdates} queries`, { duration: 3000 });
         
         sessionLogService.endOperation(
           logOpId,

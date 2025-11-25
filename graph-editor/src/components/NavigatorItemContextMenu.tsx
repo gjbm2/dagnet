@@ -199,7 +199,16 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     });
     items.push({ label: '', onClick: () => {}, divider: true });
     
-    // Discard Changes (if dirty)
+    // Revert - always show (same as tab context menu "Revert")
+    items.push({
+      label: 'Revert',
+      onClick: async () => {
+        await fileOperationsService.revertFile(fileId);
+        onClose();
+      }
+    });
+    
+    // Discard Changes (if dirty) - same as Revert but more explicit label
     const currentFile = fileRegistry.getFile(fileId);
     if (currentFile?.isDirty) {
       items.push({
@@ -209,8 +218,8 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
           onClose();
         }
       });
-      items.push({ label: '', onClick: () => {}, divider: true });
     }
+    items.push({ label: '', onClick: () => {}, divider: true });
     
     // Danger actions
     items.push({

@@ -2635,7 +2635,7 @@ class DataOperationsService {
                 p: rawData?.p_mean,
                 variants: rawData?.variants_update?.length
               }
-            });
+          });
           
           // Capture raw data for cases (used for direct graph updates)
           if (objectType === 'case') {
