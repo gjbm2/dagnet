@@ -52,15 +52,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   // Load state from IndexedDB and credentials on mount
   useEffect(() => {
     const initialize = async () => {
-      console.log('🚀 NavigatorContext: Starting initialization...');
       const savedState = await loadStateFromDB();
-      console.log('📁 NavigatorContext: State loaded from DB, now loading credentials...');
       const repoBranch = await loadCredentialsAndUpdateRepo(savedState);
       // Proactively load items once repo/branch are known to avoid timing issues
       if (repoBranch?.repo && repoBranch?.branch) {
         await loadItems(repoBranch.repo, repoBranch.branch);
       }
-      console.log('✅ NavigatorContext: Initialization complete');
       setIsInitialized(true);
     };
     initialize();
@@ -77,7 +74,6 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      console.log(`🔄 NavigatorContext: File ${fileId} dirty state changed to ${isDirty}`);
       // NOTE: No need to reload items! The Navigator will automatically update
       // because NavigatorContent subscribes to registry changes via registryService.
       // Reloading here causes unnecessary work and can create race conditions.
@@ -101,50 +97,33 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    */
   const loadCredentialsAndUpdateRepo = async (savedState: any): Promise<{ repo: string; branch: string } | null> => {
     try {
-      console.log('🔑 NavigatorContext: Loading credentials...');
       const result = await credentialsManager.loadCredentials();
-      console.log('🔑 NavigatorContext: Credentials result:', result);
 
       if (result.success && result.credentials) {
         const availableRepos = result.credentials.git.map(repo => repo.name);
 
-        // Determine default repo (NEW: prefer isDefault flag, fallback to defaultGitRepo or first repo)
+        // Determine default repo (prefer isDefault flag, fallback to defaultGitRepo or first repo)
         const repoWithDefaultFlag = result.credentials.git.find(r => r.isDefault);
         let defaultRepo = repoWithDefaultFlag?.name;
-        console.log(`🔑 NavigatorContext: Repo with isDefault=true:`, repoWithDefaultFlag);
-        console.log(`🔑 NavigatorContext: defaultRepo from isDefault flag:`, defaultRepo);
 
         if (!defaultRepo) {
           // Check if defaultGitRepo is valid (exists in available repos)
           if (result.credentials.defaultGitRepo && availableRepos.includes(result.credentials.defaultGitRepo)) {
             defaultRepo = result.credentials.defaultGitRepo;
-            console.log(`🔑 NavigatorContext: Using deprecated defaultGitRepo field:`, defaultRepo);
           } else {
             // Fall back to first available repo
             defaultRepo = availableRepos[0];
-            console.log(`🔑 NavigatorContext: Falling back to first available repo:`, defaultRepo);
           }
         }
 
         // Use saved repo if it exists and is valid, otherwise use default
         const savedRepoName = savedState?.selectedRepo;
-        console.log(`🔑 NavigatorContext: Saved repo from DB: ${savedRepoName}`);
-        console.log(`🔑 NavigatorContext: Available repos: ${availableRepos.join(', ')}`);
-        console.log(`🔑 NavigatorContext: Default repo: ${defaultRepo}`);
 
         const repoToUse = savedRepoName && availableRepos.includes(savedRepoName) ? savedRepoName : defaultRepo;
         const gitCreds = result.credentials.git.find(repo => repo.name === repoToUse) || result.credentials.git[0];
 
-        console.log(`🔑 NavigatorContext: Using repo: ${repoToUse}`);
-        console.log(`🔑 NavigatorContext: Selected git creds:`, gitCreds);
-
         if (gitCreds) {
-          // Get repo name (support both 'name' field and deprecated 'repo' field)
-          const repoName = gitCreds.repo || gitCreds.name;
-          console.log(`🔑 NavigatorContext: Updating repo to ${gitCreds.name} (${gitCreds.owner}/${repoName})`);
-
           // Fetch branches for the selected repository
-          console.log(`🔑 NavigatorContext: Fetching branches for ${gitCreds.name}...`);
           const branches = await fetchBranches(gitCreds.name);
           // Prefer configured branch from credentials, then fall back to 'main' or first available
           const selectedBranch = gitCreds.branch || (branches.includes('main') ? 'main' : branches[0]) || 'main';
@@ -153,22 +132,17 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           const savedBranchName = savedState?.selectedBranch;
           const branchToUse = savedBranchName && branches.includes(savedBranchName) ? savedBranchName : selectedBranch;
 
-          setState(prev => {
-            const newState = {
-              ...prev,
-              selectedRepo: gitCreds.name,
-              selectedBranch: branchToUse,
-              availableRepos,
-              availableBranches: branches
-            };
-            console.log('🔑 NavigatorContext: New state set:', newState);
-            return newState;
-          });
+          setState(prev => ({
+            ...prev,
+            selectedRepo: gitCreds.name,
+            selectedBranch: branchToUse,
+            availableRepos,
+            availableBranches: branches
+          }));
 
           // Return chosen repo/branch to allow caller to immediately load
           return { repo: gitCreds.name, branch: branchToUse };
         } else {
-          console.log('🔑 NavigatorContext: No git credentials found');
           setState(prev => ({
             ...prev,
             availableRepos
@@ -176,7 +150,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           return null;
         }
       } else {
-        console.log('🔑 NavigatorContext: No credentials available:', result.error);
+        console.warn('NavigatorContext: No credentials available:', result.error);
         setState(prev => ({
           ...prev,
           availableRepos: []
@@ -184,7 +158,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         return null;
       }
     } catch (error) {
-      console.error('🔑 NavigatorContext: Failed to load credentials:', error);
+      console.error('NavigatorContext: Failed to load credentials:', error);
       return null;
     }
   };
@@ -195,7 +169,6 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    */
   const loadStateFromDB = async () => {
     const appState = await db.getAppState();
-    console.log('📁 NavigatorContext: Raw state from DB:', appState?.navigatorState);
     if (appState?.navigatorState) {
       const restoredState = {
         ...appState.navigatorState,
@@ -203,28 +176,22 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         selectedRepo: appState.navigatorState.selectedRepo || '',
         selectedBranch: appState.navigatorState.selectedBranch || ''
       };
-      console.log('📁 NavigatorContext: Restoring state:', restoredState);
-      console.log('📁 NavigatorContext: Saved selectedRepo:', appState.navigatorState.selectedRepo);
       setState(restoredState);
 
       // Restore local items
       if (appState.localItems) {
-        console.log('📁 NavigatorContext: Restoring local items:', appState.localItems);
         setLocalItems(appState.localItems);
       }
 
       return restoredState;
-    } else {
-      console.log('📁 NavigatorContext: No saved state found in DB');
-      return null;
     }
+    return null;
   };
 
   /**
    * Save navigator state to IndexedDB
    */
   const saveStateToDB = async () => {
-    console.log('NavigatorContext: Saving state to DB:', state);
     await db.saveAppState({
       navigatorState: state,
       localItems: localItems
@@ -236,14 +203,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    */
   const toggleNavigator = useCallback(() => {
     setState(prev => {
-      console.log('Navigator toggle:', { wasOpen: prev.isOpen, wasPinned: prev.isPinned });
-      const newState = {
+      return {
         ...prev,
         isOpen: !prev.isOpen,
         isPinned: !prev.isOpen ? prev.isPinned : false // Unpin when closing
       };
-      console.log('Navigator new state:', { isOpen: newState.isOpen, isPinned: newState.isPinned });
-      return newState;
     });
   }, []);
 

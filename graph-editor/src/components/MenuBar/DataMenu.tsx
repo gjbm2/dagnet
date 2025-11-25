@@ -316,21 +316,6 @@ export function DataMenu() {
   const hasEdgeSelection = selectedEdgeId !== null;
   const hasNodeSelection = selectedNodeId !== null;
   
-  // DEBUG: Log state at render time
-  console.log('[DataMenu] RENDER STATE:', {
-    selectedEdgeId,
-    selectedNodeId,
-    hasEdgeSelection,
-    hasNodeSelection,
-    hasSelection,
-    isGraphTab,
-    graphExists: !!graph,
-    graphNodeCount: graph?.nodes?.length,
-    graphEdgeCount: graph?.edges?.length,
-  });
-  
-  // Debug logging
-  
   return (
     <>
       <Menubar.Menu>

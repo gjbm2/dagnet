@@ -118,8 +118,6 @@ function AppShellContent() {
     
     console.log('✅ Services initialized');
   }, [navOperations, tabOperations, dialogOps]);
-
-  console.log('AppShell render - navState:', navState);
   
   // Track hover state for unpinned navigator
   const [isHovering, setIsHovering] = useState(false);

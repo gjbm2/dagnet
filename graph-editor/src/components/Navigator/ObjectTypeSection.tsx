@@ -134,7 +134,6 @@ export function ObjectTypeSection({
         if (contentRef.current) {
           const height = contentRef.current.scrollHeight;
           setContentHeight(height);
-          console.log(`[Navigator] ${sectionType} content height:`, height);
         }
       }, 10);
       return () => clearTimeout(timeoutId);
