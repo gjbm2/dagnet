@@ -171,6 +171,11 @@ class FileRegistry {
     const oldDataStr = JSON.stringify(file.data);
     const newDataStr = JSON.stringify(newData);
     const originalDataStr = JSON.stringify(file.originalData);
+    
+    // Debug logging for dirty detection
+    const newNodeCount = newData?.nodes?.length ?? 0;
+    const originalNodeCount = file.originalData?.nodes?.length ?? 0;
+    console.log(`FileRegistry.updateFile[${fileId}]: nodes ${originalNodeCount} → ${newNodeCount}, isInitializing=${file.isInitializing}, contentMatch=${newDataStr === originalDataStr}`);
 
     // Detect dangerous logical ID changes for registry-backed types
     try {
@@ -205,12 +210,28 @@ class FileRegistry {
     file.data = newData;
     const wasDirty = file.isDirty;
     
-    // During initialization, update both data and originalData to establish normalized baseline
-    // This prevents form validation/normalization from marking files as dirty
+    // During initialization, we normally update originalData to allow form normalization
+    // HOWEVER: structural changes (different node/edge count) indicate real user edits
+    // In that case, complete initialization immediately and track the dirty state
     if (file.isInitializing) {
-      console.log(`FileRegistry: ${fileId} is initializing, updating originalData to normalized state`);
-      file.originalData = structuredClone(newData);
-      file.isDirty = false;
+      const oldNodeCount = file.originalData?.nodes?.length ?? 0;
+      const newNodeCount = newData?.nodes?.length ?? 0;
+      const oldEdgeCount = file.originalData?.edges?.length ?? 0;
+      const newEdgeCount = newData?.edges?.length ?? 0;
+      
+      const isStructuralChange = oldNodeCount !== newNodeCount || oldEdgeCount !== newEdgeCount;
+      
+      if (isStructuralChange) {
+        // Real user edit during init period - complete initialization and mark dirty
+        console.log(`FileRegistry: ${fileId} structural change during init (nodes: ${oldNodeCount}→${newNodeCount}, edges: ${oldEdgeCount}→${newEdgeCount}), completing init and marking dirty`);
+        file.isInitializing = false;
+        file.isDirty = true;
+      } else {
+        // Form normalization - update originalData to match
+        console.log(`FileRegistry: ${fileId} is initializing, updating originalData to normalized state`);
+        file.originalData = structuredClone(newData);
+        file.isDirty = false;
+      }
     } else {
       // Normal dirty detection: compare against original
       file.isDirty = newDataStr !== originalDataStr;

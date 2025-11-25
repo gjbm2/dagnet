@@ -65,28 +65,56 @@ class RepositoryOperationsService {
     }
 
     try {
-      // Use workspaceService.pullLatest which does incremental SHA comparison + merge
-      const result = await workspaceService.pullLatest(repository, branch, gitCreds);
+    // Use workspaceService.pullLatest which does incremental SHA comparison + merge
+    const result = await workspaceService.pullLatest(repository, branch, gitCreds);
 
-      // Reload Navigator to show updated files
-      if (this.navigatorOps) {
-        await this.navigatorOps.refreshItems();
+    // Reload Navigator to show updated files
+    if (this.navigatorOps) {
+      await this.navigatorOps.refreshItems();
+    }
+
+    // Build file details summary for logging
+    const buildFileDetails = (): string | undefined => {
+      const parts: string[] = [];
+      const newFiles = result.newFiles || [];
+      const changedFiles = result.changedFiles || [];
+      const deletedFiles = result.deletedFiles || [];
+      
+      if (newFiles.length === 0 && changedFiles.length === 0 && deletedFiles.length === 0) {
+        return 'No files changed';
       }
+      
+      // Helper to get just the filename from a path
+      const getName = (path: string) => path.split('/').pop() || path;
+      
+      if (newFiles.length > 0) {
+        parts.push(`+${newFiles.length} new: ${newFiles.map(getName).join(', ')}`);
+      }
+      if (changedFiles.length > 0) {
+        parts.push(`~${changedFiles.length} changed: ${changedFiles.map(getName).join(', ')}`);
+      }
+      if (deletedFiles.length > 0) {
+        parts.push(`-${deletedFiles.length} deleted: ${deletedFiles.map(getName).join(', ')}`);
+      }
+      
+      return parts.join(' | ');
+    };
 
-      if (result.conflicts && result.conflicts.length > 0) {
-        console.log(`⚠️ RepositoryOperationsService: Pull completed with ${result.conflicts.length} conflicts`);
+    if (result.conflicts && result.conflicts.length > 0) {
+      console.log(`⚠️ RepositoryOperationsService: Pull completed with ${result.conflicts.length} conflicts`);
         sessionLogService.warning('git', 'GIT_PULL_CONFLICTS', 
           `Pull completed with ${result.conflicts.length} conflict(s)`, 
           result.conflicts.map((c: any) => c.fileName || c.fileId).join(', '),
           { conflicts: result.conflicts.map((c: any) => c.fileName || c.fileId) });
-        return { success: true, conflicts: result.conflicts };
-      }
+      return { success: true, conflicts: result.conflicts };
+    }
 
-      console.log(`✅ RepositoryOperationsService: Pulled latest successfully`);
-      sessionLogService.success('git', 'GIT_PULL_SUCCESS', `Pulled latest from ${repository}/${branch}`,
-        undefined,
-        { repository, branch });
-      return { success: true };
+    const fileDetails = buildFileDetails();
+    console.log(`✅ RepositoryOperationsService: Pulled latest successfully - ${fileDetails}`);
+    sessionLogService.success('git', 'GIT_PULL_SUCCESS', `Pulled latest from ${repository}/${branch}`,
+      fileDetails,
+      { repository, branch, newFiles: result.newFiles, changedFiles: result.changedFiles, deletedFiles: result.deletedFiles });
+    return { success: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       sessionLogService.error('git', 'GIT_PULL_ERROR', `Pull failed: ${message}`);
@@ -120,16 +148,16 @@ class RepositoryOperationsService {
     }
 
     try {
-      // Delete and re-clone
-      await workspaceService.deleteWorkspace(repository, branch);
-      await workspaceService.cloneWorkspace(repository, branch, gitCreds);
+    // Delete and re-clone
+    await workspaceService.deleteWorkspace(repository, branch);
+    await workspaceService.cloneWorkspace(repository, branch, gitCreds);
 
-      // Reload Navigator
-      if (this.navigatorOps) {
-        await this.navigatorOps.refreshItems();
-      }
+    // Reload Navigator
+    if (this.navigatorOps) {
+      await this.navigatorOps.refreshItems();
+    }
 
-      console.log(`✅ RepositoryOperationsService: Cloned successfully`);
+    console.log(`✅ RepositoryOperationsService: Cloned successfully`);
       // Note: detailed logging is done by workspaceService.cloneWorkspace
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -614,77 +642,77 @@ class RepositoryOperationsService {
     }
 
     try {
-      // Update file timestamps BEFORE committing to Git
-      const nowISO = new Date().toISOString();
-      const YAML = await import('yaml');
+    // Update file timestamps BEFORE committing to Git
+    const nowISO = new Date().toISOString();
+    const YAML = await import('yaml');
+    
+    const filesToCommit: Array<{
+      path: string;
+      content?: string;
+      binaryContent?: Uint8Array;
+      encoding?: 'utf-8' | 'base64';
+      sha?: string;
+      delete?: boolean;
+    }> = files.map(file => {
+      // Get the file from registry to update its metadata
+      const fileState = fileRegistry.getFile(file.fileId);
+      let content = file.content;
       
-      const filesToCommit: Array<{
-        path: string;
-        content?: string;
-        binaryContent?: Uint8Array;
-        encoding?: 'utf-8' | 'base64';
-        sha?: string;
-        delete?: boolean;
-      }> = files.map(file => {
-        // Get the file from registry to update its metadata
-        const fileState = fileRegistry.getFile(file.fileId);
-        let content = file.content;
+      // Update timestamp in the file content itself (standardized metadata structure)
+      if (fileState?.data) {
+        // All file types now use metadata.updated_at
+        if (!fileState.data.metadata) {
+          fileState.data.metadata = {
+            created_at: nowISO,
+            version: '1.0.0'
+          };
+        }
+        fileState.data.metadata.updated_at = nowISO;
         
-        // Update timestamp in the file content itself (standardized metadata structure)
-        if (fileState?.data) {
-          // All file types now use metadata.updated_at
-          if (!fileState.data.metadata) {
-            fileState.data.metadata = {
-              created_at: nowISO,
-              version: '1.0.0'
-            };
-          }
-          fileState.data.metadata.updated_at = nowISO;
-          
-          // Set author from credentials userName if available
-          if (gitCreds?.userName && !fileState.data.metadata.author) {
-            fileState.data.metadata.author = gitCreds.userName;
-          }
-          
-          // Re-serialize with updated timestamp
-          content = fileState.type === 'graph' 
-            ? JSON.stringify(fileState.data, null, 2)
-            : YAML.stringify(fileState.data);
+        // Set author from credentials userName if available
+        if (gitCreds?.userName && !fileState.data.metadata.author) {
+          fileState.data.metadata.author = gitCreds.userName;
         }
         
-        const basePath = gitCreds.basePath || '';
-        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
-        return {
-          path: fullPath,
-          content,
-          sha: file.sha
-        };
-      });
-
+        // Re-serialize with updated timestamp
+        content = fileState.type === 'graph' 
+          ? JSON.stringify(fileState.data, null, 2)
+          : YAML.stringify(fileState.data);
+      }
+      
       const basePath = gitCreds.basePath || '';
-      
-      // Add pending image operations (uploads + image deletions)
-      const imageFiles = await fileRegistry.commitPendingImages();
-      filesToCommit.push(...imageFiles.map(img => ({
-        path: basePath ? `${basePath}/${img.path}` : img.path,
-        binaryContent: img.binaryContent,
-        encoding: img.encoding,
-        delete: img.delete
-      })));
-      
-      // Add pending file deletions
-      const fileDeletions = await fileRegistry.commitPendingFileDeletions();
-      filesToCommit.push(...fileDeletions.map(del => ({
-        path: basePath ? `${basePath}/${del.path}` : del.path,
-        delete: true
-      })));
-      
-      console.log('[RepositoryOperationsService] Committing:', {
-        modifiedFiles: files.length,
-        imageOps: imageFiles.length,
-        fileDeletions: fileDeletions.length,
-        total: filesToCommit.length
-      });
+      const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
+      return {
+        path: fullPath,
+        content,
+        sha: file.sha
+      };
+    });
+
+    const basePath = gitCreds.basePath || '';
+    
+    // Add pending image operations (uploads + image deletions)
+    const imageFiles = await fileRegistry.commitPendingImages();
+    filesToCommit.push(...imageFiles.map(img => ({
+      path: basePath ? `${basePath}/${img.path}` : img.path,
+      binaryContent: img.binaryContent,
+      encoding: img.encoding,
+      delete: img.delete
+    })));
+    
+    // Add pending file deletions
+    const fileDeletions = await fileRegistry.commitPendingFileDeletions();
+    filesToCommit.push(...fileDeletions.map(del => ({
+      path: basePath ? `${basePath}/${del.path}` : del.path,
+      delete: true
+    })));
+    
+    console.log('[RepositoryOperationsService] Committing:', {
+      modifiedFiles: files.length,
+      imageOps: imageFiles.length,
+      fileDeletions: fileDeletions.length,
+      total: filesToCommit.length
+    });
 
       // Log files being committed
       for (const file of filesToCommit) {
@@ -695,16 +723,16 @@ class RepositoryOperationsService {
           { filePath: file.path });
       }
 
-      // Commit and push
-      const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
-      if (!result.success) {
+    // Commit and push
+    const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
+    if (!result.success) {
         sessionLogService.endOperation(logOpId, 'error', `Commit failed: ${result.error || 'Unknown error'}`);
-        throw new Error(result.error || 'Failed to commit files');
-      }
+      throw new Error(result.error || 'Failed to commit files');
+    }
 
-      // Mark files as saved in FileRegistry
-      for (const file of files) {
-        await fileRegistry.markSaved(file.fileId);
+    // Mark files as saved in FileRegistry
+    for (const file of files) {
+      await fileRegistry.markSaved(file.fileId);
       }
 
       sessionLogService.endOperation(logOpId, 'success', 

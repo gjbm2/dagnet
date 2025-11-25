@@ -1167,6 +1167,79 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setGraph(nextGraph);
   }, [graph, setGraph, getAllExistingIds]);
 
+  /**
+   * Handle edge reconnection from ConversionEdge's custom drag handlers
+   * This is called when the user drags an edge endpoint to a different node or face
+   * 
+   * @param edgeId - The UUID of the edge being reconnected
+   * @param newSource - New source node UUID (if reconnecting source), or undefined
+   * @param newTarget - New target node UUID (if reconnecting target), or undefined  
+   * @param newTargetHandle - New target handle/face (e.g., 'left', 'right', 'top', 'bottom')
+   * @param newSourceHandle - New source handle/face (e.g., 'left', 'right', 'top', 'bottom')
+   */
+  const handleReconnect = useCallback((
+    edgeId: string, 
+    newSource?: string, 
+    newTarget?: string, 
+    newTargetHandle?: string, 
+    newSourceHandle?: string
+  ) => {
+    if (!graph) return;
+    
+    console.log('🔄 handleReconnect called:', { edgeId, newSource, newTarget, newTargetHandle, newSourceHandle });
+    
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
+    
+    if (edgeIndex === -1) {
+      console.warn('handleReconnect: Edge not found:', edgeId);
+      return;
+    }
+    
+    const edge = nextGraph.edges[edgeIndex];
+    const originalFrom = edge.from;
+    const originalTo = edge.to;
+    
+    // Update source if provided
+    if (newSource !== undefined) {
+      edge.from = newSource;
+      // Add '-out' suffix for source handles if not already present
+      if (newSourceHandle) {
+        edge.fromHandle = newSourceHandle.endsWith('-out') ? newSourceHandle : `${newSourceHandle}-out`;
+      }
+    }
+    
+    // Update target if provided
+    if (newTarget !== undefined) {
+      edge.to = newTarget;
+      // Target handles don't need '-out' suffix
+      if (newTargetHandle) {
+        edge.toHandle = newTargetHandle;
+      }
+    }
+    
+    // Update edge ID if source/target changed (not just handles)
+    if (edge.from !== originalFrom || edge.to !== originalTo) {
+      const newEdgeId = `${edge.from}->${edge.to}`;
+      edge.id = newEdgeId;
+    }
+    
+    // Update metadata
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    console.log('✅ handleReconnect: Edge updated:', {
+      from: `${originalFrom} → ${edge.from}`,
+      to: `${originalTo} → ${edge.to}`,
+      fromHandle: edge.fromHandle,
+      toHandle: edge.toHandle
+    });
+    
+    setGraph(nextGraph);
+    saveHistoryState('Reconnect edge', undefined, edgeId);
+  }, [graph, setGraph, saveHistoryState]);
+
   const handleDeleteEdge = useCallback(async (edgeUuid: string) => {
     console.log('=== DELETING EDGE ===', edgeUuid);
     
@@ -1708,6 +1781,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onDoubleClickNode: onDoubleClickNode,
       onDoubleClickEdge: onDoubleClickEdge,
       onSelectEdge: onSelectEdge,
+      onReconnect: handleReconnect,
     }, useSankeyView);
     
     // Restore selection state
@@ -2138,7 +2212,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       isSyncingRef.current = false;
       console.log('Reset isSyncingRef to false');
     }, 100);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView, effectiveWhatIfDSL]);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, handleReconnect, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView, effectiveWhatIfDSL]);
 
   // Compute face directions based on edge connections (for curved node outlines)
   // Runs after edges have been auto-routed and have sourceFace/targetFace assigned
