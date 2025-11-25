@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.95b
+**Released:** November 25, 2025
+
+Context are in and working. We are nearing RC1!
+
+---
+
 ## Version 0.94.2-beta
 **Released:** November 24, 2025
 
