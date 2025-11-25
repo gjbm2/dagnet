@@ -42,14 +42,6 @@ const MIN_CHEVRON_THRESHOLD = 10;
  * Only 'current' layer edges are interactive (selectable, editable).
  */
 export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams): Edge[] {
-  // DIAGNOSTIC: Log what called this function
-  const callerStack = new Error().stack || '';
-  const stackLines = callerStack.split('\n');
-  // Extract caller info (skip Error line and this function's line)
-  const callerInfo = stackLines.slice(2, 5).map(line => line.trim()).join(' -> ');
-  console.log(`[buildScenarioRenderEdges] CALLED BY:`, callerInfo);
-  console.log(`[buildScenarioRenderEdges] isInSlowPathRebuild:`, params.isInSlowPathRebuild);
-  
   const {
     baseEdges,
     nodes,
@@ -67,6 +59,11 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     isPanningOrZooming,
     isInSlowPathRebuild
   } = params;
+
+  // Log slow path rebuilds - these are expensive and shouldn't happen repeatedly on load
+  if (isInSlowPathRebuild) {
+    console.warn(`⚠️ [buildScenarioRenderEdges] Slow path rebuild triggered (${baseEdges.length} edges, ${nodes.length} nodes)`);
+  }
 
   if (!scenariosContext || !graph) {
     // Fallback: return base edges as-is if no scenario system
@@ -166,19 +163,6 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     helpers: { dfs: (nodeId: string) => number },
     currentScenarioId: string
   ): number => {
-    // DIAGNOSTIC: Log inputs for first edge only (avoid spam)
-    const isFirstEdge = e.id === baseEdges[0]?.id;
-    if (isFirstEdge) {
-      console.log(`[computeOverlayWidthRaw] Computing for ${e.id}, scenario=${currentScenarioId}:`, {
-        edgeProb: probResolver(e),
-        startNodeId: startNodeId,
-        hasStartNode: !!startNodeId,
-        effectiveMassGenerosity,
-        effectiveMaxWidth,
-        useUniformScaling
-      });
-    }
-    
     if (useUniformScaling) {
       // Uniform scaling mode - all edges same width
       return 10;
@@ -190,9 +174,6 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       if (denom === 0) return MIN_WIDTH;
       const proportion = edgeProb / denom;
       const result = MIN_WIDTH + proportion * (effectiveMaxWidth - MIN_WIDTH);
-      if (isFirstEdge) {
-        console.log(`[computeOverlayWidthRaw] No start node path:`, { proportion, result });
-      }
       return result;
     }
     const residualAtSource = helpers.dfs(e.source);
@@ -211,14 +192,6 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       displayMass = Math.pow(actualMass, power);
     }
     const result = MIN_WIDTH + displayMass * (effectiveMaxWidth - MIN_WIDTH);
-    if (isFirstEdge) {
-      console.log(`[computeOverlayWidthRaw] Start node path:`, {
-        residualAtSource,
-        actualMass,
-        displayMass,
-        result
-      });
-    }
     return result;
   };
 
@@ -376,22 +349,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const freshComputed = rawWidths.get(edge.id) || MIN_WIDTH;
       const mergedWidth = edge.data?.scaledWidth as number | undefined;
       
-      // REVERTED: Now always use fresh computation to see when it's wrong
-      // Previously: const preScaled = mergedWidth ?? freshComputed;
+      // Use fresh computation
       const preScaled = freshComputed;
-      
-      // Diagnostic logging for first edge only
-      if (edge.id === baseEdges[0]?.id && (scenarioId === 'current' || layerIndex === 0)) {
-        const mergeDelta = mergedWidth ? Math.abs(freshComputed - mergedWidth) : 0;
-        console.log(`[buildScenarioRenderEdges] Width calc for ${edge.id}:`, {
-          scenarioId,
-          freshComputed,
-          mergedWidth,
-          preScaled,
-          mergeDelta,
-          usingFresh: true
-        });
-      }
       
       const edgeProb = probResolver(edge);
 
@@ -408,15 +367,6 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const overlayOpacity = (scenarioId === 'current' && !visibleScenarioIds.includes('current')) 
         ? HIDDEN_CURRENT_OPACITY 
         : dynamicLayerOpacity;
-      
-      if (scenarioId === 'current') {
-        console.log(`[buildScenarioRenderEdges] Current layer opacity:`, {
-          isInVisibleList: visibleScenarioIds.includes('current'),
-          computedOpacity: overlayOpacity,
-          HIDDEN_CURRENT_OPACITY,
-          dynamicLayerOpacity
-        });
-      }
 
       // STEP 2: Make 'current' edges fully interactive; others are visual-only
       const isCurrent = scenarioId === 'current';

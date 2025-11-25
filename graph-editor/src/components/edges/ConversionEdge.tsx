@@ -325,9 +325,6 @@ export default function ConversionEdge({
   
   // What-if DSL is now passed through edge.data (from tab state)
   const whatIfDSL = data?.whatIfDSL;
-  useEffect(() => {
-    console.log(`[ConversionEdge ${id}] render with whatIfDSL:`, whatIfDSL);
-  }, [id, whatIfDSL]);
   
   // Get the full edge object from graph (needed for tooltips and colours)
   // Find edge in graph (check both uuid and human-readable id after Phase 0.0 migration)
@@ -498,11 +495,7 @@ export default function ConversionEdge({
       return data.scaledWidth;
     }
     if (data?.calculateWidth) {
-      const width = data.calculateWidth();
-      if (id && id.includes('node-2')) {
-        console.log(`[RENDER] Edge ${id}: using calculateWidth=${width}, prob=${data?.probability}`);
-      }
-      return width;
+      return data.calculateWidth();
     }
     if (selected) return 3;
     if (data?.probability === undefined || data?.probability === null) return 3;
@@ -524,9 +517,6 @@ export default function ConversionEdge({
     hasStdev && 
     !viewPrefs?.useUniformScaling && // Skip if uniform scaling is enabled
     !data?.useSankeyView; // Skip in Sankey view
-  
-  // DEBUG: Log confidence interval state
-  console.log(`[CI Debug ${id}] confidenceIntervalLevel=${confidenceIntervalLevel}, stdev=${stdev}, hasStdev=${hasStdev}, shouldShow=${shouldShowConfidenceIntervals}, fullEdge.p.stdev=${fullEdge?.p?.stdev}, data.stdev=${data?.stdev}, useUniformScaling=${viewPrefs?.useUniformScaling}, useSankeyView=${data?.useSankeyView}`);
   
   // Helper function to convert hex to RGB (must be defined before useMemo)
   const hexToRgb = (hex: string) => {
@@ -590,7 +580,6 @@ export default function ConversionEdge({
 
   // Calculate confidence bounds and colours if needed
   const confidenceData = useMemo(() => {
-    console.log(`[CI Data ${id}] Computing confidenceData, shouldShow=${shouldShowConfidenceIntervals}`);
     if (!shouldShowConfidenceIntervals) return null;
     
     // For scenario overlays, use scenario-specific probability (do NOT bleed from current layer)
@@ -662,15 +651,6 @@ export default function ConversionEdge({
       widthMiddle = strokeWidth;
       widthLower = MIN_WIDTH + displayMassLower * (MAX_WIDTH - MIN_WIDTH);
     }
-    
-    // Debug logging for all edges
-    console.log(`[CI ${id}] mean=${mean.toFixed(3)}, stdev=${stdev.toFixed(3)}, level=${confidenceIntervalLevel}, distribution=${distribution}`);
-    console.log(`[CI ${id}] bounds=`, bounds);
-    console.log(`[CI ${id}] massGenerosity=${massGenerosity.toFixed(2)}, strokeWidth=${strokeWidth.toFixed(1)}`);
-    console.log(`[CI ${id}] widths=`, {upper: widthUpper.toFixed(1), middle: widthMiddle.toFixed(1), lower: widthLower.toFixed(1)});
-    console.log(`[CI ${id}] width ratios=`, {upper: (widthUpper/widthMiddle).toFixed(3), lower: (widthLower/widthMiddle).toFixed(3)});
-    console.log(`[CI ${id}] probability ratios=`, {upper: (bounds.upper/mean).toFixed(3), lower: (bounds.lower/mean).toFixed(3)});
-    console.log(`[CI ${id}] opacities=`, opacities);
     
     return {
       bounds,
@@ -1789,16 +1769,6 @@ export default function ConversionEdge({
               // visibleStartOffset is perpendicular distance, but beads measure along path
               // For now use perpendicular as approximation; correct solution requires path integration
               visibleStartOffset = basePerpDistance;
-              
-              console.log('[Bead offset] Calculated:', {
-                edgeId: id,
-                sourceFace: data.sourceFace,
-                sourceFaceDirection,
-                perpendicularOffset,
-                normalizedOffset,
-                basePerpDistance,
-                visibleStartOffset
-              });
             }
             
             return (

@@ -237,20 +237,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Recompute edge widths when what-if DSL changes
   // Create a "version" to track changes in what-if state (for reactivity)
   const overridesVersion = effectiveWhatIfDSL || '';
-  console.log(
-    `[${ts()}] [GraphCanvas] effectiveWhatIfDSL on render:`,
-    { tabId, propWhatIfDSL: whatIfDSL, tabWhatIfDSL, effectiveWhatIfDSL, overridesVersion }
-  );
   const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
   
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
-  // Monotonic render frame id for correlating logs across components
-  const renderFrameRef = useRef(0);
-  renderFrameRef.current += 1;
-  console.log(`[${ts()}] [GraphCanvas] Render frame #${renderFrameRef.current} start`);
-  
   // Track array reference changes to detect loops
   const prevNodesRef = useRef(nodes);
   const prevEdgesRef = useRef(edges);
@@ -4243,8 +4234,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Handle node drag start - set flag and start failsafe timeout
   const onNodeDragStart = useCallback(() => {
-    console.log(`🎯 Node drag started [frame=${renderFrameRef.current}] (pending movement detection)`);
-    
     // Reset movement flag; we only treat this as a "real" drag if movement occurs
     hasNodeMovedRef.current = false;
 
@@ -4270,14 +4259,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const onNodeDrag = useCallback(() => {
     if (!hasNodeMovedRef.current) {
       hasNodeMovedRef.current = true;
-      console.log(`🎯 Node drag movement detected [frame=${renderFrameRef.current}]`);
     }
   }, []);
 
   // Handle node drag stop - save final position to history
   const onNodeDragStop = useCallback(() => {
-    console.log(`🎯 Node drag stopped [frame=${renderFrameRef.current}] (hasMoved=${hasNodeMovedRef.current})`);
-    
     // Keep drag flag set - it will be cleared by the sync effect when it takes the fast path
     // Use double requestAnimationFrame to ensure ReactFlow has finished updating node positions
     // and React has re-rendered before we sync to graph store and trigger edge recalculation
@@ -4533,7 +4519,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const performSankeyLayout = useCallback(() => {
     if (!graph) return;
     
-    console.log(`[${ts()}] [Sankey Layout] Starting d3-sankey layout (RF#${renderFrameRef.current})`);
     // Begin layout transaction: block effects and start cooldown window
     sankeyLayoutInProgressRef.current = true;
     effectsCooldownUntilRef.current = performance.now() + 800; // 0.8s settle window

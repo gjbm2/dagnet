@@ -26,15 +26,6 @@ export function EditMenu() {
                         activeTab?.fileId.startsWith('case-')) && 
                        activeTab?.viewMode === 'interactive';
 
-  console.log('EditMenu render:', { 
-    activeTabId, 
-    fileId: activeTab?.fileId, 
-    viewMode: activeTab?.viewMode,
-    isGraphEditor,
-    isFormEditor,
-    isRawView
-  });
-
   // Track undo/redo state for the active editor
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);

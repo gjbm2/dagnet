@@ -419,10 +419,18 @@ class RepositoryOperationsService {
     let allFiles: FileState[];
     
     if (repository && branch) {
-      allFiles = await db.files
+      // Get files matching the workspace, PLUS files with no source (workspace-agnostic files like connections)
+      const workspaceFiles = await db.files
         .where('source.repository').equals(repository)
         .and(file => file.source?.branch === branch)
         .toArray();
+      
+      // Also get files with no source property (they belong to any/current workspace)
+      const noSourceFiles = await db.files
+        .filter(file => !file.source)
+        .toArray();
+      
+      allFiles = [...workspaceFiles, ...noSourceFiles];
     } else {
       allFiles = await db.files.toArray();
     }
