@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface ConfirmDialogOptions {
   title: string;
@@ -43,12 +44,13 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   return (
     <DialogContext.Provider value={{ showConfirm }}>
       {children}
-      {dialog && (
+      {dialog && createPortal(
         <ConfirmDialog
           {...dialog.options}
           onConfirm={handleConfirm}
           onCancel={handleCancel}
-        />
+        />,
+        document.body
       )}
     </DialogContext.Provider>
   );
@@ -88,7 +90,7 @@ function ConfirmDialog({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 10000
+        zIndex: 10001  // Higher than CommitModal (10000) to ensure this appears on top
       }}
       onClick={onCancel}
     >
