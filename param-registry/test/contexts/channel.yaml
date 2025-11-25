@@ -1,46 +1,57 @@
 id: channel
 name: Marketing Channel
-description: Primary acquisition channel (paid, organic, direct, etc.)
+description: Primary acquisition channel based on utm_medium
 type: categorical
-otherPolicy: computed  # "other" = ALL - (google + meta + organic + direct)
+otherPolicy: computed  # "other" = ALL - (google + influencer + paid-social + referral + pr)
 
 values:
   - id: google
-    label: Google Ads
-    description: Google Ads campaigns
+    label: Google Ads (CPC)
+    description: Google cost-per-click campaigns
     sources:
       amplitude:
-        field: utm_source
-        filter: "utm_source == 'google'"
+        field: utm_medium
+        filter: "utm_medium == 'cpc'"
         
-  - id: meta
-    label: Meta (Facebook/Instagram)
-    description: Facebook and Instagram campaigns
+  - id: influencer
+    label: Influencer Marketing
+    description: Influencer campaigns
     sources:
       amplitude:
-        field: utm_source
-        filter: "utm_source in ['facebook', 'instagram']"
+        field: utm_medium
+        filter: "utm_medium == 'Influencers'"
         
-  - id: organic
-    label: Organic Search
-    description: Organic traffic from search engines
+  - id: paid-social
+    label: Paid Social
+    description: Paid social media campaigns
     sources:
       amplitude:
-        field: utm_source
-        filter: "utm_source == 'organic'"
+        field: utm_medium
+        # Case-insensitive pattern matching for 'Paid Social' or 'paidsocial'
+        pattern: '^(Paid Social|paidsocial)$'
+        patternFlags: 'i'
         
-  - id: direct
-    label: Direct Traffic
-    description: Direct navigation or bookmarks
+  - id: referral
+    label: Referral Traffic
+    description: Referral traffic from partner sites
     sources:
       amplitude:
-        field: utm_source
-        filter: "utm_source is null or utm_source == 'direct'"
+        field: utm_medium
+        filter: "utm_medium == 'referral'"
+        
+  - id: pr
+    label: PR & Media
+    description: Public relations and media coverage
+    sources:
+      amplitude:
+        field: utm_medium
+        filter: "utm_medium == 'pr'"
         
   - id: other
     label: Other Channels
-    description: All other traffic sources
+    description: All other utm_medium values
     # otherPolicy=computed: adapter generates NOT filter dynamically
+    # Will exclude: cpc, Influencers, Paid Social, paidsocial, referral, pr
 
 metadata:
   category: marketing
@@ -49,4 +60,13 @@ metadata:
   version: "1.0.0"
   status: active
   author: Dagnet Team
+  notes: |
+    This context uses utm_medium field from Amplitude.
+    The 'paid-social' value uses regex pattern matching to handle both
+    'Paid Social' and 'paidsocial' variants (case-insensitive).
+    
+    For Amplitude segmentation, create an 'All Users' segment with:
+    - Filter: utm_medium is set
+    - This ensures we're only analyzing users with tracking data
+
 

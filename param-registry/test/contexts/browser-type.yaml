@@ -1,4 +1,4 @@
-id: browser_type
+id: browser-type
 name: Browser Type
 description: User's browser (Chrome, Safari, Firefox, etc.)
 type: categorical
@@ -44,4 +44,3 @@ metadata:
   version: "1.0.0"
   status: active
   author: Dagnet Team
-

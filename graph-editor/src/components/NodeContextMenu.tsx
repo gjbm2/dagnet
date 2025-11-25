@@ -205,8 +205,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       targetId: nodeId,
       graph,
       setGraph,
-      dailyMode: false,
-      window: undefined
+      dailyMode: false
     });
     onClose();
   };
@@ -223,8 +222,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       objectId: nodeData.case.id,
       targetId: nodeId,
       graph,
-      setGraph,
-      window: undefined
+      setGraph
     });
     onClose();
   };

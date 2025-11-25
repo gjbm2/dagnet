@@ -235,7 +235,7 @@ export function DataOperationsMenu({
       graph,
       setGraph,
       paramSlot,
-      window: window ?? undefined
+      currentDSL: graph?.currentQueryDSL || '',
     });
   };
   
@@ -261,9 +261,8 @@ export function DataOperationsMenu({
       setGraph,
       paramSlot,
       conditionalIndex,
-      window: window ?? undefined,
-      dailyMode: false, // CRITICAL: Always false for direct mode (no file save)
-      bustCache: true // ALWAYS fetch fresh when "Get from Source (direct)" is clicked
+      dailyMode: false, // Direct mode: no file save; service decides caching
+      currentDSL: graph?.currentQueryDSL || '',
     });
   };
   

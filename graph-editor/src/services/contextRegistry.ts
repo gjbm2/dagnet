@@ -48,8 +48,16 @@ export class ContextRegistry {
   private cache: Map<string, ContextDefinition> = new Map();
   
   /**
+   * Clear the cache to force reload from source.
+   */
+  clearCache(): void {
+    console.log('[ContextRegistry] Clearing cache');
+    this.cache.clear();
+  }
+  
+  /**
    * Get context definition (loads and caches).
-   * Checks workspace first, then falls back to param registry.
+   * Tries param registry (filesystem) first for fresh data, then falls back to workspace.
    */
   async getContext(id: string): Promise<ContextDefinition | undefined> {
     if (this.cache.has(id)) {
@@ -57,7 +65,20 @@ export class ContextRegistry {
     }
     
     try {
-      // Scan ALL context files in workspace to find matching id
+      // Try param registry FIRST (loads from filesystem - always fresh)
+      try {
+        console.log(`[ContextRegistry] Loading ${id} from param registry (filesystem)...`);
+        const context = await paramRegistryService.loadContext(id) as ContextDefinition;
+        if (context) {
+          console.log(`[ContextRegistry] Loaded ${id} from filesystem`);
+          this.cache.set(id, context);
+          return context;
+        }
+      } catch (fsError) {
+        console.log(`[ContextRegistry] Could not load ${id} from filesystem:`, fsError);
+      }
+      
+      // Fall back to workspace (IndexedDB) if filesystem load failed
       const allFiles = Array.from((fileRegistry as any).files?.values() || []) as any[];
       for (const file of allFiles) {
         if (file.type === 'context' && file.data?.id === id) {
@@ -68,11 +89,8 @@ export class ContextRegistry {
         }
       }
       
-      // Fall back to param registry (git/filesystem)
-      console.log(`[ContextRegistry] Context ${id} not in workspace, trying param registry`);
-      const context = await paramRegistryService.loadContext(id) as ContextDefinition;
-      this.cache.set(id, context);
-      return context;
+      console.error(`[ContextRegistry] Context ${id} not found in filesystem or workspace`);
+      return undefined;
     } catch (error) {
       console.error(`Failed to load context '${id}':`, error);
       return undefined;
@@ -150,13 +168,25 @@ export class ContextRegistry {
   }
   
   /**
-   * Get all context keys from workspace files.
-   * Scans fileRegistry for context-* files.
+   * Get all context keys.
+   * Tries param registry (filesystem) first, then falls back to workspace.
    */
   async getAllContextKeys(): Promise<Array<{ id: string; type: string; status: string; fileId?: string }>> {
+    // Try param registry FIRST (loads from filesystem - always fresh)
+    try {
+      console.log('[ContextRegistry] Loading contexts index from param registry (filesystem)...');
+      const index = await paramRegistryService.loadContextsIndex();
+      if (index.contexts && index.contexts.length > 0) {
+        console.log('[ContextRegistry] Found contexts from filesystem:', index.contexts.map((c: any) => c.id));
+        return index.contexts;
+      }
+    } catch (fsError) {
+      console.log('[ContextRegistry] Could not load contexts index from filesystem:', fsError);
+    }
+    
+    // Fall back to workspace (IndexedDB)
     const contextKeys: Array<{ id: string; type: string; status: string; fileId?: string }> = [];
     
-    // Scan fileRegistry for context files
     const allFiles = Array.from((fileRegistry as any).files?.values() || []) as any[];
     console.log('[ContextRegistry] Scanning fileRegistry, total files:', allFiles.length);
     const contextFiles = allFiles.filter((f: any) => f.type === 'context');
@@ -171,18 +201,6 @@ export class ContextRegistry {
           status: file.data.metadata?.status || 'active',
           fileId: file.fileId
         });
-      }
-    }
-    
-    // Fall back to param registry if no workspace contexts found
-    if (contextKeys.length === 0) {
-      try {
-        console.log('[ContextRegistry] No workspace contexts, trying param registry');
-        const index = await paramRegistryService.loadContextsIndex();
-        return index.contexts || [];
-      } catch (error) {
-        console.warn('No contexts in workspace or registry:', error);
-        return [];
       }
     }
     
@@ -309,12 +327,6 @@ export class ContextRegistry {
     }
   }
   
-  /**
-   * Clear cache (useful for testing or when registry updated).
-   */
-  clearCache(): void {
-    this.cache.clear();
-  }
 }
 
 export const contextRegistry = new ContextRegistry();

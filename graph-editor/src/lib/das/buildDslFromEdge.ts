@@ -9,15 +9,30 @@
  * @param graph - The full graph (needed to resolve node IDs)
  * @param connectionProvider - Provider name from connection (e.g., "amplitude")
  * @param eventLoader - Function to load event definitions (optional)
+ * @param constraints - Optional parsed constraints (context filters, window)
  * @returns DSL object with resolved provider-specific event names
  * @throws Error if nodes not found or missing event_ids
  */
-import { parseDSL } from '../queryDSL';
+import { parseDSL, type ParsedConstraints } from '../queryDSL';
+import { contextRegistry } from '../../services/contextRegistry';
+import { querySignatureService } from '../../services/querySignatureService';
 
 export interface EventFilter {
   property: string;
   operator: string;
   values: string[];
+}
+
+/**
+ * Context filter object for structured passing to adapters.
+ * This allows adapters to build provider-specific filter syntax.
+ */
+export interface ContextFilterObject {
+  field: string;           // Property name (e.g., "utm_medium")
+  op: 'is' | 'is not' | 'matches';  // Operator
+  values: string[];        // Values to match
+  pattern?: string;        // Regex pattern (if op is 'matches')
+  patternFlags?: string;   // Regex flags (e.g., 'i' for case-insensitive)
 }
 
 export interface DslObject {
@@ -29,6 +44,9 @@ export interface DslObject {
   context?: Array<{ key: string; value: string }>;
   case?: Array<{ key: string; value: string }>;
   event_filters?: Record<string, EventFilter[]>; // Map of event_name -> filters
+  context_filters?: ContextFilterObject[]; // NEW: Structured context filters for this query
+  start?: string; // NEW: Start date (ISO format)
+  end?: string; // NEW: End date (ISO format)
 }
 
 export interface EventDefinition {
@@ -65,7 +83,8 @@ export async function buildDslFromEdge(
   edge: any,
   graph: any,
   connectionProvider?: string,
-  eventLoader?: EventLoader
+  eventLoader?: EventLoader,
+  constraints?: ParsedConstraints
 ): Promise<DslObject> {
   // Edge.query is a string: "from(nodeA).to(nodeB).visited(nodeC)"
   // We need to parse it, look up nodes to get event_ids,
@@ -288,6 +307,37 @@ export async function buildDslFromEdge(
     console.log('DSL with event filters:', dsl.event_filters);
   }
   
+  // NEW: Add context filters if constraints provided
+  if (constraints && (constraints.context.length > 0 || constraints.contextAny.length > 0)) {
+    try {
+      const contextFilters = await buildContextFilters(constraints, connectionProvider || 'amplitude');
+      if (contextFilters && contextFilters.length > 0) {
+        dsl.context_filters = contextFilters;
+        console.log('[buildDslFromEdge] Added context filters:', dsl.context_filters);
+      }
+    } catch (error) {
+      console.error('[buildDslFromEdge] Failed to build context filters:', error);
+      throw error;
+    }
+  }
+  
+  // NEW: Add window/date range if constraints provided
+  if (constraints && constraints.window) {
+    try {
+      const { startDate, endDate } = resolveWindowDates(constraints.window);
+      if (startDate) {
+        dsl.start = startDate.toISOString();
+      }
+      if (endDate) {
+        dsl.end = endDate.toISOString();
+      }
+      console.log('[buildDslFromEdge] Added window:', { start: dsl.start, end: dsl.end });
+    } catch (error) {
+      console.error('[buildDslFromEdge] Failed to resolve window dates:', error);
+      throw error;
+    }
+  }
+  
   // ===== DIAGNOSTIC: Show final DSL and what was NOT preserved =====
   console.log('[buildDslFromEdge] Final DSL:', dsl);
   console.log('[buildDslFromEdge] Original query had minus():', edge.query?.includes('.minus('));
@@ -297,5 +347,517 @@ export async function buildDslFromEdge(
   // ================================================================
   
   return dsl;
+}
+
+/**
+ * Build context filters from parsed constraints.
+ * Returns structured filter objects that adapters can convert to provider-specific syntax.
+ * 
+ * @param constraints - Parsed constraints with context and contextAny
+ * @param source - Source name (e.g., "amplitude")
+ * @returns Array of structured filter objects
+ */
+async function buildContextFilters(
+  constraints: ParsedConstraints,
+  source: string
+): Promise<ContextFilterObject[] | undefined> {
+  const filters: ContextFilterObject[] = [];
+  
+  // Process context(...) constraints (single value per key)
+  for (const ctx of constraints.context) {
+    const filter = await buildFilterObjectForContextValue(ctx.key, ctx.value, source);
+    if (filter === null) {
+      // otherPolicy: null means query all data (no filtering)
+      return undefined;
+    }
+    filters.push(filter);
+  }
+  
+  // Process contextAny(...) constraints (OR within key, AND across keys)
+  // contextAny(channel:X,channel:Y) means "channel is X OR channel is Y"
+  // This should produce ONE filter with multiple values, not multiple filters
+  for (const ctxAny of constraints.contextAny) {
+    // Group pairs by key
+    const byKey = new Map<string, string[]>();
+    for (const pair of ctxAny.pairs) {
+      if (!byKey.has(pair.key)) {
+        byKey.set(pair.key, []);
+      }
+      byKey.get(pair.key)!.push(pair.value);
+    }
+    
+    // For each key, collect all values/patterns into one filter object
+    for (const [key, values] of byKey.entries()) {
+      // Check if "other" is in the list
+      const hasOther = values.includes('other');
+      const explicitValues = values.filter(v => v !== 'other');
+      
+      // If ONLY "other" is selected, use computed NOT filter
+      if (hasOther && explicitValues.length === 0) {
+        const filterObj = await buildFilterObjectForContextValue(key, 'other', source);
+        if (filterObj === null) {
+          return undefined;
+        }
+        filters.push(filterObj);
+        continue;
+      }
+      
+      // If "other" + explicit values: this is "everything except some values"
+      // We need to compute which values are NOT selected
+      // For now, collect the explicit values' filters
+      const allValues: string[] = [];
+      const allPatterns: string[] = [];
+      let field: string = key;
+      let patternFlags: string | undefined;
+      
+      for (const value of explicitValues) {
+        const filterObj = await buildFilterObjectForContextValue(key, value, source);
+        if (filterObj === null) {
+          return undefined;
+        }
+        
+        field = filterObj.field;
+        
+        if (filterObj.pattern) {
+          allPatterns.push(filterObj.pattern);
+          patternFlags = filterObj.patternFlags;
+        } else {
+          allValues.push(...filterObj.values);
+        }
+      }
+      
+      // If "other" is also selected, we need to include "everything else"
+      // This means: NOT(values NOT in our selection)
+      // Which is equivalent to: just don't filter at all, OR filter for the opposite
+      if (hasOther) {
+        // Get the context definition to find what values are NOT selected
+        const contextDef = await contextRegistry.getContext(key);
+        if (contextDef) {
+          const allContextValues = contextDef.values
+            .filter((v: any) => v.id !== 'other')
+            .map((v: any) => v.id);
+          const notSelected = allContextValues.filter((v: string) => !explicitValues.includes(v));
+          
+          if (notSelected.length === 0) {
+            // All values selected + other = no filter needed
+            continue;
+          }
+          
+          // Build a NOT filter for the values that are NOT selected
+          const notSelectedFilters: string[] = [];
+          const notSelectedPatterns: string[] = [];
+          let notField: string = key;
+          let notPatternFlags: string | undefined;
+          
+          for (const value of notSelected) {
+            const filterObj = await buildFilterObjectForContextValue(key, value, source);
+            if (filterObj === null) continue;
+            
+            notField = filterObj.field;
+            
+            if (filterObj.pattern) {
+              notSelectedPatterns.push(filterObj.pattern);
+              notPatternFlags = filterObj.patternFlags;
+            } else {
+              notSelectedFilters.push(...filterObj.values);
+            }
+          }
+          
+          // Build "is not" filter for values NOT selected
+          if (notSelectedPatterns.length > 0 && notSelectedFilters.length > 0) {
+            const combinedPattern = [...notSelectedPatterns, ...notSelectedFilters.map(v => escapeRegex(v))].join('|');
+            filters.push({
+              field: notField,
+              op: 'is not',
+              values: [],
+              pattern: combinedPattern,
+              patternFlags: notPatternFlags || 'i'
+            });
+          } else if (notSelectedPatterns.length > 0) {
+            filters.push({
+              field: notField,
+              op: 'is not',
+              values: [],
+              pattern: notSelectedPatterns.join('|'),
+              patternFlags: notPatternFlags || 'i'
+            });
+          } else if (notSelectedFilters.length > 0) {
+            filters.push({
+              field: notField,
+              op: 'is not',
+              values: notSelectedFilters
+            });
+          }
+          continue;
+        }
+      }
+      
+      // Build combined filter object for explicit values only (no "other")
+      if (allPatterns.length > 0 && allValues.length > 0) {
+        // Mix of patterns and values - combine into regex
+        const combinedPattern = [...allPatterns, ...allValues.map(v => escapeRegex(v))].join('|');
+        filters.push({
+          field,
+          op: 'is',
+          values: [],
+          pattern: combinedPattern,
+          patternFlags: patternFlags || 'i'
+        });
+      } else if (allPatterns.length > 0) {
+        // All patterns - combine into single regex
+        filters.push({
+          field,
+          op: 'is',
+          values: [],
+          pattern: allPatterns.join('|'),
+          patternFlags: patternFlags || 'i'
+        });
+      } else {
+        // All values - use "is" with array
+        filters.push({
+          field,
+          op: 'is',
+          values: allValues
+        });
+      }
+    }
+  }
+  
+  return filters;
+}
+
+/**
+ * Escape special regex characters in a string
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Build structured filter object for a specific (key, value) pair.
+ * Handles otherPolicy and regex patterns.
+ * 
+ * @param key - Context key (e.g., "channel")
+ * @param value - Context value (e.g., "google")
+ * @param source - Source name (e.g., "amplitude")
+ * @returns Structured filter object, or null if no filter needed
+ */
+async function buildFilterObjectForContextValue(
+  key: string,
+  value: string,
+  source: string
+): Promise<ContextFilterObject | null> {
+  const contextDef = await contextRegistry.getContext(key);
+  if (!contextDef) {
+    throw new Error(`Context definition not found: ${key}`);
+  }
+  
+  // Handle "other" value with special policies BEFORE getting mapping
+  if (value === 'other') {
+    const valueDef = contextDef.values.find((v: any) => v.id === 'other');
+    // otherPolicy can be on the value's source mapping or on the context definition
+    const otherPolicy = (valueDef?.sources?.[source] as any)?.otherPolicy || contextDef.otherPolicy;
+    
+    if (otherPolicy === 'null') {
+      // No filter needed - query all data
+      return null;
+    }
+    
+    if (otherPolicy === 'undefined') {
+      throw new Error(`Cannot query ${key}:other with otherPolicy=undefined (value not defined)`);
+    }
+    
+    if (otherPolicy === 'computed') {
+      return await buildComputedOtherFilterObject(key, source, contextDef);
+    }
+    
+    if (otherPolicy === 'explicit') {
+      const mapping = await contextRegistry.getSourceMapping(key, value, source);
+      if (!mapping || (!mapping.filter && !mapping.pattern)) {
+        throw new Error(`otherPolicy='explicit' but no filter/pattern defined for ${key}:other`);
+      }
+      // Fall through to use the mapping
+    }
+  }
+  
+  // Get mapping for regular values or explicit "other"
+  const mapping = await contextRegistry.getSourceMapping(key, value, source);
+  
+  // Regular value: use mapping
+  if (!mapping) {
+    throw new Error(`No ${source} mapping for ${key}:${value}`);
+  }
+  
+  const field = mapping.field || key;
+  
+  // If pattern provided, return regex filter
+  if (mapping.pattern) {
+    return {
+      field,
+      op: 'matches',
+      values: [],
+      pattern: mapping.pattern,
+      patternFlags: mapping.patternFlags || ''
+    };
+  }
+  
+  // If explicit filter string provided, parse it to extract value
+  if (mapping.filter) {
+    // Parse simple filter: "field == 'value'" or "field = 'value'"
+    // Field name can contain spaces (e.g., "Device family == 'iOS'")
+    const eqMatch = mapping.filter.match(/(.+?)\s*==?\s*'([^']+)'/);
+    if (eqMatch) {
+      return {
+        field: eqMatch[1].trim(),
+        op: 'is',
+        values: [eqMatch[2]]
+      };
+    }
+    // Parse IN filter: "field in ['val1', 'val2']"
+    // Field name can contain spaces
+    const inMatch = mapping.filter.match(/(.+?)\s+in\s+\[([^\]]+)\]/);
+    if (inMatch) {
+      const values = inMatch[2].split(',').map(v => v.trim().replace(/'/g, ''));
+      return {
+        field: inMatch[1].trim(),
+        op: 'is',
+        values
+      };
+    }
+    // Fallback: treat filter as single value
+    return {
+      field,
+      op: 'is',
+      values: [mapping.filter]
+    };
+  }
+  
+  throw new Error(`Mapping for ${key}:${value} has neither filter nor pattern`);
+}
+
+/**
+ * Build filter for a specific (key, value) pair, handling otherPolicy and regex patterns.
+ * @deprecated Use buildFilterObjectForContextValue instead
+ * 
+ * @param key - Context key (e.g., "channel")
+ * @param value - Context value (e.g., "google")
+ * @param source - Source name (e.g., "amplitude")
+ * @returns Filter string for this source
+ */
+async function buildFilterForContextValue(
+  key: string,
+  value: string,
+  source: string
+): Promise<string | null> {
+  const filterObj = await buildFilterObjectForContextValue(key, value, source);
+  if (filterObj === null) return null;
+  
+  // Convert to string representation
+  if (filterObj.pattern) {
+    const caseFlag = filterObj.patternFlags?.includes('i') ? ' (case-insensitive)' : '';
+    return `${filterObj.field} matches '${filterObj.pattern}'${caseFlag}`;
+  }
+  
+  if (filterObj.values.length === 1) {
+    return `${filterObj.field} == '${filterObj.values[0]}'`;
+  }
+  
+  return `${filterObj.field} in [${filterObj.values.map(v => `'${v}'`).join(', ')}]`;
+}
+
+/**
+ * Build computed "other" filter object (NOT of all explicit values).
+ * 
+ * @param key - Context key
+ * @param source - Source name
+ * @param contextDef - Context definition
+ * @returns Structured filter object for "other"
+ */
+async function buildComputedOtherFilterObject(
+  key: string,
+  source: string,
+  contextDef: any
+): Promise<ContextFilterObject> {
+  const explicitValues = contextDef.values.filter((v: any) => v.id !== 'other');
+  
+  const allValues: string[] = [];
+  const allPatterns: string[] = [];
+  let field: string = key;
+  let patternFlags: string | undefined;
+  
+  for (const v of explicitValues) {
+    const mapping = await contextRegistry.getSourceMapping(key, v.id, source);
+    
+    if (mapping?.pattern) {
+      allPatterns.push(mapping.pattern);
+      field = mapping.field || key;
+      patternFlags = mapping.patternFlags;
+    } else if (mapping?.filter) {
+      // Parse filter to extract value
+      const eqMatch = mapping.filter.match(/(\S+)\s*==?\s*'([^']+)'/);
+      if (eqMatch) {
+        field = eqMatch[1];
+        allValues.push(eqMatch[2]);
+      }
+    }
+  }
+  
+  // Build "is not" filter with all values/patterns
+  if (allPatterns.length > 0 && allValues.length > 0) {
+    // Mix of patterns and values - combine into regex
+    const combinedPattern = [...allPatterns, ...allValues.map(v => escapeRegex(v))].join('|');
+    return {
+      field,
+      op: 'is not',
+      values: [],
+      pattern: combinedPattern,
+      patternFlags: patternFlags || 'i'
+    };
+  } else if (allPatterns.length > 0) {
+    // All patterns - combine into single regex
+    return {
+      field,
+      op: 'is not',
+      values: [],
+      pattern: allPatterns.join('|'),
+      patternFlags: patternFlags || 'i'
+    };
+  } else {
+    // All values - use "is not" with array
+    return {
+      field,
+      op: 'is not',
+      values: allValues
+    };
+  }
+}
+
+/**
+ * Build computed "other" filter (NOT of all explicit values).
+ * @deprecated Use buildComputedOtherFilterObject instead
+ * 
+ * @param key - Context key
+ * @param source - Source name
+ * @param contextDef - Context definition
+ * @returns Filter string for "other"
+ */
+async function buildComputedOtherFilter(
+  key: string,
+  source: string,
+  contextDef: any
+): Promise<string> {
+  const filterObj = await buildComputedOtherFilterObject(key, source, contextDef);
+  
+  if (filterObj.pattern) {
+    const caseFlag = filterObj.patternFlags?.includes('i') ? ' (case-insensitive)' : '';
+    return `NOT (${filterObj.field} matches '${filterObj.pattern}'${caseFlag})`;
+  }
+  
+  const valueClauses = filterObj.values.map(v => `${filterObj.field} == '${v}'`);
+  return `NOT (${valueClauses.join(' OR ')})`;
+}
+
+/**
+ * Resolve window dates to absolute Date objects.
+ * Handles relative dates (e.g., "-30d") and absolute dates (e.g., "1-Jan-25").
+ * 
+ * @param window - Window constraint with start/end
+ * @returns Resolved start and end dates (end may be undefined for open-ended windows)
+ */
+function resolveWindowDates(window: { start?: string; end?: string }): { startDate?: Date; endDate?: Date } {
+  const now = new Date();
+  
+  let startDate: Date | undefined;
+  if (!window.start) {
+    // No start specified - beginning of time (or undefined for fully open)
+    startDate = undefined;
+  } else if (window.start.match(/^-?\d+[dwmy]$/)) {
+    // Relative offset
+    startDate = applyRelativeOffset(now, window.start);
+  } else {
+    // Absolute date in d-MMM-yy format
+    startDate = parseUKDate(window.start);
+  }
+  
+  let endDate: Date | undefined;
+  if (!window.end) {
+    // No end specified - open-ended (query to "now")
+    endDate = undefined;
+  } else if (window.end.match(/^-?\d+[dwmy]$/)) {
+    endDate = applyRelativeOffset(now, window.end);
+  } else {
+    endDate = parseUKDate(window.end);
+  }
+  
+  return { startDate, endDate };
+}
+
+/**
+ * Apply relative offset to a base date.
+ * 
+ * @param base - Base date
+ * @param offset - Offset string (e.g., "-30d", "+7w")
+ * @returns New date with offset applied
+ */
+function applyRelativeOffset(base: Date, offset: string): Date {
+  const match = offset.match(/^(-?\d+)([dwmy])$/);
+  if (!match) {
+    throw new Error(`Invalid relative offset: ${offset}`);
+  }
+  
+  const amount = parseInt(match[1]);
+  const unit = match[2];
+  
+  const result = new Date(base);
+  switch (unit) {
+    case 'd':
+      result.setDate(result.getDate() + amount);
+      break;
+    case 'w':
+      result.setDate(result.getDate() + amount * 7);
+      break;
+    case 'm':
+      result.setMonth(result.getMonth() + amount);
+      break;
+    case 'y':
+      result.setFullYear(result.getFullYear() + amount);
+      break;
+  }
+  
+  return result;
+}
+
+/**
+ * Parse UK date format (d-MMM-yy) to Date object.
+ * 
+ * @param dateStr - Date string in d-MMM-yy format (e.g., "1-Jan-25")
+ * @returns Date object
+ */
+function parseUKDate(dateStr: string): Date {
+  // Parse d-MMM-yy format (e.g., "1-Jan-25")
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) {
+    throw new Error(`Invalid date format: ${dateStr}. Expected d-MMM-yy (e.g., "1-Jan-25")`);
+  }
+  
+  const day = parseInt(parts[0]);
+  const monthStr = parts[1];
+  const yearStr = parts[2];
+  
+  // Map month abbreviations to numbers
+  const months: Record<string, number> = {
+    Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+    Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11
+  };
+  
+  const month = months[monthStr];
+  if (month === undefined) {
+    throw new Error(`Invalid month: ${monthStr}. Expected 3-letter abbreviation (e.g., "Jan")`);
+  }
+  
+  // Parse 2-digit year (e.g., "25" → 2025)
+  const year = parseInt(yearStr) + 2000;
+  
+  return new Date(year, month, day);
 }
 

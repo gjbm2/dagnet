@@ -2,18 +2,20 @@
 Query DSL Parser and Validator
 
 Schema Authority: /graph-editor/public/schemas/query-dsl-1.0.0.json
-Valid Functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case", "minus", "plus"]
+Valid Functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "contextAny", "window", "case", "minus", "plus"]
 
 Grammar:
     query          ::= from-clause to-clause constraint*
     from-clause    ::= "from(" node-id ")"
     to-clause      ::= "to(" node-id ")"
-    constraint     ::= exclude-clause | visited-clause | visitedAny-clause | context-clause | case-clause | minus-clause | plus-clause
+    constraint     ::= exclude-clause | visited-clause | visitedAny-clause | context-clause | contextAny-clause | window-clause | case-clause | minus-clause | plus-clause
     
     exclude-clause    ::= ".exclude(" node-list ")"
     visited-clause    ::= ".visited(" node-list ")"
     visitedAny-clause ::= ".visitedAny(" node-list ")"
     context-clause    ::= ".context(" key ":" value ")"
+    contextAny-clause ::= ".contextAny(" key ":" value ("," key ":" value)* ")"
+    window-clause     ::= ".window(" date-or-offset ":" date-or-offset ")"
     case-clause       ::= ".case(" key ":" value ")"
     minus-clause      ::= ".minus(" node-list ")"
     plus-clause       ::= ".plus(" node-list ")"
@@ -22,12 +24,16 @@ Grammar:
     node-id        ::= [a-z0-9_-]+
     key            ::= [a-z0-9_-]+
     value          ::= [a-z0-9_-]+
+    date-or-offset ::= [0-9]+-[A-Za-z]{3}-[0-9]{2} | -?[0-9]+[dwmy]
 
 Examples:
     "from(homepage).to(checkout)"
     "from(homepage).to(checkout).exclude(back-button)"
     "from(product-view).to(checkout).visited(add-to-cart)"
     "from(homepage).to(checkout).context(device:mobile)"
+    "from(homepage).to(checkout).contextAny(channel:google,channel:meta)"
+    "from(homepage).to(checkout).window(1-Jan-25:31-Mar-25)"
+    "from(homepage).to(checkout).window(-30d:)"
     "from(homepage).to(checkout).case(onboarding-test:treatment)"
     "from(a).to(b).visitedAny(x,y)"
     "from(start).to(end).visited(checkpoint).exclude(detour-a,detour-b)"
@@ -46,6 +52,19 @@ class KeyValuePair:
 
 
 @dataclass
+class ContextAnyGroup:
+    """Group of key-value pairs for contextAny (OR within key, AND across keys)."""
+    pairs: List[KeyValuePair]
+
+
+@dataclass
+class WindowConstraint:
+    """Time window constraint for data retrieval."""
+    start: Optional[str] = None  # Date (d-MMM-yy) or relative offset (-30d)
+    end: Optional[str] = None    # Date (d-MMM-yy) or relative offset (-30d)
+
+
+@dataclass
 class ParsedQuery:
     """
     Parsed query DSL expression per query-dsl-1.0.0.json schema.
@@ -58,15 +77,17 @@ class ParsedQuery:
     Schema authority: /graph-editor/public/schemas/query-dsl-1.0.0.json
     Valid functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case", "minus", "plus"]
     """
-    from_node: str              # Source node ID
-    to_node: str                # Target node ID
-    exclude: List[str]          # Nodes to exclude from path (AND)
-    visited: List[str]          # Nodes that must be visited (AND)
-    visited_any: List[List[str]]# Groups where at least one must be visited (OR per group)
-    context: List[KeyValuePair] # Context filters (e.g., device:mobile)
-    cases: List[KeyValuePair]   # Case/variant filters (e.g., test-id:variant)
-    minus: List[List[str]]      # Subtractive node sets (coefficient -1, inherits base from/to)
-    plus: List[List[str]]       # Add-back node sets (coefficient +1, inherits base from/to)
+    from_node: str                    # Source node ID
+    to_node: str                      # Target node ID
+    exclude: List[str]                # Nodes to exclude from path (AND)
+    visited: List[str]                # Nodes that must be visited (AND)
+    visited_any: List[List[str]]      # Groups where at least one must be visited (OR per group)
+    context: List[KeyValuePair]       # Context filters (e.g., device:mobile)
+    context_any: List[ContextAnyGroup]# ContextAny groups (OR within key, AND across keys)
+    window: Optional[WindowConstraint]# Time window constraint (e.g., window(1-Jan-25:31-Mar-25))
+    cases: List[KeyValuePair]         # Case/variant filters (e.g., test-id:variant)
+    minus: List[List[str]]            # Subtractive node sets (coefficient -1, inherits base from/to)
+    plus: List[List[str]]             # Add-back node sets (coefficient +1, inherits base from/to)
     
     @property
     def raw(self) -> str:
@@ -85,6 +106,15 @@ class ParsedQuery:
         
         for ctx in self.context:
             parts.append(f"context({ctx.key}:{ctx.value})")
+        
+        for ctx_any in self.context_any:
+            pairs_str = ','.join(f"{p.key}:{p.value}" for p in ctx_any.pairs)
+            parts.append(f"contextAny({pairs_str})")
+        
+        if self.window:
+            start = self.window.start or ''
+            end = self.window.end or ''
+            parts.append(f"window({start}:{end})")
         
         for case in self.cases:
             parts.append(f"case({case.key}:{case.value})")
@@ -151,6 +181,8 @@ def parse_query(query: str) -> ParsedQuery:
     visited = _extract_node_list(query, 'visited')
     visited_any = _extract_node_groups(query, 'visitedAny')
     context = _extract_key_value_pairs(query, 'context')
+    context_any = _extract_context_any(query)
+    window = _extract_window(query)
     cases = _extract_key_value_pairs(query, 'case')
     
     # Extract minus/plus clauses (now just node lists, not nested queries)
@@ -164,6 +196,8 @@ def parse_query(query: str) -> ParsedQuery:
         visited=visited,
         visited_any=visited_any,
         context=context,
+        context_any=context_any,
+        window=window,
         cases=cases,
         minus=minus_node_sets,
         plus=plus_node_sets
@@ -259,6 +293,58 @@ def _extract_nested_queries(query: str, function_name: str) -> List['ParsedQuery
             continue
     
     return nested_queries
+
+
+def _extract_context_any(query: str) -> List[ContextAnyGroup]:
+    """
+    Extract contextAny groups from query.
+    
+    Examples:
+        _extract_context_any("...contextAny(channel:google,channel:meta)...")
+            → [ContextAnyGroup(pairs=[KeyValuePair("channel", "google"), KeyValuePair("channel", "meta")])]
+    """
+    pattern = r'contextAny\(([a-z0-9_:,-]+)\)'
+    matches = re.findall(pattern, query)
+    
+    groups = []
+    for match in matches:
+        pairs = []
+        # Split by comma and parse each key:value pair
+        for pair_str in match.split(','):
+            if ':' in pair_str:
+                key, value = pair_str.strip().split(':', 1)
+                pairs.append(KeyValuePair(key=key, value=value))
+        
+        if pairs:
+            groups.append(ContextAnyGroup(pairs=pairs))
+    
+    return groups
+
+
+def _extract_window(query: str) -> Optional[WindowConstraint]:
+    """
+    Extract window constraint from query.
+    
+    Examples:
+        _extract_window("...window(1-Jan-25:31-Mar-25)...") 
+            → WindowConstraint(start="1-Jan-25", end="31-Mar-25")
+        _extract_window("...window(-30d:)...")
+            → WindowConstraint(start="-30d", end=None)
+    """
+    # Pattern matches: window(start:end) where start/end can be:
+    # - Date: 1-Jan-25
+    # - Relative offset: -30d, -7w, -3m, -1y
+    # - Empty (for open-ended)
+    pattern = r'window\(([^:]*):([^)]*)\)'
+    match = re.search(pattern, query)
+    
+    if not match:
+        return None
+    
+    start = match.group(1).strip() or None
+    end = match.group(2).strip() or None
+    
+    return WindowConstraint(start=start, end=end)
 
 
 def validate_query(

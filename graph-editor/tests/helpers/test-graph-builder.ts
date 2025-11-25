@@ -11,6 +11,7 @@ export interface NodeConfig {
   id?: string;
   uuid?: string;
   name: string;
+  event_id?: string;
   type?: 'regular' | 'case' | 'terminal';
   x?: number;
   y?: number;
@@ -75,6 +76,7 @@ export function createTestGraph(config: TestGraphConfig = {}): Graph {
     uuid: node.uuid || `node-${node.id || idx}`,
     id: node.id || `node-${idx}`,
     name: node.name,
+    event_id: node.event_id,
     type: node.type || 'regular',
     x: node.x ?? idx * 200,
     y: node.y ?? 100,
@@ -126,9 +128,9 @@ export function createTestGraph(config: TestGraphConfig = {}): Graph {
 export function createLinearGraph(): Graph {
   return createTestGraph({
     nodes: [
-      { id: 'a', name: 'Node A' },
-      { id: 'b', name: 'Node B' },
-      { id: 'c', name: 'Node C' }
+      { id: 'a', name: 'Node A', event_id: 'event_a' },
+      { id: 'b', name: 'Node B', event_id: 'event_b' },
+      { id: 'c', name: 'Node C', event_id: 'event_c' }
     ],
     edges: [
       { from: 'a', to: 'b', p: { mean: 0.6, stdev: 0.05 } },
@@ -144,10 +146,10 @@ export function createLinearGraph(): Graph {
 export function createBranchingGraph(): Graph {
   return createTestGraph({
     nodes: [
-      { id: 'a', name: 'Start' },
-      { id: 'b', name: 'Path 1' },
-      { id: 'd', name: 'Path 2' },
-      { id: 'c', name: 'End' }
+      { id: 'a', name: 'Start', event_id: 'event_a' },
+      { id: 'b', name: 'Path 1', event_id: 'event_b' },
+      { id: 'd', name: 'Path 2', event_id: 'event_d' },
+      { id: 'c', name: 'End', event_id: 'event_c' }
     ],
     edges: [
       { from: 'a', to: 'b', p: { mean: 0.6 } },
@@ -164,9 +166,9 @@ export function createBranchingGraph(): Graph {
 export function createCompositeQueryGraph(): Graph {
   return createTestGraph({
     nodes: [
-      { id: 'saw-WA-details-page', name: 'Saw WA Details' },
-      { id: 'viewed-coffee-screen', name: 'Viewed Coffee' },
-      { id: 'straight-to-dashboard', name: 'Dashboard' }
+      { id: 'saw-WA-details-page', name: 'Saw WA Details', event_id: 'event_wa_details' },
+      { id: 'viewed-coffee-screen', name: 'Viewed Coffee', event_id: 'event_coffee' },
+      { id: 'straight-to-dashboard', name: 'Dashboard', event_id: 'event_dashboard' }
     ],
     edges: [
       {
@@ -190,8 +192,8 @@ export function createCompositeQueryGraph(): Graph {
 export function createMixedProviderGraph(): Graph {
   return createTestGraph({
     nodes: [
-      { id: 'a', name: 'Node A' },
-      { id: 'b', name: 'Node B' }
+      { id: 'a', name: 'Node A', event_id: 'event_a' },
+      { id: 'b', name: 'Node B', event_id: 'event_b' }
     ],
     edges: [
       {

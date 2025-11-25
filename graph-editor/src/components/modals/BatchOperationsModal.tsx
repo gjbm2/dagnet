@@ -345,7 +345,6 @@ export function BatchOperationsModal({
               graph,
               setGraph,
               paramSlot: item.paramSlot,
-              window: window || undefined,
               bustCache
             });
             
@@ -393,7 +392,6 @@ export function BatchOperationsModal({
               graph,
               setGraph,
               paramSlot: item.paramSlot,
-              window: window || undefined,
               dailyMode: false,
               bustCache
             });

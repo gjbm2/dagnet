@@ -55,16 +55,20 @@ export function FileMenu() {
   const [mergeConflicts, setMergeConflicts] = useState<ConflictFile[]>([]);
   
   // Track dirty files - update when tabs or files change
-  // NOTE: Check IndexedDB for ALL dirty files (not just in-memory FileRegistry)
+  // NOTE: Use content-based detection for reliable cross-session dirty tracking
   const [hasDirtyFiles, setHasDirtyFiles] = useState(false);
   const [hasCurrentFileDirty, setHasCurrentFileDirty] = useState(false);
   
   // Listen for file dirty state changes
   React.useEffect(() => {
     const updateDirtyState = async () => {
-      // Check IndexedDB for ALL dirty files (includes files not in FileRegistry)
-      const dirtyFiles = await db.getDirtyFiles();
-      setHasDirtyFiles(dirtyFiles.length > 0);
+      // Use content-based detection for reliable dirty file tracking
+      // This compares actual data to originalData, works across page refreshes
+      const committableFiles = await repositoryOperationsService.getCommittableFiles(
+        navState.selectedRepo,
+        navState.selectedBranch
+      );
+      setHasDirtyFiles(committableFiles.length > 0);
       
       // Check if current file is committable (centralized logic)
       if (activeTab) {
@@ -84,7 +88,7 @@ export function FileMenu() {
     
     window.addEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
     return () => window.removeEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
-  }, [tabs, operations, activeTab]);
+  }, [tabs, operations, activeTab, navState.selectedRepo, navState.selectedBranch]);
 
   const handleNew = (type: ObjectType) => {
     setNewFileType(type);
