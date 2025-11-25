@@ -109,6 +109,8 @@ function constructQueryDSL(
 **Design:**
 
 **Predicate vocabulary:**
+
+*Selection predicates:*
 | Predicate | Type | Description |
 |-----------|------|-------------|
 | `node_count` | int | Number of selected nodes |
@@ -119,11 +121,65 @@ function constructQueryDSL(
 | `start_is_graph_start` | bool | Unique start is a graph entry node |
 | `end_is_graph_end` | bool | Unique end is an absorbing node |
 
+*Scenario predicates:*
+| Predicate | Type | Description |
+|-----------|------|-------------|
+| `scenario_count` | int | Number of visible scenarios |
+| `multiple_scenarios` | bool | More than one scenario visible |
+
+*Graph predicates (future):*
+| Predicate | Type | Description |
+|-----------|------|-------------|
+| `has_case_nodes` | bool | Graph contains case/variant nodes |
+| `has_conditionals` | bool | Graph has conditional probability edges |
+| `has_cycles` | bool | Graph contains cycles |
+| `graph_node_count` | int | Total nodes in graph |
+
+*Data predicates (future):*
+| Predicate | Type | Description |
+|-----------|------|-------------|
+| `has_actuals` | bool | Actual data available for some nodes |
+| `has_live_connection` | bool | Connected to live data source |
+
+---
+
+### Important: Three Distinct Query Concepts
+
+**Do not conflate these:**
+
+| Query Type | What It Is | Example | Used For |
+|------------|------------|---------|----------|
+| **Selection Query** | Constructed from user's node selection | `from(A).to(B).visited(C)` | Analytics: "analyze this path" |
+| **Pinned Query** | Query pinned to graph definition | (graph config) | Graph-level defaults |
+| **Data View Query** | Slices current data view | `window(2024-01:2024-06).context(uk)` | Filtering displayed data |
+
+**For analytics predicates:**
+- Selection predicates → derived from **Selection Query**
+- Scenario predicates → derived from UI state (visible scenarios)
+- Graph predicates → derived from graph structure
+- Data predicates → derived from **Data View Query** state (but be careful!)
+
+**Example of correct thinking:**
+- `has_window: true` is NOT a selection predicate
+- The window is part of the **Data View Query** that determines what data populates the graph
+- Analytics runs on the graph with whatever data is currently loaded
+- The analytics selection query (`from(A).to(B)`) is orthogonal to the data view window
+
+**Phase 1 scope:** Focus on Selection + Scenario predicates. Data view query is already applied before analytics runs - we receive the graph with data already sliced.
+
 **Analysis definitions:**
 ```yaml
 # analysis_types.yaml
 
+# MATCHING RULES:
+# 1. Definitions are evaluated in order (top to bottom)
+# 2. First match wins (more specific should come before general)
+# 3. Last entry should be fallback with `when: {}` (matches anything)
+# 4. `when: {}` means "always matches" (fallback)
+# 5. All conditions in `when` must be satisfied (AND logic)
+
 analyses:
+  # Most specific first
   - id: single_node_path
     name: "Path to Node"
     description: "Probability and cost to reach single selected node from graph start"
@@ -176,24 +232,58 @@ analyses:
 **Matching algorithm:**
 ```python
 def match_analysis_type(predicates: dict, definitions: list) -> AnalysisDefinition:
-    """Find first matching analysis definition."""
+    """
+    Find first matching analysis definition.
+    
+    Rules:
+    - Definitions evaluated in order (first match wins)
+    - More specific definitions should come before general ones
+    - Last definition should be fallback with when: {}
+    """
     for defn in definitions:
-        if matches(predicates, defn.when):
+        conditions = defn.get('when', {})
+        if matches(predicates, conditions):
             return defn
     
     # Should never reach here if definitions include a fallback
-    raise ValueError("No matching analysis type")
+    # But handle gracefully
+    return {
+        'id': 'unknown',
+        'name': 'Unknown Selection',
+        'runner': 'general_stats_runner'
+    }
 
 def matches(predicates: dict, conditions: dict) -> bool:
-    """Check if predicates satisfy all conditions."""
+    """
+    Check if predicates satisfy all conditions.
+    
+    Empty conditions ({}) always matches (fallback).
+    All conditions must be satisfied (AND logic).
+    """
+    # Empty conditions = always match (fallback)
+    if not conditions:
+        return True
+    
     for key, expected in conditions.items():
         actual = predicates.get(key)
         
+        # Handle None/missing predicates
+        if actual is None:
+            return False
+        
         if isinstance(expected, dict):
-            # Range check: { gte: 3 }
+            # Range check: { gte: 3 } or { lte: 5 } or { gte: 2, lte: 10 }
             if 'gte' in expected and actual < expected['gte']:
                 return False
             if 'lte' in expected and actual > expected['lte']:
+                return False
+            if 'gt' in expected and actual <= expected['gt']:
+                return False
+            if 'lt' in expected and actual >= expected['lt']:
+                return False
+        elif isinstance(expected, list):
+            # Value in list: [1, 2, 3]
+            if actual not in expected:
                 return False
         else:
             # Exact match
@@ -202,6 +292,204 @@ def matches(predicates: dict, conditions: dict) -> bool:
     
     return True
 ```
+
+**Condition operators:**
+
+| Operator | Example | Meaning |
+|----------|---------|---------|
+| (exact) | `node_count: 2` | Must equal 2 |
+| `gte` | `node_count: { gte: 3 }` | Must be ≥ 3 |
+| `lte` | `node_count: { lte: 10 }` | Must be ≤ 10 |
+| `gt` | `node_count: { gt: 1 }` | Must be > 1 |
+| `lt` | `node_count: { lt: 5 }` | Must be < 5 |
+| (list) | `node_count: [2, 3]` | Must be 2 or 3 |
+| (empty) | `when: {}` | Always matches (fallback) |
+
+**Ordering example:**
+```yaml
+analyses:
+  # Specific cases first (order matters!)
+  - id: single_node
+    when: { node_count: 1 }
+    
+  # Comparative analyses require multiple scenarios
+  - id: scenario_comparison
+    when: { multiple_scenarios: true, node_count: 1 }
+    
+  - id: end_comparison
+    when: { all_absorbing: true, node_count: { gte: 2 } }
+    
+  - id: end_comparison_multi_scenario
+    when: { all_absorbing: true, node_count: { gte: 2 }, multiple_scenarios: true }
+    
+  - id: two_node_path
+    when: { node_count: 2 }
+    
+  - id: sequential_path
+    when: { has_unique_start: true, has_unique_end: true, is_sequential: true }
+    
+  - id: constrained_path
+    when: { has_unique_start: true, has_unique_end: true }
+    
+  # Fallback last (matches anything)
+  - id: general_selection
+    when: {}
+```
+
+---
+
+## Extensibility: Return Object Shapes
+
+### Phase 1: JSON only
+
+For Phase 1, all analyses return a generic JSON object. The structure is implicit in the runner code.
+
+```python
+class AnalysisResponse(BaseModel):
+    analysis_type: str
+    analysis_name: str
+    query_parsed: dict
+    results: list[ScenarioResult]  # Generic dict per scenario
+    metadata: dict
+```
+
+### Future: Declared return shapes
+
+When we need richer UI (Phase 2+), we can extend `analysis_types.yaml` to declare return shape:
+
+```yaml
+analyses:
+  - id: path_analysis
+    when: { has_unique_start: true, has_unique_end: true }
+    runner: path_runner
+    # Future: declare return shape for UI rendering
+    returns:
+      type: path_result
+      fields:
+        - name: probability
+          type: float
+          display: percentage
+        - name: expected_cost_gbp
+          type: float
+          display: currency
+        - name: expected_time_days
+          type: float
+          display: duration
+        - name: path_nodes
+          type: list[string]
+          display: node_sequence
+```
+
+This enables:
+- Type-safe UI components per result type
+- Automatic table/card rendering
+- Validation of runner output
+
+**Decision:** Defer to Phase 2. Phase 1 just returns JSON, UI pretty-prints it.
+
+---
+
+## Schema Strategy
+
+### Key Decision: Where does `analysis_types.yaml` live?
+
+**Options:**
+
+| Option | Location | Editable by Users | Extensible |
+|--------|----------|-------------------|------------|
+| **A: Internal only** | Bundled in app code | No | Only via code releases |
+| **B: User-managed** | User's repo (like `connections.yaml`) | Yes, in app | Fully extensible |
+| **C: Hybrid** | Core bundled + user extensions | Partially | Users extend, can't break core |
+
+**Recommendation: A (Internal only) for Phase 1**
+
+**Rationale:**
+- Analysis types require matching **runner code** in Python
+- Users can't add new runners without code changes
+- Unlike `connections.yaml` (pure config), analysis types are code-config hybrids
+- Safer: users can't break analytics by editing YAML
+
+**Extensibility model:**
+- New analysis types require code release
+- Users customize behavior via **scenarios** and **what-if overrides**, not analysis definitions
+- Phase 2+ could add "user-defined analysis presets" (saved queries with labels) - but that's different from analysis *types*
+
+**Implication: Pydantic is sufficient**
+
+Since `analysis_types.yaml` is internal:
+- No need for external schema validation
+- No need for schema → type → code pipeline
+- Pydantic types for request/response are fine
+- YAML is just internal config, loaded at startup
+
+```python
+# Internal config - loaded from bundled file
+class AnalysisAdaptor:
+    def __init__(self):
+        config_path = Path(__file__).parent / 'analysis_types.yaml'  # Bundled
+        with open(config_path) as f:
+            self.definitions = yaml.safe_load(f)['analyses']
+```
+
+---
+
+### Future: If we want user extensibility
+
+If we later decide users should define custom analysis types:
+
+1. **Require JSON Schema** for `analysis_types.yaml`
+2. **Validate user YAML** against schema on load
+3. **Limit to existing runners** - users can only combine predicates + existing runners
+4. **Separate files**: `analysis_types.yaml` (bundled core) + `custom_analyses.yaml` (user repo)
+
+But this adds complexity. **Defer unless there's a clear user need.**
+
+---
+
+### Schema for Request/Response Types
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **A: Pydantic only** | Fast, Pythonic, IDE support | TS types must be manually synced |
+| **B: JSON Schema** | Language-agnostic, can generate types | More verbose, another artifact |
+| **C: Pydantic + export** | Best of both | Slight complexity |
+
+**Phase 1 approach:** Pydantic in Python, manual TS types. 
+
+If TS/Python drift becomes painful, add schema export:
+
+```python
+# types.py
+from pydantic import BaseModel
+
+class AnalysisRequest(BaseModel):
+    graph: dict
+    query: str
+    scenarios: list[ScenarioParams] = []
+    what_if_overrides: dict = {}
+
+# Optional: Export schema for TS codegen
+if __name__ == "__main__":
+    import json
+    print(json.dumps(AnalysisRequest.model_json_schema(), indent=2))
+```
+
+---
+
+## Anticipated Predicate Categories Summary
+
+| Category | Phase 1 | Future | Derived From | Notes |
+|----------|---------|--------|--------------|-------|
+| **Selection** | ✅ | | Selection Query | node_count, all_absorbing, unique start/end |
+| **Scenario** | ✅ | | UI State | scenario_count, multiple_scenarios |
+| **Graph** | | ✅ | Graph Structure | has_case_nodes, has_conditionals, has_cycles |
+| **Data** | | ✅ | Loaded Data | has_actuals, has_live_connection |
+
+**Not predicates** (orthogonal concerns):
+- Window / Context → These are part of the **Data View Query**, already applied before analytics
+- Analytics receives graph with data already sliced by window/context
+
+Phase 1 implements Selection + Scenario predicates. Others can be added as needed without restructuring.
 
 ---
 
@@ -876,6 +1164,108 @@ Once Analytics Panel is working:
 
 ---
 
+## DSL Parsing Requirements
+
+### Required DSL Functions
+
+The Python DSL parser (`lib/query_dsl.py`) must handle:
+
+| Function | Example | Parsed Output |
+|----------|---------|---------------|
+| `from(X)` | `from(node-a)` | `{ "from": "node-a" }` |
+| `to(X)` | `to(node-b)` | `{ "to": "node-b" }` |
+| `visited(X,Y,...)` | `visited(n1,n2)` | `{ "visited": ["n1", "n2"] }` |
+| `nodes(X,Y,...)` | `nodes(a,b,c)` | `{ "nodes": ["a", "b", "c"] }` |
+| `compare(X,Y,...)` | `compare(e1,e2)` | `{ "compare": ["e1", "e2"] }` |
+| `exclude(X,Y,...)` | `exclude(x)` | `{ "exclude": ["x"] }` |
+
+**Pre-implementation check:** Verify existing `query_dsl.py` supports these, or extend.
+
+See `DSL_CONSTRUCTION_CASES.md` for full mapping of selection patterns → DSL strings.
+
+---
+
+## Scenario Predicate Handling
+
+**Scenario predicates** (`scenario_count`, `multiple_scenarios`) are derived from UI state, not the graph.
+
+**API approach:** Pass scenario count explicitly in request:
+
+```python
+class AnalysisRequest(BaseModel):
+    graph: dict
+    query: str
+    scenarios: list[ScenarioParams] = []
+    what_if_overrides: dict = {}
+    # Scenario count derived from len(scenarios)
+```
+
+**Predicate computation:**
+```python
+def compute_all_predicates(G, selected_node_ids, scenarios):
+    predicates = compute_selection_predicates(G, selected_node_ids)
+    
+    # Add scenario predicates
+    predicates['scenario_count'] = len(scenarios)
+    predicates['multiple_scenarios'] = len(scenarios) > 1
+    
+    return predicates
+```
+
+---
+
+## Error Response Format
+
+**Error response structure:**
+```json
+{
+  "error": true,
+  "error_type": "validation_error | parse_error | compute_error",
+  "message": "Human-readable error message",
+  "details": {
+    "query": "the invalid query",
+    "position": 15,
+    "expected": ["from", "to", "nodes"]
+  }
+}
+```
+
+**HTTP status codes:**
+- `400` - Invalid request (bad DSL, missing fields)
+- `422` - Validation error (node not found, invalid graph)
+- `500` - Internal compute error
+
+---
+
+## What-If Override Application
+
+**Override structure:**
+```python
+what_if_overrides = {
+    "case_overrides": {
+        "case-node-id": "variant-name"  # Force case node to specific variant
+    },
+    "conditional_overrides": {
+        "edge-id": {
+            "condition": "context(uk)",
+            "active": True  # Force conditional to active/inactive
+        }
+    },
+    "probability_overrides": {
+        "edge-id": 0.75  # Direct probability override
+    }
+}
+```
+
+**Application order:**
+1. Start with base graph probabilities
+2. Apply scenario's `param_overrides`
+3. Apply request's `what_if_overrides` (overrides scenario)
+4. Compute effective edge probabilities
+5. Run analysis
+
+---
+
 ## Open Design Questions
 
 ### Q1: Trust TS predicates or recompute in Python?
@@ -893,7 +1283,15 @@ Once Analytics Panel is working:
 
 ### Q3: How to handle invalid/unsupported queries?
 
-**Recommendation:** Return error response with helpful message, don't crash.
+**Recommendation:** Return error response with helpful message, don't crash. See error format above.
+
+---
+
+## Related Documents
+
+- `DSL_CONSTRUCTION_CASES.md` - Selection pattern → DSL string mapping
+- `PHASE_1_SCOPE.md` - Scope and effort estimates
+- `PHASE_1_IMPLEMENTATION_PLAN.md` - Step-by-step implementation
 
 ---
 
