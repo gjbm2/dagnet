@@ -858,6 +858,8 @@ class GitService {
   /**
    * Check which files have been changed on the remote
    * Returns array of file paths that have different SHAs
+   * 
+   * OPTIMIZED: Uses a single tree fetch instead of checking each file individually
    */
   async checkFilesChangedOnRemote(
     files: Array<{ path: string; sha?: string }>,
@@ -866,27 +868,51 @@ class GitService {
   ): Promise<string[]> {
     const changedFiles: string[] = [];
     
-    for (const file of files) {
-      if (file.sha) {
-        // Only check files that exist remotely (have a SHA)
-        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
-        
-        try {
-          const fileResult = await this.getFile(fullPath, branch);
-          
-          if (fileResult.success && fileResult.data) {
-            const remoteSha = (fileResult.data as any).sha;
-            
-            if (remoteSha !== file.sha) {
-              // File has been changed on remote
-              changedFiles.push(file.path);
-            }
-          }
-        } catch (error) {
-          // File might not exist on remote, which is fine for new files
-          console.log(`File ${file.path} doesn't exist on remote, will create it`);
+    // Filter to only files that have SHAs (exist remotely)
+    const filesToCheck = files.filter(f => f.sha);
+    if (filesToCheck.length === 0) {
+      return [];
+    }
+    
+    try {
+      // Fetch the entire tree in ONE API call
+      const treeResult = await this.getRepositoryTree(branch, true);
+      
+      if (!treeResult.success || !treeResult.data?.tree) {
+        console.warn('GitService.checkFilesChangedOnRemote: Could not fetch tree, skipping remote check');
+        return [];
+      }
+      
+      // Build a map of paths to SHAs from the tree
+      // Paths in tree are relative to repo root, so prepend basePath if provided
+      const remoteShaMap = new Map<string, string>();
+      for (const item of treeResult.data.tree) {
+        if (item.type === 'blob' && item.path && item.sha) {
+          // Store with the path relative to basePath for comparison
+          const relativePath = basePath && item.path.startsWith(basePath + '/')
+            ? item.path.substring(basePath.length + 1)
+            : item.path;
+          remoteShaMap.set(relativePath, item.sha);
         }
       }
+      
+      // Compare local SHAs against remote tree
+      for (const file of filesToCheck) {
+        const remoteSha = remoteShaMap.get(file.path);
+        
+        if (remoteSha && remoteSha !== file.sha) {
+          // File has been changed on remote
+          changedFiles.push(file.path);
+        }
+        // If remoteSha is undefined, file doesn't exist on remote (will be created)
+      }
+      
+      console.log(`GitService.checkFilesChangedOnRemote: Checked ${filesToCheck.length} files, ${changedFiles.length} changed`);
+      
+    } catch (error) {
+      console.error('GitService.checkFilesChangedOnRemote: Error fetching tree:', error);
+      // Fall back gracefully - don't block commit
+      return [];
     }
     
     return changedFiles;
