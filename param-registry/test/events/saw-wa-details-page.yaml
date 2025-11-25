@@ -1,0 +1,14 @@
+id: saw-wa-details-page
+name: saw-wa-details-page
+category: conversion
+tags: []
+provider_event_names:
+  amplitude: Viewed WhatsApp details /onboarding/whatsApp-details Page
+amplitude_filters: []
+metadata:
+  created_at: '2025-11-20T18:50:04.258Z'
+  updated_at: '2025-11-21T00:23:24.819Z'
+  status: active
+  author: user
+  version: 1.0.0
+

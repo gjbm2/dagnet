@@ -320,6 +320,8 @@ export function parseDSL(dsl: string | null | undefined): ParsedFullQuery {
       context: [],
       cases: [],
       visitedAny: [],
+      contextAny: [],
+      window: null,
       raw: ''
     };
   }

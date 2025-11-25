@@ -12,7 +12,6 @@ import { workspaceService } from '../../services/workspaceService';
 import type { MergeConflict } from '../../services/workspaceService';
 import { gitService } from '../../services/gitService';
 import { credentialsManager } from '../../lib/credentials';
-import { db } from '../../db/appDatabase';
 import toast from 'react-hot-toast';
 import YAML from 'yaml';
 import type { ObjectType } from '../../types';
@@ -45,10 +44,15 @@ export function RepositoryMenu() {
   const hasDirtyFiles = dirtyFiles.length > 0;
   const hasActiveTab = !!activeTabId;
   
-  // Load dirty files from IndexedDB (not just FileRegistry)
+  // Load dirty files using content-based detection (more reliable than isDirty flag)
   React.useEffect(() => {
     const loadDirtyFiles = async () => {
-      const files = await db.getDirtyFiles();
+      // Use content-based detection which compares data to originalData
+      // This works reliably across page refreshes
+      const files = await repositoryOperationsService.getCommittableFiles(
+        state.selectedRepo,
+        state.selectedBranch
+      );
       setDirtyFiles(files);
     };
     loadDirtyFiles();
@@ -56,7 +60,7 @@ export function RepositoryMenu() {
     const handleDirtyChange = () => loadDirtyFiles();
     window.addEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
     return () => window.removeEventListener('dagnet:fileDirtyChanged', handleDirtyChange);
-  }, []);
+  }, [state.selectedRepo, state.selectedBranch]);
 
   const handleSwitchRepository = () => {
     setIsSwitchRepoModalOpen(true);

@@ -203,6 +203,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         paramSlot: section.paramSlot,
         conditionalIndex: section.conditionalIndex,
         dailyMode: false,
+        currentDSL: graph?.currentQueryDSL || '',
       });
     });
   };

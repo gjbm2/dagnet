@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { gitService } from '../services/gitService';
-import { db } from '../db/appDatabase';
+import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import { ObjectType } from '../types';
 
 interface CommitModalProps {
@@ -48,7 +48,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   const hasInitializedSelectionRef = useRef(false);
   const [forceUpdate, setForceUpdate] = useState(0);
 
-  // Get dirty files that can be committed - from IndexedDB (not just FileRegistry)
+  // Get committable files using content-based detection (more reliable than isDirty flag)
   const [dirtyFiles, setDirtyFiles] = useState<any[]>([]);
   
   useEffect(() => {
@@ -57,49 +57,61 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
       return;
     }
     
-    const loadDirtyFiles = async () => {
-      const filesFromDB = await db.getDirtyFiles();
+    const loadCommittableFiles = async () => {
+      // Use content-based detection which compares data to originalData
+      // This works reliably across page refreshes
+      const filesFromDB = await repositoryOperationsService.getCommittableFiles(
+        state.selectedRepo,
+        state.selectedBranch
+      );
       setDirtyFiles(filesFromDB);
     };
     
-    loadDirtyFiles();
-  }, [isOpen, forceUpdate]);
+    loadCommittableFiles();
+  }, [isOpen, forceUpdate, state.selectedRepo, state.selectedBranch]);
   
   const getCommittableFiles = () => {
     if (!isOpen) return [];
-    return dirtyFiles
-      .filter(file => (fileRegistry.constructor as any).isFileCommittable(file))
-      .map(file => {
-        const fileId = file.fileId;
-        const type = file.type;
-        
-        // Handle index files specially
-        if (fileId.endsWith('-index')) {
-          return {
-            fileId,
-            name: `${type}s-index`,
-            type,
-            path: file.path || `${type}s-index.yaml`,
-            content: file.data ? JSON.stringify(file.data, null, 2) : '',
-            sha: file.sha
-          };
-        }
-        
-        // Regular data files
-        const name = fileId.split('-').slice(1).join('-');
-        const extension = type === 'graph' ? 'json' : 'yaml';
-        const nameWithoutExt = name.replace(/\.(json|yaml|yml)$/, '');
-        const fileName = `${nameWithoutExt}.${extension}`;
-        
+    
+    // dirtyFiles already filtered by getCommittableFiles() service
+    // which uses content-based detection
+    return dirtyFiles.map(file => {
+      // Strip workspace prefix if present (e.g., "repo-branch-parameter-test" -> "parameter-test")
+      let fileId = file.fileId;
+      const prefix = `${state.selectedRepo}-${state.selectedBranch}-`;
+      if (fileId.startsWith(prefix)) {
+        fileId = fileId.substring(prefix.length);
+      }
+      
+      const type = file.type;
+      
+      // Handle index files specially
+      if (fileId.endsWith('-index')) {
         return {
           fileId,
-          name: nameWithoutExt,
+          name: `${type}s-index`,
           type,
-          path: file.path || `${type}s/${fileName}`,
+          path: file.source?.path || file.path || `${type}s-index.yaml`,
           content: file.data ? JSON.stringify(file.data, null, 2) : '',
           sha: file.sha
         };
-      });
+      }
+      
+      // Regular data files
+      const name = fileId.split('-').slice(1).join('-');
+      const extension = type === 'graph' ? 'json' : 'yaml';
+      const nameWithoutExt = name.replace(/\.(json|yaml|yml)$/, '');
+      const fileName = `${nameWithoutExt}.${extension}`;
+      
+      return {
+        fileId,
+        name: nameWithoutExt,
+        type,
+        path: file.source?.path || file.path || `${type}s/${fileName}`,
+        content: file.data ? JSON.stringify(file.data, null, 2) : '',
+        sha: file.sha
+      };
+    });
   };
   
   const commitableFiles = getCommittableFiles();

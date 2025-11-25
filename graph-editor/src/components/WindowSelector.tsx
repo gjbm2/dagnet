@@ -75,6 +75,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const [availableKeySections, setAvailableKeySections] = useState<any[]>([]);
   const [isUnrolled, setIsUnrolled] = useState(false);
   const [showPinnedQueryModal, setShowPinnedQueryModal] = useState(false);
+  const [showingAllContexts, setShowingAllContexts] = useState(false);
   
   const contextButtonRef = useRef<HTMLButtonElement>(null);
   const contextDropdownRef = useRef<HTMLDivElement>(null);
@@ -145,9 +146,19 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   }, [isUnrolled, graph?.currentQueryDSL, showContextDropdown, needsFetch]);
   
   // Load context keys from graph.dataInterestsDSL when dropdown opens
+  // Also reload when graph changes (e.g., after F5)
   useEffect(() => {
-    if (showContextDropdown && availableKeySections.length === 0) {
+    // Skip if in "show all" mode - don't overwrite the full list with pinned DSL
+    if (showingAllContexts) {
+      console.log('[WindowSelector] Skipping context load - in "show all" mode');
+      return;
+    }
+    
+    // Always reload contexts when dropdown opens (don't cache stale data)
+    if (showContextDropdown) {
       const loadContextsFromPinnedQuery = async () => {
+        // Clear cache to get fresh data
+        contextRegistry.clearCache();
         // Parse dataInterestsDSL to get pinned context keys
         const pinnedDSL = graph?.dataInterestsDSL || '';
         console.log('[WindowSelector] Pinned DSL:', pinnedDSL);
@@ -215,7 +226,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         console.error('Failed to load contexts from pinned query:', err);
       });
     }
-  }, [showContextDropdown, availableKeySections.length, graph?.dataInterestsDSL]);
+  }, [showContextDropdown, showingAllContexts, graph?.dataInterestsDSL]);
   
   const isInitialMountRef = useRef(true);
   const isAggregatingRef = useRef(false); // Track if we're currently aggregating to prevent loops
@@ -234,6 +245,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         !contextDropdownRef.current.contains(event.target as Node)
       ) {
         setShowContextDropdown(false);
+        setShowingAllContexts(false); // Reset for next open
       }
     }
     
@@ -676,7 +688,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     
     const newWindow: DateRange = { start: startStr, end: endStr };
     
-    // Phase 3: Early short-circuit - skip setWindow if functionally same
+    // Phase 3: Early short-circuit - skip if functionally same
     if (windowsMatch(newWindow, window)) {
       console.log(`[WindowSelector] Preset ${days} days skipped (window unchanged):`, {
         start: startStr,
@@ -693,7 +705,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       includesToday: endStr === new Date().toISOString().split('T')[0],
     });
     
-    setWindow(newWindow);
+    // IMPORTANT: Update BOTH window state and graph.currentQueryDSL
+    updateWindowAndDSL(startStr, endStr);
   };
   
   // Helper to check if current window matches a preset
@@ -876,7 +889,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 if (g) setGraph(g);
               },
               paramSlot: item.paramSlot,
-              window: normalizedWindow,
               targetSlice: graph?.currentQueryDSL || ''
             });
             successCount++;
@@ -1056,8 +1068,31 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 availableKeys={availableKeySections}
                 currentValues={currentContextValues}
                 currentContextKey={currentContextKey}
+                showingAll={showingAllContexts}
+                onShowAll={async () => {
+                  // Load ALL contexts from registry (not just pinned)
+                  contextRegistry.clearCache();
+                  const keys = await contextRegistry.getAllContextKeys();
+                  console.log('[WindowSelector] Loading ALL context keys:', keys);
+                  const sections = await Promise.all(
+                    keys.map(async key => {
+                      const context = await contextRegistry.getContext(key.id);
+                      const values = await contextRegistry.getValuesForContext(key.id);
+                      return {
+                        id: key.id,
+                        name: key.id.replace(/_/g, ' ').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                        values,
+                        otherPolicy: context?.otherPolicy
+                      };
+                    })
+                  );
+                  setAvailableKeySections(sections);
+                  setShowingAllContexts(true);
+                  return sections;
+                }}
                 onApply={async (key, values) => {
                   setShowContextDropdown(false);
+                  setShowingAllContexts(false); // Reset for next open
                   
                   if (!setGraph || !graph) return;
                   
@@ -1099,7 +1134,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                     toast.success('All values selected = no filter', { duration: 2000 });
                   }
                 }}
-                onCancel={() => setShowContextDropdown(false)}
+                onCancel={() => {
+                  setShowContextDropdown(false);
+                  setShowingAllContexts(false); // Reset for next open
+                }}
                 anchorEl={contextButtonRef.current}
               />
             </div>

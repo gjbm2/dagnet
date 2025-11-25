@@ -422,8 +422,8 @@ export function unflattenParams(flat: Record<string, any>): ScenarioParams {
     }
     
     // Check for conditional probability format: e.<edgeId>.<condition>.p.<field>
-    // Condition patterns contain: visited(, context(, case(, exclude(
-    const conditionalMatch = key.match(/^e\.([^.]+)\.((?:visited|context|case|exclude)\([^)]+\)(?:\.(?:visited|context|case|exclude)\([^)]+\))*)\.p\.(.+)$/);
+    // Condition patterns contain: visited(, context(, contextAny(, window(, case(, exclude(
+    const conditionalMatch = key.match(/^e\.([^.]+)\.((?:visited|visitedAny|context|contextAny|window|case|exclude)\([^)]+\)(?:\.(?:visited|visitedAny|context|contextAny|window|case|exclude)\([^)]+\))*)\.p\.(.+)$/);
     if (conditionalMatch) {
       const [, edgeId, condition, field] = conditionalMatch;
       

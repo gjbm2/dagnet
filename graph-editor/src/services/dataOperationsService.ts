@@ -527,12 +527,42 @@ class DataOperationsService {
                   };
                 };
                 
+                // Parse and merge constraints from graph-level and edge-specific queries
+                let constraints;
+                try {
+                  const { parseConstraints } = await import('../lib/queryDSL');
+                  
+                  // Parse graph-level constraints (from WindowSelector)
+                  const graphConstraints = graph?.currentQueryDSL ? parseConstraints(graph.currentQueryDSL) : null;
+                  
+                  // Parse edge-specific constraints
+                  const edgeConstraints = targetEdge.query ? parseConstraints(targetEdge.query) : null;
+                  
+                  // Merge: edge-specific overrides graph-level
+                  constraints = {
+                    context: [...(graphConstraints?.context || []), ...(edgeConstraints?.context || [])],
+                    contextAny: [...(graphConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
+                    window: edgeConstraints?.window || graphConstraints?.window || null,
+                    visited: edgeConstraints?.visited || [],
+                    visitedAny: edgeConstraints?.visitedAny || []
+                  };
+                  
+                  console.log('[DataOps:getDataSnapshot] Merged constraints:', {
+                    graphDSL: graph?.currentQueryDSL,
+                    edgeQuery: targetEdge.query,
+                    merged: constraints
+                  });
+                } catch (error) {
+                  console.warn('[DataOps:getDataSnapshot] Failed to parse constraints:', error);
+                }
+                
                 // Build DSL from edge
                 const dsl = await buildDslFromEdge(
                   targetEdge,
                   graph,
                   connectionProvider,
-                  eventLoader
+                  eventLoader,
+                  constraints  // Pass constraints for context filters
                 );
                 
                 // Compute expected query signature (include event_ids from nodes)
@@ -1619,11 +1649,11 @@ class DataOperationsService {
     setGraph?: (graph: Graph | null) => void;
     paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
     conditionalIndex?: number;
-    window?: DateRange;
     bustCache?: boolean; // If true, ignore existing dates and re-fetch everything
     targetSlice?: string; // Optional: DSL for specific slice (default '' = uncontexted)
+    currentDSL?: string;  // Explicit DSL for window/context (e.g. from WindowSelector / scenario)
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, window, bustCache, targetSlice = '' } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL } = options;
     
     try {
       if (objectType === 'parameter') {
@@ -1638,9 +1668,10 @@ class DataOperationsService {
           setGraph,
           paramSlot,
           conditionalIndex,
-          window,
-          dailyMode: true, // Always use daily mode for versioned fetching
-          bustCache // Pass through bust cache flag
+          dailyMode: true, // Internal: write daily time-series into file when provider supports it
+          bustCache,       // Pass through bust cache flag
+          currentDSL,
+          targetSlice,
         });
         
         // 2. Update graph from file (standard file-to-graph flow)
@@ -1649,8 +1680,7 @@ class DataOperationsService {
             paramId: objectId,
             edgeId: targetId,
             graph,
-            setGraph,
-            window // Use same window for aggregation
+            setGraph
           });
         }
         
@@ -1669,10 +1699,10 @@ class DataOperationsService {
           targetId,
           graph,
           setGraph,
-          window,
           dailyMode: false, // Cases do not use daily time-series; this is a single snapshot
           versionedCase: true, // Signal to append schedule to case file instead of direct graph apply
-          bustCache: false
+          bustCache: false,
+          currentDSL,
         });
         
         // 2. Update graph nodes from case file (with windowed aggregation)
@@ -1686,13 +1716,12 @@ class DataOperationsService {
           if (caseNode) {
             const nodeId = caseNode.uuid || caseNode.id;
             
-            // Use getCaseFromFile with window for time-weighted aggregation
+            // Use getCaseFromFile for time-weighted aggregation; service will infer window from DSL
             await this.getCaseFromFile({
               caseId: objectId,
               nodeId,
               graph,
-              setGraph,
-              window // Pass window for time-weighted aggregation (Component 5)
+              setGraph
             });
           } else {
             console.warn(`[DataOperationsService] No case node found with case_id="${objectId}"`);
@@ -1707,10 +1736,8 @@ class DataOperationsService {
             const { WindowAggregationService } = await import('./windowAggregationService');
             const aggregationService = new WindowAggregationService();
             
-            // Get windowed aggregation (or latest if no window)
-            const aggregated = window 
-              ? aggregationService.aggregateCaseSchedulesForWindow(caseFile.data.schedules || [], window)
-              : aggregationService.getCaseWeightsForWindow(caseFile.data.schedules || []);
+            // Get windowed aggregation (or latest if no window) - using default service semantics
+            const aggregated = aggregationService.getCaseWeightsForWindow(caseFile.data.schedules || []);
             
             const variants = aggregated.variants || [];
             
@@ -1855,11 +1882,12 @@ class DataOperationsService {
     // For direct parameter references (no param file)
     paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
     conditionalIndex?: number;
-    window?: DateRange; // Optional: date range for fetching
-    dailyMode?: boolean; // For parameters: if true, fetch daily time-series data into file
-    bustCache?: boolean; // If true, ignore existing dates and re-fetch everything
+    dailyMode?: boolean;      // INTERNAL: for parameters, whether to write daily time-series into file
+    bustCache?: boolean;      // If true, ignore existing dates and re-fetch everything
     // For cases: distinguish direct vs versioned/schedule-based path
-    versionedCase?: boolean; // If true AND objectType==='case', append schedule to case file instead of direct graph update
+    versionedCase?: boolean;  // If true AND objectType==='case', append schedule to case file instead of direct graph update
+    currentDSL?: string;      // Explicit DSL for window/context (e.g. from WindowSelector / scenario)
+    targetSlice?: string;     // Optional: DSL for specific slice (default '' = uncontexted)
   }): Promise<void> {
       const {
         objectType,
@@ -1869,10 +1897,11 @@ class DataOperationsService {
         setGraph,
         paramSlot,
         conditionalIndex,
-        window,
         dailyMode,
         bustCache,
         versionedCase,
+        currentDSL,
+        targetSlice = '',
       } = options;
     
     try {
@@ -1983,6 +2012,7 @@ class DataOperationsService {
       // 3. Build DSL from edge query (if available in graph)
       let dsl: any = {};
       let connectionProvider: string | undefined;
+      let supportsDailyTimeSeries = false; // Capability from connections.yaml
       
       if (objectType === 'case') {
         // Cases don't need DSL building
@@ -2016,6 +2046,14 @@ class DataOperationsService {
             const connection = await (tempRunner as any).connectionProvider.getConnection(connectionName);
             connectionProvider = connection.provider;
             
+            // Check if connection supports daily time series (from capabilities in connections.yaml)
+            supportsDailyTimeSeries = connection.capabilities?.supports_daily_time_series === true;
+            console.log('[DataOps] Connection capabilities:', {
+              connectionName,
+              supportsDailyTimeSeries,
+              capabilities: connection.capabilities
+            });
+            
             // Skip DSL building for connections that don't require event_ids
             // This is specified in the connection definition (requires_event_ids: false)
             const requiresEventIds = connection.requires_event_ids !== false; // Default to true if not specified
@@ -2042,14 +2080,58 @@ class DataOperationsService {
                 };
               };
               
+              // Parse and merge constraints from graph-level and edge-specific queries
+              // Priority: currentDSL param > graph.currentQueryDSL (for dynamic scenarios)
+              let constraints;
+              try {
+                const { parseConstraints } = await import('../lib/queryDSL');
+                
+                // Use explicit currentDSL if provided, otherwise fall back to graph.currentQueryDSL
+                const effectiveDSL = currentDSL || graph?.currentQueryDSL || '';
+                
+                // Parse graph-level constraints (from WindowSelector or scenario)
+                const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
+                
+                // Parse edge-specific constraints
+                const edgeConstraints = targetEdge.query ? parseConstraints(targetEdge.query) : null;
+                
+                // Merge: edge-specific overrides graph-level
+                constraints = {
+                  context: [...(graphConstraints?.context || []), ...(edgeConstraints?.context || [])],
+                  contextAny: [...(graphConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
+                  window: edgeConstraints?.window || graphConstraints?.window || null,
+                  visited: edgeConstraints?.visited || [],
+                  visitedAny: edgeConstraints?.visitedAny || []
+                };
+                
+                console.log('[DataOps] Merged constraints:', {
+                  currentDSL,
+                  graphDSL: graph?.currentQueryDSL,
+                  effectiveDSL,
+                  edgeQuery: targetEdge.query,
+                  graphConstraints,
+                  edgeConstraints,
+                  merged: constraints
+                });
+              } catch (error) {
+                console.warn('[DataOps] Failed to parse constraints:', error);
+              }
+              
+              // Clear context registry cache to ensure fresh data from filesystem
+              const { contextRegistry } = await import('./contextRegistry');
+              contextRegistry.clearCache();
+              
               // Build DSL with event mapping for analytics-style connections (e.g., Amplitude)
               dsl = await buildDslFromEdge(
                 targetEdge,
                 graph,
                 connectionProvider,
-                eventLoader
+                eventLoader,
+                constraints  // NEW: Pass constraints for context filters
               );
               console.log('Built DSL from edge with event mapping:', dsl);
+              console.log('[DataOps] Context filters:', dsl.context_filters);
+              console.log('[DataOps] Window dates:', dsl.start, dsl.end);
             }
           } catch (e) {
             console.warn('Could not load connection for provider mapping:', e);
@@ -2067,11 +2149,42 @@ class DataOperationsService {
                   provider_event_names: {}
                 };
               };
+              
+              // Parse and merge constraints from graph-level and edge-specific queries (fallback path)
+              let constraints;
+              try {
+                const { parseConstraints } = await import('../lib/queryDSL');
+                
+                // Parse graph-level constraints (from WindowSelector)
+                const graphConstraints = graph?.currentQueryDSL ? parseConstraints(graph.currentQueryDSL) : null;
+                
+                // Parse edge-specific constraints
+                const edgeConstraints = targetEdge.query ? parseConstraints(targetEdge.query) : null;
+                
+                // Merge: edge-specific overrides graph-level
+                constraints = {
+                  context: [...(graphConstraints?.context || []), ...(edgeConstraints?.context || [])],
+                  contextAny: [...(graphConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
+                  window: edgeConstraints?.window || graphConstraints?.window || null,
+                  visited: edgeConstraints?.visited || [],
+                  visitedAny: edgeConstraints?.visitedAny || []
+                };
+                
+                console.log('[DataOps] Merged constraints (fallback):', {
+                  graphDSL: graph?.currentQueryDSL,
+                  edgeQuery: targetEdge.query,
+                  merged: constraints
+                });
+              } catch (error) {
+                console.warn('[DataOps] Failed to parse constraints (fallback):', error);
+              }
+              
               dsl = await buildDslFromEdge(
                 targetEdge,
                 graph,
                 connectionProvider,
-                eventLoader
+                eventLoader,
+                constraints  // NEW: Pass constraints for context filters
               );
             } catch (error) {
               console.error('Error building DSL from edge:', error);
@@ -2088,29 +2201,32 @@ class DataOperationsService {
       const sevenDaysAgo = new Date(now);
       sevenDaysAgo.setDate(now.getDate() - 7);
       
-      // Normalize window to ISO timestamps (handle both YYYY-MM-DD strings and ISO timestamps)
-      const normalizeWindowDate = (dateStr: string): string => {
-        // If already ISO timestamp, return as-is
-        if (dateStr.includes('T')) return dateStr;
-        // If YYYY-MM-DD format, convert to ISO timestamp at start of day
-        return new Date(dateStr + 'T00:00:00Z').toISOString();
-      };
-      
-      const requestedWindow: DateRange = window ? {
-        start: normalizeWindowDate(window.start),
-        end: normalizeWindowDate(window.end),
-      } : {
-        start: sevenDaysAgo.toISOString(),
-        end: now.toISOString()
-      };
+      // CRITICAL: Use window dates from DSL object if available (already ISO format from buildDslFromEdge)
+      // This is the authoritative source - buildDslFromEdge has already parsed and normalized the window
+      let requestedWindow: DateRange;
+      if (dsl.start && dsl.end) {
+        // DSL object has window dates (already ISO format from buildDslFromEdge)
+        requestedWindow = {
+          start: dsl.start,
+          end: dsl.end
+        };
+        console.log('[DataOps] Using window from DSL object:', requestedWindow);
+      } else {
+        // No window in DSL, use default last 7 days
+        requestedWindow = {
+          start: sevenDaysAgo.toISOString(),
+          end: now.toISOString()
+        };
+        console.log('[DataOps] No window in DSL, using default last 7 days:', requestedWindow);
+      }
       
       let actualFetchWindows: DateRange[] = [requestedWindow];
       let querySignature: string | undefined;
       let shouldSkipFetch = false;
       
-      // CRITICAL: ALWAYS compute query signature for dailyMode (even on first fetch)
-      // We need it to sign the data we're writing to the parameter file
-      if (dailyMode && objectType === 'parameter') {
+      // CRITICAL: ALWAYS compute query signature when writing to parameter files
+      // (we only write for parameter objects in versioned/source-via-file pathway)
+      if (objectType === 'parameter' && dailyMode) {
         const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
         querySignature = await computeQuerySignature(dsl, connectionName, graph, targetEdge);
         console.log('[DataOperationsService] Computed query signature for storage:', {
@@ -2120,9 +2236,8 @@ class DataOperationsService {
         });
       }
       
-      // IMPORTANT: Only check for incremental fetch if bustCache is NOT set
-      // When user explicitly chooses "Get from Source (direct)", we should ALWAYS fetch
-      // The dailyMode flag controls whether we SAVE to file, not whether we check cache
+      // IMPORTANT: Only check for incremental fetch if bustCache is NOT set and we are
+      // in the versioned parameter pathway (source→file→graph).
       const shouldCheckIncrementalFetch = dailyMode && !bustCache && objectType === 'parameter' && objectId;
       
       if (shouldCheckIncrementalFetch) {
@@ -2233,17 +2348,17 @@ class DataOperationsService {
             // Fallback to requested window
             actualFetchWindows = [requestedWindow];
             const cacheBustText = bustCache ? ' (busting cache)' : '';
-            toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}${cacheBustText}...`, { id: 'das-fetch' });
+            toast.loading(`Fetching data from source${cacheBustText}...`, { id: 'das-fetch' });
           }
         } else {
           // No parameter file - use requested window
           actualFetchWindows = [requestedWindow];
-          toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}...`, { id: 'das-fetch' });
+          toast.loading(`Fetching data from source...`, { id: 'das-fetch' });
         }
       } else {
         // Not daily mode or no parameter file - use requested window
         actualFetchWindows = [requestedWindow];
-        toast.loading(`Fetching data from source${dailyMode ? ' (daily mode)' : ''}...`, { id: 'das-fetch' });
+        toast.loading(`Fetching data from source...`, { id: 'das-fetch' });
       }
       
       // If all dates are cached, skip fetching and use existing data
@@ -2263,8 +2378,10 @@ class DataOperationsService {
       const { createDASRunner } = await import('../lib/das');
       const runner = createDASRunner();
       
-      // Set context mode: 'daily' if dailyMode is true, otherwise 'aggregate'
-      const contextMode = dailyMode ? 'daily' : 'aggregate';
+      // Set context mode based on provider capabilities (from connections.yaml).
+      // Connections with supports_daily_time_series: true can return per-day data for incremental fetch.
+      const contextMode = supportsDailyTimeSeries ? 'daily' : 'aggregate';
+      console.log('[DataOps] Context mode:', { contextMode, supportsDailyTimeSeries, connectionName });
       
       // Collect all time-series data from all gaps (parameters only)
       const allTimeSeriesData: Array<{ date: string; n: number; k: number; p: number }> = [];
@@ -2272,7 +2389,7 @@ class DataOperationsService {
       // For cases: capture the most recent transformed raw result (e.g. variants_update, gate_id)
       let lastResultRaw: any = null;
       
-      // Store query info for daily mode storage
+      // Store query info for versioned parameter storage
       let queryParamsForStorage: any = undefined;
       let fullQueryForStorage: string | undefined = undefined;
       
@@ -2295,7 +2412,7 @@ class DataOperationsService {
       // Capture query info for storage (same for all gaps)
       // CRITICAL: Store the DSL STRING (from graph edge), not the DSL object
       // The DSL object has provider event names; we want the original query string
-      if (dailyMode) {
+      if (dailyMode && objectType === 'parameter') {
         queryParamsForStorage = queryString || dsl; // Use query string first, fall back to DSL object
         fullQueryForStorage = queryString || JSON.stringify(dsl);
       }
@@ -2338,8 +2455,8 @@ class DataOperationsService {
             
             console.log(`[DataOperationsService] Composite query result for gap ${gapIndex + 1}:`, combined);
             
-            // Extract results based on mode
-            if (dailyMode) {
+            // Extract results based on pathway: for parameters we collect time-series
+            if (dailyMode && objectType === 'parameter') {
               // CRITICAL: Extract time-series data from composite result
               if (combined.evidence?.time_series && Array.isArray(combined.evidence.time_series)) {
                 const timeSeries = combined.evidence.time_series;
@@ -2409,8 +2526,8 @@ class DataOperationsService {
             lastResultRaw = result.raw;
           }
         
-          // Collect time-series data if in daily mode
-          if (dailyMode && result.raw?.time_series) {
+          // Collect time-series data for versioned parameters when time_series is present
+          if (dailyMode && objectType === 'parameter' && result.raw?.time_series) {
             // Ensure time_series is an array before spreading
             const timeSeries = result.raw.time_series;
             if (Array.isArray(timeSeries)) {
@@ -2676,7 +2793,7 @@ class DataOperationsService {
           
           // Create new schedule entry
           const newSchedule = {
-            window_from: window?.start || new Date().toISOString(),
+            window_from: new Date().toISOString(),
             window_to: null,
             variants,
             // Capture provenance on the schedule itself (case file history)
@@ -2743,7 +2860,7 @@ class DataOperationsService {
           
           // Enhance with statistical methods (same as file pulls: inverse-variance)
           // Handle both sync (TS) and async (Python) results
-          const enhancedResult = statisticalEnhancementService.enhance(rawAggregation, 'inverse-variance');
+          const enhancedResult = statisticalEnhancementService.enhance(rawAggregation as any, 'inverse-variance');
           const enhanced = enhancedResult instanceof Promise 
             ? await enhancedResult 
             : enhancedResult;

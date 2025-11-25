@@ -29,6 +29,8 @@ interface ContextValueSelectorProps {
   onCancel: () => void;
   anchorEl?: HTMLElement | null;
   otherPolicy?: 'null' | 'computed' | 'explicit' | 'undefined'; // For single-key mode
+  onShowAll?: () => Promise<ContextKeySection[]>; // Callback to load all contexts (not just pinned)
+  showingAll?: boolean; // Whether we're currently showing all contexts
 }
 
 export function ContextValueSelector({
@@ -41,7 +43,9 @@ export function ContextValueSelector({
   onApply,
   onCancel,
   anchorEl,
-  otherPolicy
+  otherPolicy,
+  onShowAll,
+  showingAll = false
 }: ContextValueSelectorProps) {
   const [selectedValues, setSelectedValues] = useState<Set<string>>(
     new Set(currentValues)
@@ -210,6 +214,25 @@ export function ContextValueSelector({
               )}
             </div>
           ))}
+          
+          {/* Show All button - only show if callback provided and not already showing all */}
+          {onShowAll && !showingAll && (
+            <button 
+              className="context-show-all-button"
+              onClick={async () => {
+                const allSections = await onShowAll();
+                // Expand all new sections
+                setExpandedSections(new Set(allSections.map(s => s.id)));
+              }}
+            >
+              Show all contexts...
+            </button>
+          )}
+          {showingAll && (
+            <div className="context-show-all-indicator">
+              Showing all available contexts
+            </div>
+          )}
         </div>
       )}
       

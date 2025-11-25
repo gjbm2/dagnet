@@ -6,7 +6,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { explodeDSL, countAtomicSlices } from '../../lib/dslExplosion';
+import { explodeDSL } from '../../lib/dslExplosion';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import './Modal.css';
 
@@ -39,6 +39,7 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
       }
       
       try {
+        // Use TypeScript DSL explosion (local, fast)
         const slices = await explodeDSL(draftDSL);
         setImpliedSlices(slices.slice(0, 20)); // Show first 20
         setSliceCount(slices.length);
@@ -106,7 +107,7 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
                 ⚠️ Note: {sliceCount} slices may impact nightly run performance
               </div>
             )}
-            <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0 0', maxHeight: '200px', overflowY: 'auto', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: '4px', padding: '8px' }}>
+            <ul style={{ listStyle: 'none', padding: '8px', margin: '8px 0 0 0', maxHeight: '200px', overflowY: 'auto', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: '4px' }}>
               {impliedSlices.map((slice, i) => (
                 <li key={i} style={{ padding: '4px 0', fontSize: '12px', fontFamily: 'Monaco, monospace', color: '#374151' }}>{slice}</li>
               ))}
