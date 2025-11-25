@@ -587,7 +587,10 @@ class RepositoryOperationsService {
     gitService.setCredentials(credentialsWithRepo);
 
     // Check for files changed on remote and warn user
+    console.log(`[repositoryOperationsService] Starting remote changes check for ${files.length} files...`);
+    const remoteCheckStart = performance.now();
     const changedFiles = await gitService.checkFilesChangedOnRemote(files, branch, gitCreds.basePath);
+    console.log(`[repositoryOperationsService] Remote changes check completed in ${(performance.now() - remoteCheckStart).toFixed(0)}ms`);
     if (changedFiles.length > 0) {
       sessionLogService.addChild(logOpId, 'warning', 'REMOTE_CHANGES', 
         `${changedFiles.length} file(s) changed on remote`,
