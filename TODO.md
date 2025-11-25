@@ -2,9 +2,6 @@
 
 - Not absolutely sure our condition_p logic works. If I set the prob of A-B conditionally on C to x, then the siblings must track the complement BUT we use the CONDITION to key the probability...that means the logic can never work???!!!
 
-## Project Contexts
-- Context support
-
 ## Current query DSL
 
 - This query string is now a natural candidate for what to use to populate the name of newly created scenarios, poss. along with timestamp.
