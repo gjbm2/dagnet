@@ -1,6 +1,7 @@
 # TODO
 
 - Not absolutely sure our condition_p logic works. If I set the prob of A-B conditionally on C to x, then the siblings must track the complement BUT we use the CONDITION to key the probability...that means the logic can never work???!!!
+- 
 
 ## Current query DSL
 

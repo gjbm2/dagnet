@@ -866,17 +866,23 @@ class GitService {
     branch: string,
     basePath?: string
   ): Promise<string[]> {
+    const startTime = performance.now();
     const changedFiles: string[] = [];
     
     // Filter to only files that have SHAs (exist remotely)
     const filesToCheck = files.filter(f => f.sha);
     if (filesToCheck.length === 0) {
+      console.log(`GitService.checkFilesChangedOnRemote: No files with SHAs to check`);
       return [];
     }
     
+    console.log(`GitService.checkFilesChangedOnRemote: Checking ${filesToCheck.length} files...`);
+    
     try {
       // Fetch the entire tree in ONE API call
+      const treeFetchStart = performance.now();
       const treeResult = await this.getRepositoryTree(branch, true);
+      console.log(`GitService.checkFilesChangedOnRemote: Tree fetch took ${(performance.now() - treeFetchStart).toFixed(0)}ms`);
       
       if (!treeResult.success || !treeResult.data?.tree) {
         console.warn('GitService.checkFilesChangedOnRemote: Could not fetch tree, skipping remote check');
@@ -907,7 +913,8 @@ class GitService {
         // If remoteSha is undefined, file doesn't exist on remote (will be created)
       }
       
-      console.log(`GitService.checkFilesChangedOnRemote: Checked ${filesToCheck.length} files, ${changedFiles.length} changed`);
+      const elapsed = performance.now() - startTime;
+      console.log(`GitService.checkFilesChangedOnRemote: Checked ${filesToCheck.length} files, ${changedFiles.length} changed (total: ${elapsed.toFixed(0)}ms)`);
       
     } catch (error) {
       console.error('GitService.checkFilesChangedOnRemote: Error fetching tree:', error);
