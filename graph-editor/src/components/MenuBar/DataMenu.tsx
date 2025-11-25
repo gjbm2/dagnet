@@ -268,8 +268,8 @@ export function DataMenu() {
       setGraph: handleSetGraph,
       paramSlot: section.paramSlot,
       conditionalIndex: section.conditionalIndex,
-      window: windowState || undefined,
       dailyMode: false,
+      currentDSL: graph.currentQueryDSL || '',
     });
   };
 
@@ -283,7 +283,7 @@ export function DataMenu() {
       setGraph: handleSetGraph,
       paramSlot: section.paramSlot,
       conditionalIndex: section.conditionalIndex,
-      window: windowState || undefined,
+      currentDSL: graph.currentQueryDSL || '',
     });
   };
   

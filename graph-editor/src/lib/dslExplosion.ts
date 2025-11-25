@@ -66,11 +66,14 @@ function parseExpression(dsl: string): string[] {
     return branches;
   }
   
-  // Handle (...)
-  if (trimmed.startsWith('(') && !trimmed.includes(').')) {
-    // Simple parenthesized group
-    const inner = trimmed.slice(1, -1);
-    return parseExpression(inner);
+  // Handle (...) - Check if outer parens match and can be stripped
+  if (trimmed.startsWith('(') && !trimmed.startsWith('or(')) {
+    const parenEnd = findMatchingParen(trimmed, 0);
+    // If the matching paren is at the end, strip outer parens
+    if (parenEnd === trimmed.length - 1) {
+      const inner = trimmed.slice(1, -1);
+      return parseExpression(inner);
+    }
   }
   
   // Handle (...).suffix

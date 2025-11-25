@@ -16,6 +16,7 @@ connections:
       supports_visited: true
       supports_ordered: true
       max_funnel_length: 10
+      supports_daily_time_series: true  # Amplitude supports per-day data retrieval for incremental fetch
     # NOTE: Demo/test credentials - events may not exist in the test project
     # For real data, configure actual Amplitude project credentials
     defaults:
@@ -146,6 +147,80 @@ connections:
             }
           }
           
+          // Add context filtering (if any) as SEGMENT filters
+          // IMPORTANT: Segment filters operate on USER PROPERTIES in this API.
+          // For custom user properties, Amplitude expects "gp:<name>" as the prop key.
+          //
+          // Context filters are now STRUCTURED OBJECTS from buildDslFromEdge:
+          //   { field: "utm_medium", op: "is", values: ["cpc"] }
+          //   { field: "utm_medium", op: "is", values: ["Paid Social", "paidsocial"] }
+          //   { field: "utm_medium", op: "is not", values: ["cpc", "referral"] }
+          //   { field: "utm_medium", op: "matches", pattern: "paidsocial|Paid Social", patternFlags: "i" }
+          //
+          // We convert these to Amplitude segment objects:
+          //   { prop: "gp:utm_medium", op: "is", values: ["cpc"] }
+          //   { prop: "gp:utm_medium", op: "is not", values: ["cpc", "referral"] }
+          //   { prop: "gp:utm_medium", op: "contains", values: ["paidsocial"] }  // for regex patterns
+          if (dsl.context_filters && Array.isArray(dsl.context_filters)) {
+            const BUILT_IN_USER_PROPS = new Set([
+              "version", "country", "city", "region", "DMA", "language",
+              "platform", "os", "device", "device_type", "device_family", "start_version", "paying",
+              "userdata_cohort"
+            ]);
+            
+            // Helper to normalize property name to Amplitude user property key
+            const normalizeProp = (prop) => {
+              if (!prop) return prop;
+              if (BUILT_IN_USER_PROPS.has(prop)) return prop;
+              if (prop.startsWith("gp:")) return prop;
+              // Treat everything else as custom user property
+              return `gp:${prop}`;
+            };
+            
+            for (const filterObj of dsl.context_filters) {
+              // Handle both structured objects (new) and string expressions (legacy)
+              if (typeof filterObj === 'string') {
+                console.warn(`[Amplitude Adapter] Legacy string filter not supported: ${filterObj}`);
+                continue;
+              }
+              
+              const prop = normalizeProp(filterObj.field);
+              
+              if (filterObj.pattern) {
+                // Regex pattern - Amplitude doesn't support regex on segments directly
+                // Extract literal values from regex patterns like "^(Paid Social|paidsocial)$"
+                // Strip regex anchors and extract alternatives from groups
+                let patternStr = filterObj.pattern;
+                // Remove anchors
+                patternStr = patternStr.replace(/^\^/, '').replace(/\$$/, '');
+                // Remove outer group parens if present
+                if (patternStr.startsWith('(') && patternStr.endsWith(')')) {
+                  patternStr = patternStr.slice(1, -1);
+                }
+                // Now split by | to get literal alternatives
+                const patternParts = patternStr.split('|').map(s => s.trim()).filter(s => s.length > 0);
+                const op = filterObj.op === 'is not' ? 'is not' : 'is';
+                segments.push({
+                  prop,
+                  op,
+                  values: patternParts
+                });
+                console.log(`[Amplitude Adapter] Added pattern context segment filter: ${prop} ${op} ${JSON.stringify(patternParts)}`);
+              } else if (filterObj.values && filterObj.values.length > 0) {
+                // Simple values
+                const op = filterObj.op === 'is not' ? 'is not' : 'is';
+                segments.push({
+                  prop,
+                  op,
+                  values: filterObj.values
+                });
+                console.log(`[Amplitude Adapter] Added context segment filter: ${prop} ${op} ${JSON.stringify(filterObj.values)}`);
+              } else {
+                console.warn(`[Amplitude Adapter] Empty filter object: ${JSON.stringify(filterObj)}`);
+              }
+            }
+          }
+          
           // Build s parameter if we have any segments
           let segmentParam = '';
           if (segments.length > 0) {
@@ -215,12 +290,13 @@ connections:
                   }
                 }) : []
             )
-        - name: p_mean
-          jsonata: "$number(from_count) > 0 ? $number(to_count) / $number(from_count) : 0"
+        # Handle null values gracefully - return 0 when no data
         - name: n
-          jsonata: "$number(from_count)"
+          jsonata: "from_count != null ? $number(from_count) : 0"
         - name: k
-          jsonata: "$number(to_count)"
+          jsonata: "to_count != null ? $number(to_count) : 0"
+        - name: p_mean
+          jsonata: "n > 0 ? k / n : 0"
       upsert:
         mode: replace
         writes:

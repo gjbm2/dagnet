@@ -509,8 +509,11 @@ export function QueryExpressionEditor({
         }
         
         // After context(key: → suggest values for that key (async)
+        // Match the LAST context( in the string (not the first)
         if (/context\(([^:)]+):([^)]*)$/.test(textUntilPosition)) {
-          const match = textUntilPosition.match(/context\(([^:)]+):/);
+          // Use a more specific regex that captures the LAST context(key:
+          const matches = Array.from(textUntilPosition.matchAll(/context\(([^:)]+):/g));
+          const match = matches[matches.length - 1]; // Get last match
           if (match) {
             const contextKey = match[1];
             

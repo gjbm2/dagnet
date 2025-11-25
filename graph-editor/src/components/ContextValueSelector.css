@@ -126,3 +126,31 @@
   padding: 4px 0 4px 28px;
 }
 
+/* Show All button */
+.context-show-all-button {
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  cursor: pointer;
+  font-size: 12px;
+  color: #6B7280;
+  text-align: center;
+  transition: all 0.15s;
+}
+
+.context-show-all-button:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.context-show-all-indicator {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: #9CA3AF;
+  text-align: center;
+  border-top: 1px solid #e5e7eb;
+  font-style: italic;
+}
+

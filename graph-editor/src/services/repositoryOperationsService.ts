@@ -9,6 +9,8 @@ import { workspaceService } from './workspaceService';
 import { fileRegistry } from '../contexts/TabContext';
 import { gitService } from './gitService';
 import { credentialsManager } from '../lib/credentials';
+import { db } from '../db/appDatabase';
+import { FileState } from '../types';
 
 export interface RepositoryStatus {
   repository: string;
@@ -247,10 +249,199 @@ class RepositoryOperationsService {
   }
 
   /**
-   * Show dirty files list
+   * Show dirty files list (from in-memory FileRegistry)
+   * Note: For reliable cross-session detection, use getFilesWithChanges() instead
    */
   getDirtyFiles() {
     return fileRegistry.getDirtyFiles();
+  }
+
+  /**
+   * Get files that have been changed (content-based detection)
+   * 
+   * This is MORE RELIABLE than isDirty flag because:
+   * 1. It compares actual content to originalData
+   * 2. Works across page refreshes (persisted in IndexedDB)
+   * 3. Doesn't depend on isDirty being correctly maintained
+   * 
+   * Returns files from IndexedDB where serialized data differs from originalData
+   */
+  async getFilesWithChanges(repository?: string, branch?: string): Promise<FileState[]> {
+    console.log('📊 RepositoryOperationsService: Detecting changed files (content-based)...');
+    
+    // Get all files from IndexedDB
+    let allFiles: FileState[];
+    
+    if (repository && branch) {
+      // Filter by repository/branch
+      allFiles = await db.files
+        .where('source.repository').equals(repository)
+        .and(file => file.source?.branch === branch)
+        .toArray();
+    } else {
+      // Get all files
+      allFiles = await db.files.toArray();
+    }
+    
+    const changedFiles: FileState[] = [];
+    
+    for (const file of allFiles) {
+      // Skip if no data or originalData to compare
+      if (!file.data || !file.originalData) {
+        // If we have data but no originalData, this is a local-only file
+        if (file.data && !file.originalData && file.isLocal) {
+          changedFiles.push(file);
+        }
+        continue;
+      }
+      
+      // Content-based comparison
+      const dataStr = JSON.stringify(file.data);
+      const originalStr = JSON.stringify(file.originalData);
+      
+      if (dataStr !== originalStr) {
+        console.log(`  📝 Changed: ${file.fileId} (content differs from original)`);
+        changedFiles.push(file);
+      }
+    }
+    
+    console.log(`📊 RepositoryOperationsService: Found ${changedFiles.length} changed files`);
+    return changedFiles;
+  }
+
+  /**
+   * Compute Git blob SHA for content
+   * Git blob SHA = SHA-1("blob " + content_length + "\0" + content)
+   */
+  private async computeGitBlobSha(content: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const contentBytes = encoder.encode(content);
+    const header = `blob ${contentBytes.length}\0`;
+    const headerBytes = encoder.encode(header);
+    
+    // Combine header and content
+    const combined = new Uint8Array(headerBytes.length + contentBytes.length);
+    combined.set(headerBytes, 0);
+    combined.set(contentBytes, headerBytes.length);
+    
+    // Compute SHA-1
+    const hashBuffer = await crypto.subtle.digest('SHA-1', combined);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /**
+   * Serialize file data to the format that would be committed to git
+   */
+  private async serializeFileData(file: FileState): Promise<string> {
+    if (file.type === 'graph') {
+      return JSON.stringify(file.data, null, 2);
+    } else {
+      const YAML = await import('yaml');
+      return YAML.stringify(file.data);
+    }
+  }
+
+  /**
+   * Get all committable files by comparing to REMOTE state
+   * 
+   * This is the most reliable method because it compares:
+   * - Local serialized content SHA vs stored remote SHA
+   * - Works even if originalData was updated (e.g., after pull)
+   * - Detects ALL local changes that differ from last sync
+   * 
+   * Returns files that:
+   * 1. Have different content SHA than stored remote SHA
+   * 2. OR are local-only (no SHA = never pushed)
+   * 3. AND are committable (not credentials, settings, or temporary)
+   */
+  async getCommittableFiles(repository?: string, branch?: string): Promise<FileState[]> {
+    console.log('📊 RepositoryOperationsService: Getting committable files (SHA-based comparison)...');
+    
+    // Get all files from IndexedDB
+    let allFiles: FileState[];
+    
+    if (repository && branch) {
+      allFiles = await db.files
+        .where('source.repository').equals(repository)
+        .and(file => file.source?.branch === branch)
+        .toArray();
+    } else {
+      allFiles = await db.files.toArray();
+    }
+    
+    // Deduplicate: files exist with both prefixed and unprefixed IDs
+    // Keep the unprefixed version (or strip prefix to get canonical ID)
+    const prefix = repository && branch ? `${repository}-${branch}-` : '';
+    const seenFileIds = new Set<string>();
+    const deduplicatedFiles: FileState[] = [];
+    
+    for (const file of allFiles) {
+      // Get canonical (unprefixed) fileId
+      let canonicalId = file.fileId;
+      if (prefix && file.fileId.startsWith(prefix)) {
+        canonicalId = file.fileId.substring(prefix.length);
+      }
+      
+      // Skip if we've already seen this file
+      if (seenFileIds.has(canonicalId)) {
+        continue;
+      }
+      seenFileIds.add(canonicalId);
+      
+      // Use the file but with canonical ID
+      deduplicatedFiles.push({ ...file, fileId: canonicalId });
+    }
+    
+    console.log(`📊 RepositoryOperationsService: ${allFiles.length} files in IDB, ${deduplicatedFiles.length} after deduplication`);
+    
+    const committableFiles: FileState[] = [];
+    
+    for (const file of deduplicatedFiles) {
+      // Skip non-committable file types
+      if (file.type === 'credentials') continue;
+      if (file.type === 'settings') continue;
+      if (file.source?.repository === 'temporary') continue;
+      
+      // Skip files without data
+      if (!file.data) continue;
+      
+      // Check if file has changes compared to remote
+      let hasChanges = false;
+      let reason = '';
+      
+      if (!file.sha) {
+        // No SHA = local-only file, never pushed
+        hasChanges = true;
+        reason = 'local-only (no SHA)';
+      } else {
+        // Compare local content SHA to stored remote SHA
+        try {
+          const serialized = await this.serializeFileData(file);
+          const localSha = await this.computeGitBlobSha(serialized);
+          
+          if (localSha !== file.sha) {
+            hasChanges = true;
+            reason = `SHA differs (local: ${localSha.substring(0, 8)}, remote: ${file.sha.substring(0, 8)})`;
+          }
+        } catch (error) {
+          // If we can't compute SHA, fall back to isDirty flag
+          console.warn(`  ⚠️ Could not compute SHA for ${file.fileId}:`, error);
+          if (file.isDirty) {
+            hasChanges = true;
+            reason = 'isDirty flag (SHA computation failed)';
+          }
+        }
+      }
+      
+      if (hasChanges) {
+        committableFiles.push(file);
+        console.log(`  ✓ Committable: ${file.fileId} - ${reason}`);
+      }
+    }
+    
+    console.log(`📊 RepositoryOperationsService: Found ${committableFiles.length} committable files`);
+    return committableFiles;
   }
 
   /**

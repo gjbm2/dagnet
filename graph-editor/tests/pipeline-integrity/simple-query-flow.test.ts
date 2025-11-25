@@ -115,9 +115,9 @@ describe('Pipeline Integrity: Simple Query Flow', () => {
   test('query with visited: correct funnel order', async () => {
     const graph = createTestGraph({
       nodes: [
-        { id: 'a', name: 'A' },
-        { id: 'b', name: 'B' },
-        { id: 'c', name: 'C' }
+        { id: 'a', name: 'A', event_id: 'event_a' },
+        { id: 'b', name: 'B', event_id: 'event_b' },
+        { id: 'c', name: 'C', event_id: 'event_c' }
       ],
       edges: [{
         from: 'a',
