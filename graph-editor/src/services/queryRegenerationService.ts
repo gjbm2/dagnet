@@ -326,6 +326,8 @@ export class QueryRegenerationService {
         downstreamOf: options?.downstreamOf
       });
       
+      // Note: Session logging is handled by the caller (graphMutationService) using hierarchical logging
+      
       return {
         parameters: response.parameters,
         graphUpdates: 0,
@@ -333,6 +335,7 @@ export class QueryRegenerationService {
       };
     } catch (error) {
       console.error('[QueryRegeneration] Failed to regenerate queries:', error);
+      // Note: Session logging is handled by the caller (graphMutationService) using hierarchical logging
       throw error;
     }
   }
@@ -347,6 +350,12 @@ export class QueryRegenerationService {
     graphUpdates: number;
     fileUpdates: number;
     skipped: number;
+    changedParameters: Array<{
+      paramId: string;
+      oldQuery: string;
+      newQuery: string;
+      location: string;
+    }>;
   }> {
     let graphUpdates = 0;
     let fileUpdates = 0;
@@ -410,7 +419,7 @@ export class QueryRegenerationService {
       console.log('[QueryRegeneration] Queries changed:', changedQueries);
     }
     
-    return { graphUpdates, fileUpdates, skipped };
+    return { graphUpdates, fileUpdates, skipped, changedParameters: changedQueries };
   }
   
   /**

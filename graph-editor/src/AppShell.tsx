@@ -11,6 +11,7 @@ import { VisibleTabsProvider, useVisibleTabs } from './contexts/VisibleTabsConte
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { fileOperationsService } from './services/fileOperationsService';
 import { repositoryOperationsService } from './services/repositoryOperationsService';
+import { sessionLogService } from './services/sessionLogService';
 import { MenuBar } from './components/MenuBar';
 import { NavigatorContent } from './components/Navigator';
 import { TabContextMenu } from './components/TabContextMenu';
@@ -97,6 +98,9 @@ function AppShellContent() {
   
   // Initialize services once
   useEffect(() => {
+    // Initialize session logging first (needs to be early to capture init events)
+    sessionLogService.initialize();
+    
     fileOperationsService.initialize({
       navigatorOps: navOperations,
       tabOps: tabOperations,

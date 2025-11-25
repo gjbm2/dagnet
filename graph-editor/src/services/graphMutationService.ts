@@ -16,6 +16,7 @@
 
 import toast from 'react-hot-toast';
 import { queryRegenerationService } from './queryRegenerationService';
+import { sessionLogService } from './sessionLogService';
 import type { Graph } from '../types';
 
 /**
@@ -159,6 +160,23 @@ class GraphMutationService {
     
     console.log('🚨 [GraphMutation] TOPOLOGY CHANGE DETECTED:', change);
     
+    // Log topology change to session log
+    const changeDescriptions: Record<string, string> = {
+      'node-added': 'Node added to graph',
+      'node-removed': 'Node removed from graph',
+      'edge-added': 'Edge added to graph',
+      'edge-removed': 'Edge removed from graph',
+      'edge-connectivity-changed': 'Edge connection changed',
+      'conditional-condition-changed': 'Conditional probability condition changed'
+    };
+    
+    sessionLogService.info(
+      'graph',
+      `GRAPH_${(change.changeType || 'unknown').toUpperCase().replace(/-/g, '_')}`,
+      changeDescriptions[change.changeType || ''] || `Graph topology changed: ${change.changeType}`,
+      change.affectedNode ? `Affected: ${change.affectedNode}` : undefined
+    );
+    
     // If regeneration already in progress, queue this one
     if (this.regenerationInProgress) {
       console.log('[GraphMutation] Regeneration in progress, queuing...');
@@ -196,6 +214,18 @@ class GraphMutationService {
     console.log('🎬 [GraphMutation] Setting isAutoUpdating = true');
     options?.setAutoUpdating?.(true);
     
+    // Start hierarchical log operation for MSMDC
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'msmdc',
+      'MSMDC_REGEN',
+      `Query regeneration starting (${graph.nodes.length} nodes, ${graph.edges.length} edges)`,
+      {
+        nodesAffected: graph.nodes.map(n => n.id || n.uuid),
+        edgesAffected: graph.edges.map(e => `${e.from}→${e.to}`)
+      }
+    );
+    
     try {
       // Step 1: Call Python MSMDC
       console.log('[GraphMutation] Calling MSMDC...', {
@@ -203,6 +233,14 @@ class GraphMutationService {
         nodeCount: graph.nodes.length,
         edgeCount: graph.edges.length
       });
+      
+      sessionLogService.addChild(
+        logOpId,
+        'info',
+        'MSMDC_API_CALL',
+        'Calling Python MSMDC API',
+        options?.downstreamOf ? `Downstream of: ${options.downstreamOf}` : 'Full graph regeneration'
+      );
       
       const result = await queryRegenerationService.regenerateQueries(graph, {
         downstreamOf: options?.downstreamOf,
@@ -214,6 +252,14 @@ class GraphMutationService {
       console.log('[GraphMutation] MSMDC completed in', elapsed.toFixed(0), 'ms', {
         parametersGenerated: result.parameters.length
       });
+      
+      sessionLogService.addChild(
+        logOpId,
+        'success',
+        'MSMDC_API_RESPONSE',
+        `Python API returned ${result.parameters.length} parameter queries`,
+        `Duration: ${elapsed.toFixed(0)}ms`
+      );
       
       // Step 2: Apply regenerated queries to graph
       const updatedGraph = structuredClone(graph);
@@ -228,6 +274,22 @@ class GraphMutationService {
         skipped: applyResult.skipped
       });
       
+      // Log each parameter that was changed
+      for (const param of applyResult.changedParameters || []) {
+        sessionLogService.addChild(
+          logOpId,
+          'info',
+          'PARAM_UPDATED',
+          `Updated: ${param.paramId}`,
+          `Location: ${param.location}`,
+          {
+            paramId: param.paramId,
+            valuesBefore: { query: param.oldQuery?.substring(0, 50) },
+            valuesAfter: { query: param.newQuery?.substring(0, 50) }
+          }
+        );
+      }
+      
       // Step 3: Update graph store with regenerated queries
       if (applyResult.graphUpdates > 0) {
         updatedGraph.metadata = updatedGraph.metadata || {
@@ -239,17 +301,41 @@ class GraphMutationService {
         setGraph(updatedGraph);
         
         // Notify user
-        if (applyResult.graphUpdates > 0) {
-          toast.success(`✓ Regenerated ${applyResult.graphUpdates} queries`, { duration: 3000 });
-        }
+        toast.success(`✓ Regenerated ${applyResult.graphUpdates} queries`, { duration: 3000 });
+        
+        sessionLogService.endOperation(
+          logOpId,
+          'success',
+          `MSMDC completed: ${applyResult.graphUpdates} queries regenerated`,
+          {
+            parametersGenerated: applyResult.changedParameters?.map(p => ({
+              paramId: p.paramId,
+              query: p.newQuery?.substring(0, 80) || '',
+              location: p.location,
+              changed: true
+            }))
+          }
+        );
       } else {
         console.log('[GraphMutation] No query changes needed');
+        sessionLogService.endOperation(
+          logOpId,
+          'info',
+          'MSMDC completed: No query changes needed'
+        );
       }
       
     } catch (error) {
       console.error('[GraphMutation] Regeneration error:', error);
       // Don't throw - graph is already updated, this is just cascade failure
       toast.error('Query regeneration failed - queries may be stale');
+      
+      sessionLogService.endOperation(
+        logOpId,
+        'error',
+        'MSMDC query regeneration failed',
+        { error: error instanceof Error ? error.message : String(error) }
+      );
     } finally {
       this.regenerationInProgress = false;
       

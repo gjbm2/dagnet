@@ -3,6 +3,7 @@ import { GraphEditor } from './GraphEditor';
 import { FormEditor } from './FormEditor';
 import { RawView } from './RawView';
 import { MarkdownViewer } from './MarkdownViewer';
+import { SessionLogViewer } from './SessionLogViewer';
 import { getFileTypeConfig } from '../../config/fileTypeRegistry';
 
 /**
@@ -17,13 +18,14 @@ const EDITOR_COMPONENTS = {
   form: FormEditor,
   raw: RawView,
   markdown: MarkdownViewer,
+  sessionLog: SessionLogViewer,
 };
 
 /**
  * Get editor component for a given type and view mode.
  * Queries FILE_TYPE_REGISTRY to determine which editor to use.
  */
-export function getEditorComponent(type: ObjectType | 'settings', viewMode: 'interactive' | 'raw-json' | 'raw-yaml') {
+export function getEditorComponent(type: ObjectType | 'settings' | 'session-log', viewMode: 'interactive' | 'raw-json' | 'raw-yaml') {
   // Raw views always use RawView component (including settings)
   if (viewMode === 'raw-json' || viewMode === 'raw-yaml') {
     return RawView;
@@ -32,6 +34,11 @@ export function getEditorComponent(type: ObjectType | 'settings', viewMode: 'int
   // Special case for settings interactive view
   if (type === 'settings') {
     return FormEditor;
+  }
+  
+  // Special case for session log viewer
+  if (type === 'session-log') {
+    return SessionLogViewer;
   }
   
   // Special case for markdown - always use MarkdownViewer for read-only display

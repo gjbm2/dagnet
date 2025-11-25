@@ -46,6 +46,35 @@ import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice } from './sliceIsolation';
+import { sessionLogService } from './sessionLogService';
+
+/**
+ * Format edge identifier in human-readable form for logging
+ * Shows: "from → to (paramId)" or "from → to" if no param
+ */
+function formatEdgeForLog(edge: any, graph: Graph | null): string {
+  if (!edge) return 'unknown edge';
+  
+  // Find source and target nodes to get human-readable names
+  const fromNode = graph?.nodes?.find((n: any) => n.uuid === edge.from || n.id === edge.from);
+  const toNode = graph?.nodes?.find((n: any) => n.uuid === edge.to || n.id === edge.to);
+  
+  const fromName = fromNode?.id || fromNode?.label || edge.from?.substring(0, 8) || '?';
+  const toName = toNode?.id || toNode?.label || edge.to?.substring(0, 8) || '?';
+  const paramId = edge.p?.id;
+  
+  return paramId 
+    ? `${fromName} → ${toName} (${paramId})`
+    : `${fromName} → ${toName}`;
+}
+
+/**
+ * Format node identifier in human-readable form for logging
+ */
+function formatNodeForLog(node: any): string {
+  if (!node) return 'unknown node';
+  return node.id || node.label || node.uuid?.substring(0, 8) || '?';
+}
 
 // Shared UpdateManager instance
 const updateManager = new UpdateManager();
@@ -1654,6 +1683,8 @@ class DataOperationsService {
     currentDSL?: string;  // Explicit DSL for window/context (e.g. from WindowSelector / scenario)
   }): Promise<void> {
     const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL } = options;
+    sessionLogService.info('data-fetch', 'DATA_GET_FROM_SOURCE', `Get from Source (versioned): ${objectType} ${objectId}`,
+      undefined, { fileId: `${objectType}-${objectId}`, fileType: objectType });
     
     try {
       if (objectType === 'parameter') {
@@ -1904,6 +1935,32 @@ class DataOperationsService {
         targetSlice = '',
       } = options;
     
+    // Get human-readable identifiers for logging
+    const targetEntity = targetId && graph 
+      ? (objectType === 'parameter'
+          ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId)
+          : graph.nodes?.find((n: any) => n.uuid === targetId || n.id === targetId))
+      : null;
+    
+    const entityLabel = objectType === 'parameter' && targetEntity
+      ? formatEdgeForLog(targetEntity, graph || null)
+      : targetEntity
+        ? formatNodeForLog(targetEntity)
+        : objectId || 'inline';
+    
+    // Start hierarchical logging for data operation
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'data-fetch',
+      dailyMode ? 'DATA_FETCH_VERSIONED' : 'DATA_FETCH_DIRECT',
+      `Fetching ${objectType}: ${entityLabel}`,
+      { 
+        fileId: objectId ? `${objectType}-${objectId}` : undefined, 
+        fileType: objectType,
+        targetId
+      }
+    );
+    
     try {
       let connectionName: string | undefined;
       let connectionString: any = {};
@@ -1925,6 +1982,7 @@ class DataOperationsService {
             : data.connection_string;
             } catch (e) {
               toast.error('Invalid connection_string JSON in parameter file');
+              sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON in parameter file');
               return;
             }
           }
@@ -1965,6 +2023,7 @@ class DataOperationsService {
                     : param.connection_string;
                 } catch (e) {
                   toast.error('Invalid connection_string JSON on edge');
+                  sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON on edge');
                   return;
                 }
               }
@@ -1981,6 +2040,7 @@ class DataOperationsService {
                     : target.case.connection_string;
                 } catch (e) {
                   toast.error('Invalid connection_string JSON on case');
+                  sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON on case');
                   return;
                 }
               }
@@ -1996,6 +2056,7 @@ class DataOperationsService {
                   : target.connection_string;
               } catch (e) {
                 toast.error('Invalid connection_string JSON');
+                sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON');
                 return;
               }
             }
@@ -2005,9 +2066,16 @@ class DataOperationsService {
       
       // 2. Check if we have a connection configured
       if (!connectionName) {
+        sessionLogService.endOperation(logOpId, 'error', 'No connection configured');
         toast.error(`No connection configured. Please set the 'connection' field.`);
         return;
       }
+      
+      // Log connection info
+      sessionLogService.addChild(logOpId, 'info', 'CONNECTION', 
+        `Using connection: ${connectionName}`,
+        connectionString ? `Config: ${JSON.stringify(connectionString).substring(0, 100)}...` : undefined,
+        { sourceType: connectionName });
       
       // 3. Build DSL from edge query (if available in graph)
       let dsl: any = {};
@@ -2132,6 +2200,21 @@ class DataOperationsService {
               console.log('Built DSL from edge with event mapping:', dsl);
               console.log('[DataOps] Context filters:', dsl.context_filters);
               console.log('[DataOps] Window dates:', dsl.start, dsl.end);
+              
+              // Log query details for user
+              const queryDesc = targetEdge.query || 'no query';
+              const windowDesc = (dsl.start && dsl.end) 
+                ? `${normalizeDate(dsl.start)} to ${normalizeDate(dsl.end)}`
+                : 'default window';
+              sessionLogService.addChild(logOpId, 'info', 'QUERY_BUILT',
+                `Query: ${queryDesc}`,
+                `Window: ${windowDesc}${dsl.context_filters?.length ? `, Filters: ${dsl.context_filters.length}` : ''}`,
+                { 
+                  edgeQuery: queryDesc,
+                  resolvedWindow: windowDesc,
+                  events: dsl.events?.map((e: any) => e.event_id || e),
+                  contextFilters: dsl.context_filters
+                });
             }
           } catch (e) {
             console.warn('Could not load connection for provider mapping:', e);
@@ -2189,6 +2272,7 @@ class DataOperationsService {
             } catch (error) {
               console.error('Error building DSL from edge:', error);
               toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+              sessionLogService.endOperation(logOpId, 'error', `Failed to build query: ${error instanceof Error ? error.message : String(error)}`);
               return;
             }
           }
@@ -2465,6 +2549,7 @@ class DataOperationsService {
               } else {
                 console.warn(`[DataOperationsService] No time-series in composite result for gap ${gapIndex + 1}`, combined);
                 toast.error(`Composite query returned no daily data for gap ${gapIndex + 1}`, { id: 'das-fetch' });
+                sessionLogService.endOperation(logOpId, 'error', `Composite query returned no daily data for gap ${gapIndex + 1}`);
                 return;
               }
             } else {
@@ -2478,6 +2563,7 @@ class DataOperationsService {
             
           } catch (error) {
             toast.error(`Composite query failed for gap ${gapIndex + 1}: ${error instanceof Error ? error.message : String(error)}`, { id: 'das-fetch' });
+            sessionLogService.endOperation(logOpId, 'error', `Composite query failed: ${error instanceof Error ? error.message : String(error)}`);
             return;
           }
           
@@ -2504,6 +2590,7 @@ class DataOperationsService {
             // Show user-friendly message in toast
             const userMessage = result.error || 'Failed to fetch data from source';
             toast.error(`${userMessage} (gap ${gapIndex + 1}/${actualFetchWindows.length})`, { id: 'das-fetch' });
+            sessionLogService.endOperation(logOpId, 'error', `API call failed: ${userMessage}`);
             return;
           }
           
@@ -2520,6 +2607,35 @@ class DataOperationsService {
             timeSeriesValue: result.raw?.time_series,
             window: fetchWindow,
           });
+          
+          // Log API response for user
+          const responseDesc: string[] = [];
+          const rawData = result.raw as any;
+          if (rawData?.time_series && Array.isArray(rawData.time_series) && rawData.time_series.length > 0) {
+            responseDesc.push(`${rawData.time_series.length} days of daily data`);
+          }
+          if (rawData?.n !== undefined) responseDesc.push(`n=${rawData.n}`);
+          if (rawData?.k !== undefined) responseDesc.push(`k=${rawData.k}`);
+          if (rawData?.p_mean !== undefined) responseDesc.push(`p=${((rawData.p_mean as number) * 100).toFixed(2)}%`);
+          if (rawData?.variants_update) responseDesc.push(`${rawData.variants_update.length} variants`);
+          
+          // Provide meaningful description even when no daily breakdown
+          const finalDesc = responseDesc.length > 0 
+            ? responseDesc.join(', ')
+            : 'aggregate data (no daily breakdown)';
+          
+          sessionLogService.addChild(logOpId, 'success', 'API_RESPONSE',
+            `Received: ${finalDesc}`,
+            `Window: ${normalizeDate(fetchWindow.start)} to ${normalizeDate(fetchWindow.end)}`,
+            { 
+              rowCount: rawData?.time_series?.length || result.updates?.length || 1,
+              aggregates: {
+                n: rawData?.n,
+                k: rawData?.k,
+                p: rawData?.p_mean,
+                variants: rawData?.variants_update?.length
+              }
+            });
           
           // Capture raw data for cases (used for direct graph updates)
           if (objectType === 'case') {
@@ -2749,6 +2865,12 @@ class DataOperationsService {
             
             toast.success(`✓ Added ${allTimeSeriesData.length} new days across ${actualFetchWindows.length} gap${actualFetchWindows.length > 1 ? 's' : ''}`, { duration: 2000 });
             
+            // Log file update
+            sessionLogService.addChild(logOpId, 'success', 'FILE_UPDATED',
+              `Updated parameter file: ${objectId}`,
+              `Added ${allTimeSeriesData.length} days of time-series data`,
+              { fileId: `parameter-${objectId}`, rowCount: allTimeSeriesData.length });
+            
             // CRITICAL: After writing daily time-series to file, load it back into the graph
             // This is the "versioned path" that applies File→Graph (see comment at line ~2909)
             if (graph && setGraph && targetId) {
@@ -2780,6 +2902,7 @@ class DataOperationsService {
           if (!caseFile) {
             console.error('[DataOperationsService] Case file not found for versioned case fetch:', { caseFileId });
             toast.error(`Case file not found: ${objectId}`);
+            sessionLogService.endOperation(logOpId, 'error', `Case file not found: ${objectId}`);
             return;
           }
           
@@ -2788,6 +2911,7 @@ class DataOperationsService {
           if (!variants) {
             console.error('[DataOperationsService] No variants found in transform output');
             toast.error('No variant data returned from Statsig');
+            sessionLogService.endOperation(logOpId, 'error', 'No variant data returned from Statsig');
             return;
           }
           
@@ -2895,6 +3019,7 @@ class DataOperationsService {
             targetId, hasGraph: !!graph, hasSetGraph: !!setGraph
           });
           toast.error('Cannot apply to graph: missing context');
+          sessionLogService.endOperation(logOpId, 'error', 'Cannot apply to graph: missing context');
           return;
         }
         
@@ -2905,6 +3030,7 @@ class DataOperationsService {
             targetId, edgeCount: graph.edges?.length
           });
           toast.error('Target edge not found in graph');
+          sessionLogService.endOperation(logOpId, 'error', 'Target edge not found in graph');
           return;
         }
         
@@ -2948,6 +3074,7 @@ class DataOperationsService {
         
         if (!updateResult.success) {
           toast.error('Failed to apply updates to graph');
+          sessionLogService.endOperation(logOpId, 'error', 'Failed to apply updates to graph');
           return;
         }
         
@@ -3020,6 +3147,7 @@ class DataOperationsService {
       if (objectType === 'case' && !dailyMode && !versionedCase && graph && setGraph && targetId) {
         if (!updateData.variants) {
           console.warn('[DataOperationsService] No variants data to apply to case node');
+          sessionLogService.endOperation(logOpId, 'warning', 'No variants data to apply to case node');
           return;
         }
         
@@ -3035,6 +3163,7 @@ class DataOperationsService {
         if (!caseNode) {
           console.error('[DataOperationsService] Case node not found', { targetId });
           toast.error('Case node not found in graph');
+          sessionLogService.endOperation(logOpId, 'error', 'Case node not found in graph');
           return;
         }
         
@@ -3082,6 +3211,7 @@ class DataOperationsService {
         if (!updateResult.success) {
           console.error('[DataOperationsService] UpdateManager failed for case', updateResult);
           toast.error('Failed to apply case updates');
+          sessionLogService.endOperation(logOpId, 'error', 'Failed to apply case updates');
           return;
         }
         
@@ -3141,16 +3271,28 @@ class DataOperationsService {
               });
             }
             toast.success('✓ Updated case from Statsig');
+            
+            // Log graph update
+            sessionLogService.addChild(logOpId, 'success', 'GRAPH_UPDATED',
+              `Updated case node: ${formatNodeForLog(caseNode)}`,
+              `${updateResult.changes?.length || 0} changes applied`,
+              { targetId });
           }
         } else {
           toast('No changes to apply', { icon: 'ℹ️' });
         }
       }
       
+      // End operation successfully
+      sessionLogService.endOperation(logOpId, 'success', 
+        `Completed: ${entityLabel}`,
+        { sourceType: connectionName });
+      
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toast.error(`Error: ${message}`);
       console.error('getFromSourceDirect error:', error);
+      sessionLogService.endOperation(logOpId, 'error', `Data fetch failed: ${message}`);
     }
   }
   

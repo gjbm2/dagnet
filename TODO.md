@@ -52,6 +52,8 @@
 - add moving arrow effect, speed of animation scale on log lag
 
 ### Medium 
+- let's add a 'Create [x] scenarios' on right click context menu on context chips in window component AND within context drop-down which: creates one scenario for each value in the key clicked  -- e.g. if I had browser-type, it would create one scenario [snapshot all mode] for each of the values in browser-type. As always, ensure the logic for this is NOT expressed in the menu file, but in a generalised location
+- Orphaned rc windows at times
 - Some of our files (UpdateManager, GraphEditor, etc.) are becoming very long; we need to re-factor them down to be more manageable
 - **PMF Overflow/Underflow Policies** - Longer-term enhancement to rebalancing logic
   - Current: Edges with parameter references are excluded from auto-rebalancing (implemented)

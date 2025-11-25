@@ -19,10 +19,11 @@ import {
   Settings,      // Settings & Special
   Key,           // Credentials
   Info,          // About
-  FileType       // Markdown
+  FileType,      // Markdown
+  ScrollText     // Session Log
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown';
+export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log';
 
 export interface ObjectTypeTheme {
   /** Light pastel background colour */
@@ -128,6 +129,13 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     icon: FileType,
     label: 'Document',
     emoji: '📄'
+  },
+  'session-log': {
+    lightColour: '#F0FDF4',  // light green
+    accentColour: '#22C55E', // green-500
+    icon: ScrollText,
+    label: 'Session Log',
+    emoji: '📜'
   }
 };
 
