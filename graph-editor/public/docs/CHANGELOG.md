@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.95.2-beta
+**Released:** November 25, 2025
+
+Logging & full data retrieval feature.
+
+---
+
 ## Version 0.95b
 **Released:** November 25, 2025
 
