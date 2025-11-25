@@ -1,405 +1,625 @@
-# DSL Construction: Selection → Query String
+# DSL Construction: Inferring Analytic Intent from Selection
 
 ## Overview
 
-When user selects nodes, we need to construct a DSL query string that Python can parse and execute. This document enumerates all selection patterns and their corresponding DSL.
+When a user selects nodes, we must infer their **analytic intent** and construct an appropriate DSL query. This document exhaustively reasons through all selection patterns.
+
+**DSL Schema Authority:** `/graph-editor/public/schemas/query-dsl-1.0.0.json`
 
 ---
 
-## Selection Pattern Catalog
+## Critical Semantic: Pruning & Renormalization
 
-### Pattern 1: Single Node
+**Current system behavior:** When user selects intermediate nodes, they're saying:
 
-**Selection:** `[B]`
+> "I'm interested in paths uniquely defined by these interstices."
 
-**Graph context matters:**
-- Is B the graph start? → Special case
-- Is B an end/absorbing node? → Special case
-- Otherwise → Path from graph start to B
+This carries **pruning semantics**, not just filtering:
+
+1. **Implicit sibling exclusion:** Selecting node B (when B has siblings B2, B3) implicitly EXCLUDES paths through B2 and B3
+
+2. **Renormalization:** We renormalize probabilities because the user has "made that decision for us"
+
+### Example: Sibling Pruning
+
+```
+Graph:    A ──0.3──► B1 ──► C
+          │
+          ├──0.5──► B2 ──► C    
+          │
+          └──0.2──► B3 ──► C
+
+Selection: [A, B1, C]  (B2, B3 NOT selected)
+
+Effect:
+  - Paths through B2, B3 are EXCLUDED
+  - B1's effective probability renormalizes from 0.3 to 1.0
+    (because it's the only remaining path)
+  - Analysis computes P(A→C via B1) with renormalized probabilities
+```
+
+### Example: Partial Sibling Selection
+
+```
+Graph:    A ──0.3──► B1 ──► C
+          ├──0.5──► B2 ──► C    
+          └──0.2──► B3 ──► C
+
+Selection: [A, B1, B2, C]  (selecting 2 of 3 siblings)
+
+Effect:
+  - Paths through B3 are EXCLUDED
+  - B1 renormalizes: 0.3 / (0.3 + 0.5) = 0.375
+  - B2 renormalizes: 0.5 / (0.3 + 0.5) = 0.625
+  - Analysis computes with renormalized probabilities
+```
+
+### Implication for DSL
+
+`visited(B1)` doesn't just mean "filter to paths containing B1"
+
+It means:
+- **Prune** sibling edges (exclude B2, B3)
+- **Renormalize** remaining edge probabilities
+- **Compute** path metrics with adjusted probabilities
+
+Similarly, `visitedAny(B1,B2)` means:
+- **Keep** paths through B1 OR B2
+- **Prune** unselected siblings (B3)
+- **Renormalize** B1 and B2 proportionally
+
+---
+
+## Core Insight: User Intent Categories
+
+| Intent | User is asking... | Typical selection |
+|--------|-------------------|-------------------|
+| **Path analysis** | "What's the probability/cost of this journey?" | Sequential nodes with clear start→end |
+| **Outcome comparison** | "Compare probabilities of these endpoints" | Multiple absorbing nodes |
+| **Branch comparison** | "Compare these alternative routes" | Sibling nodes (parallel branches) |
+| **Waypoint constraint** | "Paths that pass through these points" | Middle nodes, no clear start/end |
+| **Single node focus** | "Stats for this specific point" | One node |
+
+---
+
+## Step 1: Compute Predicates
+
+For selection `[N1, N2, ..., Nk]`, compute:
+
+### Basic Predicates
+```
+node_count           = k
+is_entry[i]          = node has no predecessors in graph
+is_absorbing[i]      = node has no successors in graph
+is_middle[i]         = has both predecessors and successors
+```
+
+### Structural Predicates
+```
+selected_predecessors[i] = predecessors of Ni that are in selection
+selected_successors[i]   = successors of Ni that are in selection
+
+starts = { Ni : selected_predecessors[i] is empty }  
+         # Nodes with no selected predecessors
+ends   = { Ni : selected_successors[i] is empty }    
+         # Nodes with no selected successors
+
+has_unique_start = |starts| == 1
+has_unique_end   = |ends| == 1
+start_node       = the single start (if unique)
+end_node         = the single end (if unique)
+```
+
+### Sibling Predicates
+```
+parents[i]        = immediate predecessors of Ni in graph
+are_siblings(i,j) = parents[i] ∩ parents[j] ≠ ∅  # Share a parent
+
+sibling_groups    = cluster nodes by shared parents
+all_are_siblings  = all selected nodes share at least one common parent
+```
+
+### Aggregate Predicates
+```
+all_absorbing  = all selected nodes are absorbing
+all_entry      = all selected nodes are entry
+all_middle     = all selected nodes are middle
+```
+
+---
+
+## Step 2: Decision Tree for Intent Inference
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Selection: [N1, ..., Nk]                      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  node_count = 0  │──► No query
+                    └─────────────────┘
+                              │ no
+                              ▼
+                    ┌─────────────────┐
+                    │  node_count = 1  │──► SINGLE NODE ANALYSIS
+                    └─────────────────┘
+                              │ no
+                              ▼
+                    ┌─────────────────┐
+                    │  all_absorbing?  │──► OUTCOME COMPARISON
+                    └─────────────────┘
+                              │ no
+                              ▼
+                    ┌─────────────────┐
+                    │ all_are_siblings │──► BRANCH COMPARISON  
+                    │ AND no unique    │    (no start/end in selection)
+                    │ start or end?    │
+                    └─────────────────┘
+                              │ no
+                              ▼
+                    ┌─────────────────┐
+                    │ has_unique_start │──► PATH ANALYSIS
+                    │ AND              │    (full path)
+                    │ has_unique_end?  │
+                    └─────────────────┘
+                              │ no
+                              ▼
+                    ┌─────────────────┐
+                    │ has_unique_start │──► PARTIAL PATH (from start)
+                    │ only?            │
+                    └─────────────────┘
+                              │ no
+                              ▼
+                    ┌─────────────────┐
+                    │ has_unique_end   │──► PARTIAL PATH (to end)
+                    │ only?            │
+                    └─────────────────┘
+                              │ no
+                              ▼
+                    ┌─────────────────┐
+                    │   Otherwise      │──► GENERAL CONSTRAINT
+                    └─────────────────┘
+```
+
+---
+
+## Step 3: DSL Construction by Intent
+
+### Case 1: Single Node Analysis
+
+**Selection:** `[N]`
+
+**Sub-cases:**
+
+| Node type | Intent | DSL |
+|-----------|--------|-----|
+| Entry node | "Paths starting here" | `from(N)` |
+| Absorbing node | "Paths ending here" | `to(N)` |
+| Middle node | "Paths through here" | `visited(N)` |
+
+---
+
+### Case 2: Outcome Comparison
+
+**Selection:** `[E1, E2, ..., Ek]` where all are absorbing
+
+**Intent:** Compare probabilities of reaching each endpoint
 
 **DSL options:**
 
-| Scenario | DSL | Notes |
-|----------|-----|-------|
-| B is middle node | `from(START).to(B)` | START = graph's entry node |
-| B is graph start | `node(B)` | Just show node stats |
-| B is absorbing | `from(START).to(B)` | Path to this end |
+1. **Single query (OR semantics):** `visitedAny(E1,E2,...,Ek)`
+   - Returns paths to ANY of these ends
+   
+2. **Multiple queries (comparison):** Run separately:
+   - `to(E1)`, `to(E2)`, `to(E3)`
+   - Compare results
 
-**Question:** Should we always include graph start explicitly, or let Python infer it?
-
-**Recommendation:** Always include: `from(START).to(B)`
+**Recommendation:** For comparison analysis, use multiple queries or pass `selected_nodes` for special handling.
 
 ---
 
-### Pattern 2: Two Sequential Nodes
+### Case 3: Branch Comparison
 
-**Selection:** `[A, B]` where A→B edge exists (or A comes before B topologically)
-
-**DSL:** `from(A).to(B)`
+**Selection:** `[B1, B2, ..., Bk]` where all are siblings (share common parent) and none is a unique start/end within selection
 
 **Example:**
 ```
-Graph: START → A → B → C → END
-Selection: [A, B]
-DSL: from(A).to(B)
+Graph:    A → B1 → C
+          ↘ B2 ↗
+          ↘ B3 ↗
+
+Selection: [B1, B2]  (not A, not C)
+```
+
+**Intent:** Compare these parallel branches
+
+**DSL:** `visitedAny(B1,B2)`
+
+---
+
+### Case 4: Path Analysis (Full Path)
+
+**Selection:** Has unique start S and unique end E, with intermediates I = selection - {S, E}
+
+**Sub-cases based on intermediates:**
+
+#### 4a: No intermediates
+**Selection:** `[S, E]`
+**DSL:** `from(S).to(E)`
+
+#### 4b: Sequential intermediates
+**Selection:** `[S, I1, I2, E]` where S→I1→I2→E
+**DSL:** `from(S).to(E).visited(I1).visited(I2)`
+
+#### 4c: Sibling intermediates (all siblings)
+**Selection:** `[S, B1, B2, E]` where B1,B2 are siblings
+```
+Graph:    S → B1 → E
+          ↘ B2 ↗
+```
+**DSL:** `from(S).to(E).visitedAny(B1,B2)`
+
+#### 4d: Mixed intermediates (multiple sibling groups)
+**Selection:** `[S, B1, B2, C1, C2, E]` where B1,B2 siblings, then C1,C2 siblings
+```
+Graph:    S → B1 → C1 → E
+          ↘ B2   ↘ C2 ↗
+```
+**DSL:** `from(S).to(E).visitedAny(B1,B2).visitedAny(C1,C2)`
+
+#### 4e: Mixed siblings and non-siblings
+**Selection:** `[S, B1, B2, D, E]` where B1,B2 siblings, D is not
+```
+Graph:    S → B1 → D → E
+          ↘ B2 ↗
+```
+**DSL:** `from(S).to(E).visitedAny(B1,B2).visited(D)`
+
+---
+
+### Case 5: Partial Path (From Start Only)
+
+**Selection:** Has unique start S, but no unique end
+
+**Example:**
+```
+Selection: [S, B1, B2] 
+where S is start, B1,B2 have multiple successors (no unique end)
+```
+
+**Sub-cases:**
+
+#### 5a: Remaining nodes are all siblings
+**Selection:** `[S, B1, B2]` where B1,B2 share parent S
+**DSL:** `from(S).visitedAny(B1,B2)`
+
+#### 5b: Remaining nodes are NOT siblings
+**Selection:** `[S, X, Y]` where X,Y don't share parent
+**DSL:** `from(S).visited(X).visited(Y)`
+
+#### 5c: Mixed sibling groups
+**Selection:** `[S, B1, B2, C1, C2]` with two sibling groups
+**DSL:** `from(S).visitedAny(B1,B2).visitedAny(C1,C2)`
+
+(Order sibling groups topologically)
+
+---
+
+### Case 6: Partial Path (To End Only)
+
+**Selection:** Has unique end E, but no unique start
+
+**Example:**
+```
+Selection: [X, Y, E] 
+where multiple nodes could precede X or Y
+```
+
+**Sub-cases:** Mirror of Case 5
+
+#### 6a: Preceding nodes are all siblings
+**DSL:** `visitedAny(X,Y).to(E)`
+
+#### 6b: Preceding nodes NOT siblings
+**DSL:** `visited(X).visited(Y).to(E)`
+
+---
+
+### Case 7: General Constraint (No Unique Start or End)
+
+**Selection:** Multiple starts possible, multiple ends possible
+
+**Sub-cases:**
+
+#### 7a: All nodes are siblings
+**Selection:** `[B1, B2, B3]` all share parent
+**DSL:** `visitedAny(B1,B2,B3)`
+
+#### 7b: Nodes NOT siblings
+**Selection:** `[X, Y, Z]` no common parent
+**DSL:** `visited(X).visited(Y).visited(Z)`
+
+#### 7c: Multiple sibling groups, no clear order
+**Selection:** `[A1, A2, B1, B2]` where A's are siblings, B's are siblings
+**DSL:** `visitedAny(A1,A2).visitedAny(B1,B2)` (if topologically orderable)
+**Or:** May need user disambiguation
+
+---
+
+## Step 4: Intermediate Constraint Chain Algorithm
+
+When we have intermediates between start and end:
+
+```
+function buildConstraintChain(intermediates, graph):
+    # 1. Sort topologically
+    sorted = topologicalSort(intermediates, graph)
+    
+    # 2. Group consecutive siblings
+    groups = []
+    currentGroup = [sorted[0]]
+    
+    for i in 1..len(sorted):
+        if areSiblings(sorted[i], currentGroup[0], graph):
+            currentGroup.append(sorted[i])
+        else:
+            groups.append(currentGroup)
+            currentGroup = [sorted[i]]
+    groups.append(currentGroup)
+    
+    # 3. Build constraint string
+    constraints = []
+    for group in groups:
+        if len(group) == 1:
+            constraints.append(f"visited({group[0]})")
+        else:
+            constraints.append(f"visitedAny({','.join(group)})")
+    
+    return '.'.join(constraints)
+```
+
+**Example:**
+```
+intermediates = [B1, B2, C, D1, D2]
+Graph structure:
+  S → B1 → C → D1 → E
+    ↘ B2 ↗   ↘ D2 ↗
+
+After topo sort: [B1, B2, C, D1, D2]
+Groups: [[B1, B2], [C], [D1, D2]]
+Constraints: visitedAny(B1,B2).visited(C).visitedAny(D1,D2)
 ```
 
 ---
 
-### Pattern 3: Two Non-Sequential Nodes
-
-**Selection:** `[A, C]` where A comes before C but no direct edge
-
-**DSL:** `from(A).to(C)`
-
-```
-Graph: START → A → B → C → END
-Selection: [A, C]
-DSL: from(A).to(C)
-```
-
-Python calculates path A→...→C through whatever intermediates exist.
-
----
-
-### Pattern 4: Two End Nodes (Comparison)
-
-**Selection:** `[END1, END2]` where both are absorbing
-
-**DSL:** `compare(END1, END2)` OR `ends(END1, END2)`
-
-```
-Graph: START → A → END1
-              ↘ B → END2
-Selection: [END1, END2]
-DSL: compare(END1, END2)
-```
-
-**Alternative:** Could use `from(START).to(END1, END2)` but semantics are different (comparison vs path).
-
-**Question:** Do we need a new DSL function for comparison, or reuse existing?
-
----
-
-### Pattern 5: Three+ Nodes - Sequential Path
-
-**Selection:** `[A, B, C]` where A→B→C (direct edges)
-
-**DSL:** `from(A).to(C).visited(B)`
-
-```
-Graph: START → A → B → C → END
-                   ↘ X
-Selection: [A, B, C]
-DSL: from(A).to(C).visited(B)
-```
-
-The `visited(B)` forces the path through B, pruning alternatives.
-
----
-
-### Pattern 6: Three+ Nodes - Non-Sequential but Valid Path
-
-**Selection:** `[A, B, D]` where A→...→B→...→D but not direct edges
-
-**DSL:** `from(A).to(D).visited(B)`
-
-```
-Graph: A → X → B → Y → D
-           ↘ Z ↗
-Selection: [A, B, D]
-DSL: from(A).to(D).visited(B)
-```
-
----
-
-### Pattern 7: Three+ Nodes - Parallel/OR Pattern
-
-**Selection:** `[A, B, C, D]` where A→{B,C}→D (parallel branches)
-
-**DSL:** `from(A).to(D).visitedAny(B, C)`
-
-```
-Graph: A → B → D
-       ↘ C ↗
-Selection: [A, B, C, D]
-DSL: from(A).to(D).visitedAny(B, C)
-```
-
-**Question:** Is `visitedAny` the right semantics? Or should multiple intermediates imply OR?
-
-**Alternative:** `from(A).to(D).visited(B, C)` could mean "visited any of B, C"
-
----
-
-### Pattern 8: Three+ Nodes - All End Nodes
-
-**Selection:** `[END1, END2, END3]` where all are absorbing
-
-**DSL:** `compare(END1, END2, END3)` OR `ends(END1, END2, END3)`
-
-```
-Graph: START → A → END1
-              ↘ B → END2
-              ↘ C → END3
-Selection: [END1, END2, END3]
-DSL: compare(END1, END2, END3)
-```
-
----
-
-### Pattern 9: General Multi-Selection (No Clear Path)
-
-**Selection:** `[A, C, E]` where no unique start/end structure
-
-**DSL:** `nodes(A, C, E)`
-
-```
-Graph: Complex graph, selection doesn't form a path
-Selection: [A, C, E]
-DSL: nodes(A, C, E)
-```
-
-Returns aggregate statistics, not path analysis.
-
----
-
-### Pattern 10: Selection Includes Graph Start
-
-**Selection:** `[START, A, B]`
-
-**DSL:** `from(START).to(B).visited(A)`
-
-Same as normal path, but START is explicit.
-
----
-
-### Pattern 11: Selection Includes Graph End
-
-**Selection:** `[A, B, END]`
-
-**DSL:** `from(A).to(END).visited(B)`
-
-Same as normal path, END is explicit target.
-
----
-
-### Pattern 12: Disconnected Selection
-
-**Selection:** `[A, X]` where A and X are in disconnected subgraphs
-
-**DSL:** `nodes(A, X)` with warning/error
-
-Python should detect this and return appropriate error or stats.
-
----
-
-### Pattern 13: Selection with Excluded Nodes
-
-**User manually edits to exclude:**
-
-**DSL:** `from(A).to(D).visited(B).exclude(C)`
-
-```
-Graph: A → B → D
-       ↘ C ↗
-User wants path through B, explicitly excluding C
-DSL: from(A).to(D).visited(B).exclude(C)
-```
-
-This is manual editing - TS won't auto-generate excludes.
-
----
-
-## DSL Function Summary
-
-| Function | Purpose | Example |
-|----------|---------|---------|
-| `from(X)` | Path start | `from(A)` |
-| `to(X)` | Path end | `to(B)` |
-| `visited(X,Y,...)` | Must pass through (AND) | `visited(B,C)` |
-| `visitedAny(X,Y,...)` | Must pass through one (OR) | `visitedAny(B,C)` |
-| `exclude(X,Y,...)` | Must not pass through | `exclude(D)` |
-| `compare(X,Y,...)` | Compare endpoints | `compare(END1,END2)` |
-| `nodes(X,Y,...)` | General selection | `nodes(A,B,C)` |
-| `node(X)` | Single node stats | `node(A)` |
-
----
-
-## Decision Matrix: Selection → DSL
-
-```
-Selection received: [N1, N2, ..., Nk]
-
-1. k = 0?
-   → No analysis
-   
-2. k = 1?
-   → from(GRAPH_START).to(N1)
-   → Unless N1 IS graph start: node(N1)
-
-3. k = 2?
-   → Both absorbing? → compare(N1, N2)
-   → Otherwise: Sort topo → from(first).to(last)
-
-4. k >= 3?
-   → All absorbing? → compare(N1, N2, ..., Nk)
-   → Has unique start AND unique end?
-      → Sort topo: [S, I1, I2, ..., E]
-      → from(S).to(E).visited(I1, I2, ...)
-   → Otherwise: nodes(N1, N2, ..., Nk)
-```
-
----
-
-## Algorithm: constructQueryDSL()
+## Step 5: Complete Algorithm
 
 ```typescript
 function constructQueryDSL(
   selectedNodeIds: string[],
   graph: Graph
 ): string {
-  const n = selectedNodeIds.length;
+  const k = selectedNodeIds.length;
   
-  if (n === 0) {
-    return '';  // No query
+  // === Case 0: Empty selection ===
+  if (k === 0) return '';
+  
+  // === Compute all predicates ===
+  const nodeTypes = computeNodeTypes(selectedNodeIds, graph);
+  const { starts, ends, startNode, endNode } = computeStartsEnds(selectedNodeIds, graph);
+  const siblingGroups = computeSiblingGroups(selectedNodeIds, graph);
+  
+  const hasUniqueStart = starts.length === 1;
+  const hasUniqueEnd = ends.length === 1;
+  const allAbsorbing = selectedNodeIds.every(id => nodeTypes[id] === 'absorbing');
+  const allAreSiblings = siblingGroups.length === 1 && siblingGroups[0].length === k;
+  
+  // === Case 1: Single node ===
+  if (k === 1) {
+    const node = selectedNodeIds[0];
+    if (nodeTypes[node] === 'entry') return `from(${node})`;
+    if (nodeTypes[node] === 'absorbing') return `to(${node})`;
+    return `visited(${node})`;
   }
   
-  // Get predicates
-  const predicates = computeSelectionPredicates(selectedNodeIds, graph);
+  // === Case 2: All absorbing (outcome comparison) ===
+  if (allAbsorbing) {
+    return `visitedAny(${selectedNodeIds.join(',')})`;
+  }
   
-  // Case 1: Single node
-  if (n === 1) {
-    const nodeId = selectedNodeIds[0];
-    const graphStart = findGraphStart(graph);
-    
-    if (nodeId === graphStart) {
-      return `node(${nodeId})`;
+  // === Case 3: All siblings, no unique start/end (branch comparison) ===
+  if (allAreSiblings && !hasUniqueStart && !hasUniqueEnd) {
+    return `visitedAny(${selectedNodeIds.join(',')})`;
+  }
+  
+  // === Build DSL parts ===
+  const parts: string[] = [];
+  
+  // Add from() if unique start
+  if (hasUniqueStart) {
+    parts.push(`from(${startNode})`);
+  }
+  
+  // Add to() if unique end  
+  if (hasUniqueEnd) {
+    parts.push(`to(${endNode})`);
+  }
+  
+  // Compute intermediates
+  const intermediates = selectedNodeIds.filter(id => 
+    id !== startNode && id !== endNode
+  );
+  
+  // === Case 4/5/6: Has start and/or end, process intermediates ===
+  if (intermediates.length > 0) {
+    const constraintChain = buildConstraintChain(intermediates, graph, siblingGroups);
+    parts.push(constraintChain);
+  }
+  
+  // === Case 7: No start, no end, just constraints ===
+  if (parts.length === 0) {
+    if (allAreSiblings) {
+      return `visitedAny(${selectedNodeIds.join(',')})`;
+    } else {
+      return selectedNodeIds.map(id => `visited(${id})`).join('.');
     }
-    return `from(${graphStart}).to(${nodeId})`;
   }
   
-  // Case 2: All absorbing (comparison mode)
-  if (predicates.all_absorbing) {
-    return `compare(${selectedNodeIds.join(',')})`;
-  }
+  return parts.join('.');
+}
+
+function buildConstraintChain(
+  intermediates: string[],
+  graph: Graph,
+  siblingGroups: string[][]
+): string {
+  // Sort intermediates topologically
+  const sorted = topologicalSort(intermediates, graph);
   
-  // Case 3: Has unique start and end (path mode)
-  if (predicates.has_unique_start && predicates.has_unique_end) {
-    const start = predicates.start_node;
-    const end = predicates.end_node;
-    const intermediates = predicates.intermediate_nodes;
-    
-    let dsl = `from(${start}).to(${end})`;
-    
-    if (intermediates.length > 0) {
-      dsl += `.visited(${intermediates.join(',')})`;
+  // Group consecutive siblings
+  const groups: string[][] = [];
+  let currentGroup = [sorted[0]];
+  
+  for (let i = 1; i < sorted.length; i++) {
+    if (areInSameSiblingGroup(sorted[i], currentGroup[0], siblingGroups)) {
+      currentGroup.push(sorted[i]);
+    } else {
+      groups.push(currentGroup);
+      currentGroup = [sorted[i]];
     }
-    
-    return dsl;
   }
+  groups.push(currentGroup);
   
-  // Case 4: General selection (no clear structure)
-  return `nodes(${selectedNodeIds.join(',')})`;
+  // Build constraint string
+  return groups.map(group => {
+    if (group.length === 1) {
+      return `visited(${group[0]})`;
+    } else {
+      return `visitedAny(${group.join(',')})`;
+    }
+  }).join('.');
 }
 ```
 
 ---
 
-## Edge Cases to Handle
+## Summary: Selection → DSL Mapping
 
-### EC1: Node IDs with special characters
+| Selection Pattern | Predicates | DSL | Pruning Effect |
+|-------------------|------------|-----|----------------|
+| `[N]` entry | single, is_entry | `from(N)` | None |
+| `[N]` absorbing | single, is_absorbing | `to(N)` | None |
+| `[N]` middle | single, is_middle | `visited(N)` | Prune N's siblings |
+| `[E1,E2,E3]` all ends | all_absorbing | `visitedAny(E1,E2,E3)` | Prune other ends |
+| `[B1,B2]` siblings only | all_siblings, no start/end | `visitedAny(B1,B2)` | Prune unselected siblings |
+| `[S,E]` path | unique start+end | `from(S).to(E)` | None at intermediate level |
+| `[S,I,E]` path | unique start+end, 1 intermediate | `from(S).to(E).visited(I)` | Prune I's siblings, renorm |
+| `[S,B1,B2,E]` parallel | start+end, sibling intermediates | `from(S).to(E).visitedAny(B1,B2)` | Prune unselected siblings of B1,B2 |
+| `[S,B1,B2]` start + siblings | unique start, sibling rest | `from(S).visitedAny(B1,B2)` | Prune unselected siblings |
+| `[S,X,Y]` start + non-siblings | unique start, non-sibling rest | `from(S).visited(X).visited(Y)` | Prune X's siblings, Y's siblings |
 
-If node IDs contain commas, parentheses, or dots, need escaping:
-```
-Node ID: "my.node-1"
-DSL: from(my.node-1) - is this valid?
-```
+### Pruning Semantics
 
-**Recommendation:** Assume node IDs are alphanumeric + hyphens + underscores. Document this constraint.
-
-### EC2: Very large selections
-
-If user selects 50 nodes, DSL becomes unwieldy:
-```
-from(A).to(Z).visited(B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y)
-```
-
-**Recommendation:** For selections > N nodes (e.g., 10), fall back to `nodes(...)` or warn user.
-
-### EC3: Cyclic selections
-
-If selection includes nodes in a cycle:
-```
-Graph: A → B → C → A (cycle)
-Selection: [A, B, C]
-```
-
-**Recommendation:** Topo sort will fail. Fall back to `nodes(...)` with metadata indicating cycle detected.
-
-### EC4: Multiple starts/ends
-
-If selection has multiple valid starts or ends:
-```
-Selection: [A, B, C, D] where both A and B have no selected predecessors
-```
-
-**Recommendation:** Currently design assumes unique start/end. Fall back to `nodes(...)` if ambiguous.
+- **`visited(X)`**: "I chose X" → prune X's siblings → renormalize
+- **`visitedAny(X,Y)`**: "I chose X or Y" → prune unselected siblings → renormalize X,Y proportionally
+- **No constraint on layer**: No pruning at that layer (all branches remain)
 
 ---
 
-## Testing Matrix
+## Edge Cases & Ambiguities
 
-| Pattern | Selection | Expected DSL |
-|---------|-----------|--------------|
-| Empty | `[]` | `` |
-| Single middle | `[B]` | `from(START).to(B)` |
-| Single start | `[START]` | `node(START)` |
-| Two sequential | `[A, B]` | `from(A).to(B)` |
-| Two non-seq | `[A, C]` | `from(A).to(C)` |
-| Two ends | `[END1, END2]` | `compare(END1,END2)` |
-| Three seq | `[A, B, C]` | `from(A).to(C).visited(B)` |
-| Three non-seq | `[A, B, D]` | `from(A).to(D).visited(B)` |
-| All ends | `[E1, E2, E3]` | `compare(E1,E2,E3)` |
-| No structure | `[A, X, Z]` | `nodes(A,X,Z)` |
+### Ambiguity 1: Impossible Constraints
 
----
+**Selection:** `[S, X, Y, E]` where X and Y are on mutually exclusive paths
 
-## Open Questions
+```
+Graph:    S → X → E1
+          ↘ Y → E2   (E ≠ E1 or E2)
+```
 
-### Q1: Do we need `compare()` function or reuse `from/to`?
+**DSL:** `from(S).to(E).visited(X).visited(Y)` — may be impossible
 
-**Options:**
-- A) New `compare(X,Y,Z)` function - clear semantics
-- B) `to(X,Y,Z)` with multiple targets - implicit comparison
-- C) `ends(X,Y,Z)` - explicit naming
+**Handling:** Analytics should detect and report "no valid paths match this constraint"
 
-**Recommendation:** A - `compare()` makes intent explicit.
+### Ambiguity 2: Siblings Selection (Resolved by Pruning Semantics)
 
-### Q2: `visited(A,B)` semantics - AND or OR?
+**Selection:** `[A, B]` where A and B are siblings (parallel)
 
-**Options:**
-- A) AND - must visit all (current `visited`)
-- B) OR - must visit any (need `visitedAny`)
-- C) Infer from graph structure
+**With pruning semantics, this is unambiguous:**
+- User selected A and B (2 of possibly more siblings)
+- Intent: "Paths through A OR B, excluding unselected siblings"
+- DSL: `visitedAny(A,B)`
+- Effect: Prune unselected siblings, renormalize A and B
 
-**Recommendation:** 
-- `visited(A,B)` = AND (sequential intermediate)
-- `visitedAny(A,B)` = OR (parallel branches)
+**NOT:** `visited(A).visited(B)` — this would mean "must pass through both" (impossible for siblings)
 
-TS constructor can choose based on `is_sequential` predicate.
+### Ambiguity 3: Multiple Possible Orderings
 
-### Q3: Should graph start be implicit or explicit?
+**Selection:** `[X, Y, Z]` where topological order is ambiguous
 
-**Options:**
-- A) Always explicit: `from(START).to(B)`
-- B) Implicit if not specified: `to(B)` means from graph start
-- C) Configurable
-
-**Recommendation:** B - implicit is cleaner, Python infers graph start if `from()` is missing.
+**Resolution:** Use graph structure to determine order, or if truly ambiguous, treat as unordered constraints
 
 ---
 
-*DSL Construction Cases*
+## Implication for Python Runner
+
+The pruning/renormalization logic is **central to the analytics computation**:
+
+```python
+def compute_path_with_pruning(graph, parsed_query):
+    # 1. Identify constraint nodes from DSL
+    visited_nodes = parsed_query.visited
+    visited_any_groups = parsed_query.visited_any
+    
+    # 2. For each constraint node, find its siblings
+    for node in visited_nodes:
+        siblings = find_siblings(node, graph)
+        # Prune edges to unselected siblings
+        for sibling in siblings:
+            if sibling not in visited_nodes:
+                prune_edge(graph, parent_of(node), sibling)
+        # Renormalize remaining sibling probabilities
+        renormalize_sibling_group(graph, node)
+    
+    # 3. For visitedAny groups
+    for group in visited_any_groups:
+        all_siblings = find_all_siblings_of_group(group, graph)
+        unselected = all_siblings - set(group)
+        for sibling in unselected:
+            prune_edge(graph, parent_of(group[0]), sibling)
+        renormalize_sibling_group(graph, group)
+    
+    # 4. Compute probabilities on pruned/renormalized graph
+    return compute_path_probability(graph, parsed_query.from_node, parsed_query.to_node)
+```
+
+This matches the existing TS behavior in `graphPruning.ts`.
+
+---
+
+## Python Parser Update Required
+
+Current parser requires `from()` and `to()`. Need to update:
+
+```python
+@dataclass
+class ParsedQuery:
+    from_node: str | None    # Optional
+    to_node: str | None      # Optional
+    visited: list[str]       # AND constraints
+    visited_any: list[list[str]]  # OR groups
+    exclude: list[str]
+    # ... other fields
+```
+
+Parser should accept:
+- `from(A).to(B)` ✓
+- `visited(X).visited(Y)` ✓ (no from/to)
+- `from(A).visitedAny(B,C)` ✓ (no to)
+- `visitedAny(X,Y,Z)` ✓ (no from/to)
+
+---
+
+*DSL Construction: Exhaustive Intent Inference*
 *Created: 2025-11-25*
-
