@@ -1,396 +1,364 @@
 # Phase 1: Implementation Plan
 
-## Overview
+## Summary
 
-This plan breaks Phase 1 into discrete implementation steps with clear deliverables.
-
-**Total estimate:** 9-14 days
-**Prerequisite:** Review PHASE_1_DESIGN.md for architecture and API specs
+| Item | Value |
+|------|-------|
+| **Total effort** | 9-14 days |
+| **Prerequisites** | PHASE_1_DESIGN.md reviewed |
+| **Files created** | ~15 Python + 3 TS |
+| **Files removed** | ~800 lines from GraphCanvas.tsx |
 
 **Key deliverables:**
-- Python analytics runner
-- Declarative analysis type adaptor
-- Basic Analytics sidebar panel
-- Deprecation of old path analysis popup
+1. Python analytics runner with path/cost calculation
+2. Declarative analysis type adaptor
+3. Basic Analytics sidebar panel
+4. Deprecation of old path analysis popup
 
 ---
 
-## Step 1: Schema Audit (0.5-1 day)
+## Implementation Steps
 
-### Goal
-Document current graph schema to ensure Python implementation is correct.
+### Step 1: Schema Audit (Day 1, 0.5 day)
 
-### Tasks
+**Goal:** Document current graph schema before coding.
 
-- [ ] **1.1** Examine a real graph YAML file from the test suite
-- [ ] **1.2** Document node structure:
-  - All fields (id, uuid, type, entry, absorbing, case, etc.)
-  - Which are required vs optional
-  - Data types
-- [ ] **1.3** Document edge structure:
-  - All fields (id, uuid, from, to, p, conditional_p, cost_gbp, cost_time, case_id, case_variant, etc.)
-  - Probability format (p.mean? flat p?)
-  - Cost format
-- [ ] **1.4** Document case node structure:
-  - How case.id relates to edges
-  - How variants are stored
-- [ ] **1.5** Document conditional_p structure:
-  - Array format
-  - Condition DSL format
-  - How probability overrides work
-- [ ] **1.6** Create `SCHEMA_REFERENCE.md` with findings
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 1.1 | Examine real graph YAML from test suite | - |
+| 1.2 | Document node fields (id, uuid, type, entry, absorbing, case) | Schema doc |
+| 1.3 | Document edge fields (p, conditional_p, cost_gbp, cost_time, case_id) | Schema doc |
+| 1.4 | Document case node & variant structure | Schema doc |
+| 1.5 | Document conditional_p array format | Schema doc |
 
-### Deliverable
-`docs/current/project-analysis/SCHEMA_REFERENCE.md`
+**Deliverable:** `docs/current/project-analysis/SCHEMA_REFERENCE.md`
 
 ---
 
-## Step 2: Python Types (0.5 day)
+### Step 2: DSL Parser Verification (Day 1, 0.5 day)
 
-### Goal
-Create Pydantic models for request/response.
+**Goal:** Ensure Python DSL parser handles required functions.
 
-### Tasks
+**Required DSL functions:**
+- `from(X)`, `to(X)`, `visited(X,Y,...)` 
+- `nodes(X,Y,...)`, `compare(X,Y,...)`, `exclude(X,Y,...)`
 
-- [ ] **2.1** Create `lib/runner/__init__.py`
-- [ ] **2.2** Create `lib/runner/types.py` with models:
-  - `CostResult`
-  - `ScenarioParams`
-  - `AnalysisRequest`
-  - `ScenarioResult`
-  - `AnalysisResponse`
-- [ ] **2.3** Add validation rules
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 2.1 | Review existing `lib/query_dsl.py` | Gap analysis |
+| 2.2 | Add missing functions if needed | Updated parser |
+| 2.3 | Write parser tests for analytics DSL patterns | Tests |
 
-### Deliverable
-Working Pydantic models that match API spec in design doc.
+**Deliverable:** DSL parser that handles all patterns in `DSL_CONSTRUCTION_CASES.md`
 
 ---
 
-## Step 3: Selection Predicates (0.5 day)
+### Step 3: Python Types (Day 1, 0.5 day)
 
-### Goal
-Implement predicate computation from graph + selection.
+**Goal:** Create Pydantic models for API.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 3.1 | Create `lib/runner/__init__.py` | Package |
+| 3.2 | Create `lib/runner/types.py` | Models |
+| 3.3 | Implement: `CostResult`, `ScenarioParams`, `AnalysisRequest`, `ScenarioResult`, `AnalysisResponse` | - |
+| 3.4 | Add validation rules | - |
 
-- [ ] **3.1** Create `lib/runner/predicates.py`
-- [ ] **3.2** Implement `compute_selection_predicates()`:
-  - `node_count`
-  - `all_absorbing`
-  - `has_unique_start`, `start_node`
-  - `has_unique_end`, `end_node`
-  - `is_sequential`
-  - `sorted_nodes`, `intermediate_nodes`
-- [ ] **3.3** Write tests `tests/runner/test_predicates.py`:
-  - Empty selection
-  - Single node
-  - Two nodes
-  - All end nodes
-  - Sequential nodes
-  - Non-sequential nodes
-
-### Deliverable
-`predicates.py` with full test coverage.
+**Deliverable:** Working Pydantic models per PHASE_1_DESIGN.md API spec
 
 ---
 
-## Step 4: Declarative Adaptor (0.5 day)
+### Step 4: Selection Predicates (Day 2, 0.5 day)
 
-### Goal
-Implement analysis type matching from predicates.
+**Goal:** Compute predicates from graph + selection.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 4.1 | Create `lib/runner/predicates.py` | Module |
+| 4.2 | Implement `compute_selection_predicates()` | Function |
+| 4.3 | Handle: node_count, all_absorbing, has_unique_start/end, is_sequential | - |
+| 4.4 | Add scenario predicates (from request) | - |
+| 4.5 | Write tests: empty, single, two, all_ends, sequential, non-sequential | Tests |
 
-- [ ] **4.1** Create `lib/runner/analysis_types.yaml` with definitions:
-  - single_node_path
-  - two_node_path
-  - end_node_comparison
-  - sequential_path
-  - constrained_path
-  - general_selection
-- [ ] **4.2** Create `lib/runner/adaptor.py`:
-  - `AnalysisAdaptor` class
-  - `match()` method
-  - Condition matching logic (exact, gte, lte)
-- [ ] **4.3** Write tests `tests/runner/test_adaptor.py`:
-  - Each analysis type matches correctly
-  - Fallback works
-  - Priority order works
-
-### Deliverable
-Working adaptor with YAML config and tests.
+**Deliverable:** `predicates.py` with full test coverage
 
 ---
 
-## Step 5: Graph Builder (0.5 day)
+### Step 5: Declarative Adaptor (Day 2, 0.5 day)
 
-### Goal
-Convert DagNet graph format to NetworkX.
+**Goal:** Match predicates to analysis type.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 5.1 | Create `lib/runner/analysis_types.yaml` | Config |
+| 5.2 | Define 6 analysis types: single_node, two_node, end_comparison, sequential_path, constrained_path, general_selection | - |
+| 5.3 | Create `lib/runner/adaptor.py` | Module |
+| 5.4 | Implement `AnalysisAdaptor.match()` with condition operators | - |
+| 5.5 | Write tests: each type matches, fallback works, priority order | Tests |
 
-- [ ] **5.1** Create graph building logic in `analyzer.py`:
-  - Handle uuid vs id
-  - Handle from/to vs source/target
-  - Copy all node/edge attributes
-- [ ] **5.2** Handle edge probability extraction:
-  - Base probability (p.mean or p)
-  - Case variant probabilities
-  - Conditional probabilities
-- [ ] **5.3** Write tests with real graph fixtures
-
-### Deliverable
-Reliable graph conversion that handles schema variations.
+**Deliverable:** Working adaptor with YAML config
 
 ---
 
-## Step 6: Path Analysis Runner (2-3 days)
+### Step 6: Graph Builder (Day 3, 0.5 day)
 
-### Goal
-Implement core path probability calculation.
+**Goal:** Convert DagNet graph to NetworkX.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 6.1 | Add `_build_graph()` method to analyzer | Function |
+| 6.2 | Handle id/uuid variations | - |
+| 6.3 | Handle from/to edge format | - |
+| 6.4 | Extract probability (p.mean vs p) | - |
+| 6.5 | Extract costs | - |
+| 6.6 | Write tests with real graph fixtures | Tests |
 
-- [ ] **6.1** Create `lib/runner/path_analysis.py`
-- [ ] **6.2** Implement `PathRunner` class:
-  - DFS probability calculation with memoization
-  - Cost aggregation
-  - Handling of what-if overrides
-- [ ] **6.3** Create `lib/runner/graph_pruning.py`:
-  - Sibling group identification
-  - Edge pruning for intermediate nodes
-  - Renormalization factor calculation
-- [ ] **6.4** Implement different entry points:
-  - Single node (from graph start)
-  - Two nodes (direct path)
-  - Multi-node with pruning
-- [ ] **6.5** Write comprehensive tests:
-  - Simple linear graph
-  - Branching graph
-  - Graph with cycles
-  - Graph with case nodes
-  - Graph with conditional probabilities
-  - Pruning scenarios
-  - Cost calculations
-
-### Deliverable
-Working path runner with pruning, tested against expected results.
+**Deliverable:** Reliable graph conversion
 
 ---
 
-## Step 7: Other Runners (1 day)
+### Step 7: Path Analysis Runner (Days 3-5, 2-3 days)
 
-### Goal
-Implement remaining analysis type runners.
+**Goal:** Core path probability and cost calculation.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 7.1 | Create `lib/runner/path_analysis.py` | Module |
+| 7.2 | Implement `PathRunner` class | Class |
+| 7.3 | DFS probability calculation with memoization | - |
+| 7.4 | Cost aggregation (monetary, time) | - |
+| 7.5 | What-if override application | - |
+| 7.6 | Create `lib/runner/graph_pruning.py` | Module |
+| 7.7 | Sibling group identification | - |
+| 7.8 | Edge pruning for intermediate nodes | - |
+| 7.9 | Renormalization factor calculation | - |
+| 7.10 | Write comprehensive tests | Tests |
 
-- [ ] **7.1** Implement `EndComparisonRunner`:
-  - Calculate path to each end node from start
-  - Return sorted by probability
-- [ ] **7.2** Implement `GeneralStatsRunner`:
-  - Count internal/incoming/outgoing edges
-  - Sum probabilities
-  - Aggregate costs
-- [ ] **7.3** Write tests for each runner
+**Test cases:**
+- Simple linear graph
+- Branching graph
+- Graph with case nodes
+- Graph with conditional probabilities
+- Pruning scenarios (visited intermediate)
+- Cost calculations
 
-### Deliverable
-All 6 analysis types working.
-
----
-
-## Step 8: Main Analyzer (0.5 day)
-
-### Goal
-Wire everything together in main entry point.
-
-### Tasks
-
-- [ ] **8.1** Create `lib/runner/analyzer.py`:
-  - `GraphAnalyzer` class
-  - `analyze()` method
-  - DSL parsing integration
-  - Predicate computation
-  - Adaptor matching
-  - Runner dispatch
-  - Multi-scenario handling
-- [ ] **8.2** Integration tests:
-  - End-to-end request/response
-  - Multiple scenarios
-  - Error handling
-
-### Deliverable
-Complete analyzer that handles full request/response cycle.
+**Deliverable:** Working path runner with pruning
 
 ---
 
-## Step 9: API Endpoint (0.5 day)
+### Step 8: Other Runners (Day 6, 1 day)
 
-### Goal
-Create HTTP endpoint for analyzer.
+**Goal:** Implement remaining analysis types.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 8.1 | Implement `EndComparisonRunner` | Class |
+| 8.2 | - Path to each end from start | - |
+| 8.3 | - Return sorted by probability | - |
+| 8.4 | Implement `GeneralStatsRunner` | Class |
+| 8.5 | - Count edges (internal/in/out) | - |
+| 8.6 | - Sum probabilities, aggregate costs | - |
+| 8.7 | Write tests for each runner | Tests |
 
-- [ ] **9.1** Create `api/runner/analyze.py`:
-  - Vercel serverless handler format
-  - Request parsing
-  - Error handling
-  - Response formatting
-- [ ] **9.2** Update `dev-server.py`:
-  - Add `/api/runner/analyze` route
-  - Test locally
-- [ ] **9.3** Test via curl/Postman
-
-### Deliverable
-Working endpoint at `/api/runner/analyze`.
+**Deliverable:** All 6 analysis types working
 
 ---
 
-## Step 10: TypeScript Client (0.5 day)
+### Step 9: Main Analyzer (Day 6, 0.5 day)
 
-### Goal
-Extend TS client to call new endpoint.
+**Goal:** Wire components together.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 9.1 | Create `lib/runner/analyzer.py` | Module |
+| 9.2 | Implement `GraphAnalyzer` class | Class |
+| 9.3 | Wire: DSL parsing → predicates → adaptor → runner | - |
+| 9.4 | Multi-scenario handling | - |
+| 9.5 | Error handling with structured responses | - |
+| 9.6 | Integration tests (end-to-end request/response) | Tests |
 
-- [ ] **10.1** Add types to `graphComputeClient.ts`:
-  - `ScenarioParams`
-  - `AnalysisRequest`
-  - `ScenarioResult`
-  - `AnalysisResponse`
-- [ ] **10.2** Add `analyzeSelection()` method
-- [ ] **10.3** Add error handling
-
-### Deliverable
-TS client can call Python runner.
+**Deliverable:** Complete analyzer handling full cycle
 
 ---
 
-## Step 11: DSL Construction (0.5 day)
+### Step 10: API Endpoint (Day 7, 0.5 day)
 
-### Goal
-Implement DSL construction from node selection.
+**Goal:** HTTP endpoint for analyzer.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 10.1 | Create `api/runner/analyze.py` | Endpoint |
+| 10.2 | Vercel serverless handler format | - |
+| 10.3 | Request parsing, validation | - |
+| 10.4 | Error handling (400/422/500) | - |
+| 10.5 | Update `dev-server.py` with route | - |
+| 10.6 | Test via curl | - |
 
-- [ ] **11.1** Create helper function `constructQueryDSL()`:
-  - Compute predicates locally
-  - Generate appropriate DSL string
-  - Handle all selection patterns
-- [ ] **11.2** Add to appropriate location (GraphCanvas or utility file)
-- [ ] **11.3** Test with various selections
-
-### Deliverable
-Selection → DSL conversion working.
-
----
-
-## Step 12: Analytics Panel (1 day)
-
-### Goal
-Create basic Analytics sidebar panel for testing and user interaction.
-
-### Tasks
-
-- [ ] **12.1** Create `components/panels/AnalyticsPanel.tsx`:
-  - DSL query input (editable textarea)
-  - Analysis type dropdown (available types for selection)
-  - "Run Analysis" button
-  - Results display (pretty-printed JSON)
-- [ ] **12.2** Create `components/panels/AnalyticsPanel.css`:
-  - Match existing panel styling
-- [ ] **12.3** Wire selection → auto-generate DSL:
-  - Hook into selected nodes
-  - Call `constructQueryDSL()`
-  - Populate textarea (user can edit)
-- [ ] **12.4** Wire "Run Analysis" to Python:
-  - Call `graphComputeClient.analyzeSelection()`
-  - Display results
-  - Handle loading/error states
-- [ ] **12.5** Add to sidebar layout:
-  - Add to `GRAPH_PANELS` in `graphSidebarLayout.ts`
-  - Test panel appears and functions
-
-### Deliverable
-Working Analytics panel in sidebar.
+**Deliverable:** Working endpoint at `/api/runner/analyze`
 
 ---
 
-## Step 13: Validation (1-2 days)
+### Step 11: TypeScript Client (Day 7, 0.5 day)
 
-### Goal
-Ensure Python results are correct.
+**Goal:** TS client for Python runner.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 11.1 | Add types to `graphComputeClient.ts` | Types |
+| 11.2 | - ScenarioParams, AnalysisRequest | - |
+| 11.3 | - ScenarioResult, AnalysisResponse | - |
+| 11.4 | Add `analyzeSelection()` method | Method |
+| 11.5 | Error handling | - |
 
-- [ ] **13.1** Create validation test suite:
-  - Known graphs with expected results
-  - Compare Python vs manual calculation
-- [ ] **13.2** Compare with TS implementation:
-  - Log both results
-  - Identify discrepancies
-  - Determine which is correct
-- [ ] **13.3** Document any intentional differences
-- [ ] **13.4** Fix bugs discovered
-
-### Deliverable
-Validated, correct implementation.
+**Deliverable:** TS client can call Python runner
 
 ---
 
-## Step 14: Cleanup & Deprecation (1 day)
+### Step 12: DSL Construction (Day 8, 0.5 day)
 
-### Goal
-Remove old inline code and deprecated path analysis popup.
+**Goal:** Selection → DSL string conversion.
 
-### Tasks
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 12.1 | Create `lib/analytics/constructQueryDSL.ts` | Module |
+| 12.2 | Implement selection predicate computation (TS side) | - |
+| 12.3 | Generate DSL per patterns in `DSL_CONSTRUCTION_CASES.md` | - |
+| 12.4 | Unit tests for all selection patterns | Tests |
 
-- [ ] **14.1** Remove from `GraphCanvas.tsx`:
-  - `calculateSelectionAnalysis()` function (~585 lines)
-  - `findPathThroughIntermediates()` helper
-  - `computeGlobalPruning()` helper
-  - `analysis` state variable
-  - `<Panel position="bottom-left">` rendering block (~200 lines)
-  - All path analysis related imports
-- [ ] **14.2** Remove from `GraphEditor.tsx`:
-  - Any path analysis related code
-- [ ] **14.3** Update any components that referenced old path analysis:
-  - Check for any event handlers
-  - Check for any state dependencies
-- [ ] **14.4** Verify no regressions:
-  - Test all graph editing still works
-  - Test Analytics panel is the only analysis UI
-- [ ] **14.5** Update documentation:
-  - Remove references to old path analysis popup
-  - Update keyboard shortcuts if any
-
-### Deliverable
-- Clean codebase with Python as single source of truth
-- Analytics panel is the only analysis UI
-- ~800+ lines removed from GraphCanvas.tsx
+**Deliverable:** Selection → DSL working for all patterns
 
 ---
 
-## Implementation Order
+### Step 13: Analytics Panel (Days 8-9, 1 day)
+
+**Goal:** Basic sidebar panel for analytics.
+
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 13.1 | Create `components/panels/AnalyticsPanel.tsx` | Component |
+| 13.2 | Editable DSL query textarea | - |
+| 13.3 | Analysis type dropdown | - |
+| 13.4 | "Run Analysis" button | - |
+| 13.5 | Results display (pretty JSON) | - |
+| 13.6 | Create `AnalyticsPanel.css` | Styles |
+| 13.7 | Wire selection → auto-generate DSL | - |
+| 13.8 | Wire button → Python call | - |
+| 13.9 | Add to sidebar layout | - |
+
+**Deliverable:** Working Analytics panel in sidebar
+
+---
+
+### Step 14: Validation (Days 9-10, 1-2 days)
+
+**Goal:** Verify Python results are correct.
+
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 14.1 | Create validation test suite | Tests |
+| 14.2 | Known graphs with hand-calculated results | - |
+| 14.3 | Compare Python vs TS (where TS exists) | Report |
+| 14.4 | Identify and resolve discrepancies | - |
+| 14.5 | Document intentional differences | Doc |
+
+**Deliverable:** Validated, correct implementation
+
+---
+
+### Step 15: Cleanup & Deprecation (Days 10-11, 1 day)
+
+**Goal:** Remove old code, clean up.
+
+**Tasks:**
+| # | Task | Output |
+|---|------|--------|
+| 15.1 | Remove from GraphCanvas.tsx: | - |
+| - | `calculateSelectionAnalysis()` (~585 lines) | - |
+| - | `findPathThroughIntermediates()` | - |
+| - | `computeGlobalPruning()` | - |
+| - | `analysis` state variable | - |
+| - | Bottom-left Panel (~200 lines) | - |
+| 15.2 | Remove from GraphEditor.tsx if any | - |
+| 15.3 | Verify no regressions | - |
+| 15.4 | Update documentation | - |
+
+**Deliverable:** ~800+ lines removed, Analytics panel is sole analysis UI
+
+---
+
+## Files Created
+
+**Python:**
+```
+lib/runner/
+├── __init__.py
+├── types.py
+├── predicates.py
+├── adaptor.py
+├── analyzer.py
+├── path_analysis.py
+├── graph_pruning.py
+└── analysis_types.yaml
+
+api/runner/
+└── analyze.py
+
+tests/runner/
+├── test_predicates.py
+├── test_adaptor.py
+├── test_path_analysis.py
+└── test_analyzer.py
+```
+
+**TypeScript:**
+```
+src/lib/analytics/
+└── constructQueryDSL.ts
+
+src/components/panels/
+├── AnalyticsPanel.tsx
+└── AnalyticsPanel.css
+```
+
+**Docs:**
+```
+docs/current/project-analysis/
+└── SCHEMA_REFERENCE.md
+```
+
+---
+
+## Schedule
 
 ```
 Week 1:
-├── Step 1: Schema Audit (Day 1)
-├── Step 2: Python Types (Day 1)
-├── Step 3: Selection Predicates (Day 2)
-├── Step 4: Declarative Adaptor (Day 2)
-├── Step 5: Graph Builder (Day 3)
-└── Step 6: Path Analysis Runner (Days 3-5)
+├── Day 1: Schema Audit + DSL Parser + Types (Steps 1-3)
+├── Day 2: Predicates + Adaptor (Steps 4-5)
+├── Day 3: Graph Builder + Path Runner start (Steps 6-7)
+├── Day 4: Path Runner continued (Step 7)
+└── Day 5: Path Runner complete (Step 7)
 
 Week 2:
-├── Step 7: Other Runners (Day 6)
-├── Step 8: Main Analyzer (Day 6)
-├── Step 9: API Endpoint (Day 7)
-├── Step 10: TypeScript Client (Day 7)
-├── Step 11: DSL Construction (Day 8)
-├── Step 12: Analytics Panel (Day 8-9)
-├── Step 13: Validation (Days 9-10)
-└── Step 14: Cleanup & Deprecation (Day 10-11)
+├── Day 6: Other Runners + Main Analyzer (Steps 8-9)
+├── Day 7: API Endpoint + TS Client (Steps 10-11)
+├── Day 8: DSL Construction + Analytics Panel (Steps 12-13)
+├── Day 9: Analytics Panel + Validation start (Steps 13-14)
+├── Day 10: Validation + Cleanup start (Steps 14-15)
+└── Day 11: Cleanup complete (Step 15) [buffer]
 ```
 
 ---
@@ -399,9 +367,10 @@ Week 2:
 
 | Risk | Mitigation |
 |------|------------|
-| Schema drift discovered | Extra time budgeted in Step 6 |
-| Complex edge cases | Comprehensive test suite |
-| TS/Python discrepancy | Validation step with manual verification |
+| Schema drift from TS | Extra time in Step 7, manual verification |
+| DSL parser incomplete | Step 2 explicitly checks/extends |
+| Complex pruning logic | Comprehensive test suite |
+| TS/Python discrepancy | Validation step with manual calculation |
 | Performance issues | Benchmark early, optimize if needed |
 
 ---
@@ -410,15 +379,37 @@ Week 2:
 
 Phase 1 is complete when:
 
-- [ ] All 14 steps completed
+- [ ] All 15 steps completed
 - [ ] All tests passing (Python + TS)
-- [ ] GraphCanvas uses Python runner for all analysis
-- [ ] Inline analysis code removed from GraphCanvas
+- [ ] Analytics panel works for all selection patterns
 - [ ] Multi-scenario analysis working
+- [ ] Old path analysis code removed from GraphCanvas
 - [ ] Documentation updated
+
+---
+
+## Quick Reference: Test Commands
+
+```bash
+# Python tests
+cd graph-editor
+source venv/bin/activate
+pytest tests/runner/ -v
+
+# Run specific test file
+pytest tests/runner/test_path_analysis.py -v
+
+# TS tests
+npm test
+
+# Manual API test
+curl -X POST http://localhost:3001/api/runner/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"graph": {...}, "query": "from(a).to(b)", "scenarios": []}'
+```
 
 ---
 
 *Phase 1 Implementation Plan*
 *Created: 2025-11-25*
-
+*Updated: 2025-11-25 - Added DSL parser step, clarified schedule*
