@@ -17,9 +17,11 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 - **What-If Analysis**: Test different scenarios and see their impact
 - **Path Analysis**: Analyze conversion paths and identify bottlenecks
 - **Conditional Probabilities**: Model complex decision trees with conditional logic
+- **Contexts**: Segment data by channel, device, browser, or custom dimensions with MECE partitions
 - **Probabilistic Calculations**: Built-in probability mass calculations and normalization
 - **Bayesian Analysis**: Support for Bayesian parameter estimation with n, k, and window_to parameters
 - **Data-Driven Parameters**: Connect parameters to Google Sheets and Amplitude for live data
+- **Scenarios**: Save, compare, and overlay different parameter configurations
 
 ### 🔧 Developer-Friendly
 - **Monaco Editor Integration**: Full-featured code editor with syntax highlighting
@@ -84,8 +86,8 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 
 ## Version Information
 
-- **Version**: 1.0.0
-- **Build Date**: January 2025
+- **Version**: 0.94.4-beta
+- **Build Date**: November 2025
 - **License**: MIT
 - **Repository**: [github.com/gjbm2/dagnet](https://github.com/gjbm2/dagnet)
 
