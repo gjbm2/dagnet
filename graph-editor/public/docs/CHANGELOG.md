@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.95.5-beta
+**Released:** November 25, 2025
+
+Repo and dirty fixes. Reduced verbose logs
+
+---
+
 ## Version 0.95.4-beta
 **Released:** November 25, 2025
 
