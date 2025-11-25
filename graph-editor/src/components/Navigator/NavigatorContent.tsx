@@ -66,7 +66,6 @@ export function NavigatorContent() {
   useEffect(() => {
     const loadAllItems = async () => {
       try {
-        console.log('📦 NavigatorContent: Loading registry items...');
         const [parameters, contexts, cases, nodes, events] = await Promise.all([
           registryService.getParameters(tabs),
           registryService.getContexts(tabs),
@@ -74,20 +73,6 @@ export function NavigatorContent() {
           registryService.getNodes(tabs),
           registryService.getEvents(tabs)
         ]);
-        
-        console.log(`📦 NavigatorContent: Loaded ${parameters.length} parameters, ${contexts.length} contexts, ${cases.length} cases, ${nodes.length} nodes, ${events.length} events`);
-        
-        // DETAILED LOGGING FOR NODES
-        console.log('🔍 NavigatorContent: NODES from registryService.getNodes():', nodes.map(n => ({
-          id: n.id,
-          name: n.name,
-          hasFile: n.hasFile,
-          isLocal: n.isLocal,
-          inIndex: n.inIndex,
-          isOrphan: n.isOrphan,
-          file_path: n.file_path,
-          fileId: `node-${n.id}`
-        })));
         
         setRegistryItems({ parameters, contexts, cases, nodes, events });
       } catch (error) {
@@ -101,7 +86,6 @@ export function NavigatorContent() {
   // Listen for file dirty state changes and refresh registry items + force re-render
   useEffect(() => {
     const handleFileDirtyChanged = () => {
-      console.log('🔄 NavigatorContent: File dirty state changed, refreshing registry items...');
       
       // Force re-render by incrementing version (this will trigger navigatorEntries useMemo)
       setDirtyStateVersion(v => v + 1);
@@ -167,45 +151,17 @@ export function NavigatorContent() {
     addRegistryItems(registryItems.contexts);
     addRegistryItems(registryItems.cases);
     
-    // DETAILED LOGGING FOR NODES BEFORE ADDING
-    console.log('🔍 NavigatorContent: About to add nodes to entriesMap:', registryItems.nodes.map(n => ({
-      id: n.id,
-      type: n.type, // CRITICAL: Check the type field
-      name: n.name,
-      hasFile: n.hasFile,
-      isLocal: n.isLocal,
-      inIndex: n.inIndex
-    })));
     addRegistryItems(registryItems.nodes);
     
     addRegistryItems(registryItems.events);
     
     // 2. Add graph files from NavigatorContext (graphs don't have indexes)
     // Also add node files from NavigatorContext that aren't already in entriesMap (orphans)
-    // DETAILED LOGGING: What items from NavigatorContext contains
-    const nodeItemsFromContext = items.filter(item => item.type === 'node');
-    console.log('🔍 NavigatorContent: NODE items from NavigatorContext.items:', nodeItemsFromContext.map(item => ({
-      id: item.id,
-      fileId: `${item.type}-${item.id}`,
-      type: item.type,
-      name: item.name,
-      path: item.path,
-      isLocal: item.isLocal
-    })));
-    
     for (const item of items) {
       if (item.type === 'graph') {
         const fileId = `graph-${item.id}`;
         const file = fileRegistry.getFile(fileId);
         const itemTabs = tabs.filter(t => t.fileId === fileId);
-        
-        if (file) {
-          console.log(`🗂 NavigatorContent: Graph entry for ${item.id}`, {
-            fileId,
-            lastModified: file.lastModified,
-            'data.metadata.updated': file.data?.metadata?.updated
-          });
-        }
         
         entriesMap.set(fileId, { // Use fileId as map key
           id: item.id,
@@ -251,27 +207,7 @@ export function NavigatorContent() {
       }
     }
     
-    const allEntries = Array.from(entriesMap.values());
-    const nodeEntries = allEntries.filter(e => e.type === 'node');
-    console.log('🔍 NavigatorContent: entriesMap has', entriesMap.size, 'total entries');
-    console.log('🔍 NavigatorContent: entriesMap keys:', Array.from(entriesMap.keys()));
-    console.log('🔍 NavigatorContent: ALL entriesMap entries with types:', allEntries.map(e => ({
-      id: e.id,
-      type: e.type, // CRITICAL: What type do entries have?
-      fileId: e.fileId, // CRITICAL: What fileId do they have?
-      name: e.name
-    })));
-    console.log('🔍 NavigatorContent: Final NODE entries in navigatorEntries ('+nodeEntries.length+'):', nodeEntries.map(e => ({
-      id: e.id,
-      name: e.name,
-      hasFile: e.hasFile,
-      isLocal: e.isLocal,
-      inIndex: e.inIndex,
-      isOrphan: e.isOrphan,
-      path: e.path
-    })));
-    
-    return allEntries;
+    return Array.from(entriesMap.values());
   }, [items, tabs, registryItems, dirtyStateVersion]);
 
   // Apply filters and sorting
@@ -346,18 +282,6 @@ export function NavigatorContent() {
       connections: []
     };
     
-    // DETAILED LOGGING: What nodes are in filteredAndSortedEntries
-    const filteredNodes = filteredAndSortedEntries.filter(e => e.type === 'node');
-    console.log('🔍 NavigatorContent: NODE entries after filtering/sorting:', filteredNodes.map(e => ({
-      id: e.id,
-      name: e.name,
-      hasFile: e.hasFile,
-      isLocal: e.isLocal,
-      inIndex: e.inIndex,
-      isOrphan: e.isOrphan,
-      path: e.path
-    })));
-    
     for (const entry of filteredAndSortedEntries) {
       if (groups[entry.type]) {
         groups[entry.type].push(entry);
@@ -365,17 +289,6 @@ export function NavigatorContent() {
         console.warn(`Unknown entry type: ${entry.type}`, entry);
       }
     }
-    
-    // DETAILED LOGGING: Final grouped nodes
-    console.log('🔍 NavigatorContent: Final groupedEntries.node:', groups.node.map(e => ({
-      id: e.id,
-      name: e.name,
-      hasFile: e.hasFile,
-      isLocal: e.isLocal,
-      inIndex: e.inIndex,
-      isOrphan: e.isOrphan,
-      path: e.path
-    })));
     
     return groups;
   }, [filteredAndSortedEntries]);

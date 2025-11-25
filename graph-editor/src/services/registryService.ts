@@ -74,48 +74,18 @@ class RegistryService {
   async getItems(type: 'parameter' | 'context' | 'case' | 'node' | 'event', tabs: any[] = []): Promise<RegistryItem[]> {
     const itemsMap = new Map<string, RegistryItem>();
     
-    // DETAILED LOGGING FOR NODES
-    const isNodeType = type === 'node';
-    if (isNodeType) {
-      console.log('🔍 RegistryService.getItems(node): Starting...');
-    }
-    
     // 1. Load index file from FileRegistry only (don't load stale data from IDB)
     // The workspace loading process should have already loaded the correct index file into FileRegistry
     const indexFileId = `${type}-index`; // FileIds use singular form (e.g., parameter-index)
     const indexFile = fileRegistry.getFile(indexFileId);
-    
-    if (isNodeType) {
-      console.log('🔍 RegistryService.getItems(node): Index file:', {
-        indexFileId,
-        exists: !!indexFile,
-        hasData: !!indexFile?.data
-      });
-    }
     
     // 2. Process index entries
     if (indexFile?.data) {
       const arrayKey = `${type}s` as 'parameters' | 'contexts' | 'cases' | 'nodes' | 'events';
       const entries = (indexFile.data as any)[arrayKey] || [];
       
-      if (isNodeType) {
-        console.log('🔍 RegistryService.getItems(node): Index entries:', entries.map((e: any) => ({
-          id: e.id,
-          name: e.name,
-          file_path: e.file_path
-        })));
-      }
-      
       for (const entry of entries) {
         const normalizedId = this.normalizeId(entry.id, type);
-        
-        if (isNodeType) {
-          console.log('🔍 RegistryService.getItems(node): Processing index entry:', {
-            entryId: entry.id,
-            normalizedId,
-            name: entry.name
-          });
-        }
         
         itemsMap.set(normalizedId, {
           id: normalizedId,
@@ -141,33 +111,11 @@ class RegistryService {
     
     // 3. Process actual files from FileRegistry - get fresh data
     const allFiles = fileRegistry.getAllFiles();
-    console.log(`RegistryService.getItems(${type}): FileRegistry has ${allFiles.length} total files`);
     const typeFiles = allFiles.filter(f => f.type === type && f.fileId !== `${type}-index`); // Skip index files
-    
-    if (isNodeType) {
-      console.log('🔍 RegistryService.getItems(node): Node files in FileRegistry:', typeFiles.map(f => ({
-        fileId: f.fileId,
-        name: f.name,
-        isLocal: f.isLocal,
-        isDirty: f.isDirty
-      })));
-    }
-    
-    console.log(`RegistryService: Processing ${typeFiles.length} ${type} files for dirty state`);
     
     for (const file of typeFiles) {
       const normalizedId = this.normalizeId(file.fileId, type);
       const existing = itemsMap.get(normalizedId);
-      
-      if (isNodeType) {
-        console.log('🔍 RegistryService.getItems(node): Processing file:', {
-          fileId: file.fileId,
-          normalizedId,
-          name: file.name,
-          foundInMap: !!existing,
-          mapKeys: Array.from(itemsMap.keys())
-        });
-      }
       
       if (existing) {
         // File exists for this index entry - update flags
@@ -187,18 +135,8 @@ class RegistryService {
         if (file.data?.event_type && type === 'event') {
           existing.event_type = file.data.event_type;
         }
-        
-        console.log(`RegistryService: Updated ${file.fileId} - isDirty: ${existing.isDirty}, isOpen: ${existing.isOpen}`);
       } else {
         // Orphan file (not in index)
-        if (isNodeType) {
-          console.log('🔍 RegistryService.getItems(node): Found orphan file:', {
-            fileId: file.fileId,
-            normalizedId,
-            name: file.name,
-            availableMapKeys: Array.from(itemsMap.keys())
-          });
-        }
         itemsMap.set(normalizedId, {
           id: normalizedId,
           type: type as ObjectType,
@@ -227,21 +165,7 @@ class RegistryService {
       }
     }
     
-    const result = Array.from(itemsMap.values());
-    
-    if (isNodeType) {
-      console.log('🔍 RegistryService.getItems(node): Final result:', result.map(r => ({
-        id: r.id,
-        name: r.name,
-        hasFile: r.hasFile,
-        isLocal: r.isLocal,
-        inIndex: r.inIndex,
-        isOrphan: r.isOrphan,
-        file_path: r.file_path
-      })));
-    }
-    
-    return result;
+    return Array.from(itemsMap.values());
   }
 
   /**

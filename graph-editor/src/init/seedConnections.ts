@@ -73,7 +73,13 @@ export async function seedConnectionsFile(): Promise<void> {
               type: 'connections',
               data: parsedData as any,
               lastModified: Date.now(),
-              viewTabs: existing?.viewTabs || []
+              viewTabs: existing?.viewTabs || [],
+              sha: data.sha,
+              source: {
+                repository: gitCred.name,
+                branch: gitCred.branch || 'main',
+                path: fullPath
+              }
             });
             console.log('[seedConnections] connections.yaml synced successfully from git');
           } else {
@@ -104,6 +110,11 @@ export async function seedConnectionsFile(): Promise<void> {
       console.log(
         `[seedConnections] ${existing ? 'Reseeding' : 'Creating'} connections.yaml from defaults (${defaultCount} connections)`
       );
+      
+      // Get current workspace info for source
+      const { credentialsManager } = await import('../lib/credentials');
+      const credResult = await credentialsManager.loadCredentials();
+      const gitCred = credResult.success && credResult.credentials?.git?.[0];
 
       await db.files.put({
         fileId,
@@ -112,7 +123,13 @@ export async function seedConnectionsFile(): Promise<void> {
         lastModified: Date.now(),
         viewTabs: existing?.viewTabs || [],
         isDirty: false,
-        originalData: defaultData
+        originalData: defaultData,
+        // Set source so file shows up in commit dialog
+        source: gitCred ? {
+          repository: gitCred.name,
+          branch: gitCred.branch || 'main',
+          path: 'connections/connections.yaml'
+        } : undefined
       });
       console.log(
         '[seedConnections] ✅ connections.yaml',
