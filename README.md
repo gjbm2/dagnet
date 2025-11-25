@@ -124,9 +124,11 @@ dagnet/
 - **Conditional Probabilities**: Define probabilities based on graph state
 - **File-Backed Parameters**: Link parameters to external data sources
 - **Data Connections & Adapters**: Connect to Amplitude, Google Sheets, PostgreSQL, and more via DAS (Data Adapter Service)
+- **Contexts**: Segment data by dimensions like channel, device, browser with MECE partitions and weighted aggregation
 - **Time-Series Data**: Daily breakdowns with incremental fetching and window aggregation
-- **Query DSL**: Powerful query language for graph traversal
+- **Query DSL**: Powerful query language for graph traversal with context and window support
 - **What-If Analysis**: Simulate different scenarios
+- **Scenarios**: Save, compare, and overlay parameter configurations
 - **Graph Analytics**: MSMDC, mutations, pruning (Python/NetworkX)
 - **Case Variants**: A/B testing and multivariate scenarios
 - **Batch Operations**: Bulk data fetching and updates across multiple parameters
@@ -140,13 +142,13 @@ dagnet/
 User-facing documentation accessible both in the app and on GitHub:
 
 - [User Guide](graph-editor/public/docs/user-guide.md) - Getting started and core concepts
+- [Contexts](graph-editor/public/docs/contexts.md) - Data segmentation by channel, device, browser, etc.
 - [Data Connections & Adapters](graph-editor/public/docs/data-connections.md) - Connect to external data sources
 - [Query Expressions](graph-editor/public/docs/query-expressions.md) - Query DSL reference
 - [What-If Analysis](graph-editor/public/docs/what-ifs-with-conditionals.md) - Scenario modeling
-- [Scenarios](graph-editor/public/docs/scenarios.md) - Case variants and A/B testing
+- [Scenarios](graph-editor/public/docs/scenarios.md) - Parameter overlays and A/B testing
 - [API Reference](graph-editor/public/docs/api-reference.md) - Programmatic access
 - [Keyboard Shortcuts](graph-editor/public/docs/keyboard-shortcuts.md) - Productivity tips
-- [Query Algorithms White Paper](graph-editor/public/docs/query-algorithms-white-paper.md) - Technical deep dive
 - [CHANGELOG](graph-editor/public/docs/CHANGELOG.md) - Release history
 
 ### 🔧 Technical Documentation

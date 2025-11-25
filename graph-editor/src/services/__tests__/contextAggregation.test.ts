@@ -8,6 +8,7 @@ import {
 } from '../contextAggregationService';
 import { contextRegistry } from '../contextRegistry';
 import type { ContextDefinition } from '../contextRegistry';
+import type { ParameterValue } from '../paramRegistryService';
 
 describe('Context Aggregation Service', () => {
   
@@ -51,12 +52,13 @@ describe('Context Aggregation Service', () => {
   
   describe('aggregateWindowsWithContexts', () => {
     it('should aggregate specific context slice', async () => {
+      const windows: ParameterValue[] = [
+        { sliceDSL: 'context(channel:google)', n: 100, k: 15, mean: 0.15 },
+        { sliceDSL: 'context(channel:meta)', n: 80, k: 12, mean: 0.15 }
+      ];
       const variable = {
         id: 'test-var',
-        windows: [
-          { sliceDSL: 'context(channel:google)', n: 100, k: 15 },
-          { sliceDSL: 'context(channel:meta)', n: 80, k: 12 }
-        ]
+        windows
       };
       
       const { parseConstraints } = await import('../../lib/queryDSL');
@@ -75,11 +77,12 @@ describe('Context Aggregation Service', () => {
     });
     
     it('should return partial_data for missing slice', async () => {
+      const windows: ParameterValue[] = [
+        { sliceDSL: 'context(channel:meta)', n: 80, k: 12, mean: 0.15 }
+      ];
       const variable = {
         id: 'test-var',
-        windows: [
-          { sliceDSL: 'context(channel:meta)', n: 80, k: 12 }
-        ]
+        windows
       };
       
       const { parseConstraints } = await import('../../lib/queryDSL');
@@ -97,12 +100,13 @@ describe('Context Aggregation Service', () => {
     });
     
     it('should aggregate uncontexted data when available', async () => {
+      const windows: ParameterValue[] = [
+        { sliceDSL: '', n: 200, k: 30, mean: 0.15 },  // Uncontexted
+        { sliceDSL: 'context(channel:google)', n: 100, k: 15, mean: 0.15 }
+      ];
       const variable = {
         id: 'test-var',
-        windows: [
-          { sliceDSL: '', n: 200, k: 30 },  // Uncontexted
-          { sliceDSL: 'context(channel:google)', n: 100, k: 15 }
-        ]
+        windows
       };
       
       const { parseConstraints } = await import('../../lib/queryDSL');
@@ -156,7 +160,7 @@ describe('Context Aggregation Service', () => {
         return undefined;
       });
       
-      const perContextResults = [
+      const perContextResults: Array<{ n: number; k: number; contextCombo: ContextCombination }> = [
         // MECE key (browser-type) - complete
         { n: 100, k: 20, contextCombo: { 'browser_type': 'chrome' } },
         { n: 80, k: 12, contextCombo: { 'browser_type': 'safari' } },
@@ -167,7 +171,7 @@ describe('Context Aggregation Service', () => {
         { n: 30, k: 4, contextCombo: { channel: 'meta' } }
       ];
       
-      const variable = { id: 'test-var', windows: [] };
+      const variable = { id: 'test-var', windows: [] as ParameterValue[] };
       
       const result = await tryMECEAggregationAcrossContexts(perContextResults, variable);
       

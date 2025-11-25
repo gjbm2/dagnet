@@ -106,10 +106,11 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
         name: 'Channel',
         description: 'Marketing channel',
         type: 'categorical',
+        otherPolicy: 'computed',
         values: [
           { id: 'google', label: 'Google', sources: { amplitude: { filter: "utm_source == 'google'" } } },
           { id: 'meta', label: 'Meta', sources: { amplitude: { filter: "utm_source == 'facebook'" } } },
-          { id: 'other', label: 'Other', sources: { amplitude: { otherPolicy: 'computed' } } }
+          { id: 'other', label: 'Other' }
         ],
         metadata: { created_at: '2025-01-01T00:00:00Z', version: '1.0.0', status: 'active' }
       };
@@ -143,9 +144,10 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
         name: 'Channel',
         description: 'Marketing channel',
         type: 'categorical',
+        otherPolicy: 'explicit',
         values: [
           { id: 'google', label: 'Google', sources: { amplitude: { filter: "utm_source == 'google'" } } },
-          { id: 'other', label: 'Other', sources: { amplitude: { otherPolicy: 'explicit', filter: "utm_source == 'direct'" } } }
+          { id: 'other', label: 'Other', sources: { amplitude: { filter: "utm_source == 'direct'" } } }
         ],
         metadata: { created_at: '2025-01-01T00:00:00Z', version: '1.0.0', status: 'active' }
       };

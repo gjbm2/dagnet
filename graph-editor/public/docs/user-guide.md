@@ -23,12 +23,19 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 ### Parameters
 - **Baseline Values**: Default conversion rates and costs
 - **Treatment Values**: Experimental or alternative values
-- **Contexts**: Different scenarios or user segments
+- **Data Connections**: Link to external data sources (Amplitude, Google Sheets)
+
+### Contexts
+- **Segmentation**: Break down data by dimensions like channel, browser, device
+- **MECE Partitions**: Mutually exclusive, collectively exhaustive categorizations
+- **Aggregation**: Combine segment data with proper weighting
+- **Comparison**: View and compare different user segments side-by-side
 
 ### What-If Analysis
 - **Override Values**: Temporarily change parameters to see impact
 - **Path Analysis**: Analyze conversion paths and identify bottlenecks
 - **Conditional Probabilities**: Model complex decision trees
+- **Scenarios**: Save and compare different parameter configurations
 
 ## Working with Graphs
 
@@ -48,6 +55,33 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 - **Select**: Click on an edge to select it
 - **Adjust Weight**: Use the Properties panel or drag the probability slider
 - **Delete**: Press `Delete` key or right-click menu
+
+## Working with Contexts
+
+Contexts let you segment your data by user dimensions like marketing channel, device type, or browser.
+
+### Setting Up Contexts
+1. **Create Context Definition**: `File > New Context` to define a new context
+2. **Define Values**: List the possible values (e.g., google, facebook, organic for channel)
+3. **Set Filters**: Specify how each value maps to your data source
+
+### Using Contexts in Queries
+1. **Open Query Editor**: Use the DSL input in the toolbar
+2. **Add Context Filter**: Type `context(channel:google)` to filter by segment
+3. **Use Multiple Values**: `contextAny(channel:google,channel:facebook)` for multiple segments
+4. **Combine with Time**: `context(channel:google).window(-30d:)` for time-bounded queries
+
+### Context Selector
+- **Select Dimension**: Choose which context to visualize (channel, device, etc.)
+- **Select Value**: Pick a specific segment or "All" for aggregate
+- **Compare**: View segments side-by-side with color coding
+
+### Aggregation
+- **Weighted Average**: Segments are combined based on sample sizes
+- **Daily Data**: Time-series data aggregates correctly across segments
+- **Automatic Updates**: Change context selection and see immediate updates
+
+For more details, see the [Contexts documentation](./contexts.md).
 
 ## What-If Analysis
 

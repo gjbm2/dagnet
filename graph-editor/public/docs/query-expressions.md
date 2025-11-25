@@ -340,7 +340,9 @@ Conditions can be combined to create specific targeting:
 visited(node-id)           # User visited this node
 exclude(node-id)           # User did NOT visit this node
 context(key:value)         # Matches context variable
+contextAny(key:v1,key:v2)  # Matches ANY of multiple context values
 case(experiment:variant)   # In this experiment variant
+window(start:end)          # Time-bounded data window
 ```
 
 ### Combined Conditions
@@ -349,6 +351,78 @@ case(experiment:variant)   # In this experiment variant
 visited(promo).exclude(blog)                    # Visited promo but not blog
 visited(a).visited(b)                           # Visited both a and b
 context(device:mobile).case(test:treatment)     # Mobile users in treatment
+context(channel:google).window(-30d:)           # Google channel, last 30 days
+```
+
+---
+
+## Context & Window Functions
+
+### context() — Single Context Value
+
+Filter data to a specific segment:
+
+```
+context(channel:google)           # Google channel only
+context(device-family:mobile)     # Mobile devices only
+context(browser-type:chrome)      # Chrome users only
+```
+
+Multiple contexts can be combined (AND logic):
+
+```
+context(channel:google).context(device-family:mobile)
+# Google channel AND mobile devices
+```
+
+### contextAny() — Multiple Context Values
+
+Aggregate data across multiple context values (OR logic):
+
+```
+contextAny(channel:google,channel:facebook)
+# Google OR Facebook channel (aggregated)
+
+contextAny(device-family:mobile,device-family:tablet)
+# Mobile OR tablet devices
+```
+
+### window() — Time Windows
+
+Bound data to a specific time range:
+
+**Relative windows** (from today):
+```
+window(-30d:)     # Last 30 days
+window(-7d:)      # Last 7 days
+window(-90d:)     # Last 90 days
+```
+
+**Absolute windows**:
+```
+window(2025-01-01:2025-03-31)    # Q1 2025
+window(2025-01-01:2025-01-31)    # January 2025
+```
+
+**Combined with contexts**:
+```
+context(channel:google).window(-30d:)
+# Google channel, last 30 days
+
+contextAny(channel:google,channel:facebook).window(2025-01-01:2025-03-31)
+# Google or Facebook, Q1 2025
+```
+
+### Data Interests DSL
+
+Set on graphs to specify what data to fetch:
+
+```
+context(channel).window(-90d:)
+# Fetch all channel values for last 90 days
+
+context(channel);context(device-family).window(-30d:)
+# Fetch both channel and device breakdowns
 ```
 
 ---
@@ -535,7 +609,9 @@ visited(<node-a>).visited(<node-b>)            # Visited both nodes
 exclude(<node-id>)                             # User did NOT visit
 visited(<node-a>).exclude(<node-b>)            # Visited a but not b
 context(<key>:<value>)                         # Context matches
+contextAny(<key>:<v1>,<key>:<v2>)              # Any context matches (OR)
 case(<experiment>:<variant>)                   # In experiment variant
+window(<start>:<end>)                          # Time window (dates or relative)
 ```
 
 ---
@@ -642,6 +718,7 @@ For Google Sheets:
 
 ---
 
-**Version History:**u
+**Version History:**
+- **2.1** (November 2025): Added context(), contextAny(), and window() function documentation
 - **2.0** (November 2025): Simplified user guide format, correct conditional probability syntax
 - **1.0** (November 2025): Initial release
