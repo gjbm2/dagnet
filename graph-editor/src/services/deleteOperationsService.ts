@@ -7,6 +7,7 @@
 
 import { fileRegistry } from '../contexts/TabContext';
 import { workspaceService } from './workspaceService';
+import { sessionLogService } from './sessionLogService';
 import toast from 'react-hot-toast';
 
 class DeleteOperationsService {
@@ -63,10 +64,15 @@ class DeleteOperationsService {
    * - Nothing is committed to Git until user explicitly commits
    */
   async deleteNodeFile(nodeId: string): Promise<void> {
+    sessionLogService.info('file', 'NODE_FILE_DELETE', 
+      `Attempting to delete node file: ${nodeId}`, undefined, { fileId: `node-${nodeId}` });
+    
     try {
       const nodeFile = fileRegistry.getFile(`node-${nodeId}`);
       if (!nodeFile) {
         toast.error(`Node file not found: ${nodeId}`);
+        sessionLogService.warning('file', 'NODE_FILE_DELETE_NOT_FOUND', 
+          `Node file not found: ${nodeId}`, undefined, { fileId: `node-${nodeId}` });
         return;
       }
       
@@ -114,13 +120,22 @@ class DeleteOperationsService {
         imagesStaged: imagesToDelete.length,
         imagesKept: imageIds.length - imagesToDelete.length
       });
+      
+      sessionLogService.success('file', 'NODE_FILE_DELETE_SUCCESS', 
+        `Node file deletion staged: ${nodeId}`,
+        `Images staged for deletion: ${imagesToDelete.length}, Images kept: ${imageIds.length - imagesToDelete.length}`,
+        { fileId: `node-${nodeId}`, filesAffected: imagesToDelete });
     } catch (error) {
       console.error('Failed to delete node file:', error);
       toast.error('Failed to delete node file');
+      
+      sessionLogService.error('file', 'NODE_FILE_DELETE_FAILURE', 
+        `Failed to delete node file: ${nodeId}`,
+        error instanceof Error ? error.message : String(error),
+        { fileId: `node-${nodeId}` });
       throw error;
     }
   }
 }
 
 export const deleteOperationsService = new DeleteOperationsService();
-

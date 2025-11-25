@@ -28,6 +28,7 @@
 import { generateUniqueId } from '../lib/idUtils';
 import { getSiblingEdges } from '../lib/conditionalColours';
 import { normalizeConstraintString } from '../lib/queryDSL';
+import { sessionLogService } from './sessionLogService';
 
 // ============================================================
 // TYPES & INTERFACES
@@ -426,20 +427,39 @@ export class UpdateManager {
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
     console.log('[UpdateManager] update:start', { direction: 'graph_to_file', operation, subDest });
+    const sourceId = source?.id || source?.uuid || 'unknown';
+    sessionLogService.info('data-update', `GRAPH_TO_FILE_${operation}`, 
+      `${operation} ${subDest} file from graph`, `Source: ${sourceId}`, { fileId: sourceId, fileType: subDest });
     
     try {
+      let result: UpdateResult;
       switch (operation) {
         case 'CREATE':
-          return await this.createFileFromGraph(source, subDest, options);
+          result = await this.createFileFromGraph(source, subDest, options);
+          break;
         case 'UPDATE':
-          return await this.updateFileMetadata(source, target!, subDest, options);
+          result = await this.updateFileMetadata(source, target!, subDest, options);
+          break;
         case 'APPEND':
-          return await this.appendToFileHistory(source, target!, subDest, options);
+          result = await this.appendToFileHistory(source, target!, subDest, options);
+          break;
         default:
           throw new Error(`Unsupported operation: ${operation}`);
       }
+      
+      if (result.success) {
+        sessionLogService.success('data-update', `GRAPH_TO_FILE_${operation}_SUCCESS`, 
+          `${operation} ${subDest} file completed`, 
+          result.changes?.length ? `${result.changes.length} field(s) updated` : undefined,
+          { fileId: sourceId, fileType: subDest });
+      }
+      return result;
     } catch (error) {
       console.error('[UpdateManager] update:error', { direction: 'graph_to_file', operation, subDest, error });
+      sessionLogService.error('data-update', `GRAPH_TO_FILE_${operation}_ERROR`, 
+        `${operation} ${subDest} file failed`, 
+        error instanceof Error ? error.message : String(error),
+        { fileId: sourceId, fileType: subDest });
       throw error;
     }
   }
@@ -482,11 +502,27 @@ export class UpdateManager {
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
     console.log('[UpdateManager] update:start', { direction: 'external_to_graph', operation, subDest });
+    const sourceId = source?.id || source?.name || 'external source';
+    const targetId = target?.uuid || target?.id || 'unknown';
+    sessionLogService.info('data-fetch', `EXTERNAL_TO_GRAPH_${subDest.toUpperCase()}`, 
+      `Fetching ${subDest} data from external source`, `Source: ${sourceId}`, 
+      { sourceType: 'external', sourceId, targetId, fileType: subDest });
     
     try {
-      return await this.updateGraphFromExternal(source, target, subDest, options);
+      const result = await this.updateGraphFromExternal(source, target, subDest, options);
+      if (result.success) {
+        sessionLogService.success('data-fetch', `EXTERNAL_TO_GRAPH_${subDest.toUpperCase()}_SUCCESS`, 
+          `Updated graph from external ${subDest} source`, 
+          result.changes?.length ? `${result.changes.length} field(s) updated` : undefined,
+          { sourceId, targetId, fileType: subDest });
+      }
+      return result;
     } catch (error) {
       console.error('[UpdateManager] update:error', { direction: 'external_to_graph', operation, subDest, error });
+      sessionLogService.error('data-fetch', `EXTERNAL_TO_GRAPH_${subDest.toUpperCase()}_ERROR`, 
+        `External ${subDest} fetch failed`, 
+        error instanceof Error ? error.message : String(error),
+        { sourceId, targetId, fileType: subDest });
       throw error;
     }
   }
@@ -505,11 +541,28 @@ export class UpdateManager {
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
     console.log('[UpdateManager] update:start', { direction: 'external_to_file', operation, subDest });
+    const sourceId = source?.id || source?.name || 'external source';
+    const targetId = target?.id || target?.fileId || 'target file';
+    sessionLogService.info('data-update', `EXTERNAL_TO_FILE_${subDest.toUpperCase()}`, 
+      `Appending external ${subDest} data to file`, 
+      `Source: ${sourceId}, Target: ${targetId}`,
+      { sourceType: 'external', sourceId, fileId: targetId, fileType: subDest });
     
     try {
-      return await this.appendExternalToFile(source, target, subDest, options);
+      const result = await this.appendExternalToFile(source, target, subDest, options);
+      if (result.success) {
+        sessionLogService.success('data-update', `EXTERNAL_TO_FILE_${subDest.toUpperCase()}_SUCCESS`, 
+          `Appended external data to ${subDest} file`, 
+          result.changes?.length ? `${result.changes.length} item(s) appended` : undefined,
+          { sourceId, fileId: targetId, fileType: subDest });
+      }
+      return result;
     } catch (error) {
       console.error('[UpdateManager] update:error', { direction: 'external_to_file', operation, subDest, error });
+      sessionLogService.error('data-update', `EXTERNAL_TO_FILE_${subDest.toUpperCase()}_ERROR`, 
+        `Append external data to ${subDest} file failed`, 
+        error instanceof Error ? error.message : String(error),
+        { sourceId, fileId: targetId, fileType: subDest });
       throw error;
     }
   }

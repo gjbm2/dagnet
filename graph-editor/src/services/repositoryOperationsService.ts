@@ -11,6 +11,7 @@ import { gitService } from './gitService';
 import { credentialsManager } from '../lib/credentials';
 import { db } from '../db/appDatabase';
 import { FileState } from '../types';
+import { sessionLogService } from './sessionLogService';
 
 export interface RepositoryStatus {
   repository: string;
@@ -44,10 +45,13 @@ class RepositoryOperationsService {
    */
   async pullLatest(repository: string, branch: string): Promise<{ success: boolean; conflicts?: any[] }> {
     console.log(`🔄 RepositoryOperationsService: Pulling latest for ${repository}/${branch}`);
+    sessionLogService.info('git', 'GIT_PULL', `Pulling latest from ${repository}/${branch}`, undefined,
+      { repository, branch });
 
     // Get git credentials
     const credsResult = await credentialsManager.loadCredentials();
     if (!credsResult.success) {
+      sessionLogService.error('git', 'GIT_PULL_ERROR', 'Pull failed: No credentials available');
       throw new Error('No credentials available');
     }
 
@@ -56,24 +60,38 @@ class RepositoryOperationsService {
     );
 
     if (!gitCreds) {
+      sessionLogService.error('git', 'GIT_PULL_ERROR', `Pull failed: Repository "${repository}" not found in credentials`);
       throw new Error(`Repository "${repository}" not found in credentials`);
     }
 
-    // Use workspaceService.pullLatest which does incremental SHA comparison + merge
-    const result = await workspaceService.pullLatest(repository, branch, gitCreds);
+    try {
+      // Use workspaceService.pullLatest which does incremental SHA comparison + merge
+      const result = await workspaceService.pullLatest(repository, branch, gitCreds);
 
-    // Reload Navigator to show updated files
-    if (this.navigatorOps) {
-      await this.navigatorOps.refreshItems();
+      // Reload Navigator to show updated files
+      if (this.navigatorOps) {
+        await this.navigatorOps.refreshItems();
+      }
+
+      if (result.conflicts && result.conflicts.length > 0) {
+        console.log(`⚠️ RepositoryOperationsService: Pull completed with ${result.conflicts.length} conflicts`);
+        sessionLogService.warning('git', 'GIT_PULL_CONFLICTS', 
+          `Pull completed with ${result.conflicts.length} conflict(s)`, 
+          result.conflicts.map((c: any) => c.fileName || c.fileId).join(', '),
+          { conflicts: result.conflicts.map((c: any) => c.fileName || c.fileId) });
+        return { success: true, conflicts: result.conflicts };
+      }
+
+      console.log(`✅ RepositoryOperationsService: Pulled latest successfully`);
+      sessionLogService.success('git', 'GIT_PULL_SUCCESS', `Pulled latest from ${repository}/${branch}`,
+        undefined,
+        { repository, branch });
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sessionLogService.error('git', 'GIT_PULL_ERROR', `Pull failed: ${message}`);
+      throw error;
     }
-
-    if (result.conflicts && result.conflicts.length > 0) {
-      console.log(`⚠️ RepositoryOperationsService: Pull completed with ${result.conflicts.length} conflicts`);
-      return { success: true, conflicts: result.conflicts };
-    }
-
-    console.log(`✅ RepositoryOperationsService: Pulled latest successfully`);
-    return { success: true };
   }
 
   /**
@@ -82,10 +100,13 @@ class RepositoryOperationsService {
    */
   async cloneWorkspace(repository: string, branch: string): Promise<void> {
     console.log(`🔄 RepositoryOperationsService: Force cloning ${repository}/${branch}`);
+    sessionLogService.info('git', 'GIT_CLONE', `Cloning workspace ${repository}/${branch}`, undefined,
+      { repository, branch });
 
     // Get git credentials
     const credsResult = await credentialsManager.loadCredentials();
     if (!credsResult.success) {
+      sessionLogService.error('git', 'GIT_CLONE_ERROR', 'Clone failed: No credentials available');
       throw new Error('No credentials available');
     }
 
@@ -94,19 +115,27 @@ class RepositoryOperationsService {
     );
 
     if (!gitCreds) {
+      sessionLogService.error('git', 'GIT_CLONE_ERROR', `Clone failed: Repository "${repository}" not found in credentials`);
       throw new Error(`Repository "${repository}" not found in credentials`);
     }
 
-    // Delete and re-clone
-    await workspaceService.deleteWorkspace(repository, branch);
-    await workspaceService.cloneWorkspace(repository, branch, gitCreds);
+    try {
+      // Delete and re-clone
+      await workspaceService.deleteWorkspace(repository, branch);
+      await workspaceService.cloneWorkspace(repository, branch, gitCreds);
 
-    // Reload Navigator
-    if (this.navigatorOps) {
-      await this.navigatorOps.refreshItems();
+      // Reload Navigator
+      if (this.navigatorOps) {
+        await this.navigatorOps.refreshItems();
+      }
+
+      console.log(`✅ RepositoryOperationsService: Cloned successfully`);
+      // Note: detailed logging is done by workspaceService.cloneWorkspace
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sessionLogService.error('git', 'GIT_CLONE_ERROR', `Clone failed: ${message}`);
+      throw error;
     }
-
-    console.log(`✅ RepositoryOperationsService: Cloned successfully`);
   }
 
   /**
@@ -520,16 +549,33 @@ class RepositoryOperationsService {
     repository: string,
     showConfirmDialog: (options: any) => Promise<boolean>
   ): Promise<void> {
+    // Start hierarchical log for commit operation
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'git',
+      'GIT_COMMIT',
+      `Committing ${files.length} file(s) to ${repository}/${branch}`,
+      { 
+        repository, 
+        branch,
+        filesAffected: files.map(f => f.fileId || f.path)
+      }
+    );
+    
+    sessionLogService.addChild(logOpId, 'info', 'COMMIT_MESSAGE', `Message: "${message}"`);
+
     // Get git credentials
     const credsResult = await credentialsManager.loadCredentials();
     
     if (!credsResult.success || !credsResult.credentials) {
+      sessionLogService.endOperation(logOpId, 'error', 'Commit failed: No credentials available');
       throw new Error('No credentials available. Please configure credentials first.');
     }
 
     const gitCreds = credsResult.credentials.git.find(cred => cred.name === repository);
     
     if (!gitCreds) {
+      sessionLogService.endOperation(logOpId, 'error', `Commit failed: No credentials for repository ${repository}`);
       throw new Error(`No credentials found for repository ${repository}`);
     }
 
@@ -543,6 +589,10 @@ class RepositoryOperationsService {
     // Check for files changed on remote and warn user
     const changedFiles = await gitService.checkFilesChangedOnRemote(files, branch, gitCreds.basePath);
     if (changedFiles.length > 0) {
+      sessionLogService.addChild(logOpId, 'warning', 'REMOTE_CHANGES', 
+        `${changedFiles.length} file(s) changed on remote`,
+        changedFiles.join(', '),
+        { filesAffected: changedFiles });
       const fileList = changedFiles.map(path => `  • ${path}`).join('\n');
       const confirmed = await showConfirmDialog({
         title: 'Files Changed on Remote',
@@ -555,91 +605,123 @@ class RepositoryOperationsService {
       });
       
       if (!confirmed) {
+        sessionLogService.endOperation(logOpId, 'info', 'Commit cancelled by user');
         throw new Error('Commit cancelled by user');
       }
     }
 
-    // Update file timestamps BEFORE committing to Git
-    const nowISO = new Date().toISOString();
-    const YAML = await import('yaml');
-    
-    const filesToCommit: Array<{
-      path: string;
-      content?: string;
-      binaryContent?: Uint8Array;
-      encoding?: 'utf-8' | 'base64';
-      sha?: string;
-      delete?: boolean;
-    }> = files.map(file => {
-      // Get the file from registry to update its metadata
-      const fileState = fileRegistry.getFile(file.fileId);
-      let content = file.content;
+    try {
+      // Update file timestamps BEFORE committing to Git
+      const nowISO = new Date().toISOString();
+      const YAML = await import('yaml');
       
-      // Update timestamp in the file content itself (standardized metadata structure)
-      if (fileState?.data) {
-        // All file types now use metadata.updated_at
-        if (!fileState.data.metadata) {
-          fileState.data.metadata = {
-            created_at: nowISO,
-            version: '1.0.0'
-          };
-        }
-        fileState.data.metadata.updated_at = nowISO;
+      const filesToCommit: Array<{
+        path: string;
+        content?: string;
+        binaryContent?: Uint8Array;
+        encoding?: 'utf-8' | 'base64';
+        sha?: string;
+        delete?: boolean;
+      }> = files.map(file => {
+        // Get the file from registry to update its metadata
+        const fileState = fileRegistry.getFile(file.fileId);
+        let content = file.content;
         
-        // Set author from credentials userName if available
-        if (gitCreds?.userName && !fileState.data.metadata.author) {
-          fileState.data.metadata.author = gitCreds.userName;
+        // Update timestamp in the file content itself (standardized metadata structure)
+        if (fileState?.data) {
+          // All file types now use metadata.updated_at
+          if (!fileState.data.metadata) {
+            fileState.data.metadata = {
+              created_at: nowISO,
+              version: '1.0.0'
+            };
+          }
+          fileState.data.metadata.updated_at = nowISO;
+          
+          // Set author from credentials userName if available
+          if (gitCreds?.userName && !fileState.data.metadata.author) {
+            fileState.data.metadata.author = gitCreds.userName;
+          }
+          
+          // Re-serialize with updated timestamp
+          content = fileState.type === 'graph' 
+            ? JSON.stringify(fileState.data, null, 2)
+            : YAML.stringify(fileState.data);
         }
         
-        // Re-serialize with updated timestamp
-        content = fileState.type === 'graph' 
-          ? JSON.stringify(fileState.data, null, 2)
-          : YAML.stringify(fileState.data);
-      }
-      
+        const basePath = gitCreds.basePath || '';
+        const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
+        return {
+          path: fullPath,
+          content,
+          sha: file.sha
+        };
+      });
+
       const basePath = gitCreds.basePath || '';
-      const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
-      return {
-        path: fullPath,
-        content,
-        sha: file.sha
-      };
-    });
+      
+      // Add pending image operations (uploads + image deletions)
+      const imageFiles = await fileRegistry.commitPendingImages();
+      filesToCommit.push(...imageFiles.map(img => ({
+        path: basePath ? `${basePath}/${img.path}` : img.path,
+        binaryContent: img.binaryContent,
+        encoding: img.encoding,
+        delete: img.delete
+      })));
+      
+      // Add pending file deletions
+      const fileDeletions = await fileRegistry.commitPendingFileDeletions();
+      filesToCommit.push(...fileDeletions.map(del => ({
+        path: basePath ? `${basePath}/${del.path}` : del.path,
+        delete: true
+      })));
+      
+      console.log('[RepositoryOperationsService] Committing:', {
+        modifiedFiles: files.length,
+        imageOps: imageFiles.length,
+        fileDeletions: fileDeletions.length,
+        total: filesToCommit.length
+      });
 
-    const basePath = gitCreds.basePath || '';
-    
-    // Add pending image operations (uploads + image deletions)
-    const imageFiles = await fileRegistry.commitPendingImages();
-    filesToCommit.push(...imageFiles.map(img => ({
-      path: basePath ? `${basePath}/${img.path}` : img.path,
-      binaryContent: img.binaryContent,
-      encoding: img.encoding,
-      delete: img.delete
-    })));
-    
-    // Add pending file deletions
-    const fileDeletions = await fileRegistry.commitPendingFileDeletions();
-    filesToCommit.push(...fileDeletions.map(del => ({
-      path: basePath ? `${basePath}/${del.path}` : del.path,
-      delete: true
-    })));
-    
-    console.log('[RepositoryOperationsService] Committing:', {
-      modifiedFiles: files.length,
-      imageOps: imageFiles.length,
-      fileDeletions: fileDeletions.length,
-      total: filesToCommit.length
-    });
+      // Log files being committed
+      for (const file of filesToCommit) {
+        const action = file.delete ? 'DELETE' : (file.binaryContent ? 'IMAGE' : 'UPDATE');
+        sessionLogService.addChild(logOpId, 'info', `COMMIT_${action}`, 
+          `${action}: ${file.path}`,
+          undefined,
+          { filePath: file.path });
+      }
 
-    // Commit and push
-    const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
-    if (!result.success) {
-      throw new Error(result.error || 'Failed to commit files');
-    }
+      // Commit and push
+      const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
+      if (!result.success) {
+        sessionLogService.endOperation(logOpId, 'error', `Commit failed: ${result.error || 'Unknown error'}`);
+        throw new Error(result.error || 'Failed to commit files');
+      }
 
-    // Mark files as saved in FileRegistry
-    for (const file of files) {
-      await fileRegistry.markSaved(file.fileId);
+      // Mark files as saved in FileRegistry
+      for (const file of files) {
+        await fileRegistry.markSaved(file.fileId);
+      }
+
+      sessionLogService.endOperation(logOpId, 'success', 
+        `Committed ${filesToCommit.length} file(s) to ${repository}/${branch}`,
+        { 
+          repository, 
+          branch,
+          filesAffected: filesToCommit.map(f => f.path),
+          added: files.length,
+          updated: imageFiles.length,
+          errors: fileDeletions.length
+        });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (!errorMessage.includes('cancelled')) {
+        sessionLogService.endOperation(logOpId, 'error', `Commit failed: ${errorMessage}`);
+      } else {
+        sessionLogService.endOperation(logOpId, 'info', 'Commit cancelled by user');
+      }
+      throw error;
     }
   }
 }

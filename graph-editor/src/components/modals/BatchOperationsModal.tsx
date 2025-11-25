@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
 import { LogFileService } from '../../services/logFileService';
+import { sessionLogService } from '../../services/sessionLogService';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import './Modal.css';
@@ -255,6 +256,25 @@ export function BatchOperationsModal({
     logLines.push('Results:');
     logLines.push('');
 
+    // Map operation type to human-readable name
+    const operationNames: Record<BatchOperationType, string> = {
+      'get-from-files': 'Get All from Files',
+      'get-from-sources': 'Get All from Sources (versioned)',
+      'get-from-sources-direct': 'Get All from Sources (direct)',
+      'put-to-files': 'Put All to Files'
+    };
+    
+    // Start hierarchical session log operation
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'data-fetch',
+      `BATCH_${operationType.toUpperCase().replace(/-/g, '_')}`,
+      `${operationNames[operationType]}: ${selectedBatchItems.length} items`,
+      {
+        filesAffected: selectedBatchItems.map(item => item.objectId)
+      }
+    );
+
     // Show progress bar toast (only if not logging to file, or show both)
     let progressToastId: string | undefined;
     if (!createLog) {
@@ -345,7 +365,8 @@ export function BatchOperationsModal({
               graph,
               setGraph,
               paramSlot: item.paramSlot,
-              bustCache
+              bustCache,
+              currentDSL: graph?.currentQueryDSL || ''
             });
             
             // Get edge after operation to extract details
@@ -375,7 +396,8 @@ export function BatchOperationsModal({
               objectId: item.objectId,
               targetId: item.targetId,
               graph,
-              setGraph
+              setGraph,
+              currentDSL: graph?.currentQueryDSL || ''
             });
             success = true;
           }
@@ -393,7 +415,8 @@ export function BatchOperationsModal({
               setGraph,
               paramSlot: item.paramSlot,
               dailyMode: false,
-              bustCache
+              bustCache,
+              currentDSL: graph?.currentQueryDSL || ''
             });
             
             // Get edge after operation to extract details
@@ -477,6 +500,19 @@ export function BatchOperationsModal({
         const detailText = details || '';
         logLines.push(`${statusIcon} ${item.name}${contextText}${detailText} (${statusText})`);
 
+        // Add child to hierarchical session log
+        sessionLogService.addChild(
+          logOpId,
+          success ? 'success' : 'error',
+          success ? 'ITEM_SUCCESS' : 'ITEM_ERROR',
+          `${item.name}${detailText}`,
+          contextText ? contextText.slice(2, -1) : undefined, // Remove leading " (" and trailing ")"
+          {
+            fileId: item.objectId,
+            fileType: item.type
+          }
+        );
+
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         operationResults.push({
@@ -486,6 +522,19 @@ export function BatchOperationsModal({
           error: errorMessage
         });
         logLines.push(`✗ ${item.name}: ${errorMessage}`);
+        
+        // Log error to hierarchical session log
+        sessionLogService.addChild(
+          logOpId,
+          'error',
+          'ITEM_ERROR',
+          `${item.name} failed`,
+          errorMessage,
+          {
+            fileId: item.objectId,
+            fileType: item.type
+          }
+        );
       }
     }
 
@@ -494,6 +543,18 @@ export function BatchOperationsModal({
     const successCount = operationResults.filter(r => r.success).length;
     const skippedCount = operationResults.filter(r => r.skipped).length;
     const errorCount = operationResults.filter(r => !r.success && !r.skipped).length;
+    
+    // End hierarchical session log operation
+    sessionLogService.endOperation(
+      logOpId,
+      errorCount > 0 ? 'warning' : 'success',
+      `${operationNames[operationType]} complete: ${successCount} succeeded, ${errorCount} failed`,
+      {
+        added: successCount,
+        errors: errorCount,
+        skipped: skippedCount
+      }
+    );
     
     // Build final log content as plain text
     const finalLogContent = logLines.join('\n') + '\n\n' + 
@@ -561,10 +622,10 @@ export function BatchOperationsModal({
   if (!isOpen) return null;
 
   const operationTitle = {
-    'get-from-files': 'Get All from Files',
-    'get-from-sources': 'Get All from Sources',
-    'get-from-sources-direct': 'Get All from Sources (direct)',
-    'put-to-files': 'Put All to Files'
+    'get-from-files': 'Get all for current slice from Files',
+    'get-from-sources': 'Get all for current slice from Sources',
+    'get-from-sources-direct': 'Get all for current slice from Sources (direct)',
+    'put-to-files': 'Put all for current slice to Files'
   }[operationType];
 
   const selectedCount = selectedItems.size;

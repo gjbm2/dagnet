@@ -4,6 +4,7 @@ import { useTabContext } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
+import { sessionLogService } from '../../services/sessionLogService';
 
 /**
  * View Menu
@@ -112,6 +113,10 @@ export function ViewMenu() {
   const handleToggleWhatIfPanel = () => {
     // TODO: Implement sidebar panel toggles
     console.log('Toggle What-If Analysis');
+  };
+
+  const handleOpenSessionLogs = async () => {
+    await sessionLogService.openLogTab();
   };
 
   const handleHideUnselected = async () => {
@@ -340,6 +345,15 @@ export function ViewMenu() {
           >
             Navigator
             <div className="menubar-right-slot">⌘B</div>
+          </Menubar.Item>
+
+          <Menubar.Separator className="menubar-separator" />
+
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={handleOpenSessionLogs}
+          >
+            Session Logs
           </Menubar.Item>
         </Menubar.Content>
       </Menubar.Portal>
