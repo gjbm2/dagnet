@@ -2,7 +2,25 @@
 ## Version 0.95b
 **Released:** November 25, 2025
 
-Context are in and working. We are nearing RC1!
+### 🎯 Major Features
+- **Contexts v1.0**: Full context support for data segmentation
+  - Define contexts (channel, device-family, browser-type) in YAML files
+  - Use `context()` in DSL to filter by single values
+  - Use `contextAny()` to aggregate multiple values
+  - MECE partition support with configurable `otherPolicy`
+  - Weighted aggregation across context segments
+- **Time Windows**: `window()` function for time-bounded queries
+  - Relative windows: `window(-30d:)` for last 30 days
+  - Absolute windows: `window(2025-01-01:2025-03-31)`
+- **SHA-Based Commit Detection**: More reliable detection of uncommitted changes
+  - Compares local content SHA to stored remote SHA
+  - Works reliably across page refreshes
+
+### 🐛 Bug Fixes
+- Fixed commit modal not showing all changed files after page refresh
+- Fixed duplicate files appearing in commit modal
+
+We are nearing RC1!
 
 ---
 
