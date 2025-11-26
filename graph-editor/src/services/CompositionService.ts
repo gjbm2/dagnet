@@ -3,9 +3,192 @@
  * 
  * Handles deep-merging of scenario parameter overlays with deterministic precedence.
  * Null values remove keys from the composition.
+ * 
+ * This is the SINGLE source of truth for scenario composition logic.
+ * All rendering and analysis code should use these functions.
  */
 
-import { ScenarioParams, EdgeParamDiff, NodeParamDiff } from '../types/scenarios';
+import { ScenarioParams, EdgeParamDiff, NodeParamDiff, Scenario } from '../types/scenarios';
+import { Graph, GraphEdge, GraphNode } from '../types';
+
+/**
+ * Minimal scenario interface for composition (avoids full Scenario dependency)
+ */
+interface ScenarioLike {
+  id: string;
+  params: ScenarioParams;
+}
+
+/**
+ * Get composed parameters for a specific layer.
+ * 
+ * This is the SINGLE entry point for "what are the params for layer X?"
+ * Replaces all the duplicated composition patterns across the codebase.
+ * 
+ * @param layerId - Layer ID: 'base', 'current', or a scenario ID
+ * @param baseParams - Base parameters (from graph when file opened)
+ * @param currentParams - Current parameters (live working state)
+ * @param scenarios - All scenarios
+ * @param visibleScenarioIds - Optional: if provided, only compose visible scenarios in this order
+ * @returns Composed parameters for the layer
+ */
+export function getComposedParamsForLayer(
+  layerId: string,
+  baseParams: ScenarioParams,
+  currentParams: ScenarioParams,
+  scenarios: ScenarioLike[],
+  visibleScenarioIds?: string[]
+): ScenarioParams {
+  // Special layer: 'base' - return base params as-is
+  if (layerId === 'base') {
+    return deepClone(baseParams);
+  }
+  
+  // Special layer: 'current' - already composed (base + what-if)
+  if (layerId === 'current') {
+    return deepClone(currentParams);
+  }
+  
+  // Scenario layer: compose from base through all layers up to this one
+  const scenario = scenarios.find(s => s.id === layerId);
+  if (!scenario) {
+    // Unknown scenario - return base as fallback
+    return deepClone(baseParams);
+  }
+  
+  // Determine layer order
+  const layerOrder = visibleScenarioIds || scenarios.map(s => s.id);
+  const layerIndex = layerOrder.indexOf(layerId);
+  
+  if (layerIndex === -1) {
+    // Layer not in order - just compose this single overlay
+    return composeParams(baseParams, [scenario.params]);
+  }
+  
+  // Get all layers up to and including this one
+  const layersUpToThis = layerOrder
+    .slice(0, layerIndex + 1)
+    .map(id => scenarios.find(s => s.id === id))
+    .filter((s): s is ScenarioLike => s !== undefined);
+  
+  // Compose overlays
+  const overlays = layersUpToThis.map(s => s.params);
+  return composeParams(baseParams, overlays);
+}
+
+/**
+ * Apply composed parameters to a graph, creating a new graph with values baked in.
+ * 
+ * This is used for analysis: compose params in TS, then create a graph
+ * with those values that can be sent to Python for analysis.
+ * 
+ * @param graph - Source graph
+ * @param composedParams - Composed parameters to apply
+ * @returns New graph with parameter values baked in
+ */
+export function applyComposedParamsToGraph(
+  graph: Graph,
+  composedParams: ScenarioParams
+): Graph {
+  // Deep clone the graph
+  const result: Graph = JSON.parse(JSON.stringify(graph));
+  
+  // Apply edge parameters
+  if (result.edges && composedParams.edges) {
+    for (const edge of result.edges) {
+      const edgeKey = edge.id || edge.uuid;
+      const edgeParams = composedParams.edges[edgeKey];
+      
+      if (edgeParams) {
+        // Apply probability
+        // Note: ScenarioParams.ProbabilityParam has more distribution types than Graph.ProbabilityParam
+        // We spread the values, letting TypeScript handle the compatible subset
+        if (edgeParams.p !== undefined) {
+          edge.p = { 
+            ...edge.p, 
+            mean: edgeParams.p.mean ?? edge.p?.mean,
+            stdev: edgeParams.p.stdev ?? edge.p?.stdev,
+          };
+        }
+        
+        // Apply weight_default
+        if (edgeParams.weight_default !== undefined) {
+          edge.weight_default = edgeParams.weight_default;
+        }
+        
+        // Apply costs
+        if (edgeParams.cost_gbp !== undefined) {
+          edge.cost_gbp = { ...edge.cost_gbp, ...edgeParams.cost_gbp };
+        }
+        if (edgeParams.cost_time !== undefined) {
+          edge.cost_time = { ...edge.cost_time, ...edgeParams.cost_time };
+        }
+        
+        // Apply conditional_p (convert from Record to array format if needed)
+        if (edgeParams.conditional_p !== undefined) {
+          // The graph uses array format, params use Record format
+          // For now, we'll keep the existing conditional_p structure
+          // and let the rendering/analysis code handle the lookup
+          // TODO: If needed, convert between formats
+        }
+      }
+    }
+  }
+  
+  // Apply node parameters
+  if (result.nodes && composedParams.nodes) {
+    for (const node of result.nodes) {
+      const nodeKey = node.id || node.uuid;
+      const nodeParams = composedParams.nodes[nodeKey];
+      
+      if (nodeParams) {
+        // Apply entry weight
+        if (nodeParams.entry?.entry_weight !== undefined) {
+          node.entry = node.entry || {};
+          node.entry.entry_weight = nodeParams.entry.entry_weight;
+        }
+        
+        // Apply case variants
+        if (nodeParams.case?.variants !== undefined && node.case) {
+          node.case.variants = nodeParams.case.variants;
+        }
+      }
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Build a scenario-modified graph for a specific layer.
+ * 
+ * Convenience function that combines getComposedParamsForLayer + applyComposedParamsToGraph.
+ * 
+ * @param layerId - Layer ID: 'base', 'current', or a scenario ID
+ * @param graph - Source graph
+ * @param baseParams - Base parameters
+ * @param currentParams - Current parameters
+ * @param scenarios - All scenarios
+ * @param visibleScenarioIds - Optional layer order
+ * @returns Graph with the layer's composed parameters baked in
+ */
+export function buildGraphForLayer(
+  layerId: string,
+  graph: Graph,
+  baseParams: ScenarioParams,
+  currentParams: ScenarioParams,
+  scenarios: ScenarioLike[],
+  visibleScenarioIds?: string[]
+): Graph {
+  const composedParams = getComposedParamsForLayer(
+    layerId,
+    baseParams,
+    currentParams,
+    scenarios,
+    visibleScenarioIds
+  );
+  return applyComposedParamsToGraph(graph, composedParams);
+}
 
 /**
  * Compose multiple scenario parameter overlays into a single merged result.

@@ -45,6 +45,7 @@ const createTestGraph = () => ({
   metadata: {
     id: 'test-graph',
     name: 'Test Graph',
+    version: '1.0',
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
   },
@@ -76,6 +77,7 @@ const createTestGraph = () => ({
       toHandle: 'left',
     },
   ],
+  policies: { default_outcome: 'end' },
 });
 
 describe('Graph Store Sync Integration Tests', () => {

@@ -1,5 +1,9 @@
 # TODO
 
+- background if no cards still needs to be white for 'results' in analytics
+- let's think about tables....
+- let's think about graphs...
+
 
 - Not absolutely sure our condition_p logic works. If I set the prob of A-B conditionally on C to x, then the siblings must track the complement BUT we use the CONDITION to key the probability...that means the logic can never work???!!!
 - pre-commit modal is shit -- massively too long vertically. just make it X files changed; pull now?

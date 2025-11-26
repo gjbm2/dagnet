@@ -51,7 +51,7 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
-import { composeParams } from '../services/CompositionService';
+import { getComposedParamsForLayer } from '../services/CompositionService';
 import { toFlow, fromFlow } from '@/lib/transform';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
@@ -1597,18 +1597,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               let layerWhatIfDSL = effectiveWhatIfDSL;
               let composedParams: any = null;
               
-              if (layerId !== 'current' && layerId !== 'base' && scenariosContext) {
-                const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
-                if (scenario) {
-                  const allScenarios = scenariosContext.scenarios;
-                  const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
-                  const layersBelow = allScenarios
-                    .slice(0, currentIndex)
-                    .map((s: any) => s.params)
-                    .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
-                  
-                  composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
-                  layerWhatIfDSL = null;
+              if (layerId !== 'current' && scenariosContext) {
+                // Scenario layer - use centralized composition
+                composedParams = getComposedParamsForLayer(
+                  layerId,
+                  scenariosContext.baseParams,
+                  scenariosContext.currentParams,
+                  scenariosContext.scenarios
+                );
+                if (layerId !== 'base') {
+                  layerWhatIfDSL = null; // Scenarios don't use What-If
                 }
               }
               
@@ -1815,19 +1813,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         let layerWhatIfDSL = effectiveWhatIfDSL;
         let composedParams: any = null;
         
-        if (layerId !== 'current' && layerId !== 'base' && scenariosContext) {
-          // For scenario layers, compose params from base + all layers below this one
-          const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
-          if (scenario) {
-            const allScenarios = scenariosContext.scenarios;
-            const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
-            const layersBelow = allScenarios
-              .slice(0, currentIndex)
-              .map((s: any) => s.params)
-              .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
-            
-            composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
-            layerWhatIfDSL = null; // Scenarios don't use what-if DSL
+        if (layerId !== 'current' && scenariosContext) {
+          // Scenario layer - use centralized composition
+          composedParams = getComposedParamsForLayer(
+            layerId,
+            scenariosContext.baseParams,
+            scenariosContext.currentParams,
+            scenariosContext.scenarios
+          );
+          if (layerId !== 'base') {
+            layerWhatIfDSL = null; // Scenarios don't use What-If
           }
         }
         
@@ -2107,13 +2102,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         
         const colour = colourMap.get(scenarioId) || scenario.colour;
         
-        // Compose params up to this scenario
-        const layersUpToThis = visibleScenarioIds
-          .slice(0, visibleScenarioIds.indexOf(scenarioId) + 1)
-          .map(id => scenarios.find(s => s.id === id))
-          .filter((s): s is any => s !== undefined);
-        const overlays = layersUpToThis.map(s => s.params);
-        const composedParams = composeParams(baseParams, overlays);
+        // Scenario layer - use centralized composition
+        const composedParams = getComposedParamsForLayer(
+          scenarioId,
+          baseParams,
+          baseParams, // currentParams not needed here
+          scenarios,
+          visibleScenarioIds
+        );
         
         // Create overlay edge for each base edge (not graph edge)
         baseEdges.forEach(edge => {

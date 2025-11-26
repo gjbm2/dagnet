@@ -7,7 +7,7 @@ nodes:
       is_start: true
       entry_weight: 1
     layout:
-      x: -273
+      x: -275
       'y': 9
     description: ''
     label_overridden: true
@@ -26,8 +26,8 @@ nodes:
     label: household-delegated
     absorbing: false
     layout:
-      x: -40
-      'y': -34
+      x: -37
+      'y': -36
     description: ''
     event_id: household-delegated
     event_id_overridden: true
@@ -66,7 +66,7 @@ nodes:
     label: Viewed dashboard
     absorbing: false
     layout:
-      x: 882
+      x: 881
       'y': -377
     event_id: viewed-dashboard
     event_id_overridden: true
@@ -92,7 +92,7 @@ nodes:
     absorbing: false
     layout:
       x: 1836
-      'y': -751
+      'y': -753
     event_id: switch-registered
     event_id_overridden: true
   - uuid: bff4f41c-6052-49fa-a443-6443b5f9bbb8
@@ -111,7 +111,7 @@ nodes:
     label: Recommendation calling for bds
     absorbing: false
     layout:
-      x: 1499
+      x: 1498
       'y': -355
     event_id: recommendation-offered-no-bdos
     event_id_overridden: true
@@ -120,8 +120,8 @@ nodes:
     label: Switch success
     absorbing: true
     layout:
-      x: 2224
-      'y': -757
+      x: 2227
+      'y': -760
     event_id: switch-success
     event_id_overridden: true
     label_overridden: true
@@ -131,7 +131,7 @@ nodes:
     absorbing: true
     layout:
       x: 1696
-      'y': 64
+      'y': 66
   - uuid: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
     id: post-recommendation-failure
     label: Post recommendation failure
@@ -145,7 +145,7 @@ nodes:
     absorbing: true
     layout:
       x: 2217
-      'y': -437
+      'y': -435
 edges:
   - uuid: household-created-to-household-delegated
     id: household-created-to-household-delegated
@@ -961,7 +961,7 @@ metadata:
   name: conversion-flow-v0-ezra
   description: ''
   created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-11-26T13:13:24.456Z'
+  updated_at: '2025-11-26T17:58:48.093Z'
   version: 1.0.0
   updated: '2025-11-25T18:25:17.542Z'
 currentQueryDSL: window(1-Oct-25:31-Oct-25)

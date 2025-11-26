@@ -16,7 +16,7 @@
 
 import React from 'react';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
-import { composeParams } from '../../services/CompositionService';
+import { getComposedParamsForLayer } from '../../services/CompositionService';
 import type { ScenarioParams } from '../../types/scenarios';
 
 // ============================================================================
@@ -206,30 +206,15 @@ export function getEdgeInfoForLayer(
       hasCostTimeParam: !!edge?.cost_time?.id,
     };
   } else {
-    // Scenario layer: look up in scenario params (with compositing)
-    const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
-    if (!scenario) {
-      return {
-        probability: 0,
-        hasProbabilityParam: !!edge?.p?.id,
-        hasCostGbpParam: !!edge?.cost_gbp?.id,
-        hasCostTimeParam: !!edge?.cost_time?.id,
-      };
-    }
+    // Scenario layer - use centralized composition
+    const composedParams = getComposedParamsForLayer(
+      layerId,
+      scenariosContext.baseParams,
+      scenariosContext.currentParams,
+      scenariosContext.scenarios
+    );
     
-    // Get all layers below this one for compositing
-    // Note: We assume visibleScenarioIds is available in context, but for now we'll compose with all previous scenarios
-    const allScenarios = scenariosContext.scenarios;
-    const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
-    const layersBelow = allScenarios
-      .slice(0, currentIndex)
-      .map((s: any) => s.params)
-      .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
-    
-    // Compose params
-    const composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
-    
-    // Get probability
+    // Get probability with fallback chain
     let prob = composedParams.edges?.[edgeKey]?.p?.mean 
       ?? scenariosContext.baseParams.edges?.[edgeKey]?.p?.mean 
       ?? 0;

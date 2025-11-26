@@ -28,6 +28,7 @@ from .runners import (
     run_end_comparison,
     run_branch_comparison,
     run_path,
+    run_conversion_funnel,
     run_partial_path,
     run_general_stats,
     run_graph_overview,
@@ -40,29 +41,37 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
     """
     Main analysis entry point.
     
+    Passes all scenarios to the analysis. Returns a single result.
+    The runner decides how to structure the data based on analysis type.
+    
     Args:
-        request: AnalysisRequest with graph and DSL query
+        request: AnalysisRequest with graph(s) and DSL query
     
     Returns:
-        AnalysisResponse with results for each scenario
+        AnalysisResponse with single result
     """
     try:
-        results = []
+        # Use first scenario for analysis (runner may use all scenarios internally)
+        first_scenario = request.scenarios[0] if request.scenarios else None
         
-        # Process each scenario
-        for scenario in request.scenarios:
-            result = analyze_scenario(
-                graph_data=scenario.graph,
+        if not first_scenario:
+            return AnalysisResponse(
+                success=False,
+                error={'error_type': 'ValueError', 'message': 'No scenarios provided'},
                 query_dsl=request.query_dsl,
-                scenario_id=scenario.scenario_id,
-                scenario_count=len(request.scenarios),
-                analysis_type_override=request.analysis_type,
             )
-            results.append(result)
+        
+        result = analyze_scenario(
+            graph_data=first_scenario.graph,
+            query_dsl=request.query_dsl,
+            scenario_count=len(request.scenarios),
+            all_scenarios=request.scenarios,
+            analysis_type_override=request.analysis_type,
+        )
         
         return AnalysisResponse(
             success=True,
-            results=results,
+            result=result,
             query_dsl=request.query_dsl,
         )
     
@@ -73,7 +82,6 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
                 'error_type': type(e).__name__,
                 'message': str(e),
             },
-            results=[],
             query_dsl=request.query_dsl,
         )
 
@@ -81,18 +89,18 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
 def analyze_scenario(
     graph_data: dict[str, Any],
     query_dsl: Optional[str] = None,
-    scenario_id: str = 'default',
     scenario_count: int = 1,
+    all_scenarios: Optional[list] = None,
     analysis_type_override: Optional[str] = None,
 ) -> AnalysisResult:
     """
-    Analyze a single scenario.
+    Run analysis.
     
     Args:
-        graph_data: Raw graph data dict
+        graph_data: Raw graph data dict (primary scenario)
         query_dsl: DSL query string (determines what to analyze)
-        scenario_id: Scenario identifier
-        scenario_count: Total number of scenarios (for predicates)
+        scenario_count: Total number of scenarios
+        all_scenarios: All scenario data (for multi-scenario analysis)
         analysis_type_override: Optional override for analysis type
     
     Returns:
@@ -158,19 +166,33 @@ def analyze_scenario(
         to_node=to_node,
         dsl_nodes=dsl_nodes,
         pruning=pruning,
+        all_scenarios=all_scenarios,
     )
     
     # Translate UUIDs to human-readable IDs in the results
     # This ensures consistency: DSL uses human IDs, results return human IDs
     translated_result = translate_uuids_to_ids(G, runner_result)
     
-    return AnalysisResult(
-        scenario_id=scenario_id,
-        analysis_type=analysis_def.id,
-        analysis_name=analysis_def.name,
-        analysis_description=analysis_def.description,
-        data=translated_result,
-    )
+    # Extract declarative schema fields if present (new schema)
+    # Otherwise fall back to putting everything in data (legacy)
+    if 'semantics' in translated_result:
+        return AnalysisResult(
+            analysis_type=analysis_def.id,
+            analysis_name=analysis_def.name,
+            analysis_description=analysis_def.description,
+            metadata=translated_result.get('metadata', {}),
+            semantics=translated_result.get('semantics'),
+            dimension_values=translated_result.get('dimension_values', {}),
+            data=translated_result.get('data', []),
+        )
+    else:
+        # Legacy format - wrap in data field
+        return AnalysisResult(
+            analysis_type=analysis_def.id,
+            analysis_name=analysis_def.name,
+            analysis_description=analysis_def.description,
+            data=[translated_result],  # Wrap as single-item array for consistency
+        )
 
 
 def dispatch_runner(
@@ -181,6 +203,7 @@ def dispatch_runner(
     to_node: Optional[str],
     dsl_nodes: list[str],
     pruning: Optional[PruningResult],
+    all_scenarios: Optional[list] = None,
 ) -> dict[str, Any]:
     """
     Dispatch to the appropriate runner based on runner name.
@@ -191,70 +214,85 @@ def dispatch_runner(
         runner_name: Name from analysis definition
         G: NetworkX graph
         predicates: Computed predicates from DSL
-        from_node: From DSL from() clause
-        to_node: From DSL to() clause
-        dsl_nodes: All nodes mentioned in DSL
+        from_node: From DSL from() clause (human-readable ID)
+        to_node: From DSL to() clause (human-readable ID)
+        all_scenarios: All scenario data for multi-scenario analysis
+        dsl_nodes: All nodes mentioned in DSL (human-readable IDs)
         pruning: Computed pruning result
     
     Returns:
         Runner result dict
     """
+    from .graph_builder import get_graph_key, resolve_node_ids
+    
+    # Resolve human-readable IDs to graph keys (UUIDs)
+    # DSL uses human IDs but graph is keyed by UUIDs
+    resolved_from = get_graph_key(G, from_node) if from_node else None
+    resolved_to = get_graph_key(G, to_node) if to_node else None
+    resolved_nodes = resolve_node_ids(G, dsl_nodes)
+    
     # Single node runners - node comes from DSL
     if runner_name == 'from_node_runner':
-        if from_node:
-            return run_single_node_entry(G, from_node, pruning)
-        return {'error': 'from() node required'}
+        if resolved_from:
+            return run_single_node_entry(G, resolved_from, pruning, all_scenarios)
+        return {'error': f'from() node not found: {from_node}'}
     
     elif runner_name == 'to_node_runner':
-        if to_node:
-            return run_path_to_end(G, to_node, pruning)
-        return {'error': 'to() node required'}
+        if resolved_to:
+            return run_path_to_end(G, resolved_to, pruning, all_scenarios)
+        return {'error': f'to() node not found: {to_node}'}
     
     elif runner_name == 'path_through_runner':
         # Single visited() node
-        node_id = dsl_nodes[0] if dsl_nodes else None
-        if node_id:
-            return run_path_through(G, node_id, pruning)
+        node_key = resolved_nodes[0] if resolved_nodes else None
+        if node_key:
+            return run_path_through(G, node_key, pruning, all_scenarios)
         return {'error': 'visited() node required'}
     
     # Multi-node comparison runners - nodes from DSL
     elif runner_name == 'end_comparison_runner':
-        return run_end_comparison(G, dsl_nodes, pruning)
+        return run_end_comparison(G, resolved_nodes, pruning, all_scenarios)
     
     elif runner_name == 'branch_comparison_runner':
-        return run_branch_comparison(G, dsl_nodes, pruning)
+        return run_branch_comparison(G, resolved_nodes, pruning, all_scenarios)
     
     # Path runners
     elif runner_name == 'path_runner':
-        if from_node and to_node:
+        if resolved_from and resolved_to:
             # Get intermediates (nodes that aren't from/to)
-            intermediates = [n for n in dsl_nodes if n != from_node and n != to_node]
-            return run_path(G, from_node, to_node, intermediates, pruning)
+            intermediates = [n for n in resolved_nodes if n != resolved_from and n != resolved_to]
+            return run_path(G, resolved_from, resolved_to, intermediates, pruning, all_scenarios)
         return {'error': 'Path requires from() and to() nodes'}
     
+    elif runner_name == 'conversion_funnel_runner':
+        if resolved_from and resolved_to:
+            intermediates = [n for n in resolved_nodes if n != resolved_from and n != resolved_to]
+            return run_conversion_funnel(G, resolved_from, resolved_to, intermediates, all_scenarios)
+        return {'error': 'Conversion funnel requires from() and to() nodes'}
+    
     elif runner_name == 'constrained_path_runner':
-        if from_node and to_node:
-            intermediates = [n for n in dsl_nodes if n != from_node and n != to_node]
-            return run_path(G, from_node, to_node, intermediates, pruning)
+        if resolved_from and resolved_to:
+            intermediates = [n for n in resolved_nodes if n != resolved_from and n != resolved_to]
+            return run_path(G, resolved_from, resolved_to, intermediates, pruning, all_scenarios)
         return {'error': 'Constrained path requires from() and to() nodes'}
     
     elif runner_name == 'branches_from_start_runner':
-        if from_node:
-            intermediates = [n for n in dsl_nodes if n != from_node]
-            return run_partial_path(G, from_node, intermediates, pruning)
+        if resolved_from:
+            intermediates = [n for n in resolved_nodes if n != resolved_from]
+            return run_partial_path(G, resolved_from, intermediates, pruning, all_scenarios)
         return {'error': 'Branches from start requires from() node'}
     
     elif runner_name == 'multi_waypoint_runner':
         # Multiple visited() without from/to
-        return run_general_stats(G, dsl_nodes, pruning)
+        return run_general_stats(G, resolved_nodes, pruning, all_scenarios)
     
     # Graph overview (empty DSL)
     elif runner_name == 'graph_overview_runner':
-        return run_graph_overview(G, dsl_nodes, pruning)
+        return run_graph_overview(G, resolved_nodes, pruning, all_scenarios)
     
     # Fallback
     elif runner_name == 'general_stats_runner':
-        return run_general_stats(G, dsl_nodes, pruning)
+        return run_general_stats(G, resolved_nodes, pruning, all_scenarios)
     
     else:
         return {'error': f'Unknown runner: {runner_name}'}

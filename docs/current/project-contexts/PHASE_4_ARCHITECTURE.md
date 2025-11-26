@@ -196,3 +196,4 @@ Phase 4 clarified architecture:
 
 This decision simplifies implementation and reduces maintenance burden.
 
+

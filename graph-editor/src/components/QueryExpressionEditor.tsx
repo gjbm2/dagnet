@@ -1626,7 +1626,7 @@ export function QueryExpressionEditor({
               onClick={(e) => handleOuterChipClick(chip, e)}
               style={{
                 display: 'inline-flex',
-                alignItems: 'center',
+                alignItems: 'flex-start',  // Align to top when wrapped
                 flexWrap: 'wrap',
                 gap: '4px',
                 padding: '5px 8px',
@@ -1638,14 +1638,15 @@ export function QueryExpressionEditor({
                 position: 'relative',
                 transition: 'all 0.15s ease',
                 cursor: readonly ? 'default' : 'pointer',
-                maxWidth: '100%'
+                maxWidth: '100%',
+                minWidth: 0  // Allow shrinking below content size
               }}
             >
-              <Icon size={13} style={{ color: '#6B7280' }} />
-              <span style={{ color: '#374151', fontWeight: '600' }}>
+              <Icon size={13} style={{ color: '#6B7280', alignSelf: 'center' }} />
+              <span style={{ color: '#374151', fontWeight: '600', alignSelf: 'center' }}>
                 {config.label}
               </span>
-              <span style={{ color: '#6B7280' }}>(</span>
+              <span style={{ color: '#6B7280', alignSelf: 'center' }}>(</span>
               
               {/* Inner chips for values */}
               {chip.values.map((val, vIndex) => (
@@ -1665,20 +1666,21 @@ export function QueryExpressionEditor({
                       fontWeight: '500',
                       cursor: readonly ? 'default' : 'pointer',
                       position: 'relative',
-                      whiteSpace: 'nowrap'
+                      wordBreak: 'break-word',
+                      maxWidth: '100%'
                     }}
                   >
-                    <span style={{ color: innerConfig.textColour, whiteSpace: 'nowrap' }}>
+                    <span style={{ color: innerConfig.textColour }}>
                       {val}
                     </span>
                   </div>
                   {vIndex < chip.values.length - 1 && (
-                    <span style={{ color: '#6B7280', margin: '0 2px' }}>,</span>
+                    <span style={{ color: '#6B7280', margin: '0 2px', alignSelf: 'center' }}>,</span>
                   )}
                 </React.Fragment>
               ))}
               
-              <span style={{ color: '#6B7280' }}>)</span>
+              <span style={{ color: '#6B7280', alignSelf: 'center' }}>)</span>
               
               {/* Dropdown button for context chips */}
               {!readonly && (chip.type === 'context' || chip.type === 'contextAny') && (
@@ -1698,6 +1700,7 @@ export function QueryExpressionEditor({
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
+                    alignSelf: 'center',
                     color: '#9CA3AF',
                     transition: 'color 0.15s ease'
                   }}
@@ -1722,6 +1725,7 @@ export function QueryExpressionEditor({
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
+                    alignSelf: 'center',
                     color: '#9CA3AF',
                     transition: 'color 0.15s ease'
                   }}

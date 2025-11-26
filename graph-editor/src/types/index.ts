@@ -130,7 +130,7 @@ export interface TabState {
     // NEW: Sidebar state (Phase 1 - Icon Bar)
     sidebarState?: {
       mode: 'minimized' | 'maximized';
-      activePanel: 'what-if' | 'properties' | 'tools';
+      activePanel: 'what-if' | 'properties' | 'tools' | 'analytics';
       sidebarWidth?: number; // Track sidebar width for minimize button positioning
       isResizing?: boolean; // Track if sidebar is being resized
       floatingPanels: string[];

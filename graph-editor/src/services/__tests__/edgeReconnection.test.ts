@@ -341,13 +341,14 @@ describe('Edge Reconnection Tests', () => {
     it('should preserve all edge properties during reconnection', async () => {
       const graph = createTestGraph();
       
-      // Add more properties to the edge
-      graph.edges[0].cost_gbp = { mean: 10, connection: 'test-conn' };
-      graph.edges[0].cost_time = { mean: 5 };
-      graph.edges[0].case_variant = 'variant-a';
-      graph.edges[0].case_id = 'case-1';
+      // Add more properties to the edge (using any to test arbitrary property preservation)
+      const edge = graph.edges[0] as any;
+      edge.cost_gbp = { mean: 10, connection: 'test-conn' };
+      edge.cost_time = { mean: 5 };
+      edge.case_variant = 'variant-a';
+      edge.case_id = 'case-1';
       
-      const originalEdge = { ...graph.edges[0] };
+      const originalEdge = { ...edge };
       
       // Reconnect to different node
       const nextGraph = simulateHandleReconnect(
@@ -359,7 +360,7 @@ describe('Edge Reconnection Tests', () => {
         undefined
       );
       
-      const updatedEdge = nextGraph.edges[0];
+      const updatedEdge = nextGraph.edges[0] as any;
       
       // All properties should be preserved
       expect(updatedEdge.uuid).toBe(originalEdge.uuid);
