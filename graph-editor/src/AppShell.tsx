@@ -43,11 +43,16 @@ function AppShellContent() {
   const recentlyClosedRef = useRef<Set<string>>(new Set());
   const isProgrammaticSwitchRef = useRef(false); // Track when WE trigger rc-dock updates
 
-  // Keep a ref to navState for the fileOperationsService callback
+  // Keep refs to operations and state for the services (avoids re-init on reference changes)
   const navStateRef = useRef(navState);
-  useEffect(() => {
-    navStateRef.current = navState;
-  }, [navState]);
+  const navOperationsRef = useRef(navOperations);
+  const tabOperationsRef = useRef(tabOperations);
+  const dialogOpsRef = useRef(dialogOps);
+  
+  useEffect(() => { navStateRef.current = navState; }, [navState]);
+  useEffect(() => { navOperationsRef.current = navOperations; }, [navOperations]);
+  useEffect(() => { tabOperationsRef.current = tabOperations; }, [tabOperations]);
+  useEffect(() => { dialogOpsRef.current = dialogOps; }, [dialogOps]);
 
   // Warn when logical IDs inside registry-backed files are changed
   useEffect(() => {
@@ -96,15 +101,30 @@ function AppShellContent() {
   // In minimal mode, render ONLY GraphEditor with no UI chrome (tabs, navigator, menu, etc.)
   const isMinimalMode = new URLSearchParams(window.location.search).has('minimal');
   
-  // Initialize services once
+  // Initialize services once on mount (use refs to avoid stale closures)
+  const servicesInitializedRef = useRef(false);
   useEffect(() => {
+    if (servicesInitializedRef.current) return;
+    servicesInitializedRef.current = true;
+    
     // Initialize session logging first (needs to be early to capture init events)
     sessionLogService.initialize();
     
+    // Create stable wrappers that dereference refs (so services always get current operations)
+    const navOpsProxy = new Proxy({} as typeof navOperations, {
+      get: (_, prop) => (navOperationsRef.current as any)[prop]
+    });
+    const tabOpsProxy = new Proxy({} as typeof tabOperations, {
+      get: (_, prop) => (tabOperationsRef.current as any)[prop]
+    });
+    const dialogOpsProxy = new Proxy({} as typeof dialogOps, {
+      get: (_, prop) => (dialogOpsRef.current as any)[prop]
+    });
+    
     fileOperationsService.initialize({
-      navigatorOps: navOperations,
-      tabOps: tabOperations,
-      dialogOps,
+      navigatorOps: navOpsProxy,
+      tabOps: tabOpsProxy,
+      dialogOps: dialogOpsProxy,
       getWorkspaceState: () => ({
         repo: navStateRef.current.selectedRepo,
         branch: navStateRef.current.selectedBranch
@@ -112,12 +132,12 @@ function AppShellContent() {
     });
     
     repositoryOperationsService.initialize({
-      navigatorOps: navOperations,
-      dialogOps
+      navigatorOps: navOpsProxy,
+      dialogOps: dialogOpsProxy
     });
     
     console.log('✅ Services initialized');
-  }, [navOperations, tabOperations, dialogOps]);
+  }, []); // Empty deps - runs once on mount
   
   // Track hover state for unpinned navigator
   const [isHovering, setIsHovering] = useState(false);
