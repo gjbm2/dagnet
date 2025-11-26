@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTabContext } from '../contexts/TabContext';
+import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../lib/uiConstants';
 
 /**
  * Sidebar state interface
@@ -35,7 +36,7 @@ export const DEFAULT_SIDEBAR_STATE: SidebarState = {
   propertiesOpen: true,
   toolsOpen: false,
   analyticsOpen: false,
-  sidebarWidth: 300,  // Default sidebar width
+  sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   isResizing: false    // Not resizing by default
 };
 
@@ -154,8 +155,8 @@ export function useSidebarState(tabId?: string) {
   const maximize = useCallback((panel?: 'what-if' | 'properties' | 'tools' | 'analytics') => {
     console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Maximizing sidebar, panel=${panel}, currentWidth=${state.sidebarWidth}`);
     
-    // CRITICAL: If sidebar width is 0 or very small (collapsed), restore to default 300px
-    const restoredWidth = (!state.sidebarWidth || state.sidebarWidth < 50) ? 300 : state.sidebarWidth;
+    // CRITICAL: If sidebar width is 0 or very small (collapsed), restore to default
+    const restoredWidth = (!state.sidebarWidth || state.sidebarWidth < MIN_SIDEBAR_WIDTH) ? DEFAULT_SIDEBAR_WIDTH : state.sidebarWidth;
     
     updateState({ 
       mode: 'maximized',

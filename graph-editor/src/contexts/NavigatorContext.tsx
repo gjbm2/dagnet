@@ -22,6 +22,23 @@ const NavigatorContext = createContext<NavigatorContextValue | null>(null);
 /**
  * Navigator Provider
  */
+// Load expanded sections from localStorage or default to only graphs
+const getInitialExpandedSections = (): string[] => {
+  try {
+    const saved = localStorage.getItem('dagnet:navigator:expandedSections');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load expanded sections from localStorage:', e);
+  }
+  // Default: only graphs expanded
+  return ['graphs'];
+};
+
 export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<NavigatorState>({
     isOpen: true,  // Open by default
@@ -29,7 +46,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     searchQuery: '',
     selectedRepo: '',
     selectedBranch: '',
-    expandedSections: ['graphs', 'parameters', 'contexts', 'cases', 'nodes', 'events'],
+    expandedSections: getInitialExpandedSections(),
     availableRepos: [],
     availableBranches: [],
 
