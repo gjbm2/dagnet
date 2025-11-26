@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { SidebarState } from '../hooks/useSidebarState';
-import { Layers, FileText, Wrench } from 'lucide-react';
+import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 import './SidebarIconBar.css';
 
 interface SidebarIconBarProps {
   state: SidebarState;
-  onIconClick: (panel: 'what-if' | 'properties' | 'tools') => void;
-  onIconHover?: (panel: 'what-if' | 'properties' | 'tools' | null) => void;
+  onIconClick: (panel: 'what-if' | 'properties' | 'tools' | 'analytics') => void;
+  onIconHover?: (panel: 'what-if' | 'properties' | 'tools' | 'analytics' | null) => void;
 }
 
 /**
@@ -16,9 +16,9 @@ interface SidebarIconBarProps {
  * Visible only when sidebar is in 'minimized' mode
  */
 export default function SidebarIconBar({ state, onIconClick, onIconHover }: SidebarIconBarProps) {
-  const [hoveredIcon, setHoveredIcon] = useState<'what-if' | 'properties' | 'tools' | null>(null);
+  const [hoveredIcon, setHoveredIcon] = useState<'what-if' | 'properties' | 'tools' | 'analytics' | null>(null);
   
-  const handleMouseEnter = (panel: 'what-if' | 'properties' | 'tools') => {
+  const handleMouseEnter = (panel: 'what-if' | 'properties' | 'tools' | 'analytics') => {
     console.log(`[${new Date().toISOString()}] [SidebarIconBar] handleMouseEnter: panel=${panel}, mode=${state.mode}`);
     // Only allow hover when actually minimized
     if (state.mode !== 'minimized') {
@@ -45,11 +45,11 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
     }
   }, [state.mode, hoveredIcon, onIconHover]);
   
-  const handleClick = (panel: 'what-if' | 'properties' | 'tools') => {
+  const handleClick = (panel: 'what-if' | 'properties' | 'tools' | 'analytics') => {
     onIconClick(panel);
   };
   
-  const getIconState = (panel: 'what-if' | 'properties' | 'tools') => {
+  const getIconState = (panel: 'what-if' | 'properties' | 'tools' | 'analytics') => {
     const isFloating = state.floatingPanels.includes(panel);
     const isHovered = hoveredIcon === panel;
     
@@ -103,6 +103,21 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
       >
         <Wrench className="icon" size={20} strokeWidth={2} />
         {state.floatingPanels.includes('tools') && (
+          <span className="floating-indicator">↗</span>
+        )}
+      </button>
+      
+      {/* Analytics Icon */}
+      <button
+        className={getIconState('analytics').className}
+        onClick={() => handleClick('analytics')}
+        onMouseEnter={() => handleMouseEnter('analytics')}
+        onMouseLeave={handleMouseLeave}
+        title="Analytics (Ctrl/Cmd + Shift + A)"
+        aria-label="Open Analytics Panel"
+      >
+        <BarChart3 className="icon" size={20} strokeWidth={2} />
+        {state.floatingPanels.includes('analytics') && (
           <span className="floating-indicator">↗</span>
         )}
       </button>

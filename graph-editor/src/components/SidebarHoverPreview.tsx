@@ -2,11 +2,12 @@ import React from 'react';
 import ScenariosPanel from './panels/ScenariosPanel';
 import PropertiesPanel from './PropertiesPanel';
 import ToolsPanel from './panels/ToolsPanel';
-import { Layers, FileText, Wrench } from 'lucide-react';
+import AnalyticsPanel from './panels/AnalyticsPanel';
+import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 import './SidebarHoverPreview.css';
 
 interface SidebarHoverPreviewProps {
-  panel: 'what-if' | 'properties' | 'tools' | null;
+  panel: 'what-if' | 'properties' | 'tools' | 'analytics' | null;
   tabId?: string;
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
@@ -101,6 +102,18 @@ export default function SidebarHoverPreview({
                 onShowAll={onShowAll}
                 hideHeader={true}
               />
+            </div>
+          </div>
+        )}
+        
+        {panel === 'analytics' && (
+          <div className="preview-panel">
+            <div className="preview-header">
+              <BarChart3 size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
+              <span>Analytics</span>
+            </div>
+            <div className="preview-body" style={{ padding: 0 }}>
+              <AnalyticsPanel tabId={tabId} hideHeader={true} />
             </div>
           </div>
         )}

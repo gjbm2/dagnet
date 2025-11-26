@@ -116,6 +116,9 @@ export interface TabState {
     caseOverrides?: Record<string, string>; // nodeId -> variantName (legacy, will be converted to whatIfDSL)
     conditionalOverrides?: Record<string, string | Set<string>>; // edgeId -> normalized condition string (legacy, will be converted to whatIfDSL)
     whatIfDSL?: string | null; // Unified DSL string (e.g., "case(case_id:treatment).visited(nodea)") - NEW
+    // Analytics query DSL (can be auto-generated from selection or manually overridden)
+    analyticsQueryDSL?: string | null;
+    analyticsQueryOverridden?: boolean; // True if user manually edited the DSL
     // Target panel for "Open in X View" placement
     targetPanel?: string;
     // Node visibility state (per-tab, not per-file)
