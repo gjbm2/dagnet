@@ -1,15 +1,8 @@
 # TODO
 
-- A very large amount of logging takes place on load -- see /tmp.log
-  Much of it is irrelevant
-  Some of it is probably concerning
-  1. triage the two 
-  2. retain the stuff we should be concerned about or which is telling us e.g. that things are failing, going wrong, or redundantly happening multiple times
-  3. remove the stuff which is repetitive or unnecessarily verbose
-
 
 - Not absolutely sure our condition_p logic works. If I set the prob of A-B conditionally on C to x, then the siblings must track the complement BUT we use the CONDITION to key the probability...that means the logic can never work???!!!
-- 
+- pre-commit modal is shit -- massively too long vertically. just make it X files changed; pull now?
 
 ## Current query DSL
 
@@ -144,6 +137,7 @@
 - maximised tabs in main app are not reflecting padding
 - somewhere along the line we lose animations on edge width changes, which is sad
 - Sankey mode and normal view use diff code paths for mass infernece; hence sankey requires start node to work -- weird glitch
+- all tests in weird places in the codepath; centralise
 
 
 

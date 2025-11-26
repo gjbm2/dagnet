@@ -7,7 +7,7 @@ nodes:
       is_start: true
       entry_weight: 1
     layout:
-      x: -275
+      x: -273
       'y': 9
     description: ''
     label_overridden: true
@@ -18,8 +18,8 @@ nodes:
     label: abandonned-before-delegation
     absorbing: false
     layout:
-      x: -62
-      'y': 142
+      x: -51
+      'y': 249
     description: ''
   - uuid: 16974652-b532-41ee-b4d5-a3ef5381591d
     id: household-delegated
@@ -27,33 +27,29 @@ nodes:
     absorbing: false
     layout:
       x: -40
-      'y': -33
+      'y': -34
     description: ''
     event_id: household-delegated
     event_id_overridden: true
   - uuid: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    id: gave-bds
-    label: Gave bds
+    id: gave-bds-in-onboarding
+    label: Gave bds in onboarding
     absorbing: false
     layout:
-      x: 868
-      'y': -629
+      x: 649
+      'y': -688
     event_id: gave-bds
     event_id_overridden: true
-  - uuid: 61317e7f-54c9-4364-90d0-2b80e431b658
-    id: did-not-give-bds
-    label: Did not give bds
-    absorbing: false
-    layout:
-      x: 844
-      'y': 149
+    images: []
+    url: ''
+    url_overridden: true
   - uuid: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    id: saw-WA-details-page
-    label: Saw WA details page
+    id: saw-wa-details-page
+    label: Saw wa details page
     absorbing: false
     layout:
-      x: 129
-      'y': -314
+      x: -10
+      'y': -376
     event_id: saw-wa-details-page
     event_id_overridden: true
   - uuid: 5788d308-a7a9-49ce-a755-07491315a603
@@ -61,8 +57,8 @@ nodes:
     label: Viewed coffee screen
     absorbing: false
     layout:
-      x: 475
-      'y': -469
+      x: 235
+      'y': -670
     event_id: viewed-coffee-screen
     event_id_overridden: true
   - uuid: 7515449a-4743-43fb-8fc0-66b9575c5b0c
@@ -70,10 +66,86 @@ nodes:
     label: Viewed dashboard
     absorbing: false
     layout:
-      x: 928
-      'y': -254
+      x: 882
+      'y': -377
     event_id: viewed-dashboard
     event_id_overridden: true
+  - uuid: dab4f352-b997-4f58-a24f-6fae0b8c82d3
+    id: dropped-out-without-bds
+    label: Dropped out without bds
+    absorbing: true
+    layout:
+      x: 740
+      'y': 121
+  - uuid: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    id: gave-bds-after-onboarding
+    label: Gave bds after onboarding
+    absorbing: false
+    layout:
+      x: 1137
+      'y': -3
+    event_id: gave-bds-after-onboarding
+    event_id_overridden: true
+  - uuid: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    id: switch-registered
+    label: Switch registered
+    absorbing: false
+    layout:
+      x: 1836
+      'y': -751
+    event_id: switch-registered
+    event_id_overridden: true
+  - uuid: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    id: recommendation-with-BDOs
+    label: Recommendation with BDOs
+    absorbing: false
+    layout:
+      x: 1509
+      'y': -748
+    url: ''
+    url_overridden: true
+    event_id: recommendation-offered
+    event_id_overridden: true
+  - uuid: 496ea177-7049-41a3-8fa7-d8ead43a842b
+    id: recommendation-calling-for-bds
+    label: Recommendation calling for bds
+    absorbing: false
+    layout:
+      x: 1499
+      'y': -355
+    event_id: recommendation-offered-no-bdos
+    event_id_overridden: true
+  - uuid: 30aabc44-e448-4359-b0d0-338a231edb92
+    id: switch-success
+    label: Switch success
+    absorbing: true
+    layout:
+      x: 2224
+      'y': -757
+    event_id: switch-success
+    event_id_overridden: true
+    label_overridden: true
+  - uuid: e5cd8923-f466-4535-8451-ed78566757e4
+    id: not-sent-recommendation
+    label: Not sent recommendation
+    absorbing: true
+    layout:
+      x: 1696
+      'y': 64
+  - uuid: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    id: post-recommendation-failure
+    label: Post recommendation failure
+    absorbing: true
+    layout:
+      x: 1839
+      'y': -360
+  - uuid: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
+    id: post-registration-failure
+    label: Post registration failure
+    absorbing: true
+    layout:
+      x: 2217
+      'y': -437
 edges:
   - uuid: household-created-to-household-delegated
     id: household-created-to-household-delegated
@@ -82,10 +154,10 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.531
+      mean: 0.546
       evidence:
-        'n': 3799
-        k: 2019
+        'n': 11353
+        k: 6202
         window_from: '2025-11-13T00:00:00Z'
         window_to: '2025-11-20T23:59:59Z'
         retrieved_at: '2025-11-20T01:46:43.434Z'
@@ -96,7 +168,7 @@ edges:
           DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any of","values":["ON"]}]}}
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-21T13:41:32.615Z'
+        retrieved_at: '2025-11-25T18:22:58.796Z'
         query:
           from: Household Created
           to: Household DelegationStatusChanged
@@ -109,46 +181,48 @@ edges:
                 operator: is any of
                 values:
                   - 'ON'
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
           query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+            e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
         full_query: >-
           {"from":"Household Created","to":"Household
           DelegationStatusChanged","context":[],"case":[],"event_filters":{"Household Created":[],"Household
           DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any
-          of","values":["ON"]}]},"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+          of","values":["ON"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
       connection: amplitude-prod
       id: household-delegation-rate
-      stdev: 0.008
+      stdev: 0.005
     query: from(household-created).to(household-delegated)
     description: ''
   - uuid: household-created-to-abandonned-before-delegation
     id: household-created-to-abandonned-before-delegation
     from: 86469c9f-2f83-49ca-a154-589231be5511
     to: addb99b6-5773-482c-a437-4661c8433ff7
-    fromHandle: right-out
-    toHandle: left
+    fromHandle: bottom-out
+    toHandle: top
     p:
-      mean: 0.469
+      mean: 0.454
     query: from(household-created).to(abandonned-before-delegation)
     description: ''
   - uuid: household-delegated-to-saw-WA-details-page
-    id: household-delegated-to-saw-WA-details-page
+    id: household-delegated-to-saw-wa-details-page
     from: 16974652-b532-41ee-b4d5-a3ef5381591d
     to: 2810b6a8-7a7a-477d-b504-8714a8f22b68
     fromHandle: top-out
     toHandle: bottom
     p:
-      mean: 0.943
+      mean: 0.897
       evidence:
         window_from: '2025-11-20T17:10:54.147Z'
         source: manual
-        'n': 2118
-        k: 1998
+        'n': 6466
+        k: 5798
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-21T13:41:33.574Z'
+        retrieved_at: '2025-11-25T18:22:59.677Z'
         query:
           from: Household DelegationStatusChanged
           to: Viewed WhatsApp details /onboarding/whatsApp-details Page
@@ -161,8 +235,10 @@ edges:
                 values:
                   - 'ON'
             Viewed WhatsApp details /onboarding/whatsApp-details Page: []
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
           query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
         full_query: >-
@@ -170,108 +246,465 @@ edges:
           Page","context":[],"case":[],"event_filters":{"Household
           DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any of","values":["ON"]}],"Viewed
           WhatsApp details /onboarding/whatsApp-details
-          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+          Page":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
       id: delegation-to-wa-details
       connection: amplitude-prod
       connection_overridden: true
-      stdev: 0.005
-    query: from(household-delegated).to(saw-WA-details-page)
+      stdev: 0.004
+    query: from(household-delegated).to(saw-wa-details-page)
     description: ''
-  - uuid: household-delegated-to-did-not-give-bds
-    id: household-delegated-to-did-not-give-bds
+  - uuid: 34727f46-dd15-43c8-9981-2cb1e4a6e65e
+    id: household-delegated-to-dropped-out-without-bds
     from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: 61317e7f-54c9-4364-90d0-2b80e431b658
+    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.056
-      connection_string: |-
-        {
-          "spreadsheet_id": "1dxRY7l2A4t27nY2Wqgr1oIqq1Q1i1rgFNG4fc9kMMr4",
-          "range": "'Sheet1!F1:G8'"
-        }
-      connection: sheets-readonly
-      connection_overridden: true
-    query: from(household-delegated).to(did-not-give-bds).exclude(saw-WA-details-page,viewed-coffee-screen)
+      mean: 0.095
+    query: from(household-delegated).to(dropped-out-without-bds).minus(saw-wa-details-page)
     description: ''
-    query_overridden: false
-  - uuid: viewed-coffee-screen-to-did-not-give-bds
-    id: viewed-coffee-screen-to-did-not-give-bds
+  - uuid: af23535c-192b-48d1-8386-132b0f5079f3
+    id: saw-wa-details-page-to-dropped-out-without-bds
+    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
+    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.501
+    query: from(saw-wa-details-page).to(dropped-out-without-bds).minus(viewed-coffee-screen)
+    description: ''
+  - uuid: 7f41cc52-1d06-4d99-9e13-30aa643ce0b9
+    id: viewed-coffee-screen-to-dropped-out-without-bds
     from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: 61317e7f-54c9-4364-90d0-2b80e431b658
+    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
     fromHandle: bottom-out
     toHandle: top
     p:
-      mean: 0.416
-    query: from(viewed-coffee-screen).to(did-not-give-bds)
+      mean: 0.483
+    query: from(viewed-coffee-screen).to(dropped-out-without-bds)
     description: ''
-  - uuid: 8b832619-b7fe-44ef-bc46-843aca29c517
-    id: saw-WA-details-page-to-did-not-give-bds
-    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    to: 61317e7f-54c9-4364-90d0-2b80e431b658
+  - uuid: 12ab4626-08c7-4496-a4a0-03b9538dbc92
+    id: abandonned-before-delegation-to-dropped-out-without-bds
+    from: addb99b6-5773-482c-a437-4661c8433ff7
+    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0
-    query: from(saw-WA-details-page).to(did-not-give-bds).exclude(viewed-coffee-screen)
+      mean: 1
+    query: from(abandonned-before-delegation).to(dropped-out-without-bds)
     description: ''
-  - uuid: c20c9bd4-0b4e-4042-8d54-30cb3f0c02f0
-    id: saw-WA-details-page-to-viewed-coffee-screen
-    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    to: 5788d308-a7a9-49ce-a755-07491315a603
+  - uuid: 7a9ddce3-f401-49ad-abb1-ebec1bd27010
+    id: viewed-dashboard-to-recommendation-calling-for-bds
+    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    to: 496ea177-7049-41a3-8fa7-d8ead43a842b
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.427
-      id: wa-to-coffee
-      stdev: 0.011
+      mean: 0.422
+      id: dashboard-to-rec-from-non-bdos
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.007
       evidence:
-        'n': 2014
-        k: 860
-        window_from: '2025-11-20T18:58:06.435Z'
-        retrieved_at: '2025-11-20T18:32:51.222Z'
-        source: amplitude
-        full_query: >-
-          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"Viewed Coffee Promotion Page
-          /onboarding/coffee Page","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
-          /onboarding/whatsApp-details Page":[],"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        window_from: '2025-11-24T18:08:27.476Z'
+        source: manual
+        'n': 4388
+        k: 1851
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-21T13:41:35.613Z'
+        retrieved_at: '2025-11-25T18:24:52.000Z'
+        query:
+          from: User sees dashboard
+          to: Blueprint CheckpointReached
+          context: []
+          case: []
+          event_filters:
+            User sees dashboard: []
+            Blueprint CheckpointReached:
+              - property: checkpoint
+                operator: is
+                values:
+                  - RecommendationOffered
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 1
+        full_query: >-
+          {"from":"User sees dashboard","to":"Blueprint CheckpointReached","context":[],"case":[],"event_filters":{"User
+          sees dashboard":[],"Blueprint
+          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+    query: from(viewed-dashboard).to(recommendation-calling-for-bds)
+    description: ''
+    query_overridden: false
+    conditional_p:
+      - condition: visited(gave-bds-in-onboarding)
+        query: from(viewed-dashboard).to(recommendation-calling-for-bds).visited(gave-bds-in-onboarding)
+        query_overridden: false
+        p:
+          mean: 0.014
+          stdev: 0.002
+  - uuid: f575cbcc-b1d3-4e20-8fa3-bb19b706a496
+    id: recommendation-with-BDOs-to-switch-registered
+    from: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.015
+      id: gave-bds-in-onboarding
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.002
+      evidence:
+        window_from: '2025-11-25T17:34:56.136Z'
+        source: amplitude
+        'n': 4388
+        k: 66
+        retrieved_at: '2025-11-25T17:34:54.426Z'
+        full_query: >-
+          {"from":"User sees dashboard","to":"Blueprint CheckpointReached","visited":["BankAccount
+          DetailsEntryConfirmed"],"context":[],"case":[],"event_filters":{"User sees dashboard":[],"Blueprint
+          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}],"BankAccount
+          DetailsEntryConfirmed":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":2}
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:23.957Z'
+        query:
+          from: User sees dashboard
+          to: Blueprint CheckpointReached
+          visited:
+            - BankAccount DetailsEntryConfirmed
+          context: []
+          case: []
+          event_filters:
+            User sees dashboard: []
+            Blueprint CheckpointReached:
+              - property: checkpoint
+                operator: is
+                values:
+                  - RecommendationOffered
+            BankAccount DetailsEntryConfirmed: []
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 2
+        full_query: >-
+          {"from":"User sees dashboard","to":"Blueprint CheckpointReached","visited":["BankAccount
+          DetailsEntryConfirmed"],"context":[],"case":[],"event_filters":{"User sees dashboard":[],"Blueprint
+          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}],"BankAccount
+          DetailsEntryConfirmed":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":2}
+    query: from(viewed-dashboard).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
+    description: ''
+  - uuid: 25ab4406-51d2-4852-a373-5d656c4a295f
+    id: recommendation-calling-for-bds-to-switch-registered
+    from: 496ea177-7049-41a3-8fa7-d8ead43a842b
+    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    fromHandle: top-out
+    toHandle: bottom
+    p:
+      mean: 0.068
+      id: calling-for-bds-to-registration
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.008
+      evidence:
+        window_from: '2025-11-24T16:25:20.910Z'
+        source: amplitude
+        'n': 909
+        k: 62
+        retrieved_at: '2025-11-25T17:06:36.634Z'
+        full_query: >-
+          {"from":"Blueprint CheckpointReached","to":"Blueprint
+          CheckpointReached","context":[],"case":[],"event_filters":{"Blueprint
+          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["SwitchRegistered"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:02.331Z'
+        query:
+          from: Blueprint CheckpointReached
+          to: Blueprint CheckpointReached
+          context: []
+          case: []
+          event_filters:
+            Blueprint CheckpointReached:
+              - property: checkpoint
+                operator: is
+                values:
+                  - SwitchRegistered
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 1
+        full_query: >-
+          {"from":"Blueprint CheckpointReached","to":"Blueprint
+          CheckpointReached","context":[],"case":[],"event_filters":{"Blueprint
+          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["SwitchRegistered"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+    query: from(recommendation-calling-for-bds).to(switch-registered)
+    description: ''
+  - uuid: 370dce1d-3a36-4109-9711-204c301478c8
+    id: switch-registered-to-switch-success
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 30aabc44-e448-4359-b0d0-338a231edb92
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.811
+      stdev: 0.013
+      id: registration-to-success
+      evidence:
+        window_from: '2025-11-24T16:38:31.493Z'
+        source: manual
+        'n': 909
+        k: 737
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:03.237Z'
+        query:
+          from: Blueprint CheckpointReached
+          to: Blueprint SwitchSuccess
+          context: []
+          case: []
+          event_filters:
+            Blueprint CheckpointReached:
+              - property: checkpoint
+                operator: is
+                values:
+                  - SwitchRegistered
+            Blueprint SwitchSuccess: []
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20SwitchSuccess%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 1
+        full_query: >-
+          {"from":"Blueprint CheckpointReached","to":"Blueprint
+          SwitchSuccess","context":[],"case":[],"event_filters":{"Blueprint
+          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["SwitchRegistered"]}],"Blueprint
+          SwitchSuccess":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20SwitchSuccess%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+      connection: amplitude-prod
+      connection_overridden: true
+    query: from(switch-registered).to(switch-success)
+    description: ''
+  - uuid: c38b4315-7815-47b7-8aae-a87d1506490e
+    id: gave-bds-in-onboarding-after-onboarding-to-recommendation-with-BDOs
+    from: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    fromHandle: top-out
+    toHandle: bottom
+    p:
+      mean: 1
+      connection: amplitude-prod
+      connection_overridden: true
+    query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
+    description: ''
+  - uuid: d7bf4100-18db-4afa-b0c8-2e8c5d72a1f1
+    id: viewed-coffee-screen-to-gave-bds-in-onboarding-after-onboarding
+    from: 5788d308-a7a9-49ce-a755-07491315a603
+    to: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.058
+      stdev: 0.01
+      id: gave-bds-after-onboarding
+      evidence:
+        window_from: '2025-11-24T16:29:07.917Z'
+        source: manual
+        'n': 603
+        k: 35
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:04.145Z'
+        query:
+          from: Viewed Coffee Promotion Page /onboarding/coffee Page
+          to: BankAccount DetailsEntrySaved
+          context: []
+          case: []
+          event_filters:
+            Viewed Coffee Promotion Page /onboarding/coffee Page: []
+            BankAccount DetailsEntrySaved:
+              - property: context
+                operator: is not
+                values:
+                  - ONBOARDING
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntrySaved%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 1
+        full_query: >-
+          {"from":"Viewed Coffee Promotion Page /onboarding/coffee Page","to":"BankAccount
+          DetailsEntrySaved","context":[],"case":[],"event_filters":{"Viewed Coffee Promotion Page /onboarding/coffee
+          Page":[],"BankAccount DetailsEntrySaved":[{"property":"context","operator":"is
+          not","values":["ONBOARDING"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntrySaved%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+      connection: amplitude-prod
+      connection_overridden: true
+    query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
+    description: ''
+  - uuid: 4d0ee2fc-ec70-4f3e-9528-2cf3f9d96dde
+    id: household-delegated-to-gave-bds-in-onboarding-after-onboarding
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.008
+      stdev: 0.001
+      id: gave-bds-after-delegation
+      connection: amplitude-prod
+      connection_overridden: true
+      evidence:
+        window_from: '2025-11-24T16:33:02.212Z'
+        source: manual
+        'n': 6466
+        k: 49
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:05.738Z'
+        query:
+          from: Household DelegationStatusChanged
+          to: BankAccount DetailsEntrySaved
+          context: []
+          case: []
+          event_filters:
+            Household DelegationStatusChanged:
+              - property: newDelegationStatus
+                operator: is any of
+                values:
+                  - 'ON'
+            BankAccount DetailsEntrySaved:
+              - property: context
+                operator: is not
+                values:
+                  - ONBOARDING
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+        full_query: >-
+          {"from":"Household DelegationStatusChanged","to":"BankAccount
+          DetailsEntrySaved","context":[],"case":[],"event_filters":{"Household
+          DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any
+          of","values":["ON"]}],"BankAccount DetailsEntrySaved":[{"property":"context","operator":"is
+          not","values":["ONBOARDING"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z"}
+    query: from(household-delegated).to(gave-bds-after-onboarding).minus(saw-wa-details-page)
+    description: ''
+    query_overridden: false
+  - uuid: 586b4354-5293-4961-b63f-8b0f31e756f1
+    id: saw-wa-details-page-to-gave-bds-in-onboarding-after-onboarding
+    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
+    to: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.05
+      id: gave-bds-after-wa
+      connection: amplitude-prod
+      connection_overridden: true
+      evidence:
+        window_from: '2025-11-24T16:32:42.451Z'
+        source: manual
+        'n': 5836
+        k: 290
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:06.956Z'
         query:
           from: Viewed WhatsApp details /onboarding/whatsApp-details Page
-          to: Viewed Coffee Promotion Page /onboarding/coffee Page
+          to: BankAccount DetailsEntrySaved
           context: []
           case: []
           event_filters:
             Viewed WhatsApp details /onboarding/whatsApp-details Page: []
-            Viewed Coffee Promotion Page /onboarding/coffee Page: []
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
+            BankAccount DetailsEntrySaved:
+              - property: context
+                operator: is not
+                values:
+                  - ONBOARDING
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
         full_query: >-
-          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"Viewed Coffee Promotion Page
-          /onboarding/coffee Page","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
-          /onboarding/whatsApp-details Page":[],"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-      connection: amplitude-prod
-    query: from(saw-WA-details-page).to(viewed-coffee-screen)
+          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"BankAccount
+          DetailsEntrySaved","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
+          /onboarding/whatsApp-details Page":[],"BankAccount DetailsEntrySaved":[{"property":"context","operator":"is
+          not","values":["ONBOARDING"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z"}
+      stdev: 0.003
     description: ''
-  - uuid: 8520ab3d-ce8d-486d-8b9c-8dd527a2703c
-    id: saw-WA-details-page-to-viewed-dashboard
+    query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
+  - uuid: 2e25fd40-2c84-4b14-af19-6a61220ddbcd
+    id: viewed-dashboard-to-not-sent-recommendation
+    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    to: e5cd8923-f466-4535-8451-ed78566757e4
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.563
+    query: from(viewed-dashboard).to(not-sent-recommendation)
+    description: ''
+    conditional_p:
+      - condition: visited(gave-bds-in-onboarding)
+        query: from(viewed-dashboard).to(not-sent-recommendation).visited(gave-bds-in-onboarding)
+        query_overridden: false
+        p:
+          mean: 0.972
+  - uuid: df61ee70-5722-4198-8a2d-d03686e4af0c
+    id: gave-bds-in-onboarding-after-onboarding-to-not-sent-recommendation
+    from: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    to: e5cd8923-f466-4535-8451-ed78566757e4
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0
+    query: from(gave-bds-after-onboarding).to(not-sent-recommendation)
+    description: ''
+  - uuid: 2a2f9f24-9bf5-4e77-9061-ab677b7ab5d7
+    id: recommendation-calling-for-bds-to-post-recommendation-failure
+    from: 496ea177-7049-41a3-8fa7-d8ead43a842b
+    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.932
+    query: from(recommendation-calling-for-bds).to(post-recommendation-failure)
+    description: ''
+  - uuid: 532a304a-c435-4ea5-aa6a-44714b40adab
+    id: switch-registered-to-post-registration-failure
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.189
+    query: from(switch-registered).to(post-registration-failure)
+    description: ''
+  - uuid: efa9649b-5c26-41ec-aff6-9270498e0740
+    id: recommendation-with-BDOs-to-post-recommendation-failure
+    from: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    fromHandle: right-out
+    toHandle: top
+    p:
+      mean: 0.985
+    query: from(recommendation-with-BDOs).to(post-recommendation-failure)
+    description: ''
+  - uuid: c4c63403-5e62-4a22-b84c-8b55f06290f9
+    id: saw-wa-details-page-to-viewed-dashboard
     from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
     to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.571
-      id: wa-to-dashboard
-      stdev: 0.011
+      mean: 0.345
+      stdev: 0.007
       evidence:
-        'n': 2014
-        k: 1150
+        'n': 5171
+        k: 1786
         window_from: '2025-11-20T19:03:08.357Z'
         retrieved_at: '2025-11-20T18:44:47.506Z'
         source: amplitude
@@ -283,83 +716,252 @@ edges:
           Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-21T13:41:34.546Z'
+        retrieved_at: '2025-11-25T16:41:04.715Z'
         query:
           from: Viewed WhatsApp details /onboarding/whatsApp-details Page
           to: User sees dashboard
-          exclude:
-            - Viewed Coffee Promotion Page /onboarding/coffee Page
           context: []
           case: []
           event_filters:
             Viewed WhatsApp details /onboarding/whatsApp-details Page: []
             User sees dashboard: []
-            Viewed Coffee Promotion Page /onboarding/coffee Page: []
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
+          start: '2025-10-23T23:00:00.000Z'
+          end: '2025-11-23T00:00:00.000Z'
         full_query: >-
           {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"User sees
-          dashboard","exclude":["Viewed Coffee Promotion Page /onboarding/coffee
-          Page"],"context":[],"case":[],"event_filters":{"Viewed WhatsApp details /onboarding/whatsApp-details
-          Page":[],"User sees dashboard":[],"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251114&end=20251121&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+          dashboard","context":[],"case":[],"event_filters":{"Viewed WhatsApp details /onboarding/whatsApp-details
+          Page":[],"User sees dashboard":[]},"start":"2025-10-23T23:00:00.000Z","end":"2025-11-23T00:00:00.000Z"}
       connection: amplitude-prod
-    query: from(saw-WA-details-page).to(viewed-dashboard).exclude(viewed-coffee-screen)
+      id: wa-to-dashboard
+    query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
     description: ''
     query_overridden: false
-  - uuid: fdcf949f-4869-47d6-ab33-6473b46ec8cd
-    id: viewed-coffee-screen-to-viewed-dashboard
+  - uuid: 76e0e0f8-133d-4065-9fab-56480063d9c9
+    id: viewed-coffee-screen-to-gave-bds-in-onboarding
     from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    to: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.584
+      mean: 0.444
+      stdev: 0.02
+      id: coffee-to-bds
       connection: amplitude-prod
       connection_overridden: true
-      id: coffee-to-dashboard
-      stdev: 0.016
       evidence:
-        'n': 934
-        k: 545
-        window_from: '2025-11-21T12:27:24.696Z'
-        retrieved_at: '2025-11-20T18:32:53.053Z'
-        source: amplitude
-        full_query: >-
-          {"from":"Viewed Coffee Promotion Page /onboarding/coffee Page","to":"User sees
-          dashboard","context":[],"case":[],"event_filters":{"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[],"User sees
-          dashboard":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        'n': 603
+        k: 268
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-20T18:32:53.053Z'
+        retrieved_at: '2025-11-25T18:23:08.436Z'
         query:
           from: Viewed Coffee Promotion Page /onboarding/coffee Page
+          to: BankAccount DetailsEntryConfirmed
+          context: []
+          case: []
+          event_filters:
+            Viewed Coffee Promotion Page /onboarding/coffee Page: []
+            BankAccount DetailsEntryConfirmed: []
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 1
+        full_query: >-
+          {"from":"Viewed Coffee Promotion Page /onboarding/coffee Page","to":"BankAccount
+          DetailsEntryConfirmed","context":[],"case":[],"event_filters":{"Viewed Coffee Promotion Page
+          /onboarding/coffee Page":[],"BankAccount
+          DetailsEntryConfirmed":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+    query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
+    description: ''
+  - uuid: 41b26675-c962-4cb6-be4d-55804d22b480
+    id: gave-bds-in-onboarding-to-viewed-dashboard
+    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    fromHandle: bottom-out
+    toHandle: top
+    p:
+      mean: 0.975
+      stdev: 0.005
+      id: bdos-to-dashboard
+      connection: amplitude-prod
+      connection_overridden: true
+      evidence:
+        'n': 889
+        k: 867
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:09.258Z'
+        query:
+          from: BankAccount DetailsEntryConfirmed
           to: User sees dashboard
           context: []
           case: []
+          event_filters:
+            BankAccount DetailsEntryConfirmed: []
+            User sees dashboard: []
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
           query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+            e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
-          event_filters:
-            Viewed Coffee Promotion Page /onboarding/coffee Page: []
-            User sees dashboard: []
         full_query: >-
-          {"from":"Viewed Coffee Promotion Page /onboarding/coffee Page","to":"User sees
-          dashboard","context":[],"case":[],"event_filters":{"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[],"User sees
-          dashboard":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(viewed-coffee-screen).to(viewed-dashboard)
+          {"from":"BankAccount DetailsEntryConfirmed","to":"User sees
+          dashboard","context":[],"case":[],"event_filters":{"BankAccount DetailsEntryConfirmed":[],"User sees
+          dashboard":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+    query: from(gave-bds-in-onboarding).to(viewed-dashboard)
     description: ''
+  - uuid: 153e467f-754c-4fcd-96ef-d25edcee6716
+    id: viewed-dashboard-to-recommendation-with-BDOs
+    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.015
+      id: dashboard-to-rec-from-bdos
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.002
+      evidence:
+        'n': 4388
+        k: 66
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:24:11.735Z'
+        query:
+          from: User sees dashboard
+          to: Blueprint CheckpointReached
+          visited:
+            - BankAccount DetailsEntryConfirmed
+          context: []
+          case: []
+          event_filters:
+            User sees dashboard: []
+            Blueprint CheckpointReached:
+              - property: checkpoint
+                operator: is
+                values:
+                  - RecommendationOffered
+            BankAccount DetailsEntryConfirmed: []
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 2
+        full_query: >-
+          {"from":"User sees dashboard","to":"Blueprint CheckpointReached","visited":["BankAccount
+          DetailsEntryConfirmed"],"context":[],"case":[],"event_filters":{"User sees dashboard":[],"Blueprint
+          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}],"BankAccount
+          DetailsEntryConfirmed":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":2}
+    query: from(viewed-dashboard).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
+    description: ''
+    conditional_p:
+      - condition: visited(gave-bds-in-onboarding)
+        query: from(viewed-dashboard).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
+        query_overridden: false
+        p:
+          mean: 0.5
+          id: gave-bds-in-onboarding
+    query_overridden: false
+  - uuid: bb6380f3-6e5f-4734-aa90-99a8a7ec3444
+    id: gave-bds-in-onboarding-to-recommendation-with-BDOs
+    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.029
+      id: bdos-to-recommendation
+      evidence:
+        window_from: '2025-11-24T16:12:20.961Z'
+        source: manual
+        'n': 889
+        k: 26
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:11.006Z'
+        query:
+          from: BankAccount DetailsEntryConfirmed
+          to: Blueprint CheckpointReached
+          context: []
+          case: []
+          event_filters:
+            BankAccount DetailsEntryConfirmed: []
+            Blueprint CheckpointReached:
+              - property: checkpoint
+                operator: is
+                values:
+                  - RecommendationOffered
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+        full_query: >-
+          {"from":"BankAccount DetailsEntryConfirmed","to":"Blueprint
+          CheckpointReached","context":[],"case":[],"event_filters":{"BankAccount DetailsEntryConfirmed":[],"Blueprint
+          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z"}
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.006
+    query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
+    description: ''
+    query_overridden: false
+  - uuid: c20c9bd4-0b4e-4042-8d54-30cb3f0c02f0
+    id: saw-wa-details-page-to-viewed-coffee-screen
+    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
+    to: 5788d308-a7a9-49ce-a755-07491315a603
+    fromHandle: top-out
+    toHandle: left
+    p:
+      mean: 0.104
+      id: wa-to-coffee
+      stdev: 0.004
+      evidence:
+        'n': 5836
+        k: 608
+        window_from: '2025-11-20T18:58:06.435Z'
+        retrieved_at: '2025-11-20T18:32:51.222Z'
+        source: amplitude
+        full_query: >-
+          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"Viewed Coffee Promotion Page
+          /onboarding/coffee Page","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
+          /onboarding/whatsApp-details Page":[],"Viewed Coffee Promotion Page /onboarding/coffee
+          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-25T18:23:11.943Z'
+        query:
+          from: Viewed WhatsApp details /onboarding/whatsApp-details Page
+          to: Viewed Coffee Promotion Page /onboarding/coffee Page
+          context: []
+          case: []
+          event_filters:
+            Viewed WhatsApp details /onboarding/whatsApp-details Page: []
+            Viewed Coffee Promotion Page /onboarding/coffee Page: []
+          start: '2025-09-30T23:00:00.000Z'
+          end: '2025-10-31T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 1
+        full_query: >-
+          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"Viewed Coffee Promotion Page
+          /onboarding/coffee Page","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
+          /onboarding/whatsApp-details Page":[],"Viewed Coffee Promotion Page /onboarding/coffee
+          Page":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+      connection: amplitude-prod
+    query: from(saw-wa-details-page).to(viewed-coffee-screen)
+    description: ''
+    query_overridden: false
 policies:
   default_outcome: success
 metadata:
   name: conversion-flow-v0-ezra
   description: ''
   created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-11-24T13:08:26.042Z'
+  updated_at: '2025-11-26T13:13:24.456Z'
   version: 1.0.0
-  updated: '2025-11-21T13:46:22.311Z'
+  updated: '2025-11-25T18:25:17.542Z'
+currentQueryDSL: window(1-Oct-25:31-Oct-25)

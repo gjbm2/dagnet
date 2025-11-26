@@ -25,7 +25,7 @@ Uses schema-based Pydantic types from graph_types.py - NO manual dict parsing.
 
 from typing import List, Set, Union, Dict, Any
 import networkx as nx
-from query_dsl import ParsedQuery, parse_query
+from query_dsl import ParsedQuery, parse_query_strict
 from graph_types import Graph, Node, Edge
 
 
@@ -54,8 +54,8 @@ def apply_query_to_graph(graph_input: Union[Graph, Dict[str, Any]], query_string
     else:
         graph = graph_input
     
-    # Parse the query
-    query = parse_query(query_string)
+    # Parse the query (strict - requires from/to for topology filtering)
+    query = parse_query_strict(query_string)
     
     # Build NetworkX graph for traversal
     G = _build_networkx_graph(graph)

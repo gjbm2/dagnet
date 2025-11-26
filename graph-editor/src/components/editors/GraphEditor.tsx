@@ -13,12 +13,13 @@ import SidebarHoverPreview from '../SidebarHoverPreview';
 import WhatIfPanel from '../panels/WhatIfPanel';
 import PropertiesPanelWrapper from '../panels/PropertiesPanelWrapper';
 import ToolsPanel from '../panels/ToolsPanel';
+import AnalyticsPanel from '../panels/AnalyticsPanel';
 import { useSidebarState } from '../../hooks/useSidebarState';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
-import { Layers, FileText, Wrench } from 'lucide-react';
+import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
@@ -950,6 +951,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     />
   ), []);
   
+  // Analytics panel
+  const analyticsComponent = useMemo(() => <AnalyticsPanel tabId={tabId} />, [tabId]);
+  
   // Helper function to create layout structure (uses stable components)
   const createLayoutStructure = useCallback((
     mode: 'minimized' | 'maximized',
@@ -1010,6 +1014,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           tab.content = propertiesComponent;
         } else if (tab.id === 'tools-tab') {
           tab.content = toolsComponent;
+        } else if (tab.id === 'analytics-tab') {
+          tab.content = analyticsComponent;
         }
       });
       
@@ -1023,7 +1029,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     }
     
     return layout;
-  }, [sidebarState.activePanel, sidebarState.sidebarWidth, fileId, whatIfComponent, propertiesComponent, toolsComponent]);
+  }, [sidebarState.activePanel, sidebarState.sidebarWidth, fileId, whatIfComponent, propertiesComponent, toolsComponent, analyticsComponent]);
   
   // Watch What-If state: no layout reloads needed; CanvasHost reads from context
   // (left intentionally empty to avoid expensive rc-dock loadLayout calls)
@@ -1101,6 +1107,23 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                     whiteSpace: 'nowrap' 
                   } 
                 }, 'Tools')
+              );
+            } else if (tab.id === 'analytics-tab') {
+              tab.content = analyticsComponent;
+              tab.title = React.createElement('div', { 
+                className: 'dock-tab-title', 
+                style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+              },
+                React.createElement(BarChart3, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { 
+                  style: { 
+                    flex: 1, 
+                    minWidth: 0, 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis', 
+                    whiteSpace: 'nowrap' 
+                  } 
+                }, 'Analytics')
               );
             }
           });
@@ -1655,7 +1678,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               
               // Update sidebar state with current floating panels
               const sidebarFloatingIds = floatingTabIds.filter(id => 
-                id === 'what-if-tab' || id === 'properties-tab' || id === 'tools-tab'
+                id === 'what-if-tab' || id === 'properties-tab' || id === 'tools-tab' || id === 'analytics-tab'
               );
               if (JSON.stringify(sidebarFloatingIds.sort()) !== JSON.stringify(sidebarState.floatingPanels.sort())) {
                 console.log(`[${new Date().toISOString()}] [GraphEditor] Updating floatingPanels:`, sidebarFloatingIds);
@@ -1663,7 +1686,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               }
               
               // Dynamic closable management: tabs should be closable ONLY when NOT in their home position
-              const SIDEBAR_TAB_IDS = ['what-if-tab', 'properties-tab', 'tools-tab'];
+              const SIDEBAR_TAB_IDS = ['what-if-tab', 'properties-tab', 'tools-tab', 'analytics-tab'];
               if (dockRef.current) {
                 SIDEBAR_TAB_IDS.forEach(tabId => {
                   const tabData = dockRef.current!.find(tabId);
@@ -1767,7 +1790,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               console.log('[GraphEditor] All visible tabs:', Array.from(allTabIds));
               
               // If sidebar tabs are closed (not just floating), restore them to dock
-              const expectedSidebarTabs = ['what-if-tab', 'properties-tab', 'tools-tab'];
+              const expectedSidebarTabs = ['what-if-tab', 'properties-tab', 'tools-tab', 'analytics-tab'];
               const missingSidebarTabs = expectedSidebarTabs.filter(id => !allTabIds.has(id));
               
               if (missingSidebarTabs.length > 0) {
@@ -1795,7 +1818,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               
               // Check if sidebar has any existing sidebar tabs (not just Canvas)
               const existingSidebarTabs = sidebarPanel?.tabs?.filter((t: any) => 
-                t.id === 'what-if-tab' || t.id === 'properties-tab' || t.id === 'tools-tab'
+                t.id === 'what-if-tab' || t.id === 'properties-tab' || t.id === 'tools-tab' || t.id === 'analytics-tab'
               ) || [];
                     
                     if (existingSidebarTabs.length > 0) {
@@ -1856,6 +1879,23 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                               } 
                             }, 'Tools')
                           ) as any;
+                        } else if (tabId === 'analytics-tab') {
+                          component = analyticsComponent;
+                          title = React.createElement('div', { 
+                            className: 'dock-tab-title', 
+                            style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                          },
+                            React.createElement(BarChart3, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement('span', { 
+                              style: { 
+                                flex: 1, 
+                                minWidth: 0, 
+                                overflow: 'hidden', 
+                                textOverflow: 'ellipsis', 
+                                whiteSpace: 'nowrap' 
+                              } 
+                            }, 'Analytics')
+                          ) as any;
                         }
                         
                         if (component && sidebarPanel) {
@@ -1877,6 +1917,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                             if (tab.id === 'what-if-tab') tab.content = whatIfComponent;
                             else if (tab.id === 'properties-tab') tab.content = propertiesComponent;
                             else if (tab.id === 'tools-tab') tab.content = toolsComponent;
+                            else if (tab.id === 'analytics-tab') tab.content = analyticsComponent;
                           });
                         }
                         if (node.children) node.children.forEach(reinjectFloating);
@@ -1906,6 +1947,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                               if (tab.id === 'what-if-tab') tab.content = whatIfComponent;
                               else if (tab.id === 'properties-tab') tab.content = propertiesComponent;
                               else if (tab.id === 'tools-tab') tab.content = toolsComponent;
+                              else if (tab.id === 'analytics-tab') tab.content = analyticsComponent;
                             });
                           }
                           if (node.children) node.children.forEach(reinjectFloating);

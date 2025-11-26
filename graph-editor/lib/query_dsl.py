@@ -5,7 +5,7 @@ Schema Authority: /graph-editor/public/schemas/query-dsl-1.0.0.json
 Valid Functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "contextAny", "window", "case", "minus", "plus"]
 
 Grammar:
-    query          ::= from-clause to-clause constraint*
+    query          ::= [from-clause] [to-clause] constraint*
     from-clause    ::= "from(" node-id ")"
     to-clause      ::= "to(" node-id ")"
     constraint     ::= exclude-clause | visited-clause | visitedAny-clause | context-clause | contextAny-clause | window-clause | case-clause | minus-clause | plus-clause
@@ -26,10 +26,16 @@ Grammar:
     value          ::= [a-z0-9_-]+
     date-or-offset ::= [0-9]+-[A-Za-z]{3}-[0-9]{2} | -?[0-9]+[dwmy]
 
+NOTE: from() and to() are OPTIONAL for analytics queries. They are required
+for data retrieval queries but optional for path constraint queries.
+
 Examples:
-    "from(homepage).to(checkout)"
-    "from(homepage).to(checkout).exclude(back-button)"
-    "from(product-view).to(checkout).visited(add-to-cart)"
+    "from(homepage).to(checkout)"                                    # Full path query
+    "from(homepage).to(checkout).exclude(back-button)"               # Path with exclusion
+    "from(product-view).to(checkout).visited(add-to-cart)"           # Path with waypoint
+    "visited(promo).visited(cart)"                                   # Constraints only (analytics)
+    "visitedAny(branch-a,branch-b)"                                  # OR constraint (analytics)
+    "from(start).visitedAny(a,b)"                                    # Start with OR branches
     "from(homepage).to(checkout).context(device:mobile)"
     "from(homepage).to(checkout).contextAny(channel:google,channel:meta)"
     "from(homepage).to(checkout).window(1-Jan-25:31-Mar-25)"
@@ -73,12 +79,13 @@ class ParsedQuery:
     - Order-independent: .exclude(A,B) ≡ .exclude(B,A)
     - Idempotent: .exclude(A).exclude(A) ≡ .exclude(A)
     - Composable: Constraints are logically ANDed
+    - from_node/to_node are OPTIONAL for analytics queries
     
     Schema authority: /graph-editor/public/schemas/query-dsl-1.0.0.json
     Valid functions: ["from", "to", "visited", "visitedAny", "exclude", "context", "case", "minus", "plus"]
     """
-    from_node: str                    # Source node ID
-    to_node: str                      # Target node ID
+    from_node: Optional[str]          # Source node ID (optional for analytics)
+    to_node: Optional[str]            # Target node ID (optional for analytics)
     exclude: List[str]                # Nodes to exclude from path (AND)
     visited: List[str]                # Nodes that must be visited (AND)
     visited_any: List[List[str]]      # Groups where at least one must be visited (OR per group)
@@ -92,7 +99,13 @@ class ParsedQuery:
     @property
     def raw(self) -> str:
         """Reconstruct query string from parsed components."""
-        parts = [f"from({self.from_node})", f"to({self.to_node})"]
+        parts = []
+        
+        if self.from_node:
+            parts.append(f"from({self.from_node})")
+        
+        if self.to_node:
+            parts.append(f"to({self.to_node})")
         
         if self.exclude:
             parts.append(f"exclude({','.join(self.exclude)})")
@@ -126,6 +139,21 @@ class ParsedQuery:
             parts.append(f"plus({','.join(plus_nodes)})")
         
         return ".".join(parts)
+    
+    @property
+    def has_path_endpoints(self) -> bool:
+        """Check if query has explicit from/to endpoints."""
+        return self.from_node is not None and self.to_node is not None
+    
+    @property
+    def all_constraint_nodes(self) -> List[str]:
+        """Get all nodes referenced in constraints (visited, exclude, visitedAny)."""
+        nodes = []
+        nodes.extend(self.visited)
+        nodes.extend(self.exclude)
+        for group in self.visited_any:
+            nodes.extend(group)
+        return nodes
 
 
 class QueryParseError(Exception):
@@ -133,18 +161,20 @@ class QueryParseError(Exception):
     pass
 
 
-def parse_query(query: str) -> ParsedQuery:
+def parse_query(query: str, require_endpoints: bool = False) -> ParsedQuery:
     """
     Parse query DSL string into structured components.
     
     Args:
-        query: Query string (e.g., "from(a).to(b).exclude(c)")
+        query: Query string (e.g., "from(a).to(b).exclude(c)" or "visited(x).visited(y)")
+        require_endpoints: If True, raise error if from/to are missing (for data retrieval).
+                          If False, from/to are optional (for analytics queries).
     
     Returns:
         ParsedQuery with extracted components
     
     Raises:
-        QueryParseError: If query is malformed
+        QueryParseError: If query is malformed or missing required endpoints
     
     Examples:
         >>> q = parse_query("from(homepage).to(checkout)")
@@ -158,23 +188,32 @@ def parse_query(query: str) -> ParsedQuery:
         ['c', 'd']
         >>> q.visited
         ['e']
+        
+        >>> q = parse_query("visited(x).visited(y)")  # Analytics query, no from/to
+        >>> q.from_node
+        None
+        >>> q.visited
+        ['x', 'y']
     """
     
     # Validate basic structure
     if not query or not isinstance(query, str):
         raise QueryParseError("Query must be a non-empty string")
     
-    # Extract from() and to()
-    from_match = re.search(r'from\(([a-z0-9_-]+)\)', query)
-    to_match = re.search(r'to\(([a-z0-9_-]+)\)', query)
+    # Extract from() and to() - now optional
+    # Note: Node IDs can contain uppercase letters (e.g., recommendation-with-BDOs)
+    from_match = re.search(r'from\(([a-zA-Z0-9_-]+)\)', query)
+    to_match = re.search(r'to\(([a-zA-Z0-9_-]+)\)', query)
     
-    if not from_match:
-        raise QueryParseError("Query must contain 'from(node-id)'")
-    if not to_match:
-        raise QueryParseError("Query must contain 'to(node-id)'")
+    from_node = from_match.group(1) if from_match else None
+    to_node = to_match.group(1) if to_match else None
     
-    from_node = from_match.group(1)
-    to_node = to_match.group(1)
+    # Enforce endpoints if required (for data retrieval queries)
+    if require_endpoints:
+        if not from_node:
+            raise QueryParseError("Query must contain 'from(node-id)'")
+        if not to_node:
+            raise QueryParseError("Query must contain 'to(node-id)'")
     
     # Extract constraints
     exclude = _extract_node_list(query, 'exclude')
@@ -204,6 +243,24 @@ def parse_query(query: str) -> ParsedQuery:
     )
 
 
+def parse_query_strict(query: str) -> ParsedQuery:
+    """
+    Parse query DSL string, requiring from() and to() endpoints.
+    
+    Use this for data retrieval queries where endpoints are mandatory.
+    
+    Args:
+        query: Query string (e.g., "from(a).to(b).exclude(c)")
+    
+    Returns:
+        ParsedQuery with extracted components
+    
+    Raises:
+        QueryParseError: If query is malformed or missing from/to
+    """
+    return parse_query(query, require_endpoints=True)
+
+
 def _extract_node_list(query: str, constraint_type: str) -> List[str]:
     """
     Extract node list from constraint clause.
@@ -212,7 +269,8 @@ def _extract_node_list(query: str, constraint_type: str) -> List[str]:
         _extract_node_list("...exclude(a,b,c)...", "exclude") → ["a", "b", "c"]
         _extract_node_list("...visited(x)...", "visited") → ["x"]
     """
-    pattern = rf'{constraint_type}\(([a-z0-9_,-]+)\)'
+    # Note: Node IDs can contain uppercase letters (e.g., recommendation-with-BDOs)
+    pattern = rf'{constraint_type}\(([a-zA-Z0-9_,-]+)\)'
     matches = re.findall(pattern, query)
     
     nodes = []
@@ -240,7 +298,8 @@ def _extract_key_value_pairs(query: str, function_type: str) -> List[KeyValuePai
         _extract_key_value_pairs("...context(device:mobile)...", "context")
             → [KeyValuePair("device", "mobile")]
     """
-    pattern = rf'{function_type}\(([a-z0-9_-]+):([a-z0-9_-]+)\)'
+    # Note: Keys and values can contain uppercase letters
+    pattern = rf'{function_type}\(([a-zA-Z0-9_-]+):([a-zA-Z0-9_-]+)\)'
     matches = re.findall(pattern, query)
     
     return [KeyValuePair(key=m[0], value=m[1]) for m in matches]
@@ -251,7 +310,8 @@ def _extract_node_groups(query: str, function_type: str) -> List[List[str]]:
     Extract OR-groups from DSL functions like visitedAny(a,b).
     Returns list of groups; each group is a list of node ids.
     """
-    pattern = rf'{function_type}\(([a-z0-9_,-]+)\)'
+    # Note: Node IDs can contain uppercase letters (e.g., recommendation-with-BDOs)
+    pattern = rf'{function_type}\(([a-zA-Z0-9_,-]+)\)'
     matches = re.findall(pattern, query)
     groups: List[List[str]] = []
     for m in matches:
@@ -303,7 +363,8 @@ def _extract_context_any(query: str) -> List[ContextAnyGroup]:
         _extract_context_any("...contextAny(channel:google,channel:meta)...")
             → [ContextAnyGroup(pairs=[KeyValuePair("channel", "google"), KeyValuePair("channel", "meta")])]
     """
-    pattern = r'contextAny\(([a-z0-9_:,-]+)\)'
+    # Note: Keys and values can contain uppercase letters
+    pattern = r'contextAny\(([a-zA-Z0-9_:,-]+)\)'
     matches = re.findall(pattern, query)
     
     groups = []
@@ -349,7 +410,8 @@ def _extract_window(query: str) -> Optional[WindowConstraint]:
 
 def validate_query(
     query: str,
-    available_nodes: Optional[List[str]] = None
+    available_nodes: Optional[List[str]] = None,
+    require_endpoints: bool = False
 ) -> Tuple[bool, Optional[str]]:
     """
     Validate query string.
@@ -357,6 +419,7 @@ def validate_query(
     Args:
         query: Query string to validate
         available_nodes: List of valid node IDs (optional)
+        require_endpoints: If True, require from/to endpoints
     
     Returns:
         (is_valid, error_message)
@@ -365,29 +428,38 @@ def validate_query(
         >>> validate_query("from(a).to(b)")
         (True, None)
         
-        >>> validate_query("invalid")
+        >>> validate_query("visited(x).visited(y)")  # Analytics query
+        (True, None)
+        
+        >>> validate_query("visited(x)", require_endpoints=True)
         (False, "Query must contain 'from(node-id)'")
     """
     
     try:
-        parsed = parse_query(query)
+        parsed = parse_query(query, require_endpoints=require_endpoints)
     except QueryParseError as e:
         return False, str(e)
     
     # Validate node references
     if available_nodes is not None:
         node_set = set(available_nodes)
-        all_refs = [parsed.from_node, parsed.to_node] + parsed.exclude + parsed.visited
+        
+        # Collect all referenced nodes
+        all_refs = parsed.exclude + parsed.visited + parsed.all_constraint_nodes
+        if parsed.from_node:
+            all_refs.append(parsed.from_node)
+        if parsed.to_node:
+            all_refs.append(parsed.to_node)
         
         for node_id in all_refs:
-            if node_id not in node_set:
+            if node_id and node_id not in node_set:
                 return False, f"Node not found: {node_id}"
         
-        # Check logical constraints
-        if parsed.from_node in parsed.exclude:
+        # Check logical constraints (only if endpoints are set)
+        if parsed.from_node and parsed.from_node in parsed.exclude:
             return False, f"Cannot exclude source node: {parsed.from_node}"
         
-        if parsed.to_node in parsed.exclude:
+        if parsed.to_node and parsed.to_node in parsed.exclude:
             return False, f"Cannot exclude target node: {parsed.to_node}"
     
     return True, None

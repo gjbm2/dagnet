@@ -1,0 +1,278 @@
+/* Analytics Panel Styles */
+
+.analytics-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  font-size: 13px;
+  height: 100%;
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: analytics-panel;
+}
+
+.analytics-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+
+.analytics-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+/* Responsive content area */
+.analytics-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Controls column (selection, DSL, type) */
+.analytics-controls {
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+
+/* Output column (loading, error, results) */
+.analytics-output {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* Wide layout: side-by-side when container > 400px */
+@container analytics-panel (min-width: 400px) {
+  .analytics-content {
+    flex-direction: row;
+  }
+  
+  .analytics-controls {
+    width: 200px;
+    min-width: 200px;
+    border-right: 1px solid #e5e7eb;
+  }
+  
+  .analytics-output {
+    flex: 1;
+  }
+  
+  .analytics-controls .analytics-section {
+    border-bottom: 1px solid #f3f4f6;
+  }
+  
+  .analytics-controls .analytics-section:last-child {
+    border-bottom: none;
+  }
+}
+
+.analytics-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.analytics-section:last-child {
+  border-bottom: none;
+}
+
+.analytics-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.analytics-selection-info {
+  font-size: 13px;
+  color: #374151;
+}
+
+.analytics-muted {
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.analytics-node-ids {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* DSL Input */
+.analytics-dsl-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  background: #fff;
+  color: #374151;
+  box-sizing: border-box;
+}
+
+.analytics-dsl-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.analytics-dsl-input:disabled {
+  background: #f9fafb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+/* Type Selector */
+.analytics-type-selector {
+  position: relative;
+}
+
+.analytics-select {
+  width: 100%;
+  padding: 8px 32px 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: #374151;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+}
+
+.analytics-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.analytics-select:disabled {
+  background: #f9fafb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.analytics-select-icon {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #6b7280;
+  pointer-events: none;
+}
+
+.analytics-type-description {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Loading Indicator */
+.analytics-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #f0f9ff;
+  border-bottom: 1px solid #bae6fd;
+  color: #0369a1;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.analytics-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Error */
+.analytics-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #fef2f2;
+  border-bottom: 1px solid #fecaca;
+  color: #991b1b;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.analytics-error svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* In wide layout, loading/error don't need bottom border */
+@container analytics-panel (min-width: 400px) {
+  .analytics-loading,
+  .analytics-error {
+    border-bottom: none;
+    border-radius: 6px;
+    margin: 12px 16px;
+  }
+}
+
+/* Results */
+.analytics-results {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.analytics-success-icon {
+  color: #10b981;
+}
+
+.analytics-json {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  background: #f9fafb;
+  color: #374151;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-y: auto;
+  max-height: 400px;
+}
+
+/* In wide layout, remove max-height constraint so results fill available space */
+@container analytics-panel (min-width: 400px) {
+  .analytics-json {
+    max-height: none;
+  }
+  
+  .analytics-output .analytics-section {
+    border-bottom: none;
+  }
+}
+

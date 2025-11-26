@@ -142,12 +142,20 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   }, [graph?.currentQueryDSL]);
   
   // Update CSS variable for scenario legend positioning when height changes
+  // Set on the container element (not document root) so it's scoped to this tab
   useEffect(() => {
     const updatePosition = () => {
       if (windowSelectorRef.current) {
         const height = windowSelectorRef.current.offsetHeight;
-        const gap = 26; // Stable 16px gap between WindowSelector bottom and scenario legend top
-        document.documentElement.style.setProperty('--window-selector-bottom', `${height + gap}px`);
+        const gap = 16; // Gap between WindowSelector bottom and scenario legend top
+        const topOffset = 16; // WindowSelector's top position
+        const bottomPosition = topOffset + height + gap;
+        
+        // Set on the closest .graph-editor-dock-container (scoped to this tab)
+        const container = windowSelectorRef.current.closest('.graph-editor-dock-container') as HTMLElement;
+        if (container) {
+          container.style.setProperty('--window-selector-bottom', `${bottomPosition}px`);
+        }
       }
     };
     

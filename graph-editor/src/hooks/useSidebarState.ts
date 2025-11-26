@@ -7,7 +7,7 @@ import { useTabContext } from '../contexts/TabContext';
  */
 export interface SidebarState {
   mode: 'minimized' | 'maximized';        // Icon bar or full panel view
-  activePanel: 'what-if' | 'properties' | 'tools';  // Which tab is selected
+  activePanel: 'what-if' | 'properties' | 'tools' | 'analytics';  // Which tab is selected
   floatingPanels: string[];               // Which panels are floating (for backwards compat and quick checks)
   savedDockLayout?: any;                  // Saved rc-dock layout structure (components stripped)
   hasAutoOpened: boolean;                 // Smart auto-open tracker (once per tab)
@@ -16,6 +16,7 @@ export interface SidebarState {
   whatIfOpen: boolean;
   propertiesOpen: boolean;
   toolsOpen: boolean;
+  analyticsOpen: boolean;
   
   // Per-tab positioning state for minimize button
   sidebarWidth?: number;                  // Tracked width of sidebar panel
@@ -33,6 +34,7 @@ export const DEFAULT_SIDEBAR_STATE: SidebarState = {
   whatIfOpen: false,
   propertiesOpen: true,
   toolsOpen: false,
+  analyticsOpen: false,
   sidebarWidth: 300,  // Default sidebar width
   isResizing: false    // Not resizing by default
 };
@@ -149,7 +151,7 @@ export function useSidebarState(tabId?: string) {
    * Maximize sidebar to full panel view
    * Opens the specified panel (or activePanel if none specified)
    */
-  const maximize = useCallback((panel?: 'what-if' | 'properties' | 'tools') => {
+  const maximize = useCallback((panel?: 'what-if' | 'properties' | 'tools' | 'analytics') => {
     console.log(`[${new Date().toISOString()}] [useSidebarState] maximize: Maximizing sidebar, panel=${panel}, currentWidth=${state.sidebarWidth}`);
     
     // CRITICAL: If sidebar width is 0 or very small (collapsed), restore to default 300px
@@ -176,7 +178,7 @@ export function useSidebarState(tabId?: string) {
   /**
    * Switch to a specific panel (only works when maximized)
    */
-  const switchPanel = useCallback((panel: 'what-if' | 'properties' | 'tools') => {
+  const switchPanel = useCallback((panel: 'what-if' | 'properties' | 'tools' | 'analytics') => {
     updateState({ activePanel: panel });
   }, [updateState]);
   

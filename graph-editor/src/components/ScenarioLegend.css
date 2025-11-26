@@ -6,13 +6,13 @@
 
 .scenario-legend {
   position: absolute;
-  top: var(--window-selector-bottom, 84px); /* Dynamic: adjusts when WindowSelector expands. Fallback: 68px (WindowSelector) + 16px gap */
+  top: var(--window-selector-bottom, 72px); /* Dynamic: adjusts when WindowSelector expands. Fallback: 16px (WindowSelector top) + ~40px (collapsed height) + 16px gap */
   left: 20px; /* Extra margin from left edge */
   display: flex;
   flex-wrap: wrap; /* Allow chips to wrap to new row */
   gap: 8px;
   /* max-width set dynamically based on visible canvas width */
-  z-index: 50; /* Below UI controls (z-index: 100+) but above canvas */
+  z-index: 56; /* Above WindowSelector (z-index: 55), below sidebar (z-index: 100+) */
   pointer-events: auto;
   width: auto; /* Allow natural width */
   max-width: 100%; /* Fallback - will be overridden by inline style */
