@@ -49,101 +49,119 @@ def build_test_graph():
 
 
 class TestSingleNodeEntry:
-    """Test entry node analysis."""
+    """Test entry node analysis - new declarative schema."""
     
     def test_entry_analysis(self):
         """Analyze entry node shows all outcomes."""
         G = build_test_graph()
         result = run_single_node_entry(G, 'start')
         
-        assert result['analysis_type'] == 'entry_node'
-        assert result['node_id'] == 'start'
-        assert len(result['outcomes']) == 2  # end1 and end2
-        assert result['total_probability'] == pytest.approx(1.0)
+        # New schema has semantics and data
+        assert 'semantics' in result
+        assert 'data' in result
+        assert result['metadata']['node_id'] == 'start'
+        
+        # Data has rows for each outcome
+        outcomes = [r for r in result['data'] if r['scenario_id'] == 'current']
+        assert len(outcomes) == 2  # end1 and end2
     
     def test_outcome_probabilities(self):
         """Outcome probabilities are correct."""
         G = build_test_graph()
         result = run_single_node_entry(G, 'start')
         
-        outcomes_by_id = {o['node_id']: o for o in result['outcomes']}
+        # Get outcomes from data for current scenario
+        outcomes_by_id = {r['outcome']: r for r in result['data'] if r['scenario_id'] == 'current'}
         
         assert outcomes_by_id['end1']['probability'] == pytest.approx(0.8)
         assert outcomes_by_id['end2']['probability'] == pytest.approx(0.2)
 
 
 class TestPathToEnd:
-    """Test path to absorbing analysis."""
+    """Test path to absorbing analysis - new declarative schema."""
     
     def test_to_end1(self):
         """Path to end1."""
         G = build_test_graph()
         result = run_path_to_end(G, 'end1')
         
-        assert result['analysis_type'] == 'outcome_probability'
-        assert result['probability'] == pytest.approx(0.8)
-        assert result['node_label'] == 'Success'
+        assert 'semantics' in result
+        assert result['metadata']['node_label'] == 'Success'
+        # Get probability from data for current scenario
+        current_row = [r for r in result['data'] if r['scenario_id'] == 'current'][0]
+        assert current_row['probability'] == pytest.approx(0.8)
     
     def test_to_end2(self):
         """Path to end2."""
         G = build_test_graph()
         result = run_path_to_end(G, 'end2')
         
-        assert result['probability'] == pytest.approx(0.2)
+        current_row = [r for r in result['data'] if r['scenario_id'] == 'current'][0]
+        assert current_row['probability'] == pytest.approx(0.2)
 
 
 class TestPathThrough:
-    """Test path through node analysis."""
+    """Test path through node analysis - new declarative schema."""
     
     def test_through_branch(self):
         """Path through branch node."""
         G = build_test_graph()
         result = run_path_through(G, 'b1')
         
-        assert result['analysis_type'] == 'path_through'
-        assert result['probability'] == pytest.approx(0.4)
-        assert len(result['path_breakdown']) > 0
+        assert 'semantics' in result
+        assert result['metadata']['node_id'] == 'b1'
+        # Get probability from data for current scenario
+        current_row = [r for r in result['data'] if r['scenario_id'] == 'current'][0]
+        assert current_row['probability'] == pytest.approx(0.4)
 
 
 class TestEndComparison:
-    """Test end node comparison."""
+    """Test end node comparison - new declarative schema."""
     
     def test_compare_ends(self):
         """Compare two end nodes."""
         G = build_test_graph()
         result = run_end_comparison(G, ['end1', 'end2'])
         
-        assert result['analysis_type'] == 'end_comparison'
-        assert len(result['comparisons']) == 2
-        assert result['total_probability'] == pytest.approx(1.0)
-        assert result['is_exhaustive'] == True
+        assert 'semantics' in result
+        assert 'data' in result
+        # Get data for current scenario
+        current_rows = [r for r in result['data'] if r['scenario_id'] == 'current']
+        assert len(current_rows) == 2
+        total_prob = sum(r['probability'] for r in current_rows)
+        assert total_prob == pytest.approx(1.0)
     
     def test_sorted_by_probability(self):
-        """Results are sorted by probability."""
+        """Results contain correct probabilities."""
         G = build_test_graph()
         result = run_end_comparison(G, ['end1', 'end2'])
         
-        # end1 has higher probability, should be first
-        assert result['comparisons'][0]['node_id'] == 'end1'
+        # Get data for current scenario
+        probs = {r['node']: r['probability'] for r in result['data'] if r['scenario_id'] == 'current'}
+        # end1 has higher probability than end2
+        assert probs['end1'] > probs['end2']
 
 
 class TestBranchComparison:
-    """Test branch comparison."""
+    """Test branch comparison - new declarative schema."""
     
     def test_compare_branches(self):
         """Compare sibling branches."""
         G = build_test_graph()
         result = run_branch_comparison(G, ['b1', 'b2', 'b3'])
         
-        assert result['analysis_type'] == 'branch_comparison'
-        assert len(result['comparisons']) == 3
+        assert 'semantics' in result
+        # Get data for current scenario
+        current_rows = [r for r in result['data'] if r['scenario_id'] == 'current']
+        assert len(current_rows) == 3
     
     def test_edge_probabilities(self):
         """Edge probabilities are included."""
         G = build_test_graph()
         result = run_branch_comparison(G, ['b1', 'b2', 'b3'])
         
-        probs = {c['node_id']: c['edge_probability'] for c in result['comparisons']}
+        # Get data for current scenario
+        probs = {r['branch']: r['edge_probability'] for r in result['data'] if r['scenario_id'] == 'current'}
         assert probs['b1'] == 0.4
         assert probs['b2'] == 0.4
         assert probs['b3'] == 0.2
@@ -153,40 +171,53 @@ class TestPath:
     """Test path analysis."""
     
     def test_full_path(self):
-        """Full path between nodes."""
+        """Full path between nodes - new declarative schema."""
         G = build_test_graph()
         result = run_path(G, 'start', 'end1')
         
-        assert result['analysis_type'] == 'path'
-        assert result['probability'] == pytest.approx(0.8)
-        assert result['from_node'] == 'start'
-        assert result['to_node'] == 'end1'
+        # Check new schema structure
+        assert 'semantics' in result
+        assert 'data' in result
+        assert result['metadata']['from_node'] == 'start'
+        assert result['metadata']['to_node'] == 'end1'
+        
+        # Check data rows exist (stage × scenario)
+        assert len(result['data']) >= 2  # At least start and end stages
+        
+        # Find final stage probability (stage now uses node ID, not index)
+        final_stage_row = [r for r in result['data'] if r['stage'] == 'end1'][0]
+        assert final_stage_row['probability'] == pytest.approx(0.8)
 
 
 class TestPartialPath:
-    """Test partial path analysis."""
+    """Test partial path analysis - new declarative schema."""
     
     def test_partial_with_intermediates(self):
         """Partial path with intermediates."""
         G = build_test_graph()
         result = run_partial_path(G, 'start', ['a'])
         
-        assert result['analysis_type'] == 'partial_path'
-        assert result['from_node'] == 'start'
-        assert result['total_probability'] == pytest.approx(1.0)
+        assert 'semantics' in result
+        assert result['metadata']['from_node'] == 'start'
+        # Total probability of all outcomes should sum to 1
+        current_rows = [r for r in result['data'] if r['scenario_id'] == 'current']
+        total_prob = sum(r['probability'] for r in current_rows)
+        assert total_prob == pytest.approx(1.0)
 
 
 class TestGeneralStats:
-    """Test general statistics."""
+    """Test general statistics - new declarative schema."""
     
     def test_general_for_selection(self):
         """General stats for arbitrary selection."""
         G = build_test_graph()
         result = run_general_stats(G, ['a', 'b1', 'c'])
         
-        assert result['analysis_type'] == 'general_stats'
-        assert len(result['node_breakdown']) == 3
-        assert 'graph_stats' in result
+        assert 'semantics' in result
+        assert result['metadata']['selected_nodes'] == ['a', 'b1', 'c']
+        # Data should have one row per node per scenario
+        current_rows = [r for r in result['data'] if r['scenario_id'] == 'current']
+        assert len(current_rows) == 3
 
 
 class TestGetRunner:

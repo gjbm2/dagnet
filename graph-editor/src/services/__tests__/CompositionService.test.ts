@@ -8,8 +8,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { composeParams, areParamsEqual } from '../CompositionService';
+import { 
+  composeParams, 
+  areParamsEqual, 
+  getComposedParamsForLayer,
+  applyComposedParamsToGraph,
+  buildGraphForLayer
+} from '../CompositionService';
 import { ScenarioParams } from '../../types/scenarios';
+import { Graph } from '../../types';
 
 describe('CompositionService', () => {
   describe('composeParams', () => {
@@ -190,6 +197,150 @@ describe('CompositionService', () => {
       };
       
       expect(areParamsEqual(params1, params2)).toBe(false);
+    });
+  });
+
+  describe('getComposedParamsForLayer', () => {
+    const baseParams: ScenarioParams = {
+      edges: {
+        'edge-1': { p: { mean: 0.5 } }
+      }
+    };
+    
+    const currentParams: ScenarioParams = {
+      edges: {
+        'edge-1': { p: { mean: 0.6 } }
+      }
+    };
+    
+    const scenarios = [
+      { id: 'scenario-1', params: { edges: { 'edge-1': { p: { mean: 0.7 } } } } },
+      { id: 'scenario-2', params: { edges: { 'edge-1': { p: { mean: 0.8 } } } } },
+    ];
+
+    it('returns base params for "base" layer', () => {
+      const result = getComposedParamsForLayer('base', baseParams, currentParams, scenarios);
+      expect(result.edges?.['edge-1']?.p?.mean).toBe(0.5);
+    });
+
+    it('returns current params for "current" layer', () => {
+      const result = getComposedParamsForLayer('current', baseParams, currentParams, scenarios);
+      expect(result.edges?.['edge-1']?.p?.mean).toBe(0.6);
+    });
+
+    it('composes up to specific scenario layer', () => {
+      const result = getComposedParamsForLayer('scenario-1', baseParams, currentParams, scenarios);
+      expect(result.edges?.['edge-1']?.p?.mean).toBe(0.7);
+    });
+
+    it('composes through all preceding layers', () => {
+      const result = getComposedParamsForLayer('scenario-2', baseParams, currentParams, scenarios);
+      // scenario-2 comes after scenario-1, so both are applied
+      expect(result.edges?.['edge-1']?.p?.mean).toBe(0.8);
+    });
+
+    it('respects custom layer order from visibleScenarioIds', () => {
+      // If we only have scenario-2 visible (not scenario-1), only scenario-2's overlay applies
+      const result = getComposedParamsForLayer(
+        'scenario-2', 
+        baseParams, 
+        currentParams, 
+        scenarios,
+        ['scenario-2']  // Only scenario-2 is visible
+      );
+      expect(result.edges?.['edge-1']?.p?.mean).toBe(0.8);
+    });
+
+    it('returns base params for unknown scenario', () => {
+      const result = getComposedParamsForLayer('unknown', baseParams, currentParams, scenarios);
+      expect(result.edges?.['edge-1']?.p?.mean).toBe(0.5);
+    });
+  });
+
+  describe('applyComposedParamsToGraph', () => {
+    const baseGraph: Graph = {
+      nodes: [
+        { uuid: 'node-1', id: 'start', label: 'Start' }
+      ],
+      edges: [
+        { uuid: 'edge-uuid-1', id: 'edge-1', from: 'node-1', to: 'node-2', p: { mean: 0.5 } }
+      ],
+      policies: { default_outcome: 'end' },
+      metadata: { version: '1.0.0', created_at: '2024-01-01' }
+    };
+
+    it('applies probability params to edges', () => {
+      const params: ScenarioParams = {
+        edges: {
+          'edge-1': { p: { mean: 0.9, stdev: 0.1 } }
+        }
+      };
+      
+      const result = applyComposedParamsToGraph(baseGraph, params);
+      
+      expect(result.edges[0].p?.mean).toBe(0.9);
+      expect(result.edges[0].p?.stdev).toBe(0.1);
+      // Original graph unchanged
+      expect(baseGraph.edges[0].p?.mean).toBe(0.5);
+    });
+
+    it('applies weight_default to edges', () => {
+      const params: ScenarioParams = {
+        edges: {
+          'edge-1': { weight_default: 100 }
+        }
+      };
+      
+      const result = applyComposedParamsToGraph(baseGraph, params);
+      
+      expect(result.edges[0].weight_default).toBe(100);
+    });
+  });
+
+  describe('buildGraphForLayer', () => {
+    const baseParams: ScenarioParams = {
+      edges: { 'edge-1': { p: { mean: 0.5 } } }
+    };
+    
+    const currentParams: ScenarioParams = {
+      edges: { 'edge-1': { p: { mean: 0.6 } } }
+    };
+    
+    const scenarios = [
+      { id: 'scenario-1', params: { edges: { 'edge-1': { p: { mean: 0.9 } } } } },
+    ];
+
+    const graph: Graph = {
+      nodes: [],
+      edges: [
+        { uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { mean: 0.5 } }
+      ],
+      policies: { default_outcome: 'end' },
+      metadata: { version: '1.0.0', created_at: '2024-01-01' }
+    };
+
+    it('builds graph with scenario params baked in', () => {
+      const result = buildGraphForLayer(
+        'scenario-1',
+        graph,
+        baseParams,
+        currentParams,
+        scenarios
+      );
+      
+      expect(result.edges[0].p?.mean).toBe(0.9);
+    });
+
+    it('builds graph with current params for current layer', () => {
+      const result = buildGraphForLayer(
+        'current',
+        graph,
+        baseParams,
+        currentParams,
+        scenarios
+      );
+      
+      expect(result.edges[0].p?.mean).toBe(0.6);
     });
   });
 });

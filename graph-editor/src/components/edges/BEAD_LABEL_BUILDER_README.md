@@ -278,14 +278,12 @@ function getEdgeCostGBPForLayer(layerId, edge, graph, ctx) {
   if (layerId === 'current') return edge?.cost_gbp;
   if (layerId === 'base') return ctx.baseParams.edges[key]?.cost_gbp;
   
-  // For scenarios: compose all layers bottom-to-top
-  const scenario = ctx.scenarios.find(s => s.id === layerId);
-  const currentIndex = ctx.scenarios.findIndex(s => s.id === layerId);
-  const layersBelow = ctx.scenarios.slice(0, currentIndex);
-  
-  const composedParams = composeParams(
-    ctx.baseParams, 
-    layersBelow.concat([scenario.params])
+  // For scenarios: use centralized composition
+  const composedParams = getComposedParamsForLayer(
+    layerId,
+    ctx.baseParams,
+    ctx.currentParams,
+    ctx.scenarios
   );
   return composedParams.edges[key]?.cost_gbp;
 }

@@ -46,8 +46,8 @@ class TestAnalyze:
         response = analyze(request)
         
         assert response.success == True
-        assert len(response.results) == 1
-        assert response.results[0].scenario_id == 'base'
+        assert response.result is not None
+        assert response.result.analysis_type is not None
     
     def test_with_dsl_query(self):
         """Analyze with DSL query."""
@@ -92,10 +92,8 @@ class TestAnalyzeScenario:
         result = analyze_scenario(
             graph_data=build_test_graph_data(),
             query_dsl='from(start)',
-            scenario_id='test',
         )
         
-        assert result.scenario_id == 'test'
         assert result.analysis_type == 'from_node_outcomes'
     
     def test_to_node_reach(self):
@@ -103,28 +101,29 @@ class TestAnalyzeScenario:
         result = analyze_scenario(
             graph_data=build_test_graph_data(),
             query_dsl='to(end1)',
-            scenario_id='test',
         )
         
         assert result.analysis_type == 'to_node_reach'
     
     def test_path_between(self):
-        """from(A).to(B) -> path_between."""
+        """from(A).to(B) -> path_between with new declarative schema."""
         result = analyze_scenario(
             graph_data=build_test_graph_data(),
             query_dsl='from(start).to(end1)',
-            scenario_id='test',
         )
         
         assert result.analysis_type == 'path_between'
-        assert 'probability' in result.data
+        # New schema: data is array of rows, check final stage has probability
+        assert len(result.data) >= 2
+        # Stage now uses node IDs, not indices
+        final_row = [r for r in result.data if r['stage'] == 'end1'][0]
+        assert 'probability' in final_row
     
     def test_path_through(self):
         """visited(A) -> path_through."""
         result = analyze_scenario(
             graph_data=build_test_graph_data(),
             query_dsl='visited(a)',  # 'a' is a middle node in test graph
-            scenario_id='test',
         )
         
         assert result.analysis_type == 'path_through'

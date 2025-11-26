@@ -7,7 +7,7 @@
 
 import React from 'react';
 import { computeEffectiveEdgeProbability, parseWhatIfDSL } from '@/lib/whatIf';
-import { composeParams } from '../../services/CompositionService';
+import { getComposedParamsForLayer } from '../../services/CompositionService';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING } from '../../lib/nodeEdgeConstants';
 import { getCaseEdgeVariantInfo } from './edgeLabelHelpers';
 import { getConditionalProbabilityColour, ensureDarkBeadColour } from '@/lib/conditionalColours';
@@ -274,39 +274,26 @@ function getEdgeProbabilityForLayer(
     const stdev = scenariosContext.baseParams.edges?.[edgeKey]?.p?.stdev;
     return { probability: prob, stdev };
   } else {
-    // Scenario layer
-    const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
-    if (!scenario) {
-      return { probability: 0 };
-    }
+    // Scenario layer - use centralized composition
+    const composedParams = getComposedParamsForLayer(
+      layerId,
+      scenariosContext.baseParams,
+      scenariosContext.currentParams,
+      scenariosContext.scenarios
+    );
     
-    const allScenarios = scenariosContext.scenarios;
-    const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
-    const layersBelow = allScenarios
-      .slice(0, currentIndex)
-      .map((s: any) => s.params)
-      .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
-    
-    // Compose params
-    const composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
-    
-    // Get probability with fallback chain (same as old label system)
-    // IMPORTANT: composedParams should include all edges from baseParams, but if scenario doesn't override,
-    // we need to check baseParams directly. Also check the actual edge object as final fallback.
+    // Get probability with fallback chain
     let prob = composedParams.edges?.[edgeKey]?.p?.mean;
     if (prob === undefined || prob === null) {
       prob = scenariosContext.baseParams.edges?.[edgeKey]?.p?.mean;
     }
     if (prob === undefined || prob === null) {
-      // Final fallback: use the actual edge's probability (should always exist)
       prob = edge?.p?.mean ?? 0;
     }
     const stdev = composedParams.edges?.[edgeKey]?.p?.stdev 
       ?? scenariosContext.baseParams.edges?.[edgeKey]?.p?.stdev
       ?? edge?.p?.stdev;
     
-    // For variant edges, return actual p (not p*v_weight)
-    // Variant weight is shown separately in the variant bead
     return { probability: prob, stdev };
   }
 }
@@ -326,17 +313,13 @@ function getEdgeCostGBPForLayer(
   } else if (layerId === 'base') {
     return scenariosContext.baseParams.edges?.[edgeKey]?.cost_gbp;
   } else {
-    const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
-    if (!scenario) return undefined;
-    
-    const allScenarios = scenariosContext.scenarios;
-    const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
-    const layersBelow = allScenarios
-      .slice(0, currentIndex)
-      .map((s: any) => s.params)
-      .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
-    
-    const composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
+    // Scenario layer - use centralized composition
+    const composedParams = getComposedParamsForLayer(
+      layerId,
+      scenariosContext.baseParams,
+      scenariosContext.currentParams,
+      scenariosContext.scenarios
+    );
     return composedParams.edges?.[edgeKey]?.cost_gbp;
   }
 }
@@ -356,17 +339,13 @@ function getEdgeCostTimeForLayer(
   } else if (layerId === 'base') {
     return scenariosContext.baseParams.edges?.[edgeKey]?.cost_time;
   } else {
-    const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
-    if (!scenario) return undefined;
-    
-    const allScenarios = scenariosContext.scenarios;
-    const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
-    const layersBelow = allScenarios
-      .slice(0, currentIndex)
-      .map((s: any) => s.params)
-      .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
-    
-    const composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
+    // Scenario layer - use centralized composition
+    const composedParams = getComposedParamsForLayer(
+      layerId,
+      scenariosContext.baseParams,
+      scenariosContext.currentParams,
+      scenariosContext.scenarios
+    );
     return composedParams.edges?.[edgeKey]?.cost_time;
   }
 }
@@ -431,17 +410,13 @@ function getCaseVariantForLayer(
     if (!caseInfo) return null;
     return { variantName: caseInfo.variantName, variantWeight: caseInfo.variantWeight };
   } else {
-    const scenario = scenariosContext.scenarios.find((s: any) => s.id === layerId);
-    if (!scenario) return null;
-    
-    const allScenarios = scenariosContext.scenarios;
-    const currentIndex = allScenarios.findIndex((s: any) => s.id === layerId);
-    const layersBelow = allScenarios
-      .slice(0, currentIndex)
-      .map((s: any) => s.params)
-      .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
-    
-    const composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
+    // Scenario layer - use centralized composition
+    const composedParams = getComposedParamsForLayer(
+      layerId,
+      scenariosContext.baseParams,
+      scenariosContext.currentParams,
+      scenariosContext.scenarios
+    );
     const caseInfo = getCaseEdgeVariantInfo(edge, graph, composedParams);
     if (!caseInfo) return null;
     return { variantName: caseInfo.variantName, variantWeight: caseInfo.variantWeight };
@@ -717,14 +692,13 @@ export function buildBeadDefinitions(
         
         let condProbValue = condProb;
         if (scenario) {
-          const allScenarios = scenariosContext.scenarios;
-          const currentIndex = allScenarios.findIndex((s: any) => s.id === scenarioId);
-          const layersBelow = allScenarios
-            .slice(0, currentIndex)
-            .map((s: any) => s.params)
-            .filter((p: any): p is NonNullable<typeof p> => p !== undefined);
-          
-          const composedParams = composeParams(scenariosContext.baseParams, layersBelow.concat([scenario.params]));
+          // Scenario layer - use centralized composition
+          const composedParams = getComposedParamsForLayer(
+            scenarioId,
+            scenariosContext.baseParams,
+            scenariosContext.currentParams,
+            scenariosContext.scenarios
+          );
           const edgeParams = composedParams.edges?.[edgeKey];
           if (edgeParams && edgeParams.conditional_p && Array.isArray(edgeParams.conditional_p)) {
             const matchingCond = edgeParams.conditional_p.find((c: any) => 

@@ -176,7 +176,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   
   // NEW: Sidebar state management (Phase 1)
   const { state: sidebarState, operations: sidebarOps } = useSidebarState(tabId);
-  const [hoveredPanel, setHoveredPanel] = useState<'what-if' | 'properties' | 'tools' | null>(null);
+  const [hoveredPanel, setHoveredPanel] = useState<'what-if' | 'properties' | 'tools' | 'analytics' | null>(null);
   const hoverLeaveTimerRef = useRef<number | null>(null);
   const [isHoverLocked, setIsHoverLocked] = useState(false);
   const suspendLayoutUntilRef = useRef<number>(0);
@@ -266,12 +266,12 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   }, [sidebarOps, tabId, tabOps]);
   
   // Icon bar handlers
-  const handleIconClick = React.useCallback((panel: 'what-if' | 'properties' | 'tools') => {
+  const handleIconClick = React.useCallback((panel: 'what-if' | 'properties' | 'tools' | 'analytics') => {
     // Click on icon - just update state, let the effect handle the layout
     sidebarOps.maximize(panel);
   }, [sidebarOps]);
   
-  const handleIconHover = React.useCallback((panel: 'what-if' | 'properties' | 'tools' | null) => {
+  const handleIconHover = React.useCallback((panel: 'what-if' | 'properties' | 'tools' | 'analytics' | null) => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] handleIconHover called: panel=${panel}, mode=${sidebarState.mode}, isHoverLocked=${isHoverLocked}`);
     if (sidebarState.mode !== 'minimized') return;
     if (isHoverLocked) return;
@@ -1440,8 +1440,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         const { canUndo } = store.getState();
         if (canUndo) {
           console.log(`GraphEditor[${fileIdRef.current}]: Undo triggered (active tab)`, canUndo, 'historyIndex:', store.getState().historyIndex);
-          // Reset sync flag before undo so the store→file sync can happen
-          syncingRef.current = false;
           undo();
           // Force a full redraw to ensure edge handles are updated
           setTimeout(() => {
@@ -1456,8 +1454,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         const { canRedo } = store.getState();
         if (canRedo) {
           console.log(`GraphEditor[${fileIdRef.current}]: Redo triggered (active tab)`, canRedo, 'historyIndex:', store.getState().historyIndex);
-          // Reset sync flag before redo so the store→file sync can happen
-          syncingRef.current = false;
           redo();
           // Force a full redraw to ensure edge handles are updated
           setTimeout(() => {
