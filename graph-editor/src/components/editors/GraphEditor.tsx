@@ -20,6 +20,7 @@ import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
+import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
@@ -682,7 +683,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     
     // If maximized and NOT resizing, apply fixed width (but keep it resizable!)
     if (sidebarState.mode === 'maximized') {
-      const targetWidth = sidebarState.sidebarWidth || 300;
+      const targetWidth = sidebarState.sidebarWidth || DEFAULT_SIDEBAR_WIDTH;
       const currentWidth = sidebarPanel.getBoundingClientRect().width;
       
       // Set flex basis and width, but DON'T lock with min/max
@@ -814,7 +815,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
             // Find sidebar panel using its stable ID
             const sidebar = containerRef.current.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
             
-            if (sidebar && sidebarState.sidebarWidth && sidebarState.sidebarWidth > 50) {
+            if (sidebar && sidebarState.sidebarWidth && sidebarState.sidebarWidth > MIN_SIDEBAR_WIDTH) {
               sidebar.style.flex = 'none';
               sidebar.style.width = `${sidebarState.sidebarWidth}px`;
               console.log(`[GraphEditor ${fileId}] ResizeObserver RETRY: Applied stored width ${sidebarState.sidebarWidth}px to restored sidebar`);
@@ -966,7 +967,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     // Back-calculate flex weights based on desired pixel widths
     if (containerRef.current && mode === 'maximized') {
       const containerWidth = containerRef.current.getBoundingClientRect().width;
-      const desiredSidebarWidth = sidebarState.sidebarWidth ?? 300;
+      const desiredSidebarWidth = sidebarState.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH;
       
       // Calculate flex weights to achieve absolute pixel widths
       const canvasWidth = containerWidth - desiredSidebarWidth;
@@ -1061,9 +1062,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               tab.content = whatIfComponent;
               tab.title = React.createElement('div', { 
                 className: 'dock-tab-title', 
-                style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                style: { display: 'flex', alignItems: 'center', gap: '4px' } 
               },
-                React.createElement(Layers, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Layers, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -1078,9 +1079,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               tab.content = propertiesComponent;
               tab.title = React.createElement('div', { 
                 className: 'dock-tab-title', 
-                style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                style: { display: 'flex', alignItems: 'center', gap: '4px' } 
               },
-                React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(FileText, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -1095,9 +1096,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               tab.content = toolsComponent;
               tab.title = React.createElement('div', { 
                 className: 'dock-tab-title', 
-                style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                style: { display: 'flex', alignItems: 'center', gap: '4px' } 
               },
-                React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Wrench, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -1112,9 +1113,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               tab.content = analyticsComponent;
               tab.title = React.createElement('div', { 
                 className: 'dock-tab-title', 
-                style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                style: { display: 'flex', alignItems: 'center', gap: '4px' } 
               },
-                React.createElement(BarChart3, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(BarChart3, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -1828,9 +1829,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                           component = whatIfComponent;
                           title = React.createElement('div', { 
                             className: 'dock-tab-title', 
-                            style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                            style: { display: 'flex', alignItems: 'center', gap: '4px' } 
                           },
-                            React.createElement(Layers, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement(Layers, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                             React.createElement('span', { 
                               style: { 
                                 flex: 1, 
@@ -1845,9 +1846,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                           component = propertiesComponent;
                           title = React.createElement('div', { 
                             className: 'dock-tab-title', 
-                            style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                            style: { display: 'flex', alignItems: 'center', gap: '4px' } 
                           },
-                            React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement(FileText, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                             React.createElement('span', { 
                               style: { 
                                 flex: 1, 
@@ -1862,9 +1863,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                           component = toolsComponent;
                           title = React.createElement('div', { 
                             className: 'dock-tab-title', 
-                            style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                            style: { display: 'flex', alignItems: 'center', gap: '4px' } 
                           },
-                            React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement(Wrench, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                             React.createElement('span', { 
                               style: { 
                                 flex: 1, 
@@ -1879,9 +1880,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                           component = analyticsComponent;
                           title = React.createElement('div', { 
                             className: 'dock-tab-title', 
-                            style: { display: 'flex', alignItems: 'center', gap: '6px' } 
+                            style: { display: 'flex', alignItems: 'center', gap: '4px' } 
                           },
-                            React.createElement(BarChart3, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                            React.createElement(BarChart3, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                             React.createElement('span', { 
                               style: { 
                                 flex: 1, 
@@ -2047,7 +2048,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           style={{
             position: 'absolute',
             right: sidebarState.mode === 'maximized' 
-              ? `${sidebarState.sidebarWidth ?? 300}px` 
+              ? `${sidebarState.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH}px` 
               : '48px', // When minimized, position at icon bar
               top: splitterCenterY > 0 ? `${splitterCenterY}px` : '50%',
             transform: 'translateY(-50%)',
