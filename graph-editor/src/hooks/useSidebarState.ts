@@ -77,11 +77,19 @@ export function useSidebarState(tabId?: string) {
       floatingPanels: memoizedStoredState?.floatingPanels,
       sidebarWidth: memoizedStoredState?.sidebarWidth
     });
+    
+    // Sanitize stored width - never accept tiny values
+    const sanitizedWidth = (memoizedStoredState?.sidebarWidth && memoizedStoredState.sidebarWidth >= MIN_SIDEBAR_WIDTH)
+      ? memoizedStoredState.sidebarWidth
+      : DEFAULT_SIDEBAR_WIDTH;
+    
     const initialState = {
       ...DEFAULT_SIDEBAR_STATE,
       ...memoizedStoredState,
       // Ensure floatingPanels is always an array (might be undefined in old saved states)
-      floatingPanels: memoizedStoredState?.floatingPanels || []
+      floatingPanels: memoizedStoredState?.floatingPanels || [],
+      // Use sanitized width
+      sidebarWidth: sanitizedWidth
     };
     console.log(`[${new Date().toISOString()}] [useSidebarState] Initial state result:`, initialState);
     return initialState;
@@ -245,8 +253,15 @@ export function useSidebarState(tabId?: string) {
   
   /**
    * Update sidebar width (for minimize button positioning)
+   * CRITICAL: Never store tiny widths - they corrupt state and cause infinite loops
    */
   const setSidebarWidth = useCallback((width: number) => {
+    // Guard: Never store widths smaller than MIN_SIDEBAR_WIDTH
+    // This prevents corruption when sidebar is minimized (width=0 or 1)
+    if (width < MIN_SIDEBAR_WIDTH) {
+      console.log(`[useSidebarState] setSidebarWidth: Ignoring tiny width ${width}px (< ${MIN_SIDEBAR_WIDTH})`);
+      return;
+    }
     updateState({ sidebarWidth: width });
   }, [updateState]);
   
@@ -269,26 +284,63 @@ export function useSidebarState(tabId?: string) {
   
   // Sync local state with tab state when tab or stored state changes
   // BUT: Don't sync if we just updated locally (prevents circular loop)
+  // Track the last synced stored state to avoid re-syncing the same data
+  const lastSyncedStoredStateRef = useRef<SidebarState | null>(null);
+  
   useEffect(() => {
-    if (memoizedStoredState && !isUpdatingRef.current) {
-      console.log(`[${new Date().toISOString()}] [useSidebarState] Syncing from stored state (floatingPanels=${memoizedStoredState.floatingPanels?.length || 0}):`, memoizedStoredState);
-      
-      // Preserve session-only state (hasAutoOpened) - don't let sync overwrite it
-      const currentHasAutoOpened = state.hasAutoOpened;
-      
-      const newState = {
-        ...DEFAULT_SIDEBAR_STATE,
-        ...memoizedStoredState,
-        // Ensure floatingPanels is always an array
-        floatingPanels: memoizedStoredState.floatingPanels || []
-      };
-      
-      // AFTER spreading, restore session-only hasAutoOpened
-      newState.hasAutoOpened = currentHasAutoOpened;
-      
-      setState(newState);
+    // Skip if no stored state or if we're currently updating
+    if (!memoizedStoredState || isUpdatingRef.current) {
+      return;
     }
-  }, [memoizedStoredState, state.hasAutoOpened]);
+    
+    // Skip if this is the same stored state we already synced
+    // Use JSON comparison for deep equality (excluding functions)
+    const storedStateKey = JSON.stringify({
+      mode: memoizedStoredState.mode,
+      activePanel: memoizedStoredState.activePanel,
+      sidebarWidth: memoizedStoredState.sidebarWidth,
+      floatingPanels: memoizedStoredState.floatingPanels
+    });
+    const lastSyncedKey = lastSyncedStoredStateRef.current ? JSON.stringify({
+      mode: lastSyncedStoredStateRef.current.mode,
+      activePanel: lastSyncedStoredStateRef.current.activePanel,
+      sidebarWidth: lastSyncedStoredStateRef.current.sidebarWidth,
+      floatingPanels: lastSyncedStoredStateRef.current.floatingPanels
+    }) : null;
+    
+    if (storedStateKey === lastSyncedKey) {
+      return; // Already synced this exact state
+    }
+    
+    console.log(`[${new Date().toISOString()}] [useSidebarState] Syncing from stored state (floatingPanels=${memoizedStoredState.floatingPanels?.length || 0}):`, memoizedStoredState);
+    
+    // Mark as synced BEFORE setting state to prevent re-entry
+    lastSyncedStoredStateRef.current = memoizedStoredState;
+    
+    // Preserve session-only state (hasAutoOpened) - don't let sync overwrite it
+    const currentHasAutoOpened = state.hasAutoOpened;
+    
+    // Sanitize stored width - never accept tiny values (they corrupt state)
+    const sanitizedWidth = (memoizedStoredState.sidebarWidth && memoizedStoredState.sidebarWidth >= MIN_SIDEBAR_WIDTH)
+      ? memoizedStoredState.sidebarWidth
+      : (state.sidebarWidth && state.sidebarWidth >= MIN_SIDEBAR_WIDTH)
+        ? state.sidebarWidth  // Keep current valid width
+        : DEFAULT_SIDEBAR_WIDTH;  // Fallback to default
+    
+    const newState = {
+      ...DEFAULT_SIDEBAR_STATE,
+      ...memoizedStoredState,
+      // Ensure floatingPanels is always an array
+      floatingPanels: memoizedStoredState.floatingPanels || [],
+      // Use sanitized width
+      sidebarWidth: sanitizedWidth
+    };
+    
+    // AFTER spreading, restore session-only hasAutoOpened
+    newState.hasAutoOpened = currentHasAutoOpened;
+    
+    setState(newState);
+  }, [memoizedStoredState]); // Removed state.hasAutoOpened - we read it inside via closure
   
   // Memoize operations object to prevent unnecessary re-renders
   const operations = useMemo(() => ({
