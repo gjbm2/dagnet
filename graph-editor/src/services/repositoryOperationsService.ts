@@ -25,7 +25,7 @@ export interface RepositoryStatus {
 class RepositoryOperationsService {
   private navigatorOps: any = null;
   private dialogOps: any = null;
-  
+
   // Cache for getCommittableFiles to avoid excessive IDB queries
   private committableFilesCache: {
     key: string;
@@ -117,7 +117,7 @@ class RepositoryOperationsService {
 
     // Invalidate cache since workspace was updated
     this.invalidateCommittableFilesCache();
-    
+
     if (result.conflicts && result.conflicts.length > 0) {
       console.log(`⚠️ RepositoryOperationsService: Pull completed with ${result.conflicts.length} conflicts`);
         sessionLogService.warning('git', 'GIT_PULL_CONFLICTS', 
@@ -776,12 +776,12 @@ class RepositoryOperationsService {
     // Mark files as saved in FileRegistry
     for (const file of files) {
       await fileRegistry.markSaved(file.fileId);
-    }
+      }
     
     // Invalidate cache since files were committed
     this.invalidateCommittableFilesCache();
 
-    sessionLogService.endOperation(logOpId, 'success', 
+      sessionLogService.endOperation(logOpId, 'success', 
         `Committed ${filesToCommit.length} file(s) to ${repository}/${branch}`,
         { 
           repository, 

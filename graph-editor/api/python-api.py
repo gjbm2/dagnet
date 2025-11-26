@@ -5,8 +5,11 @@ This consolidates all Python endpoints into a single function to avoid
 repeated dependency installation per function.
 
 Routes:
+- /api/parse-query -> parse DSL query
 - /api/generate-all-parameters -> generate_all_parameter_queries
 - /api/stats-enhance -> enhance_aggregation
+- /api/runner/analyze -> run analytics
+- /api/runner/available-analyses -> get available analysis types
 """
 from http.server import BaseHTTPRequestHandler
 import json
@@ -46,22 +49,45 @@ class handler(BaseHTTPRequestHandler):
                 parsed = urlparse(self.path)
                 query_params = parse_qs(parsed.query)
                 endpoint = query_params.get('endpoint', [None])[0]
-                if endpoint == 'generate-all-parameters':
+                if endpoint == 'parse-query':
+                    path = '/api/parse-query'
+                elif endpoint == 'generate-all-parameters':
                     path = '/api/generate-all-parameters'
                 elif endpoint == 'stats-enhance':
                     path = '/api/stats-enhance'
+                elif endpoint == 'runner-analyze':
+                    path = '/api/runner/analyze'
+                elif endpoint == 'runner-available-analyses':
+                    path = '/api/runner/available-analyses'
                 # If no endpoint param and no original path header, this is an error
                 elif not original_path:
-                    self.send_error_response(400, "Missing endpoint. Use ?endpoint=generate-all-parameters or ?endpoint=stats-enhance")
+                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses")
                     return
             
-            if path == '/api/generate-all-parameters':
+            if path == '/api/parse-query':
+                self.handle_parse_query(data)
+            elif path == '/api/generate-all-parameters':
                 self.handle_generate_all_parameters(data)
             elif path == '/api/stats-enhance':
                 self.handle_stats_enhance(data)
+            elif path == '/api/runner/analyze':
+                self.handle_runner_analyze(data)
+            elif path == '/api/runner/available-analyses':
+                self.handle_runner_available_analyses(data)
             else:
                 self.send_error_response(404, f"Unknown endpoint: {path}")
                 
+        except Exception as e:
+            self.send_error_response(500, str(e))
+    
+    def handle_parse_query(self, data):
+        """Handle parse-query endpoint."""
+        try:
+            from api_handlers import handle_parse_query as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
         except Exception as e:
             self.send_error_response(500, str(e))
     
@@ -80,6 +106,28 @@ class handler(BaseHTTPRequestHandler):
         """Handle stats-enhance endpoint."""
         try:
             from api_handlers import handle_stats_enhance as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+    
+    def handle_runner_analyze(self, data):
+        """Handle runner/analyze endpoint."""
+        try:
+            from api_handlers import handle_runner_analyze as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+    
+    def handle_runner_available_analyses(self, data):
+        """Handle runner/available-analyses endpoint."""
+        try:
+            from api_handlers import handle_runner_available_analyses as handler_func
             response = handler_func(data)
             self.send_success_response(response)
         except ValueError as e:

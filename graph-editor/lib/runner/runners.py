@@ -532,19 +532,61 @@ def run_path(
                 prob = 1.0
                 cost_gbp = 0.0
                 cost_time = 0.0
+                stdev = None
+                distribution = None
+                n_total = None
+                k_success = None
             else:
                 result = calculate_path_probability(scenario_G, start_id, stage_id, pruning)
                 prob = result.probability
                 cost_gbp = result.expected_cost_gbp
                 cost_time = result.expected_cost_time
+                
+                # Get statistics from incoming edge to this stage
+                prev_stage = stage_ids[i - 1]
+                stdev = None
+                distribution = None
+                n_total = None
+                k_success = None
+                
+                if scenario_G.has_edge(prev_stage, stage_id):
+                    edge_data = scenario_G.edges[prev_stage, stage_id]
+                    stdev = edge_data.get('p_stdev')
+                    distribution = edge_data.get('p_distribution')
+                    evidence = edge_data.get('evidence') or {}
+                    n_total = evidence.get('n')
+                    k_success = evidence.get('k')
             
-            data_rows.append({
-                'stage': stage_id,  # Use stage_id to match dimension_values keys
+            # Calculate dropoff from previous stage
+            dropoff = None
+            if i > 0 and len(data_rows) >= len(scenarios_to_process):
+                # Find the previous stage row for this scenario
+                prev_idx = len(data_rows) - len(scenarios_to_process)
+                prev_row = data_rows[prev_idx]
+                if prev_row['scenario_id'] == scenario_id and prev_row['probability'] > 0:
+                    dropoff = prev_row['probability'] - prob
+            
+            row = {
+                'stage': stage_id,
                 'scenario_id': scenario_id,
                 'probability': prob,
                 'expected_cost_gbp': cost_gbp,
                 'expected_cost_time': cost_time,
-            })
+            }
+            
+            # Include optional fields only if present
+            if stdev is not None:
+                row['stdev'] = stdev
+            if distribution is not None:
+                row['distribution'] = distribution
+            if n_total is not None:
+                row['n'] = n_total
+            if k_success is not None:
+                row['k'] = k_success
+            if dropoff is not None:
+                row['dropoff'] = dropoff
+            
+            data_rows.append(row)
     
     return {
         'metadata': {
@@ -561,6 +603,11 @@ def run_path(
             ],
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
+                {'id': 'stdev', 'name': 'Std Dev', 'type': 'probability', 'format': 'percent'},
+                {'id': 'distribution', 'name': 'Distribution', 'type': 'category', 'format': 'string'},
+                {'id': 'n', 'name': 'Sample Size', 'type': 'count', 'format': 'integer'},
+                {'id': 'k', 'name': 'Conversions', 'type': 'count', 'format': 'integer'},
+                {'id': 'dropoff', 'name': 'Dropoff', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],

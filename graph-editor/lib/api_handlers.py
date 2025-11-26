@@ -7,7 +7,7 @@ Used by both:
 
 This ensures dev and prod use identical handler logic.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 
 def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -120,4 +120,118 @@ def handle_stats_enhance(data: Dict[str, Any]) -> Dict[str, Any]:
         **enhanced,
         "success": True
     }
+
+
+def handle_parse_query(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle parse-query endpoint.
+    
+    Args:
+        data: Request body containing:
+            - query: Query DSL string (required)
+    
+    Returns:
+        Parsed query structure
+    """
+    query_str = data.get('query')
+    
+    if not query_str:
+        raise ValueError("Missing 'query' field")
+    
+    from query_dsl import parse_query_strict, validate_query
+    
+    # Validate (require endpoints for data retrieval)
+    is_valid, error = validate_query(query_str, require_endpoints=True)
+    if not is_valid:
+        raise ValueError(f"Invalid query: {error}")
+    
+    # Parse (strict - requires from/to for data retrieval)
+    parsed = parse_query_strict(query_str)
+    
+    # Return structured response
+    return {
+        "query": query_str,
+        "parsed": {
+            "from_node": parsed.from_node,
+            "to_node": parsed.to_node,
+            "exclude": parsed.exclude,
+            "visited": parsed.visited,
+            "visited_any": getattr(parsed, "visited_any", []),
+            "context": [{"key": c.key, "value": c.value} for c in parsed.context],
+            "cases": [{"key": c.key, "value": c.value} for c in parsed.cases]
+        },
+        "valid": True,
+        "reconstructed": parsed.raw
+    }
+
+
+def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle runner/analyze endpoint.
+    
+    Args:
+        data: Request body containing:
+            - scenarios: List of scenario data (required)
+            - query_dsl: DSL query string (optional)
+            - analysis_type: Override analysis type (optional)
+    
+    Returns:
+        Analysis results
+    """
+    from runner import analyze
+    from runner.types import AnalysisRequest, ScenarioData
+    
+    if 'scenarios' not in data or not data['scenarios']:
+        raise ValueError("Missing 'scenarios' field")
+    
+    # Build request
+    scenarios = [
+        ScenarioData(
+            scenario_id=s.get('scenario_id', f'scenario_{i}'),
+            name=s.get('name'),
+            colour=s.get('colour'),
+            graph=s.get('graph', {}),
+        )
+        for i, s in enumerate(data['scenarios'])
+    ]
+    
+    request_obj = AnalysisRequest(
+        scenarios=scenarios,
+        query_dsl=data.get('query_dsl'),
+        analysis_type=data.get('analysis_type'),
+    )
+    
+    # Run analysis
+    response = analyze(request_obj)
+    
+    # Return JSON-serializable response
+    return response.model_dump()
+
+
+def handle_runner_available_analyses(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle runner/available-analyses endpoint.
+    
+    Args:
+        data: Request body containing:
+            - graph: Graph data (optional)
+            - query_dsl: DSL query string (optional)
+            - scenario_count: Number of scenarios (optional, default 1)
+    
+    Returns:
+        List of available analyses
+    """
+    from runner import get_available_analyses
+    
+    graph_data = data.get('graph', {})
+    scenario_count = data.get('scenario_count', 1)
+    query_dsl = data.get('query_dsl')
+    
+    available = get_available_analyses(
+        graph_data=graph_data,
+        query_dsl=query_dsl,
+        scenario_count=scenario_count,
+    )
+    
+    return {"analyses": available}
 

@@ -33,9 +33,14 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
         - uuid: Edge UUID
         - id: Human-readable ID (if present)
         - p: Base probability (extracted from p.mean)
+        - p_stdev: Probability standard deviation
+        - p_distribution: Distribution type ('beta', 'normal', 'uniform')
+        - evidence: Evidence dict with n, k (sample size, conversions)
         - conditional_p: List of conditional probabilities
         - cost_gbp: Monetary cost (extracted from cost_gbp.mean)
+        - cost_gbp_stdev: Cost standard deviation
         - cost_time: Time cost (extracted from cost_time.mean)
+        - cost_time_stdev: Time cost standard deviation
         - case_id: Parent case ID (for case edges)
         - case_variant: Variant name (for case edges)
         - (all original edge data preserved)
@@ -95,12 +100,19 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
             # Skip edges with invalid node references
             continue
         
-        # Extract probability
+        # Extract probability and uncertainty
         p_mean = _extract_probability(edge, graph_data)
+        p_stdev = _extract_stdev(edge.get('p'))
+        p_distribution = _extract_distribution(edge.get('p'))
         
-        # Extract costs
+        # Extract evidence (n/k for sample size and conversions)
+        evidence = _extract_evidence(edge.get('p'))
+        
+        # Extract costs and uncertainty
         cost_gbp = _extract_cost(edge.get('cost_gbp'))
+        cost_gbp_stdev = _extract_cost_stdev(edge.get('cost_gbp'))
         cost_time = _extract_cost(edge.get('cost_time'))
+        cost_time_stdev = _extract_cost_stdev(edge.get('cost_time'))
         
         G.add_edge(
             source,
@@ -108,9 +120,14 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
             uuid=edge.get('uuid'),
             id=edge.get('id'),
             p=p_mean,
+            p_stdev=p_stdev,
+            p_distribution=p_distribution,
+            evidence=evidence,
             conditional_p=edge.get('conditional_p', []),
             cost_gbp=cost_gbp,
+            cost_gbp_stdev=cost_gbp_stdev,
             cost_time=cost_time,
+            cost_time_stdev=cost_time_stdev,
             case_id=edge.get('case_id'),
             case_variant=edge.get('case_variant'),
             **{k: v for k, v in edge.items() if k not in ['uuid', 'id', 'from', 'to', 'p', 'conditional_p', 'cost_gbp', 'cost_time', 'case_id', 'case_variant']}
@@ -220,6 +237,89 @@ def _extract_cost(cost_param: Optional[dict]) -> float:
         return float(cost_param)
     
     return 0.0
+
+
+def _extract_evidence(p_param: Optional[dict]) -> Optional[dict]:
+    """
+    Extract evidence (n/k) from probability parameter.
+    
+    Args:
+        p_param: Probability parameter dict (edge.p)
+    
+    Returns:
+        Evidence dict with n, k, or None if not present
+    """
+    if p_param is None:
+        return None
+    
+    if isinstance(p_param, dict):
+        evidence = p_param.get('evidence')
+        if evidence:
+            return {
+                'n': evidence.get('n'),
+                'k': evidence.get('k'),
+                'window_from': evidence.get('window_from'),
+                'window_to': evidence.get('window_to'),
+            }
+    
+    return None
+
+
+def _extract_stdev(p_param: Optional[dict]) -> Optional[float]:
+    """
+    Extract standard deviation from probability parameter.
+    
+    Args:
+        p_param: Probability parameter dict (edge.p)
+    
+    Returns:
+        Standard deviation or None if not present
+    """
+    if p_param is None:
+        return None
+    
+    if isinstance(p_param, dict):
+        return p_param.get('stdev')
+    
+    return None
+
+
+def _extract_distribution(p_param: Optional[dict]) -> Optional[str]:
+    """
+    Extract distribution type from probability parameter.
+    
+    Args:
+        p_param: Probability parameter dict (edge.p)
+    
+    Returns:
+        Distribution type ('beta', 'normal', 'uniform') or None
+    """
+    if p_param is None:
+        return None
+    
+    if isinstance(p_param, dict):
+        return p_param.get('distribution')
+    
+    return None
+
+
+def _extract_cost_stdev(cost_param: Optional[dict]) -> Optional[float]:
+    """
+    Extract standard deviation from cost parameter.
+    
+    Args:
+        cost_param: Cost parameter dict (cost_gbp or cost_time)
+    
+    Returns:
+        Standard deviation or None if not present
+    """
+    if cost_param is None:
+        return None
+    
+    if isinstance(cost_param, dict):
+        return cost_param.get('stdev')
+    
+    return None
 
 
 def get_graph_stats(G: nx.DiGraph) -> dict:
