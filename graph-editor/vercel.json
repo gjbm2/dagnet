@@ -1,11 +1,23 @@
 {
   "rewrites": [
     {
+      "source": "/api/parse-query",
+      "destination": "/api/python-api"
+    },
+    {
       "source": "/api/generate-all-parameters",
       "destination": "/api/python-api"
     },
     {
       "source": "/api/stats-enhance",
+      "destination": "/api/python-api"
+    },
+    {
+      "source": "/api/runner/analyze",
+      "destination": "/api/python-api"
+    },
+    {
+      "source": "/api/runner/available-analyses",
       "destination": "/api/python-api"
     }
   ]

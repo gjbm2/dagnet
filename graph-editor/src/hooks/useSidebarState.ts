@@ -312,14 +312,14 @@ export function useSidebarState(tabId?: string) {
       return; // Already synced this exact state
     }
     
-    console.log(`[${new Date().toISOString()}] [useSidebarState] Syncing from stored state (floatingPanels=${memoizedStoredState.floatingPanels?.length || 0}):`, memoizedStoredState);
+      console.log(`[${new Date().toISOString()}] [useSidebarState] Syncing from stored state (floatingPanels=${memoizedStoredState.floatingPanels?.length || 0}):`, memoizedStoredState);
     
     // Mark as synced BEFORE setting state to prevent re-entry
     lastSyncedStoredStateRef.current = memoizedStoredState;
-    
-    // Preserve session-only state (hasAutoOpened) - don't let sync overwrite it
-    const currentHasAutoOpened = state.hasAutoOpened;
-    
+      
+      // Preserve session-only state (hasAutoOpened) - don't let sync overwrite it
+      const currentHasAutoOpened = state.hasAutoOpened;
+      
     // Sanitize stored width - never accept tiny values (they corrupt state)
     const sanitizedWidth = (memoizedStoredState.sidebarWidth && memoizedStoredState.sidebarWidth >= MIN_SIDEBAR_WIDTH)
       ? memoizedStoredState.sidebarWidth
@@ -327,19 +327,19 @@ export function useSidebarState(tabId?: string) {
         ? state.sidebarWidth  // Keep current valid width
         : DEFAULT_SIDEBAR_WIDTH;  // Fallback to default
     
-    const newState = {
-      ...DEFAULT_SIDEBAR_STATE,
-      ...memoizedStoredState,
-      // Ensure floatingPanels is always an array
+      const newState = {
+        ...DEFAULT_SIDEBAR_STATE,
+        ...memoizedStoredState,
+        // Ensure floatingPanels is always an array
       floatingPanels: memoizedStoredState.floatingPanels || [],
       // Use sanitized width
       sidebarWidth: sanitizedWidth
-    };
-    
-    // AFTER spreading, restore session-only hasAutoOpened
-    newState.hasAutoOpened = currentHasAutoOpened;
-    
-    setState(newState);
+      };
+      
+      // AFTER spreading, restore session-only hasAutoOpened
+      newState.hasAutoOpened = currentHasAutoOpened;
+      
+      setState(newState);
   }, [memoizedStoredState]); // Removed state.hasAutoOpened - we read it inside via closure
   
   // Memoize operations object to prevent unnecessary re-renders
