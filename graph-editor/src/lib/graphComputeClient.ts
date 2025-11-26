@@ -95,13 +95,76 @@ export interface StatsEnhanceResponse {
 // GraphComputeClient
 // ============================================================
 
+// Cache entry with TTL
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
 export class GraphComputeClient {
   private baseUrl: string;
   private useMock: boolean;
+  
+  // Analysis results cache - persists across component mounts
+  private analysisCache: Map<string, CacheEntry<AnalysisResponse>> = new Map();
+  private availableAnalysesCache: Map<string, CacheEntry<AvailableAnalysesResponse>> = new Map();
+  private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly MAX_CACHE_SIZE = 50; // Prevent unbounded growth
 
   constructor(baseUrl: string = API_BASE_URL, useMock: boolean = USE_MOCK) {
     this.baseUrl = baseUrl;
     this.useMock = useMock;
+  }
+  
+  /**
+   * Generate a stable cache key from analysis inputs
+   * Uses node/edge IDs (not full objects) for stability
+   */
+  private generateCacheKey(
+    graph: any,
+    queryDsl?: string,
+    analysisType?: string,
+    scenarioIds?: string[]
+  ): string {
+    // Extract stable identifiers from graph
+    const nodeIds = (graph?.nodes || []).map((n: any) => n.id || n.uuid).sort().join(',');
+    const edgeIds = (graph?.edges || []).map((e: any) => e.id || e.uuid).sort().join(',');
+    
+    // Create cache key from stable components
+    const parts = [
+      `nodes:${nodeIds}`,
+      `edges:${edgeIds}`,
+      `dsl:${queryDsl || ''}`,
+      `type:${analysisType || ''}`,
+      `scenarios:${(scenarioIds || []).sort().join(',')}`
+    ];
+    
+    return parts.join('|');
+  }
+  
+  /**
+   * Prune old entries if cache exceeds max size
+   */
+  private pruneCache<T>(cache: Map<string, CacheEntry<T>>): void {
+    if (cache.size <= this.MAX_CACHE_SIZE) return;
+    
+    // Remove oldest entries
+    const entries = Array.from(cache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    
+    const toRemove = entries.slice(0, entries.length - this.MAX_CACHE_SIZE);
+    for (const [key] of toRemove) {
+      cache.delete(key);
+    }
+  }
+  
+  /**
+   * Clear all caches (useful for testing or forced refresh)
+   */
+  clearCache(): void {
+    this.analysisCache.clear();
+    this.availableAnalysesCache.clear();
+    console.log('[GraphComputeClient] Cache cleared');
   }
 
   /**
@@ -232,6 +295,7 @@ export class GraphComputeClient {
 
   /**
    * Run analytics based on a DSL query
+   * Results are cached to avoid expensive recomputation on re-renders
    * 
    * @param graph - Graph data (nodes, edges, policies, metadata)
    * @param queryDsl - DSL query string (e.g. "from(a).to(b).visited(c)")
@@ -246,9 +310,17 @@ export class GraphComputeClient {
     scenarioColour: string = '#3b82f6',
     analysisType?: string
   ): Promise<AnalysisResponse> {
+    // Check cache first
+    const cacheKey = this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId]);
+    const cached = this.analysisCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+      console.log('[GraphComputeClient] Cache hit for analyzeSelection');
+      return cached.data;
+    }
+    
     if (this.useMock) {
       // Mock response with new schema
-      return {
+      const result: AnalysisResponse = {
         success: true,
         result: {
           analysis_type: analysisType || 'graph_overview',
@@ -259,6 +331,8 @@ export class GraphComputeClient {
         },
         query_dsl: queryDsl,
       };
+      this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      return result;
     }
 
     const request: AnalysisRequest = {
@@ -283,11 +357,19 @@ export class GraphComputeClient {
       throw new Error(`Analysis failed: ${error.detail || error.error || response.statusText}`);
     }
 
-    return response.json();
+    const result = await response.json();
+    
+    // Cache the result
+    this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    this.pruneCache(this.analysisCache);
+    console.log('[GraphComputeClient] Cached analyzeSelection result');
+    
+    return result;
   }
 
   /**
    * Run analytics across multiple scenarios
+   * Results are cached to avoid expensive recomputation on re-renders
    * 
    * Each scenario should have its parameters already baked into the graph.
    * Use buildGraphForLayer() from CompositionService to prepare scenario graphs.
@@ -301,9 +383,21 @@ export class GraphComputeClient {
     queryDsl?: string,
     analysisType?: string
   ): Promise<AnalysisResponse> {
+    // Use first scenario's graph for cache key (multi-scenario typically uses same base graph)
+    const baseGraph = scenarios[0]?.graph;
+    const scenarioIds = scenarios.map(s => s.scenario_id);
+    const cacheKey = this.generateCacheKey(baseGraph, queryDsl, analysisType, scenarioIds);
+    
+    // Check cache first
+    const cached = this.analysisCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+      console.log('[GraphComputeClient] Cache hit for analyzeMultipleScenarios');
+      return cached.data;
+    }
+    
     if (this.useMock) {
       // Mock response with new schema
-      return {
+      const result: AnalysisResponse = {
         success: true,
         result: {
           analysis_type: analysisType || 'graph_overview',
@@ -319,6 +413,8 @@ export class GraphComputeClient {
         },
         query_dsl: queryDsl,
       };
+      this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      return result;
     }
 
     const request: AnalysisRequest = {
@@ -343,11 +439,19 @@ export class GraphComputeClient {
       throw new Error(`Analysis failed: ${error.detail || error.error || response.statusText}`);
     }
 
-    return response.json();
+    const result = await response.json();
+    
+    // Cache the result
+    this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    this.pruneCache(this.analysisCache);
+    console.log('[GraphComputeClient] Cached analyzeMultipleScenarios result');
+    
+    return result;
   }
 
   /**
    * Get available analysis types for a DSL query
+   * Results are cached to avoid expensive recomputation on re-renders
    * 
    * @param graph - Graph data
    * @param queryDSL - DSL query string (determines available analyses)
@@ -358,8 +462,18 @@ export class GraphComputeClient {
     queryDSL?: string,
     scenarioCount: number = 1
   ): Promise<AvailableAnalysesResponse> {
+    // Cache key includes scenario count
+    const cacheKey = `available:${this.generateCacheKey(graph, queryDSL, undefined, [])}:sc${scenarioCount}`;
+    
+    // Check cache first
+    const cached = this.availableAnalysesCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+      console.log('[GraphComputeClient] Cache hit for getAvailableAnalyses');
+      return cached.data;
+    }
+    
     if (this.useMock) {
-      return {
+      const result: AvailableAnalysesResponse = {
         analyses: [{
           id: 'graph_overview',
           name: 'Graph Overview',
@@ -367,6 +481,8 @@ export class GraphComputeClient {
           is_primary: true,
         }]
       };
+      this.availableAnalysesCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      return result;
     }
 
     const response = await fetch(`${this.baseUrl}/api/runner/available-analyses`, {
@@ -384,7 +500,14 @@ export class GraphComputeClient {
       throw new Error(`Failed to get available analyses: ${error.detail || error.error || response.statusText}`);
     }
 
-    return response.json();
+    const result = await response.json();
+    
+    // Cache the result
+    this.availableAnalysesCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    this.pruneCache(this.availableAnalysesCache);
+    console.log('[GraphComputeClient] Cached getAvailableAnalyses result');
+    
+    return result;
   }
 }
 

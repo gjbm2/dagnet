@@ -25,6 +25,14 @@ export interface RepositoryStatus {
 class RepositoryOperationsService {
   private navigatorOps: any = null;
   private dialogOps: any = null;
+  
+  // Cache for getCommittableFiles to avoid excessive IDB queries
+  private committableFilesCache: {
+    key: string;
+    files: FileState[];
+    timestamp: number;
+  } | null = null;
+  private readonly CACHE_TTL_MS = 1000; // Cache for 1 second
 
   /**
    * Initialize with dependencies
@@ -32,6 +40,13 @@ class RepositoryOperationsService {
   initialize(deps: { navigatorOps: any; dialogOps?: any }) {
     this.navigatorOps = deps.navigatorOps;
     this.dialogOps = deps.dialogOps;
+  }
+  
+  /**
+   * Invalidate the committable files cache (call after commits, pulls, saves)
+   */
+  invalidateCommittableFilesCache() {
+    this.committableFilesCache = null;
   }
 
   /**
@@ -100,6 +115,9 @@ class RepositoryOperationsService {
       return parts.join(' | ');
     };
 
+    // Invalidate cache since workspace was updated
+    this.invalidateCommittableFilesCache();
+    
     if (result.conflicts && result.conflicts.length > 0) {
       console.log(`⚠️ RepositoryOperationsService: Pull completed with ${result.conflicts.length} conflicts`);
         sessionLogService.warning('git', 'GIT_PULL_CONFLICTS', 
@@ -413,6 +431,15 @@ class RepositoryOperationsService {
    * 3. AND are committable (not credentials, settings, or temporary)
    */
   async getCommittableFiles(repository?: string, branch?: string): Promise<FileState[]> {
+    const cacheKey = `${repository || ''}-${branch || ''}`;
+    
+    // Return cached result if valid
+    if (this.committableFilesCache &&
+        this.committableFilesCache.key === cacheKey &&
+        Date.now() - this.committableFilesCache.timestamp < this.CACHE_TTL_MS) {
+      return this.committableFilesCache.files;
+    }
+    
     console.log('📊 RepositoryOperationsService: Getting committable files (SHA-based comparison)...');
     
     // Get all files from IndexedDB
@@ -506,6 +533,14 @@ class RepositoryOperationsService {
     }
     
     console.log(`📊 RepositoryOperationsService: Found ${committableFiles.length} committable files`);
+    
+    // Cache the result
+    this.committableFilesCache = {
+      key: cacheKey,
+      files: committableFiles,
+      timestamp: Date.now()
+    };
+    
     return committableFiles;
   }
 
@@ -741,9 +776,12 @@ class RepositoryOperationsService {
     // Mark files as saved in FileRegistry
     for (const file of files) {
       await fileRegistry.markSaved(file.fileId);
-      }
+    }
+    
+    // Invalidate cache since files were committed
+    this.invalidateCommittableFilesCache();
 
-      sessionLogService.endOperation(logOpId, 'success', 
+    sessionLogService.endOperation(logOpId, 'success', 
         `Committed ${filesToCommit.length} file(s) to ${repository}/${branch}`,
         { 
           repository, 

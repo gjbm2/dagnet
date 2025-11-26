@@ -40,6 +40,15 @@ export class CredentialsManager {
         return { success: false, error: 'All data was cleared', source: 'none' };
       }
 
+      // Return cached credentials if available (avoid repeated IDB calls)
+      if (this.currentCredentials && this.currentSource) {
+        return {
+          success: true,
+          credentials: this.currentCredentials,
+          source: this.currentSource
+        };
+      }
+
       // 1. Check URL credentials first (highest precedence)
       const urlResult = await this.loadFromURL();
       if (urlResult.success && urlResult.credentials) {
