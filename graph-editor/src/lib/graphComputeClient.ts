@@ -229,6 +229,101 @@ export class GraphComputeClient {
 
     return response.json();
   }
+
+  /**
+   * Run analytics based on a DSL query
+   * 
+   * @param graph - Graph data (nodes, edges, policies, metadata)
+   * @param queryDsl - DSL query string (e.g. "from(a).to(b).visited(c)")
+   * @param scenarioId - Optional scenario identifier
+   * @param analysisType - Optional analysis type override
+   */
+  async analyzeSelection(
+    graph: any,
+    queryDsl?: string,
+    scenarioId: string = 'base',
+    analysisType?: string
+  ): Promise<AnalysisResponse> {
+    if (this.useMock) {
+      // Mock response
+      return {
+        success: true,
+        results: [{
+          scenario_id: scenarioId,
+          analysis_type: analysisType || 'graph_overview',
+          analysis_name: 'Graph Overview',
+          analysis_description: 'Mock analysis result',
+          data: {
+            analysis_type: 'mock',
+          }
+        }],
+        query_dsl: queryDsl,
+      };
+    }
+
+    const request: AnalysisRequest = {
+      scenarios: [{
+        scenario_id: scenarioId,
+        graph,
+      }],
+      query_dsl: queryDsl,
+      analysis_type: analysisType,
+    };
+
+    const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(`Analysis failed: ${error.detail || error.error || response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Get available analysis types for a DSL query
+   * 
+   * @param graph - Graph data
+   * @param queryDSL - DSL query string (determines available analyses)
+   * @param scenarioCount - Number of scenarios (affects available analyses)
+   */
+  async getAvailableAnalyses(
+    graph: any,
+    queryDSL?: string,
+    scenarioCount: number = 1
+  ): Promise<AvailableAnalysesResponse> {
+    if (this.useMock) {
+      return {
+        analyses: [{
+          id: 'graph_overview',
+          name: 'Graph Overview',
+          description: 'Mock analysis type',
+          is_primary: true,
+        }]
+      };
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/runner/available-analyses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graph,
+        query_dsl: queryDSL,
+        scenario_count: scenarioCount,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(`Failed to get available analyses: ${error.detail || error.error || response.statusText}`);
+    }
+
+    return response.json();
+  }
 }
 
 // ============================================================
@@ -242,6 +337,53 @@ export interface ParameterQuery {
   condition?: string;
   query: string;
   stats: { checks: number; literals: number };
+}
+
+// ============================================================
+// Analytics Runner Types
+// ============================================================
+
+export interface ScenarioData {
+  scenario_id: string;
+  name?: string;
+  graph: any;
+  param_overrides?: Record<string, any>;
+}
+
+export interface AnalysisRequest {
+  scenarios: ScenarioData[];
+  query_dsl?: string;
+  analysis_type?: string;
+}
+
+export interface AnalysisResult {
+  scenario_id: string;
+  analysis_type: string;
+  analysis_name: string;
+  analysis_description: string;
+  data: Record<string, any>;
+}
+
+export interface AnalysisResponse {
+  success: boolean;
+  results: AnalysisResult[];
+  query_dsl?: string;
+  error?: {
+    error_type: string;
+    message: string;
+    details?: Record<string, any>;
+  };
+}
+
+export interface AvailableAnalysis {
+  id: string;
+  name: string;
+  description: string;
+  is_primary: boolean;
+}
+
+export interface AvailableAnalysesResponse {
+  analyses: AvailableAnalysis[];
 }
 
 // ============================================================

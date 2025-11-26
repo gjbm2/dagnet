@@ -1,0 +1,180 @@
+# Analysis Types Configuration
+#
+# DSL Pattern -> Analysis Type Mapping:
+# | DSL                            | Analysis                 | Condition               |
+# |--------------------------------|--------------------------|-------------------------|
+# | (empty)                        | graph_overview           | node_count=0            |
+# | from(A)                        | from_node_outcomes       | has_from, !has_to       |
+# | to(B)                          | to_node_reach            | !has_from, has_to       |
+# | visited(A)                     | path_through             | node_count=1            |
+# | from(A).to(B)                  | path_between             | has_from, has_to        |
+# | from(A).to(B).visited(C)       | constrained_path         | node_count>=3, has_from |
+# | visitedAny(A,B) [absorbing]    | outcome_comparison       | all_absorbing           |
+# | visitedAny(A,B) [siblings]     | branch_comparison        | all_are_siblings        |
+# | visitedAny(A,B,C) [absorbing]  | multi_outcome_comparison | all_absorbing           |
+# | visitedAny(A,B,C) [siblings]   | multi_branch_comparison  | all_are_siblings        |
+# | from(A).visitedAny(B,C)        | branches_from_start      | visited_any_count>=1    |
+#
+# MATCHING: First match wins. More specific before general.
+# CONDITIONS: All must match (AND). Operators: exact, {gte:}, {lte:}
+
+analyses:
+  # =========== EMPTY DSL ===========
+  - id: graph_overview
+    name: "Graph Overview"
+    description: "Overall outcomes from all entry points"
+    when:
+      node_count: 0
+    runner: graph_overview_runner
+
+  # =========== SINGLE NODE (node_count=1) ===========
+  
+  # from(A) - outcomes from this node
+  - id: from_node_outcomes
+    name: "Outcomes from Node"
+    description: "Probability of reaching each outcome from this start"
+    when:
+      node_count: 1
+      has_from: true
+      has_to: false
+    runner: from_node_runner
+
+  # to(B) - reach probability
+  - id: to_node_reach
+    name: "Reach Probability"
+    description: "Probability of reaching this node from entries"
+    when:
+      node_count: 1
+      has_from: false
+      has_to: true
+    runner: to_node_runner
+
+  # visited(A) - path through
+  - id: path_through
+    name: "Path Through Node"
+    description: "Probability of paths passing through this node"
+    when:
+      node_count: 1
+      has_from: false
+      has_to: false
+    runner: path_through_runner
+
+  # =========== TWO NODES (node_count=2) ===========
+  
+  # from(A).to(B) - path between
+  - id: path_between
+    name: "Path Between Nodes"
+    description: "Probability and cost of path from start to end"
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
+
+  # visitedAny(A,B) absorbing - outcome comparison
+  # NOTE: Must come before branch_comparison to match when all are absorbing
+  - id: outcome_comparison
+    name: "Outcome Comparison"
+    description: "Compare probabilities of reaching these outcomes"
+    when:
+      node_count: 2
+      has_from: false
+      has_to: false
+      all_absorbing: true
+    runner: end_comparison_runner
+
+  # visitedAny(A,B) siblings - branch comparison
+  - id: branch_comparison
+    name: "Branch Comparison"
+    description: "Compare probabilities of parallel branches"
+    when:
+      node_count: 2
+      has_from: false
+      has_to: false
+      all_are_siblings: true
+    runner: branch_comparison_runner
+
+  # visited(A).visited(B) - multi waypoint
+  - id: multi_waypoint
+    name: "Multi-Waypoint Path"
+    description: "Path through multiple waypoints"
+    when:
+      node_count: 2
+      has_from: false
+      has_to: false
+    runner: multi_waypoint_runner
+
+  # =========== THREE+ NODES ===========
+  
+  # from(A).to(B).visited(C) - constrained path
+  - id: constrained_path
+    name: "Constrained Path"
+    description: "Path from start to end through waypoints"
+    when:
+      node_count: { gte: 3 }
+      has_from: true
+      has_to: true
+    runner: constrained_path_runner
+
+  # from(A).visitedAny(B,C) - branches from start
+  - id: branches_from_start
+    name: "Branches from Start"
+    description: "Compare branch outcomes from starting point"
+    when:
+      has_from: true
+      has_to: false
+      visited_any_count: { gte: 1 }
+    runner: branches_from_start_runner
+
+  # visitedAny(A,B,C) absorbing - multi outcome comparison
+  # NOTE: Must come before multi_branch_comparison to match when all are absorbing
+  - id: multi_outcome_comparison
+    name: "Multi-Outcome Comparison"
+    description: "Compare probabilities of reaching these outcomes"
+    when:
+      node_count: { gte: 3 }
+      has_from: false
+      has_to: false
+      all_absorbing: true
+    runner: end_comparison_runner
+
+  # visitedAny(A,B,C) - multi branch comparison
+  - id: multi_branch_comparison
+    name: "Multi-Branch Comparison"
+    description: "Compare multiple parallel branches"
+    when:
+      node_count: { gte: 3 }
+      has_from: false
+      has_to: false
+      all_are_siblings: true
+    runner: branch_comparison_runner
+
+  # =========== MULTI-SCENARIO (requires multiple_scenarios: true) ===========
+  
+  # Scenario comparison for path
+  - id: scenario_path_comparison
+    name: "Scenario Path Comparison"
+    description: "Compare path probabilities across scenarios"
+    when:
+      has_from: true
+      has_to: true
+      multiple_scenarios: true
+    runner: scenario_comparison_runner
+
+  # Scenario comparison for any DSL
+  - id: scenario_comparison
+    name: "Scenario Comparison"
+    description: "Compare outcomes across scenarios"
+    when:
+      node_count: { gte: 1 }
+      multiple_scenarios: true
+    runner: scenario_comparison_runner
+
+  # =========== FALLBACK ===========
+  - id: general_selection
+    name: "Selection Statistics"
+    description: "General statistics for selected nodes"
+    when:
+      node_count: { gte: 1 }
+    runner: general_stats_runner
+

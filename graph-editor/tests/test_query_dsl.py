@@ -4,10 +4,11 @@ Tests for Query DSL parser.
 Tests both:
 1. Direct Python parsing
 2. HTTP roundtrip (TS -> Python -> TS simulation)
+3. Analytics-specific parsing (optional from/to)
 """
 
 import pytest
-from lib.query_dsl import parse_query, validate_query, QueryParseError
+from lib.query_dsl import parse_query, parse_query_strict, validate_query, QueryParseError
 
 
 class TestDSLParsing:
@@ -92,17 +93,35 @@ class TestDSLValidation:
         assert is_valid
         assert error is None
     
-    def test_missing_from(self):
-        """Query without from() should fail."""
+    def test_missing_from_optional(self):
+        """Query without from() is valid by default (analytics mode)."""
         is_valid, error = validate_query("to(b)")
+        assert is_valid
+        assert error is None
+    
+    def test_missing_to_optional(self):
+        """Query without to() is valid by default (analytics mode)."""
+        is_valid, error = validate_query("from(a)")
+        assert is_valid
+        assert error is None
+    
+    def test_missing_from_strict(self):
+        """Query without from() should fail when endpoints required."""
+        is_valid, error = validate_query("to(b)", require_endpoints=True)
         assert not is_valid
         assert "from" in error.lower()
     
-    def test_missing_to(self):
-        """Query without to() should fail."""
-        is_valid, error = validate_query("from(a)")
+    def test_missing_to_strict(self):
+        """Query without to() should fail when endpoints required."""
+        is_valid, error = validate_query("from(a)", require_endpoints=True)
         assert not is_valid
         assert "to" in error.lower()
+    
+    def test_constraints_only_valid(self):
+        """Constraints-only query is valid for analytics."""
+        is_valid, error = validate_query("visited(x).visited(y)")
+        assert is_valid
+        assert error is None
     
     def test_validate_with_node_list(self):
         """Validation with node list should check references."""
@@ -208,6 +227,113 @@ class TestDSLEdgeCases:
         assert parsed.visited_any == [["x","y"]]
         assert "visited(p)" in parsed.raw
         assert "visitedAny(x,y)" in parsed.raw
+
+
+class TestAnalyticsQueries:
+    """Test analytics-specific parsing (optional from/to)."""
+    
+    def test_constraints_only(self):
+        """Parse query with only visited constraints (no from/to)."""
+        query = "visited(a).visited(b).visited(c)"
+        parsed = parse_query(query)
+        
+        assert parsed.from_node is None
+        assert parsed.to_node is None
+        assert parsed.visited == ["a", "b", "c"]
+        assert not parsed.has_path_endpoints
+    
+    def test_visited_any_only(self):
+        """Parse query with only visitedAny (no from/to)."""
+        query = "visitedAny(branch-a,branch-b,branch-c)"
+        parsed = parse_query(query)
+        
+        assert parsed.from_node is None
+        assert parsed.to_node is None
+        assert parsed.visited_any == [["branch-a", "branch-b", "branch-c"]]
+    
+    def test_from_only(self):
+        """Parse query with from but no to."""
+        query = "from(start).visitedAny(a,b)"
+        parsed = parse_query(query)
+        
+        assert parsed.from_node == "start"
+        assert parsed.to_node is None
+        assert parsed.visited_any == [["a", "b"]]
+    
+    def test_to_only(self):
+        """Parse query with to but no from."""
+        query = "visited(x).visited(y).to(end)"
+        parsed = parse_query(query)
+        
+        assert parsed.from_node is None
+        assert parsed.to_node == "end"
+        assert parsed.visited == ["x", "y"]
+    
+    def test_has_path_endpoints_true(self):
+        """has_path_endpoints returns True when both from and to present."""
+        query = "from(a).to(b)"
+        parsed = parse_query(query)
+        assert parsed.has_path_endpoints
+    
+    def test_has_path_endpoints_false(self):
+        """has_path_endpoints returns False when either from or to missing."""
+        assert not parse_query("from(a)").has_path_endpoints
+        assert not parse_query("to(b)").has_path_endpoints
+        assert not parse_query("visited(x)").has_path_endpoints
+    
+    def test_all_constraint_nodes(self):
+        """all_constraint_nodes returns all referenced constraint nodes."""
+        query = "from(a).to(b).visited(c,d).exclude(e).visitedAny(f,g)"
+        parsed = parse_query(query)
+        
+        nodes = parsed.all_constraint_nodes
+        assert "c" in nodes
+        assert "d" in nodes
+        assert "e" in nodes
+        assert "f" in nodes
+        assert "g" in nodes
+        # from/to are NOT constraint nodes
+        assert "a" not in nodes
+        assert "b" not in nodes
+    
+    def test_raw_reconstruction_no_from(self):
+        """Raw reconstruction works without from."""
+        query = "visited(x).to(end)"
+        parsed = parse_query(query)
+        raw = parsed.raw
+        
+        assert "from(" not in raw
+        assert "to(end)" in raw
+        assert "visited(x)" in raw
+    
+    def test_raw_reconstruction_no_to(self):
+        """Raw reconstruction works without to."""
+        query = "from(start).visited(x)"
+        parsed = parse_query(query)
+        raw = parsed.raw
+        
+        assert "from(start)" in raw
+        assert "to(" not in raw
+        assert "visited(x)" in raw
+    
+    def test_parse_query_strict_requires_from(self):
+        """parse_query_strict raises on missing from."""
+        with pytest.raises(QueryParseError) as exc:
+            parse_query_strict("to(b)")
+        assert "from" in str(exc.value).lower()
+    
+    def test_parse_query_strict_requires_to(self):
+        """parse_query_strict raises on missing to."""
+        with pytest.raises(QueryParseError) as exc:
+            parse_query_strict("from(a)")
+        assert "to" in str(exc.value).lower()
+    
+    def test_parse_query_strict_accepts_full(self):
+        """parse_query_strict accepts full from/to query."""
+        parsed = parse_query_strict("from(a).to(b).visited(c)")
+        assert parsed.from_node == "a"
+        assert parsed.to_node == "b"
+        assert parsed.visited == ["c"]
 
 
 if __name__ == "__main__":

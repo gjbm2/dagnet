@@ -1,6 +1,6 @@
 import { LayoutData } from 'rc-dock';
 import React from 'react';
-import { Layers, FileText, Wrench } from 'lucide-react';
+import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 
 /**
  * Full layout for graph editor including canvas and sidebar panels
@@ -98,6 +98,28 @@ export function getGraphEditorLayout(): LayoutData {
                 }, 'Tools')
               ),
               content: null as any, // Will be replaced with ToolsPanel
+              cached: true,
+              closable: false,  // Dynamic: false at home, true when floating/docked elsewhere
+              group: 'graph-panels'
+            },
+            {
+              id: 'analytics-tab',
+              title: React.createElement('div', { 
+                className: 'dock-tab-title',
+                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+              },
+                React.createElement(BarChart3, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { 
+                  style: { 
+                    flex: 1, 
+                    minWidth: 0, 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  } 
+                }, 'Analytics')
+              ),
+              content: null as any, // Will be replaced with AnalyticsPanel
               cached: true,
               closable: false,  // Dynamic: false at home, true when floating/docked elsewhere
               group: 'graph-panels'
@@ -205,6 +227,28 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
               cached: true,
               closable: false,  // Dynamic: false at home, true when floating/docked elsewhere
               group: 'graph-panels'
+            },
+            {
+              id: 'analytics-tab',
+              title: React.createElement('div', { 
+                className: 'dock-tab-title',
+                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+              },
+                React.createElement(BarChart3, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement('span', { 
+                  style: { 
+                    flex: 1, 
+                    minWidth: 0, 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  } 
+                }, 'Analytics')
+              ),
+              content: null as any,
+              cached: true,
+              closable: false,  // Dynamic: false at home, true when floating/docked elsewhere
+              group: 'graph-panels'
             }
           ]
         }
@@ -223,7 +267,8 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
 export const PANEL_TO_TAB_ID = {
   'what-if': 'what-if-tab',
   'properties': 'properties-tab',
-  'tools': 'tools-tab'
+  'tools': 'tools-tab',
+  'analytics': 'analytics-tab'
 } as const;
 
 /**
@@ -232,6 +277,7 @@ export const PANEL_TO_TAB_ID = {
 export const TAB_ID_TO_PANEL = {
   'what-if-tab': 'what-if',
   'properties-tab': 'properties',
-  'tools-tab': 'tools'
+  'tools-tab': 'tools',
+  'analytics-tab': 'analytics'
 } as const;
 

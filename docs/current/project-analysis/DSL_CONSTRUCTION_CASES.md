@@ -5,6 +5,68 @@
 When a user selects nodes, we must infer their **analytic intent** and construct an appropriate DSL query. This document exhaustively reasons through all selection patterns.
 
 **DSL Schema Authority:** `/graph-editor/public/schemas/query-dsl-1.0.0.json`
+**Implementation:** `/graph-editor/src/lib/dslConstruction.ts`
+**Tests:** `/graph-editor/src/lib/__tests__/dslConstruction.test.ts`
+
+---
+
+## Exhaustive Test Cases (All Verified ✅)
+
+### 1. Single Node Selections
+| Selection | Node Type | Expected DSL | Status |
+|-----------|-----------|--------------|--------|
+| `[start]` | Entry | `from(start)` | ✅ |
+| `[end]` | Absorbing | `to(end)` | ✅ |
+| `[middle]` | Middle | `visited(middle)` | ✅ |
+
+### 2. Two Node Selections
+| Selection | Relationship | Expected DSL | Status |
+|-----------|--------------|--------------|--------|
+| `[a, b]` | a→b (direct/indirect) | `from(a).to(b)` | ✅ |
+| `[a, b]` | Parallel siblings | `visitedAny(a,b)` | ✅ |
+| `[end1, end2]` | Absorbing siblings | `visitedAny(end1,end2)` | ✅ |
+
+### 3. Three Node Linear Path
+| Selection | Graph | Expected DSL | Status |
+|-----------|-------|--------------|--------|
+| `[a, b, c]` | a→b→c | `from(a).to(c).visited(b)` | ✅ |
+| `[a, b, c]` | a→x→b→y→c (x,y unselected) | `from(a).to(c).visited(b)` | ✅ |
+
+### 4. Diamond Pattern (a→b, a→c, b→d, c→d)
+| Selection | Expected DSL | Status |
+|-----------|--------------|--------|
+| `[a, b, c, d]` (all) | `from(a).to(d).visitedAny(b,c)` | ✅ |
+| `[a, d]` (endpoints only) | `from(a).to(d)` | ✅ |
+| `[b, c]` (siblings only) | `visitedAny(b,c)` | ✅ |
+| `[a, b]` (start + branch) | `from(a).to(b)` | ✅ |
+
+### 5. Fan-out Pattern (a→b, a→c, a→d)
+| Selection | Expected DSL | Status |
+|-----------|--------------|--------|
+| `[b, c, d]` (absorbing children) | `visitedAny(b,c,d)` | ✅ |
+| `[a, b, c]` (start + 2 children) | `from(a).visitedAny(b,c)` | ✅ |
+
+### 6. Fan-in Pattern (a→d, b→d, c→d)
+| Selection | Expected DSL | Status |
+|-----------|--------------|--------|
+| `[a, b, c]` (parallel entries) | `visitedAny(a,b,c)` | ✅ |
+| `[a, b, d]` (2 entries + end) | `to(d).visitedAny(a,b)` | ✅ |
+
+### 7. Complex Multi-level
+| Selection | Graph | Expected DSL | Status |
+|-----------|-------|--------------|--------|
+| `[a, b1, c1, d]` | a→b1→b2→d, a→c1→c2→d | `from(a).to(d).visitedAny(b1,c1)` | ✅ |
+
+### 8. Middle Nodes Only
+| Selection | Graph | Expected DSL | Status |
+|-----------|-------|--------------|--------|
+| `[a, b, c]` | start→a→b→c→end | `from(a).to(c).visited(b)` | ✅ |
+
+### 9. Edge Cases
+| Selection | Expected DSL | Status |
+|-----------|--------------|--------|
+| `[]` (empty) | `""` | ✅ |
+| `[a, b]` (disconnected) | `visitedAny(a,b)` | ✅ |
 
 ---
 

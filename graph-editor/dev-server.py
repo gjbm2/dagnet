@@ -65,15 +65,15 @@ async def parse_query_endpoint(request: Request):
             raise HTTPException(status_code=400, detail="Missing 'query' field")
         
         # Import and parse
-        from query_dsl import parse_query, validate_query
+        from query_dsl import parse_query_strict, validate_query
         
-        # Validate
-        is_valid, error = validate_query(query_str)
+        # Validate (require endpoints for data retrieval)
+        is_valid, error = validate_query(query_str, require_endpoints=True)
         if not is_valid:
             raise HTTPException(status_code=400, detail=f"Invalid query: {error}")
         
-        # Parse
-        parsed = parse_query(query_str)
+        # Parse (strict - requires from/to for data retrieval)
+        parsed = parse_query_strict(query_str)
         
         # Return structured response
         return {
@@ -284,6 +284,117 @@ async def python_api_endpoint(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Analytics runner endpoint
+@app.post("/api/runner/analyze")
+async def runner_analyze_endpoint(request: Request):
+    """
+    Run analytics on a graph selection.
+    
+    Request:
+    {
+        "scenarios": [
+            {
+                "scenario_id": "base",
+                "graph": { nodes: [], edges: [], ... }
+            }
+        ],
+        "query_dsl": "from(node1).to(node2)"  // determines what to analyze
+    }
+    
+    Response:
+    {
+        "success": true,
+        "results": [
+            {
+                "scenario_id": "base",
+                "analysis_type": "path",
+                "analysis_name": "Path Between Nodes",
+                "data": { probability: 0.8, ... }
+            }
+        ]
+    }
+    """
+    try:
+        data = await request.json()
+        
+        from runner import analyze
+        from runner.types import AnalysisRequest, ScenarioData
+        
+        # Validate request
+        if 'scenarios' not in data or not data['scenarios']:
+            raise HTTPException(status_code=400, detail="Missing 'scenarios' field")
+        
+        # Build request
+        scenarios = [
+            ScenarioData(
+                scenario_id=s.get('scenario_id', f'scenario_{i}'),
+                name=s.get('name'),
+                graph=s.get('graph', {}),
+            )
+            for i, s in enumerate(data['scenarios'])
+        ]
+        
+        request_obj = AnalysisRequest(
+            scenarios=scenarios,
+            query_dsl=data.get('query_dsl'),
+            analysis_type=data.get('analysis_type'),
+        )
+        
+        # Run analysis
+        response = analyze(request_obj)
+        
+        # Return JSON-serializable response
+        return response.model_dump()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Get available analysis types for a DSL query
+@app.post("/api/runner/available-analyses")
+async def runner_available_analyses_endpoint(request: Request):
+    """
+    Get available analysis types for a DSL query.
+    
+    Request:
+    {
+        "graph": { nodes: [], edges: [], ... },
+        "query_dsl": "from(node1).to(node2)",
+        "scenario_count": 1
+    }
+    
+    Response:
+    {
+        "analyses": [
+            { "id": "path", "name": "Path Between Nodes", "is_primary": true }
+        ]
+    }
+    """
+    try:
+        data = await request.json()
+        
+        from runner import get_available_analyses
+        
+        graph_data = data.get('graph', {})
+        scenario_count = data.get('scenario_count', 1)
+        query_dsl = data.get('query_dsl')
+        
+        available = get_available_analyses(
+            graph_data=graph_data,
+            query_dsl=query_dsl,
+            scenario_count=scenario_count,
+        )
+        
+        return {"analyses": available}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     import os
@@ -299,13 +410,15 @@ if __name__ == "__main__":
     print("🔄 Auto-reload enabled")
     print("")
     print("Available endpoints:")
-    print("  GET  /                          - Health check")
-    print("  POST /api/parse-query           - Parse DSL query string")
-    print("  POST /api/query-graph           - Apply query to graph (topology filter)")
-    print("  POST /api/generate-query        - Generate MSMDC query for single edge")
-    print("  POST /api/generate-all-queries  - Batch MSMDC for all edges (base only)")
+    print("  GET  /                            - Health check")
+    print("  POST /api/parse-query             - Parse DSL query string")
+    print("  POST /api/query-graph             - Apply query to graph (topology filter)")
+    print("  POST /api/generate-query          - Generate MSMDC query for single edge")
+    print("  POST /api/generate-all-queries    - Batch MSMDC for all edges (base only)")
     print("  POST /api/generate-all-parameters - All params (p, cond_p, costs, cases)")
     print("  POST /api/stats-enhance           - Statistical enhancement")
+    print("  POST /api/runner/analyze          - Run analytics on selection")
+    print("  POST /api/runner/available-analyses - Get available analyses")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"💡 Port: {port} (set via PYTHON_API_PORT env var)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
