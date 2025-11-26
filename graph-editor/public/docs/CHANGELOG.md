@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.96b
+**Released:** November 26, 2025
+
+Analytics v2.0 up and running
+
+---
+
 ## Version 0.95.5-beta
 **Released:** November 25, 2025
 
