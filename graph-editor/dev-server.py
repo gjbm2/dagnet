@@ -329,6 +329,7 @@ async def runner_analyze_endpoint(request: Request):
             ScenarioData(
                 scenario_id=s.get('scenario_id', f'scenario_{i}'),
                 name=s.get('name'),
+                colour=s.get('colour'),
                 graph=s.get('graph', {}),
             )
             for i, s in enumerate(data['scenarios'])

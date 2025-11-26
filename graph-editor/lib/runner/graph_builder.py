@@ -331,6 +331,51 @@ def get_human_id(G: nx.DiGraph, node_key: str) -> str:
     return node_key
 
 
+def get_graph_key(G: nx.DiGraph, human_id: str) -> Optional[str]:
+    """
+    Get graph key (UUID) for a node, given its human-readable ID.
+    
+    DSL queries use human-readable IDs, but the graph uses UUIDs as keys.
+    This function resolves human IDs to graph keys for lookups.
+    
+    Args:
+        G: NetworkX DiGraph
+        human_id: Human-readable ID (from DSL)
+    
+    Returns:
+        Graph key (UUID), or None if not found
+    """
+    # Direct lookup - human_id might already be a graph key
+    if human_id in G.nodes:
+        return human_id
+    
+    # Reverse lookup - search for node with matching 'id' attribute
+    for node_key, attrs in G.nodes(data=True):
+        if attrs.get('id') == human_id:
+            return node_key
+    
+    return None
+
+
+def resolve_node_ids(G: nx.DiGraph, human_ids: list[str]) -> list[str]:
+    """
+    Resolve a list of human-readable IDs to graph keys (UUIDs).
+    
+    Args:
+        G: NetworkX DiGraph
+        human_ids: List of human-readable IDs from DSL
+    
+    Returns:
+        List of graph keys (UUIDs) for nodes that were found
+    """
+    resolved = []
+    for human_id in human_ids:
+        graph_key = get_graph_key(G, human_id)
+        if graph_key:
+            resolved.append(graph_key)
+    return resolved
+
+
 def translate_uuids_to_ids(G: nx.DiGraph, data: any) -> any:
     """
     Recursively translate UUIDs to human-readable IDs in analysis results.

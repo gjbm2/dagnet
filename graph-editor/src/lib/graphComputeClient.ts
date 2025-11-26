@@ -242,21 +242,21 @@ export class GraphComputeClient {
     graph: any,
     queryDsl?: string,
     scenarioId: string = 'base',
+    scenarioName: string = 'Current',
+    scenarioColour: string = '#3b82f6',
     analysisType?: string
   ): Promise<AnalysisResponse> {
     if (this.useMock) {
-      // Mock response
+      // Mock response with new schema
       return {
         success: true,
-        results: [{
-          scenario_id: scenarioId,
+        result: {
           analysis_type: analysisType || 'graph_overview',
           analysis_name: 'Graph Overview',
           analysis_description: 'Mock analysis result',
-          data: {
-            analysis_type: 'mock',
-          }
-        }],
+          metadata: {},
+          data: [{ mock: true }],
+        },
         query_dsl: queryDsl,
       };
     }
@@ -264,8 +264,70 @@ export class GraphComputeClient {
     const request: AnalysisRequest = {
       scenarios: [{
         scenario_id: scenarioId,
+        name: scenarioName,
+        colour: scenarioColour,
         graph,
       }],
+      query_dsl: queryDsl,
+      analysis_type: analysisType,
+    };
+
+    const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(`Analysis failed: ${error.detail || error.error || response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Run analytics across multiple scenarios
+   * 
+   * Each scenario should have its parameters already baked into the graph.
+   * Use buildGraphForLayer() from CompositionService to prepare scenario graphs.
+   * 
+   * @param scenarios - Array of scenario graphs with metadata
+   * @param queryDsl - DSL query string
+   * @param analysisType - Optional analysis type override
+   */
+  async analyzeMultipleScenarios(
+    scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string }>,
+    queryDsl?: string,
+    analysisType?: string
+  ): Promise<AnalysisResponse> {
+    if (this.useMock) {
+      // Mock response with new schema
+      return {
+        success: true,
+        result: {
+          analysis_type: analysisType || 'graph_overview',
+          analysis_name: 'Graph Overview',
+          analysis_description: 'Mock multi-scenario result',
+          metadata: {},
+          dimension_values: {
+            scenario_id: Object.fromEntries(
+              scenarios.map(s => [s.scenario_id, { name: s.name, colour: s.colour }])
+            )
+          },
+          data: scenarios.map(s => ({ scenario_id: s.scenario_id, mock: true })),
+        },
+        query_dsl: queryDsl,
+      };
+    }
+
+    const request: AnalysisRequest = {
+      scenarios: scenarios.map(s => ({
+        scenario_id: s.scenario_id,
+        name: s.name,
+        colour: s.colour,
+        graph: s.graph,
+      })),
       query_dsl: queryDsl,
       analysis_type: analysisType,
     };
@@ -346,6 +408,7 @@ export interface ParameterQuery {
 export interface ScenarioData {
   scenario_id: string;
   name?: string;
+  colour?: string;
   graph: any;
   param_overrides?: Record<string, any>;
 }
@@ -356,17 +419,52 @@ export interface AnalysisRequest {
   analysis_type?: string;
 }
 
+export interface DimensionSpec {
+  id: string;
+  name: string;
+  type: string;  // scenario, stage, outcome, node, time, categorical, ordinal
+  role: string;  // primary, secondary, filter
+}
+
+export interface MetricSpec {
+  id: string;
+  name: string;
+  type: string;  // probability, currency, duration, count, ratio, delta
+  format?: string;  // percent, currency_gbp, number
+  role?: string;  // primary, secondary
+}
+
+export interface ChartSpec {
+  recommended: string;  // funnel, bar, bar_grouped, line, table, comparison, single_value
+  alternatives?: string[];
+  hints?: Record<string, any>;
+}
+
+export interface ResultSemantics {
+  dimensions: DimensionSpec[];
+  metrics: MetricSpec[];
+  chart: ChartSpec;
+}
+
+export interface DimensionValueMeta {
+  name: string;
+  colour?: string;
+  order?: number;
+}
+
 export interface AnalysisResult {
-  scenario_id: string;
   analysis_type: string;
   analysis_name: string;
   analysis_description: string;
-  data: Record<string, any>;
+  metadata?: Record<string, any>;
+  semantics?: ResultSemantics;
+  dimension_values?: Record<string, Record<string, DimensionValueMeta>>;
+  data: Record<string, any>[];
 }
 
 export interface AnalysisResponse {
   success: boolean;
-  results: AnalysisResult[];
+  result?: AnalysisResult;
   query_dsl?: string;
   error?: {
     error_type: string;

@@ -1,23 +1,29 @@
 /**
  * AnalyticsPanel
  * 
- * Basic analytics panel for Phase 1 implementation.
+ * Analytics panel with multi-scenario support.
  * 
  * Features:
  * - Shows DSL query string using QueryExpressionEditor (Monaco chip editor)
  * - AutomatableField wrapper for override state (ZapOff icon)
  * - Lists available analysis types
- * - Displays JSON results
+ * - Multi-scenario analysis: sends all visible scenario graphs to backend
+ * - Backend decides result structure (may integrate comparisons or return separate data)
  * - Persists override state to TabContext
  */
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
+import { useTabContext } from '../../contexts/TabContext';
+import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { graphComputeClient, AnalysisResponse, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { constructQueryDSL } from '../../lib/dslConstruction';
+import { buildGraphForLayer } from '../../services/CompositionService';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
-import { BarChart3, RefreshCw, ChevronDown, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code } from 'lucide-react';
+import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
+import CollapsibleSection from '../CollapsibleSection';
 import './AnalyticsPanel.css';
 
 interface AnalyticsPanelProps {
@@ -29,9 +35,73 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   // Get store state directly using the hook (same pattern as PropertiesPanel)
   const { graph } = useGraphStore();
   
+  // Get scenario context for multi-scenario analysis
+  const scenariosContext = useScenariosContextOptional();
+  const { tabs, operations } = useTabContext();
+  
   // Extract nodes and edges from graph (for DSL construction)
   const nodes = graph?.nodes || [];
   const edges = graph?.edges || [];
+  
+  // Get visible scenarios for this tab
+  const scenarioState = useMemo(() => {
+    if (!tabId) return null;
+    return operations.getScenarioState(tabId);
+  }, [tabId, operations, tabs]); // Include tabs to trigger re-render on state changes
+  
+  const visibleScenarioIds = scenarioState?.visibleScenarioIds || ['current'];
+  const scenarioOrder = scenarioState?.scenarioOrder || ['current'];
+  
+  // Order visible scenarios to match legend display order:
+  // base (if visible) -> user scenarios (REVERSED scenarioOrder) -> current
+  // Legend displays chips left-to-right as: base, oldest scenario, ..., newest scenario, current
+  const orderedVisibleScenarios = useMemo(() => {
+    const ordered: string[] = [];
+    
+    // 1. Base first (if visible)
+    if (visibleScenarioIds.includes('base')) {
+      ordered.push('base');
+    }
+    
+    // 2. User scenarios in REVERSED scenarioOrder (to match legend chip order)
+    const userScenarioOrder = scenarioOrder
+      .filter(id => id !== 'base' && id !== 'current')
+      .reverse(); // Legend reverses the order
+    for (const id of userScenarioOrder) {
+      if (visibleScenarioIds.includes(id)) {
+        ordered.push(id);
+      }
+    }
+    
+    // 3. Current last (if visible)
+    if (visibleScenarioIds.includes('current')) {
+      ordered.push('current');
+    }
+    
+    return ordered;
+  }, [visibleScenarioIds, scenarioOrder]);
+  
+  // Get scenario colour from stored values (not computed)
+  const getScenarioColour = useCallback((scenarioId: string): string => {
+    if (!scenariosContext) return '#808080';
+    
+    if (scenarioId === 'current') {
+      return scenariosContext.currentColour || '#808080';
+    } else if (scenarioId === 'base') {
+      return scenariosContext.baseColour || '#808080';
+    } else {
+      const scenario = scenariosContext.scenarios.find(s => s.id === scenarioId);
+      return scenario?.colour || '#808080';
+    }
+  }, [scenariosContext]);
+  
+  // Get scenario name helper
+  const getScenarioName = useCallback((scenarioId: string): string => {
+    if (scenarioId === 'current') return 'Current';
+    if (scenarioId === 'base') return 'Base';
+    const scenario = scenariosContext?.scenarios.find(s => s.id === scenarioId);
+    return scenario?.name || scenarioId;
+  }, [scenariosContext?.scenarios]);
   
   // State - DSL is NOT persisted, always derived from selection
   // (Override state is session-only, not saved across reloads)
@@ -41,6 +111,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
   const [results, setResults] = useState<AnalysisResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [showAllAnalyses, setShowAllAnalyses] = useState(false);
   const [showSpinner, setShowSpinner] = useState(false); // Delayed spinner
   const [error, setError] = useState<string | null>(null);
   
@@ -178,13 +249,20 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         const response = await graphComputeClient.getAvailableAnalyses(
           graph,
           queryDSL || undefined,
-          1 // Single scenario for now
+          visibleScenarioIds.length // Pass scenario count for analysis type matching
         );
-        console.log('[AnalyticsPanel] Got analyses:', response.analyses.map(a => a.id));
-        setAvailableAnalyses(response.analyses);
+        // Normalize IDs (handle aliases like graph_overview_empty -> graph_overview)
+        const normalizeId = (id: string) => id === 'graph_overview_empty' ? 'graph_overview' : id;
+        const normalizedAnalyses = response.analyses.map(a => ({
+          ...a,
+          id: normalizeId(a.id)
+        }));
+        
+        console.log('[AnalyticsPanel] Got analyses:', normalizedAnalyses.map(a => a.id));
+        setAvailableAnalyses(normalizedAnalyses);
         
         // Auto-select primary analysis
-        const primary = response.analyses.find(a => a.is_primary);
+        const primary = normalizedAnalyses.find(a => a.is_primary);
         if (primary) {
           setSelectedAnalysisId(primary.id);
         }
@@ -195,9 +273,10 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     };
     
     fetchAvailable();
-  }, [graph, queryDSL]);
+  }, [graph, queryDSL, visibleScenarioIds.length]);
   
   // Run analysis - called automatically on state changes
+  // Supports multi-scenario analysis when multiple scenarios are visible
   const runAnalysis = useCallback(async () => {
     if (!graph) {
       setResults(null);
@@ -230,12 +309,53 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     }, 500);
     
     try {
-      const response = await graphComputeClient.analyzeSelection(
-        graph,
-        queryDSL || undefined,
-        'base',
-        selectedAnalysisId || undefined
-      );
+      let response: AnalysisResponse;
+      
+      // Check if we have multiple visible scenarios for multi-scenario analysis
+      const hasMultipleScenarios = orderedVisibleScenarios.length > 1 && scenariosContext;
+      
+      if (hasMultipleScenarios) {
+        // Build scenario-modified graphs for each visible scenario (in legend order)
+        const scenarioGraphs = orderedVisibleScenarios.map(scenarioId => {
+          const scenarioGraph = buildGraphForLayer(
+            scenarioId,
+            graph,
+            scenariosContext.baseParams,
+            scenariosContext.currentParams,
+            scenariosContext.scenarios,
+            visibleScenarioIds
+          );
+          
+          const colour = getScenarioColour(scenarioId);
+          
+          return {
+            scenario_id: scenarioId,
+            name: getScenarioName(scenarioId),
+            graph: scenarioGraph,
+            colour,
+          };
+        });
+        
+        response = await graphComputeClient.analyzeMultipleScenarios(
+          scenarioGraphs,
+          queryDSL || undefined,
+          selectedAnalysisId || undefined
+        );
+      } else {
+        // Single scenario analysis
+        const scenarioId = orderedVisibleScenarios[0] || 'current';
+        const scenarioName = getScenarioName(scenarioId);
+        const scenarioColour = getScenarioColour(scenarioId);
+        
+        response = await graphComputeClient.analyzeSelection(
+          graph,
+          queryDSL || undefined,
+          scenarioId,
+          scenarioName,
+          scenarioColour,
+          selectedAnalysisId || undefined
+        );
+      }
       
       // Only update if this is still the latest request
       if (analysisRequestRef.current === requestId) {
@@ -260,30 +380,54 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         }
       }
     }
-  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId]);
+  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, orderedVisibleScenarios, scenariosContext, getScenarioName, getScenarioColour]);
   
-  // Track previous analysis ID for detecting dropdown changes
+  // Store runAnalysis in a ref to avoid effect re-triggers
+  const runAnalysisRef = useRef(runAnalysis);
+  runAnalysisRef.current = runAnalysis;
+  
+  // Serialize visible scenarios for comparison
+  const visibleScenariosKey = orderedVisibleScenarios.join(',');
+  
+  // Track previous values for detecting what changed
   const prevAnalysisIdRef = useRef<string | null>(null);
+  const prevGraphRef = useRef(graph);
+  const prevQueryDSLRef = useRef(queryDSL);
+  const prevSelectedNodesRef = useRef(selectedNodeIds);
+  const prevScenariosKeyRef = useRef(visibleScenariosKey);
   
-  // Effect 1: Run immediately when analysis type dropdown changes
+  // Single unified effect that handles all triggers
   useEffect(() => {
-    // Skip initial render and when value is being auto-set
-    if (prevAnalysisIdRef.current !== null && 
-        selectedAnalysisId !== null && 
-        prevAnalysisIdRef.current !== selectedAnalysisId) {
-      runAnalysis();
-    }
-    prevAnalysisIdRef.current = selectedAnalysisId;
-  }, [selectedAnalysisId, runAnalysis]);
-  
-  // Effect 2: Debounced auto-run for DSL/selection/graph changes
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      runAnalysis();
-    }, 300);
+    const analysisChanged = prevAnalysisIdRef.current !== null && 
+                           selectedAnalysisId !== null && 
+                           prevAnalysisIdRef.current !== selectedAnalysisId;
     
-    return () => clearTimeout(timeoutId);
-  }, [graph, selectedNodeIds, queryDSL, runAnalysis]);
+    const graphChanged = prevGraphRef.current !== graph;
+    const queryChanged = prevQueryDSLRef.current !== queryDSL;
+    const selectionChanged = prevSelectedNodesRef.current !== selectedNodeIds;
+    const scenariosChanged = prevScenariosKeyRef.current !== visibleScenariosKey;
+    
+    // Update refs
+    prevAnalysisIdRef.current = selectedAnalysisId;
+    prevGraphRef.current = graph;
+    prevQueryDSLRef.current = queryDSL;
+    prevSelectedNodesRef.current = selectedNodeIds;
+    prevScenariosKeyRef.current = visibleScenariosKey;
+    
+    // If analysis type changed, run immediately
+    if (analysisChanged) {
+      runAnalysisRef.current();
+      return;
+    }
+    
+    // For other changes, debounce
+    if (graphChanged || queryChanged || selectionChanged || scenariosChanged) {
+      const timeoutId = setTimeout(() => {
+        runAnalysisRef.current();
+      }, 300);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey]);
   
   // Cleanup spinner timeout on unmount
   useEffect(() => {
@@ -294,10 +438,169 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     };
   }, []);
   
-  // Get formatted result data
-  const formattedResults = useMemo(() => {
-    if (!results?.results?.[0]?.data) return null;
-    return JSON.stringify(results.results[0].data, null, 2);
+  // Format full result as JSON for debug display
+  const formattedResult = useMemo(() => {
+    if (!results?.result) return null;
+    return JSON.stringify(results.result, null, 2);
+  }, [results]);
+  
+  // Build rendered cards from semantics
+  const renderedCards = useMemo(() => {
+    const result = results?.result;
+    if (!result?.semantics?.dimensions || !result?.data) {
+      return null;
+    }
+    
+    const { dimensions, metrics } = result.semantics;
+    const primaryDim = dimensions.find((d: any) => d.role === 'primary');
+    const secondaryDim = dimensions.find((d: any) => d.role === 'secondary');
+    
+    if (!primaryDim) {
+      console.log('[AnalyticsPanel] No primary dimension found in:', dimensions);
+      return null;
+    }
+    
+    // Get unique primary dimension values
+    const primaryValues = [...new Set(result.data.map((row: any) => row[primaryDim.id]))];
+    
+    // Format a metric value
+    const formatValue = (value: number | null | undefined, format?: string): string => {
+      if (value === null || value === undefined) return '—';
+      switch (format) {
+        case 'percent': return `${(value * 100).toFixed(1)}%`;
+        case 'currency_gbp': return `£${value.toFixed(2)}`;
+        default: return value.toLocaleString();
+      }
+    };
+    
+    // Get label for a dimension value
+    const getLabel = (dimId: string, valueId: string | number): string => {
+      const meta = result.dimension_values?.[dimId]?.[String(valueId)];
+      return meta?.name ?? String(valueId);
+    };
+    
+    // Get colour for a dimension value
+    const getColour = (dimId: string, valueId: string | number): string | undefined => {
+      return result.dimension_values?.[dimId]?.[String(valueId)]?.colour;
+    };
+    
+    // If primary is scenario, render one card per scenario
+    if (primaryDim.type === 'scenario') {
+      return primaryValues.map(pv => {
+        const rows = result.data.filter((row: any) => row[primaryDim.id] === pv);
+        const colour = getColour(primaryDim.id, pv);
+        
+        return {
+          id: String(pv),
+          title: getLabel(primaryDim.id, pv),
+          colour,
+          metrics: metrics.map(m => ({
+            id: m.id,
+            label: m.name,
+            value: formatValue(rows[0]?.[m.id], m.format),
+            role: m.role || 'secondary'
+          }))
+        };
+      });
+    }
+    
+    // If primary is stage (funnel), render ONE card per STAGE
+    // Each stage card shows all scenarios with their values
+    if (primaryDim.type === 'stage' && secondaryDim?.type === 'scenario') {
+      const scenarioValues = [...new Set(result.data.map((row: any) => row[secondaryDim.id]))];
+      const primaryMetric = metrics.find(m => m.role === 'primary') || metrics[0];
+      
+      // Build one card per stage with scenarios as items
+      const sortedStages = primaryValues.sort((a, b) => {
+        const orderA = result.dimension_values?.stage?.[String(a)]?.order ?? 0;
+        const orderB = result.dimension_values?.stage?.[String(b)]?.order ?? 0;
+        return orderA - orderB;
+      });
+      
+      return sortedStages.map((stageId, index) => {
+        const stageLabel = getLabel(primaryDim.id, stageId);
+        const scenarioItems = scenarioValues.map(sv => {
+          const row = result.data.find((r: any) => r[primaryDim.id] === stageId && r[secondaryDim.id] === sv);
+          return {
+            label: getLabel(secondaryDim.id, sv),
+            value: formatValue(row?.[primaryMetric.id], primaryMetric.format),
+            colour: getColour(secondaryDim.id, sv)
+          };
+        });
+        
+        return {
+          id: String(stageId),
+          title: stageLabel,
+          stageNumber: index + 1,  // 1-based stage number
+          items: scenarioItems,
+          isStageCard: true
+        };
+      });
+    }
+    
+    // Generic fallback: if secondary is scenario, render one card per scenario
+    // This handles node-first, outcome-first, branch-first layouts
+    if (secondaryDim?.type === 'scenario') {
+      const scenarioValues = [...new Set(result.data.map((row: any) => row[secondaryDim.id]))];
+      const sortHint = result.semantics.chart?.hints?.sort;
+      const primaryMetric = metrics.find(m => m.role === 'primary') || metrics[0];
+      
+      return scenarioValues.map(sv => {
+        const colour = getColour(secondaryDim.id, sv);
+        const rows = result.data.filter((r: any) => r[secondaryDim.id] === sv);
+        
+        // Sort by hint (e.g., probability desc) or by dimension order
+        const sortedValues = [...primaryValues].sort((a, b) => {
+          if (sortHint?.by) {
+            // Sort by metric value
+            const rowA = rows.find((r: any) => r[primaryDim.id] === a);
+            const rowB = rows.find((r: any) => r[primaryDim.id] === b);
+            const valA = rowA?.[sortHint.by] ?? 0;
+            const valB = rowB?.[sortHint.by] ?? 0;
+            return sortHint.order === 'desc' ? valB - valA : valA - valB;
+          }
+          // Default: sort by dimension order
+          const orderA = result.dimension_values?.[primaryDim.id]?.[String(a)]?.order ?? 0;
+          const orderB = result.dimension_values?.[primaryDim.id]?.[String(b)]?.order ?? 0;
+          return orderA - orderB;
+        });
+        
+        // Build items
+        const itemData = sortedValues.map(pv => {
+          const row = rows.find((r: any) => r[primaryDim.id] === pv);
+          return {
+            label: getLabel(primaryDim.id, pv),
+            value: formatValue(row?.[primaryMetric.id], primaryMetric.format),
+            rawValue: row?.[primaryMetric.id]
+          };
+        });
+        
+        return {
+          id: String(sv),
+          title: getLabel(secondaryDim.id, sv),
+          colour,
+          items: itemData,
+          primaryDimName: primaryDim.name
+        };
+      });
+    }
+    
+    // No secondary dimension - single view with all data
+    // Render one card per primary value with all metrics
+    return primaryValues.map(pv => {
+      const rows = result.data.filter((row: any) => row[primaryDim.id] === pv);
+      
+      return {
+        id: String(pv),
+        title: getLabel(primaryDim.id, pv),
+        metrics: metrics.map(m => ({
+          id: m.id,
+          label: m.name,
+          value: formatValue(rows[0]?.[m.id], m.format),
+          role: m.role || 'secondary'
+        }))
+      };
+    });
   }, [results]);
   
   return (
@@ -314,9 +617,22 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       <div className="analytics-content">
         {/* Controls column */}
         <div className="analytics-controls">
-          {/* Selection info */}
-          <div className="analytics-section">
-            <div className="analytics-section-label">Selection</div>
+          {/* Collapsible Selection & Query section */}
+          <CollapsibleSection 
+            title={
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                <span>Selection & Query</span>
+                {selectedNodeIds.length > 0 && (
+                  <span className="analytics-muted" style={{ marginLeft: 'auto', fontWeight: 400 }}>
+                    {selectedNodeIds.length} node{selectedNodeIds.length !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </span>
+            }
+            defaultOpen={false}
+            icon={List}
+          >
+            {/* Selection info */}
             <div className="analytics-selection-info">
               {selectedNodeIds.length === 0 ? (
                 <span className="analytics-muted">No nodes selected</span>
@@ -330,57 +646,97 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                 </>
               )}
             </div>
-          </div>
-          
-          {/* DSL Query - using AutomatableField + QueryExpressionEditor */}
-          <div className="analytics-section">
-            <AutomatableField
-              label="Query DSL"
-              layout="label-above"
-              value={queryDSL}
-              overridden={isQueryOverridden}
-              onClearOverride={clearOverride}
-              tooltip="DSL query derived from selection. Edit to override auto-generation."
-            >
-              <QueryExpressionEditor
+            
+            {/* DSL Query - using AutomatableField + QueryExpressionEditor */}
+            <div style={{ marginTop: 8 }}>
+              <AutomatableField
+                label="Query DSL"
+                layout="label-above"
                 value={queryDSL}
-                onChange={handleDSLChange}
-                onBlur={handleDSLBlur}
-                graph={graph}
-                placeholder="from(node).to(node)"
-                height="40px"
-              />
-            </AutomatableField>
-          </div>
-          
-          {/* Analysis Type Selector */}
-          <div className="analytics-section">
-            <div className="analytics-section-label">Analysis Type</div>
-            <div className="analytics-type-selector">
-              <select
-                className="analytics-select"
-                value={selectedAnalysisId || ''}
-                onChange={(e) => setSelectedAnalysisId(e.target.value)}
-                disabled={availableAnalyses.length === 0}
+                overridden={isQueryOverridden}
+                onClearOverride={clearOverride}
+                tooltip="DSL query derived from selection. Edit to override auto-generation."
               >
-                {availableAnalyses.length === 0 ? (
-                  <option value="">No analyses available</option>
-                ) : (
-                  availableAnalyses.map(analysis => (
-                    <option key={analysis.id} value={analysis.id}>
-                      {analysis.name}{analysis.is_primary ? ' (recommended)' : ''}
-                    </option>
-                  ))
-                )}
-              </select>
-              <ChevronDown size={14} className="analytics-select-icon" />
+                <QueryExpressionEditor
+                  value={queryDSL}
+                  onChange={handleDSLChange}
+                  onBlur={handleDSLBlur}
+                  graph={graph}
+                  placeholder="from(node).to(node)"
+                  height="40px"
+                />
+              </AutomatableField>
             </div>
-            {selectedAnalysisId && (
-              <div className="analytics-type-description">
-                {availableAnalyses.find(a => a.id === selectedAnalysisId)?.description}
-              </div>
-            )}
-          </div>
+          </CollapsibleSection>
+          
+          {/* Analysis Type Selector - Mini Cards */}
+          <CollapsibleSection
+            title={
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                <span>Analysis Type</span>
+                <button
+                  className="analytics-show-all-toggle"
+                  onClick={(e) => { e.stopPropagation(); setShowAllAnalyses(!showAllAnalyses); }}
+                  title={showAllAnalyses ? 'Show only available' : 'Show all analysis types'}
+                >
+                  {showAllAnalyses ? <EyeOff size={12} /> : <Eye size={12} />}
+                  <span>{showAllAnalyses ? 'Available only' : 'Show all'}</span>
+                </button>
+              </span>
+            }
+            defaultOpen={true}
+            icon={BarChart3}
+          >
+            <div className="analytics-type-cards">
+              {ANALYSIS_TYPES
+                .filter(typeMeta => {
+                  // Always show available analyses
+                  const isAvailable = availableAnalyses.some(a => a.id === typeMeta.id);
+                  return showAllAnalyses || isAvailable;
+                })
+                .map(typeMeta => {
+                  const isAvailable = availableAnalyses.some(a => a.id === typeMeta.id);
+                  const isSelected = selectedAnalysisId === typeMeta.id;
+                  const availableInfo = availableAnalyses.find(a => a.id === typeMeta.id);
+                  const Icon = typeMeta.icon;
+                  
+                  return (
+                    <button
+                      key={typeMeta.id}
+                      className={`analytics-type-card ${isSelected ? 'selected' : ''} ${!isAvailable ? 'unavailable' : ''}`}
+                      onClick={() => setSelectedAnalysisId(typeMeta.id)}
+                      title={typeMeta.selectionHint}
+                    >
+                      <div className="analytics-type-card-icon">
+                        <Icon size={14} strokeWidth={2} />
+                      </div>
+                      <div className="analytics-type-card-content">
+                        <div className="analytics-type-card-name">
+                          {typeMeta.name}
+                          {availableInfo?.is_primary && <ChevronRight size={10} className="analytics-primary-indicator" />}
+                        </div>
+                        <div className="analytics-type-card-desc">
+                          {typeMeta.shortDescription}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+            </div>
+          </CollapsibleSection>
+          
+          {/* Debug JSON (under analysis type) */}
+          {results && results.success && formattedResult && (
+            <CollapsibleSection 
+              title="Results JSON (Debug)"
+              defaultOpen={false}
+              icon={Code}
+            >
+              <pre className="analytics-json analytics-debug-json">
+                {formattedResult}
+              </pre>
+            </CollapsibleSection>
+          )}
         </div>
         
         {/* Results column */}
@@ -401,16 +757,89 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
             </div>
           )}
           
-          {/* Results */}
-          {results && results.success && (
-            <div className="analytics-section analytics-results">
-              <div className="analytics-section-label">
-                <CheckCircle2 size={14} className="analytics-success-icon" />
-                Results: {results.results?.[0]?.analysis_name}
+          {/* Requirements message for unavailable analysis */}
+          {selectedAnalysisId && !availableAnalyses.some(a => a.id === selectedAnalysisId) && (
+            <div className="analytics-requirements">
+              <div className="analytics-requirements-title">
+                <Lightbulb size={16} />
+                <span>{getAnalysisTypeMeta(selectedAnalysisId)?.name || 'Analysis'}</span>
               </div>
-              <pre className="analytics-json">
-                {formattedResults}
-              </pre>
+              <div className="analytics-requirements-hint">
+                {getAnalysisTypeMeta(selectedAnalysisId)?.selectionHint || 'Select appropriate nodes to enable this analysis.'}
+              </div>
+            </div>
+          )}
+          
+          {/* Rendered Cards */}
+          {/* Rendered Cards - no header, uses full width for single card */}
+          {results && results.success && renderedCards && renderedCards.length > 0 && (
+            <div className={`analytics-cards-container ${renderedCards.length === 1 ? 'single-card' : ''}`}>
+              {renderedCards.map((card: any) => (
+                <div 
+                  key={card.id} 
+                  className={`analytics-card ${renderedCards.length === 1 ? 'full-width' : ''}`}
+                  style={card.colour ? { borderLeftColor: card.colour } : undefined}
+                >
+                  <div 
+                    className="analytics-card-header"
+                    style={card.colour ? { borderLeftColor: card.colour } : undefined}
+                  >
+                    {card.colour && (
+                      <span 
+                        className="analytics-card-dot"
+                        style={{ backgroundColor: card.colour }}
+                      />
+                    )}
+                    {card.stageNumber && (
+                      <span className="analytics-card-stage-number">{card.stageNumber}</span>
+                    )}
+                    <span className="analytics-card-title">{card.title}</span>
+                  </div>
+                  <div className="analytics-card-content">
+                    {/* Metrics display (scenario-primary layout) */}
+                    {card.metrics && card.metrics.map((m: any) => (
+                      <div key={m.id} className={`analytics-metric ${m.role === 'primary' ? 'analytics-metric-primary' : ''}`}>
+                        <span className="analytics-metric-label">{m.label}</span>
+                        <span className="analytics-metric-value">{m.value}</span>
+                      </div>
+                    ))}
+                    {/* Items breakdown - for stage cards, show coloured dots */}
+                    {card.items && card.items.map((item: any, i: number) => (
+                      <div key={i} className="analytics-item">
+                        {item.colour && (
+                          <span 
+                            className="analytics-item-dot"
+                            style={{ backgroundColor: item.colour }}
+                          />
+                        )}
+                        <span className="analytics-item-label">{item.label}</span>
+                        <span className="analytics-item-value">{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {/* Fallback: show raw data if we have results but couldn't render cards */}
+          {results && results.success && results.result?.data && (!renderedCards || renderedCards.length === 0) && (
+            <div className="analytics-section analytics-results">
+              <div className="analytics-section-label">Results (Raw)</div>
+              <div className="analytics-cards-container">
+                <div className="analytics-card">
+                  <div className="analytics-card-header">
+                    <span className="analytics-card-title">
+                      {results.result.analysis_name || 'Analysis Results'}
+                    </span>
+                  </div>
+                  <div className="analytics-card-content">
+                    <pre style={{ fontSize: '10px', margin: 0, whiteSpace: 'pre-wrap' }}>
+                      {JSON.stringify(results.result.data, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>

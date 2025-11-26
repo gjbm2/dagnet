@@ -18,6 +18,7 @@ class ScenarioData(BaseModel):
     """Graph data for a single scenario."""
     scenario_id: str = Field(default="base", description="Unique scenario identifier")
     name: Optional[str] = Field(default=None, description="Human-readable scenario name")
+    colour: Optional[str] = Field(default=None, description="Hex colour code for scenario")
     graph: dict[str, Any] = Field(description="Full graph data (nodes, edges, policies, metadata)")
     param_overrides: dict[str, Any] = Field(
         default_factory=dict,
@@ -48,27 +49,89 @@ class AnalysisRequest(BaseModel):
 
 
 # ============================================================================
-# Response Types
+# Response Types - Declarative Schema
+# See: /docs/current/project-analysis/ANALYSIS_RETURN_SCHEMA.md
 # ============================================================================
 
+class DimensionSpec(BaseModel):
+    """Specification for a data dimension."""
+    id: str = Field(description="Field name in data rows")
+    name: str = Field(description="Human-readable label")
+    type: str = Field(description="Semantic type: scenario, stage, outcome, node, time, categorical, ordinal")
+    role: str = Field(default="primary", description="Role: primary, secondary, filter")
+
+
+class MetricSpec(BaseModel):
+    """Specification for a metric."""
+    id: str = Field(description="Field name in data rows")
+    name: str = Field(description="Human-readable label")
+    type: str = Field(description="Semantic type: probability, currency, duration, count, ratio, delta")
+    format: Optional[str] = Field(default=None, description="Display format: percent, currency_gbp, number")
+    role: Optional[str] = Field(default=None, description="Visual role: primary, secondary")
+
+
+class ChartSpec(BaseModel):
+    """Chart rendering specification."""
+    recommended: str = Field(description="Recommended chart type: funnel, bar, bar_grouped, line, table, comparison, single_value")
+    alternatives: list[str] = Field(default_factory=list, description="Alternative valid chart types")
+    hints: dict[str, Any] = Field(default_factory=dict, description="Chart-specific hints")
+
+
+class ResultSemantics(BaseModel):
+    """How to interpret and render the data."""
+    dimensions: list[DimensionSpec] = Field(description="Data dimensions")
+    metrics: list[MetricSpec] = Field(description="Data metrics")
+    chart: ChartSpec = Field(description="Chart specification")
+
+
+class DimensionValueMeta(BaseModel):
+    """Metadata for a dimension value."""
+    name: str = Field(description="Human-readable label")
+    colour: Optional[str] = Field(default=None, description="Hex colour code")
+    order: Optional[int] = Field(default=None, description="Sort order")
+
+
 class AnalysisResult(BaseModel):
-    """Analysis result for a single scenario."""
-    scenario_id: str = Field(description="Scenario identifier")
+    """Analysis result with declarative schema.
+    
+    See: /docs/current/project-analysis/ANALYSIS_RETURN_SCHEMA.md
+    """
+    # Identity
     analysis_type: str = Field(description="Matched analysis type ID")
     analysis_name: str = Field(description="Human-readable analysis name")
     analysis_description: str = Field(default="", description="Analysis description")
-    data: dict[str, Any] = Field(
+    
+    # Static context
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
-        description="Analysis-specific result data (JSON)"
+        description="Analysis-specific context that doesn't vary by dimension"
+    )
+    
+    # How to interpret the data
+    semantics: Optional[ResultSemantics] = Field(
+        default=None,
+        description="Declarative schema for rendering"
+    )
+    
+    # Per-dimension-value metadata
+    dimension_values: dict[str, dict[str, DimensionValueMeta]] = Field(
+        default_factory=dict,
+        description="Metadata per dimension value (labels, colours, order)"
+    )
+    
+    # The actual data
+    data: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Data rows with dimension and metric values"
     )
 
 
 class AnalysisResponse(BaseModel):
     """Response from analytics computation."""
     success: bool = Field(default=True, description="Whether analysis succeeded")
-    results: list[AnalysisResult] = Field(
-        default_factory=list,
-        description="Results per scenario"
+    result: Optional[AnalysisResult] = Field(
+        default=None,
+        description="Analysis result"
     )
     query_dsl: Optional[str] = Field(default=None, description="The DSL query used")
     error: Optional[dict[str, Any]] = Field(
@@ -78,7 +141,7 @@ class AnalysisResponse(BaseModel):
 
 
 # ============================================================================
-# Legacy Types (for backwards compatibility)
+# Supporting Types (used by what-if and path analysis)
 # ============================================================================
 
 class CostResult(BaseModel):

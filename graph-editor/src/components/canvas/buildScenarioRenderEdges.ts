@@ -8,7 +8,7 @@
 
 import { Edge } from 'reactflow';
 import { computeEffectiveEdgeProbability } from '../../lib/whatIf';
-import { composeParams } from '../../services/CompositionService';
+import { getComposedParamsForLayer } from '../../services/CompositionService';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, SANKEY_MAX_EDGE_WIDTH } from '../../lib/nodeEdgeConstants';
 
 interface BuildScenarioRenderEdgesParams {
@@ -203,26 +203,19 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     const isVisible = visibleScenarioIds.includes(scenarioId);
     const colour = getScenarioColour(scenarioId, isVisible);
 
-    // Compose params based on layer type and visibility
-    let composedParams = baseParams;
-    if (scenarioId === 'base') {
-      composedParams = baseParams;
-    } else if (scenarioId === 'current') {
-      // current layer reads from live graph, does NOT compose from scenarios
-      composedParams = baseParams; // Not used for current, kept for consistency
-    } else if (scenario) {
-      // Compose from base + ALL VISIBLE layers below this one in stack
-      const currentIndex = visibleScenarioIds.indexOf(scenarioId);
-      const layersBelowIds = visibleScenarioIds.slice(0, currentIndex)
-        .filter(id => id !== 'current' && id !== 'base');
-
-      const layersBelow = layersBelowIds
-        .map(id => scenarios.find((s: any) => s.id === id)?.params)
-        .filter((p): p is NonNullable<typeof p> => p !== undefined);
-
-      composedParams = composeParams(baseParams, layersBelow.concat([scenario.params]));
-    } else {
-      // Unknown id - skip
+    // Compose params based on layer type - use centralized composition
+    // Note: 'current' layer reads from live graph at render time, so we use baseParams here
+    // but the actual probability is resolved via probResolver below
+    const composedParams = getComposedParamsForLayer(
+      scenarioId,
+      baseParams,
+      baseParams, // currentParams not needed here - 'current' uses live graph values
+      scenarios,
+      visibleScenarioIds
+    );
+    
+    // Skip unknown scenarios that couldn't be composed
+    if (scenarioId !== 'base' && scenarioId !== 'current' && !scenario) {
       continue;
     }
 

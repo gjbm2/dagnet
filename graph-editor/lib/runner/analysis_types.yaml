@@ -19,13 +19,15 @@
 # CONDITIONS: All must match (AND). Operators: exact, {gte:}, {lte:}
 
 analyses:
-  # =========== EMPTY DSL ===========
-  - id: graph_overview
+  # =========== EMPTY DSL (higher priority for auto-select) ===========
+  - id: graph_overview_empty
     name: "Graph Overview"
     description: "Overall outcomes from all entry points"
     when:
       node_count: 0
     runner: graph_overview_runner
+    
+  # =========== SINGLE NODE (node_count=1) ===========
 
   # =========== SINGLE NODE (node_count=1) ===========
   
@@ -106,10 +108,21 @@ analyses:
 
   # =========== THREE+ NODES ===========
   
-  # from(A).to(B).visited(C) - constrained path
+  # from(A).to(B).visited(C) - conversion funnel (DEFAULT - no pruning)
+  - id: conversion_funnel
+    name: "Conversion Funnel"
+    description: "Probability at each stage of the journey"
+    when:
+      node_count: { gte: 3 }
+      has_from: true
+      has_to: true
+    runner: conversion_funnel_runner
+    
+  # from(A).to(B).visited(C) - constrained path (with pruning)
+  # Use this when you only want paths that pass through ALL waypoints
   - id: constrained_path
     name: "Constrained Path"
-    description: "Path from start to end through waypoints"
+    description: "Path constrained to pass through all waypoints"
     when:
       node_count: { gte: 3 }
       has_from: true
@@ -149,27 +162,6 @@ analyses:
       all_are_siblings: true
     runner: branch_comparison_runner
 
-  # =========== MULTI-SCENARIO (requires multiple_scenarios: true) ===========
-  
-  # Scenario comparison for path
-  - id: scenario_path_comparison
-    name: "Scenario Path Comparison"
-    description: "Compare path probabilities across scenarios"
-    when:
-      has_from: true
-      has_to: true
-      multiple_scenarios: true
-    runner: scenario_comparison_runner
-
-  # Scenario comparison for any DSL
-  - id: scenario_comparison
-    name: "Scenario Comparison"
-    description: "Compare outcomes across scenarios"
-    when:
-      node_count: { gte: 1 }
-      multiple_scenarios: true
-    runner: scenario_comparison_runner
-
   # =========== FALLBACK ===========
   - id: general_selection
     name: "Selection Statistics"
@@ -177,4 +169,12 @@ analyses:
     when:
       node_count: { gte: 1 }
     runner: general_stats_runner
-
+    
+  # Graph overview is ALSO always available as an option (even when nodes selected)
+  # This allows users to see overall graph stats regardless of selection
+  - id: graph_overview
+    name: "Graph Overview"
+    description: "Overall outcomes from all entry points"
+    when:
+      # No conditions = always available
+    runner: graph_overview_runner

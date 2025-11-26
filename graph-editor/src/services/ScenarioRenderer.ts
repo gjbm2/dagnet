@@ -7,7 +7,7 @@
 
 import { Graph, GraphEdge } from '../types';
 import { Scenario, ScenarioParams } from '../types/scenarios';
-import { composeParams } from './CompositionService';
+import { getComposedParamsForLayer } from './CompositionService';
 import { assignColours } from './ColourAssigner';
 
 /**
@@ -66,15 +66,15 @@ export function renderScenarios(
     // 2. Compute edge widths using composed params
     // 3. Compute Sankey offsets
     
-    // Get all scenarios up to and including this one (in render order)
-    const layersUpToThis = visibleScenarioIds
-      .slice(0, visibleScenarioIds.indexOf(scenarioId) + 1)
-      .map(id => scenarios.find(s => s.id === id))
-      .filter((s): s is Scenario => s !== undefined);
-    
-    // Compose parameters
-    const overlays = layersUpToThis.map(s => s.params);
-    const composedParams = composeParams(baseParams, overlays);
+    // Compose parameters - use centralized composition
+    // Note: baseParams serves as both base and current for rendering
+    const composedParams = getComposedParamsForLayer(
+      scenarioId,
+      baseParams,
+      baseParams, // currentParams not needed for scenario overlays
+      scenarios,
+      visibleScenarioIds
+    );
     
     // Compute edge render data
     const edgeRenderData = computeEdgeRenderData(graph, composedParams);
