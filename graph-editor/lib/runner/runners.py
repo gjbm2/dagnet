@@ -541,7 +541,7 @@ def run_path(
                 prob = result.probability
                 cost_gbp = result.expected_cost_gbp
                 cost_time = result.expected_cost_time
-                
+            
                 # Get statistics from incoming edge to this stage
                 prev_stage = stage_ids[i - 1]
                 stdev = None

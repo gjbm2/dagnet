@@ -355,8 +355,8 @@ export class GraphComputeClient {
     if (!response.ok) {
       const contentType = response.headers.get('content-type');
       if (contentType?.includes('application/json')) {
-        const error = await response.json();
-        throw new Error(`Analysis failed: ${error.detail || error.error || response.statusText}`);
+      const error = await response.json();
+      throw new Error(`Analysis failed: ${error.detail || error.error || response.statusText}`);
       } else {
         throw new Error(`Analysis API unavailable (${response.status}). Ensure Python backend is running or serverless functions are deployed.`);
       }
