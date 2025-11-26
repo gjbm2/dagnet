@@ -1,13 +1,14 @@
 import { LayoutData } from 'rc-dock';
 import React from 'react';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
+import { DEFAULT_SIDEBAR_WIDTH } from '../lib/uiConstants';
 
 /**
  * Full layout for graph editor including canvas and sidebar panels
  * 
  * Structure: 
  * - Main area (left, flex): Canvas panel
- * - Sidebar (right, 300px): Scenarios/Properties/Tools tabs
+ * - Sidebar (right): Scenarios/Properties/Tools tabs
  * 
  * This layout spans the entire graph editor, allowing floatbox to move freely
  */
@@ -34,15 +35,15 @@ export function getGraphEditorLayout(): LayoutData {
         // Sidebar panels (right, constrained width)
         {
           id: 'graph-sidebar-panel',
-          size: 300,
+          size: DEFAULT_SIDEBAR_WIDTH,
           tabs: [
             {
               id: 'what-if-tab',
               title: React.createElement('div', { 
                 className: 'dock-tab-title',
-                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+                style: { display: 'flex', alignItems: 'center', gap: '4px' }
               },
-                React.createElement(Layers, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Layers, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -62,9 +63,9 @@ export function getGraphEditorLayout(): LayoutData {
               id: 'properties-tab',
               title: React.createElement('div', { 
                 className: 'dock-tab-title',
-                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+                style: { display: 'flex', alignItems: 'center', gap: '4px' }
               },
-                React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(FileText, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -84,9 +85,9 @@ export function getGraphEditorLayout(): LayoutData {
               id: 'tools-tab',
               title: React.createElement('div', { 
                 className: 'dock-tab-title',
-                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+                style: { display: 'flex', alignItems: 'center', gap: '4px' }
               },
-                React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Wrench, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -106,9 +107,9 @@ export function getGraphEditorLayout(): LayoutData {
               id: 'analytics-tab',
               title: React.createElement('div', { 
                 className: 'dock-tab-title',
-                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+                style: { display: 'flex', alignItems: 'center', gap: '4px' }
               },
-                React.createElement(BarChart3, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(BarChart3, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -166,9 +167,9 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
               id: 'what-if-tab',
               title: React.createElement('div', { 
                 className: 'dock-tab-title',
-                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+                style: { display: 'flex', alignItems: 'center', gap: '4px' }
               },
-                React.createElement(Layers, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Layers, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -188,9 +189,9 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
               id: 'properties-tab',
               title: React.createElement('div', { 
                 className: 'dock-tab-title',
-                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+                style: { display: 'flex', alignItems: 'center', gap: '4px' }
               },
-                React.createElement(FileText, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(FileText, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -210,9 +211,9 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
               id: 'tools-tab',
               title: React.createElement('div', { 
                 className: 'dock-tab-title',
-                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+                style: { display: 'flex', alignItems: 'center', gap: '4px' }
               },
-                React.createElement(Wrench, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(Wrench, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 
@@ -232,9 +233,9 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
               id: 'analytics-tab',
               title: React.createElement('div', { 
                 className: 'dock-tab-title',
-                style: { display: 'flex', alignItems: 'center', gap: '6px' }
+                style: { display: 'flex', alignItems: 'center', gap: '4px' }
               },
-                React.createElement(BarChart3, { size: 14, strokeWidth: 2, style: { flexShrink: 0 } }),
+                React.createElement(BarChart3, { size: 12, strokeWidth: 2, style: { flexShrink: 0 } }),
                 React.createElement('span', { 
                   style: { 
                     flex: 1, 

@@ -133,12 +133,26 @@
   pointer-events: none !important;
 }
 
-/* Sidebar tabs - smaller font size (both docked and floating) */
-/* Use data-node-key to identify sidebar tabs regardless of position */
-[data-node-key="what-if-tab"] .dock-tab,
-[data-node-key="properties-tab"] .dock-tab,
-[data-node-key="tools-tab"] .dock-tab {
-  font-size: 11px !important;
+/* Sidebar tabs - smaller font size and tighter spacing (both docked and floating) */
+/* Target all tabs within the sidebar panel */
+.dock-panel[data-panel-id="graph-sidebar-panel"] .dock-tab,
+.dock-panel[data-dockid="graph-sidebar-panel"] .dock-tab,
+/* Also target floating sidebar tabs */
+.dock-fbox:has([data-node-key="what-if-tab"]) .dock-tab,
+.dock-fbox:has([data-node-key="properties-tab"]) .dock-tab,
+.dock-fbox:has([data-node-key="tools-tab"]) .dock-tab,
+.dock-fbox:has([data-node-key="analytics-tab"]) .dock-tab {
+  font-size: 10px !important;
+}
+
+/* Reduce padding in sidebar tab inner div (rc-dock default is 4px 14px) */
+.dock-panel[data-panel-id="graph-sidebar-panel"] .dock-tab > div,
+.dock-panel[data-dockid="graph-sidebar-panel"] .dock-tab > div,
+.dock-fbox:has([data-node-key="what-if-tab"]) .dock-tab > div,
+.dock-fbox:has([data-node-key="properties-tab"]) .dock-tab > div,
+.dock-fbox:has([data-node-key="tools-tab"]) .dock-tab > div,
+.dock-fbox:has([data-node-key="analytics-tab"]) .dock-tab > div {
+  padding: 5px 8px !important; /* Tighter than default 4px 14px */
 }
 
 /* Floating panels styling */
