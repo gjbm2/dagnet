@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { GraphEdge, ConditionalProbability, ProbabilityParam } from '../../types';
-import type { DslObject } from '../../lib/das/buildDslFromEdge';
+import type { QueryPayload } from '../../lib/das/buildDslFromEdge';
 
 describe('Conditional Probability Integration Tests', () => {
   
@@ -341,11 +341,10 @@ describe('Super-funnel URL construction verification', () => {
   
   it('should include all events in correct order for super-funnel', () => {
     // Simulates the pre_request script logic from connections.yaml
-    const dsl: DslObject = {
+    const dsl: QueryPayload = {
       from: 'User sees dashboard',
       to: 'Blueprint CheckpointReached',
-      visited_upstream: ['BankAccount DetailsEntryConfirmed'],
-      event_filters: {}
+      visited_upstream: ['BankAccount DetailsEntryConfirmed']
     };
     
     const events: any[] = [];
@@ -378,11 +377,10 @@ describe('Super-funnel URL construction verification', () => {
   });
 
   it('should handle multiple upstream visited events', () => {
-    const dsl: DslObject = {
+    const dsl: QueryPayload = {
       from: 'Step C',
       to: 'Step D',
-      visited_upstream: ['Step A', 'Step B'], // Two upstream events
-      event_filters: {}
+      visited_upstream: ['Step A', 'Step B'] // Two upstream events
     };
     
     const events: any[] = [];
@@ -407,11 +405,10 @@ describe('Super-funnel URL construction verification', () => {
   });
 
   it('should handle no upstream visited events (standard funnel)', () => {
-    const dsl: DslObject = {
+    const dsl: QueryPayload = {
       from: 'Event A',
-      to: 'Event B',
+      to: 'Event B'
       // No visited_upstream
-      event_filters: {}
     };
     
     const events: any[] = [];
@@ -433,12 +430,11 @@ describe('Super-funnel URL construction verification', () => {
   });
 
   it('should handle visited (between) events separately from visited_upstream', () => {
-    const dsl: DslObject = {
+    const dsl: QueryPayload = {
       from: 'Event B',
       to: 'Event D',
       visited_upstream: ['Event A'], // Before from
-      visited: ['Event C'], // Between from and to
-      event_filters: {}
+      visited: ['Event C'] // Between from and to
     };
     
     const events: any[] = [];

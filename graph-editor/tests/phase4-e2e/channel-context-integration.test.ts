@@ -9,7 +9,7 @@
  * 5. Verify complete funnel construction with context filters
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { buildDslFromEdge } from '../../src/lib/das/buildDslFromEdge';
 import { parseConstraints } from '../../src/lib/queryDSL';
 import { contextRegistry } from '../../src/services/contextRegistry';
@@ -89,29 +89,29 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
         filter: "utm_medium == 'cpc'"
       });
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', eventLoader, constraints);
+      const { queryPayload, eventDefinitions } = await buildDslFromEdge(edge, graph, 'amplitude', eventLoader, constraints);
       
-      // Verify DSL structure
-      expect(result.from).toBe('Household DelegationStatusChanged');
-      expect(result.to).toBe('Viewed WhatsApp details /onboarding/whatsApp-details Page');
-      expect(result.context_filters).toBeDefined();
-      expect(result.context_filters).toHaveLength(1);
+      // Verify QueryPayload structure - from/to now contain event IDs, not provider names
+      expect(queryPayload.from).toBe('household-delegated');
+      expect(queryPayload.to).toBe('saw-wa-details-page');
+      expect(queryPayload.context_filters).toBeDefined();
+      expect(queryPayload.context_filters).toHaveLength(1);
       // Context filters now return structured objects instead of strings
-      expect(result.context_filters![0]).toEqual({ field: 'utm_medium', op: 'is', values: ['cpc'] });
+      expect(queryPayload.context_filters![0]).toEqual({ field: 'utm_medium', op: 'is', values: ['cpc'] });
       
-      // Verify event filters for Amplitude properties
-      expect(result.event_filters).toBeDefined();
-      expect(result.event_filters!['Household DelegationStatusChanged']).toBeDefined();
-      expect(result.event_filters!['Household DelegationStatusChanged']).toHaveLength(1);
-      expect(result.event_filters!['Household DelegationStatusChanged'][0].property).toBe('newDelegationStatus');
-      expect(result.event_filters!['Household DelegationStatusChanged'][0].operator).toBe('is any of');
-      expect(result.event_filters!['Household DelegationStatusChanged'][0].values).toContain('ON');
+      // Verify event definitions contain filter info
+      expect(eventDefinitions).toBeDefined();
+      expect(eventDefinitions['household-delegated']).toBeDefined();
+      expect(eventDefinitions['household-delegated'].amplitude_filters).toHaveLength(1);
+      expect(eventDefinitions['household-delegated'].amplitude_filters[0].property).toBe('newDelegationStatus');
+      expect(eventDefinitions['household-delegated'].amplitude_filters[0].operator).toBe('is any of');
+      expect(eventDefinitions['household-delegated'].amplitude_filters[0].values).toContain('ON');
       
       console.log('\n[E2E Test] ✅ Google Channel Funnel Built Successfully');
-      console.log('[E2E Test] From:', result.from);
-      console.log('[E2E Test] To:', result.to);
-      console.log('[E2E Test] Context Filter:', result.context_filters![0]);
-      console.log('[E2E Test] Event Filters:', JSON.stringify(result.event_filters, null, 2));
+      console.log('[E2E Test] From:', queryPayload.from);
+      console.log('[E2E Test] To:', queryPayload.to);
+      console.log('[E2E Test] Context Filter:', queryPayload.context_filters![0]);
+      console.log('[E2E Test] Event Definitions:', JSON.stringify(eventDefinitions, null, 2));
     });
     
     it('should build funnel for Influencer channel', async () => {
@@ -147,14 +147,14 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
         filter: "utm_medium == 'Influencers'"
       });
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
-      expect(result.context_filters).toBeDefined();
+      expect(queryPayload.context_filters).toBeDefined();
       // Context filters now return structured objects instead of strings
-      expect(result.context_filters![0]).toEqual({ field: 'utm_medium', op: 'is', values: ['Influencers'] });
+      expect(queryPayload.context_filters![0]).toEqual({ field: 'utm_medium', op: 'is', values: ['Influencers'] });
       
       console.log('\n[E2E Test] ✅ Influencer Channel Funnel Built');
-      console.log('[E2E Test] Context Filter:', result.context_filters![0]);
+      console.log('[E2E Test] Context Filter:', queryPayload.context_filters![0]);
     });
     
     it('should build funnel for Paid Social channel with regex', async () => {
@@ -191,18 +191,18 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
         patternFlags: 'i'
       });
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
-      expect(result.context_filters).toBeDefined();
+      expect(queryPayload.context_filters).toBeDefined();
       // Context filters now return structured objects - regex patterns use 'matches' op
-      expect(result.context_filters![0]).toMatchObject({ 
+      expect(queryPayload.context_filters![0]).toMatchObject({ 
         field: 'utm_medium', 
         op: 'matches',
         pattern: '^(Paid Social|paidsocial)$'
       });
       
       console.log('\n[E2E Test] ✅ Paid Social Channel Funnel Built (Regex)');
-      console.log('[E2E Test] Context Filter:', result.context_filters![0]);
+      console.log('[E2E Test] Context Filter:', queryPayload.context_filters![0]);
     });
     
     it('should build funnel for "other" channel with computed NOT filter', async () => {
@@ -253,16 +253,16 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
           return mappings[value];
         });
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       // "other" with computed policy returns a NOT filter structure
-      expect(result.context_filters).toBeDefined();
-      expect(result.context_filters).toHaveLength(1);
+      expect(queryPayload.context_filters).toBeDefined();
+      expect(queryPayload.context_filters).toHaveLength(1);
       // Verify it's a NOT/exclusion filter for utm_medium
-      expect(result.context_filters![0]).toHaveProperty('field', 'utm_medium');
+      expect(queryPayload.context_filters![0]).toHaveProperty('field', 'utm_medium');
       
       console.log('\n[E2E Test] ✅ "Other" Channel Funnel Built (Computed NOT filter)');
-      console.log('[E2E Test] Context Filter:', result.context_filters![0]);
+      console.log('[E2E Test] Context Filter:', queryPayload.context_filters![0]);
       console.log('\n[E2E Test] This filter excludes: google, influencer, paid-social, referral, pr');
       console.log('[E2E Test] Includes all other utm_medium values (email, sms, affiliate, etc.)');
     });
@@ -355,7 +355,7 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
         query: 'from(household-delegated).to(saw-wa-details-page)'
       };
       
-      const baselineResult = await buildDslFromEdge(
+      const { queryPayload: baselineResult } = await buildDslFromEdge(
         baselineEdge, 
         graph, 
         'amplitude', 
@@ -370,7 +370,7 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
       
       // 2. Build DSL queries for each explicit channel
       const explicitChannels = ['google', 'influencer', 'paid-social', 'referral', 'pr'];
-      const channelFilters: Record<string, string> = {};
+      const channelFilters: Record<string, any> = {};
       
       console.log('[E2E Test] 2. Explicit Channel Filters:');
       
@@ -392,7 +392,7 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
           vi.spyOn(contextRegistry, 'getSourceMapping').mockResolvedValue(amplitudeSource);
         }
         
-        const result = await buildDslFromEdge(
+        const { queryPayload } = await buildDslFromEdge(
           channelEdge,
           graph,
           'amplitude',
@@ -400,8 +400,8 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
           constraints
         );
         
-        channelFilters[channelId] = result.context_filters![0];
-        console.log(`[E2E Test]    ${channelId.padEnd(13)}: ${result.context_filters![0]}`);
+        channelFilters[channelId] = queryPayload.context_filters![0];
+        console.log(`[E2E Test]    ${channelId.padEnd(13)}: ${JSON.stringify(queryPayload.context_filters![0])}`);
       }
       
       console.log('[E2E Test]');
@@ -435,7 +435,7 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
           return mappings[value];
         });
       
-      const otherResult = await buildDslFromEdge(
+      const { queryPayload: otherResult } = await buildDslFromEdge(
         otherEdge,
         graph,
         'amplitude',
@@ -444,7 +444,7 @@ describe('Phase 4 E2E: Channel Context with Real Funnel', () => {
       );
       
       console.log('[E2E Test] 3. Computed "Other" Filter (otherPolicy: computed):');
-      console.log('[E2E Test]    Filter:', otherResult.context_filters![0]);
+      console.log('[E2E Test]    Filter:', JSON.stringify(otherResult.context_filters![0]));
       console.log('[E2E Test]');
       
       // 4. Verify "other" filter structure

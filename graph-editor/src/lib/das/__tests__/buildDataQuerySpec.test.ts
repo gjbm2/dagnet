@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildDataQuerySpec } from '../buildDataQuerySpec';
-import type { DslObject, ContextFilterObject } from '../buildDslFromEdge';
+import type { QueryPayload, ContextFilterObject } from '../buildDslFromEdge';
 import { parseConstraints } from '../../queryDSL';
 import { contextRegistry } from '../../../services/contextRegistry';
 
@@ -17,7 +17,7 @@ describe('buildDataQuerySpec', () => {
   });
   
   it('should build spec from DSL with context filters', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'signup',
       to: 'purchase',
       context_filters: [{
@@ -38,7 +38,7 @@ describe('buildDataQuerySpec', () => {
     });
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'test-conn-id',
       'amplitude',
       constraints,
@@ -57,13 +57,13 @@ describe('buildDataQuerySpec', () => {
   });
 
   it('should handle DSL without context filters', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'a',
       to: 'b'
     };
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'conn-id',
       'amplitude',
       undefined,
@@ -75,14 +75,14 @@ describe('buildDataQuerySpec', () => {
   });
 
   it('should include visited constraints in spec', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'a',
       to: 'c',
       visited: ['b']
     };
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'conn-id',
       'amplitude',
       undefined,
@@ -93,14 +93,14 @@ describe('buildDataQuerySpec', () => {
   });
 
   it('should include exclude constraints in spec', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'a',
       to: 'c',
       exclude: ['x', 'y']
     };
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'conn-id',
       'amplitude',
       undefined,
@@ -111,7 +111,7 @@ describe('buildDataQuerySpec', () => {
   });
 
   it('should handle window dates in spec', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'a',
       to: 'b',
       start: '2025-01-01T00:00:00Z',
@@ -119,7 +119,7 @@ describe('buildDataQuerySpec', () => {
     };
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'conn-id',
       'amplitude',
       undefined,
@@ -132,7 +132,7 @@ describe('buildDataQuerySpec', () => {
   });
 
   it('should not include window bounds for daily mode', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'a',
       to: 'b',
       start: '2025-01-01T00:00:00Z',
@@ -140,7 +140,7 @@ describe('buildDataQuerySpec', () => {
     };
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'conn-id',
       'amplitude',
       undefined,
@@ -151,7 +151,7 @@ describe('buildDataQuerySpec', () => {
   });
 
   it('should handle multiple context filters', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'a',
       to: 'b',
       context_filters: [
@@ -181,7 +181,7 @@ describe('buildDataQuerySpec', () => {
       });
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'conn-id',
       'amplitude',
       constraints,
@@ -194,14 +194,14 @@ describe('buildDataQuerySpec', () => {
   });
 
   it('should include visitedAny in spec', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'a',
       to: 'd',
       visitedAny: [['b', 'c']]
     };
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'conn-id',
       'amplitude',
       undefined,
@@ -213,14 +213,14 @@ describe('buildDataQuerySpec', () => {
   });
 
   it('should handle case filters in spec', async () => {
-    const dsl: DslObject = {
+    const queryPayload: QueryPayload = {
       from: 'a',
       to: 'b',
       case: [{ key: 'experiment-1', value: 'variant-a' }]
     };
     
     const spec = await buildDataQuerySpec(
-      dsl,
+      queryPayload,
       'conn-id',
       'amplitude',
       undefined,

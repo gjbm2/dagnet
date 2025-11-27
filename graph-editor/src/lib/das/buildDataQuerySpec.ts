@@ -4,16 +4,16 @@
  * Used by adapters to generate signatures for stored data.
  */
 
-import type { DslObject } from './buildDslFromEdge';
+import type { QueryPayload } from './buildDslFromEdge';
 import type { DataQuerySpec } from '../../services/querySignatureService';
 import { contextRegistry } from '../../services/contextRegistry';
 import type { ParsedConstraints } from '../queryDSL';
 
 /**
- * Build a DataQuerySpec from a DSL object and connection info.
+ * Build a DataQuerySpec from a QueryPayload and connection info.
  * This spec can then be passed to querySignatureService to generate a signature.
  * 
- * @param dsl - DSL object from buildDslFromEdge
+ * @param queryPayload - QueryPayload from buildDslFromEdge
  * @param connectionId - Connection ID
  * @param connectionType - Connection type (e.g., "amplitude")
  * @param constraints - Original parsed constraints (for context info)
@@ -21,7 +21,7 @@ import type { ParsedConstraints } from '../queryDSL';
  * @returns DataQuerySpec for signature generation
  */
 export async function buildDataQuerySpec(
-  dsl: DslObject,
+  queryPayload: QueryPayload,
   connectionId: string,
   connectionType: 'amplitude' | 'sheets' | 'statsig' | 'optimizely',
   constraints?: ParsedConstraints,
@@ -63,21 +63,21 @@ export async function buildDataQuerySpec(
   const spec: DataQuerySpec = {
     connectionId,
     connectionType,
-    fromNode: dsl.from,
-    toNode: dsl.to,
-    visited: dsl.visited || [],
-    excluded: dsl.exclude || [],
-    cases: dsl.case || [],
+    fromNode: queryPayload.from,
+    toNode: queryPayload.to,
+    visited: queryPayload.visited || [],
+    excluded: queryPayload.exclude || [],
+    cases: queryPayload.case || [],
     contextFilters,
     granularity,
     adapterOptions: {}
   };
   
   // Include window bounds only for aggregate mode
-  if (granularity === 'aggregate' && dsl.start && dsl.end) {
+  if (granularity === 'aggregate' && queryPayload.start && queryPayload.end) {
     spec.windowBounds = {
-      start: dsl.start,
-      end: dsl.end
+      start: queryPayload.start,
+      end: queryPayload.end
     };
   }
   

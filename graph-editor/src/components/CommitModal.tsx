@@ -104,11 +104,17 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
       const nameWithoutExt = name.replace(/\.(json|yaml|yml)$/, '');
       const fileName = `${nameWithoutExt}.${extension}`;
       
+      // Determine correct path - ensure graphs always use .json extension
+      let filePath = file.source?.path || file.path || `${type}s/${fileName}`;
+      if (type === 'graph' && filePath.endsWith('.yaml')) {
+        filePath = filePath.replace(/\.yaml$/, '.json');
+      }
+      
       return {
         fileId,
         name: nameWithoutExt,
         type,
-        path: file.source?.path || file.path || `${type}s/${fileName}`,
+        path: filePath,
         content: file.data ? JSON.stringify(file.data, null, 2) : '',
         sha: file.sha
       };

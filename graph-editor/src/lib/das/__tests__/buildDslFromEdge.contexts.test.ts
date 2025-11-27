@@ -59,7 +59,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       
       const constraints = parseConstraints('context(channel:google)');
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       expect(result.context_filters).toBeDefined();
       expect(result.context_filters![0]).toEqual(expect.objectContaining({
@@ -94,7 +94,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('context(channel:other)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       // otherPolicy: null means no filter (query all data)
       expect(result.context_filters).toBeUndefined();
@@ -127,7 +127,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('context(channel:other)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       // otherPolicy: computed generates "is not" filter with all explicit values
       expect(result.context_filters).toBeDefined();
@@ -164,7 +164,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('context(channel:other)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       // otherPolicy: explicit uses the provided filter
       expect(result.context_filters).toBeDefined();
@@ -209,7 +209,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('context(channel:social)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       // Regex pattern should be converted to structured filter with pattern
       expect(result.context_filters).toBeDefined();
@@ -260,7 +260,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('context(channel:google).context(device:mobile)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       // Multiple contexts should result in AND-ed filters (array of filter objects)
       expect(result.context_filters).toBeDefined();
@@ -289,7 +289,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('window(-30d:)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       expect(result.start).toBeDefined();
       expect(result.end).toBeUndefined(); // Open-ended
@@ -315,7 +315,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('window(-2w:-1w)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       expect(result.start).toBeDefined();
       expect(result.end).toBeDefined();
@@ -349,7 +349,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('window(1-Jan-25:31-Dec-25)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       expect(result.start).toBeDefined();
       expect(result.end).toBeDefined();
@@ -378,7 +378,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('window(:-30d)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       expect(result.start).toBeUndefined(); // Open-ended past
       expect(result.end).toBeDefined();
@@ -424,7 +424,7 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       };
       
       const constraints = parseConstraints('context(channel:google).window(-30d:)');
-      const result = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
       
       // Should have both context filter and window dates
       expect(result.context_filters).toBeDefined();
