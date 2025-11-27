@@ -264,21 +264,6 @@ connections:
           dsl.from_step_index = fromStepIndex;  // Index of 'from' step (after any upstream visited)
           dsl.to_step_index = events.length - 1;  // 'to' is always last step
           
-          if (fromStepIndex > 0) {
-            console.log('[Amplitude Adapter] SUPER-FUNNEL mode: from_step_index=' + fromStepIndex + 
-                        ', to_step_index=' + dsl.to_step_index + 
-                        ' (upstream events at indices 0-' + (fromStepIndex - 1) + ')');
-          }
-          
-          console.log('[Amplitude Adapter] Built funnel:', {
-            events: events,
-            query_params: dsl.query_params,
-            from_index: dsl.from_step_index,
-            to_index: dsl.to_step_index,
-            excluded_cohorts: connection.excluded_cohorts || [],
-            case_filters: dsl.case || []
-          });
-          
           return dsl;
       request:
         # Dashboard REST API uses GET with query parameters
@@ -292,6 +277,7 @@ connections:
       response:
         extract:
           # Extract aggregate data (cumulativeRaw) - always available
+          # from_step_index/to_step_index set by pre_request script based on funnel structure
           - name: from_count
             jmes: "data[0].cumulativeRaw[{{from_step_index}}]"
           - name: to_count
