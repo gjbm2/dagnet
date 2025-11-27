@@ -310,7 +310,7 @@ export function extractSheetsUpdateData(
  * Includes event_ids from nodes to detect when event definitions change
  */
 export async function computeQuerySignature(
-  dsl: any, 
+  queryPayload: any, 
   connectionName?: string,
   graph?: Graph | null,
   edge?: any
@@ -375,18 +375,18 @@ export async function computeQuerySignature(
     const canonical = JSON.stringify({
       connection: connectionName || '',
       // Provider-specific event names (from DSL)
-      from: dsl.from || '',
-      to: dsl.to || '',
-      visited: (dsl.visited || []).sort(),
-      exclude: (dsl.exclude || []).sort(),
+      from: queryPayload.from || '',
+      to: queryPayload.to || '',
+      visited: (queryPayload.visited || []).sort(),
+      exclude: (queryPayload.exclude || []).sort(),
       // Original event_ids from nodes (for change detection)
       from_event_id: from_event_id || '',
       to_event_id: to_event_id || '',
       visited_event_ids: visited_event_ids.sort(),
       exclude_event_ids: exclude_event_ids.sort(),
-      event_filters: dsl.event_filters || {},
-      context: (dsl.context || []).sort(),
-      case: (dsl.case || []).sort(),
+      event_filters: queryPayload.event_filters || {},
+      context: (queryPayload.context || []).sort(),
+      case: (queryPayload.case || []).sort(),
       // IMPORTANT: Include original query string to capture minus()/plus() terms
       // which are NOT preserved in the DSL object by buildDslFromEdge
       original_query: edge?.query || '',
@@ -625,16 +625,18 @@ class DataOperationsService {
                 }
                 
                 // Build DSL from edge
-                const dsl = await buildDslFromEdge(
+                const compResult = await buildDslFromEdge(
                   targetEdge,
                   graph,
                   connectionProvider,
                   eventLoader,
                   constraints  // Pass constraints for context filters
                 );
+                const compDsl = compResult.queryPayload;
+                const compEventDefs = compResult.eventDefinitions;
                 
                 // Compute expected query signature (include event_ids from nodes)
-                expectedQuerySignature = await computeQuerySignature(dsl, connectionName, graph, targetEdge);
+                expectedQuerySignature = await computeQuerySignature(compDsl, connectionName, graph, targetEdge);
                 
                 // Find the latest query signature by timestamp
                 // Group entries by query signature and find the most recent timestamp for each
@@ -2135,7 +2137,8 @@ class DataOperationsService {
         { sourceType: connectionName });
       
       // 3. Build DSL from edge query (if available in graph)
-      let dsl: any = {};
+      let queryPayload: any = {};
+      let eventDefinitions: Record<string, any> = {};  // Event file data for adapter
       let connectionProvider: string | undefined;
       let supportsDailyTimeSeries = false; // Capability from connections.yaml
       
@@ -2143,7 +2146,7 @@ class DataOperationsService {
         // Cases don't need DSL building
         // Statsig adapter only needs caseId (passed via context below)
         console.log('[DataOperationsService] Skipping DSL build for case (caseId passed via context)');
-        dsl = {};  // Empty DSL is fine
+        queryPayload = {};  // Empty DSL is fine
         
       } else if (targetId && graph) {
         // Parameters: build DSL from edge query
@@ -2193,7 +2196,7 @@ class DataOperationsService {
             const requiresEventIds = connection.requires_event_ids !== false; // Default to true if not specified
             if (!requiresEventIds) {
               console.log(`[DataOperationsService] Skipping DSL build for ${connectionName} (requires_event_ids=false)`);
-              dsl = {};  // Empty DSL is fine for connections that don't need event_ids
+              queryPayload = {};  // Empty DSL is fine for connections that don't need event_ids
             } else {
               // Event loader that reads from IDB
               const eventLoader = async (eventId: string) => {
@@ -2262,31 +2265,34 @@ class DataOperationsService {
                 query: effectiveQuery  // Use effective query (base or conditional_p)
               };
               
-              dsl = await buildDslFromEdge(
+              const buildResult = await buildDslFromEdge(
                 edgeForDsl,
                 graph,
                 connectionProvider,
                 eventLoader,
-                constraints  // NEW: Pass constraints for context filters
+                constraints  // Pass constraints for context filters
               );
-              console.log('Built DSL from edge with event mapping:', dsl);
+              queryPayload = buildResult.queryPayload;
+              eventDefinitions = buildResult.eventDefinitions;
+              console.log('Built DSL from edge with event mapping:', queryPayload);
+              console.log('[DataOps] Event definitions loaded:', Object.keys(eventDefinitions));
               console.log('[DataOps] Query used for DSL:', effectiveQuery);
-              console.log('[DataOps] Context filters:', dsl.context_filters);
-              console.log('[DataOps] Window dates:', dsl.start, dsl.end);
+              console.log('[DataOps] Context filters:', queryPayload.context_filters);
+              console.log('[DataOps] Window dates:', queryPayload.start, queryPayload.end);
               
               // Log query details for user
               const queryDesc = effectiveQuery || 'no query';
-              const windowDesc = (dsl.start && dsl.end) 
-                ? `${normalizeDate(dsl.start)} to ${normalizeDate(dsl.end)}`
+              const windowDesc = (queryPayload.start && queryPayload.end) 
+                ? `${normalizeDate(queryPayload.start)} to ${normalizeDate(queryPayload.end)}`
                 : 'default window';
               sessionLogService.addChild(logOpId, 'info', 'QUERY_BUILT',
                 `Query: ${queryDesc}`,
-                `Window: ${windowDesc}${dsl.context_filters?.length ? `, Filters: ${dsl.context_filters.length}` : ''}`,
+                `Window: ${windowDesc}${queryPayload.context_filters?.length ? `, Filters: ${queryPayload.context_filters.length}` : ''}`,
                 { 
                   edgeQuery: queryDesc,
                   resolvedWindow: windowDesc,
-                  events: dsl.events?.map((e: any) => e.event_id || e),
-                  contextFilters: dsl.context_filters,
+                  events: queryPayload.events?.map((e: any) => e.event_id || e),
+                  contextFilters: queryPayload.context_filters,
                   isConditional: conditionalIndex !== undefined,
                   conditionalIndex
                 });
@@ -2337,13 +2343,15 @@ class DataOperationsService {
                 console.warn('[DataOps] Failed to parse constraints (fallback):', error);
               }
               
-              dsl = await buildDslFromEdge(
+              const fallbackResult = await buildDslFromEdge(
                 targetEdge,
                 graph,
                 connectionProvider,
                 eventLoader,
-                constraints  // NEW: Pass constraints for context filters
+                constraints  // Pass constraints for context filters
               );
+              queryPayload = fallbackResult.queryPayload;
+              eventDefinitions = fallbackResult.eventDefinitions;
             } catch (error) {
               console.error('Error building DSL from edge:', error);
               toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -2363,11 +2371,11 @@ class DataOperationsService {
       // CRITICAL: Use window dates from DSL object if available (already ISO format from buildDslFromEdge)
       // This is the authoritative source - buildDslFromEdge has already parsed and normalized the window
       let requestedWindow: DateRange;
-      if (dsl.start && dsl.end) {
+      if (queryPayload.start && queryPayload.end) {
         // DSL object has window dates (already ISO format from buildDslFromEdge)
         requestedWindow = {
-          start: dsl.start,
-          end: dsl.end
+          start: queryPayload.start,
+          end: queryPayload.end
         };
         console.log('[DataOps] Using window from DSL object:', requestedWindow);
       } else {
@@ -2387,7 +2395,7 @@ class DataOperationsService {
       // (we only write for parameter objects in versioned/source-via-file pathway)
       if (objectType === 'parameter' && dailyMode) {
         const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
-        querySignature = await computeQuerySignature(dsl, connectionName, graph, targetEdge);
+        querySignature = await computeQuerySignature(queryPayload, connectionName, graph, targetEdge);
         console.log('[DataOperationsService] Computed query signature for storage:', {
           signature: querySignature?.substring(0, 16) + '...',
           dailyMode,
@@ -2553,7 +2561,7 @@ class DataOperationsService {
       let fullQueryForStorage: string | undefined = undefined;
       
       // Check if query uses composite operators (minus/plus for inclusion-exclusion)
-      // CRITICAL: Check the ORIGINAL edge query string, NOT dsl.query (which doesn't exist after buildDslFromEdge)
+      // CRITICAL: Check the ORIGINAL edge query string, NOT queryPayload.query (which doesn't exist after buildDslFromEdge)
       const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
       let queryString = targetEdge?.query || '';
       const isAlreadyComposite = /\.(minus|plus)\(/.test(queryString);
@@ -2585,8 +2593,8 @@ class DataOperationsService {
         isAlreadyComposite: isAlreadyComposite,
         hasExcludes: hasExcludes,
         isComposite: isComposite,
-        dslHasQuery: !!(dsl as any).query,
-        dslKeys: Object.keys(dsl),
+        dslHasQuery: !!(queryPayload as any).query,
+        dslKeys: Object.keys(queryPayload),
       });
       // ===========================================================
       
@@ -2594,8 +2602,8 @@ class DataOperationsService {
       // CRITICAL: Store the DSL STRING (from graph edge), not the DSL object
       // The DSL object has provider event names; we want the original query string
       if (dailyMode && objectType === 'parameter') {
-        queryParamsForStorage = queryString || dsl; // Use query string first, fall back to DSL object
-        fullQueryForStorage = queryString || JSON.stringify(dsl);
+        queryParamsForStorage = queryString || queryPayload; // Use query string first, fall back to DSL object
+        fullQueryForStorage = queryString || JSON.stringify(queryPayload);
       }
       
       // Determine data source type from connection name (used for parameter files)
@@ -2630,7 +2638,7 @@ class DataOperationsService {
             // Also pass graph for upstream/between categorization of visited nodes
             const combined: CombinedResult = await executeCompositeQuery(
               queryString,
-              { ...dsl, window: fetchWindow, mode: contextMode },
+              { ...queryPayload, window: fetchWindow, mode: contextMode },
               connectionName,
               runner,
               graph  // Pass graph for isNodeUpstream checks
@@ -2668,13 +2676,14 @@ class DataOperationsService {
           
         } else {
           // Simple query: use standard DAS runner
-          const result = await runner.execute(connectionName, dsl, {
+          const result = await runner.execute(connectionName, queryPayload, {
             connection_string: connectionString,
             window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
             context: { mode: contextMode }, // Pass mode to adapter (daily or aggregate)
             edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
             caseId: objectType === 'case' ? objectId : undefined, // Pass caseId for cases
             nodeId: objectType === 'node' ? (targetId || objectId) : undefined, // Pass nodeId for nodes (future)
+            eventDefinitions,  // Event file data for adapter to resolve provider names + filters
           });
           
           // Capture DAS execution history for session logs (request/response details)
@@ -2896,8 +2905,8 @@ class DataOperationsService {
             ? 'statsig'
             : 'api',
           retrieved_at: new Date().toISOString(),
-          query: dsl,
-          full_query: dsl.query || JSON.stringify(dsl),
+          query: queryPayload,
+          full_query: queryPayload.query || JSON.stringify(queryPayload),
         };
       }
       
@@ -3285,7 +3294,7 @@ class DataOperationsService {
               // Attach experiment/gate id if available from transform or DSL
               experiment_id:
                 (lastResultRaw as any)?.gate_id ??
-                (dsl as any)?.gate_id ??
+                (queryPayload as any)?.gate_id ??
                 updateData.data_source.experiment_id,
             }
           : undefined;

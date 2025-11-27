@@ -54,12 +54,12 @@ describe('buildDslFromEdge - Upstream Visited Node Detection', () => {
         query: 'from(node-a).to(node-d).visited(node-c)'
       };
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude');
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude');
       
       // C is between A and D, so should be in visited (not visited_upstream)
-      expect(result.visited).toBeDefined();
-      expect(result.visited).toContain('event_c');
-      expect(result.visited_upstream).toBeUndefined();
+      expect(queryPayload.visited).toBeDefined();
+      expect(queryPayload.visited).toContain('event_c');
+      expect(queryPayload.visited_upstream).toBeUndefined();
     });
 
     it('should detect visited node UPSTREAM of from (super-funnel case)', async () => {
@@ -74,12 +74,12 @@ describe('buildDslFromEdge - Upstream Visited Node Detection', () => {
         query: 'from(node-c).to(node-d).visited(node-a)'
       };
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude');
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude');
       
       // A is upstream of C, so should be in visited_upstream
-      expect(result.visited_upstream).toBeDefined();
-      expect(result.visited_upstream).toContain('event_a');
-      expect(result.visited).toBeUndefined();
+      expect(queryPayload.visited_upstream).toBeDefined();
+      expect(queryPayload.visited_upstream).toContain('event_a');
+      expect(queryPayload.visited).toBeUndefined();
     });
 
     it('should detect visited node UPSTREAM of from (B is upstream of C)', async () => {
@@ -94,12 +94,12 @@ describe('buildDslFromEdge - Upstream Visited Node Detection', () => {
         query: 'from(node-c).to(node-d).visited(node-b)'
       };
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude');
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude');
       
       // B is upstream of C
-      expect(result.visited_upstream).toBeDefined();
-      expect(result.visited_upstream).toContain('event_b');
-      expect(result.visited).toBeUndefined();
+      expect(queryPayload.visited_upstream).toBeDefined();
+      expect(queryPayload.visited_upstream).toContain('event_b');
+      expect(queryPayload.visited).toBeUndefined();
     });
 
     it('should handle mix of upstream and between visited nodes', async () => {
@@ -115,14 +115,14 @@ describe('buildDslFromEdge - Upstream Visited Node Detection', () => {
         query: 'from(node-b).to(node-d).visited(node-a).visited(node-c)'
       };
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude');
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude');
       
       // A should be upstream, C should be between
-      expect(result.visited_upstream).toBeDefined();
-      expect(result.visited_upstream).toContain('event_a');
+      expect(queryPayload.visited_upstream).toBeDefined();
+      expect(queryPayload.visited_upstream).toContain('event_a');
       
-      expect(result.visited).toBeDefined();
-      expect(result.visited).toContain('event_c');
+      expect(queryPayload.visited).toBeDefined();
+      expect(queryPayload.visited).toContain('event_c');
     });
 
     it('should work with node IDs (not UUIDs) in query', async () => {
@@ -137,10 +137,10 @@ describe('buildDslFromEdge - Upstream Visited Node Detection', () => {
         query: 'from(node-c).to(node-d).visited(node-a)'
       };
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude');
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude');
       
-      expect(result.visited_upstream).toBeDefined();
-      expect(result.visited_upstream).toContain('event_a');
+      expect(queryPayload.visited_upstream).toBeDefined();
+      expect(queryPayload.visited_upstream).toContain('event_a');
     });
   });
 
@@ -170,12 +170,12 @@ describe('buildDslFromEdge - Upstream Visited Node Detection', () => {
         query: 'from(node-a).to(node-b).visited(node-x)'
       };
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude');
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude');
       
       // X is not upstream, so it goes in regular visited
-      expect(result.visited).toBeDefined();
-      expect(result.visited).toContain('event_x');
-      expect(result.visited_upstream).toBeUndefined();
+      expect(queryPayload.visited).toBeDefined();
+      expect(queryPayload.visited).toContain('event_x');
+      expect(queryPayload.visited_upstream).toBeUndefined();
     });
 
     it('should handle no visited nodes', async () => {
@@ -189,12 +189,12 @@ describe('buildDslFromEdge - Upstream Visited Node Detection', () => {
         query: 'from(node-a).to(node-b)'
       };
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude');
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude');
       
-      expect(result.visited).toBeUndefined();
-      expect(result.visited_upstream).toBeUndefined();
-      expect(result.from).toBe('event_a');
-      expect(result.to).toBe('event_b');
+      expect(queryPayload.visited).toBeUndefined();
+      expect(queryPayload.visited_upstream).toBeUndefined();
+      expect(queryPayload.from).toBe('event_a');
+      expect(queryPayload.to).toBe('event_b');
     });
   });
 
@@ -226,19 +226,19 @@ describe('buildDslFromEdge - Upstream Visited Node Detection', () => {
         query: 'from(viewed-dashboard).to(recommendation).visited(gave-bds-in-onboarding)'
       };
       
-      const result = await buildDslFromEdge(edge, graph, 'amplitude');
+      const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude');
       
       // gave-bds-in-onboarding is upstream of viewed-dashboard
-      expect(result.visited_upstream).toBeDefined();
-      expect(result.visited_upstream).toContain('gave-bds');
-      expect(result.visited_upstream).toHaveLength(1);
+      expect(queryPayload.visited_upstream).toBeDefined();
+      expect(queryPayload.visited_upstream).toContain('gave-bds');
+      expect(queryPayload.visited_upstream).toHaveLength(1);
       
       // No between visited nodes
-      expect(result.visited).toBeUndefined();
+      expect(queryPayload.visited).toBeUndefined();
       
-      // From/to should be correct
-      expect(result.from).toBe('viewed-dashboard');
-      expect(result.to).toBe('recommendation-offered');
+      // From/to should be correct (now event_ids, not provider names)
+      expect(queryPayload.from).toBe('viewed-dashboard');
+      expect(queryPayload.to).toBe('recommendation-offered');
     });
   });
 });

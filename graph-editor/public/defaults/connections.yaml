@@ -55,9 +55,23 @@ connections:
             return mapping[op] || "is";
           };
           
-          // Helper: Build event step with optional filters
-          const buildEventStep = (eventName, filters) => {
-            const step = { event_type: eventName };
+          // Helper: Get event info from eventDefinitions
+          // Returns { providerName, filters } for an event_id
+          const getEventInfo = (eventId) => {
+            const eventDef = eventDefinitions[eventId];
+            if (!eventDef) {
+              console.warn(`[Amplitude Adapter] No event definition for "${eventId}", using as-is`);
+              return { providerName: eventId, filters: [] };
+            }
+            const providerName = eventDef.provider_event_names?.amplitude || eventId;
+            const filters = eventDef.amplitude_filters || [];
+            return { providerName, filters };
+          };
+          
+          // Helper: Build event step from event_id
+          const buildEventStepFromId = (eventId) => {
+            const { providerName, filters } = getEventInfo(eventId);
+            const step = { event_type: providerName };
             
             // Add property filters if defined
             if (filters && filters.length > 0) {
@@ -74,12 +88,11 @@ connections:
           
           // Build full funnel including visited events
           const events = [];
-          const eventFilters = dsl.event_filters || {};
           
           // WARN: Check for exclude() - NOT SUPPORTED by Amplitude API
-          if (dsl.exclude && dsl.exclude.length > 0) {
+          if (queryPayload.exclude && queryPayload.exclude.length > 0) {
             console.warn('[Amplitude Adapter] WARNING: exclude() is not supported by Amplitude API!');
-            console.warn('[Amplitude Adapter] Excluded events are being IGNORED:', dsl.exclude);
+            console.warn('[Amplitude Adapter] Excluded events are being IGNORED:', queryPayload.exclude);
             console.warn('[Amplitude Adapter] To fix: use minus() instead of exclude() in your query');
             console.warn('[Amplitude Adapter] Example: from(A).to(C).minus(from(A).to(C).visited(B))');
           }
@@ -94,30 +107,28 @@ connections:
           let fromStepIndex = 0;
           
           // 1. Add upstream visited events FIRST (events that must happen BEFORE 'from')
-          if (dsl.visited_upstream && dsl.visited_upstream.length > 0) {
-            console.log('[Amplitude Adapter] Building SUPER-FUNNEL with upstream visited nodes:', dsl.visited_upstream);
-            events.push(...dsl.visited_upstream.map(eventName => 
-              buildEventStep(eventName, eventFilters[eventName])
-            ));
-            fromStepIndex = dsl.visited_upstream.length;
+          // queryPayload.visited_upstream contains event_ids
+          if (queryPayload.visited_upstream && queryPayload.visited_upstream.length > 0) {
+            console.log('[Amplitude Adapter] Building SUPER-FUNNEL with upstream visited nodes:', queryPayload.visited_upstream);
+            events.push(...queryPayload.visited_upstream.map(eventId => buildEventStepFromId(eventId)));
+            fromStepIndex = queryPayload.visited_upstream.length;
           }
           
-          // 2. Add 'from' event
-          events.push(buildEventStep(dsl.from, eventFilters[dsl.from]));
+          // 2. Add 'from' event (queryPayload.from is the event_id)
+          events.push(buildEventStepFromId(queryPayload.from));
           
           // 3. Add visited events between from and to (middle steps)
-          if (dsl.visited && dsl.visited.length > 0) {
-            events.push(...dsl.visited.map(eventName => 
-              buildEventStep(eventName, eventFilters[eventName])
-            ));
+          // queryPayload.visited contains event_ids
+          if (queryPayload.visited && queryPayload.visited.length > 0) {
+            events.push(...queryPayload.visited.map(eventId => buildEventStepFromId(eventId)));
           }
           
-          // 4. End with 'to'
-          events.push(buildEventStep(dsl.to, eventFilters[dsl.to]));
+          // 4. End with 'to' (queryPayload.to is the event_id)
+          events.push(buildEventStepFromId(queryPayload.to));
           
           // Convert window to Amplitude date format (YYYYMMDD)
           const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
-          // CRITICAL: Use window variable from execution context (not dsl.window)!
+          // CRITICAL: Use window variable from execution context (not queryPayload.window)!
           const startDate = formatDate(window.start);
           const endDate = formatDate(window.end);
           
@@ -139,8 +150,8 @@ connections:
           // → filter on activeGates.experiment_coffee_promotion = true/false based on variant name
           // Variant → bool policy is implemented in DAS core as dasHelpers.resolveVariantToBool
           // Naming convention: DagNet uses hyphens (coffee-promotion), Statsig/Amplitude uses underscores (experiment_coffee_promotion)
-          if (dsl.case && Array.isArray(dsl.case)) {
-            for (const caseFilter of dsl.case) {
+          if (queryPayload.case && Array.isArray(queryPayload.case)) {
+            for (const caseFilter of queryPayload.case) {
               const case_id = caseFilter.key;
               const variant = caseFilter.value;
               
@@ -178,7 +189,7 @@ connections:
           //   { prop: "gp:utm_medium", op: "is", values: ["cpc"] }
           //   { prop: "gp:utm_medium", op: "is not", values: ["cpc", "referral"] }
           //   { prop: "gp:utm_medium", op: "contains", values: ["paidsocial"] }  // for regex patterns
-          if (dsl.context_filters && Array.isArray(dsl.context_filters)) {
+          if (queryPayload.context_filters && Array.isArray(queryPayload.context_filters)) {
             const BUILT_IN_USER_PROPS = new Set([
               "version", "country", "city", "region", "DMA", "language",
               "platform", "os", "device", "device_type", "device_family", "start_version", "paying",
@@ -194,7 +205,7 @@ connections:
               return `gp:${prop}`;
             };
             
-            for (const filterObj of dsl.context_filters) {
+            for (const filterObj of queryPayload.context_filters) {
               // Handle both structured objects (new) and string expressions (legacy)
               if (typeof filterObj === 'string') {
                 console.warn(`[Amplitude Adapter] Legacy string filter not supported: ${filterObj}`);
@@ -257,17 +268,17 @@ connections:
             segmentParam
           ].filter(p => p).join('&');  // Filter out empty strings
           
-          dsl.query_params = eventParams + '&' + otherParams;
+          queryPayload.query_params = eventParams + '&' + otherParams;
           
           // CRITICAL: Set step indices for n/k extraction
           // With super-funnel, 'from' may not be at index 0 if there are upstream visited nodes
-          dsl.from_step_index = fromStepIndex;  // Index of 'from' step (after any upstream visited)
-          dsl.to_step_index = events.length - 1;  // 'to' is always last step
+          queryPayload.from_step_index = fromStepIndex;  // Index of 'from' step (after any upstream visited)
+          queryPayload.to_step_index = events.length - 1;  // 'to' is always last step
           
-          return dsl;
+          return queryPayload;
       request:
         # Dashboard REST API uses GET with query parameters
-        url_template: "{{{connection.base_url}}}/funnels?{{{dsl.query_params}}}"
+        url_template: "{{{connection.base_url}}}/funnels?{{{queryPayload.query_params}}}"
         method: GET
         headers:
           # Dashboard REST API uses HTTP Basic auth: API Key (username) + Secret Key (password)
@@ -296,9 +307,9 @@ connections:
                 $.day_funnels.series ~> $map(function($dayData, $i) {
                   {
                     "date": $.day_funnels.xValues[$i],
-                    "n": $dayData[$number($dsl.from_step_index)],
-                    "k": $dayData[$number($dsl.to_step_index)],
-                    "p": $dayData[$number($dsl.to_step_index)] / $dayData[$number($dsl.from_step_index)]
+                    "n": $dayData[$number($queryPayload.from_step_index)],
+                    "k": $dayData[$number($queryPayload.to_step_index)],
+                    "p": $dayData[$number($queryPayload.to_step_index)] / $dayData[$number($queryPayload.from_step_index)]
                   }
                 }) : []
             )
@@ -407,13 +418,13 @@ connections:
             throw new Error('Invalid Google Sheets URL: could not extract range. Make sure to copy the link with a range selected.');
           }
           
-          // Store parsed values in dsl for use in URL template
-          dsl.spreadsheet_id = spreadsheet_id;
-          dsl.range = range;
+          // Store parsed values in queryPayload for use in URL template
+          queryPayload.spreadsheet_id = spreadsheet_id;
+          queryPayload.range = range;
           
-          return dsl;
+          return queryPayload;
       request:
-        url_template: "https://sheets.googleapis.com/v4/spreadsheets/{{{dsl.spreadsheet_id}}}/values/{{{dsl.range}}}"
+        url_template: "https://sheets.googleapis.com/v4/spreadsheets/{{{queryPayload.spreadsheet_id}}}/values/{{{queryPayload.range}}}"
         method: GET
         headers:
           Authorization: "Bearer {{credentials.access_token}}"
@@ -466,19 +477,19 @@ connections:
           // Transform case_id to gate_id: "coffee-promotion" → "experiment_coffee_promotion"
           // DagNet uses hyphens, Statsig uses underscores
           if (typeof caseId === 'string') {
-            dsl.gate_id = caseId.replace(/-/g, '_');
-            console.log(`[Statsig Adapter] Transformed case_id="${caseId}" → gate_id="${dsl.gate_id}"`);
+            queryPayload.gate_id = caseId.replace(/-/g, '_');
+            console.log(`[Statsig Adapter] Transformed case_id="${caseId}" → gate_id="${queryPayload.gate_id}"`);
           } else {
-            dsl.gate_id = caseId;
+            queryPayload.gate_id = caseId;
           }
           
           // Get target environment (from connection_string or defaults)
-          dsl.target_env = connection_string.environment || connection.environment || 'production';
-          console.log(`[Statsig Adapter] Target environment: ${dsl.target_env}`);
+          queryPayload.target_env = connection_string.environment || connection.environment || 'production';
+          console.log(`[Statsig Adapter] Target environment: ${queryPayload.target_env}`);
           
-          return dsl;
+          return queryPayload;
       request:
-        url_template: "{{{connection.base_url}}}/gates/{{{dsl.gate_id}}}"
+        url_template: "{{{connection.base_url}}}/gates/{{{queryPayload.gate_id}}}"
         method: GET
         headers:
           STATSIG-API-KEY: "{{credentials.console_api_key}}"
@@ -501,7 +512,7 @@ connections:
         # 3. If multiple rules, use first public rule's passPercentage
         # 4. Return passPercentage as decimal (0.0 to 1.0)
         - name: target_env
-          jsonata: "dsl.target_env"
+          jsonata: "queryPayload.target_env"
         - name: production_rules
           jsonata: |
             (

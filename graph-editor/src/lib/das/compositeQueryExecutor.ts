@@ -143,10 +143,10 @@ async function executeSubQuery(
     }
   }
   
-  // Build DSL for this funnel
+  // Build query payload for this funnel
   // CRITICAL: DON'T override from/to (they're already correct in baseDsl with provider event names)
   // Include both visited (between) and visited_upstream for super-funnel construction
-  const dsl = {
+  const subQueryPayload = {
     ...baseDsl,
     visited: mappedVisited.length > 0 ? mappedVisited : undefined,
     visited_upstream: mappedVisitedUpstream.length > 0 ? mappedVisitedUpstream : undefined,
@@ -158,13 +158,13 @@ async function executeSubQuery(
   
   const visitedStr = mappedVisited.length > 0 ? `.visited(${mappedVisited.join(',')})` : '';
   const upstreamStr = mappedVisitedUpstream.length > 0 ? `.visited_upstream(${mappedVisitedUpstream.join(',')})` : '';
-  console.log(`[SubQuery ${id}] Executing: from(${baseDsl.from}).to(${baseDsl.to})${upstreamStr}${visitedStr} [coeff=${coefficient>0?'+':''}${coefficient}] (mode=${dsl.mode})`);
+  console.log(`[SubQuery ${id}] Executing: from(${baseDsl.from}).to(${baseDsl.to})${upstreamStr}${visitedStr} [coeff=${coefficient>0?'+':''}${coefficient}] (mode=${subQueryPayload.mode})`);
   
   try {
     // CRITICAL: Pass window and context mode so sub-queries can return daily time-series
-    const result = await runner.execute(connectionName, dsl, {
+    const result = await runner.execute(connectionName, subQueryPayload, {
       window: baseDsl.window,
-      context: { mode: dsl.mode }  // Pass 'daily' or 'aggregate' mode to adapter
+      context: { mode: subQueryPayload.mode }  // Pass 'daily' or 'aggregate' mode to adapter
     });
     
     if (!result.success) {

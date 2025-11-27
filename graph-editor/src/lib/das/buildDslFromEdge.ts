@@ -35,19 +35,27 @@ export interface ContextFilterObject {
   patternFlags?: string;   // Regex flags (e.g., 'i' for case-insensitive)
 }
 
-export interface DslObject {
-  from: string;
-  to: string;
+/**
+ * QueryPayload - Structured query data passed to the DAS adapter.
+ * NOT a DSL string - this is the resolved, graph-aware payload.
+ * 
+ * - from/to: event_ids from node references
+ * - visited/visited_upstream: categorized by graph topology
+ * - visitedAny/visitedAny_upstream: groups categorized by graph topology
+ */
+export interface QueryPayload {
+  from: string;                    // event_id of the 'from' node
+  to: string;                      // event_id of the 'to' node
   visited?: string[];              // Visited nodes BETWEEN from and to
   visited_upstream?: string[];     // Visited nodes BEFORE from (for super-funnel construction)
+  visitedAny?: string[][];         // Groups of visited nodes BETWEEN from and to (OR within group)
+  visitedAny_upstream?: string[][]; // Groups of visited nodes BEFORE from (OR within group)
   exclude?: string[];
-  visitedAny?: string[][];
   context?: Array<{ key: string; value: string }>;
   case?: Array<{ key: string; value: string }>;
-  event_filters?: Record<string, EventFilter[]>; // Map of event_name -> filters
-  context_filters?: ContextFilterObject[]; // NEW: Structured context filters for this query
-  start?: string; // NEW: Start date (ISO format)
-  end?: string; // NEW: End date (ISO format)
+  context_filters?: ContextFilterObject[]; // Structured context filters for this query
+  start?: string; // Start date (ISO format)
+  end?: string; // End date (ISO format)
 }
 
 export interface EventDefinition {
@@ -80,13 +88,19 @@ function parseQueryString(queryString: string): any {
   return query;
 }
 
+export interface BuildQueryPayloadResult {
+  queryPayload: QueryPayload;
+  eventDefinitions: Record<string, EventDefinition>;
+}
+
+
 export async function buildDslFromEdge(
   edge: any,
   graph: any,
   connectionProvider?: string,
   eventLoader?: EventLoader,
   constraints?: ParsedConstraints
-): Promise<DslObject> {
+): Promise<BuildQueryPayloadResult> {
   // Edge.query is a string: "from(nodeA).to(nodeB).visited(nodeC)"
   // We need to parse it, look up nodes to get event_ids,
   // then map event_ids to provider-specific event names
@@ -125,40 +139,23 @@ export async function buildDslFromEdge(
     return node;
   };
   
-  // Track event filters
-  const eventFilters: Record<string, EventFilter[]> = {};
+  // Collect event definitions for all referenced events
+  // These will be passed separately to the adapter (NOT embedded in DSL)
+  const eventDefinitions: Record<string, EventDefinition> = {};
   
-  // Helper to resolve event_id to provider-specific event name and collect filters
-  const resolveEventName = async (eventId: string): Promise<string> => {
-    // If no event loader or no provider specified, return event_id as-is
-    if (!eventLoader || !connectionProvider) {
+  // Helper to load event definition and collect it
+  // Returns the event_id unchanged - provider translation happens in the adapter
+  const loadEventDefinition = async (eventId: string): Promise<string> => {
+    if (!eventLoader) {
       return eventId;
     }
     
     try {
-      // Load event definition
       const eventDef = await eventLoader(eventId);
-      
-      // Check for provider-specific mapping
-      const providerEventName = eventDef.provider_event_names?.[connectionProvider];
-      
-      if (providerEventName) {
-        console.log(`Mapped event_id "${eventId}" → "${providerEventName}" for provider "${connectionProvider}"`);
-        
-        // Collect Amplitude filters if this is Amplitude provider
-        if (connectionProvider === 'amplitude' && eventDef.amplitude_filters) {
-          eventFilters[providerEventName] = eventDef.amplitude_filters;
-          console.log(`Added filters for "${providerEventName}":`, eventDef.amplitude_filters);
-        }
-        
-        return providerEventName;
-      }
-      
-      // No mapping found, use event_id as fallback
-      console.log(`No provider mapping for "${eventId}" on "${connectionProvider}", using event_id as-is`);
+      eventDefinitions[eventId] = eventDef;
+      console.log(`Loaded event definition for "${eventId}"`);
       return eventId;
     } catch (error) {
-      // Event file doesn't exist or can't be loaded - use event_id as fallback
       console.warn(`Could not load event definition for "${eventId}":`, error);
       return eventId;
     }
@@ -201,16 +198,16 @@ export async function buildDslFromEdge(
     );
   }
   
-  // Resolve provider-specific event names
-  const from_event_name = await resolveEventName(from_event_id);
-  const to_event_name = await resolveEventName(to_event_id);
+  // Load event definitions for from/to (for passing to adapter)
+  await loadEventDefinition(from_event_id);
+  await loadEventDefinition(to_event_id);
   
   // Look up visited nodes and extract their event_ids
   // CRITICAL: Categorize visited nodes as upstream vs between
   // - visited_upstream: nodes that must be visited BEFORE 'from' (for super-funnel construction)
   // - visited: nodes that must be visited BETWEEN 'from' and 'to' (standard funnel)
-  const visited_event_names: string[] = [];
-  const visited_upstream_event_names: string[] = [];
+  const visited_ids: string[] = [];
+  const visited_upstream_ids: string[] = [];
   
   if (query.visited && Array.isArray(query.visited)) {
     for (const ref of query.visited) {
@@ -226,24 +223,25 @@ export async function buildDslFromEdge(
           `Visited node "${node.label || node.id}" missing event_id field`
         );
       }
-      const eventName = await resolveEventName(node.event_id);
+      
+      // Load event definition for this visited node
+      await loadEventDefinition(node.event_id);
       
       // Determine if visited node is upstream of 'from' node
-      // Use graph topology to check reachability
       const isUpstreamOfFrom = isNodeUpstream(node.id, query.from, graph);
       
       if (isUpstreamOfFrom) {
         console.log(`[buildDslFromEdge] Visited node "${ref}" is UPSTREAM of from node "${query.from}"`);
-        visited_upstream_event_names.push(eventName);
+        visited_upstream_ids.push(node.event_id);
       } else {
         console.log(`[buildDslFromEdge] Visited node "${ref}" is BETWEEN from/to nodes`);
-        visited_event_names.push(eventName);
+        visited_ids.push(node.event_id);
       }
     }
   }
   
   // Look up exclude nodes and extract their event_ids
-  const exclude_event_names: string[] = [];
+  const exclude_ids: string[] = [];
   if (query.exclude && Array.isArray(query.exclude)) {
     for (const ref of query.exclude) {
       const node = findNode(ref);
@@ -258,18 +256,25 @@ export async function buildDslFromEdge(
           `Exclude node "${node.label || node.id}" missing event_id field`
         );
       }
-      const eventName = await resolveEventName(node.event_id);
-      exclude_event_names.push(eventName);
+      await loadEventDefinition(node.event_id);
+      exclude_ids.push(node.event_id);
     }
   }
   
   // Look up visitedAny nodes (groups of OR conditions)
-  const visitedAny_event_names: string[][] = [];
+  // IMPORTANT: Each group needs to be categorized by topology too
+  // A group is "upstream" if ALL nodes in it are upstream of 'from'
+  // Otherwise it's "between" (mixed groups go to between for safety)
+  const visitedAny_between: string[][] = [];
+  const visitedAny_upstream: string[][] = [];
+  
   if (query.visitedAny && Array.isArray(query.visitedAny)) {
     for (const group of query.visitedAny) {
       if (!Array.isArray(group)) continue;
       
-      const groupEventNames: string[] = [];
+      const groupIds: string[] = [];
+      let allUpstream = true;
+      
       for (const ref of group) {
         const node = findNode(ref);
         if (!node) {
@@ -283,93 +288,108 @@ export async function buildDslFromEdge(
             `VisitedAny node "${node.label || node.id}" missing event_id field`
           );
         }
-        const eventName = await resolveEventName(node.event_id);
-        groupEventNames.push(eventName);
+        await loadEventDefinition(node.event_id);
+        groupIds.push(node.event_id);
+        
+        // Check if this node is upstream of 'from'
+        const isUpstreamOfFrom = isNodeUpstream(node.id, query.from, graph);
+        if (!isUpstreamOfFrom) {
+          allUpstream = false;
+        }
       }
-      visitedAny_event_names.push(groupEventNames);
+      
+      // Categorize the entire group
+      if (allUpstream && groupIds.length > 0) {
+        visitedAny_upstream.push(groupIds);
+        console.log(`[buildDslFromEdge] VisitedAny group [${groupIds.join(', ')}] is UPSTREAM`);
+      } else if (groupIds.length > 0) {
+        visitedAny_between.push(groupIds);
+        console.log(`[buildDslFromEdge] VisitedAny group [${groupIds.join(', ')}] is BETWEEN (or mixed)`);
+      }
     }
   }
   
-  // Build DSL object with provider-specific event names
-  const dsl: DslObject = {
-    from: from_event_name,
-    to: to_event_name
+  // Build query payload with event_ids (adapter will translate to provider names)
+  const queryPayload: QueryPayload = {
+    from: from_event_id,
+    to: to_event_id
   };
   
-  // Add optional constraints
-  if (visited_event_names.length > 0) {
-    dsl.visited = visited_event_names;
+  // Add optional constraints (all using event_ids)
+  if (visited_ids.length > 0) {
+    queryPayload.visited = visited_ids;
   }
   
   // Add upstream visited nodes (for super-funnel construction)
-  if (visited_upstream_event_names.length > 0) {
-    dsl.visited_upstream = visited_upstream_event_names;
-    console.log(`[buildDslFromEdge] Added ${visited_upstream_event_names.length} upstream visited node(s) for super-funnel`);
+  if (visited_upstream_ids.length > 0) {
+    queryPayload.visited_upstream = visited_upstream_ids;
+    console.log(`[buildQueryPayload] Added ${visited_upstream_ids.length} upstream visited node(s) for super-funnel`);
   }
   
-  if (exclude_event_names.length > 0) {
-    dsl.exclude = exclude_event_names;
+  if (exclude_ids.length > 0) {
+    queryPayload.exclude = exclude_ids;
   }
   
-  if (visitedAny_event_names.length > 0) {
-    dsl.visitedAny = visitedAny_event_names;
+  if (visitedAny_between.length > 0) {
+    queryPayload.visitedAny = visitedAny_between;
+  }
+  
+  if (visitedAny_upstream.length > 0) {
+    queryPayload.visitedAny_upstream = visitedAny_upstream;
+    console.log(`[buildQueryPayload] Added ${visitedAny_upstream.length} upstream visitedAny group(s) for super-funnel`);
   }
   
   // Pass through context and case filters (no node lookup needed)
   if (query.context) {
-    dsl.context = query.context;
+    queryPayload.context = query.context;
   }
   
   if (query.case) {
-    dsl.case = query.case;
+    queryPayload.case = query.case;
   }
   
-  // Add event filters if any were collected
-  if (Object.keys(eventFilters).length > 0) {
-    dsl.event_filters = eventFilters;
-    console.log('DSL with event filters:', dsl.event_filters);
-  }
+  // Event definitions are returned separately (not embedded in query payload)
   
-  // NEW: Add context filters if constraints provided
+  // Add context filters if constraints provided
   if (constraints && (constraints.context.length > 0 || constraints.contextAny.length > 0)) {
     try {
       const contextFilters = await buildContextFilters(constraints, connectionProvider || 'amplitude');
       if (contextFilters && contextFilters.length > 0) {
-        dsl.context_filters = contextFilters;
-        console.log('[buildDslFromEdge] Added context filters:', dsl.context_filters);
+        queryPayload.context_filters = contextFilters;
+        console.log('[buildQueryPayload] Added context filters:', queryPayload.context_filters);
       }
     } catch (error) {
-      console.error('[buildDslFromEdge] Failed to build context filters:', error);
+      console.error('[buildQueryPayload] Failed to build context filters:', error);
       throw error;
     }
   }
   
-  // NEW: Add window/date range if constraints provided
+  // Add window/date range if constraints provided
   if (constraints && constraints.window) {
     try {
       const { startDate, endDate } = resolveWindowDates(constraints.window);
       if (startDate) {
-        dsl.start = startDate.toISOString();
+        queryPayload.start = startDate.toISOString();
       }
       if (endDate) {
-        dsl.end = endDate.toISOString();
+        queryPayload.end = endDate.toISOString();
       }
-      console.log('[buildDslFromEdge] Added window:', { start: dsl.start, end: dsl.end });
+      console.log('[buildQueryPayload] Added window:', { start: queryPayload.start, end: queryPayload.end });
     } catch (error) {
-      console.error('[buildDslFromEdge] Failed to resolve window dates:', error);
+      console.error('[buildQueryPayload] Failed to resolve window dates:', error);
       throw error;
     }
   }
   
-  // ===== DIAGNOSTIC: Show final DSL and what was NOT preserved =====
-  console.log('[buildDslFromEdge] Final DSL:', dsl);
-  console.log('[buildDslFromEdge] Original query had minus():', edge.query?.includes('.minus('));
-  console.log('[buildDslFromEdge] Original query had plus():', edge.query?.includes('.plus('));
-  console.log('[buildDslFromEdge] WARNING: minus()/plus() terms are NOT preserved in DSL object');
-  console.log('[buildDslFromEdge] Composite query execution must check edge.query BEFORE calling buildDslFromEdge');
+  // ===== DIAGNOSTIC: Show final query payload and what was NOT preserved =====
+  console.log('[buildQueryPayload] Final payload:', queryPayload);
+  console.log('[buildQueryPayload] Original query string had minus():', edge.query?.includes('.minus('));
+  console.log('[buildQueryPayload] Original query string had plus():', edge.query?.includes('.plus('));
+  console.log('[buildQueryPayload] WARNING: minus()/plus() terms are NOT preserved in query payload');
+  console.log('[buildQueryPayload] Composite query execution must check edge.query BEFORE calling buildQueryPayload');
   // ================================================================
   
-  return dsl;
+  return { queryPayload, eventDefinitions };
 }
 
 /**

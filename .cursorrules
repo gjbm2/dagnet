@@ -299,6 +299,32 @@ When asked to "run tests":
 - **NEVER** leave tests broken
 - **ALWAYS** run relevant tests after changes
 
+## Code Surface Area
+
+### MINIMIZE CODE - Especially Pre-Release
+- **NO backward compatibility shims** - Let it break, then fix properly
+- **NO deprecated aliases** - Remove old names, update all references
+- **NO "just in case" code** - If it's not used, delete it
+- **NO legacy wrappers** - Migrate callers to new APIs directly
+
+### When Renaming/Refactoring
+1. Make the change cleanly
+2. Find all broken references
+3. Fix them directly
+4. Delete old code entirely
+
+**WRONG:**
+```typescript
+// Legacy alias (deprecated)
+export type OldName = NewName;
+```
+
+**RIGHT:**
+```typescript
+// Just use NewName everywhere, delete OldName entirely
+export interface NewName { ... }
+```
+
 ## Remember
 
 > "Menus are access points. Services are logic. Tests are proof."
@@ -307,4 +333,5 @@ If you're writing business logic in a menu file, STOP and move it to a service.
 If you're duplicating code, STOP and centralize it.
 If you're changing functionality, UPDATE THE TESTS.
 Check architectural docs BEFORE making system changes.
+**Reduce code surface area** - delete unused code, don't add compatibility shims.
 

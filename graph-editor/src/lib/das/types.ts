@@ -99,7 +99,7 @@ export interface ConnectionFile {
 }
 
 export interface ExecutionContext {
-  dsl: Record<string, unknown>;
+  queryPayload: Record<string, unknown>;  // Structured query data (NOT a DSL string)
   connection: Record<string, unknown>;
   credentials: Record<string, unknown>;
   window: Record<string, unknown>;
@@ -143,6 +143,7 @@ export interface RunnerExecuteOptions {
   caseId?: string;
   nodeId?: string;  // For node-level fetches (future extensibility)
   parameterId?: string;
+  eventDefinitions?: Record<string, any>;  // Event file data for adapter to resolve provider names + filters
 }
 
 
