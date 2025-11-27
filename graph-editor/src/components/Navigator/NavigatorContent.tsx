@@ -279,7 +279,8 @@ export function NavigatorContent() {
       settings: [],
       about: [],
       markdown: [],
-      connections: []
+      connections: [],
+      image: []
     };
     
     for (const entry of filteredAndSortedEntries) {
