@@ -41,7 +41,7 @@ export class DASRunner {
    */
   async execute(
     connectionName: string,
-    dsl: Record<string, unknown>,
+    queryPayload: Record<string, unknown>,
     options: RunnerExecuteOptions = {}
   ): Promise<ExecutionResult> {
     this.executionHistory = [];
@@ -115,7 +115,7 @@ export class DASRunner {
 
       // 4. Build execution context
       const execContext: ExecutionContext = {
-        dsl,
+        queryPayload,
         connection: connection.defaults || {},
         credentials,
         window: options.window || {},
@@ -125,6 +125,7 @@ export class DASRunner {
         caseId: options.caseId,
         parameterId: options.parameterId,
         extractedVars: {},
+        eventDefinitions: options.eventDefinitions || {},  // Event file data for adapter
       };
       this.log('build_context', 'Execution context built');
 
@@ -151,8 +152,8 @@ export class DASRunner {
 
   /**
    * Execute pre-request JavaScript transformation script.
-   * Script has access to: dsl, window, connection_string, connection, context, console, caseId, edgeId, nodeId
-   * Script can mutate dsl object to add calculated fields.
+   * Script has access to: queryPayload, window, connection_string, connection, context, console, caseId, edgeId, nodeId, eventDefinitions
+   * Script can mutate queryPayload object to add calculated fields.
    */
   private executePreRequestScript(script: string, context: ExecutionContext): void {
     this.log('pre_request', 'Executing pre-request transformation script');
@@ -161,7 +162,7 @@ export class DASRunner {
       // Create execution environment with controlled access
       // Script can read/modify these objects
       const scriptEnv = {
-        dsl: context.dsl,
+        queryPayload: context.queryPayload,
         window: context.window,
         connection_string: context.connection_string,
         connection: context.connection,
@@ -169,6 +170,7 @@ export class DASRunner {
         caseId: context.caseId,
         edgeId: context.edgeId,
         nodeId: context.nodeId,
+        eventDefinitions: context.eventDefinitions || {},  // Event file data for provider translation
         dasHelpers: {
           resolveVariantToBool,
           parseSheetsRange,
@@ -188,7 +190,7 @@ export class DASRunner {
       // - File system (require, import)
       // - Credentials (not in scope)
       const fn = new Function(
-        'dsl',
+        'queryPayload',
         'window',
         'connection_string',
         'connection',
@@ -196,13 +198,14 @@ export class DASRunner {
         'caseId',
         'edgeId',
         'nodeId',
+        'eventDefinitions',
         'dasHelpers',
         'console',
         script
       );
       
       const result = fn(
-        scriptEnv.dsl,
+        scriptEnv.queryPayload,
         scriptEnv.window,
         scriptEnv.connection_string,
         scriptEnv.connection,
@@ -210,6 +213,7 @@ export class DASRunner {
         scriptEnv.caseId,
         scriptEnv.edgeId,
         scriptEnv.nodeId,
+        scriptEnv.eventDefinitions,
         scriptEnv.dasHelpers,
         scriptEnv.console
       );
@@ -243,14 +247,14 @@ export class DASRunner {
     if (adapter.pre_request && adapter.pre_request.script) {
       this.executePreRequestScript(adapter.pre_request.script, context);
       this.log('pre_request', 'Pre-request transformation complete', {
-        dslKeys: Object.keys(context.dsl),
+        queryPayloadKeys: Object.keys(context.queryPayload),
         // Log critical funnel construction details for debugging n/k extraction
-        funnel_from: context.dsl.from,
-        funnel_to: context.dsl.to,
-        from_step_index: context.dsl.from_step_index,
-        to_step_index: context.dsl.to_step_index,
-        visited_upstream: context.dsl.visited_upstream,
-        visited_between: context.dsl.visited,
+        funnel_from: context.queryPayload.from,
+        funnel_to: context.queryPayload.to,
+        from_step_index: context.queryPayload.from_step_index,
+        to_step_index: context.queryPayload.to_step_index,
+        visited_upstream: context.queryPayload.visited_upstream,
+        visited_between: context.queryPayload.visited,
       });
     }
 
@@ -334,8 +338,8 @@ export class DASRunner {
     // Log extraction details including raw cumulativeRaw for n/k verification
     const responseData = response.body as any;
     const cumulativeRaw = responseData?.data?.[0]?.cumulativeRaw as number[] | undefined;
-    const fromIdx = context.dsl.from_step_index as number | undefined;
-    const toIdx = context.dsl.to_step_index as number | undefined;
+    const fromIdx = context.queryPayload.from_step_index as number | undefined;
+    const toIdx = context.queryPayload.to_step_index as number | undefined;
     this.log('extract_data', `Extracted ${Object.keys(extracted).length} variables`, {
       ...extracted,
       // Include funnel indices and raw array for debugging n/k issues
@@ -386,7 +390,7 @@ export class DASRunner {
     const ctx = context as any;
     
     // These are context objects that should NOT be JSON-encoded (they have nested properties)
-    const contextObjects = new Set(['connection', 'credentials', 'window', 'context', 'connection_string', 'dsl']);
+    const contextObjects = new Set(['connection', 'credentials', 'window', 'context', 'connection_string', 'queryPayload']);
     
     const flatContext: Record<string, any> = {
       connection: ctx.connection,
@@ -398,12 +402,12 @@ export class DASRunner {
       caseId: ctx.caseId,
       nodeId: ctx.nodeId,
       parameterId: ctx.parameterId,
-      dsl: ctx.dsl || {},  // Keep dsl as nested object for template access
+      queryPayload: ctx.queryPayload || {},  // Keep queryPayload as nested object for template access
     };
     
-    // Also add DSL fields at top level for convenience (backward compatibility)
-    if (ctx.dsl && typeof ctx.dsl === 'object') {
-      Object.assign(flatContext, ctx.dsl);
+    // Also add queryPayload fields at top level for convenience
+    if (ctx.queryPayload && typeof ctx.queryPayload === 'object') {
+      Object.assign(flatContext, ctx.queryPayload);
     }
     
     // Add extracted/transformed variables
@@ -563,7 +567,7 @@ export class DASRunner {
 
         // Bind context variables (JSONata can reference these)
         expression.assign('extracted', extracted);
-        expression.assign('dsl', context.dsl);
+        expression.assign('queryPayload', context.queryPayload);
         expression.assign('window', context.window);
         expression.assign('context', context.context || {});
         
@@ -587,8 +591,8 @@ export class DASRunner {
                       dayFunnelsSeries: (transformed.day_funnels as any)?.series,
                       dayFunnelsXValues: (transformed.day_funnels as any)?.xValues,
                       dayFunnelsSeriesLength: Array.isArray((transformed.day_funnels as any)?.series) ? (transformed.day_funnels as any).series.length : 'not array',
-            dslFromStepIndex: context.dsl?.from_step_index,
-            dslToStepIndex: context.dsl?.to_step_index,
+            fromStepIndex: context.queryPayload?.from_step_index,
+            toStepIndex: context.queryPayload?.to_step_index,
             transformedKeys: Object.keys(transformed),
             result: result,
             resultLength: Array.isArray(result) ? result.length : 'not array',
@@ -629,7 +633,7 @@ export class DASRunner {
           error: errorMessage,
           stack: errorDetails,
           extracted: Object.keys(extracted),
-          dsl: context.dsl ? Object.keys(context.dsl) : 'missing',
+          queryPayload: context.queryPayload ? Object.keys(context.queryPayload) : 'missing',
           context: context.context
         });
         

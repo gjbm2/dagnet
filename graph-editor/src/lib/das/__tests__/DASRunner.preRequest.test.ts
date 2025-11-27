@@ -100,7 +100,7 @@ describe('DASRunner - Pre-Request Script Execution', () => {
     );
   });
 
-  it('should execute pre-request script and mutate dsl', async () => {
+  it('should execute pre-request script and mutate queryPayload', async () => {
     const mockConnection: ConnectionDefinition = {
       name: 'test-connection',
       provider: 'test',
@@ -109,10 +109,10 @@ describe('DASRunner - Pre-Request Script Execution', () => {
       adapter: {
         pre_request: {
           script: `
-            // Mutate dsl object
-            dsl.calculated_field = dsl.from_event_id + '_to_' + dsl.to_event_id;
-            dsl.array_field = [1, 2, 3];
-            dsl.object_field = { key: 'value' };
+            // Mutate queryPayload object
+            queryPayload.calculated_field = queryPayload.from_event_id + '_to_' + queryPayload.to_event_id;
+            queryPayload.array_field = [1, 2, 3];
+            queryPayload.object_field = { key: 'value' };
           `
         },
         request: {
@@ -132,12 +132,12 @@ describe('DASRunner - Pre-Request Script Execution', () => {
     
     mockConnectionProvider.setMockConnection('test-connection', mockConnection);
     
-    const dsl = {
+    const queryPayload = {
       from_event_id: 'event_a',
       to_event_id: 'event_b'
     };
     
-    const result = await runner.execute('test-connection', dsl);
+    const result = await runner.execute('test-connection', queryPayload);
     
     expect(result.success).toBe(true);
     expect(mockHttpExecutor.lastRequest?.url).toBe('http://test.com/event_a_to_event_b');
@@ -152,8 +152,8 @@ describe('DASRunner - Pre-Request Script Execution', () => {
       adapter: {
         pre_request: {
           script: `
-            dsl.formatted_date = window.start.substring(0, 10);
-            dsl.has_segment = connection_string.segment ? true : false;
+            queryPayload.formatted_date = window.start.substring(0, 10);
+            queryPayload.has_segment = connection_string.segment ? true : false;
           `
         },
         request: {
@@ -192,18 +192,18 @@ describe('DASRunner - Pre-Request Script Execution', () => {
           script: `
             // Amplitude funnel transformation
             const events = [];
-            if (dsl.visited_event_ids && dsl.visited_event_ids.length > 0) {
-              events.push(...dsl.visited_event_ids.map(id => ({ event_type: id })));
+            if (queryPayload.visited_event_ids && queryPayload.visited_event_ids.length > 0) {
+              events.push(...queryPayload.visited_event_ids.map(id => ({ event_type: id })));
             }
-            events.push({ event_type: dsl.from_event_id });
-            events.push({ event_type: dsl.to_event_id });
+            events.push({ event_type: queryPayload.from_event_id });
+            events.push({ event_type: queryPayload.to_event_id });
             
             const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
-            dsl.start_date = formatDate(window.start);
-            dsl.end_date = formatDate(window.end);
-            dsl.funnel_events = events;
-            dsl.from_step_index = events.length - 2;
-            dsl.to_step_index = events.length - 1;
+            queryPayload.start_date = formatDate(window.start);
+            queryPayload.end_date = formatDate(window.end);
+            queryPayload.funnel_events = events;
+            queryPayload.from_step_index = events.length - 2;
+            queryPayload.to_step_index = events.length - 1;
           `
         },
         request: {
@@ -240,13 +240,13 @@ describe('DASRunner - Pre-Request Script Execution', () => {
     
     mockConnectionProvider.setMockConnection('amplitude-test', mockConnection);
     
-    const dsl = {
+    const queryPayload = {
       from_event_id: 'add_to_cart',
       to_event_id: 'checkout',
       visited_event_ids: ['product_view']
     };
     
-    const result = await runner.execute('amplitude-test', dsl, {
+    const result = await runner.execute('amplitude-test', queryPayload, {
       window: { start: '2025-01-01T00:00:00Z', end: '2025-01-31T23:59:59Z' },
       edgeId: 'edge-123'
     });
@@ -336,12 +336,12 @@ describe('DASRunner - Pre-Request Script Execution', () => {
           script: `
             // Attempt to access dangerous globals
             // Note: 'fetch', 'require' are not accessible in Function constructor scope
-            dsl.has_fetch = false; // Would be true if fetch was accessible
-            dsl.has_require = false; // Would be true if require was accessible
+            queryPayload.has_fetch = false; // Would be true if fetch was accessible
+            queryPayload.has_require = false; // Would be true if require was accessible
             
             // Console should be available (sandboxed version we provide)
             console.log('This should log safely');
-            dsl.has_console = typeof console !== 'undefined';
+            queryPayload.has_console = typeof console !== 'undefined';
           `
         },
         request: {
@@ -361,8 +361,8 @@ describe('DASRunner - Pre-Request Script Execution', () => {
     
     mockConnectionProvider.setMockConnection('security-test', mockConnection);
     
-    const dsl: any = {};
-    const result = await runner.execute('security-test', dsl);
+    const queryPayload: any = {};
+    const result = await runner.execute('security-test', queryPayload);
     
     expect(result.success).toBe(true);
     // Note: Function constructor doesn't give access to outer scope,
@@ -381,7 +381,7 @@ describe('DASRunner - Pre-Request Script Execution', () => {
             console.log('Starting transformation');
             console.warn('This is a warning');
             console.error('This is an error (but not thrown)');
-            dsl.completed = true;
+            queryPayload.completed = true;
           `
         },
         request: {
@@ -416,8 +416,8 @@ describe('DASRunner - Pre-Request Script Execution', () => {
         pre_request: {
           script: `
             const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
-            dsl.start_date = formatDate(window.start);
-            dsl.end_date = formatDate(window.end);
+            queryPayload.start_date = formatDate(window.start);
+            queryPayload.end_date = formatDate(window.end);
           `
         },
         request: {

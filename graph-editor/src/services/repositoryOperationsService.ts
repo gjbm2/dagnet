@@ -500,7 +500,18 @@ class RepositoryOperationsService {
     
     const committableFiles: FileState[] = [];
     
+    // Files that should never be committed (controlled from code, not repo)
+    const EXCLUDED_FROM_COMMIT = new Set([
+      'connections-connections',  // connections.yaml - controlled from public/defaults/
+    ]);
+    
     for (const file of deduplicatedFiles) {
+      // Skip files explicitly excluded from commits
+      if (EXCLUDED_FROM_COMMIT.has(file.fileId)) {
+        console.log(`  ⏭️ Skipping: ${file.fileId} (excluded from commits)`);
+        continue;
+      }
+      
       // Skip non-committable file types
       if (file.type === 'credentials') continue;
       if (file.type === 'settings') continue;
@@ -695,7 +706,13 @@ class RepositoryOperationsService {
       }
       
       const basePath = gitCreds.basePath || '';
-      const fullPath = basePath ? `${basePath}/${file.path}` : file.path;
+      // Ensure correct file extension: graphs should always be .json
+      let filePath = file.path;
+      if (fileState?.type === 'graph' && filePath.endsWith('.yaml')) {
+        filePath = filePath.replace(/\.yaml$/, '.json');
+        console.log(`[RepositoryOperationsService] Corrected graph path: ${file.path} → ${filePath}`);
+      }
+      const fullPath = basePath ? `${basePath}/${filePath}` : filePath;
       return {
         path: fullPath,
         content,
@@ -744,9 +761,21 @@ class RepositoryOperationsService {
       throw new Error(result.error || 'Failed to commit files');
     }
 
-    // Mark files as saved in FileRegistry
+    // Mark files as saved in FileRegistry, and fix any corrected paths
     for (const file of files || []) {
       try {
+        // Get the file state to check if path needs updating
+        const fileState = fileRegistry.getFile(file.fileId);
+        
+        // If this was a graph file with .yaml extension, update to .json
+        if (fileState?.type === 'graph' && fileState.source?.path?.endsWith('.yaml')) {
+          const correctedPath = fileState.source.path.replace(/\.yaml$/, '.json');
+          console.log(`[RepositoryOperationsService] Updating stored path: ${fileState.source.path} → ${correctedPath}`);
+          fileState.source.path = correctedPath;
+          // Update in IDB
+          await db.files.put(fileState);
+        }
+        
         await fileRegistry.markSaved(file.fileId);
       } catch (e) {
         console.error(`Failed to mark file ${file.fileId} as saved:`, e);

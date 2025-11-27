@@ -88,7 +88,7 @@ describe('DASRunner - Google Sheets adapter (sheets-readonly)', () => {
         pre_request: {
           script: `
             // pre_request is intentionally minimal for sheets
-            return dsl;
+            return queryPayload;
           `,
         },
         request: {
