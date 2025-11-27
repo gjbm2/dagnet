@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.97.0b
+**Released:** November 27, 2025
+
+Super-funnels now recompile without excludes() terms, allowing direct edge conditionality through the query dsl
+
+---
+
 ## Version 0.96.3-beta
 **Released:** November 27, 2025
 
