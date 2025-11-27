@@ -671,6 +671,9 @@ class FileRegistry {
     if (file.type === 'settings') return false;
     if (file.source?.repository === 'temporary') return false;
     
+    // Exclude files controlled from code (not repo)
+    if (file.fileId === 'connections-connections') return false;
+    
     return true;
   }
 

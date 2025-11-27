@@ -360,7 +360,18 @@ class RepositoryOperationsService {
     
     const changedFiles: FileState[] = [];
     
+    // Files that should never be committed (controlled from code, not repo)
+    const EXCLUDED_FROM_COMMIT = new Set([
+      'connections-connections',  // connections.yaml - controlled from public/defaults/
+    ]);
+    
     for (const file of allFiles) {
+      // Skip files that are explicitly excluded from commits
+      if (EXCLUDED_FROM_COMMIT.has(file.fileId)) {
+        console.log(`  ⏭️ Skipping: ${file.fileId} (excluded from commits)`);
+        continue;
+      }
+      
       // Skip if no data or originalData to compare
       if (!file.data || !file.originalData) {
         // If we have data but no originalData, this is a local-only file
