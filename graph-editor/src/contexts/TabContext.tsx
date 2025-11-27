@@ -302,28 +302,18 @@ class FileRegistry {
     });
 
     const now = Date.now();
-    const nowISO = new Date(now).toISOString();
     
-    // Update internal file metadata timestamp so it persists across page reloads
-    // This ensures sort by "Modified" works correctly after refresh
-    if (file.data) {
-      if (file.type === 'graph' && file.data.metadata) {
-        file.data.metadata.updated = nowISO;
-      } else if (file.type === 'parameter' || file.type === 'context' || file.type === 'case' || file.type === 'node' || file.type === 'event') {
-        file.data.updated_at = nowISO;
-      }
-    }
+    // DON'T update timestamps here - the file was just committed with whatever
+    // timestamp it had. Modifying it now would make IDB diverge from Git.
+    // The lastModified/lastSaved fields track when WE saved, not file content timestamps.
 
     file.originalData = structuredClone(file.data);
     file.isDirty = false;
     file.lastSaved = now;
     file.lastModified = now;
 
-    console.log(`📝 markSaved[${fileId}]: Setting timestamps`, {
-      nowISO,
-      now,
-      'data.metadata.updated': file.data?.metadata?.updated,
-      'data.updated_at': file.data?.updated_at,
+    console.log(`📝 markSaved[${fileId}]: Marked as saved`, {
+      lastSaved: file.lastSaved,
       lastModified: file.lastModified
     });
 
