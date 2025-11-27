@@ -32,7 +32,7 @@ interface ScenarioEditorModalProps {
 }
 
 export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave }: ScenarioEditorModalProps) {
-  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot, createBlank } = useScenariosContext();
+  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot, createBlank, renameScenario } = useScenariosContext();
   const { operations } = useTabContext();
   const graphStore = useGraphStore();
   const graph = graphStore?.getState().graph || null;
@@ -46,6 +46,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [editableNote, setEditableNote] = useState('');
+  const [editableName, setEditableName] = useState('');
   
   const editorRef = useRef<any>(null);
   
@@ -65,6 +66,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
           meta: { note: 'Session baseline parameters' }
         };
         setScenario(pseudoScenario);
+        setEditableName(pseudoScenario.name);
         setEditableNote(pseudoScenario.meta?.note || '');
         
         const content = format.syntax === 'yaml'
@@ -87,6 +89,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
           meta: { note: 'Live working state' }
         };
         setScenario(pseudoScenario);
+        setEditableName(pseudoScenario.name);
         setEditableNote(pseudoScenario.meta?.note || '');
         
         const content = format.syntax === 'yaml'
@@ -102,6 +105,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         const loadedScenario = getScenario(scenarioId);
         if (loadedScenario) {
           setScenario(loadedScenario);
+          setEditableName(loadedScenario.name);
           setEditableNote(loadedScenario.meta?.note || '');
           
           // Convert params to editor format
@@ -228,6 +232,11 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
           validate: false // Already validated above
         });
         
+        // Rename if name has changed
+        if (editableName && editableName !== scenario.name) {
+          await renameScenario(scenario.id, editableName);
+        }
+        
         toast.success('Scenario updated');
         setIsDirty(false);
         onSave?.(); // Notify parent that save was successful
@@ -241,7 +250,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
       setIsSaving(false);
       setIsValidating(false);
     }
-  }, [scenario, editorValue, format, validateContent, applyContent, fromYAML, fromJSON, setBaseParams, createBlank, tabId, operations, onClose]);
+  }, [scenario, editorValue, format, validateContent, applyContent, fromYAML, fromJSON, setBaseParams, createBlank, tabId, operations, onClose, onSave, renameScenario, editableName, graph]);
   
   /**
    * Handle Cancel button
@@ -312,7 +321,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         <div className="modal-header">
           <h2 className="modal-title">
             <FileText size={20} style={{ marginRight: 8 }} />
-            Edit Scenario: {scenario.name}
+            Edit Scenario: {editableName || scenario.name}
           </h2>
           <button className="modal-close-btn" onClick={handleCancel}>
             <X size={20} />
@@ -323,6 +332,22 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         <div className="modal-body scenario-editor-body">
           {/* Metadata Panel */}
           <div className="scenario-metadata-panel">
+            {/* Editable Name - only for non-Base/Current scenarios */}
+            {scenario.id !== 'base' && scenario.id !== 'current' && (
+              <div className="metadata-row metadata-name-row">
+                <strong>Name:</strong>
+                <input
+                  type="text"
+                  value={editableName}
+                  onChange={(e) => {
+                    setEditableName(e.target.value);
+                    setIsDirty(true);
+                  }}
+                  className="metadata-name-input"
+                  placeholder="Scenario name..."
+                />
+              </div>
+            )}
             <div className="metadata-row">
               <strong>Created:</strong>
               <span>{new Date(scenario.createdAt).toLocaleString()}</span>

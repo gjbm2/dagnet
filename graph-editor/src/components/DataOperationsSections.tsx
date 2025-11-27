@@ -153,28 +153,59 @@ export function getEdgeDataSections(
   
   // 2. Conditional probability parameters (edge.conditional_p)
   // Create a section for EACH conditional probability
+  console.log('[DataOperationsSections] Processing conditional_p:', {
+    hasConditionalP: !!edge.conditional_p,
+    isArray: Array.isArray(edge.conditional_p),
+    length: edge.conditional_p?.length,
+    entries: edge.conditional_p?.map((c: any, i: number) => ({
+      index: i,
+      condition: c.condition,
+      conditionType: typeof c.condition,
+      hasQuery: !!c.query,
+      hasPConnection: !!c.p?.connection,
+      baseConnection: edge.p?.connection,
+    })),
+  });
+  
   if (edge.conditional_p && Array.isArray(edge.conditional_p)) {
     edge.conditional_p.forEach((condP: any, index: number) => {
-      // Skip old format conditions (string-based)
-      if (typeof condP.condition === 'string') return;
+      // String conditions are the current format (e.g., "visited(node-a)")
+      // Object conditions were an older format - skip those
+      if (typeof condP.condition === 'object') {
+        console.log(`[DataOperationsSections] Skipping conditional_p[${index}] - object condition`);
+        return;
+      }
       
       const condParamId = condP.p?.id;
-      if (condParamId || condP.p?.connection) {
+      // Conditional probabilities can inherit connection from base edge.p
+      const condDirectConnection = condP.p?.connection;
+      const baseConnection = edge.p?.connection;
+      const effectiveConnection = condDirectConnection || baseConnection;
+      
+      // Only create section if there's a connection (direct or inherited from base)
+      if (condParamId || effectiveConnection) {
         const file = condParamId ? fileRegistry.getFile(`parameter-${condParamId}`) : null;
         const hasFile = !!file;
         const hasFileConnection = hasFile && !!file.data?.connection;
-        const hasDirectConnection = !!condP.p?.connection;
+        const hasDirectConnection = !!effectiveConnection;
         const hasAnyConnection = hasDirectConnection || hasFileConnection;
         const canPutToFile = !!condParamId;
         
         // Generate label with condition display
         const conditionDisplay = condP.condition ? 
-          (typeof condP.condition === 'object' ? JSON.stringify(condP.condition) : String(condP.condition)) :
+          (typeof condP.condition === 'string' ? condP.condition : JSON.stringify(condP.condition)) :
           `#${index + 1}`;
+        
+        console.log(`[DataOperationsSections] Creating conditional section:`, {
+          index,
+          condition: conditionDisplay,
+          hasAnyConnection,
+          effectiveConnection,
+        });
         
         sections.push({
           id: `param-conditional-${index}`,
-          label: `Conditional prob. ${conditionDisplay}`,
+          label: `Conditional: ${conditionDisplay}`,
           objectType: 'parameter',
           objectId: condParamId || '',
           targetId: edgeId,
@@ -191,6 +222,11 @@ export function getEdgeDataSections(
             putToFile: canPutToFile,
             clearCache: hasFile, // Parameters have time-series cache
           },
+        });
+      } else {
+        console.log(`[DataOperationsSections] Skipping conditional_p[${index}] - no connection:`, {
+          condParamId,
+          effectiveConnection,
         });
       }
     });

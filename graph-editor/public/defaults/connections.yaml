@@ -84,18 +84,35 @@ connections:
             console.warn('[Amplitude Adapter] Example: from(A).to(C).minus(from(A).to(C).visited(B))');
           }
           
-          // Build funnel in correct order: from → visited → to
-          // CRITICAL: Start with 'from' to maintain correct denominator for pathway subtraction
+          // Build funnel with proper ordering:
+          // Super-funnel approach for upstream visited nodes:
+          //   visited_upstream → from → visited (between) → to
+          // This ensures temporal ordering: upstream events must occur BEFORE 'from'
+          // We then extract n/k for the from→to hop (ignoring upstream prefix)
+          
+          // Track the index where 'from' will be placed (for n/k extraction)
+          let fromStepIndex = 0;
+          
+          // 1. Add upstream visited events FIRST (events that must happen BEFORE 'from')
+          if (dsl.visited_upstream && dsl.visited_upstream.length > 0) {
+            console.log('[Amplitude Adapter] Building SUPER-FUNNEL with upstream visited nodes:', dsl.visited_upstream);
+            events.push(...dsl.visited_upstream.map(eventName => 
+              buildEventStep(eventName, eventFilters[eventName])
+            ));
+            fromStepIndex = dsl.visited_upstream.length;
+          }
+          
+          // 2. Add 'from' event
           events.push(buildEventStep(dsl.from, eventFilters[dsl.from]));
           
-          // Add visited events (middle steps)
+          // 3. Add visited events between from and to (middle steps)
           if (dsl.visited && dsl.visited.length > 0) {
             events.push(...dsl.visited.map(eventName => 
               buildEventStep(eventName, eventFilters[eventName])
             ));
           }
           
-          // End with 'to'
+          // 4. End with 'to'
           events.push(buildEventStep(dsl.to, eventFilters[dsl.to]));
           
           // Convert window to Amplitude date format (YYYYMMDD)
@@ -241,8 +258,17 @@ connections:
           ].filter(p => p).join('&');  // Filter out empty strings
           
           dsl.query_params = eventParams + '&' + otherParams;
-          dsl.from_step_index = 0;  // 'from' is always first step
+          
+          // CRITICAL: Set step indices for n/k extraction
+          // With super-funnel, 'from' may not be at index 0 if there are upstream visited nodes
+          dsl.from_step_index = fromStepIndex;  // Index of 'from' step (after any upstream visited)
           dsl.to_step_index = events.length - 1;  // 'to' is always last step
+          
+          if (fromStepIndex > 0) {
+            console.log('[Amplitude Adapter] SUPER-FUNNEL mode: from_step_index=' + fromStepIndex + 
+                        ', to_step_index=' + dsl.to_step_index + 
+                        ' (upstream events at indices 0-' + (fromStepIndex - 1) + ')');
+          }
           
           console.log('[Amplitude Adapter] Built funnel:', {
             events: events,

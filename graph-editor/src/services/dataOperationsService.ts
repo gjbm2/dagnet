@@ -1935,6 +1935,16 @@ class DataOperationsService {
         targetSlice = '',
       } = options;
     
+    // DEBUG: Log conditionalIndex at entry point
+    console.log('[DataOps:getFromSourceDirect] Entry:', {
+      objectType,
+      objectId,
+      targetId,
+      paramSlot,
+      conditionalIndex,
+      hasConditionalIndex: conditionalIndex !== undefined,
+    });
+    
     // Get human-readable identifiers for logging
     const targetEntity = targetId && graph 
       ? (objectType === 'parameter'
@@ -1999,28 +2009,36 @@ class DataOperationsService {
           // For parameters, resolve the specific parameter location
           if (objectType === 'parameter') {
             let param: any = null;
+            let baseParam: any = null;  // For fallback connection
             
             // If paramSlot specified, use that (e.g., 'p', 'cost_gbp', 'cost_time')
             if (paramSlot) {
-              param = target[paramSlot];
+              baseParam = target[paramSlot];
+              param = baseParam;
               
-              // If conditionalIndex specified, get from conditional_ps array
-              if (conditionalIndex !== undefined && param?.conditional_ps) {
-                param = param.conditional_ps[conditionalIndex];
+              // If conditionalIndex specified, get from conditional_p array on edge
+              // Conditional probabilities are at edge.conditional_p, NOT edge.p.conditional_ps
+              if (conditionalIndex !== undefined && target?.conditional_p?.[conditionalIndex]) {
+                const condEntry = target.conditional_p[conditionalIndex];
+                param = condEntry.p;  // The p object within the conditional entry
+                console.log(`[DataOps] Using conditional_p[${conditionalIndex}] for connection:`, param);
               }
             }
             // Otherwise, default to p (backward compatibility)
             else {
-              param = target.p;
+              baseParam = target.p;
+              param = baseParam;
             }
             
             if (param) {
-              connectionName = param.connection;
-              if (param.connection_string) {
+              // Use param.connection, or fall back to base param's connection for conditionals
+              connectionName = param.connection || baseParam?.connection;
+              const connString = param.connection_string || baseParam?.connection_string;
+              if (connString) {
                 try {
-                  connectionString = typeof param.connection_string === 'string'
-                    ? JSON.parse(param.connection_string)
-                    : param.connection_string;
+                  connectionString = typeof connString === 'string'
+                    ? JSON.parse(connString)
+                    : connString;
                 } catch (e) {
                   toast.error('Invalid connection_string JSON on edge');
                   sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON on edge');
@@ -2092,11 +2110,20 @@ class DataOperationsService {
         // Parameters: build DSL from edge query
         const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
         
-        if (targetEdge && targetEdge.query) {
+        // CRITICAL: For conditional_p fetches, use the conditional entry's query, not the base edge query
+        // This ensures visited() clauses in conditional queries are included
+        let effectiveQuery = targetEdge?.query;
+        if (conditionalIndex !== undefined && targetEdge?.conditional_p?.[conditionalIndex]?.query) {
+          effectiveQuery = targetEdge.conditional_p[conditionalIndex].query;
+          console.log(`[DataOps] Using conditional_p[${conditionalIndex}] query:`, effectiveQuery);
+        }
+        
+        if (targetEdge && effectiveQuery) {
           // ===== DIAGNOSTIC LOGGING FOR COMPOSITE QUERIES =====
-          console.log('[DataOps:COMPOSITE] Edge query string:', targetEdge.query);
-          console.log('[DataOps:COMPOSITE] Contains minus():', targetEdge.query.includes('.minus('));
-          console.log('[DataOps:COMPOSITE] Contains plus():', targetEdge.query.includes('.plus('));
+          console.log('[DataOps:COMPOSITE] Effective query string:', effectiveQuery);
+          console.log('[DataOps:COMPOSITE] Contains minus():', effectiveQuery.includes('.minus('));
+          console.log('[DataOps:COMPOSITE] Contains plus():', effectiveQuery.includes('.plus('));
+          console.log('[DataOps:COMPOSITE] Contains visited():', effectiveQuery.includes('.visited('));
           // ===================================================
           
           // Parse query string (format: "from(nodeA).to(nodeB)")
@@ -2160,8 +2187,8 @@ class DataOperationsService {
                 // Parse graph-level constraints (from WindowSelector or scenario)
                 const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
                 
-                // Parse edge-specific constraints
-                const edgeConstraints = targetEdge.query ? parseConstraints(targetEdge.query) : null;
+                // Parse edge-specific constraints (use effectiveQuery which may be from conditional_p)
+                const edgeConstraints = effectiveQuery ? parseConstraints(effectiveQuery) : null;
                 
                 // Merge: edge-specific overrides graph-level
                 constraints = {
@@ -2176,7 +2203,7 @@ class DataOperationsService {
                   currentDSL,
                   graphDSL: graph?.currentQueryDSL,
                   effectiveDSL,
-                  edgeQuery: targetEdge.query,
+                  edgeQuery: effectiveQuery,
                   graphConstraints,
                   edgeConstraints,
                   merged: constraints
@@ -2190,19 +2217,26 @@ class DataOperationsService {
               contextRegistry.clearCache();
               
               // Build DSL with event mapping for analytics-style connections (e.g., Amplitude)
+              // Create edge-like object with effective query (may be from conditional_p)
+              const edgeForDsl = {
+                ...targetEdge,
+                query: effectiveQuery  // Use effective query (base or conditional_p)
+              };
+              
               dsl = await buildDslFromEdge(
-                targetEdge,
+                edgeForDsl,
                 graph,
                 connectionProvider,
                 eventLoader,
                 constraints  // NEW: Pass constraints for context filters
               );
               console.log('Built DSL from edge with event mapping:', dsl);
+              console.log('[DataOps] Query used for DSL:', effectiveQuery);
               console.log('[DataOps] Context filters:', dsl.context_filters);
               console.log('[DataOps] Window dates:', dsl.start, dsl.end);
               
               // Log query details for user
-              const queryDesc = targetEdge.query || 'no query';
+              const queryDesc = effectiveQuery || 'no query';
               const windowDesc = (dsl.start && dsl.end) 
                 ? `${normalizeDate(dsl.start)} to ${normalizeDate(dsl.end)}`
                 : 'default window';
@@ -2213,7 +2247,9 @@ class DataOperationsService {
                   edgeQuery: queryDesc,
                   resolvedWindow: windowDesc,
                   events: dsl.events?.map((e: any) => e.event_id || e),
-                  contextFilters: dsl.context_filters
+                  contextFilters: dsl.context_filters,
+                  isConditional: conditionalIndex !== undefined,
+                  conditionalIndex
                 });
             }
           } catch (e) {

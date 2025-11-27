@@ -256,6 +256,7 @@ export function ConditionalProbabilityEditor({
                   objectType="edge"
                   objectId={edgeId || ''}
                   paramSlot="p"
+                  conditionalIndex={index}
                   param={condition.p}
                   onUpdate={(changes) => {
                     if (onUpdateParam) {

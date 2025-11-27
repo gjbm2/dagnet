@@ -30,7 +30,14 @@
   },
   
   "provider_event_names": {
-    "ui:description": ""
+    "ui:widget": "MonacoWidget",
+    "ui:options": {
+      "language": "json",
+      "height": "120px",
+      "minimap": false,
+      "lineNumbers": "off"
+    },
+    "ui:description": "Map of provider names to event names (e.g., {\"amplitude\": \"Event Name\"})"
   },
   
   "amplitude_filters": {
