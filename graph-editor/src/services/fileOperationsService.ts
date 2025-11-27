@@ -63,6 +63,13 @@ class FileOperationsService {
   }
 
   /**
+   * Set the workspace state getter (for testing)
+   */
+  setWorkspaceStateGetter(getter: () => { repo: string; branch: string }) {
+    this.getWorkspaceState = getter;
+  }
+
+  /**
    * Load a default example object for a given type from its schema's examples array.
    * This lets schemas own their own "default" shape instead of hard-coding it here.
    */
@@ -282,10 +289,11 @@ class FileOperationsService {
 
     // Determine correct file path
     // Index files go to repo root: parameters-index.yaml
-    // Regular files go to subdirectories: parameters/my-param.yaml
+    // Regular files go to subdirectories: parameters/my-param.yaml, graphs/my-graph.json
+    const extension = type === 'graph' ? 'json' : 'yaml';
     const filePath = fileId.endsWith('-index')
       ? `${fileId}.yaml`
-      : `${type}s/${name}.yaml`;
+      : `${type}s/${name}.${extension}`;
     
     // Get current workspace state to ensure persistence works correctly
     // If we use 'local'/'main' when the user is in a specific repo, the file will be created
@@ -311,7 +319,7 @@ class FileOperationsService {
     // 4. Create RepositoryItem
     const item: RepositoryItem = {
       id: name,
-      name: `${name}.yaml`,
+      name: `${name}.${extension}`,
       path: filePath,
       type: type,
       isLocal: true

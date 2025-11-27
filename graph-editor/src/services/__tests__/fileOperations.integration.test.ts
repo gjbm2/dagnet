@@ -72,6 +72,40 @@ describe('File Operations Integration Tests', () => {
       const retrieved = fileRegistry.getFile('parameter-test-param');
       expect(retrieved).toBe(file);
     });
+
+    it('should create graph files with .json extension', async () => {
+      // Mock getWorkspaceState to return a workspace
+      fileOperationsService.setWorkspaceStateGetter(() => ({ repo: 'test-repo', branch: 'main' }));
+      
+      const { fileId, item } = await fileOperationsService.createFile('test-graph', 'graph', {
+        openInTab: false,
+      });
+
+      expect(fileId).toBe('graph-test-graph');
+      
+      // CRITICAL: Graph files must have .json extension, not .yaml
+      expect(item.path).toBe('graphs/test-graph.json');
+      expect(item.name).toBe('test-graph.json');
+      expect(item.path).not.toContain('.yaml');
+      
+      // Verify the file was created with correct path
+      const file = fileRegistry.getFile(fileId);
+      expect(file?.source?.path).toBe('graphs/test-graph.json');
+    });
+
+    it('should create parameter files with .yaml extension', async () => {
+      fileOperationsService.setWorkspaceStateGetter(() => ({ repo: 'test-repo', branch: 'main' }));
+      
+      const { fileId, item } = await fileOperationsService.createFile('test-param', 'parameter', {
+        openInTab: false,
+      });
+
+      expect(fileId).toBe('parameter-test-param');
+      
+      // Parameters should have .yaml extension
+      expect(item.path).toBe('parameters/test-param.yaml');
+      expect(item.name).toBe('test-param.yaml');
+    });
   });
 
   describe('File Opening Workflows', () => {
