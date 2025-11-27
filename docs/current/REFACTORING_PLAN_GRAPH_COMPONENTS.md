@@ -13,36 +13,38 @@ This plan addresses the structural issues identified in `GraphEditor.tsx` (2100 
 
 ---
 
-## Phase 1: Remove Deprecated Path Analytics
+## Phase 1: Remove Deprecated Path Analytics ✅ COMPLETED
 
 **Priority: HIGH | Risk: LOW | Effort: ~2 hours**
+**Status: COMPLETED (2025-11-27)**
 
-The path analysis code in GraphCanvas (lines 3500-4100, ~600 lines) is now dominated by the new analytics machinery in AnalyticsPanel + Python runner.
+The path analysis code in GraphCanvas was removed as it was superseded by AnalyticsPanel + Python runner.
 
-### Actions
+### Completed Actions
 
-1. **Mark as deprecated** (immediate)
-   - Add `@deprecated` comments to path analysis functions
-   - Add console warnings when called
+1. **Removed path analysis calculation code** (~585 lines)
+   - Deleted `calculateSelectionAnalysis` function and all its internal helpers
+   - Deleted `findPathThroughIntermediates` helper
+   - Deleted `calculateProbability` helper
+   - Deleted `computeGlobalPruning` function
+   - Removed `analysis` state variable and `setSelectedNodesForAnalysis` setter
+   - Removed `highlightMetadata` useMemo hook
 
-2. **Remove path analysis code** (after verification)
-   - Delete `findPathThroughIntermediates` function
-   - Delete `calculateProbability` function  
-   - Delete `computeGlobalPruning` function
-   - Delete associated state and refs
-   - Delete path analysis result rendering
+2. **Removed path analysis UI panel** (~275 lines JSX)
+   - Removed the inline "Selection Analysis Popup" (`{analysis && (<Panel ...>...</Panel>)}`)
+   - This was the panel showing pathProbability, pathCosts when nodes were selected
 
-3. **Remove path analysis UI panel** (~140 lines JSX at lines 5289-5430)
-   - Remove the inline "Path Analysis" / "Selection Analysis" panel
-   - This panel renders when nodes are selected, showing pathProbability, pathCosts
-   - Now replaced by AnalyticsPanel with richer visualization
+3. **Cleaned up references**
+   - Removed `analysis` and `highlightMetadata` from `buildScenarioRenderEdges` call
+   - Removed from dependency arrays
 
 ### Files Affected
-- `GraphCanvas.tsx` - remove ~740 lines (600 calculation + 140 UI)
+- `GraphCanvas.tsx` - removed ~860 lines total (was 5740 lines, now ~4880 lines)
 
 ### Verification
-- Ensure AnalyticsPanel provides equivalent functionality
-- Test multi-node selection doesn't break
+- ✅ App builds successfully
+- ✅ All unit/integration tests pass (fixed 13 test issues during refactor)
+- ✅ AnalyticsPanel provides equivalent+ functionality
 
 ---
 
