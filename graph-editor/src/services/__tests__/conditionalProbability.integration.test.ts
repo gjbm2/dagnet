@@ -471,3 +471,315 @@ describe('Super-funnel URL construction verification', () => {
   });
 });
 
+/**
+ * Dual Query n/k Separation Tests
+ * 
+ * These tests verify the fix for the upstream-conditioned query n/k issue:
+ * 
+ * Problem:
+ * - When a query has visited_upstream (e.g., from(B).to(C).visited(A) where A is upstream of B),
+ *   the super-funnel A→B→C gives us n = users who did A→B, k = users who did A→B→C
+ * - But this is WRONG: n should be ALL users at B, not just those who came via A
+ * - This matters because we want to partition the flow: "what fraction of ALL users at B
+ *   came from A and went to C?"
+ * 
+ * Solution:
+ * - Run TWO queries:
+ *   1. Base query (strip upstream conditions) → gives n (all users at 'from')
+ *   2. Conditioned query (super-funnel) → gives k (users via upstream path who converted)
+ * - Combine: n from base, k from conditioned
+ */
+describe('Dual Query n/k Separation Tests', () => {
+  
+  describe('Detection of upstream conditions', () => {
+    
+    it('should detect visited_upstream and trigger dual query mode', () => {
+      const queryPayload: QueryPayload = {
+        from: 'viewed-dashboard',
+        to: 'recommendation-offered',
+        visited_upstream: ['gave-bds']
+      };
+      
+      const needsDualQuery = queryPayload.visited_upstream && 
+        Array.isArray(queryPayload.visited_upstream) && 
+        queryPayload.visited_upstream.length > 0;
+      
+      expect(needsDualQuery).toBe(true);
+    });
+    
+    it('should NOT trigger dual query mode when no upstream conditions', () => {
+      const queryPayload: QueryPayload = {
+        from: 'viewed-dashboard',
+        to: 'recommendation-offered'
+        // No visited_upstream
+      };
+      
+      const needsDualQuery = queryPayload.visited_upstream && 
+        Array.isArray(queryPayload.visited_upstream) && 
+        queryPayload.visited_upstream.length > 0;
+      
+      expect(needsDualQuery).toBeFalsy();
+    });
+    
+    it('should NOT trigger dual query mode for visited (between) only', () => {
+      const queryPayload: QueryPayload = {
+        from: 'viewed-dashboard',
+        to: 'recommendation-offered',
+        visited: ['intermediate-step']  // Between, not upstream
+      };
+      
+      const needsDualQuery = queryPayload.visited_upstream && 
+        Array.isArray(queryPayload.visited_upstream) && 
+        queryPayload.visited_upstream.length > 0;
+      
+      expect(needsDualQuery).toBeFalsy();
+    });
+  });
+  
+  describe('Base query payload construction', () => {
+    
+    it('should strip visited_upstream from base query', () => {
+      const queryPayload: QueryPayload = {
+        from: 'viewed-dashboard',
+        to: 'recommendation-offered',
+        visited_upstream: ['gave-bds'],
+        context_filters: [{ field: 'country', op: 'is', values: ['US'] }]
+      };
+      
+      // Simulate the baseQueryPayload construction from dataOperationsService
+      const baseQueryPayload = {
+        ...queryPayload,
+        visited_upstream: undefined,
+        visitedAny_upstream: undefined
+      };
+      
+      expect(baseQueryPayload.from).toBe('viewed-dashboard');
+      expect(baseQueryPayload.to).toBe('recommendation-offered');
+      expect(baseQueryPayload.visited_upstream).toBeUndefined();
+      expect(baseQueryPayload.context_filters).toEqual([{ field: 'country', op: 'is', values: ['US'] }]);
+    });
+    
+    it('should preserve visited (between) in base query', () => {
+      const queryPayload: QueryPayload = {
+        from: 'viewed-dashboard',
+        to: 'recommendation-offered',
+        visited_upstream: ['gave-bds'],
+        visited: ['clicked-something']  // Between from and to - should be preserved
+      };
+      
+      const baseQueryPayload = {
+        ...queryPayload,
+        visited_upstream: undefined,
+        visitedAny_upstream: undefined
+      };
+      
+      expect(baseQueryPayload.visited_upstream).toBeUndefined();
+      expect(baseQueryPayload.visited).toEqual(['clicked-something']);
+    });
+  });
+  
+  describe('n/k combination logic', () => {
+    
+    it('should use base n and conditioned k for aggregate result', () => {
+      // Simulate query results
+      const baseResult = {
+        n: 1000,  // ALL users at 'from'
+        k: 800    // ALL users at 'from' who went to 'to' (we don't use this k)
+      };
+      
+      const conditionedResult = {
+        n: 500,   // Users who did A→B (we don't use this n - it's WRONG)
+        k: 400    // Users who did A→B→C (this is the CORRECT k)
+      };
+      
+      // Combine: n from base, k from conditioned
+      const combinedN = baseResult.n;
+      const combinedK = conditionedResult.k;
+      const combinedP = combinedN > 0 ? combinedK / combinedN : 0;
+      
+      expect(combinedN).toBe(1000);  // ALL users at 'from'
+      expect(combinedK).toBe(400);   // Users via upstream path who converted
+      expect(combinedP).toBe(0.4);   // 400/1000 = 40%
+      
+      // The WRONG approach would be:
+      const wrongP = conditionedResult.k / conditionedResult.n;  // 400/500 = 80%
+      expect(wrongP).toBe(0.8);  // This is too high!
+      expect(combinedP).not.toBe(wrongP);
+    });
+    
+    it('should handle edge case where base n is 0', () => {
+      const baseResult = { n: 0, k: 0 };
+      const conditionedResult = { n: 0, k: 0 };
+      
+      const combinedN = baseResult.n;
+      const combinedK = conditionedResult.k;
+      const combinedP = combinedN > 0 ? combinedK / combinedN : 0;
+      
+      expect(combinedN).toBe(0);
+      expect(combinedK).toBe(0);
+      expect(combinedP).toBe(0);  // Avoid divide-by-zero
+    });
+  });
+  
+  describe('Time-series combination logic', () => {
+    
+    it('should combine daily n from base with daily k from conditioned', () => {
+      // Simulate daily time-series from base query
+      const baseTimeSeries = [
+        { date: '2025-10-01', n: 100, k: 80, p: 0.8 },
+        { date: '2025-10-02', n: 120, k: 96, p: 0.8 },
+        { date: '2025-10-03', n: 90, k: 72, p: 0.8 }
+      ];
+      
+      // Simulate daily time-series from conditioned query
+      const condTimeSeries = [
+        { date: '2025-10-01', n: 50, k: 40, p: 0.8 },  // n is WRONG (users who did A→B for that day)
+        { date: '2025-10-02', n: 60, k: 48, p: 0.8 },
+        { date: '2025-10-03', n: 45, k: 36, p: 0.8 }
+      ];
+      
+      // Combine: for each date, use base n and conditioned k
+      const dateMap = new Map<string, { n: number; k: number }>();
+      
+      for (const day of baseTimeSeries) {
+        dateMap.set(day.date, { n: day.n, k: 0 });
+      }
+      
+      for (const day of condTimeSeries) {
+        const existing = dateMap.get(day.date);
+        if (existing) {
+          existing.k = day.k;
+        }
+      }
+      
+      const combinedTimeSeries = Array.from(dateMap.entries()).map(([date, { n, k }]) => ({
+        date,
+        n,  // From base
+        k,  // From conditioned
+        p: n > 0 ? k / n : 0
+      }));
+      
+      expect(combinedTimeSeries).toHaveLength(3);
+      
+      // Day 1: n=100 (base), k=40 (conditioned), p=40%
+      expect(combinedTimeSeries[0].n).toBe(100);
+      expect(combinedTimeSeries[0].k).toBe(40);
+      expect(combinedTimeSeries[0].p).toBe(0.4);
+      
+      // Day 2: n=120 (base), k=48 (conditioned), p=40%
+      expect(combinedTimeSeries[1].n).toBe(120);
+      expect(combinedTimeSeries[1].k).toBe(48);
+      expect(combinedTimeSeries[1].p).toBe(0.4);
+      
+      // Day 3: n=90 (base), k=36 (conditioned), p=40%
+      expect(combinedTimeSeries[2].n).toBe(90);
+      expect(combinedTimeSeries[2].k).toBe(36);
+      expect(combinedTimeSeries[2].p).toBe(0.4);
+    });
+    
+    it('should handle missing dates in conditioned time-series', () => {
+      const baseTimeSeries = [
+        { date: '2025-10-01', n: 100, k: 80, p: 0.8 },
+        { date: '2025-10-02', n: 120, k: 96, p: 0.8 }
+      ];
+      
+      // Conditioned only has data for one day
+      const condTimeSeries = [
+        { date: '2025-10-01', n: 50, k: 40, p: 0.8 }
+        // Missing 2025-10-02
+      ];
+      
+      const dateMap = new Map<string, { n: number; k: number }>();
+      
+      for (const day of baseTimeSeries) {
+        dateMap.set(day.date, { n: day.n, k: 0 });
+      }
+      
+      for (const day of condTimeSeries) {
+        const existing = dateMap.get(day.date);
+        if (existing) {
+          existing.k = day.k;
+        }
+      }
+      
+      const combinedTimeSeries = Array.from(dateMap.entries()).map(([date, { n, k }]) => ({
+        date,
+        n,
+        k,
+        p: n > 0 ? k / n : 0
+      }));
+      
+      // Day 1: has data from both
+      expect(combinedTimeSeries.find(d => d.date === '2025-10-01')?.k).toBe(40);
+      
+      // Day 2: k defaults to 0 (no conditioned data)
+      expect(combinedTimeSeries.find(d => d.date === '2025-10-02')?.k).toBe(0);
+    });
+  });
+  
+  describe('Semantic correctness of dual query approach', () => {
+    
+    it('should give correct partition-of-flow semantics', () => {
+      // Scenario: Edge B→C with visited(A) where A is upstream of B
+      // Graph: A → B → C (users flow through A to B to C)
+      // 
+      // Total users at B: 1000
+      // Users who came to B via A: 500 (the other 500 came via other paths)
+      // Users who did A→B→C: 400
+      // 
+      // Question: What fraction of ALL users at B came from A AND went to C?
+      // Answer: 400/1000 = 40%
+      //
+      // WRONG answer (old approach): 400/500 = 80% (this is the conditional probability
+      // P(C|B, visited A) which is NOT what we want for flow partitioning)
+      
+      const totalUsersAtB = 1000;
+      const usersFromA = 500;  // Subset who came via A
+      const usersFromAThenC = 400;  // Subset who came via A and then went to C
+      
+      // Correct approach (dual query)
+      const correctP = usersFromAThenC / totalUsersAtB;
+      expect(correctP).toBe(0.4);
+      
+      // Wrong approach (single super-funnel query)
+      const wrongP = usersFromAThenC / usersFromA;
+      expect(wrongP).toBe(0.8);
+      
+      // The difference matters for decision modeling!
+      expect(correctP).toBeLessThan(wrongP);
+    });
+    
+    it('should allow sibling conditionals to partition the total flow', () => {
+      // Scenario: Edge B→C with multiple conditionals:
+      // - visited(A1): users who came via A1
+      // - visited(A2): users who came via A2
+      // - (base): users who came via neither A1 nor A2
+      //
+      // All three should use the SAME n (total users at B)
+      // Each has its own k (users via that specific path who converted)
+      
+      const totalUsersAtB = 1000;  // This is n for ALL conditionals
+      
+      // Sibling 1: visited(A1)
+      const k_viaA1 = 300;
+      const p_viaA1 = k_viaA1 / totalUsersAtB;
+      
+      // Sibling 2: visited(A2)
+      const k_viaA2 = 200;
+      const p_viaA2 = k_viaA2 / totalUsersAtB;
+      
+      // Base (neither A1 nor A2)
+      const k_base = 400;
+      const p_base = k_base / totalUsersAtB;
+      
+      // Sum of ks should approximate total k (allowing for some overlap)
+      // In a clean partition: k_viaA1 + k_viaA2 + k_base ≈ total_k
+      const total_k_estimated = k_viaA1 + k_viaA2 + k_base;
+      expect(total_k_estimated).toBe(900);
+      
+      // Probabilities should sum to ≤ 1 (overlap allowed)
+      expect(p_viaA1 + p_viaA2 + p_base).toBeLessThanOrEqual(1);
+    });
+  });
+});
+

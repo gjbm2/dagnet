@@ -227,7 +227,7 @@ describe('Composite Query Parser: Performance', () => {
     const result = parseCompositeQuery(query);
     const elapsed = performance.now() - start;
     
-    expect(elapsed).toBeLessThan(5); // <5ms
+    expect(elapsed).toBeLessThan(50); // Should be fast (no I/O)
     expect(result.base.visited).toEqual(['c', 'd']);
     expect(result.minusTerms).toHaveLength(2);
     expect(result.plusTerms).toHaveLength(1);

@@ -2362,6 +2362,40 @@ class DataOperationsService {
         }
       }
       
+      // 4b. Detect upstream conditions and prepare base query for n
+      // When a query has visited_upstream (or exclude with upstream nodes),
+      // we need TWO queries:
+      // - Conditioned query (super-funnel) → gives k
+      // - Base query (strip upstream conditions) → gives n
+      // This is because n should be ALL users at the 'from' node, not just those who came via a specific path
+      let baseQueryPayload: any = null;
+      let needsDualQuery = false;
+      
+      if (queryPayload.visited_upstream && Array.isArray(queryPayload.visited_upstream) && queryPayload.visited_upstream.length > 0) {
+        needsDualQuery = true;
+        console.log('[DataOps:DUAL_QUERY] Detected visited_upstream, will run dual queries for n and k');
+        console.log('[DataOps:DUAL_QUERY] Conditioned query has visited_upstream:', queryPayload.visited_upstream);
+        
+        // Create base query: same from/to, but strip visited_upstream
+        // This will give us a simple 2-step funnel where:
+        // - n = cumulativeRaw[0] = all users at 'from'
+        // - k = cumulativeRaw[1] = all users at 'from' who went to 'to'
+        // We only use n from this query
+        baseQueryPayload = {
+          ...queryPayload,
+          visited_upstream: undefined,  // Strip upstream conditions
+          visitedAny_upstream: undefined,  // Also strip any visitedAny upstream
+          // Note: Keep 'visited' (between from and to) if present - that's part of the path
+        };
+        
+        console.log('[DataOps:DUAL_QUERY] Base query (for n):', {
+          from: baseQueryPayload.from,
+          to: baseQueryPayload.to,
+          visited: baseQueryPayload.visited,
+          visited_upstream: baseQueryPayload.visited_upstream,  // should be undefined
+        });
+      }
+      
       // 5. Check for incremental fetch opportunities (if dailyMode and parameter file exists)
       // Determine default window first
       const now = new Date();
@@ -2627,6 +2661,47 @@ class DataOperationsService {
           );
         }
         
+        // =====================================================================
+        // DUAL QUERY FOR N: Run base query first if we have upstream conditions
+        // This runs ONCE, upstream of both composite and simple query paths
+        // =====================================================================
+        let baseN: number | undefined;
+        let baseTimeSeries: Array<{ date: string; n: number; k: number; p: number }> | undefined;
+        
+        if (needsDualQuery && baseQueryPayload) {
+          console.log('[DataOps:DUAL_QUERY] Running base query for n (upstream of k queries)...');
+          
+          const baseResult = await runner.execute(connectionName, baseQueryPayload, {
+            connection_string: connectionString,
+            window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+            context: { mode: contextMode },
+            edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
+            eventDefinitions,
+          });
+          
+          if (!baseResult.success) {
+            console.error('[DataOps:DUAL_QUERY] Base query failed:', baseResult.error);
+            toast.error(`Base query failed: ${baseResult.error}`, { id: 'das-fetch' });
+            sessionLogService.endOperation(logOpId, 'error', `Base query failed: ${baseResult.error}`);
+            return;
+          }
+          
+          const baseRaw = baseResult.raw as any;
+          baseN = baseRaw?.n ?? 0;
+          baseTimeSeries = Array.isArray(baseRaw?.time_series) ? baseRaw.time_series : undefined;
+          
+          console.log('[DataOps:DUAL_QUERY] Base query result (for n):', {
+            n: baseN,
+            hasTimeSeries: !!baseTimeSeries,
+            timeSeriesLength: baseTimeSeries?.length ?? 0,
+          });
+          
+          sessionLogService.addChild(logOpId, 'info', 'DUAL_QUERY_BASE',
+            `Base query for n: n=${baseN} (all users at 'from')`,
+            `This is the denominator for upstream-conditioned queries`
+          );
+        }
+        
         if (isComposite) {
           // Composite query: use inclusion-exclusion executor
           console.log('[DataOps] Detected composite query, using inclusion-exclusion executor');
@@ -2646,11 +2721,44 @@ class DataOperationsService {
             
             console.log(`[DataOperationsService] Composite query result for gap ${gapIndex + 1}:`, combined);
             
+            // If we have a base n from dual query, use it instead of composite's n
+            let finalN = combined.n;
+            let finalK = combined.k;
+            let finalP = combined.p_mean;
+            
+            if (needsDualQuery && baseN !== undefined) {
+              finalN = baseN;  // Override n with base query's n
+              finalP = finalN > 0 ? finalK / finalN : 0;
+              console.log('[DataOps:DUAL_QUERY] Overriding composite n with base n:', {
+                composite_n: combined.n,
+                base_n: baseN,
+                final_n: finalN,
+                k: finalK,
+                p: finalP
+              });
+            }
+            
             // Extract results based on pathway: for parameters we collect time-series
             if (dailyMode && objectType === 'parameter') {
               // CRITICAL: Extract time-series data from composite result
               if (combined.evidence?.time_series && Array.isArray(combined.evidence.time_series)) {
-                const timeSeries = combined.evidence.time_series;
+                let timeSeries = combined.evidence.time_series;
+                
+                // If dual query, override n values with base time-series n
+                if (needsDualQuery && baseTimeSeries) {
+                  const baseDateMap = new Map(baseTimeSeries.map(d => [d.date, d.n]));
+                  timeSeries = timeSeries.map(day => {
+                    const base_n = baseDateMap.get(day.date) ?? day.n;
+                    return {
+                      date: day.date,
+                      n: base_n,  // Use base n
+                      k: day.k,   // Keep composite k
+                      p: base_n > 0 ? day.k / base_n : 0
+                    };
+                  });
+                  console.log('[DataOps:DUAL_QUERY] Overrode composite time-series n with base n');
+                }
+                
                 console.log(`[DataOperationsService] Extracted ${timeSeries.length} days from composite query (gap ${gapIndex + 1})`);
                 allTimeSeriesData.push(...timeSeries);
               } else {
@@ -2660,11 +2768,11 @@ class DataOperationsService {
                 return;
               }
             } else {
-              // Non-daily mode: use aggregated results
+              // Non-daily mode: use aggregated results (with potentially overridden n)
               updateData = {
-                mean: combined.p_mean,
-                n: combined.n,
-                k: combined.k
+                mean: finalP,
+                n: finalN,
+                k: finalK
               };
             }
             
@@ -2674,8 +2782,106 @@ class DataOperationsService {
             return;
           }
           
+        } else if (needsDualQuery && baseQueryPayload) {
+          // DUAL QUERY (simple): Already have base n, now get k from conditioned query
+          console.log('[DataOps:DUAL_QUERY] Running conditioned query (for k)...');
+          
+          const condResult = await runner.execute(connectionName, queryPayload, {
+            connection_string: connectionString,
+            window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+            context: { mode: contextMode },
+            edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
+            eventDefinitions,
+          });
+          
+          if (!condResult.success) {
+            console.error('[DataOps:DUAL_QUERY] Conditioned query failed:', condResult.error);
+            toast.error(`Conditioned query failed: ${condResult.error}`, { id: 'das-fetch' });
+            sessionLogService.endOperation(logOpId, 'error', `Conditioned query failed: ${condResult.error}`);
+            return;
+          }
+          
+          const condRaw = condResult.raw as any;
+          console.log('[DataOps:DUAL_QUERY] Conditioned query result (for k):', {
+            n: condRaw?.n,  // This is the WRONG n (users at A→B), we'll discard it
+            k: condRaw?.k,  // This is the CORRECT k (users who did A→B→C)
+            hasTimeSeries: !!condRaw?.time_series,
+            timeSeriesLength: Array.isArray(condRaw?.time_series) ? condRaw.time_series.length : 0,
+          });
+          
+          // Combine: n from base (already fetched above), k from conditioned
+          const combinedN = baseN ?? 0;
+          const combinedK = condRaw?.k ?? 0;
+          const combinedP = combinedN > 0 ? combinedK / combinedN : 0;
+          
+          console.log('[DataOps:DUAL_QUERY] Combined result:', {
+            n: combinedN,
+            k: combinedK,
+            p: combinedP,
+            explanation: `n=${combinedN} (all at 'from'), k=${combinedK} (via upstream path), p=${(combinedP * 100).toFixed(2)}%`
+          });
+          
+          sessionLogService.addChild(logOpId, 'info', 'DUAL_QUERY_COMBINED',
+            `Dual query: n=${combinedN} (base), k=${combinedK} (conditioned), p=${(combinedP * 100).toFixed(2)}%`,
+            `Base query gives total at 'from', conditioned query gives conversions via upstream path`
+          );
+          
+          // Combine time-series data if in daily mode
+          if (dailyMode && objectType === 'parameter') {
+            const condTimeSeries = Array.isArray(condRaw?.time_series) ? condRaw.time_series : [];
+            
+            // Build a map of date → {base_n, cond_k} for combining
+            const dateMap = new Map<string, { n: number; k: number }>();
+            
+            // Add base n values
+            if (baseTimeSeries) {
+              for (const day of baseTimeSeries) {
+                dateMap.set(day.date, { n: day.n, k: 0 });
+              }
+            }
+            
+            // Add conditioned k values
+            for (const day of condTimeSeries) {
+              const existing = dateMap.get(day.date);
+              if (existing) {
+                existing.k = day.k;
+              } else {
+                // Date only in conditioned (shouldn't happen, but handle it)
+                dateMap.set(day.date, { n: 0, k: day.k });
+              }
+            }
+            
+            // Build combined time series
+            const combinedTimeSeries: Array<{ date: string; n: number; k: number; p: number }> = [];
+            for (const [date, { n, k }] of dateMap) {
+              combinedTimeSeries.push({
+                date,
+                n,  // From base query (all users at 'from')
+                k,  // From conditioned query (users via upstream path who converted)
+                p: n > 0 ? k / n : 0
+              });
+            }
+            
+            // Sort by date
+            combinedTimeSeries.sort((a, b) => a.date.localeCompare(b.date));
+            
+            console.log('[DataOps:DUAL_QUERY] Combined time series:', {
+              days: combinedTimeSeries.length,
+              sample: combinedTimeSeries.slice(0, 3),
+            });
+            
+            allTimeSeriesData.push(...combinedTimeSeries);
+          } else {
+            // Non-daily mode: use combined aggregates
+            updateData = {
+              mean: combinedP,
+              n: combinedN,
+              k: combinedK
+            };
+          }
+          
         } else {
-          // Simple query: use standard DAS runner
+          // Simple query: use standard DAS runner (no upstream conditions)
           const result = await runner.execute(connectionName, queryPayload, {
             connection_string: connectionString,
             window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
