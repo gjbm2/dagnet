@@ -118,7 +118,7 @@ export class GraphComputeClient {
   
   /**
    * Generate a stable cache key from analysis inputs
-   * Uses node/edge IDs (not full objects) for stability
+   * Uses node/edge IDs AND probability values to ensure What-If changes invalidate cache
    */
   private generateCacheKey(
     graph: any,
@@ -130,10 +130,31 @@ export class GraphComputeClient {
     const nodeIds = (graph?.nodes || []).map((n: any) => n.id || n.uuid).sort().join(',');
     const edgeIds = (graph?.edges || []).map((e: any) => e.id || e.uuid).sort().join(',');
     
+    // IMPORTANT: Include edge probabilities so What-If changes invalidate cache
+    // This ensures that when What-If modifies probabilities, we don't return stale results
+    const edgeProbs = (graph?.edges || [])
+      .map((e: any) => `${e.id || e.uuid}:${(e.p?.mean ?? 0).toFixed(6)}`)
+      .sort()
+      .join(',');
+    
+    // Also include case variant weights for case nodes
+    const caseWeights = (graph?.nodes || [])
+      .filter((n: any) => n.type === 'case' && n.case?.variants)
+      .map((n: any) => {
+        const weights = (n.case.variants || [])
+          .map((v: any) => `${v.name}:${(v.weight ?? 0).toFixed(4)}`)
+          .join(';');
+        return `${n.id || n.uuid}=[${weights}]`;
+      })
+      .sort()
+      .join(',');
+    
     // Create cache key from stable components
     const parts = [
       `nodes:${nodeIds}`,
       `edges:${edgeIds}`,
+      `probs:${edgeProbs}`,
+      `cases:${caseWeights}`,
       `dsl:${queryDsl || ''}`,
       `type:${analysisType || ''}`,
       `scenarios:${(scenarioIds || []).sort().join(',')}`

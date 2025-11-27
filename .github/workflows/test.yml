@@ -13,7 +13,7 @@ jobs:
     
     strategy:
       matrix:
-        node-version: [18.x, 20.x]
+        node-version: [20.x, 22.x]
     
     steps:
       - name: Checkout code
@@ -79,13 +79,13 @@ jobs:
         working-directory: ./
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest graph-editor/tests/ -v
+        run: pytest graph-editor/tests/ -q --tb=short
       
       - name: Generate coverage report
         working-directory: ./
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest graph-editor/tests/ --cov=lib --cov-report=xml --cov-report=term
+        run: pytest graph-editor/tests/ -q --tb=short --cov=lib --cov-report=xml --cov-report=term
       
       - name: Upload coverage to Codecov (optional)
         uses: codecov/codecov-action@v4

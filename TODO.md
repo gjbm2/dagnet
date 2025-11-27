@@ -1,8 +1,33 @@
 # TODO
 
+## What-If Compositing Centralization (REFACTOR)
+
+**Problem:** What-If DSL compositing logic is duplicated across multiple files:
+- `GraphCanvas.tsx` - 7+ direct calls to `computeEffectiveEdgeProbability`
+- `buildScenarioRenderEdges.ts` - inline case variant logic
+- `AnalyticsPanel.tsx` - builds graphs with What-If
+- `CompositionService.ts` - `applyWhatIfToGraph` (partial implementation)
+
+**Solution:** All What-If compositing should be centralized in `CompositionService`:
+1. Create `getEffectiveEdgeProbability(layerId, edgeId, graph, params, whatIfDSL)` that:
+   - For 'current': calls `computeEffectiveEdgeProbability` with whatIfDSL
+   - For scenarios: uses composed params + case variant weights
+   - Replaces the 3-way pattern that appears 4+ times in the codebase
+
+2. Consolidate case variant weight application
+3. Single source of truth for layer probability resolution
+
+**Docs:** See `docs/current/refactor/GRAPH_CANVAS_ARCHITECTURE.md` for full analysis
+
 ## Project-latency
 
-Edge cases to consider:
+- Use Amplitude time data properly
+- Convolve time onto p params
+- Re-name cost_time as cost_labour & use accordingly
+- Upgrade runner
+- Distinguish between eventwindow() and cohortwindow() [aka window()]
+
+### Edge cases to consider
 - upstream visited() calls to Amplitude need to query on the right cohort window for the edges we actually care about NOT the upstream start window
 
 
@@ -158,6 +183,9 @@ Edge cases to consider:
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- Keyboard short cuts, generally
+- Clean up dead / misleading menu items
+- add '?' icons to components, which link to relevant help docs 
 - Image Undo/Redo Broken 
 - bead labels aren't updating when values change e.g. on data retrieval, revbalances, etc. 
 - make 'overridden' icons brighter

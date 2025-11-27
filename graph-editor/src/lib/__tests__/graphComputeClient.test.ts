@@ -21,14 +21,19 @@ import { GraphComputeClient } from '../graphComputeClient';
 let pythonServerAvailable = false;
 
 beforeAll(async () => {
+  // Use AbortController to prevent hanging connections
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
+  
   try {
-    console.log('🔍 Checking for Python server on http://localhost:9000/...');
-    const response = await fetch('http://localhost:9000/');
+    const response = await fetch('http://localhost:9000/', { 
+      signal: controller.signal 
+    });
     pythonServerAvailable = response.ok;
-    console.log(`✅ Python server ${pythonServerAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'}`);
   } catch (e) {
-    console.log(`❌ Python server connection failed: ${e}`);
     pythonServerAvailable = false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }, 5000);
 

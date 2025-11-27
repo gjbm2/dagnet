@@ -52,6 +52,10 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || ['current'];
   const scenarioOrder = scenarioState?.scenarioOrder || ['current'];
   
+  // Get What-If DSL from tab state (for 'current' layer analysis)
+  const currentTab = tabId ? tabs.find(t => t.id === tabId) : undefined;
+  const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
+  
   // Order visible scenarios to match legend display order:
   // base (if visible) -> user scenarios (REVERSED scenarioOrder) -> current
   // Legend displays chips left-to-right as: base, oldest scenario, ..., newest scenario, current
@@ -328,13 +332,16 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       if (hasMultipleScenarios) {
         // Build scenario-modified graphs for each visible scenario (in legend order)
         const scenarioGraphs = orderedVisibleScenarios.map(scenarioId => {
+          // Pass whatIfDSL only for 'current' layer - scenario layers have their
+          // What-If already baked into their params at snapshot time
           const scenarioGraph = buildGraphForLayer(
             scenarioId,
             graph,
             scenariosContext.baseParams,
             scenariosContext.currentParams,
             scenariosContext.scenarios,
-            visibleScenarioIds
+            visibleScenarioIds,
+            scenarioId === 'current' ? whatIfDSL : undefined
           );
           
           const colour = getScenarioColour(scenarioId);
@@ -358,8 +365,26 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         const scenarioName = getScenarioName(scenarioId);
         const scenarioColour = getScenarioColour(scenarioId);
         
+        // Build the graph with What-If applied (if current layer)
+        let analysisGraph = graph;
+        if (scenariosContext) {
+          analysisGraph = buildGraphForLayer(
+            scenarioId,
+            graph,
+            scenariosContext.baseParams,
+            scenariosContext.currentParams,
+            scenariosContext.scenarios,
+            visibleScenarioIds,
+            scenarioId === 'current' ? whatIfDSL : undefined
+          );
+        } else if (scenarioId === 'current' && whatIfDSL) {
+          // No scenario context but we have whatIfDSL - apply it directly
+          const { applyWhatIfToGraph } = await import('../../services/CompositionService');
+          analysisGraph = applyWhatIfToGraph(graph, whatIfDSL);
+        }
+        
         response = await graphComputeClient.analyzeSelection(
-          graph,
+          analysisGraph,
           queryDSL || undefined,
           scenarioId,
           scenarioName,
@@ -391,7 +416,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         }
       }
     }
-  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, orderedVisibleScenarios, scenariosContext, getScenarioName, getScenarioColour]);
+  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, orderedVisibleScenarios, scenariosContext, getScenarioName, getScenarioColour, whatIfDSL]);
   
   // Store runAnalysis in a ref to avoid effect re-triggers
   const runAnalysisRef = useRef(runAnalysis);
@@ -406,6 +431,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const prevQueryDSLRef = useRef(queryDSL);
   const prevSelectedNodesRef = useRef(selectedNodeIds);
   const prevScenariosKeyRef = useRef(visibleScenariosKey);
+  const prevWhatIfDSLRef = useRef(whatIfDSL);
   
   // Single unified effect that handles all triggers
   useEffect(() => {
@@ -417,6 +443,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     const queryChanged = prevQueryDSLRef.current !== queryDSL;
     const selectionChanged = prevSelectedNodesRef.current !== selectedNodeIds;
     const scenariosChanged = prevScenariosKeyRef.current !== visibleScenariosKey;
+    const whatIfChanged = prevWhatIfDSLRef.current !== whatIfDSL;
     
     // Update refs
     prevAnalysisIdRef.current = selectedAnalysisId;
@@ -424,6 +451,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     prevQueryDSLRef.current = queryDSL;
     prevSelectedNodesRef.current = selectedNodeIds;
     prevScenariosKeyRef.current = visibleScenariosKey;
+    prevWhatIfDSLRef.current = whatIfDSL;
     
     // If analysis type changed (including first selection), run immediately
     if (analysisChanged) {
@@ -432,13 +460,14 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     }
     
     // For other changes, debounce
-    if (graphChanged || queryChanged || selectionChanged || scenariosChanged) {
+    // What-If changes should also trigger re-analysis since they affect probabilities
+    if (graphChanged || queryChanged || selectionChanged || scenariosChanged || whatIfChanged) {
       const timeoutId = setTimeout(() => {
         runAnalysisRef.current();
       }, 300);
       return () => clearTimeout(timeoutId);
     }
-  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey]);
+  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey, whatIfDSL]);
   
   // Cleanup spinner timeout on unmount
   useEffect(() => {

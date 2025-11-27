@@ -163,8 +163,6 @@ def test_complex_multi_path_graph():
         print("   Need inclusion-exclusion with plus() add-backs")
     else:
         print("\n✓ MECE works (path interiors are truly disjoint)")
-    
-    return query
 
 
 def test_simple_diamond():
@@ -207,8 +205,6 @@ def test_simple_diamond():
     assert query_ac.startswith("from(a).to(c)")
     assert "minus" in query_ac
 
-    return query_ac
-
 
 def test_native_exclude_provider():
     """
@@ -234,8 +230,6 @@ def test_native_exclude_provider():
     assert "exclude" in query
     assert "minus" not in query
     assert "d" in query
-    
-    return query
 
 
 def test_no_competing_branches():
@@ -260,8 +254,6 @@ def test_no_competing_branches():
     assert query == "from(a).to(b)"
     assert "minus" not in query
     assert "exclude" not in query
-    
-    return query
 
 
 def test_inclusion_exclusion_approach():
@@ -305,8 +297,6 @@ def test_inclusion_exclusion_approach():
     for term, coeff in result['terms']:
         sign = '+' if coeff > 0 else ''
         print(f"  {sign}{coeff}: {term[:80]}")
-    
-    return result
 
 
 def test_optimized_inclusion_exclusion():
@@ -345,8 +335,6 @@ def test_optimized_inclusion_exclusion():
     print(f"  Match: {result['matches']}")
     
     assert result['matches'], "Optimized inclusion-exclusion flow validation failed"
-    
-    return result
 
 
 if __name__ == "__main__":

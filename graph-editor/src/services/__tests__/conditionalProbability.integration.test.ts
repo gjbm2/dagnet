@@ -13,6 +13,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { GraphEdge, ConditionalProbability, ProbabilityParam } from '../../types';
+import type { DslObject } from '../../lib/das/buildDslFromEdge';
 
 describe('Conditional Probability Integration Tests', () => {
   
@@ -28,19 +30,19 @@ describe('Conditional Probability Integration Tests', () => {
     
     it('should use conditional_p query when conditionalIndex is provided', () => {
       // Setup: Edge with base query and conditional_p with different query
-      const edge = {
+      const edge: GraphEdge = {
         uuid: 'edge-1',
         id: 'test-edge',
         from: 'node-a',
         to: 'node-b',
         query: 'from(node-a).to(node-b)', // Base query
-        p: { mean: 0.5, connection: 'amplitude-prod' },
+        p: { mean: 0.5, connection: 'amplitude-prod' } as ProbabilityParam,
         conditional_p: [
           {
             condition: 'visited(node-x)',
             query: 'from(node-a).to(node-b).visited(node-x)', // Conditional query - DIFFERENT
-            p: { mean: 0.8, connection: 'amplitude-prod' }
-          }
+            p: { mean: 0.8, connection: 'amplitude-prod' } as ProbabilityParam
+          } as ConditionalProbability
         ]
       };
       
@@ -55,19 +57,19 @@ describe('Conditional Probability Integration Tests', () => {
     });
 
     it('should use base edge query when conditionalIndex is undefined', () => {
-      const edge = {
+      const edge: GraphEdge = {
         uuid: 'edge-1',
         id: 'test-edge',
         from: 'node-a',
         to: 'node-b',
         query: 'from(node-a).to(node-b)',
-        p: { mean: 0.5, connection: 'amplitude-prod' },
+        p: { mean: 0.5, connection: 'amplitude-prod' } as ProbabilityParam,
         conditional_p: [
           {
             condition: 'visited(node-x)',
             query: 'from(node-a).to(node-b).visited(node-x)',
-            p: { mean: 0.8 }
-          }
+            p: { mean: 0.8 } as ProbabilityParam
+          } as ConditionalProbability
         ]
       };
       
@@ -80,19 +82,19 @@ describe('Conditional Probability Integration Tests', () => {
     });
 
     it('should fallback to base query if conditional_p entry has no query', () => {
-      const edge = {
+      const edge: GraphEdge = {
         uuid: 'edge-1',
         id: 'test-edge',
         from: 'node-a',
         to: 'node-b',
         query: 'from(node-a).to(node-b)',
-        p: { mean: 0.5, connection: 'amplitude-prod' },
+        p: { mean: 0.5, connection: 'amplitude-prod' } as ProbabilityParam,
         conditional_p: [
           {
             condition: 'visited(node-x)',
             // No query defined - should fallback to base
-            p: { mean: 0.8 }
-          }
+            p: { mean: 0.8 } as ProbabilityParam
+          } as ConditionalProbability
         ]
       };
       
@@ -108,14 +110,16 @@ describe('Conditional Probability Integration Tests', () => {
   describe('Connection Fallback for conditional_p', () => {
     
     it('should use conditional_p.p.connection when available', () => {
-      const edge = {
+      const edge: GraphEdge = {
         uuid: 'edge-1',
-        p: { mean: 0.5, connection: 'base-connection' },
+        from: 'node-a',
+        to: 'node-b',
+        p: { mean: 0.5, connection: 'base-connection' } as ProbabilityParam,
         conditional_p: [
           {
             condition: 'visited(node-x)',
-            p: { mean: 0.8, connection: 'conditional-connection' } // Own connection
-          }
+            p: { mean: 0.8, connection: 'conditional-connection' } as ProbabilityParam // Own connection
+          } as ConditionalProbability
         ]
       };
       
@@ -127,14 +131,16 @@ describe('Conditional Probability Integration Tests', () => {
     });
 
     it('should fallback to base edge.p.connection when conditional_p has no connection', () => {
-      const edge = {
+      const edge: GraphEdge = {
         uuid: 'edge-1',
-        p: { mean: 0.5, connection: 'base-connection' },
+        from: 'node-a',
+        to: 'node-b',
+        p: { mean: 0.5, connection: 'base-connection' } as ProbabilityParam,
         conditional_p: [
           {
             condition: 'visited(node-x)',
-            p: { mean: 0.8 } // No connection - should inherit base
-          }
+            p: { mean: 0.8 } as ProbabilityParam // No connection - should inherit base
+          } as ConditionalProbability
         ]
       };
       
@@ -146,14 +152,16 @@ describe('Conditional Probability Integration Tests', () => {
     });
 
     it('should handle missing connection on both levels', () => {
-      const edge = {
+      const edge: GraphEdge = {
         uuid: 'edge-1',
-        p: { mean: 0.5 }, // No connection on base
+        from: 'node-a',
+        to: 'node-b',
+        p: { mean: 0.5 } as ProbabilityParam, // No connection on base
         conditional_p: [
           {
             condition: 'visited(node-x)',
-            p: { mean: 0.8 } // No connection on conditional
-          }
+            p: { mean: 0.8 } as ProbabilityParam // No connection on conditional
+          } as ConditionalProbability
         ]
       };
       
@@ -223,19 +231,22 @@ describe('Conditional Probability Integration Tests', () => {
     });
 
     it('should determine hasConnection correctly with fallback', () => {
-      const edge = {
-        p: { mean: 0.5, connection: 'amplitude-prod' }, // Base has connection
+      const edge: GraphEdge = {
+        uuid: 'edge-1',
+        from: 'node-a',
+        to: 'node-b',
+        p: { mean: 0.5, connection: 'amplitude-prod' } as ProbabilityParam, // Base has connection
         conditional_p: [
           {
             condition: 'visited(node-x)',
-            p: { mean: 0.8 } // Conditional has NO connection - should inherit
-          }
+            p: { mean: 0.8 } as ProbabilityParam // Conditional has NO connection - should inherit
+          } as ConditionalProbability
         ]
       };
       
       // The fix: check conditional_p.p.connection OR edge.p.connection
-      const condP = edge.conditional_p[0];
-      const hasDirectConnection = !!condP.p?.connection || !!edge.p?.connection;
+      const condP = edge.conditional_p?.[0];
+      const hasDirectConnection = !!condP?.p?.connection || !!edge.p?.connection;
       
       expect(hasDirectConnection).toBe(true);
     });
@@ -282,19 +293,19 @@ describe('Conditional Probability Integration Tests', () => {
         ]
       };
       
-      const targetEdge = {
+      const targetEdge: GraphEdge = {
         uuid: 'uuid-edge',
         id: 'dashboard-to-rec',
         from: 'uuid-dash',
         to: 'uuid-rec',
         query: 'from(viewed-dashboard).to(recommendation)', // Base query (NO visited)
-        p: { mean: 0.42, connection: 'amplitude-prod' },
+        p: { mean: 0.42, connection: 'amplitude-prod' } as ProbabilityParam,
         conditional_p: [
           {
             condition: 'visited(gave-bds)',
             query: 'from(viewed-dashboard).to(recommendation).visited(gave-bds)', // HAS visited
-            p: { mean: 0.85, stdev: 0.01 } // Note: no connection - should inherit
-          }
+            p: { mean: 0.85, stdev: 0.01 } as ProbabilityParam // Note: no connection - should inherit
+          } as ConditionalProbability
         ]
       };
       
@@ -309,13 +320,13 @@ describe('Conditional Probability Integration Tests', () => {
       expect(effectiveQuery).toContain('.visited(');
       
       // 2. Connection should fall back to base
-      const condEntry = targetEdge.conditional_p[conditionalIndex];
+      const condEntry = targetEdge.conditional_p?.[conditionalIndex];
       const connectionName = condEntry?.p?.connection || targetEdge.p?.connection;
       
       expect(connectionName).toBe('amplitude-prod');
       
       // 3. Query should be parseable and contain visited clause
-      const hasVisited = effectiveQuery.includes('.visited(');
+      const hasVisited = effectiveQuery?.includes('.visited(');
       expect(hasVisited).toBe(true);
       
       // 4. Verify base query does NOT have visited (to ensure we'd catch using wrong query)
@@ -330,7 +341,7 @@ describe('Super-funnel URL construction verification', () => {
   
   it('should include all events in correct order for super-funnel', () => {
     // Simulates the pre_request script logic from connections.yaml
-    const dsl = {
+    const dsl: DslObject = {
       from: 'User sees dashboard',
       to: 'Blueprint CheckpointReached',
       visited_upstream: ['BankAccount DetailsEntryConfirmed'],
@@ -367,7 +378,7 @@ describe('Super-funnel URL construction verification', () => {
   });
 
   it('should handle multiple upstream visited events', () => {
-    const dsl = {
+    const dsl: DslObject = {
       from: 'Step C',
       to: 'Step D',
       visited_upstream: ['Step A', 'Step B'], // Two upstream events
@@ -396,7 +407,7 @@ describe('Super-funnel URL construction verification', () => {
   });
 
   it('should handle no upstream visited events (standard funnel)', () => {
-    const dsl = {
+    const dsl: DslObject = {
       from: 'Event A',
       to: 'Event B',
       // No visited_upstream
@@ -422,7 +433,7 @@ describe('Super-funnel URL construction verification', () => {
   });
 
   it('should handle visited (between) events separately from visited_upstream', () => {
-    const dsl = {
+    const dsl: DslObject = {
       from: 'Event B',
       to: 'Event D',
       visited_upstream: ['Event A'], // Before from
