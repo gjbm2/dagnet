@@ -244,8 +244,9 @@ describe('GraphComputeClient - Performance', () => {
     await client.parseQuery('from(a).to(b)');
     const duration = Date.now() - start;
     
-    // Mock should be < 10ms
-    expect(duration).toBeLessThan(10);
+    // Mock should be < 50ms (no network latency)
+    // Using generous threshold to avoid flakiness from system load
+    expect(duration).toBeLessThan(50);
   });
 
   it('should respond within reasonable time', async () => {

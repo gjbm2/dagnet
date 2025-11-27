@@ -416,6 +416,203 @@ To add a new data source:
 - Check that `time_series` transform returns array of `{date, n, k, p}` objects
 - Verify parameter file has `n_daily`, `k_daily`, `dates` fields
 
+## Advanced Query Processing
+
+DagNet has sophisticated query processing logic to handle complex conversion funnels, especially when conditions involve nodes that are topologically upstream or when using exclusion logic.
+
+### Super-Funnel Construction
+
+When a query includes `visited()` nodes that are **upstream** of the `from` node (not between `from` and `to`), DagNet builds a "super-funnel" that includes the upstream nodes.
+
+**Example:** For an edge B→C with `visited(A)` where A is upstream of B:
+
+```
+Graph:  A → B → C
+Query:  from(B).to(C).visited(A)
+```
+
+**Problem:** Amplitude (and similar funnel APIs) require all steps in sequence. A simple 2-step funnel B→C can't express "users who visited A before B".
+
+**Solution:** Build a 3-step "super-funnel" `A → B → C`:
+
+```javascript
+// Super-funnel construction
+const events = [];
+let fromStepIndex = 0;
+
+// 1. Add upstream visited nodes FIRST
+if (queryPayload.visited_upstream && queryPayload.visited_upstream.length > 0) {
+  events.push(...queryPayload.visited_upstream.map(id => buildEventStep(id)));
+  fromStepIndex = queryPayload.visited_upstream.length;  // 'from' is now at index 1
+}
+
+// 2. Add 'from' event
+events.push(buildEventStep(queryPayload.from));
+
+// 3. Add 'to' event
+events.push(buildEventStep(queryPayload.to));
+
+// Result: [A, B, C] with fromStepIndex=1, toStepIndex=2
+```
+
+The adapter then extracts:
+- `n` = `cumulativeRaw[fromStepIndex]` = users who did A→B
+- `k` = `cumulativeRaw[toStepIndex]` = users who did A→B→C
+
+### Dual-Query n/k Separation
+
+**Critical Insight:** For upstream-conditioned queries, using the super-funnel's `n` value gives the **wrong semantics**.
+
+**Problem:**
+- Super-funnel n = users who did A→B (users who came to B via A)
+- But we want n = **all users at B** (regardless of how they got there)
+
+**Why This Matters:**
+
+Consider edge B→C with multiple conditional paths:
+- `visited(A1)`: users who came via A1
+- `visited(A2)`: users who came via A2
+- Base (neither): users who came via other paths
+
+All three should partition the **same n** (total users at B). Each has its own k (users via that path who converted).
+
+**Solution:** Run two queries:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  1. BASE QUERY (for n)                                         │
+│     Strip upstream conditions → from(B).to(C)                  │
+│     Returns: n = all users at B                                │
+│                                                                │
+│  2. CONDITIONED QUERY (for k)                                  │
+│     Full super-funnel → A→B→C                                  │
+│     Returns: k = users who did A→B→C                           │
+│                                                                │
+│  3. COMBINE                                                    │
+│     p = k / n = (users via A who converted) / (all users at B) │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Code (simplified from dataOperationsService.ts):**
+
+```typescript
+// Detect upstream conditions
+if (queryPayload.visited_upstream?.length > 0) {
+  needsDualQuery = true;
+  
+  // Create base query: strip upstream conditions
+  baseQueryPayload = {
+    ...queryPayload,
+    visited_upstream: undefined,
+    visitedAny_upstream: undefined
+    // Keep 'visited' (between from/to) if present
+  };
+}
+
+// Later in execution:
+if (needsDualQuery) {
+  // Query 1: Base query for n
+  const baseResult = await runner.execute(connectionName, baseQueryPayload, ...);
+  const baseN = baseResult.raw.n;
+  
+  // Query 2: Conditioned query for k
+  const condResult = await runner.execute(connectionName, queryPayload, ...);
+  const condK = condResult.raw.k;
+  
+  // Combine
+  const finalN = baseN;  // All users at 'from'
+  const finalK = condK;  // Users via upstream path who converted
+  const finalP = finalN > 0 ? finalK / finalN : 0;
+}
+```
+
+**Daily Time-Series Combination:**
+
+For daily breakdowns, the same logic applies per-day:
+
+```typescript
+const combinedTimeSeries = [];
+
+for (const date of allDates) {
+  const baseDay = baseTimeSeries.find(d => d.date === date);
+  const condDay = condTimeSeries.find(d => d.date === date);
+  
+  combinedTimeSeries.push({
+    date,
+    n: baseDay?.n ?? 0,   // From base query (all users at 'from')
+    k: condDay?.k ?? 0,   // From conditioned query (conversions via path)
+    p: n > 0 ? k / n : 0
+  });
+}
+```
+
+### Composite Query Handling (Minus/Plus)
+
+When a query uses `exclude()` on a provider that doesn't support native exclusion (like Amplitude), DagNet compiles the query to a **composite query** with `minus()` and `plus()` terms.
+
+**Example:**
+
+```
+Original:  from(A).to(C).exclude(B)
+Compiled:  from(A).to(C).minus(from(A).to(C).visited(B))
+```
+
+**Execution:**
+
+The composite query executor runs multiple sub-queries in parallel:
+
+```typescript
+// Base query: from(A).to(C)
+const baseResult = await executeSubQuery(baseTerm);
+
+// Minus query: from(A).to(C).visited(B)  
+const minusResult = await executeSubQuery(minusTerm);
+
+// Combine with inclusion-exclusion
+const finalK = baseK - minusK;  // Subtract users who visited B
+const finalP = n > 0 ? finalK / n : 0;
+```
+
+**Integration with Dual-Query:**
+
+Composite queries with upstream conditions ALSO need dual-query handling. The base n query runs ONCE, upstream of the composite executor:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. BASE QUERY (for n) - runs first if upstream conditions     │
+│                                                                 │
+│  2. COMPOSITE EXECUTOR                                          │
+│     ├── Base term: from(A).to(C)                                │
+│     ├── Minus term: from(A).to(C).visited(B)                    │
+│     └── Combine: k = base_k - minus_k                           │
+│                                                                 │
+│  3. FINAL COMBINE                                               │
+│     └── Override composite n with base n from step 1            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Query Processing Summary
+
+| Query Type | n Source | k Source |
+|------------|----------|----------|
+| Simple (no upstream) | Single query | Single query |
+| Upstream visited | Base query (stripped) | Super-funnel query |
+| Composite (minus/plus) | Base query (stripped) | Composite executor |
+
+### Semantic Correctness
+
+**Correct (dual-query):**
+- n = 1000 (all users at B)
+- k = 400 (users who came via A and converted)
+- p = 40% → "40% of traffic at B came via A and converted"
+
+**Wrong (single super-funnel):**
+- n = 500 (users who came to B via A)
+- k = 400 (users who came via A and converted)  
+- p = 80% → "80% of users from A converted"
+
+The first interpretation is correct for flow partitioning: it tells you what **fraction of total traffic** took a specific path. The second is a conditional probability (P(C|B, visited A)) which is different.
+
 ## Best Practices
 
 1. **Use Versioned Mode for Production**: Store data in parameter files for version control and reproducibility
@@ -425,6 +622,7 @@ To add a new data source:
 5. **Test Incrementally**: Start with simple queries, then add complexity (visited, exclude, etc.)
 6. **Monitor API Limits**: Be aware of rate limits and quota restrictions for external APIs
 7. **Document Custom Adapters**: Add comments in `connections.yaml` explaining adapter-specific logic
+8. **Understand Flow Partitioning**: For upstream-conditioned queries, remember that n comes from the base query (all users at 'from'), not from the conditioned super-funnel
 
 ## Further Reading
 
