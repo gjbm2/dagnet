@@ -20,6 +20,9 @@ interface ParameterSectionProps {
   // Parameter slot ('p', 'cost_gbp', 'cost_time')
   paramSlot: 'p' | 'cost_gbp' | 'cost_time';
   
+  // For conditional probabilities: which index in conditional_p array
+  conditionalIndex?: number;
+  
   // Current parameter data
   param?: {
     id?: string;
@@ -69,6 +72,7 @@ export function ParameterSection({
   objectType,
   objectId,
   paramSlot,
+  conditionalIndex,
   param,
   onUpdate,
   onRebalance,
@@ -131,6 +135,7 @@ export function ParameterSection({
         value={param?.id || ''}
         targetInstanceUuid={objectId}
         paramSlot={paramSlot}
+        conditionalIndex={conditionalIndex}
         onChange={(newParamId) => {
           if (!newParamId) {
             onUpdate({ id: undefined });

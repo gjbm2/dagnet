@@ -34,6 +34,34 @@
   color: #374151;
 }
 
+/* Editable name input */
+.metadata-name-row {
+  margin-bottom: 4px;
+}
+
+.metadata-name-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid #D1D5DB;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  background-color: white;
+}
+
+.metadata-name-input:focus {
+  outline: none;
+  border-color: #0066cc;
+  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1);
+}
+
+.metadata-name-input::placeholder {
+  color: #9CA3AF;
+  font-weight: 400;
+}
+
 .metadata-note {
   display: flex;
   flex-direction: column;

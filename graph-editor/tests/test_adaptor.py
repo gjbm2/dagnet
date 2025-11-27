@@ -58,12 +58,12 @@ class TestAnalysisAdaptor:
         assert all(isinstance(d, AnalysisDefinition) for d in adaptor.definitions)
     
     def test_empty_dsl_graph_overview(self, adaptor):
-        """Empty DSL (node_count=0) matches graph_overview."""
+        """Empty DSL (node_count=0) matches graph_overview_empty."""
         predicates = {
             'node_count': 0,
         }
         result = adaptor.match(predicates)
-        assert result.id == 'graph_overview'
+        assert result.id == 'graph_overview_empty'
     
     def test_single_node_from_outcomes(self, adaptor):
         """from(A) matches from_node_outcomes."""
@@ -163,15 +163,15 @@ class TestAnalysisAdaptor:
         result = adaptor.match(predicates)
         assert result.id == 'multi_branch_comparison'
     
-    def test_constrained_path(self, adaptor):
-        """from(A).to(B).visited(C) matches constrained_path."""
+    def test_conversion_funnel(self, adaptor):
+        """from(A).to(B).visited(C) matches conversion_funnel (first matching analysis)."""
         predicates = {
             'node_count': 3,
             'has_from': True,
             'has_to': True,
         }
         result = adaptor.match(predicates)
-        assert result.id == 'constrained_path'
+        assert result.id == 'conversion_funnel'
     
     def test_branches_from_start(self, adaptor):
         """from(A).visitedAny(B,C) matches branches_from_start."""

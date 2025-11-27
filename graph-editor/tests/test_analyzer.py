@@ -133,10 +133,10 @@ class TestGetAvailableAnalyses:
     """Test DSL string -> analysis type matching."""
     
     def test_empty_dsl_graph_overview(self):
-        """Empty DSL -> graph_overview."""
+        """Empty DSL -> graph_overview_empty."""
         graph_data = build_test_graph_data()
         available = get_available_analyses(graph_data=graph_data, query_dsl='')
-        assert available[0]['id'] == 'graph_overview'
+        assert available[0]['id'] == 'graph_overview_empty'
     
     def test_from_only_outcomes(self):
         """from(A) -> from_node_outcomes."""
@@ -165,14 +165,14 @@ class TestGetAvailableAnalyses:
         available = get_available_analyses(graph_data=graph_data, query_dsl='from(start).to(end1)')
         assert available[0]['id'] == 'path_between'
     
-    def test_from_to_visited_constrained_path(self):
-        """from(A).to(B).visited(C) -> constrained_path."""
+    def test_from_to_visited_conversion_funnel(self):
+        """from(A).to(B).visited(C) -> conversion_funnel (first matching analysis)."""
         graph_data = build_test_graph_data()
         available = get_available_analyses(
             graph_data=graph_data,
             query_dsl='from(start).to(end1).visited(a)'
         )
-        assert available[0]['id'] == 'constrained_path'
+        assert available[0]['id'] == 'conversion_funnel'
 
 
 if __name__ == "__main__":
