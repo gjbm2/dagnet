@@ -36,7 +36,7 @@ jobs:
       
       - name: Run tests
         working-directory: ./graph-editor
-        run: npm run test:run
+        run: npm run test:all
       
       - name: Generate coverage report
         working-directory: ./graph-editor
