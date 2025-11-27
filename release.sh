@@ -103,15 +103,19 @@ if [[ "$RUN_BUILD" == true ]]; then
   
   # TypeScript type-check catches 95% of build failures, much faster than full build
   print_yellow "Running TypeScript type check..."
-  if ! (cd graph-editor && npx tsc --noEmit 2>&1 | head -50); then
-    # Check actual exit code
-    if ! (cd graph-editor && npx tsc --noEmit > /dev/null 2>&1); then
-      echo ""
-      print_red "✗ TypeScript errors - build would fail!"
-      print_red "Release aborted."
-      exit 1
-    fi
+  
+  # Run tsc and capture output + exit code properly
+  TSC_OUTPUT=$(cd graph-editor && npx tsc --noEmit 2>&1) || TSC_EXIT=$?
+  TSC_EXIT=${TSC_EXIT:-0}
+  
+  if [[ $TSC_EXIT -ne 0 ]]; then
+    echo "$TSC_OUTPUT" | head -50
+    echo ""
+    print_red "✗ TypeScript errors - build would fail!"
+    print_red "Release aborted."
+    exit 1
   fi
+  
   print_green "✓ TypeScript check passed"
   echo ""
   

@@ -281,8 +281,8 @@ describe('Image Operations Service', () => {
       mockGraph.nodes[0].images_overridden = true;
     });
 
-    it('should remove image from node and register for deletion', () => {
-      vi.spyOn(fileRegistry, 'registerImageDelete').mockImplementation(() => {});
+    it('should remove image from node and register for deletion', async () => {
+      vi.spyOn(fileRegistry, 'registerImageDelete').mockResolvedValue(undefined);
 
       imageOperationsService.deleteImage(mockGraph, 'test-img-1', mockCallbacks);
 
@@ -299,8 +299,8 @@ describe('Image Operations Service', () => {
       expect(updatedGraph.nodes[0].images[0].image_id).toBe('test-img-2');
     });
 
-    it('should clear images_overridden when last image deleted', () => {
-      vi.spyOn(fileRegistry, 'registerImageDelete').mockImplementation(() => {});
+    it('should clear images_overridden when last image deleted', async () => {
+      vi.spyOn(fileRegistry, 'registerImageDelete').mockResolvedValue(undefined);
       mockGraph.nodes[0].images = [
         {
           image_id: 'test-img-1',
@@ -458,7 +458,7 @@ describe('Delete Operations Service - Garbage Collection', () => {
     // The functionality is covered by UpdateManager integration tests.
     it.skip('should only stage image deletions for orphaned images', async () => {
       vi.spyOn(fileRegistry, 'registerFileDeletion').mockImplementation(() => {});
-      vi.spyOn(fileRegistry, 'registerImageDelete').mockImplementation(() => {});
+      vi.spyOn(fileRegistry, 'registerImageDelete').mockResolvedValue(undefined);
       vi.spyOn(fileRegistry, 'deleteFile').mockResolvedValue(undefined);
       vi.spyOn(fileRegistry, 'getFile').mockReturnValue({
         path: 'nodes/test-node.yaml',

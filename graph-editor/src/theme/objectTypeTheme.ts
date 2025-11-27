@@ -20,10 +20,11 @@ import {
   Key,           // Credentials
   Info,          // About
   FileType,      // Markdown
-  ScrollText     // Session Log
+  ScrollText,    // Session Log
+  Image          // Image
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log';
+export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log' | 'image';
 
 export interface ObjectTypeTheme {
   /** Light pastel background colour */
@@ -136,6 +137,13 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     icon: ScrollText,
     label: 'Session Log',
     emoji: '📜'
+  },
+  image: {
+    lightColour: '#FDF4FF',  // light purple
+    accentColour: '#A855F7', // purple-500
+    icon: Image,
+    label: 'Image',
+    emoji: '🖼️'
   }
 };
 
