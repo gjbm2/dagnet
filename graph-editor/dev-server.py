@@ -250,7 +250,7 @@ async def generate_all_queries_endpoint(request: Request):
 
 
 # Import shared handlers (used by both dev-server and python-api.py)
-from api_handlers import handle_generate_all_parameters, handle_stats_enhance
+from api_handlers import handle_generate_all_parameters, handle_stats_enhance, handle_compile_exclude
 
 
 # Consolidated Python API endpoint (matches production python-api.py structure)
@@ -281,6 +281,42 @@ async def python_api_endpoint(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Compile exclude query to minus/plus form for providers that don't support native excludes
+@app.post("/api/compile-exclude")
+async def compile_exclude_endpoint(request: Request):
+    """
+    Compile a query with excludes() to minus/plus form.
+    
+    For providers like Amplitude that don't support native excludes, this endpoint
+    compiles the query into inclusion-exclusion form (minus/plus terms).
+    
+    Request:
+    {
+        "query": "from(A).to(B).excludes(C)",
+        "graph": { nodes: [], edges: [] }
+    }
+    
+    Response:
+    {
+        "compiled_query": "from(A).to(B).minus(C)",
+        "was_compiled": true,
+        "success": true
+    }
+    """
+    try:
+        body = await request.json()
+        return handle_compile_exclude(body)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"[compile-exclude] Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

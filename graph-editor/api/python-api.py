@@ -10,6 +10,7 @@ Routes:
 - /api/stats-enhance -> enhance_aggregation
 - /api/runner/analyze -> run analytics
 - /api/runner/available-analyses -> get available analysis types
+- /api/compile-exclude -> compile excludes() to minus/plus form
 """
 from http.server import BaseHTTPRequestHandler
 import json
@@ -59,9 +60,11 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/runner/analyze'
                 elif endpoint == 'runner-available-analyses':
                     path = '/api/runner/available-analyses'
+                elif endpoint == 'compile-exclude':
+                    path = '/api/compile-exclude'
                 # If no endpoint param and no original path header, this is an error
                 elif not original_path:
-                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses")
+                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude")
                     return
             
             if path == '/api/parse-query':
@@ -74,6 +77,8 @@ class handler(BaseHTTPRequestHandler):
                 self.handle_runner_analyze(data)
             elif path == '/api/runner/available-analyses':
                 self.handle_runner_available_analyses(data)
+            elif path == '/api/compile-exclude':
+                self.handle_compile_exclude(data)
             else:
                 self.send_error_response(404, f"Unknown endpoint: {path}")
                 
@@ -128,6 +133,17 @@ class handler(BaseHTTPRequestHandler):
         """Handle runner/available-analyses endpoint."""
         try:
             from api_handlers import handle_runner_available_analyses as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+    
+    def handle_compile_exclude(self, data):
+        """Handle compile-exclude endpoint - compiles excludes() to minus/plus form."""
+        try:
+            from api_handlers import handle_compile_exclude as handler_func
             response = handler_func(data)
             self.send_success_response(response)
         except ValueError as e:

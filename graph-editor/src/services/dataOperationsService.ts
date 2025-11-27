@@ -76,6 +76,45 @@ function formatNodeForLog(node: any): string {
   return node.id || node.label || node.uuid?.substring(0, 8) || '?';
 }
 
+/**
+ * Compile a query with excludes() to minus/plus form for providers that don't support native excludes.
+ * Calls Python MSMDC API to perform the compilation.
+ * 
+ * @param queryString - Original query string with excludes() terms
+ * @param graph - Graph for topology analysis
+ * @returns Compiled query string with minus/plus terms, or original if compilation fails
+ */
+async function compileExcludeQuery(queryString: string, graph: any): Promise<string> {
+  try {
+    // Call Python API endpoint to compile the query
+    const response = await fetch('/api/compile-exclude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: queryString,
+        graph: graph
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[compileExcludeQuery] API error:', errorText);
+      return queryString; // Return original on error
+    }
+    
+    const result = await response.json();
+    if (result.compiled_query) {
+      return result.compiled_query;
+    }
+    
+    console.warn('[compileExcludeQuery] No compiled_query in response:', result);
+    return queryString;
+  } catch (error) {
+    console.error('[compileExcludeQuery] Failed to call compile API:', error);
+    return queryString; // Return original on error
+  }
+}
+
 // Shared UpdateManager instance
 const updateManager = new UpdateManager();
 
@@ -2516,13 +2555,35 @@ class DataOperationsService {
       // Check if query uses composite operators (minus/plus for inclusion-exclusion)
       // CRITICAL: Check the ORIGINAL edge query string, NOT dsl.query (which doesn't exist after buildDslFromEdge)
       const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
-      const queryString = targetEdge?.query || '';
-      const isComposite = /\.(minus|plus)\(/.test(queryString);
+      let queryString = targetEdge?.query || '';
+      const isAlreadyComposite = /\.(minus|plus)\(/.test(queryString);
+      const hasExcludes = /\.excludes?\(/.test(queryString);
+      
+      // If query has excludes but isn't already compiled to minus/plus,
+      // we need to compile it for providers that don't support native excludes (like Amplitude)
+      let isComposite = isAlreadyComposite;
+      if (hasExcludes && !isAlreadyComposite && connectionName?.includes('amplitude')) {
+        console.log('[DataOps:EXCLUDE] Query has excludes, compiling to minus/plus for Amplitude');
+        try {
+          // Call Python API to compile exclude query
+          const compiledQuery = await compileExcludeQuery(queryString, graph);
+          if (compiledQuery && compiledQuery !== queryString) {
+            console.log('[DataOps:EXCLUDE] Compiled query:', compiledQuery);
+            queryString = compiledQuery;
+            isComposite = true;
+          }
+        } catch (error) {
+          console.error('[DataOps:EXCLUDE] Failed to compile exclude query:', error);
+          toast.error('Failed to compile exclude query - excludes will be ignored');
+        }
+      }
       
       // ===== DIAGNOSTIC LOGGING FOR COMPOSITE QUERY DETECTION =====
       console.log('[DataOps:COMPOSITE] Query detection:', {
         hasTargetEdge: !!targetEdge,
         queryString: queryString,
+        isAlreadyComposite: isAlreadyComposite,
+        hasExcludes: hasExcludes,
         isComposite: isComposite,
         dslHasQuery: !!(dsl as any).query,
         dslKeys: Object.keys(dsl),
@@ -2566,11 +2627,13 @@ class DataOperationsService {
           
           try {
             // CRITICAL: Pass context mode to sub-queries (daily or aggregate)
+            // Also pass graph for upstream/between categorization of visited nodes
             const combined: CombinedResult = await executeCompositeQuery(
               queryString,
               { ...dsl, window: fetchWindow, mode: contextMode },
               connectionName,
-              runner
+              runner,
+              graph  // Pass graph for isNodeUpstream checks
             );
             
             console.log(`[DataOperationsService] Composite query result for gap ${gapIndex + 1}:`, combined);
