@@ -243,19 +243,46 @@ export class DASRunner {
     if (adapter.pre_request && adapter.pre_request.script) {
       this.executePreRequestScript(adapter.pre_request.script, context);
       this.log('pre_request', 'Pre-request transformation complete', {
-        dslKeys: Object.keys(context.dsl)
+        dslKeys: Object.keys(context.dsl),
+        // Log critical funnel construction details for debugging n/k extraction
+        funnel_from: context.dsl.from,
+        funnel_to: context.dsl.to,
+        from_step_index: context.dsl.from_step_index,
+        to_step_index: context.dsl.to_step_index,
+        visited_upstream: context.dsl.visited_upstream,
+        visited_between: context.dsl.visited,
       });
     }
 
     // Phase 2: Build HTTP request
     this.log('build_request', 'Building HTTP request');
     const request = this.buildRequest(adapter.request, context);
-    this.log('build_request', 'HTTP request built', { url: request.url, method: request.method });
+    // Log request details (sanitize headers to exclude auth tokens)
+    const sanitizedHeaders = request.headers ? 
+      Object.fromEntries(
+        Object.entries(request.headers).map(([k, v]) => 
+          k.toLowerCase() === 'authorization' ? [k, '[REDACTED]'] : [k, v]
+        )
+      ) : undefined;
+    this.log('build_request', 'HTTP request built', { 
+      url: request.url, 
+      method: request.method,
+      headers: sanitizedHeaders,
+      body: request.body ? (request.body.length > 2000 ? request.body.substring(0, 2000) + '...[truncated]' : request.body) : undefined,
+    });
 
     // Phase 3: Execute request
     this.log('execute_request', `Executing ${request.method} ${request.url}`);
     const response = await this.httpExecutor.execute(request);
-    this.log('execute_request', `Response received with status ${response.status}`);
+    this.log('execute_request', `Response received with status ${response.status}`, {
+      status: response.status,
+      // Include response body preview for debugging (truncate large responses)
+      bodyPreview: response.body ? 
+        (typeof response.body === 'string' 
+          ? response.body.substring(0, 1000) 
+          : JSON.stringify(response.body).substring(0, 1000)) + '...' 
+        : undefined,
+    });
 
     // Phase 4: Validate response
     // First, check for HTTP error status codes (4xx, 5xx)
@@ -275,7 +302,16 @@ export class DASRunner {
         }
       }
       
-      this.log('validate_response', `Response validation failed: HTTP ${response.status}`, { errorMessage });
+      // Log full error context for debugging provider issues
+      this.log('validate_response', `Response validation failed: HTTP ${response.status}`, { 
+        errorMessage,
+        status: response.status,
+        // Include full response body for error debugging
+        responseBody: response.body,
+        // Include request context so we can see what was sent
+        requestUrl: request.url,
+        requestMethod: request.method,
+      });
       
       throw new DASExecutionError(
         errorMessage,
@@ -294,7 +330,21 @@ export class DASRunner {
     const extracted = adapter.response.extract
       ? this.extractData(response.body, adapter.response.extract, context)
       : {};
-    this.log('extract_data', `Extracted ${Object.keys(extracted).length} variables`, extracted);
+    
+    // Log extraction details including raw cumulativeRaw for n/k verification
+    const responseData = response.body as any;
+    const cumulativeRaw = responseData?.data?.[0]?.cumulativeRaw as number[] | undefined;
+    const fromIdx = context.dsl.from_step_index as number | undefined;
+    const toIdx = context.dsl.to_step_index as number | undefined;
+    this.log('extract_data', `Extracted ${Object.keys(extracted).length} variables`, {
+      ...extracted,
+      // Include funnel indices and raw array for debugging n/k issues
+      _debug_from_step_index: fromIdx,
+      _debug_to_step_index: toIdx,
+      _debug_cumulativeRaw: cumulativeRaw,
+      _debug_from_count_at_index: cumulativeRaw && fromIdx !== undefined ? cumulativeRaw[fromIdx] : undefined,
+      _debug_to_count_at_index: cumulativeRaw && toIdx !== undefined ? cumulativeRaw[toIdx] : undefined,
+    });
 
     // Phase 6: Transform data
     const transformed = adapter.transform
