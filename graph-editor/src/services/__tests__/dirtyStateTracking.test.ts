@@ -631,7 +631,10 @@ describe('Dirty State Tracking', () => {
   });
 
   describe('Initialization Period', () => {
-    it('should NOT mark dirty during initialization period', async () => {
+    it('should mark dirty for ANY change (simplified dirty tracking)', async () => {
+      // NOTE: We removed the complex "initialization period" logic that suppressed
+      // dirty state for non-structural changes. This was causing bugs where node
+      // moves and other changes weren't being tracked. Now ALL changes mark dirty.
       const graph = createTestGraph();
       const file = await fileRegistry.getOrCreateFile(
         'graph-test',
@@ -644,25 +647,19 @@ describe('Dirty State Tracking', () => {
         graph
       );
 
-      // File is still initializing
-      expect(file.isInitializing).toBe(true);
-
-      // Make a change during initialization
+      // Make a change
       const modifiedGraph = structuredClone(graph);
-      modifiedGraph.nodes[0].label = 'Changed During Init';
+      modifiedGraph.nodes[0].label = 'Changed';
       await fileRegistry.updateFile('graph-test', modifiedGraph);
 
-      // Should NOT be dirty during init
-      expect(file.isDirty).toBe(false);
+      // Should BE dirty - any change marks dirty now
+      expect(file.isDirty).toBe(true);
       
-      // But data should be updated
-      expect(file.data.nodes[0].label).toBe('Changed During Init');
-      
-      // And originalData should also be updated (to match current)
-      expect(file.originalData.nodes[0].label).toBe('Changed During Init');
+      // Data should be updated
+      expect(file.data.nodes[0].label).toBe('Changed');
     });
 
-    it('should mark dirty for STRUCTURAL changes during initialization (adding nodes)', async () => {
+    it('should mark dirty for structural changes (adding nodes)', async () => {
       const graph = createTestGraph();
       const file = await fileRegistry.getOrCreateFile(
         'graph-test',
@@ -675,10 +672,7 @@ describe('Dirty State Tracking', () => {
         graph
       );
 
-      // File is still initializing
-      expect(file.isInitializing).toBe(true);
-
-      // Make a STRUCTURAL change during initialization (add a node)
+      // Make a STRUCTURAL change (add a node)
       const modifiedGraph = structuredClone(graph);
       modifiedGraph.nodes.push({
         uuid: 'node-new',
@@ -689,9 +683,8 @@ describe('Dirty State Tracking', () => {
       });
       await fileRegistry.updateFile('graph-test', modifiedGraph);
 
-      // SHOULD be dirty because structural change ends initialization
+      // Should be dirty
       expect(file.isDirty).toBe(true);
-      expect(file.isInitializing).toBe(false);
       
       // Data should have the new node
       expect(file.data.nodes.length).toBe(3);

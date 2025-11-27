@@ -465,7 +465,7 @@ class WorkspaceService {
         
         const imageFileState: FileState = {
           fileId: `image-${imageId}`,
-          type: 'image' as any,
+          type: 'image',
           name: image.name,
           path: `nodes/images/${image.name}`,
           data: {
@@ -509,10 +509,11 @@ class WorkspaceService {
         );
       }
 
-      // Update workspace record
+      // Update workspace record with commit SHA for remote-ahead detection
       workspace.fileIds = fileIds;
       workspace.isCloning = false;
       workspace.lastSynced = Date.now();
+      workspace.commitSHA = commitSha; // Track last synced commit for remote-ahead detection
       delete workspace.cloneError;
       
       await db.workspaces.put(workspace);
@@ -1045,7 +1046,7 @@ class WorkspaceService {
         
         const imageFileState: FileState = {
           fileId: `image-${imageId}`,
-          type: 'image' as any,
+          type: 'image',
           name: image.name,
           path: `nodes/images/${image.name}`,
           data: {
@@ -1081,6 +1082,7 @@ class WorkspaceService {
 
       workspace.fileIds = updatedFiles.map(f => f.fileId);
       workspace.lastSynced = Date.now();
+      workspace.commitSHA = commitSha; // Track last synced commit for remote-ahead detection
       await db.workspaces.put(workspace);
 
       const elapsed = Date.now() - startTime;

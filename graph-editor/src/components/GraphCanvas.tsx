@@ -830,18 +830,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       if (sourceNode && targetNode) {
         const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
         
-        console.log(`Re-routing edge ${graphEdge.id}:`, {
-          from: graphEdge.from,
-          to: graphEdge.to,
-          oldFromHandle: graphEdge.fromHandle,
-          newFromHandle: sourceHandle,
-          oldToHandle: graphEdge.toHandle,
-          newToHandle: targetHandle
-        });
+        // Only count as updated if handles actually changed
+        const handleChanged = graphEdge.fromHandle !== sourceHandle || graphEdge.toHandle !== targetHandle;
         
-        graphEdge.fromHandle = sourceHandle;
-        graphEdge.toHandle = targetHandle;
-        updatedCount++;
+        if (handleChanged) {
+          console.log(`Re-routing edge ${graphEdge.id}:`, {
+            from: graphEdge.from,
+            to: graphEdge.to,
+            oldFromHandle: graphEdge.fromHandle,
+            newFromHandle: sourceHandle,
+            oldToHandle: graphEdge.toHandle,
+            newToHandle: targetHandle
+          });
+          
+          graphEdge.fromHandle = sourceHandle;
+          graphEdge.toHandle = targetHandle;
+          updatedCount++;
+        }
       }
     });
     
@@ -982,6 +987,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       });
     }
     
+    // Only update if edges actually changed
+    if (changedEdges.size === 0) {
+      console.log('No edges changed, skipping graph update');
+      return;
+    }
+    
     // Preserve current ReactFlow node positions in the graph
     // This prevents nodes from jumping back to old positions when graph is synced
     nextGraph.nodes.forEach((node: any) => {
@@ -996,7 +1007,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
     
-    console.log('Updating graph with new handle positions');
+    console.log(`Updating graph with ${changedEdges.size} changed edge handle positions`);
     setGraph(nextGraph);
     // Graph→ReactFlow sync will pick up the edge handle changes via the fast path
   }, [autoReroute, forceReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);

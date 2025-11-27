@@ -19,6 +19,7 @@ import { CommitModal } from './components/CommitModal';
 import { gitService } from './services/gitService';
 import { getEditorComponent } from './components/editors';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useCommitHandler } from './hooks/useCommitHandler';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
@@ -296,11 +297,8 @@ function AppShellContent() {
     preselectedFiles: string[];
   }>({ isOpen: false, preselectedFiles: [] });
 
-  // Centralized commit handler
-  const handleCommitFiles = async (files: any[], message: string, branch: string) => {
-    const { repositoryOperationsService } = await import('./services/repositoryOperationsService');
-    await repositoryOperationsService.commitFiles(files, message, branch, navState.selectedRepo, dialogOps.showConfirm);
-  };
+  // Centralized commit handler - uses shared hook
+  const { handleCommitFiles } = useCommitHandler();
 
   // Custom groups - NO panelExtra, we'll position Navigator separately
   const customGroups = useMemo(() => ({
@@ -1438,19 +1436,8 @@ function AppShellContent() {
             x={contextMenu.x}
             y={contextMenu.y}
             onClose={() => setContextMenu(null)}
-            onRequestCommit={async (preselectedFiles) => {
-              // Check remote status first
-              const { repositoryOperationsService } = await import('./services/repositoryOperationsService');
-              const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
-                navState.selectedRepo,
-                navState.selectedBranch,
-                dialogOps.showConfirm,
-                toast.loading,
-                toast.dismiss
-              );
-              
-              if (!shouldProceed) return;
-              
+            onRequestCommit={(preselectedFiles) => {
+              // Open commit modal - remote-ahead check happens inside commitFiles
               setCommitModalState({ isOpen: true, preselectedFiles });
               setContextMenu(null); // Close context menu
             }}

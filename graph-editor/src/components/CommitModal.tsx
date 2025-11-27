@@ -70,7 +70,8 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
     loadCommittableFiles();
   }, [isOpen, forceUpdate, state.selectedRepo, state.selectedBranch]);
   
-  const getCommittableFiles = () => {
+  // Memoize committable files to prevent re-computation on every render
+  const commitableFiles = useMemo(() => {
     if (!isOpen) return [];
     
     // dirtyFiles already filtered by getCommittableFiles() service
@@ -112,9 +113,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
         sha: file.sha
       };
     });
-  };
-  
-  const commitableFiles = getCommittableFiles();
+  }, [isOpen, dirtyFiles, state.selectedRepo, state.selectedBranch]);
   
   // Get pending deletions
   const pendingDeletions = isOpen ? fileRegistry.getPendingDeletions() : [];

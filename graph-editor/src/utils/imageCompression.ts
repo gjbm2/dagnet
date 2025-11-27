@@ -2,14 +2,14 @@
  * Image Compression and Validation Utilities
  * 
  * Handles image validation, compression, and scaling before upload.
- * All images are automatically scaled to max 2048×2048 (2K) resolution
- * to optimize Git storage and performance.
+ * All images are automatically converted to JPEG and scaled to max 2048×2048
+ * to keep file sizes around 100-300KB for Git storage efficiency.
  */
 
 const MAX_SIZE_BEFORE_COMPRESSION = 5 * 1024 * 1024; // 5MB
 const MAX_WIDTH = 2048;
 const MAX_HEIGHT = 2048;
-const COMPRESSION_QUALITY = 0.85;
+const COMPRESSION_QUALITY = 0.85; // JPEG quality
 
 export interface ValidationResult {
   valid: boolean;
@@ -75,6 +75,7 @@ export async function compressImage(file: File): Promise<File> {
       // Draw and compress
       ctx.drawImage(img, 0, 0, width, height);
       
+      // Always output JPEG for better compression (PNG is lossless and much larger)
       canvas.toBlob(
         (blob) => {
           if (!blob) {
@@ -82,20 +83,17 @@ export async function compressImage(file: File): Promise<File> {
             return;
           }
           
-          // If compressed is larger than original, use original
-          if (blob.size > file.size) {
-            console.log(`ImageCompression: Compressed size (${blob.size}) larger than original (${file.size}), using original`);
-            resolve(file);
-          } else {
-            const compressed = new File([blob], file.name, {
-              type: file.type,
-              lastModified: Date.now()
-            });
-            console.log(`ImageCompression: Compressed from ${file.size} to ${compressed.size} bytes (${((1 - compressed.size / file.size) * 100).toFixed(1)}% reduction), dimensions: ${width}×${height}`);
-            resolve(compressed);
-          }
+          // Change filename extension to .jpg
+          const jpegName = file.name.replace(/\.(png|jpeg|jpg)$/i, '.jpg');
+          
+          const compressed = new File([blob], jpegName, {
+            type: 'image/jpeg',
+            lastModified: Date.now()
+          });
+          console.log(`ImageCompression: Compressed to JPEG ${file.size} → ${compressed.size} bytes (${((1 - compressed.size / file.size) * 100).toFixed(1)}% reduction), dimensions: ${width}×${height}`);
+          resolve(compressed);
         },
-        file.type,
+        'image/jpeg',
         COMPRESSION_QUALITY
       );
     };

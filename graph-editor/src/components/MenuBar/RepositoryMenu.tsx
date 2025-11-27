@@ -3,6 +3,7 @@ import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useDialog } from '../../contexts/DialogContext';
+import { useCommitHandler } from '../../hooks/useCommitHandler';
 import { SwitchRepositoryModal } from '../modals/SwitchRepositoryModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
 import { MergeConflictModal, ConflictFile } from '../modals/MergeConflictModal';
@@ -32,6 +33,7 @@ export function RepositoryMenu() {
   const { operations, activeTabId } = useTabContext();
   const { state, operations: navOps } = useNavigatorContext();
   const { showConfirm } = useDialog();
+  const { handleCommitFiles: commitFiles } = useCommitHandler();
   
   const [isSwitchRepoModalOpen, setIsSwitchRepoModalOpen] = useState(false);
   const [isSwitchBranchModalOpen, setIsSwitchBranchModalOpen] = useState(false);
@@ -147,35 +149,14 @@ export function RepositoryMenu() {
     }
   };
 
-  const handleCommitChanges = async () => {
-    // Commit ALL dirty files (Repository menu version)
-    try {
-      // Check remote status (centralized in service)
-      const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
-        state.selectedRepo,
-        state.selectedBranch,
-        showConfirm,
-        toast.loading,
-        toast.dismiss
-      );
-      
-      if (!shouldProceed) return;
-      
-      // Open commit modal for ALL dirty files
-      setIsCommitModalOpen(true);
-    } catch (error) {
-      console.error('Failed to check remote status:', error);
-      toast.error(`Failed to check remote: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+  const handleCommitChanges = () => {
+    // Open commit modal - remote-ahead check happens inside commitFiles
+    setIsCommitModalOpen(true);
   };
 
   const handleCommitFiles = async (files: any[], message: string, branch: string) => {
-    try {
-      await repositoryOperationsService.commitFiles(files, message, branch, state.selectedRepo, showConfirm);
-      toast.success(`Committed ${files.length} file(s)`);
-    } catch (error) {
-      throw error; // Re-throw to be handled by CommitModal
-    }
+    await commitFiles(files, message, branch);
+    toast.success(`Committed ${files.length} file(s)`);
   };
 
   const handleRefreshStatus = async () => {

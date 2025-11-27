@@ -399,6 +399,21 @@ class GitService {
     }
   }
 
+  /**
+   * Convert Uint8Array to base64 string
+   * Uses chunked approach to avoid JavaScript argument limits with spread operator
+   */
+  private uint8ArrayToBase64(uint8Array: Uint8Array): string {
+    // Process in chunks to avoid "Maximum call stack size exceeded" error
+    const CHUNK_SIZE = 0x8000; // 32KB chunks
+    let result = '';
+    for (let i = 0; i < uint8Array.length; i += CHUNK_SIZE) {
+      const chunk = uint8Array.subarray(i, i + CHUNK_SIZE);
+      result += String.fromCharCode.apply(null, chunk as unknown as number[]);
+    }
+    return btoa(result);
+  }
+
   // Get commit history for a file
   async getFileHistory(path: string, branch: string = this.config.branch): Promise<GitOperationResult> {
     try {
@@ -457,12 +472,17 @@ class GitService {
           console.log(`🔵 GitService.commitAndPushFiles: Deleting ${file.path}`);
           const result = await this.deleteFile(file.path, message, branch);
           
-          if (!result.success) {
+          // If file doesn't exist, that's OK - it's already deleted
+          if (!result.success && result.error !== 'File not found') {
             return {
               success: false,
               error: result.error,
               message: `Failed to delete file ${file.path}: ${result.error}`
             };
+          }
+          
+          if (!result.success) {
+            console.log(`🔵 GitService.commitAndPushFiles: File ${file.path} already deleted (not found)`);
           }
           
           results.push(result);
@@ -500,7 +520,8 @@ class GitService {
         
         if (file.binaryContent) {
           // Binary data - convert Uint8Array to base64
-          contentToCommit = btoa(String.fromCharCode(...file.binaryContent));
+          // Note: Can't use spread operator for large arrays (hits JS argument limit)
+          contentToCommit = this.uint8ArrayToBase64(file.binaryContent);
           encoding = 'base64';
         } else {
           contentToCommit = file.content!;
@@ -674,6 +695,28 @@ class GitService {
         error: error instanceof Error ? error.message : 'Unknown error',
         message: 'Failed to fetch repository tree'
       };
+    }
+  }
+
+  /**
+   * Get the current HEAD commit SHA for a branch
+   * Used for checking if remote is ahead of local
+   */
+  async getRemoteHeadSha(branch: string = this.config.branch): Promise<string | null> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      const refResponse = await this.octokit.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`
+      });
+      
+      return refResponse.data.object.sha;
+    } catch (error) {
+      console.error('❌ GitService.getRemoteHeadSha: Error:', error);
+      return null;
     }
   }
 
