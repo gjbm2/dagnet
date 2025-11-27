@@ -2677,6 +2677,18 @@ class DataOperationsService {
             nodeId: objectType === 'node' ? (targetId || objectId) : undefined, // Pass nodeId for nodes (future)
           });
           
+          // Capture DAS execution history for session logs (request/response details)
+          const dasHistory = runner.getExecutionHistory();
+          for (const entry of dasHistory) {
+            // Add each DAS execution step as a child log entry
+            const level = entry.phase === 'error' ? 'error' : 'info';
+            sessionLogService.addChild(logOpId, level, `DAS_${entry.phase.toUpperCase()}`,
+              entry.message,
+              undefined,
+              entry.data as Record<string, unknown> | undefined
+            );
+          }
+          
           if (!result.success) {
             // Log technical details to console
             console.error(`[DataOperationsService] DAS execution failed for gap ${gapIndex + 1}:`, {
