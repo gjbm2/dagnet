@@ -9,7 +9,7 @@ of all Python graph operations.
 """
 
 from typing import List, Dict, Any, Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
 
@@ -168,6 +168,8 @@ class Edge(BaseModel):
     """
     Graph edge representing a conditional transition between states.
     """
+    model_config = ConfigDict(populate_by_name=True)
+    
     uuid: str
     id: Optional[str] = Field(None, min_length=1, max_length=128)
     from_node: str = Field(..., alias='from', min_length=1, description="Source node uuid or id")
@@ -188,9 +190,6 @@ class Edge(BaseModel):
     case_variant: Optional[str] = Field(None, max_length=128, description="Variant name (case edges only)")
     case_id: Optional[str] = Field(None, description="Parent case node ID (case edges only)")
     display: Optional[EdgeDisplay] = None
-    
-    class Config:
-        populate_by_name = True
 
 
 # ============================================================================
@@ -216,7 +215,7 @@ class Metadata(BaseModel):
 
 class Graph(BaseModel):
     """Complete conversion funnel graph."""
-    nodes: List[Node] = Field(..., min_items=1)
+    nodes: List[Node] = Field(..., min_length=1)
     edges: List[Edge]
     policies: Policies
     metadata: Metadata

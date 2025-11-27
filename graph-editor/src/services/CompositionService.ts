@@ -10,6 +10,7 @@
 
 import { ScenarioParams, EdgeParamDiff, NodeParamDiff, Scenario } from '../types/scenarios';
 import { Graph, GraphEdge, GraphNode } from '../types';
+import { computeEffectiveEdgeProbability, parseWhatIfDSL } from '../lib/whatIf';
 
 /**
  * Minimal scenario interface for composition (avoids full Scenario dependency)
@@ -160,9 +161,81 @@ export function applyComposedParamsToGraph(
 }
 
 /**
+ * Apply What-If DSL overrides to a graph, baking in effective probabilities.
+ * 
+ * This computes the effective probability for each edge using the What-If DSL
+ * (case overrides, conditional overrides) and returns a new graph with those
+ * values baked in.
+ * 
+ * @param graph - Source graph
+ * @param whatIfDSL - What-If DSL string (e.g., "case(node-a:variant1).visited(node-b)")
+ * @returns New graph with What-If effects applied
+ */
+export function applyWhatIfToGraph(
+  graph: Graph,
+  whatIfDSL: string | null | undefined
+): Graph {
+  // If no What-If DSL, return a clone
+  if (!whatIfDSL || !whatIfDSL.trim()) {
+    return JSON.parse(JSON.stringify(graph));
+  }
+  
+  // Deep clone the graph
+  const result: Graph = JSON.parse(JSON.stringify(graph));
+  
+  // Parse the DSL to get overrides
+  const parsed = parseWhatIfDSL(whatIfDSL, graph);
+  
+  // Compute effective probability for each edge
+  if (result.edges) {
+    for (const edge of result.edges) {
+      const edgeId = edge.uuid || edge.id;
+      if (!edgeId) continue;
+      
+      // Compute effective probability with What-If DSL
+      const effectiveProb = computeEffectiveEdgeProbability(
+        graph,  // Use original graph for lookups
+        edgeId,
+        { whatIfDSL },
+        undefined
+      );
+      
+      // Bake the effective probability into the edge
+      edge.p = {
+        ...edge.p,
+        mean: effectiveProb
+      };
+    }
+  }
+  
+  // Also apply case node variant weights from What-If DSL
+  const caseOverrides = parsed.caseOverrides || {};
+  
+  if (result.nodes) {
+    for (const node of result.nodes) {
+      if (node.type !== 'case' || !node.case?.variants) continue;
+      
+      const nodeId = node.id || node.uuid;
+      const selectedVariant = caseOverrides[nodeId];
+      
+      if (selectedVariant) {
+        // Set the selected variant to 100% weight, others to 0%
+        node.case.variants = node.case.variants.map((v: any) => ({
+          ...v,
+          weight: v.name === selectedVariant ? 1.0 : 0.0
+        }));
+      }
+    }
+  }
+  
+  return result;
+}
+
+/**
  * Build a scenario-modified graph for a specific layer.
  * 
  * Convenience function that combines getComposedParamsForLayer + applyComposedParamsToGraph.
+ * For the 'current' layer, also applies What-If DSL if provided.
  * 
  * @param layerId - Layer ID: 'base', 'current', or a scenario ID
  * @param graph - Source graph
@@ -170,6 +243,7 @@ export function applyComposedParamsToGraph(
  * @param currentParams - Current parameters
  * @param scenarios - All scenarios
  * @param visibleScenarioIds - Optional layer order
+ * @param whatIfDSL - Optional What-If DSL to apply (only used for 'current' layer)
  * @returns Graph with the layer's composed parameters baked in
  */
 export function buildGraphForLayer(
@@ -178,7 +252,8 @@ export function buildGraphForLayer(
   baseParams: ScenarioParams,
   currentParams: ScenarioParams,
   scenarios: ScenarioLike[],
-  visibleScenarioIds?: string[]
+  visibleScenarioIds?: string[],
+  whatIfDSL?: string | null
 ): Graph {
   const composedParams = getComposedParamsForLayer(
     layerId,
@@ -187,7 +262,15 @@ export function buildGraphForLayer(
     scenarios,
     visibleScenarioIds
   );
-  return applyComposedParamsToGraph(graph, composedParams);
+  let result = applyComposedParamsToGraph(graph, composedParams);
+  
+  // For 'current' layer, also apply What-If DSL if provided
+  // (Scenario layers have their What-If already baked into their params at snapshot time)
+  if (layerId === 'current' && whatIfDSL) {
+    result = applyWhatIfToGraph(result, whatIfDSL);
+  }
+  
+  return result;
 }
 
 /**

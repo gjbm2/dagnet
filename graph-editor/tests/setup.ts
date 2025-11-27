@@ -5,10 +5,14 @@
  * - Global mocks
  * - Test utilities
  * - Cleanup handlers
+ * 
+ * Note: Requires Node.js 20+ (dependencies require it)
  */
 
 import { expect, afterEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
 
 // Extend Vitest matchers
 expect.extend({
@@ -49,15 +53,15 @@ expect.extend({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers(); // Reset any fake timers
 });
 
-// Mock console methods in tests (reduce noise)
+// Mock console methods in tests (suppress all noise)
 global.console = {
   ...console,
-  // Keep error and warn for debugging
-  error: vi.fn(console.error),
-  warn: vi.fn(console.warn),
-  // Suppress log, info, debug in tests
+  // Suppress ALL console output in tests for clean output
+  error: vi.fn(),
+  warn: vi.fn(),
   log: vi.fn(),
   info: vi.fn(),
   debug: vi.fn()
@@ -92,14 +96,36 @@ if (typeof window !== 'undefined' && !window.indexedDB) {
   });
 }
 
-// Global test timeout warning
-const originalTimeout = setTimeout;
-(global as any).setTimeout = function (callback: any, delay: number, ...args: any[]) {
-  if (delay > 5000) {
-    console.warn(`Long timeout detected: ${delay}ms. Consider reducing for faster tests.`);
+// Mock fetch to serve files from public/ folder in tests
+// This prevents ECONNREFUSED errors when tests try to load schemas
+const originalFetch = globalThis.fetch;
+globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === 'string' ? input : input.toString();
+  
+  // Handle relative URLs that would resolve to public/ folder
+  if (url.startsWith('/param-schemas/') || url.startsWith('/ui-schemas/') || url.startsWith('/schemas/')) {
+    const filePath = join(__dirname, '..', 'public', url);
+    
+    if (existsSync(filePath)) {
+      const content = readFileSync(filePath, 'utf-8');
+      const contentType = url.endsWith('.yaml') || url.endsWith('.yml') 
+        ? 'text/yaml' 
+        : 'application/json';
+      
+      return new Response(content, {
+        status: 200,
+        headers: { 'Content-Type': contentType }
+      });
+    } else {
+      return new Response('Not found', { status: 404 });
+    }
   }
-  return originalTimeout(callback, delay, ...args);
-};
-
-console.log('✅ Test environment initialized');
-
+  
+  // Handle localhost URLs - fail fast instead of hanging
+  if (url.includes('localhost') || url.includes('127.0.0.1')) {
+    return new Response('Network error', { status: 500 });
+  }
+  
+  // Pass through to original fetch for other URLs
+  return originalFetch(input, init);
+}) as typeof fetch;

@@ -116,7 +116,7 @@ def _parse_minimal_graph(graph_dict: Dict[str, Any]) -> Graph:
     
     For testing only - accepts {"nodes": [{"id": "a"}], "edges": [{"source": "a", "target": "b"}]}
     """
-    from pydantic import BaseModel
+    from pydantic import BaseModel, ConfigDict
     
     # Create minimal Node/Edge objects for testing
     class MinimalNode(BaseModel):
@@ -124,12 +124,10 @@ def _parse_minimal_graph(graph_dict: Dict[str, Any]) -> Graph:
         uuid: str = ""
         
     class MinimalEdge(BaseModel):
+        model_config = ConfigDict(populate_by_name=True)
         from_node: str
         to: str
         uuid: str = ""
-        
-        class Config:
-            populate_by_name = True
     
     nodes = []
     for n in graph_dict.get("nodes", []):
