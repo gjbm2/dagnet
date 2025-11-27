@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.96.3-beta
+**Released:** November 27, 2025
+
+Ezra bugs: added new 'super funnel' mode for upstream visited() conditional_p dsl queries
+
+---
+
 ## Version 0.96b
 **Released:** November 26, 2025
 
