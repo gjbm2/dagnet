@@ -895,7 +895,7 @@ function parseUKDate(dateStr: string): Date {
  * @param graph - Graph with nodes and edges
  * @returns true if targetNode is upstream of sourceNode
  */
-function isNodeUpstream(targetNodeId: string, sourceNodeId: string, graph: any): boolean {
+export function isNodeUpstream(targetNodeId: string, sourceNodeId: string, graph: any): boolean {
   if (targetNodeId === sourceNodeId) return false;
   
   const visited = new Set<string>();

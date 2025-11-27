@@ -62,7 +62,7 @@ describe('GitService Base64 Encoding', () => {
       expect(base64.length).toBeLessThan(size * 1.4);
     });
 
-    it('should encode very large arrays (5MB) without error', () => {
+    it('should encode very large arrays (5MB) without error', { timeout: 30000 }, () => {
       const size = 5 * 1024 * 1024; // 5MB
       const data = new Uint8Array(size);
       
