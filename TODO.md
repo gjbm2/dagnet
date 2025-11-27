@@ -1,11 +1,35 @@
 # TODO
 
-- background if no cards still needs to be white for 'results' in analytics
+## Project-latency
+
+Edge cases to consider:
+- upstream visited() calls to Amplitude need to query on the right cohort window for the edges we actually care about NOT the upstream start window
+
+
+## Extra bugs
+
+- We do not currently have a way to distinguish between paths from one node to various other nodes without manually building in conditionality e.g. from Viewed Dashboard to the three types of recs we've outlined
+
+  Consider the same graph /test.json and note the three sibling edges:-
+
+  viewed-dashboard-to-recommendation-with-BDOs
+  viewed-dashboard-to-recommendation-calling-for-bds
+  viewed-dashboard-to-not-sent-recommendation
+
+  there is notionally a means of distinguishing between the three events for each of the nodes that terminate those edges, but we would need to add the right prop to the amplitude query, whereby we define an event which has a count=0 of a prior event. 
+
+  (this is a big clunky, and I'm open to other suggestions)
+
+- **INVESTIGATE**: `dailyMode: true` may not be propagating to DAS as `mode: 'daily'`. Test `flag-threading.test.ts` is skipped - verify in prod that daily data fetch actually works.
+
+## Analytics phase 3
 - let's think about tables....
 - let's think about graphs...
 
 
-- Not absolutely sure our condition_p logic works. If I set the prob of A-B conditionally on C to x, then the siblings must track the complement BUT we use the CONDITION to key the probability...that means the logic can never work???!!!
+
+## Other
+
 - pre-commit modal is shit -- massively too long vertically. just make it X files changed; pull now?
 
 ## Current query DSL
@@ -16,6 +40,14 @@
 - crucially, this would allow dynamic layers / scenarios (useful for saved charts/reports)
 - (expand / contract scenario to show dsl string, and a 'generate' button on the right to 'run' that scenario)
 - then we need to persist scenarios to graph
+
+### Auto-scenarios (requires 'scenario from dsl query' feature)
+
+- let's add a right click context menu to context chips in e.g. dsl query selector on graph in window component AND we can add same feature to contexts in side nav (they'll need to get current graph tab):
+  "Create [x] scenarios by value"
+  where x is the number of values for this context key
+  then use existing 'snapshot all' codepath to create x new scenarios, one for each key=value
+
 
 ### Form Field Duplicate ID Warnings
 **Issue:** Multiple form editors (parameters, events, etc.) open in different tabs generate identical DOM element IDs, causing browser warnings about duplicate IDs. This is a violation of HTML spec where IDs must be unique across the entire document.

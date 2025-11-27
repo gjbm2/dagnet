@@ -38,7 +38,8 @@ export interface ContextFilterObject {
 export interface DslObject {
   from: string;
   to: string;
-  visited?: string[];
+  visited?: string[];              // Visited nodes BETWEEN from and to
+  visited_upstream?: string[];     // Visited nodes BEFORE from (for super-funnel construction)
   exclude?: string[];
   visitedAny?: string[][];
   context?: Array<{ key: string; value: string }>;
@@ -205,7 +206,12 @@ export async function buildDslFromEdge(
   const to_event_name = await resolveEventName(to_event_id);
   
   // Look up visited nodes and extract their event_ids
+  // CRITICAL: Categorize visited nodes as upstream vs between
+  // - visited_upstream: nodes that must be visited BEFORE 'from' (for super-funnel construction)
+  // - visited: nodes that must be visited BETWEEN 'from' and 'to' (standard funnel)
   const visited_event_names: string[] = [];
+  const visited_upstream_event_names: string[] = [];
+  
   if (query.visited && Array.isArray(query.visited)) {
     for (const ref of query.visited) {
       const node = findNode(ref);
@@ -221,7 +227,18 @@ export async function buildDslFromEdge(
         );
       }
       const eventName = await resolveEventName(node.event_id);
-      visited_event_names.push(eventName);
+      
+      // Determine if visited node is upstream of 'from' node
+      // Use graph topology to check reachability
+      const isUpstreamOfFrom = isNodeUpstream(node.id, query.from, graph);
+      
+      if (isUpstreamOfFrom) {
+        console.log(`[buildDslFromEdge] Visited node "${ref}" is UPSTREAM of from node "${query.from}"`);
+        visited_upstream_event_names.push(eventName);
+      } else {
+        console.log(`[buildDslFromEdge] Visited node "${ref}" is BETWEEN from/to nodes`);
+        visited_event_names.push(eventName);
+      }
     }
   }
   
@@ -282,6 +299,12 @@ export async function buildDslFromEdge(
   // Add optional constraints
   if (visited_event_names.length > 0) {
     dsl.visited = visited_event_names;
+  }
+  
+  // Add upstream visited nodes (for super-funnel construction)
+  if (visited_upstream_event_names.length > 0) {
+    dsl.visited_upstream = visited_upstream_event_names;
+    console.log(`[buildDslFromEdge] Added ${visited_upstream_event_names.length} upstream visited node(s) for super-funnel`);
   }
   
   if (exclude_event_names.length > 0) {
@@ -859,5 +882,59 @@ function parseUKDate(dateStr: string): Date {
   const year = parseInt(yearStr) + 2000;
   
   return new Date(year, month, day);
+}
+
+/**
+ * Check if targetNodeId is upstream of sourceNodeId in the graph.
+ * "Upstream" means there's a path FROM targetNode TO sourceNode (target comes before source).
+ * 
+ * Uses BFS to check reachability by traversing incoming edges.
+ * 
+ * @param targetNodeId - The node to check (is it upstream?)
+ * @param sourceNodeId - The reference node (is target upstream of this?)
+ * @param graph - Graph with nodes and edges
+ * @returns true if targetNode is upstream of sourceNode
+ */
+function isNodeUpstream(targetNodeId: string, sourceNodeId: string, graph: any): boolean {
+  if (targetNodeId === sourceNodeId) return false;
+  
+  const visited = new Set<string>();
+  const queue: string[] = [sourceNodeId];
+  
+  // Helper to get node ID (handle both id and uuid references)
+  const getNodeId = (ref: string): string | undefined => {
+    const node = graph.nodes.find((n: any) => n.id === ref || n.uuid === ref);
+    return node?.id;
+  };
+  
+  // Normalize target to node.id
+  const normalizedTarget = getNodeId(targetNodeId);
+  if (!normalizedTarget) return false;
+  
+  while (queue.length > 0) {
+    const currentRef = queue.shift()!;
+    const currentId = getNodeId(currentRef);
+    
+    if (!currentId || visited.has(currentId)) continue;
+    visited.add(currentId);
+    
+    // Find incoming edges to current node (edges where 'to' matches current)
+    const incomingEdges = graph.edges.filter((e: any) => {
+      const toId = getNodeId(e.to);
+      return toId === currentId;
+    });
+    
+    for (const edge of incomingEdges) {
+      const fromId = getNodeId(edge.from);
+      if (!fromId) continue;
+      
+      if (fromId === normalizedTarget) {
+        return true; // Found path from target to source (target is upstream)
+      }
+      queue.push(fromId);
+    }
+  }
+  
+  return false;
 }
 
