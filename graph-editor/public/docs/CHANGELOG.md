@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.97.1b
+**Released:** November 27, 2025
+
+Add Session logging for DAS runs
+
+---
+
 ## Version 0.97.0b
 **Released:** November 27, 2025
 
