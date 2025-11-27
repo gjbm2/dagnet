@@ -26,6 +26,9 @@ vi.mock('../../db/appDatabase', () => ({
           }))
         }))
       })),
+      filter: vi.fn((filterFn: (file: any) => boolean) => ({
+        toArray: vi.fn(() => Promise.resolve(mockFiles.filter(filterFn)))
+      })),
       get: vi.fn().mockResolvedValue(null),
       put: vi.fn().mockResolvedValue(undefined),
     },
@@ -53,6 +56,8 @@ describe('SHA-Based Change Detection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFiles.length = 0; // Clear mock files
+    // Invalidate the service cache to ensure fresh results each test
+    repositoryOperationsService.invalidateCommittableFilesCache();
   });
 
   describe('getFilesWithChanges() - originalData comparison', () => {

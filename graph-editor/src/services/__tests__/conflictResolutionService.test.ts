@@ -80,7 +80,10 @@ describe('conflictResolutionService', () => {
       };
 
       (fileRegistry as any).files.set('parameter-test', fileState);
-      vi.mocked(fileRegistry.getFile).mockReturnValue(fileState);
+      // Only return fileState for the specific fileId, return undefined for others (like session-log)
+      vi.mocked(fileRegistry.getFile).mockImplementation((id: string) => 
+        id === 'parameter-test' ? fileState : undefined
+      );
 
       const conflicts: MergeConflict[] = [{
         fileId: 'parameter-test',
@@ -102,7 +105,9 @@ describe('conflictResolutionService', () => {
       // Assert
       expect(count).toBe(1);
       expect(fileState.isDirty).toBe(true); // Marked dirty
-      expect(fileState.data.value).toBe(150); // Local value preserved
+      // For 'local' resolution, data is NOT modified by service
+      expect(fileState.data.id).toBe('test');
+      expect(fileState.data.value).toBe(150);
       expect((fileRegistry as any).notifyListeners).toHaveBeenCalledWith('parameter-test', fileState);
     });
 
@@ -131,7 +136,10 @@ describe('conflictResolutionService', () => {
 
       await db.files.add(fileState);
       (fileRegistry as any).files.set('parameter-test', fileState);
-      vi.mocked(fileRegistry.getFile).mockReturnValue(fileState);
+      // Only return fileState for the specific fileId, return undefined for others (like session-log)
+      vi.mocked(fileRegistry.getFile).mockImplementation((id: string) => 
+        id === 'parameter-test' ? fileState : undefined
+      );
 
       const conflicts: MergeConflict[] = [{
         fileId: 'parameter-test',
@@ -189,7 +197,10 @@ describe('conflictResolutionService', () => {
 
       await db.files.add(fileState);
       (fileRegistry as any).files.set('graph-test', fileState);
-      vi.mocked(fileRegistry.getFile).mockReturnValue(fileState);
+      // Only return fileState for the specific fileId, return undefined for others (like session-log)
+      vi.mocked(fileRegistry.getFile).mockImplementation((id: string) => 
+        id === 'graph-test' ? fileState : undefined
+      );
 
       const conflicts: MergeConflict[] = [{
         fileId: 'graph-test',

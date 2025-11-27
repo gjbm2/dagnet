@@ -169,7 +169,8 @@ describe('Identity Consistency: IDs and Signatures', () => {
       p: { mean: 0.5 }
     };
     
-    const updated = updateManager.createEdge(
+    // createEdge returns { graph, edgeId }, not the graph directly
+    const createResult = updateManager.createEdge(
       graph,
       {
         source: edgeData.from,
@@ -182,7 +183,7 @@ describe('Identity Consistency: IDs and Signatures', () => {
     
     // Then update the edge with the p property
     const edgeWithP = updateManager.updateEdge(
-      updated,
+      createResult.graph,
       providedUuid,
       { p: edgeData.p }
     );
@@ -344,7 +345,8 @@ describe('Identity Consistency: IDs and Signatures', () => {
     };
     
     // Create edge without explicit UUID
-    const updated = updateManager.createEdge(
+    // createEdge returns { graph, edgeId }, not the graph directly
+    const result = updateManager.createEdge(
       graph,
       {
         source: 'viewed-coffee-screen',
@@ -352,7 +354,7 @@ describe('Identity Consistency: IDs and Signatures', () => {
       }
     );
     
-    const edge = updated.edges[0];
+    const edge = result.graph.edges[0];
     
     // UUID should NOT be the human-readable pattern
     expect(edge.uuid).not.toBe('viewed-coffee-screen-to-straight-to-dashboard');
