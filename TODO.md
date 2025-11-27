@@ -33,23 +33,50 @@
 
 ## Extra bugs
 
-- We do not currently have a way to distinguish between paths from one node to various other nodes without manually building in conditionality e.g. from Viewed Dashboard to the three types of recs we've outlined
-
-  Consider the same graph /test.json and note the three sibling edges:-
-
-  viewed-dashboard-to-recommendation-with-BDOs
-  viewed-dashboard-to-recommendation-calling-for-bds
-  viewed-dashboard-to-not-sent-recommendation
-
-  there is notionally a means of distinguishing between the three events for each of the nodes that terminate those edges, but we would need to add the right prop to the amplitude query, whereby we define an event which has a count=0 of a prior event. 
-
-  (this is a big clunky, and I'm open to other suggestions)
-
 - **INVESTIGATE**: `dailyMode: true` may not be propagating to DAS as `mode: 'daily'`. Test `flag-threading.test.ts` is skipped - verify in prod that daily data fetch actually works.
 
-## Analytics phase 3
-- let's think about tables....
-- let's think about graphs...
+## Analytics Implementation (Phase 1 Complete ✅)
+
+**Current Status:** See `docs/current/ANALYTICS_IMPLEMENTATION_STATUS.md` for full details
+
+### Phase 1: Core Foundation ✅ COMPLETE
+- ✅ AnalyticsPanel with Monaco DSL editor
+- ✅ Multi-scenario analysis support
+- ✅ 13 analysis types defined
+- ✅ Card-based UI rendering
+- ✅ Backend integration (graphComputeClient)
+- ✅ Semantic result schema
+
+### Phase 2: Tabular Datasets (CURRENT PRIORITY)
+**Goal:** Add table views for 1-2 key analyses
+
+#### Next Steps:
+1. **[DOING]** Create `AnalyticsTable` component
+   - Sortable columns
+   - Multi-scenario delta columns (% change)
+   - Conditional formatting (green/red)
+   - Export to CSV
+   
+2. **[TODO]** Implement table view for Conversion Funnel
+   - Stage-by-stage breakdown
+   - Show all scenarios side-by-side
+   - Calculate and display deltas between scenarios
+   
+3. **[TODO]** Implement table view for Branch Comparison
+   - Side-by-side branch metrics
+   - Sortable by probability, cost, conversion
+   - Toggle between scenarios
+
+**Estimated Effort:** 12-16 hours total
+
+### Phase 3: Charts & Visualizations (BACKLOG)
+- [ ] Integrate Recharts library
+- [ ] Sankey diagrams for funnels
+- [ ] Bar charts for branch/outcome comparisons
+- [ ] Line charts for time-series with window aggregation
+- [ ] Probability heatmaps for complex branching
+
+**Estimated Effort:** 20-24 hours
 
 
 

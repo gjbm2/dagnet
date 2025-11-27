@@ -7,6 +7,7 @@
 
 import type { DASRunner } from './DASRunner';
 import { parseCompositeQuery, getExecutionTerms, type ParsedFunnel, type CompositeQueryTerm } from './compositeQueryParser';
+import { isNodeUpstream } from './buildDslFromEdge';
 
 export interface SubQueryResult {
   id: string;
@@ -31,12 +32,19 @@ export interface CombinedResult {
  * Execute a composite query (base + minus/plus terms) via DAS Runner.
  * 
  * Returns combined n, k, p_mean using inclusion-exclusion coefficients.
+ * 
+ * @param queryString - The composite query string (with minus/plus terms)
+ * @param baseDsl - Base DSL with from/to already mapped to provider event names
+ * @param connectionName - Connection name (e.g., 'amplitude')
+ * @param runner - DAS runner instance
+ * @param graph - Optional graph for upstream/between categorization of visited nodes
  */
 export async function executeCompositeQuery(
   queryString: string,
   baseDsl: any,
   connectionName: string,
-  runner: DASRunner
+  runner: DASRunner,
+  graph?: any
 ): Promise<CombinedResult> {
   console.log(`[CompositeQuery] Parsing: ${queryString}`);
   
@@ -59,7 +67,7 @@ export async function executeCompositeQuery(
   
     // Execute all terms in parallel
     const results = await Promise.all(
-      terms.map(term => executeSubQuery(term, baseDsl, connectionName, runner))
+      terms.map(term => executeSubQuery(term, baseDsl, connectionName, runner, graph))
     );
     
     console.log(`[CompositeQuery] All sub-queries completed, combining results...`);
@@ -79,31 +87,57 @@ export async function executeCompositeQuery(
 
 /**
  * Execute a single sub-query (base, minus, or plus term).
+ * 
+ * CRITICAL: Categorizes visited nodes as upstream vs between based on graph topology.
+ * - visited_upstream: nodes that must occur BEFORE 'from' (for super-funnel construction)
+ * - visited: nodes that must occur BETWEEN 'from' and 'to' (standard funnel)
  */
 async function executeSubQuery(
   term: CompositeQueryTerm,
   baseDsl: any,
   connectionName: string,
-  runner: DASRunner
+  runner: DASRunner,
+  graph?: any
 ): Promise<SubQueryResult> {
   const { funnel, coefficient, id } = term;
   
   // Map node IDs to provider event names for visited nodes
+  // AND categorize as upstream vs between based on graph topology
   // (baseDsl already has from/to mapped, so we only need to map visited)
   const mappedVisited: string[] = [];
+  const mappedVisitedUpstream: string[] = [];
+  
   if (funnel.visited && funnel.visited.length > 0) {
     const { fileRegistry } = await import('../../contexts/TabContext');
     const provider = connectionName?.includes('amplitude') ? 'amplitude' : 'statsig';
+    
+    // Get the 'from' node ID from baseDsl (it's the provider event name, need to reverse-lookup)
+    // Actually, we have the original node IDs in funnel.from, use those with graph
+    const fromNodeId = funnel.from;
     
     for (const nodeId of funnel.visited) {
       try {
         const eventFile = fileRegistry.getFile(`event-${nodeId}`);
         const event = eventFile?.data;
         const providerEventName = event?.provider_event_names?.[provider] || nodeId;
-        mappedVisited.push(providerEventName);
-        console.log(`[SubQuery ${id}] Mapped visited node: ${nodeId} → ${providerEventName}`);
+        
+        // CRITICAL: Categorize as upstream vs between
+        // If graph is provided and node is upstream of 'from', put in visited_upstream
+        let isUpstream = false;
+        if (graph && fromNodeId) {
+          isUpstream = isNodeUpstream(nodeId, fromNodeId, graph);
+        }
+        
+        if (isUpstream) {
+          mappedVisitedUpstream.push(providerEventName);
+          console.log(`[SubQuery ${id}] Mapped visited UPSTREAM node: ${nodeId} → ${providerEventName}`);
+        } else {
+          mappedVisited.push(providerEventName);
+          console.log(`[SubQuery ${id}] Mapped visited BETWEEN node: ${nodeId} → ${providerEventName}`);
+        }
       } catch (error) {
         console.warn(`[SubQuery ${id}] Failed to load event ${nodeId}, using raw ID:`, error);
+        // Default to between if we can't determine
         mappedVisited.push(nodeId);
       }
     }
@@ -111,17 +145,20 @@ async function executeSubQuery(
   
   // Build DSL for this funnel
   // CRITICAL: DON'T override from/to (they're already correct in baseDsl with provider event names)
-  // Only update visited if we have minus/plus terms
+  // Include both visited (between) and visited_upstream for super-funnel construction
   const dsl = {
     ...baseDsl,
-    visited: mappedVisited,
-    visitedAny: funnel.visitedAny || [],
+    visited: mappedVisited.length > 0 ? mappedVisited : undefined,
+    visited_upstream: mappedVisitedUpstream.length > 0 ? mappedVisitedUpstream : undefined,
+    visitedAny: (funnel.visitedAny && funnel.visitedAny.length > 0) ? funnel.visitedAny : undefined,
     // Explicitly preserve window and mode
     window: baseDsl.window,
     mode: baseDsl.mode || 'ordered'
   };
   
-  console.log(`[SubQuery ${id}] Executing: from(${baseDsl.from}).to(${baseDsl.to})${mappedVisited.length > 0 ? `.visited(${mappedVisited.join(',')})` : ''} [coeff=${coefficient>0?'+':''}${coefficient}] (mode=${dsl.mode})`);
+  const visitedStr = mappedVisited.length > 0 ? `.visited(${mappedVisited.join(',')})` : '';
+  const upstreamStr = mappedVisitedUpstream.length > 0 ? `.visited_upstream(${mappedVisitedUpstream.join(',')})` : '';
+  console.log(`[SubQuery ${id}] Executing: from(${baseDsl.from}).to(${baseDsl.to})${upstreamStr}${visitedStr} [coeff=${coefficient>0?'+':''}${coefficient}] (mode=${dsl.mode})`);
   
   try {
     // CRITICAL: Pass window and context mode so sub-queries can return daily time-series

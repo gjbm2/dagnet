@@ -2470,9 +2470,9 @@ export default function PropertiesPanel({
                 if (!graph || !selectedEdgeId) return;
                 const next = structuredClone(graph);
                 const edgeIndex = next.edges.findIndex((e: any) => 
-                  e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
-                                    );
-                                    if (edgeIndex >= 0) {
+                  e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                );
+                if (edgeIndex >= 0) {
                   next.edges[edgeIndex].query = currentValue;
                   next.edges[edgeIndex].query_overridden = true;
                   if (next.metadata) {

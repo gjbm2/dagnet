@@ -7,7 +7,7 @@
 
 import React, { useState, useCallback, useMemo, useRef } from 'react';
 import { EdgeLabelRenderer } from 'reactflow';
-import { Plug } from 'lucide-react';
+import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE } from '../../lib/nodeEdgeConstants';
@@ -242,6 +242,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     if (expanded) {
       // Expanded bead: lozenge with text along spline using SVG textPath
       const hasPlug = bead.hasParameterConnection;
+      const hasOverride = bead.isOverridden;
       
       // Get text content (without plug icon - will render separately)
       const textContent = typeof bead.displayText === 'string' 
@@ -254,19 +255,21 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       // Calculate lozenge dimensions
       const LOZENGE_HEIGHT = 14; // Match collapsed bead diameter
       const LOZENGE_PADDING = 4; // Padding on each side (increased for larger text)
+      const TEXT_TO_ICON_GAP = 8; // ← THIS controls spacing between text and first icon
       // Measure text width accurately using canvas
       const measuredTextWidth = measureTextWidth(textContent, BEAD_FONT_SIZE, '500');
-      // Add space for plug icon if present (~10px)
+      // Add space for plug icon if present (~10px) and zap-off icon if present (~10px)
       const plugIconWidth = hasPlug ? 10 : 0;
+      const zapOffIconWidth = hasOverride ? 10 : 0;
       // Reduce width by 20% to fix overestimation; treat this as the FULL lozenge length
-      const lozengeLength = (measuredTextWidth + LOZENGE_PADDING * 2 + plugIconWidth) * 1;
+      const lozengeLength = (measuredTextWidth + LOZENGE_PADDING * 2 + plugIconWidth + zapOffIconWidth) * 1;
       // Stroke START is fixed at this bead's distance; lozenge grows forward only
       const strokeStartDistance = distance;
       const textStartDistance = strokeStartDistance + LOZENGE_PADDING;
       const textEndDistance = Math.min(strokeStartDistance + lozengeLength - LOZENGE_PADDING, pathLength * 0.9);
       
-      // Calculate plug icon position (after text)
-      const plugIconDistance = textEndDistance;
+      // Calculate plug icon position (after text + gap)
+      const plugIconDistance = strokeStartDistance + LOZENGE_PADDING + measuredTextWidth + TEXT_TO_ICON_GAP;
       const plugIconPoint = path.getPointAtLength(Math.min(plugIconDistance, pathLength * 0.9));
       
       // Calculate tangent angle for icon rotation
@@ -540,6 +543,54 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
               </foreignObject>
             </g>
           )}
+          
+          {/* ZapOff icon after plug (if query is overridden) */}
+          {hasOverride && (() => {
+            // Position ZapOff icon after plug (or after text if no plug)
+            const zapOffDistance = hasPlug 
+              ? plugIconDistance + plugIconWidth 
+              : plugIconDistance;
+            const zapOffPoint = path.getPointAtLength(Math.min(zapOffDistance, pathLength * 0.9));
+            
+            // Calculate tangent angle for icon rotation
+            const zapOffAngle = zapOffPoint ? (() => {
+              const beforePoint = path.getPointAtLength(Math.max(0, zapOffDistance - 1));
+              const afterPoint = path.getPointAtLength(Math.min(pathLength, zapOffDistance + 1));
+              return Math.atan2(afterPoint.y - beforePoint.y, afterPoint.x - beforePoint.x) * 180 / Math.PI;
+            })() : 0;
+            
+            return zapOffPoint && (
+              <g
+                transform={`translate(${zapOffPoint.x}, ${zapOffPoint.y}) rotate(${isTextUpsideDown ? zapOffAngle + 180 : zapOffAngle})`}
+                style={{ pointerEvents: 'none' }}
+              >
+                <foreignObject
+                  x={-5}
+                  y={-5}
+                  width={10}
+                  height={10}
+                  style={{ overflow: 'visible' }}
+                >
+                  <div style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    width: '10px',
+                    height: '10px'
+                  }}>
+                    <ZapOff 
+                      size={10} 
+                      strokeWidth={2}
+                      color="#FFFFFF"
+                      style={{ 
+                        filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.3))'
+                      }}
+                    />
+                  </div>
+                </foreignObject>
+              </g>
+            );
+          })()}
         </g>
       );
       
@@ -603,7 +654,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   
   return {
     svg: svgBeads.length > 0 ? (
-      <g className="edge-beads-svg" style={{ zIndex: 10000 }}>
+      <g className="edge-beads-svg">
         <defs>
           <path id={pathId} d={pathD} pointerEvents="none" />
         </defs>

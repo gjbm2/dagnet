@@ -37,6 +37,7 @@ export interface BeadDefinition {
   // Bead appearance
   backgroundColor: string; // Dark grey for normal params, colored for variant/conditional
   hasParameterConnection: boolean; // Show 🔌 icon when expanded
+  isOverridden: boolean; // Show ⚡ icon when query is overridden
   
   // Position
   distance: number; // along spline from visible start
@@ -113,6 +114,7 @@ function buildParameterBead(config: {
   // Bead styling and metadata
   backgroundColor: string;
   hasParameterConnection: boolean;
+  isOverridden: boolean;
   
   // Position info
   baseDistance: number;
@@ -229,6 +231,7 @@ function buildParameterBead(config: {
     allIdentical: label.allIdentical,
     backgroundColor: config.backgroundColor,
     hasParameterConnection: config.hasParameterConnection,
+    isOverridden: config.isOverridden,
     distance: config.baseDistance + config.beadIndex * BEAD_SPACING,
     expanded: true,
     index: config.beadIndex
@@ -566,6 +569,7 @@ export function buildBeadDefinitions(
       allIdentical: allVariantIdentical && !hiddenCurrentVariant,
       backgroundColor: darkenedColour,
       hasParameterConnection: false,
+      isOverridden: false, // Variants don't have query overrides
       distance: baseDistance + beadIndex * BEAD_SPACING,
       expanded: true, // Default expanded
       index: beadIndex++
@@ -585,6 +589,7 @@ export function buildBeadDefinitions(
     buildLabel: BeadLabelBuilder.buildProbabilityLabel,
     backgroundColor: '#000000',
     hasParameterConnection: !!(edge as any).p?.id,
+    isOverridden: !!(edge as any).p?.mean_overridden,
     baseDistance,
     beadIndex: beadIndex,
     orderedVisibleIds,
@@ -620,6 +625,7 @@ export function buildBeadDefinitions(
     buildLabel: BeadLabelBuilder.buildCostGBPLabel,
     backgroundColor: '#000000',
     hasParameterConnection: !!((edge as any).cost_gbp?.id),
+    isOverridden: !!((edge as any).cost_gbp?.mean_overridden),
     baseDistance,
     beadIndex: beadIndex,
     orderedVisibleIds,
@@ -654,6 +660,7 @@ export function buildBeadDefinitions(
     buildLabel: BeadLabelBuilder.buildCostTimeLabel,
     backgroundColor: '#000000',
     hasParameterConnection: !!((edge as any).cost_time?.id),
+    isOverridden: !!((edge as any).cost_time?.mean_overridden),
     baseDistance,
     beadIndex: beadIndex,
     orderedVisibleIds,
@@ -670,7 +677,7 @@ export function buildBeadDefinitions(
   // 5. Conditional Probability Beads (one per conditional_p entry)
   // ============================================================================
   if (edge.conditional_p && edge.conditional_p.length > 0) {
-    edge.conditional_p.forEach((cp: any) => {
+    edge.conditional_p.forEach((cp: any, cpIndex: number) => {
       const condValues: BeadValue[] = [];
       let hiddenCurrentCond: { value: number } | undefined;
       
@@ -746,6 +753,7 @@ export function buildBeadDefinitions(
         allIdentical: allCondIdentical && !hiddenCurrentCond,
         backgroundColor: darkenedColour,
         hasParameterConnection: false,
+        isOverridden: !!(cp.p?.mean_overridden),
         distance: baseDistance + beadIndex * BEAD_SPACING,
         expanded: false, // Default collapsed
         index: beadIndex++

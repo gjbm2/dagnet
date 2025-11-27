@@ -235,3 +235,115 @@ def handle_runner_available_analyses(data: Dict[str, Any]) -> Dict[str, Any]:
     
     return {"analyses": available}
 
+
+def handle_compile_exclude(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle compile-exclude endpoint.
+    
+    Compiles a query with excludes() terms to minus/plus form for providers
+    that don't support native excludes (like Amplitude).
+    
+    Args:
+        data: Request body containing:
+            - query: Query DSL string with excludes() (required)
+            - graph: Graph data for topology analysis (required)
+    
+    Returns:
+        Response dict with compiled_query
+    """
+    import re
+    query_str = data.get('query')
+    graph_data = data.get('graph')
+    
+    if not query_str:
+        raise ValueError("Missing 'query' field")
+    if not graph_data:
+        raise ValueError("Missing 'graph' field")
+    
+    # Parse the query to extract from, to, and excludes
+    from query_dsl import parse_query_strict
+    from graph_types import Graph
+    
+    parsed = parse_query_strict(query_str)
+    
+    if not parsed.exclude:
+        # No excludes, return original query
+        return {
+            "compiled_query": query_str,
+            "was_compiled": False,
+            "success": True
+        }
+    
+    # Build graph for topology analysis
+    graph = Graph.model_validate(graph_data)
+    
+    # Import the inclusion-exclusion compiler
+    import sys
+    from pathlib import Path
+    algorithms_path = Path(__file__).parent / 'algorithms'
+    sys.path.insert(0, str(algorithms_path))
+    
+    from connection_capabilities import supports_native_exclude
+    
+    # Check if we need to compile (Amplitude doesn't support native excludes)
+    # For this endpoint, we assume caller has already determined compilation is needed
+    
+    # Build networkx graph for the compiler
+    import networkx as nx
+    G = nx.DiGraph()
+    
+    # Add nodes
+    for node in graph.nodes:
+        node_id = node.id or node.uuid
+        G.add_node(node_id)
+    
+    # Add edges
+    for edge in graph.edges:
+        from_id = edge.from_node
+        to_id = edge.to
+        # Resolve from/to to node IDs
+        from_node = next((n for n in graph.nodes if n.uuid == from_id or n.id == from_id), None)
+        to_node = next((n for n in graph.nodes if n.uuid == to_id or n.id == to_id), None)
+        if from_node and to_node:
+            from_node_id = from_node.id or from_node.uuid
+            to_node_id = to_node.id or to_node.uuid
+            G.add_edge(from_node_id, to_node_id)
+    
+    # Get from/to nodes
+    from_node = parsed.from_node
+    to_node = parsed.to_node
+    exclude_nodes = parsed.exclude
+    
+    # Import the optimized inclusion-exclusion compiler
+    from optimized_inclusion_exclusion import compile_optimized_inclusion_exclusion
+    
+    try:
+        compiled_query, terms = compile_optimized_inclusion_exclusion(
+            G, from_node, to_node, to_node, exclude_nodes
+        )
+        
+        # Prepend any visited() terms from original query
+        if parsed.visited:
+            visited_str = f".visited({','.join(parsed.visited)})"
+            # Insert visited after to() but before minus()
+            if '.minus(' in compiled_query:
+                parts = compiled_query.split('.minus(', 1)
+                compiled_query = f"{parts[0]}{visited_str}.minus({parts[1]}"
+            else:
+                compiled_query = f"{compiled_query}{visited_str}"
+        
+        return {
+            "compiled_query": compiled_query,
+            "was_compiled": True,
+            "terms_count": len(terms),
+            "success": True
+        }
+    except Exception as e:
+        print(f"[compile_exclude] Compilation failed: {e}")
+        return {
+            "compiled_query": query_str,
+            "was_compiled": False,
+            "error": str(e),
+            "success": False
+        }
+
