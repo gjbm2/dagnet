@@ -50,7 +50,7 @@ fi
 
 # Read current version from package.json
 CURRENT_VERSION=$(node -p "require('./graph-editor/package.json').version")
-CURRENT_DISPLAY=$(echo "$CURRENT_VERSION" | sed 's/\.0-beta$/b/')
+CURRENT_DISPLAY=$(echo "$CURRENT_VERSION" | sed 's/-beta$/b/')
 
 print_blue "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 print_blue "        DagNet Version Release Tool"
@@ -161,7 +161,7 @@ case "${CHOICE^^}" in
     ;;
 esac
 
-NEW_DISPLAY=$(echo "$NEW_VERSION" | sed 's/\.0-beta$/b/')
+NEW_DISPLAY=$(echo "$NEW_VERSION" | sed 's/-beta$/b/')
 
 # Get current branch
 CURRENT_BRANCH=$(git branch --show-current)
