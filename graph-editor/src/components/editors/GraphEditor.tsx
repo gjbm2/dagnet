@@ -1417,19 +1417,17 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#14: Setup keyboard shortcuts`);
     const handleKeyDown = (e: KeyboardEvent) => {
-      // CRITICAL: Only process if THIS tab is the active tab
-      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
-      if (activeTabIdRef.current !== tabIdRef.current) {
-        return; // Not our tab, ignore all keyboard events
-      }
-      console.log(`[${new Date().toISOString()}] [GraphEditor] Keyboard event:`, { key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey });
-      
-      // Only handle if user isn't typing in an input field or Monaco editor
-      // Exception: inputs marked with data-allow-global-shortcuts="true" should pass through
+      // Early exit for typing in inputs/textareas (most common case when modals are open)
       const target = e.target as HTMLElement;
       const allowGlobalShortcuts = target.getAttribute?.('data-allow-global-shortcuts') === 'true';
       if (!allowGlobalShortcuts && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor'))) {
         return;
+      }
+      
+      // CRITICAL: Only process if THIS tab is the active tab
+      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
+      if (activeTabIdRef.current !== tabIdRef.current) {
+        return; // Not our tab, ignore all keyboard events
       }
 
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;

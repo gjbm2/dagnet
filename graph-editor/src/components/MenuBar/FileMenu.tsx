@@ -3,6 +3,7 @@ import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useDialog } from '../../contexts/DialogContext';
+import { useCommitHandler } from '../../hooks/useCommitHandler';
 import { db } from '../../db/appDatabase';
 import { encodeStateToUrl } from '../../lib/shareUrl';
 import { CommitModal } from '../CommitModal';
@@ -34,6 +35,7 @@ export function FileMenu() {
   const { activeTabId, tabs, operations } = useTabContext();
   const { operations: navOps, state: navState } = useNavigatorContext();
   const { showConfirm } = useDialog();
+  const { handleCommitFiles } = useCommitHandler();
 
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-');
@@ -129,56 +131,26 @@ export function FileMenu() {
   };
 
 
-  const handleCommitChanges = async () => {
+  const handleCommitChanges = () => {
     // Commit ONLY the current active file
     if (!activeTab) return;
     
     // Use centralized logic to check if file is committable
     if (!fileRegistry.isFileCommittableById(activeTab.fileId)) return;
     
-    try {
-      // Check remote status (centralized in service)
-      const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
-        navState.selectedRepo,
-        navState.selectedBranch,
-        showConfirm,
-        toast.loading,
-        toast.dismiss
-      );
-      
-      if (!shouldProceed) return;
-      
-      // Open commit modal with ONLY current file pre-selected
-      setCommitModalPreselectedFiles([activeTab.fileId]);
-      setIsCommitModalOpen(true);
-    } catch (error) {
-      console.error('Failed to check remote status:', error);
-      toast.error(`Failed to check remote: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    // Open commit modal with ONLY current file pre-selected
+    // Remote-ahead check happens inside commitFiles
+    setCommitModalPreselectedFiles([activeTab.fileId]);
+    setIsCommitModalOpen(true);
   };
 
-  const handleCommitAllChanges = async () => {
-    // Commit ALL dirty files
-    try {
-      // Check remote status (centralized in service)
-      const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
-        navState.selectedRepo,
-        navState.selectedBranch,
-        showConfirm,
-        toast.loading,
-        toast.dismiss
-      );
-      
-      if (!shouldProceed) return;
-      
-      // Open commit modal for ALL dirty files
-      setCommitModalPreselectedFiles([]); // Empty means select all dirty files
-      setIsCommitModalOpen(true);
-    } catch (error) {
-      console.error('Failed to check remote status:', error);
-      toast.error(`Failed to check remote: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+  const handleCommitAllChanges = () => {
+    // Open commit modal for ALL dirty files
+    // Remote-ahead check happens inside commitFiles
+    setCommitModalPreselectedFiles([]); // Empty means select all dirty files
+    setIsCommitModalOpen(true);
   };
+
 
   const handlePullLatest = async () => {
     try {
@@ -228,14 +200,6 @@ export function FileMenu() {
   const handleViewHistory = () => {
     // TODO: Open history view for current file
     console.log('View history');
-  };
-
-  const handleCommitFiles = async (files: any[], message: string, branch: string) => {
-    try {
-      await repositoryOperationsService.commitFiles(files, message, branch, navState.selectedRepo, showConfirm);
-    } catch (error) {
-      throw error; // Re-throw to be handled by CommitModal
-    }
   };
 
   const handleRevert = () => {

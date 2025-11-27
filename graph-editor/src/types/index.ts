@@ -16,7 +16,8 @@ export type ObjectType =
   | 'connections'
   | 'settings'
   | 'about'
-  | 'markdown';
+  | 'markdown'
+  | 'image';
 
 /**
  * View modes for displaying content

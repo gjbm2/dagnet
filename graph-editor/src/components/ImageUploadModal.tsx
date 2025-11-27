@@ -74,13 +74,13 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
         return;
       }
       
-      // Compress image
+      // Compress image (always outputs JPEG)
       const compressed = await compressImage(file);
       
       // Read as Uint8Array
       const arrayBuffer = await compressed.arrayBuffer();
       const data = new Uint8Array(arrayBuffer);
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
+      const ext = 'jpg'; // Always JPEG after compression
       
       // Show preview instead of immediately uploading
       const blob = new Blob([data], { type: `image/${ext}` });
@@ -128,10 +128,11 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
         throw new Error(validation.error!);
       }
       
+      // Compress image (always outputs JPEG)
       const compressed = await compressImage(file);
       const arrayBuffer = await compressed.arrayBuffer();
       const data = new Uint8Array(arrayBuffer);
-      const ext = blob.type.split('/')[1] || 'png';
+      const ext = 'jpg'; // Always JPEG after compression
       
       // Show preview instead of immediately uploading
       const previewBlob = new Blob([data], { type: `image/${ext}` });
@@ -175,10 +176,11 @@ export function ImageUploadModal({ onClose, onUpload }: ImageUploadModalProps) {
             throw new Error(validation.error!);
           }
           
+          // Compress image (always outputs JPEG)
           const compressed = await compressImage(blob);
           const arrayBuffer = await compressed.arrayBuffer();
           const data = new Uint8Array(arrayBuffer);
-          const ext = item.type.split('/')[1] || 'png';
+          const ext = 'jpg'; // Always JPEG after compression
           
           // Show preview instead of immediately uploading
           const previewBlob = new Blob([data], { type: `image/${ext}` });

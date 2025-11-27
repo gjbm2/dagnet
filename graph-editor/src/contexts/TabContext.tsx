@@ -75,6 +75,7 @@ function deserializeEditorState(editorState: any): any {
 class FileRegistry {
   private files = new Map<string, FileState>();
   private listeners = new Map<string, Set<(file: FileState) => void>>();
+  private updatingFiles = new Set<string>(); // Guard against re-entrant updates
 
   /**
    * Get or create a file state
@@ -162,12 +163,21 @@ class FileRegistry {
    * Update file data
    */
   async updateFile(fileId: string, newData: any): Promise<void> {
+    // Guard against re-entrant updates (prevents stack overflow)
+    if (this.updatingFiles.has(fileId)) {
+      console.warn(`FileRegistry: Skipping re-entrant update for ${fileId}`);
+      return;
+    }
+    
     const file = this.files.get(fileId);
     if (!file) {
       console.warn(`FileRegistry: File ${fileId} not found for update (may have been closed)`);
       return;
     }
 
+    this.updatingFiles.add(fileId);
+    
+    try {
     const oldDataStr = JSON.stringify(file.data);
     const newDataStr = JSON.stringify(newData);
     const originalDataStr = JSON.stringify(file.originalData);
@@ -210,41 +220,21 @@ class FileRegistry {
     file.data = newData;
     const wasDirty = file.isDirty;
     
-    // During initialization, we normally update originalData to allow form normalization
-    // HOWEVER: structural changes (different node/edge count) indicate real user edits
-    // In that case, complete initialization immediately and track the dirty state
-    if (file.isInitializing) {
-      const oldNodeCount = file.originalData?.nodes?.length ?? 0;
-      const newNodeCount = newData?.nodes?.length ?? 0;
-      const oldEdgeCount = file.originalData?.edges?.length ?? 0;
-      const newEdgeCount = newData?.edges?.length ?? 0;
-      
-      const isStructuralChange = oldNodeCount !== newNodeCount || oldEdgeCount !== newEdgeCount;
-      
-      if (isStructuralChange) {
-        // Real user edit during init period - complete initialization and mark dirty
-        console.log(`FileRegistry: ${fileId} structural change during init (nodes: ${oldNodeCount}→${newNodeCount}, edges: ${oldEdgeCount}→${newEdgeCount}), completing init and marking dirty`);
-        file.isInitializing = false;
-        file.isDirty = true;
-      } else {
-        // Form normalization - update originalData to match
-        console.log(`FileRegistry: ${fileId} is initializing, updating originalData to normalized state`);
-        file.originalData = structuredClone(newData);
-        file.isDirty = false;
-      }
-    } else {
-      // Normal dirty detection: compare against original
-      file.isDirty = newDataStr !== originalDataStr;
+    // Simple dirty detection: if content changed from original, it's dirty. Period.
+    // No exceptions - every change marks dirty. The user explicitly wants this.
+    file.isDirty = newDataStr !== originalDataStr;
+    
+    // If this is the first real change during initialization, complete init now
+    if (file.isInitializing && file.isDirty) {
+      file.isInitializing = false;
     }
     
     file.lastModified = Date.now();
 
     if (wasDirty !== file.isDirty) {
       console.log(`FileRegistry: ${fileId} dirty state changed:`, wasDirty, '→', file.isDirty);
-      if (!file.isInitializing) {
-        console.log('  oldData === newData:', oldDataStr === newDataStr);
-        console.log('  newData === original:', newDataStr === originalDataStr);
-      }
+      console.log('  oldData === newData:', oldDataStr === newDataStr);
+      console.log('  newData === original:', newDataStr === originalDataStr);
     }
 
     // Update in IndexedDB - need to update BOTH prefixed and unprefixed versions
@@ -266,6 +256,9 @@ class FileRegistry {
       window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
         detail: { fileId, isDirty: file.isDirty } 
       }));
+    }
+    } finally {
+      this.updatingFiles.delete(fileId);
     }
   }
 
@@ -754,18 +747,37 @@ class FileRegistry {
   /**
    * Register a pending image deletion
    */
-  registerImageDelete(imageId: string, path: string): void {
+  async registerImageDelete(imageId: string, path: string): Promise<void> {
     // Remove any pending upload for this image
     this.pendingImageOps = this.pendingImageOps.filter(
       op => op.image_id !== imageId
     );
     
-    // Add delete operation
+    // Add delete operation for Git
     this.pendingImageOps.push({
       type: 'delete',
       image_id: imageId,
       path
     });
+    
+    // Remove from FileRegistry memory
+    const baseFileId = `image-${imageId}`;
+    this.files.delete(baseFileId);
+    
+    // Remove from IndexedDB (both prefixed and unprefixed versions)
+    try {
+      await db.files.delete(baseFileId);
+      
+      // Also try to delete prefixed version
+      const allFiles = await db.files.toArray();
+      const prefixedFiles = allFiles.filter(f => f.fileId.endsWith(`-${baseFileId}`));
+      for (const pf of prefixedFiles) {
+        await db.files.delete(pf.fileId);
+      }
+    } catch (error) {
+      console.warn(`FileRegistry: Failed to delete image from IDB: ${imageId}`, error);
+    }
+    
     console.log(`FileRegistry: Registered image deletion: ${imageId}`);
   }
   

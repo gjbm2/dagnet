@@ -4,6 +4,7 @@ import YAML from 'yaml';
 import { useTabContext } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useDialog } from '../contexts/DialogContext';
+import { useCommitHandler } from '../hooks/useCommitHandler';
 import { RepositoryItem, ObjectType } from '../types';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { CommitModal } from './CommitModal';
@@ -28,6 +29,7 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   const { tabs, operations } = useTabContext();
   const { state: navState, operations: navOps } = useNavigatorContext();
   const { showConfirm } = useDialog();
+  const { handleCommitFiles } = useCommitHandler();
   
   // Check if this item has any open tabs
   const fileId = `${item.type}-${item.id}`;
@@ -47,15 +49,6 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   // Duplicate modal state
   const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
 
-  const handleCommitFiles = async (files: any[], message: string, branch: string) => {
-    try {
-      const { repositoryOperationsService } = await import('../services/repositoryOperationsService');
-      await repositoryOperationsService.commitFiles(files, message, branch, navState.selectedRepo, showConfirm);
-    } catch (error) {
-      throw error; // Re-throw to be handled by CommitModal
-    }
-  };
-  
   const handleDeleteFile = async (message: string) => {
     try {
       // Check if this is a node file (has special image GC logic)
@@ -151,19 +144,8 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     if (fileRegistry.isFileCommittableById(fileId)) {
       items.push({
         label: 'Commit This File...',
-        onClick: async () => {
-          // Check remote status first
-          const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
-            navState.selectedRepo,
-            navState.selectedBranch,
-            showConfirm,
-            toast.loading,
-            toast.dismiss
-          );
-          
-          if (!shouldProceed) return;
-          
-          // Open commit modal for this specific file
+        onClick: () => {
+          // Open commit modal - remote-ahead check happens inside commitFiles
           setCommitModalPreselectedFiles([fileId]);
           setIsCommitModalOpen(true);
         },
@@ -172,19 +154,8 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     }
     items.push({
       label: 'Commit All Changes...',
-      onClick: async () => {
-        // Check remote status first
-        const shouldProceed = await repositoryOperationsService.checkRemoteBeforeCommit(
-          navState.selectedRepo,
-          navState.selectedBranch,
-          showConfirm,
-          toast.loading,
-          toast.dismiss
-        );
-        
-        if (!shouldProceed) return;
-        
-        // Open commit modal for all dirty files
+      onClick: () => {
+        // Open commit modal - remote-ahead check happens inside commitFiles
         setCommitModalPreselectedFiles([]);
         setIsCommitModalOpen(true);
       },
