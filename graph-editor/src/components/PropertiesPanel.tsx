@@ -522,29 +522,32 @@ export default function PropertiesPanel({
     await imageOperationsService.uploadImage(graph, imageData, extension, source, {
       onGraphUpdate: setGraph,
       onHistorySave: saveHistoryState,
-      getNodeId: () => selectedNodeId
+      getNodeId: () => selectedNodeId,
+      getGraphFileId: () => myTab?.fileId
     }, caption);
-  }, [graph, selectedNodeId, setGraph, saveHistoryState]);
+  }, [graph, selectedNodeId, setGraph, saveHistoryState, myTab?.fileId]);
   
-  const handleDeleteImage = useCallback((imageId: string) => {
+  const handleDeleteImage = useCallback(async (imageId: string) => {
     if (!graph || !selectedNodeId) return;
     
-    imageOperationsService.deleteImage(graph, imageId, {
+    await imageOperationsService.deleteImage(graph, imageId, {
       onGraphUpdate: setGraph,
       onHistorySave: saveHistoryState,
-      getNodeId: () => selectedNodeId
+      getNodeId: () => selectedNodeId,
+      getGraphFileId: () => myTab?.fileId
     });
-  }, [graph, selectedNodeId, setGraph, saveHistoryState]);
+  }, [graph, selectedNodeId, setGraph, saveHistoryState, myTab?.fileId]);
   
-  const handleEditCaption = useCallback((imageId: string, newCaption: string) => {
+  const handleEditCaption = useCallback(async (imageId: string, newCaption: string) => {
     if (!graph || !selectedNodeId) return;
     
-    imageOperationsService.editCaption(graph, imageId, newCaption, {
+    await imageOperationsService.editCaption(graph, imageId, newCaption, {
       onGraphUpdate: setGraph,
       onHistorySave: saveHistoryState,
-      getNodeId: () => selectedNodeId
+      getNodeId: () => selectedNodeId,
+      getGraphFileId: () => myTab?.fileId
     });
-  }, [graph, selectedNodeId, setGraph, saveHistoryState]);
+  }, [graph, selectedNodeId, setGraph, saveHistoryState, myTab?.fileId]);
 
   const updateEdge = useCallback(async (field: string, value: any) => {
     console.log('[PropertiesPanel] updateEdge called:', { field, value, selectedEdgeId });

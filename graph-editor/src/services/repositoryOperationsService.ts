@@ -493,6 +493,7 @@ class RepositoryOperationsService {
       // Skip non-committable file types
       if (file.type === 'credentials') continue;
       if (file.type === 'settings') continue;
+      if (file.type === 'image') continue; // Images handled separately via commitPendingImages()
       if (file.source?.repository === 'temporary') continue;
       
       // Skip files without data
@@ -544,62 +545,8 @@ class RepositoryOperationsService {
     return committableFiles;
   }
 
-  /**
-   * Check remote status before committing
-   * Shows dialog if remote is ahead
-   * Returns true if should proceed, false if cancelled
-   */
-  async checkRemoteBeforeCommit(
-    repository: string,
-    branch: string,
-    showConfirmDialog: (options: any) => Promise<boolean>,
-    showLoadingToast: (message: string) => any,
-    dismissToast: (id: any) => void
-  ): Promise<boolean> {
-    try {
-      const credsResult = await credentialsManager.loadCredentials();
-      
-      if (!credsResult.success || !credsResult.credentials) {
-        return true; // No credentials, skip check
-      }
-
-      const gitCreds = credsResult.credentials.git.find(cred => cred.name === repository);
-      
-      if (!gitCreds) {
-        return true; // No credentials for this repo, skip check
-      }
-
-      const toastId = showLoadingToast('Checking remote status...');
-      const remoteStatus = await workspaceService.checkRemoteAhead(repository, branch, gitCreds);
-      dismissToast(toastId);
-      
-      if (remoteStatus.isAhead) {
-        const fileList = remoteStatus.changedPaths.length > 0 
-          ? '\n\nFiles:\n' + remoteStatus.changedPaths.map(path => `  • ${path}`).join('\n') + '\n'
-          : '';
-        const confirmed = await showConfirmDialog({
-          title: 'Remote Has Changes',
-          message: 
-            `The remote repository has changes you don't have:\n\n` +
-            `• ${remoteStatus.filesChanged} file(s) changed\n` +
-            `• ${remoteStatus.filesAdded} file(s) added\n` +
-            `• ${remoteStatus.filesDeleted} file(s) deleted` +
-            fileList +
-            `\nIt's recommended to pull first to avoid conflicts.`,
-          confirmLabel: 'Commit Anyway',
-          cancelLabel: 'Cancel',
-          confirmVariant: 'danger'
-        });
-        
-        return confirmed;
-      }
-      
-      return true; // Remote not ahead, proceed
-    } catch (error) {
-      console.error('Failed to check remote status:', error);
-      return true; // On error, allow commit to proceed
-    }
-  }
+  // NOTE: checkRemoteBeforeCommit() removed - remote-ahead check now happens 
+  // inside commitFiles() using commit SHA comparison, which is more accurate
 
   /**
    * Commit and push files with pre-commit validation
@@ -618,7 +565,8 @@ class RepositoryOperationsService {
     message: string,
     branch: string,
     repository: string,
-    showConfirmDialog: (options: any) => Promise<boolean>
+    showTripleChoice: (options: any) => Promise<'primary' | 'secondary' | 'cancel'>,
+    onPullRequested?: () => Promise<void>
   ): Promise<void> {
     // Start hierarchical log for commit operation
     const logOpId = sessionLogService.startOperation(
@@ -657,30 +605,44 @@ class RepositoryOperationsService {
     };
     gitService.setCredentials(credentialsWithRepo);
 
-    // Check for files changed on remote and warn user
-    console.log(`[repositoryOperationsService] Starting remote changes check for ${files.length} files...`);
-    const remoteCheckStart = performance.now();
-    const changedFiles = await gitService.checkFilesChangedOnRemote(files, branch, gitCreds.basePath);
-    console.log(`[repositoryOperationsService] Remote changes check completed in ${(performance.now() - remoteCheckStart).toFixed(0)}ms`);
-    if (changedFiles.length > 0) {
-      sessionLogService.addChild(logOpId, 'warning', 'REMOTE_CHANGES', 
-        `${changedFiles.length} file(s) changed on remote`,
-        changedFiles.join(', '),
-        { filesAffected: changedFiles });
-      const fileList = changedFiles.map(path => `  • ${path}`).join('\n');
-      const confirmed = await showConfirmDialog({
-        title: 'Files Changed on Remote',
-        message: 
-          `The following file(s) have been changed on the remote:\n\n${fileList}\n\n` +
-          `Committing will overwrite the remote changes. Continue anyway?`,
-        confirmLabel: 'Commit Anyway',
-        cancelLabel: 'Cancel',
-        confirmVariant: 'danger'
-      });
-      
-      if (!confirmed) {
-        sessionLogService.endOperation(logOpId, 'info', 'Commit cancelled by user');
-        throw new Error('Commit cancelled by user');
+    // Check if remote is ahead of local (someone else pushed)
+    const workspaceId = `${repository}-${branch}`;
+    const workspace = await db.workspaces.get(workspaceId);
+    if (workspace?.commitSHA) {
+      const remoteHeadSha = await gitService.getRemoteHeadSha(branch);
+      if (remoteHeadSha && remoteHeadSha !== workspace.commitSHA) {
+        console.log(`⚠️ Remote is ahead: local=${workspace.commitSHA.substring(0, 8)}, remote=${remoteHeadSha.substring(0, 8)}`);
+        sessionLogService.addChild(logOpId, 'warning', 'REMOTE_AHEAD', 
+          'Remote has new commits',
+          `Local: ${workspace.commitSHA.substring(0, 8)}, Remote: ${remoteHeadSha.substring(0, 8)}`,
+          { localSha: workspace.commitSHA, remoteSha: remoteHeadSha });
+        
+        const choice = await showTripleChoice({
+          title: 'Remote Is Ahead',
+          message: 
+            `The remote branch has commits that you don't have locally.\n\n` +
+            `Pull changes first to avoid conflicts?`,
+          primaryLabel: 'Pull Now',
+          secondaryLabel: 'Proceed Anyway',
+          cancelLabel: 'Cancel',
+          primaryVariant: 'primary',
+          secondaryVariant: 'danger'
+        });
+        
+        if (choice === 'cancel') {
+          sessionLogService.endOperation(logOpId, 'info', 'Commit cancelled by user');
+          throw new Error('Commit cancelled');
+        }
+        
+        if (choice === 'primary' && onPullRequested) {
+          sessionLogService.endOperation(logOpId, 'info', 'Commit paused - pulling changes first');
+          await onPullRequested();
+          throw new Error('Pull completed - please commit again');
+        }
+        
+        // choice === 'secondary' - proceed with commit
+        sessionLogService.addChild(logOpId, 'warning', 'FORCE_COMMIT', 
+          'User chose to proceed despite remote being ahead');
       }
     }
 
@@ -697,30 +659,28 @@ class RepositoryOperationsService {
       sha?: string;
       delete?: boolean;
     }> = files.map(file => {
-      // Get the file from registry to update its metadata
+      // Get the file from registry
       const fileState = fileRegistry.getFile(file.fileId);
       let content = file.content;
       
-      // Update timestamp in the file content itself (standardized metadata structure)
+      // Only update metadata timestamps for graphs (they have a standard metadata structure)
+      // Don't mutate fileState.data directly - create a copy for serialization
       if (fileState?.data) {
-        // All file types now use metadata.updated_at
-        if (!fileState.data.metadata) {
-          fileState.data.metadata = {
-            created_at: nowISO,
-            version: '1.0.0'
+        if (fileState.type === 'graph' && fileState.data.metadata) {
+          // Create a shallow copy with updated timestamp for commit
+          const dataForCommit = {
+            ...fileState.data,
+            metadata: {
+              ...fileState.data.metadata,
+              updated_at: nowISO,
+              ...(gitCreds?.userName && !fileState.data.metadata.author ? { author: gitCreds.userName } : {})
+            }
           };
+          content = JSON.stringify(dataForCommit, null, 2);
+        } else {
+          // For non-graph files (YAML), just serialize as-is without modifying
+          content = YAML.stringify(fileState.data);
         }
-        fileState.data.metadata.updated_at = nowISO;
-        
-        // Set author from credentials userName if available
-        if (gitCreds?.userName && !fileState.data.metadata.author) {
-          fileState.data.metadata.author = gitCreds.userName;
-        }
-        
-        // Re-serialize with updated timestamp
-        content = fileState.type === 'graph' 
-          ? JSON.stringify(fileState.data, null, 2)
-          : YAML.stringify(fileState.data);
       }
       
       const basePath = gitCreds.basePath || '';
@@ -751,10 +711,10 @@ class RepositoryOperationsService {
     })));
     
     console.log('[RepositoryOperationsService] Committing:', {
-      modifiedFiles: files.length,
-      imageOps: imageFiles.length,
-      fileDeletions: fileDeletions.length,
-      total: filesToCommit.length
+      modifiedFiles: files?.length ?? 0,
+      imageOps: imageFiles?.length ?? 0,
+      fileDeletions: fileDeletions?.length ?? 0,
+      total: filesToCommit?.length ?? 0
     });
 
       // Log files being committed
@@ -774,22 +734,36 @@ class RepositoryOperationsService {
     }
 
     // Mark files as saved in FileRegistry
-    for (const file of files) {
-      await fileRegistry.markSaved(file.fileId);
+    for (const file of files || []) {
+      try {
+        await fileRegistry.markSaved(file.fileId);
+      } catch (e) {
+        console.error(`Failed to mark file ${file.fileId} as saved:`, e);
       }
+    }
     
     // Invalidate cache since files were committed
     this.invalidateCommittableFilesCache();
 
+    // Update workspace's commitSHA to reflect the new remote HEAD
+    // This prevents false "remote is ahead" warnings on subsequent commits
+    const newRemoteHeadSha = await gitService.getRemoteHeadSha(branch);
+    if (newRemoteHeadSha && workspace) {
+      workspace.commitSHA = newRemoteHeadSha;
+      workspace.lastSynced = Date.now();
+      await db.workspaces.put(workspace);
+      console.log(`✅ Updated workspace commitSHA to ${newRemoteHeadSha.substring(0, 8)}`);
+    }
+
       sessionLogService.endOperation(logOpId, 'success', 
-        `Committed ${filesToCommit.length} file(s) to ${repository}/${branch}`,
+        `Committed ${filesToCommit?.length ?? 0} file(s) to ${repository}/${branch}`,
         { 
           repository, 
           branch,
-          filesAffected: filesToCommit.map(f => f.path),
-          added: files.length,
-          updated: imageFiles.length,
-          errors: fileDeletions.length
+          filesAffected: filesToCommit?.map(f => f.path) ?? [],
+          added: files?.length ?? 0,
+          updated: imageFiles?.length ?? 0,
+          errors: fileDeletions?.length ?? 0
         });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

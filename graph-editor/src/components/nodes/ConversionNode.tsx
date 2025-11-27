@@ -110,13 +110,15 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   // Image upload handler - using shared service
   const handleImageUpload = useCallback(async (imageData: Uint8Array, extension: string, source: string, caption?: string) => {
     if (!graph) return;
+    const activeTab = tabs.find(tab => tab.id === activeTabId);
     
     await imageOperationsService.uploadImage(graph, imageData, extension, source, {
       onGraphUpdate: setGraph,
       onHistorySave: saveHistoryState,
-      getNodeId: () => data.uuid || data.id
+      getNodeId: () => data.uuid || data.id,
+      getGraphFileId: () => activeTab?.fileId
     }, caption);
-  }, [graph, data.uuid, data.id, setGraph, saveHistoryState]);
+  }, [graph, data.uuid, data.id, setGraph, saveHistoryState, tabs, activeTabId]);
 
   // Calculate probability mass for outgoing edges
   // PMF validation ONLY applies to 'current' layer (live editable graph), not to snapshots
@@ -1193,10 +1195,11 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           setShowImageLoupe(false);
           setShowUploadModal(true);
         }}
-        onDelete={(imageId) => {
+        onDelete={async (imageId) => {
           if (!graph) return;
+          const activeTab = tabs.find(tab => tab.id === activeTabId);
           
-          imageOperationsService.deleteImage(graph, imageId, {
+          await imageOperationsService.deleteImage(graph, imageId, {
             onGraphUpdate: (updatedGraph) => {
               setGraph(updatedGraph);
               // Close loupe if no images left
@@ -1206,16 +1209,19 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               }
             },
             onHistorySave: saveHistoryState,
-            getNodeId: () => data.uuid || data.id
+            getNodeId: () => data.uuid || data.id,
+            getGraphFileId: () => activeTab?.fileId
           });
         }}
-        onCaptionEdit={(imageId, newCaption) => {
+        onCaptionEdit={async (imageId, newCaption) => {
           if (!graph) return;
+          const activeTab = tabs.find(tab => tab.id === activeTabId);
           
-          imageOperationsService.editCaption(graph, imageId, newCaption, {
+          await imageOperationsService.editCaption(graph, imageId, newCaption, {
             onGraphUpdate: setGraph,
             onHistorySave: saveHistoryState,
-            getNodeId: () => data.uuid || data.id
+            getNodeId: () => data.uuid || data.id,
+            getGraphFileId: () => activeTab?.fileId
           });
         }}
       />

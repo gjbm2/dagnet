@@ -13,6 +13,7 @@ export interface ImageOperationCallbacks {
   onGraphUpdate: (updatedGraph: any) => void;
   onHistorySave: (action: string, nodeId: string) => void;
   getNodeId: () => string | undefined; // Returns node UUID or ID
+  getGraphFileId: () => string | undefined; // Returns graph file ID for dirty tracking
 }
 
 class ImageOperationsService {
@@ -61,7 +62,7 @@ class ImageOperationsService {
       const imageFileState: any = {
         fileId: baseFileId,
         path: `nodes/images/${imageId}.${extension}`,
-        type: 'image' as any,
+        type: 'image',
         data: {
           image_id: imageId,
           file_extension: extension,
@@ -107,6 +108,12 @@ class ImageOperationsService {
         // NOTE: History not saved for image operations to prevent desync with IDB/pending ops
         // TODO: Implement proper undo/redo support (see TODO.md § Image Undo/Redo Broken)
 
+        // Mark graph file as dirty in IndexedDB
+        const graphFileId = callbacks.getGraphFileId?.();
+        if (graphFileId) {
+          await fileRegistry.updateFile(graphFileId, next);
+        }
+
         // Register image for Git commit
         fileRegistry.registerImageUpload(imageId, `nodes/images/${imageId}.${extension}`, imageData);
 
@@ -121,11 +128,11 @@ class ImageOperationsService {
   /**
    * Delete an image from a node
    */
-  deleteImage(
+  async deleteImage(
     graph: any,
     imageId: string,
     callbacks: ImageOperationCallbacks
-  ): void {
+  ): Promise<void> {
     const nodeId = callbacks.getNodeId();
     if (!graph || !nodeId) return;
 
@@ -150,8 +157,14 @@ class ImageOperationsService {
       callbacks.onGraphUpdate(next);
       // NOTE: History not saved for image operations to prevent desync with IDB/pending ops
 
-      // Register image for deletion from Git
-      fileRegistry.registerImageDelete(imageId, `nodes/images/${imageId}.${imageToDelete.file_extension}`);
+      // Mark graph file as dirty in IndexedDB
+      const graphFileId = callbacks.getGraphFileId?.();
+      if (graphFileId) {
+        await fileRegistry.updateFile(graphFileId, next);
+      }
+
+      // Register image for deletion from Git and remove from IDB
+      await fileRegistry.registerImageDelete(imageId, `nodes/images/${imageId}.${imageToDelete.file_extension}`);
 
       toast.success('Image deleted');
     }
@@ -160,12 +173,12 @@ class ImageOperationsService {
   /**
    * Edit an image caption
    */
-  editCaption(
+  async editCaption(
     graph: any,
     imageId: string,
     newCaption: string,
     callbacks: ImageOperationCallbacks
-  ): void {
+  ): Promise<void> {
     const nodeId = callbacks.getNodeId();
     if (!graph || !nodeId) return;
 
@@ -191,6 +204,12 @@ class ImageOperationsService {
 
         callbacks.onGraphUpdate(next);
         // NOTE: History not saved for image operations to prevent desync with IDB/pending ops
+
+        // Mark graph file as dirty in IndexedDB
+        const graphFileId = callbacks.getGraphFileId?.();
+        if (graphFileId) {
+          await fileRegistry.updateFile(graphFileId, next);
+        }
 
         toast.success('Caption updated');
       }
