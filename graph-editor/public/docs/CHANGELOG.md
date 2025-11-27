@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.98.0b
+**Released:** November 27, 2025
+
+Super funnels now run dual queries automatically to aggregate for incipient N.
+
+---
+
 ## Version 0.97.1b
 **Released:** November 27, 2025
 
