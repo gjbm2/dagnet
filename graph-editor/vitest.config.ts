@@ -2,12 +2,15 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
-// Plugin to intercept whatwg-url imports and replace with mock
+// Plugin to intercept whatwg-url and webidl-conversions imports and replace with mocks
 const whatwgUrlPlugin = () => ({
   name: 'whatwg-url-mock',
   resolveId(id: string) {
     if (id === 'whatwg-url' || id.includes('whatwg-url')) {
       return path.resolve(__dirname, './src/test/mocks/whatwg-url.ts');
+    }
+    if (id === 'webidl-conversions' || id.includes('webidl-conversions')) {
+      return path.resolve(__dirname, './src/test/mocks/webidl-conversions.ts');
     }
     return null;
   },
@@ -75,7 +78,9 @@ export default defineConfig({
     poolOptions: {
       threads: {
         singleThread: false,
-        isolate: true  // NEW: Better isolation for new tests
+        isolate: true,  // NEW: Better isolation for new tests
+        minThreads: 1,
+        maxThreads: 4
       },
     },
     
@@ -89,8 +94,14 @@ export default defineConfig({
     testTimeout: 10000,
     hookTimeout: 10000,
     
+    // Force exit after tests complete (prevents hanging in CI/non-interactive mode)
+    forceRerunTriggers: [],
+    
     // NEW: Better reporters for new test suite
-    reporters: ['verbose'],
+    reporters: ['dot'],
+    
+    // Ensure tests exit properly (not in watch mode)
+    watch: false,
   },
   
   resolve: {
@@ -99,6 +110,7 @@ export default defineConfig({
       '@tests': path.resolve(__dirname, './tests'),  // NEW: Alias for new test suite
       // Replace whatwg-url with Node.js built-in URL to avoid webidl-conversions errors
       'whatwg-url': path.resolve(__dirname, './src/test/mocks/whatwg-url.ts'),
+      'webidl-conversions': path.resolve(__dirname, './src/test/mocks/webidl-conversions.ts'),
     },
   },
   

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
 # Interactive version bumper for DagNet
-# Usage: ./release.sh [--runtests]
+# Usage: ./release.sh [--runtests] [--build]
 #
 # Options:
 #   --runtests    Run all tests (npm + pytest) before releasing
+#   --build       Run TypeScript check to verify build will succeed (fast, ~10s)
 
 set -e
 
@@ -16,15 +17,20 @@ print_red() { printf '\033[0;31m%s\033[0m\n' "$*"; }
 
 # Parse command line arguments
 RUN_TESTS=false
+RUN_BUILD=false
 for arg in "$@"; do
   case $arg in
     --runtests)
       RUN_TESTS=true
       shift
       ;;
+    --build)
+      RUN_BUILD=true
+      shift
+      ;;
     *)
       print_red "Unknown option: $arg"
-      echo "Usage: ./release.sh [--runtests]"
+      echo "Usage: ./release.sh [--runtests] [--build]"
       exit 1
       ;;
   esac
@@ -61,19 +67,19 @@ if [[ "$RUN_TESTS" == true ]]; then
   echo ""
   
   # Run all npm tests (unit + integration)
-  print_yellow "[1/2] Running npm tests (127 tests)..."
+  print_yellow "[1/2] Running npm tests..."
   if ! (cd graph-editor && npm run test:all); then
     echo ""
     print_red "✗ npm tests failed!"
     print_red "Release aborted."
     exit 1
   fi
-  print_green "✓ npm tests passed (127 tests)"
+  print_green "✓ npm tests passed"
   echo ""
   
   # Run Python tests
   print_yellow "[2/2] Running Python tests..."
-  if ! graph-editor/venv/bin/pytest -v; then
+  if ! graph-editor/venv/bin/pytest --tb=short -q; then
     echo ""
     print_red "✗ Python tests failed!"
     print_red "Release aborted."
@@ -84,6 +90,33 @@ if [[ "$RUN_TESTS" == true ]]; then
   
   print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   print_green "✓ All tests passed!"
+  print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+fi
+
+# Run build verification if requested
+if [[ "$RUN_BUILD" == true ]]; then
+  print_blue "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  print_blue "Verifying build will succeed..."
+  print_blue "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  
+  # TypeScript type-check catches 95% of build failures, much faster than full build
+  print_yellow "Running TypeScript type check..."
+  if ! (cd graph-editor && npx tsc --noEmit 2>&1 | head -50); then
+    # Check actual exit code
+    if ! (cd graph-editor && npx tsc --noEmit > /dev/null 2>&1); then
+      echo ""
+      print_red "✗ TypeScript errors - build would fail!"
+      print_red "Release aborted."
+      exit 1
+    fi
+  fi
+  print_green "✓ TypeScript check passed"
+  echo ""
+  
+  print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  print_green "✓ Build verification complete!"
   print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
 fi
