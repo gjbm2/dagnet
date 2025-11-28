@@ -6,7 +6,7 @@
  * then runs 'Get all from sources (versioned)' for each selected slice.
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { explodeDSL } from '../../lib/dslExplosion';
 import { dataOperationsService } from '../../services/dataOperationsService';
@@ -48,6 +48,10 @@ export function AllSlicesModal({
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ currentSlice: 0, totalSlices: 0, currentItem: 0, totalItems: 0 });
+  
+  // CRITICAL: Use ref to track latest graph state during batch operations
+  // Without this, rebalancing doesn't work because each iteration uses stale graph
+  const graphRef = useRef(graph);
   const [currentSliceName, setCurrentSliceName] = useState('');
 
   // Load slices when modal opens
@@ -78,6 +82,11 @@ export function AllSlicesModal({
     loadSlices();
   }, [isOpen, graph?.dataInterestsDSL]);
 
+  // Keep graphRef in sync with graph prop (for initial value and external changes)
+  useEffect(() => {
+    graphRef.current = graph;
+  }, [graph]);
+  
   // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {
@@ -129,6 +138,13 @@ export function AllSlicesModal({
 
     let totalSuccess = 0;
     let totalErrors = 0;
+    
+    // CRITICAL: Wrap setGraph to also update graphRef
+    // This ensures rebalancing works correctly across iterations
+    const setGraphWithRef = (newGraph: GraphData | null) => {
+      graphRef.current = newGraph;
+      setGraph(newGraph);
+    };
 
     try {
       for (let sliceIdx = 0; sliceIdx < selectedSlices.length; sliceIdx++) {
@@ -142,8 +158,12 @@ export function AllSlicesModal({
         );
 
         try {
+          // CRITICAL: Use graphRef.current for latest state (not stale closure)
+          const currentGraph = graphRef.current;
+          if (!currentGraph) continue;
+          
           // Collect batch items for this slice (similar to BatchOperationsModal)
-          const batchItems = collectBatchItems(graph);
+          const batchItems = collectBatchItems(currentGraph);
           setProgress(prev => ({ ...prev, currentItem: 0, totalItems: batchItems.length }));
 
           let sliceSuccess = 0;
@@ -156,13 +176,14 @@ export function AllSlicesModal({
 
             try {
               // Run get-from-sources (versioned) with the specific slice DSL
+              // CRITICAL: Pass graphRef.current (latest) and setGraphWithRef (updates ref)
               if (item.type === 'parameter') {
                 await dataOperationsService.getFromSource({
                   objectType: 'parameter',
                   objectId: item.objectId,
                   targetId: item.targetId,
-                  graph,
-                  setGraph,
+                  graph: graphRef.current,
+                  setGraph: setGraphWithRef,
                   paramSlot: item.paramSlot,
                   bustCache: false, // Respect incremental fetching
                   currentDSL: slice.dsl, // Use the slice's DSL for window/context
@@ -174,8 +195,8 @@ export function AllSlicesModal({
                   objectType: 'case',
                   objectId: item.objectId,
                   targetId: item.targetId,
-                  graph,
-                  setGraph,
+                  graph: graphRef.current,
+                  setGraph: setGraphWithRef,
                   currentDSL: slice.dsl, // Use the slice's DSL for window/context
                 });
                 sliceSuccess++;
