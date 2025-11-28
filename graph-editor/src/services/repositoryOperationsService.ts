@@ -141,6 +141,119 @@ class RepositoryOperationsService {
   }
 
   /**
+   * Pull latest version of a single file from remote
+   * - Fetches file content from Git
+   * - Updates local file in IDB and FileRegistry
+   * - Marks file as not dirty (synced with remote)
+   */
+  async pullFile(fileId: string, repository: string, branch: string): Promise<{ success: boolean; message?: string }> {
+    console.log(`🔄 RepositoryOperationsService: Pulling file ${fileId} from ${repository}/${branch}`);
+    sessionLogService.info('git', 'GIT_PULL_FILE', `Pulling file ${fileId}`, undefined, { fileId, repository, branch });
+
+    // Get the file from registry to find its path
+    const file = fileRegistry.getFile(fileId);
+    if (!file) {
+      const error = `File ${fileId} not found in registry`;
+      sessionLogService.error('git', 'GIT_PULL_FILE_ERROR', error);
+      throw new Error(error);
+    }
+
+    if (!file.source?.path) {
+      const error = `File ${fileId} has no source path - cannot pull`;
+      sessionLogService.error('git', 'GIT_PULL_FILE_ERROR', error);
+      throw new Error(error);
+    }
+
+    // Get git credentials
+    const credsResult = await credentialsManager.loadCredentials();
+    if (!credsResult.success) {
+      sessionLogService.error('git', 'GIT_PULL_FILE_ERROR', 'Pull failed: No credentials available');
+      throw new Error('No credentials available');
+    }
+
+    const gitCreds = credsResult.credentials?.git?.find(
+      (repo: any) => repo.name === repository
+    );
+
+    if (!gitCreds) {
+      sessionLogService.error('git', 'GIT_PULL_FILE_ERROR', `Repository "${repository}" not found in credentials`);
+      throw new Error(`Repository "${repository}" not found in credentials`);
+    }
+
+    try {
+      // Configure gitService with credentials
+      const fullCredentials = {
+        git: [gitCreds],
+        defaultGitRepo: repository
+      };
+      gitService.setCredentials(fullCredentials);
+
+      // Fetch file from remote
+      const result = await gitService.getFileContent(file.source.path, branch);
+      if (!result.success || !result.data) {
+        throw new Error(result.error || 'Failed to fetch file from remote');
+      }
+
+      // getFileContent returns { ...file, content: string } - extract the content
+      const fileData = result.data as { content: string; sha?: string };
+      const content = fileData.content;
+      
+      if (!content) {
+        throw new Error('File content is empty');
+      }
+      
+      // Parse the content based on file type
+      let parsedData: any;
+      
+      if (file.source.path.endsWith('.json')) {
+        parsedData = JSON.parse(content);
+      } else if (file.source.path.endsWith('.yaml') || file.source.path.endsWith('.yml')) {
+        const YAML = await import('yaml');
+        parsedData = YAML.parse(content);
+      } else {
+        parsedData = content;
+      }
+      
+      // Update SHA if available
+      if (fileData.sha) {
+        file.sha = fileData.sha;
+      }
+
+      // Update file in registry
+      file.data = parsedData;
+      file.originalData = structuredClone(parsedData);
+      file.isDirty = false;
+      file.isLocal = false;
+      file.lastModified = Date.now();
+
+      // Save to IDB
+      await db.files.put(file);
+
+      // Also update prefixed version if it exists
+      if (file.source?.repository && file.source?.branch) {
+        const prefixedId = `${file.source.repository}-${file.source.branch}-${fileId}`;
+        const prefixedFile = { ...file, fileId: prefixedId };
+        await db.files.put(prefixedFile);
+      }
+
+      // Notify listeners
+      (fileRegistry as any).notifyListeners(fileId, file);
+
+      // Fire event for UI updates
+      window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
+        detail: { fileId, isDirty: false } 
+      }));
+
+      sessionLogService.success('git', 'GIT_PULL_FILE', `Pulled ${fileId} from remote`);
+      return { success: true, message: `Updated ${file.name || fileId} from remote` };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sessionLogService.error('git', 'GIT_PULL_FILE_ERROR', `Pull file failed: ${message}`);
+      throw error;
+    }
+  }
+
+  /**
    * Clone/refresh workspace (force)
    * - Force delete and re-clone
    */

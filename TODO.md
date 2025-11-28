@@ -82,7 +82,7 @@
 
 ## Other
 
-- pre-commit modal is shit -- massively too long vertically. just make it X files changed; pull now?
+- Added n_query logic to accommodate complex non-discriminaable parent node situations -- check that appropriately generalisable
 
 ## Current query DSL
 

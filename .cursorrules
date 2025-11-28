@@ -5,10 +5,12 @@
 ### 1. NO LOGIC IN UI/MENU FILES
 **CRITICAL**: Menu files, context menus, and UI components are ACCESS POINTS ONLY.
 
-- ✅ **DO**: Call centralized service methods
+- ✅ **DO**: Call centralized service methods or hooks
+- ✅ **DO**: Create a hook if same operation appears in multiple menus
 - ❌ **DON'T**: Implement business logic inline
 - ❌ **DON'T**: Duplicate logic across multiple call sites
 - ❌ **DON'T**: Put git operations, file operations, validation, or data transformations in UI files
+- ❌ **DON'T**: Copy/paste handlers between NavigatorItemContextMenu, TabContextMenu, and FileMenu
 
 **Example - WRONG**:
 ```typescript
@@ -27,6 +29,19 @@ const handleCommit = async () => {
 const handleCommit = async () => {
   await repositoryOperationsService.commitFiles(files, message, branch, repo, showConfirm);
 }
+```
+
+**For operations appearing in multiple menus, create a hook**:
+```typescript
+// hooks/usePullFile.ts - Centralized hook
+export function usePullFile(fileId: string | undefined) {
+  const { canPull, pullFile } = /* ... service calls ... */;
+  return { canPull, pullFile };
+}
+
+// All menus use the same hook:
+// NavigatorItemContextMenu.tsx, TabContextMenu.tsx, FileMenu.tsx
+const { canPull, pullFile } = usePullFile(fileId);
 ```
 
 ### 2. FIND EXISTING CODE PATHS FIRST
@@ -136,22 +151,29 @@ await repositoryOperationsService.commitFiles(
 1. **Don't put git/file operations in menu files**
    - Move to `repositoryOperationsService` or `fileOperationsService`
 
-2. **Don't duplicate validation logic**
+2. **Don't duplicate logic across menus**
+   - If NavigatorItemContextMenu, TabContextMenu, and FileMenu need the same operation:
+     1. Create a service method in `repositoryOperationsService` or `fileOperationsService`
+     2. Create a hook in `hooks/` that wraps the service call with state/error handling
+     3. Use that hook in all three menus
+   - Examples: `usePullFile`, `useCommitHandler`, `useDeleteFile`
+
+3. **Don't duplicate validation logic**
    - Create a centralized validation function
 
-3. **Don't trust FileRegistry for dirty state in git operations**
+4. **Don't trust FileRegistry for dirty state in git operations**
    - Use `db.getDirtyFiles()` which queries IndexedDB
 
-4. **Don't forget workspace prefixes for IndexedDB**
+5. **Don't forget workspace prefixes for IndexedDB**
    - Files in IDB: `repo-branch-fileId`
    - Files in FileRegistry: `fileId` (unprefixed)
 
-5. **Don't skip updating tests when changing functionality**
+6. **Don't skip updating tests when changing functionality**
    - Update existing tests
    - Add new tests for bug fixes
    - Run full test suite
 
-6. **Don't create helper scripts for testing**
+7. **Don't create helper scripts for testing**
    - Use proper Vitest integration tests
    - Mock external APIs (GitHub)
    - Use real internal components (IndexedDB, FileRegistry)

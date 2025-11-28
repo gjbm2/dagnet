@@ -169,7 +169,7 @@ export function NavigatorContent() {
           name: item.name.replace(/\.(yaml|yml|json)$/, ''),
           type: 'graph',
           hasFile: true,
-          isLocal: item.isLocal || false,
+          isLocal: file?.isLocal ?? item.isLocal ?? false, // Prefer FileRegistry (updates on commit)
           inIndex: false, // Graphs don't have indexes
           isDirty: file?.isDirty || false,
           isOpen: itemTabs.length > 0,
@@ -194,7 +194,7 @@ export function NavigatorContent() {
             name: item.name || item.id,
             type: 'node',
             hasFile: true,
-            isLocal: item.isLocal || false,
+            isLocal: file?.isLocal ?? item.isLocal ?? false, // Prefer FileRegistry (updates on commit)
             inIndex: false, // Not in index (orphan)
             isDirty: file?.isDirty || false,
             isOpen: itemTabs.length > 0,

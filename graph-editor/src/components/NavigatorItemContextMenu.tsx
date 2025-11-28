@@ -14,6 +14,8 @@ import { gitService } from '../services/gitService';
 import { fileRegistry } from '../contexts/TabContext';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
+import { usePullFile } from '../hooks/usePullFile';
+import { usePullAll } from '../hooks/usePullAll';
 
 interface NavigatorItemContextMenuProps {
   item: RepositoryItem;
@@ -34,6 +36,10 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   // Check if this item has any open tabs
   const fileId = `${item.type}-${item.id}`;
   const openTabs = tabs.filter(t => t.fileId === fileId);
+  
+  // Pull hooks - all logic including conflict modal is in the hook
+  const { canPull, pullFile } = usePullFile(fileId);
+  const { pullAll, conflictModal: pullAllConflictModal } = usePullAll();
 
   // Commit modal state
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
@@ -170,6 +176,26 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     });
     items.push({ label: '', onClick: () => {}, divider: true });
     
+    // Pull Latest - fetch latest version from remote (uses usePullFile hook)
+    if (canPull) {
+      items.push({
+        label: 'Pull Latest',
+        onClick: async () => {
+          await pullFile();
+          onClose();
+        }
+      });
+    }
+    
+    // Pull All Latest - fetch all latest from remote
+    items.push({
+      label: 'Pull All Latest',
+      onClick: async () => {
+        await pullAll();
+        onClose();
+      }
+    });
+    
     // Revert - always show (same as tab context menu "Revert")
     items.push({
       label: 'Revert',
@@ -290,6 +316,9 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
         fileType={item.type as ObjectType}
         defaultName={`${originalName}-copy`}
       />
+      
+      {/* Pull all conflict modal - managed by usePullAll hook */}
+      {pullAllConflictModal}
     </>
   );
 }

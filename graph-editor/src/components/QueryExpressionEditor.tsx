@@ -441,8 +441,8 @@ export function QueryExpressionEditor({
           };
         }
         
-        // After .exclude( or .visited( → suggest node IDs (graph + registry)
-        if (/\.(exclude|visited)\([^)]*$/.test(textUntilPosition)) {
+        // After .exclude( or .visited( or .visitedAny( → suggest node IDs (graph + registry)
+        if (/\.(exclude|visited|visitedAny)\([^)]*$/.test(textUntilPosition)) {
           return {
             suggestions: allNodes.map((n: any) => ({
               label: n.label,
@@ -489,8 +489,8 @@ export function QueryExpressionEditor({
           }
         }
         
-        // After context( → suggest context keys (async)
-        if (/context\([^:)]*$/.test(textUntilPosition)) {
+        // After context( or contextAny( → suggest context keys (async)
+        if (/(context|contextAny)\([^:)]*$/.test(textUntilPosition)) {
           // Return a Promise - Monaco supports async completion
           return contextRegistry.getAllContextKeys().then(keys => {
             const suggestions = keys.map(key => ({
@@ -508,14 +508,14 @@ export function QueryExpressionEditor({
           });
         }
         
-        // After context(key: → suggest values for that key (async)
-        // Match the LAST context( in the string (not the first)
-        if (/context\(([^:)]+):([^)]*)$/.test(textUntilPosition)) {
-          // Use a more specific regex that captures the LAST context(key:
-          const matches = Array.from(textUntilPosition.matchAll(/context\(([^:)]+):/g));
+        // After context(key: or contextAny(key: → suggest values for that key (async)
+        // Match the LAST context( or contextAny( in the string (not the first)
+        if (/(context|contextAny)\(([^:)]+):([^)]*)$/.test(textUntilPosition)) {
+          // Use a more specific regex that captures the LAST context(key: or contextAny(key:
+          const matches = Array.from(textUntilPosition.matchAll(/(context|contextAny)\(([^:)]+):/g));
           const match = matches[matches.length - 1]; // Get last match
           if (match) {
-            const contextKey = match[1];
+            const contextKey = match[2]; // Group 2 is the key (group 1 is context|contextAny)
             
             // Return a Promise
             return contextRegistry.getValuesForContext(contextKey).then(values => {

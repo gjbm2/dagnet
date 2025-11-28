@@ -4,9 +4,10 @@ import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useCommitHandler } from '../../hooks/useCommitHandler';
+import { usePullAll } from '../../hooks/usePullAll';
 import { SwitchRepositoryModal } from '../modals/SwitchRepositoryModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
-import { MergeConflictModal, ConflictFile } from '../modals/MergeConflictModal';
+// MergeConflictModal is handled by usePullAll hook
 import { CommitModal } from '../CommitModal';
 import { repositoryOperationsService } from '../../services/repositoryOperationsService';
 import { workspaceService } from '../../services/workspaceService';
@@ -37,9 +38,10 @@ export function RepositoryMenu() {
   
   const [isSwitchRepoModalOpen, setIsSwitchRepoModalOpen] = useState(false);
   const [isSwitchBranchModalOpen, setIsSwitchBranchModalOpen] = useState(false);
-  const [isMergeConflictModalOpen, setIsMergeConflictModalOpen] = useState(false);
-  const [mergeConflicts, setMergeConflicts] = useState<ConflictFile[]>([]);
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
+  
+  // Pull all hook - manages everything including conflict modal
+  const { isPulling, pullAll, conflictModal: pullAllConflictModal } = usePullAll();
 
   const dirtyTabs = operations.getDirtyTabs();
   const [dirtyFiles, setDirtyFiles] = React.useState<any[]>([]);
@@ -103,51 +105,6 @@ export function RepositoryMenu() {
     }
   };
 
-  const handlePullLatest = async () => {
-    try {
-      const toastId = toast.loading('Pulling latest changes...');
-      const result = await repositoryOperationsService.pullLatest(state.selectedRepo, state.selectedBranch);
-      toast.dismiss(toastId);
-      
-      if (result.conflicts && result.conflicts.length > 0) {
-        // Show conflict resolution modal
-        setMergeConflicts(result.conflicts);
-        setIsMergeConflictModalOpen(true);
-        toast.error(`Pull completed with ${result.conflicts.length} conflict(s)`, { duration: 5000 });
-      } else {
-        toast.success('Successfully pulled latest changes');
-      }
-    } catch (error) {
-      console.error('Failed to pull latest:', error);
-      toast.error(`Pull failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  };
-
-  const handleResolveConflicts = async (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => {
-    const { conflictResolutionService } = await import('../../services/conflictResolutionService');
-    
-    // Convert ConflictFile[] to MergeConflict[]
-    const mergeConflictsConverted: MergeConflict[] = mergeConflicts.map(cf => ({
-      fileId: cf.fileId,
-      fileName: cf.fileName,
-      path: cf.path,
-      type: cf.type as ObjectType,
-      localContent: cf.localContent,
-      remoteContent: cf.remoteContent,
-      baseContent: cf.baseContent,
-      mergedContent: cf.mergedContent,
-      hasConflicts: cf.hasConflicts
-    }));
-    
-    const resolvedCount = await conflictResolutionService.applyResolutions(mergeConflictsConverted, resolutions);
-    
-    // Refresh navigator to show updated state
-    await navOps.refreshItems();
-    
-    if (resolvedCount > 0) {
-      toast.success(`Resolved ${resolvedCount} conflict${resolvedCount !== 1 ? 's' : ''}`);
-    }
-  };
 
   const handleCommitChanges = () => {
     // Open commit modal - remote-ahead check happens inside commitFiles
@@ -223,9 +180,10 @@ export function RepositoryMenu() {
 
             <Menubar.Item 
               className="menubar-item" 
-              onSelect={handlePullLatest}
+              onSelect={pullAll}
+              disabled={isPulling}
             >
-              Pull Latest
+              Pull All Latest
               <div className="menubar-right-slot">⌘P</div>
             </Menubar.Item>
 
@@ -278,12 +236,8 @@ export function RepositoryMenu() {
         isOpen={isSwitchBranchModalOpen}
         onClose={() => setIsSwitchBranchModalOpen(false)}
       />
-      <MergeConflictModal
-        isOpen={isMergeConflictModalOpen}
-        onClose={() => setIsMergeConflictModalOpen(false)}
-        conflicts={mergeConflicts}
-        onResolve={handleResolveConflicts}
-      />
+      {/* Pull all conflict modal - managed by usePullAll hook */}
+      {pullAllConflictModal}
       <CommitModal
         isOpen={isCommitModalOpen}
         onClose={() => setIsCommitModalOpen(false)}
