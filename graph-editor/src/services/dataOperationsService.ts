@@ -2810,7 +2810,8 @@ class DataOperationsService {
                 { ...baseQueryPayload, window: fetchWindow, mode: contextMode },
                 connectionName,
                 runner,
-                graph
+                graph,
+                eventDefinitions  // Pass event definitions for event_id → provider event name translation
               );
               
               // executeCompositeQuery returns { n, k, p_mean, evidence }
@@ -2905,12 +2906,14 @@ class DataOperationsService {
           try {
             // CRITICAL: Pass context mode to sub-queries (daily or aggregate)
             // Also pass graph for upstream/between categorization of visited nodes
+            // Also pass eventDefinitions for event_id → provider event name translation
             const combined: CombinedResult = await executeCompositeQuery(
               queryString,
               { ...queryPayload, window: fetchWindow, mode: contextMode },
               connectionName,
               runner,
-              graph  // Pass graph for isNodeUpstream checks
+              graph,  // Pass graph for isNodeUpstream checks
+              eventDefinitions  // Pass event definitions for event_id → provider event name translation
             );
             
             console.log(`[DataOperationsService] Composite query result for gap ${gapIndex + 1}:`, combined);

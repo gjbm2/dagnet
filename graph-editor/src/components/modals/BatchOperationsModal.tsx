@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
@@ -81,6 +81,10 @@ export function BatchOperationsModal({
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [results, setResults] = useState<OperationResult[]>([]);
   const [logContent, setLogContent] = useState<string>('');
+  
+  // CRITICAL: Use ref to track latest graph state during batch operations
+  // Without this, rebalancing doesn't work because each iteration uses stale graph
+  const graphRef = useRef(graph);
 
   // Update selected operation type when prop changes
   useEffect(() => {
@@ -88,6 +92,11 @@ export function BatchOperationsModal({
       setSelectedOperationType(initialOperationType);
     }
   }, [initialOperationType]);
+  
+  // Keep graphRef in sync with graph prop
+  useEffect(() => {
+    graphRef.current = graph;
+  }, [graph]);
 
   // Collect all items from graph (without filtering by operation type)
   const allItems = useMemo(() => {
@@ -333,6 +342,13 @@ export function BatchOperationsModal({
         { duration: Infinity }
       );
     }
+    
+    // CRITICAL: Wrap setGraph to also update graphRef
+    // This ensures rebalancing works correctly across iterations
+    const setGraphWithRef = (newGraph: GraphData | null) => {
+      graphRef.current = newGraph;
+      setGraph(newGraph);
+    };
 
     for (let i = 0; i < selectedBatchItems.length; i++) {
       const item = selectedBatchItems[i];
@@ -354,19 +370,20 @@ export function BatchOperationsModal({
         if (operationType === 'get-from-files') {
           if (item.type === 'parameter') {
             // Get edge before operation to compare
-            const edgeBefore = graph?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+            // CRITICAL: Use graphRef.current for latest state
+            const edgeBefore = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
             const paramBefore = edgeBefore?.[item.paramSlot || 'p'];
             
             await dataOperationsService.getParameterFromFile({
               paramId: item.objectId,
               edgeId: item.targetId,
-              graph,
-              setGraph,
+              graph: graphRef.current,
+              setGraph: setGraphWithRef,
               window: window || undefined
             });
             
             // Get edge after operation to extract details
-            const edgeAfter = graph?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+            const edgeAfter = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
             const paramAfter = edgeAfter?.[item.paramSlot || 'p'];
             
             if (paramAfter) {
@@ -390,37 +407,37 @@ export function BatchOperationsModal({
             await dataOperationsService.getCaseFromFile({
               caseId: item.objectId,
               nodeId: item.targetId,
-              graph,
-              setGraph
+              graph: graphRef.current,
+              setGraph: setGraphWithRef
             });
             success = true;
           } else if (item.type === 'node') {
             await dataOperationsService.getNodeFromFile({
               nodeId: item.objectId,
-              graph,
-              setGraph
+              graph: graphRef.current,
+              setGraph: setGraphWithRef
             });
             success = true;
           }
         } else if (operationType === 'get-from-sources') {
           if (item.type === 'parameter') {
             // Get edge before operation
-            const edgeBefore = graph?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+            const edgeBefore = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
             const paramBefore = edgeBefore?.[item.paramSlot || 'p'];
             
             await dataOperationsService.getFromSource({
               objectType: 'parameter',
               objectId: item.objectId,
               targetId: item.targetId,
-              graph,
-              setGraph,
+              graph: graphRef.current,
+              setGraph: setGraphWithRef,
               paramSlot: item.paramSlot,
               bustCache,
-              currentDSL: graph?.currentQueryDSL || ''
+              currentDSL: graphRef.current?.currentQueryDSL || ''
             });
             
             // Get edge after operation to extract details
-            const edgeAfter = graph?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+            const edgeAfter = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
             const paramAfter = edgeAfter?.[item.paramSlot || 'p'];
             
             if (paramAfter) {
@@ -445,32 +462,32 @@ export function BatchOperationsModal({
               objectType: 'case',
               objectId: item.objectId,
               targetId: item.targetId,
-              graph,
-              setGraph,
-              currentDSL: graph?.currentQueryDSL || ''
+              graph: graphRef.current,
+              setGraph: setGraphWithRef,
+              currentDSL: graphRef.current?.currentQueryDSL || ''
             });
             success = true;
           }
         } else if (operationType === 'get-from-sources-direct') {
           if (item.type === 'parameter') {
             // Get edge before operation
-            const edgeBefore = graph?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+            const edgeBefore = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
             const paramBefore = edgeBefore?.[item.paramSlot || 'p'];
             
             await dataOperationsService.getFromSourceDirect({
               objectType: 'parameter',
               objectId: '',
               targetId: item.targetId,
-              graph,
-              setGraph,
+              graph: graphRef.current,
+              setGraph: setGraphWithRef,
               paramSlot: item.paramSlot,
               dailyMode: false,
               bustCache,
-              currentDSL: graph?.currentQueryDSL || ''
+              currentDSL: graphRef.current?.currentQueryDSL || ''
             });
             
             // Get edge after operation to extract details
-            const edgeAfter = graph?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+            const edgeAfter = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
             const paramAfter = edgeAfter?.[item.paramSlot || 'p'];
             
             if (paramAfter) {
@@ -496,8 +513,8 @@ export function BatchOperationsModal({
             await dataOperationsService.putParameterToFile({
               paramId: item.objectId,
               edgeId: item.targetId,
-              graph,
-              setGraph
+              graph: graphRef.current,
+              setGraph: setGraphWithRef
             });
             details = ` → Written to parameter-${item.objectId}.yaml`;
             success = true;
@@ -505,16 +522,16 @@ export function BatchOperationsModal({
             await dataOperationsService.putCaseToFile({
               caseId: item.objectId,
               nodeId: item.targetId,
-              graph,
-              setGraph
+              graph: graphRef.current,
+              setGraph: setGraphWithRef
             });
             details = ` → Written to case-${item.objectId}.yaml`;
             success = true;
           } else if (item.type === 'node') {
             await dataOperationsService.putNodeToFile({
               nodeId: item.objectId,
-              graph,
-              setGraph
+              graph: graphRef.current,
+              setGraph: setGraphWithRef
             });
             details = ` → Written to node-${item.objectId}.yaml`;
             success = true;

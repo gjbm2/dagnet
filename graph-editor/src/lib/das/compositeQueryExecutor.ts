@@ -38,13 +38,15 @@ export interface CombinedResult {
  * @param connectionName - Connection name (e.g., 'amplitude')
  * @param runner - DAS runner instance
  * @param graph - Optional graph for upstream/between categorization of visited nodes
+ * @param eventDefinitions - Event definitions for translating event_ids to provider event names
  */
 export async function executeCompositeQuery(
   queryString: string,
   baseDsl: any,
   connectionName: string,
   runner: DASRunner,
-  graph?: any
+  graph?: any,
+  eventDefinitions?: Record<string, any>
 ): Promise<CombinedResult> {
   console.log(`[CompositeQuery] Parsing: ${queryString}`);
   
@@ -67,7 +69,7 @@ export async function executeCompositeQuery(
   
     // Execute all terms in parallel
     const results = await Promise.all(
-      terms.map(term => executeSubQuery(term, baseDsl, connectionName, runner, graph))
+      terms.map(term => executeSubQuery(term, baseDsl, connectionName, runner, graph, eventDefinitions))
     );
     
     console.log(`[CompositeQuery] All sub-queries completed, combining results...`);
@@ -97,7 +99,8 @@ async function executeSubQuery(
   baseDsl: any,
   connectionName: string,
   runner: DASRunner,
-  graph?: any
+  graph?: any,
+  eventDefinitions?: Record<string, any>
 ): Promise<SubQueryResult> {
   const { funnel, coefficient, id } = term;
   
@@ -162,9 +165,11 @@ async function executeSubQuery(
   
   try {
     // CRITICAL: Pass window and context mode so sub-queries can return daily time-series
+    // Also pass eventDefinitions so adapter can translate event_ids to provider event names
     const result = await runner.execute(connectionName, subQueryPayload, {
       window: baseDsl.window,
-      context: { mode: subQueryPayload.mode }  // Pass 'daily' or 'aggregate' mode to adapter
+      context: { mode: subQueryPayload.mode },  // Pass 'daily' or 'aggregate' mode to adapter
+      eventDefinitions  // Event definitions for event_id → provider event name translation
     });
     
     if (!result.success) {
