@@ -1727,6 +1727,14 @@ class DataOperationsService {
     sessionLogService.info('data-fetch', 'DATA_GET_FROM_SOURCE', `Get from Source (versioned): ${objectType} ${objectId}`,
       undefined, { fileId: `${objectType}-${objectId}`, fileType: objectType });
     
+    // CRITICAL: Track current graph state to avoid stale closure across sequential operations
+    // Without this, step 2 would use the original graph, not the one updated by step 1
+    let currentGraph = graph;
+    const trackingSetGraph = setGraph ? (newGraph: Graph | null) => {
+      currentGraph = newGraph;
+      setGraph(newGraph);
+    } : undefined;
+    
     try {
       if (objectType === 'parameter') {
         // Parameters: fetch daily data, append to values[], update graph
@@ -1736,8 +1744,8 @@ class DataOperationsService {
           objectType: 'parameter',
           objectId, // Parameter file ID
           targetId,
-          graph,
-          setGraph,
+          graph: currentGraph,
+          setGraph: trackingSetGraph,
           paramSlot,
           conditionalIndex,
           dailyMode: true, // Internal: write daily time-series into file when provider supports it
@@ -1747,12 +1755,13 @@ class DataOperationsService {
         });
         
         // 2. Update graph from file (standard file-to-graph flow)
-        if (targetId && graph && setGraph) {
+        // Use currentGraph which was updated by step 1's setGraph call
+        if (targetId && currentGraph && trackingSetGraph) {
           await this.getParameterFromFile({
             paramId: objectId,
             edgeId: targetId,
-            graph,
-            setGraph
+            graph: currentGraph,
+            setGraph: trackingSetGraph
           });
         }
         
@@ -1769,8 +1778,8 @@ class DataOperationsService {
           objectType,
           objectId,
           targetId,
-          graph,
-          setGraph,
+          graph: currentGraph,
+          setGraph: trackingSetGraph,
           dailyMode: false, // Cases do not use daily time-series; this is a single snapshot
           versionedCase: true, // Signal to append schedule to case file instead of direct graph apply
           bustCache: false,
@@ -1779,9 +1788,10 @@ class DataOperationsService {
         
         // 2. Update graph nodes from case file (with windowed aggregation)
         // Find all nodes with this case_id and update their variant weights from file
-        if (graph && setGraph && targetId) {
+        // Use currentGraph which was updated by step 1's setGraph call
+        if (currentGraph && trackingSetGraph && targetId) {
           // Find the first case node with this case_id to update from file
-          const caseNode = graph.nodes?.find((n: any) => 
+          const caseNode = currentGraph.nodes?.find((n: any) => 
             n.type === 'case' && n.case?.id === objectId
           );
           
@@ -1792,13 +1802,13 @@ class DataOperationsService {
             await this.getCaseFromFile({
               caseId: objectId,
               nodeId,
-              graph,
-              setGraph
+              graph: currentGraph,
+              setGraph: trackingSetGraph
             });
           } else {
             console.warn(`[DataOperationsService] No case node found with case_id="${objectId}"`);
           }
-        } else if (graph && setGraph && !targetId) {
+        } else if (currentGraph && trackingSetGraph && !targetId) {
           // No targetId provided - update all nodes with this case_id
           // This is the batch update path (less common)
           const caseFileId = `case-${objectId}`;
@@ -1827,7 +1837,7 @@ class DataOperationsService {
               }
               
               // Update all nodes with this case_id using UpdateManager
-              let updatedGraph = structuredClone(graph);
+              let updatedGraph = structuredClone(currentGraph);
               let updated = false;
               let totalOverriddenCount = 0; // Track total overridden across all nodes and rebalancing
               
@@ -1911,7 +1921,7 @@ class DataOperationsService {
                 if (updatedGraph.metadata) {
                   updatedGraph.metadata.updated_at = new Date().toISOString();
                 }
-                setGraph(updatedGraph);
+                trackingSetGraph(updatedGraph);
                 
                 // Show combined overridden count notification
                 if (totalOverriddenCount > 0) {
@@ -3967,6 +3977,106 @@ class DataOperationsService {
     // - Current value in file
     // - Last retrieved from source
     // - Sync/conflict indicators
+  }
+  
+  /**
+   * Batch get from source - fetches multiple items and updates graph correctly.
+   * 
+   * CRITICAL: This method handles the iteration internally to avoid stale closure
+   * problems. Each iteration uses the updated graph from the previous iteration.
+   * 
+   * UI components should call this instead of looping over getFromSource() themselves.
+   * 
+   * @param options.items - Array of items to fetch
+   * @param options.graph - Initial graph state
+   * @param options.setGraph - Function to update graph (called after each item)
+   * @param options.currentDSL - DSL for window/context
+   * @param options.targetSlice - Optional slice DSL
+   * @param options.bustCache - If true, ignore cached data
+   * @param options.onProgress - Optional callback for progress updates
+   * @returns Results summary { success: number, errors: number, items: ItemResult[] }
+   */
+  async batchGetFromSource(options: {
+    items: Array<{
+      type: 'parameter' | 'case';
+      objectId: string;
+      targetId: string;
+      paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+      name?: string;
+    }>;
+    graph: Graph | null;
+    setGraph: (graph: Graph | null) => void;
+    currentDSL?: string;
+    targetSlice?: string;
+    bustCache?: boolean;
+    onProgress?: (current: number, total: number, itemName?: string) => void;
+  }): Promise<{
+    success: number;
+    errors: number;
+    items: Array<{ name: string; success: boolean; error?: string }>;
+  }> {
+    const { items, graph: initialGraph, setGraph, currentDSL, targetSlice, bustCache = false, onProgress } = options;
+    
+    if (!initialGraph || items.length === 0) {
+      return { success: 0, errors: 0, items: [] };
+    }
+    
+    // CRITICAL: Track current graph state internally to avoid stale closure
+    let currentGraph: Graph | null = initialGraph;
+    const results: Array<{ name: string; success: boolean; error?: string }> = [];
+    let successCount = 0;
+    let errorCount = 0;
+    
+    // Create a setGraph wrapper that updates our internal state
+    const setGraphInternal = (newGraph: Graph | null) => {
+      currentGraph = newGraph;
+      setGraph(newGraph);
+    };
+    
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const itemName = item.name || `${item.type}-${item.objectId}`;
+      
+      // Report progress
+      if (onProgress) {
+        onProgress(i + 1, items.length, itemName);
+      }
+      
+      try {
+        if (item.type === 'parameter') {
+          await this.getFromSource({
+            objectType: 'parameter',
+            objectId: item.objectId,
+            targetId: item.targetId,
+            graph: currentGraph,  // Use current (not stale) graph
+            setGraph: setGraphInternal,  // Updates internal state
+            paramSlot: item.paramSlot,
+            bustCache,
+            currentDSL: currentDSL || '',
+            targetSlice
+          });
+        } else if (item.type === 'case') {
+          await this.getFromSource({
+            objectType: 'case',
+            objectId: item.objectId,
+            targetId: item.targetId,
+            graph: currentGraph,
+            setGraph: setGraphInternal,
+            currentDSL: currentDSL || ''
+          });
+        }
+        
+        results.push({ name: itemName, success: true });
+        successCount++;
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        results.push({ name: itemName, success: false, error: errorMessage });
+        errorCount++;
+        console.error(`[DataOps:BATCH] Failed to fetch ${itemName}:`, err);
+      }
+    }
+    
+    return { success: successCount, errors: errorCount, items: results };
   }
 }
 
