@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.98.1b
+**Released:** November 28, 2025
+
+Added n_query logic to accommodate complex non-discriminaable parent node situations
+
+---
+
 ## Version 0.98.0b
 **Released:** November 27, 2025
 
