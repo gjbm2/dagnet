@@ -2470,6 +2470,14 @@ class DataOperationsService {
           );
           
           baseQueryPayload = nQueryResult.queryPayload;
+          
+          // CRITICAL: Merge n_query's event definitions into main eventDefinitions
+          // Without this, the adapter won't have provider_event_names for n_query nodes
+          if (nQueryResult.eventDefinitions) {
+            Object.assign(eventDefinitions, nQueryResult.eventDefinitions);
+            console.log('[DataOps:DUAL_QUERY] Merged n_query event definitions:', Object.keys(nQueryResult.eventDefinitions));
+          }
+          
           console.log('[DataOps:DUAL_QUERY] Built n_query payload:', {
             from: baseQueryPayload.from,
             to: baseQueryPayload.to,

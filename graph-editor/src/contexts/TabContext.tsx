@@ -297,6 +297,7 @@ class FileRegistry {
 
     console.log(`FileRegistry.markSaved[${fileId}]: Marking as saved`, {
       wasDirty: file.isDirty,
+      wasLocal: file.isLocal,
       dataSize: JSON.stringify(file.data).length,
       originalDataSize: JSON.stringify(file.originalData).length
     });
@@ -309,6 +310,7 @@ class FileRegistry {
 
     file.originalData = structuredClone(file.data);
     file.isDirty = false;
+    file.isLocal = false; // File is now in the repository
     file.lastSaved = now;
     file.lastModified = now;
 

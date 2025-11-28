@@ -338,7 +338,7 @@ export function DataMenu() {
           <Menubar.Item 
             className="menubar-item" 
             onSelect={handleRetrieveAllSlices}
-            disabled={!isGraphTab || !graph?.dataInterestsDSL}
+            disabled={!isGraphTab}
           >
             Retrieve All Slices...
           </Menubar.Item>

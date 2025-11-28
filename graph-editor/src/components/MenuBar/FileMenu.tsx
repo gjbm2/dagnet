@@ -4,11 +4,13 @@ import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useCommitHandler } from '../../hooks/useCommitHandler';
+import { usePullFile } from '../../hooks/usePullFile';
+import { usePullAll } from '../../hooks/usePullAll';
 import { db } from '../../db/appDatabase';
 import { encodeStateToUrl } from '../../lib/shareUrl';
 import { CommitModal } from '../CommitModal';
 import { NewFileModal } from '../NewFileModal';
-import { MergeConflictModal, ConflictFile } from '../modals/MergeConflictModal';
+// MergeConflictModal is handled by usePullAll hook
 import { gitService } from '../../services/gitService';
 import { gitConfig } from '../../config/gitConfig';
 import { ObjectType } from '../../types';
@@ -40,6 +42,10 @@ export function FileMenu() {
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-');
   
+  // Pull hooks - all logic is in the hooks, we just call and render
+  const { canPull: canPullLatest, pullFile: handlePullLatest } = usePullFile(activeTab?.fileId);
+  const { pullAll: handlePullAllLatest, conflictModal: pullAllConflictModal } = usePullAll();
+  
   // Get isDirty state for active tab
   const activeFile = activeTab ? fileRegistry.getFile(activeTab.fileId) : null;
   const isDirty = activeFile?.isDirty ?? false;
@@ -51,10 +57,6 @@ export function FileMenu() {
   // New file modal state
   const [isNewFileModalOpen, setIsNewFileModalOpen] = useState(false);
   const [newFileType, setNewFileType] = useState<ObjectType | undefined>(undefined);
-  
-  // Merge conflict modal state
-  const [isMergeConflictModalOpen, setIsMergeConflictModalOpen] = useState(false);
-  const [mergeConflicts, setMergeConflicts] = useState<ConflictFile[]>([]);
   
   // Track dirty files - update when tabs or files change
   // NOTE: Use content-based detection for reliable cross-session dirty tracking
@@ -149,52 +151,6 @@ export function FileMenu() {
     // Remote-ahead check happens inside commitFiles
     setCommitModalPreselectedFiles([]); // Empty means select all dirty files
     setIsCommitModalOpen(true);
-  };
-
-
-  const handlePullLatest = async () => {
-    try {
-      const selectedRepo = navState.selectedRepo;
-      const selectedBranch = navState.selectedBranch || gitConfig.branch;
-      
-      if (!selectedRepo) {
-        throw new Error('No repository selected. Please select a repository in the navigator.');
-      }
-
-      // Show loading toast
-      const toastId = toast.loading('Pulling latest changes...');
-
-      // Use repositoryOperationsService which does incremental pull with merge
-      const result = await repositoryOperationsService.pullLatest(selectedRepo, selectedBranch);
-
-      toast.dismiss(toastId);
-
-      if (result.conflicts && result.conflicts.length > 0) {
-        // Show conflict resolution modal
-        setMergeConflicts(result.conflicts);
-        setIsMergeConflictModalOpen(true);
-        toast.error(`Pull completed with ${result.conflicts.length} conflict(s)`, { duration: 5000 });
-      } else {
-        toast.success('Successfully pulled latest changes');
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Pull failed:', errorMessage);
-      toast.error(`Pull failed: ${errorMessage}`);
-    }
-  };
-
-  const handleResolveConflicts = async (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => {
-    const { conflictResolutionService } = await import('../../services/conflictResolutionService');
-    
-    const resolvedCount = await conflictResolutionService.applyResolutions(mergeConflicts as any, resolutions);
-    
-    // Refresh navigator to show updated state
-    await navOps.refreshItems();
-    
-    if (resolvedCount > 0) {
-      toast.success(`Resolved ${resolvedCount} conflict${resolvedCount !== 1 ? 's' : ''}`);
-    }
   };
 
   const handleViewHistory = () => {
@@ -540,9 +496,16 @@ export function FileMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handlePullLatest}
+              disabled={!canPullLatest}
             >
               Pull Latest
-              <div className="menubar-right-slot">⌘P</div>
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handlePullAllLatest}
+            >
+              Pull All Latest
             </Menubar.Item>
 
             <Menubar.Item 
@@ -653,12 +616,8 @@ export function FileMenu() {
       />
 
       {/* Merge Conflict Modal */}
-      <MergeConflictModal
-        isOpen={isMergeConflictModalOpen}
-        onClose={() => setIsMergeConflictModalOpen(false)}
-        conflicts={mergeConflicts}
-        onResolve={handleResolveConflicts}
-      />
+      {/* Pull all conflict modal - managed by usePullAll hook */}
+      {pullAllConflictModal}
     </>
   );
 }
