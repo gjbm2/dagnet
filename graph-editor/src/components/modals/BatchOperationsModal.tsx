@@ -22,19 +22,24 @@ interface BatchItem {
   targetId: string;
   paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
   conditionalIndex?: number;
-  reason?: string;
+  // Path notation (e.g., e.my-edge.p.mean, n.my-node.case)
+  path: string;
   // Additional details for display
   edgeId?: string; // Human-readable edge ID
   edgeFrom?: string; // Source node ID/name
   edgeTo?: string; // Target node ID/name
   nodeId?: string; // Node ID/name (for cases/nodes)
   nodeLabel?: string; // Node label (for cases/nodes)
+  source?: string; // Connection/source identifier
+  // Availability flags
+  hasFile: boolean;
+  hasConnection: boolean;
 }
 
 interface BatchOperationsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  operationType: BatchOperationType;
+  operationType?: BatchOperationType; // Optional - can be selected in modal
   graph: GraphData | null;
   setGraph: (graph: GraphData | null) => void;
   window?: { start: string; end: string } | null;
@@ -60,12 +65,15 @@ interface OperationResult {
 export function BatchOperationsModal({
   isOpen,
   onClose,
-  operationType,
+  operationType: initialOperationType,
   graph,
   setGraph,
   window
 }: BatchOperationsModalProps) {
   const { operations } = useTabContext();
+  const [selectedOperationType, setSelectedOperationType] = useState<BatchOperationType>(
+    initialOperationType || 'get-from-sources'
+  );
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [createLog, setCreateLog] = useState(false);
   const [bustCache, setBustCache] = useState(false);
@@ -74,8 +82,15 @@ export function BatchOperationsModal({
   const [results, setResults] = useState<OperationResult[]>([]);
   const [logContent, setLogContent] = useState<string>('');
 
-  // Collect all items from graph
-  const batchItems = useMemo(() => {
+  // Update selected operation type when prop changes
+  useEffect(() => {
+    if (initialOperationType) {
+      setSelectedOperationType(initialOperationType);
+    }
+  }, [initialOperationType]);
+
+  // Collect all items from graph (without filtering by operation type)
+  const allItems = useMemo(() => {
     if (!graph) return [];
 
     const items: BatchItem[] = [];
@@ -95,6 +110,8 @@ export function BatchOperationsModal({
         // Probability parameter
         if (edge.p?.id && typeof edge.p.id === 'string') {
           const paramId = edge.p.id;
+          const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+          const paramConnection = paramFile?.data?.connection;
           items.push({
             id: `param-${paramId}-p-${edgeId}`,
             type: 'parameter',
@@ -102,20 +119,21 @@ export function BatchOperationsModal({
             objectId: paramId,
             targetId: edgeId,
             paramSlot: 'p',
+            path: `e.${edgeDisplayId}.p.mean`,
             edgeId: edgeDisplayId,
             edgeFrom,
             edgeTo,
-            reason: operationType === 'get-from-files' && !fileRegistry.getFile(`parameter-${paramId}`)
-              ? 'No file'
-              : operationType === 'get-from-sources' && !fileRegistry.getFile(`parameter-${paramId}`)?.data?.connection
-              ? 'No connection'
-              : undefined
+            source: paramConnection || undefined,
+            hasFile: !!paramFile,
+            hasConnection: !!paramConnection
           });
         }
 
         // Cost GBP parameter
         if (edge.cost_gbp?.id && typeof edge.cost_gbp.id === 'string') {
           const paramId = edge.cost_gbp.id;
+          const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+          const paramConnection = paramFile?.data?.connection;
           items.push({
             id: `param-${paramId}-cost_gbp-${edgeId}`,
             type: 'parameter',
@@ -123,20 +141,21 @@ export function BatchOperationsModal({
             objectId: paramId,
             targetId: edgeId,
             paramSlot: 'cost_gbp',
+            path: `e.${edgeDisplayId}.cost_gbp.mean`,
             edgeId: edgeDisplayId,
             edgeFrom,
             edgeTo,
-            reason: operationType === 'get-from-files' && !fileRegistry.getFile(`parameter-${paramId}`)
-              ? 'No file'
-              : operationType === 'get-from-sources' && !fileRegistry.getFile(`parameter-${paramId}`)?.data?.connection
-              ? 'No connection'
-              : undefined
+            source: paramConnection || undefined,
+            hasFile: !!paramFile,
+            hasConnection: !!paramConnection
           });
         }
 
         // Cost Time parameter
         if (edge.cost_time?.id && typeof edge.cost_time.id === 'string') {
           const paramId = edge.cost_time.id;
+          const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+          const paramConnection = paramFile?.data?.connection;
           items.push({
             id: `param-${paramId}-cost_time-${edgeId}`,
             type: 'parameter',
@@ -144,14 +163,13 @@ export function BatchOperationsModal({
             objectId: paramId,
             targetId: edgeId,
             paramSlot: 'cost_time',
+            path: `e.${edgeDisplayId}.cost_time.mean`,
             edgeId: edgeDisplayId,
             edgeFrom,
             edgeTo,
-            reason: operationType === 'get-from-files' && !fileRegistry.getFile(`parameter-${paramId}`)
-              ? 'No file'
-              : operationType === 'get-from-sources' && !fileRegistry.getFile(`parameter-${paramId}`)?.data?.connection
-              ? 'No connection'
-              : undefined
+            source: paramConnection || undefined,
+            hasFile: !!paramFile,
+            hasConnection: !!paramConnection
           });
         }
       }
@@ -165,43 +183,76 @@ export function BatchOperationsModal({
         // Case file
         if (node.case?.id && typeof node.case.id === 'string') {
           const caseId = node.case.id;
+          const caseFile = fileRegistry.getFile(`case-${caseId}`);
+          const caseConnection = caseFile?.data?.connection;
+          const nodeDisplayId = node.id || node.label || nodeId;
           items.push({
             id: `case-${caseId}-${nodeId}`,
             type: 'case',
             name: `case: ${caseId}`,
             objectId: caseId,
             targetId: nodeId,
-            reason: operationType === 'get-from-files' && !fileRegistry.getFile(`case-${caseId}`)
-              ? 'No file'
-              : operationType === 'get-from-sources' && !fileRegistry.getFile(`case-${caseId}`)?.data?.connection
-              ? 'No connection'
-              : undefined
+            path: `n.${nodeDisplayId}.case`,
+            nodeLabel: nodeDisplayId,
+            source: caseConnection || undefined,
+            hasFile: !!caseFile,
+            hasConnection: !!caseConnection
           });
         }
 
-        // Node file (for put-to-files only)
-        if (operationType === 'put-to-files' && node.id && typeof node.id === 'string') {
+        // Node file
+        if (node.id && typeof node.id === 'string') {
           const nodeFileId = node.id;
+          const nodeDisplayId = node.id || node.label || nodeId;
+          const nodeFile = fileRegistry.getFile(`node-${nodeFileId}`);
           items.push({
             id: `node-${nodeFileId}-${nodeId}`,
             type: 'node',
             name: `node: ${nodeFileId}`,
             objectId: nodeFileId,
             targetId: nodeId,
-            reason: !fileRegistry.getFile(`node-${nodeFileId}`) ? 'No file' : undefined
+            path: `n.${nodeDisplayId}`,
+            nodeLabel: nodeDisplayId,
+            hasFile: !!nodeFile,
+            hasConnection: false // Nodes don't have connections
           });
         }
       }
     }
 
     return items;
-  }, [graph, operationType]);
+  }, [graph]);
 
-  // Initialize selected items when modal opens
+  // Filter items based on selected operation type
+  const batchItems = useMemo(() => {
+    return allItems.filter(item => {
+      switch (selectedOperationType) {
+        case 'get-from-files':
+          // Only show items that have a file to read from
+          return item.hasFile;
+        case 'get-from-sources':
+          // Only show items that have a connection defined
+          return item.hasConnection;
+        case 'get-from-sources-direct':
+          // Only parameters (direct mode doesn't need param files, uses edge connection)
+          return item.type === 'parameter';
+        case 'put-to-files':
+          // Show all items - we can always write to files
+          return true;
+        default:
+          return true;
+      }
+    });
+  }, [allItems, selectedOperationType]);
+
+  // Use selectedOperationType for operations
+  const operationType = selectedOperationType;
+
+  // Initialize selected items when modal opens or operation type changes
   useEffect(() => {
     if (isOpen) {
-      const selectable = batchItems.filter(item => !item.reason);
-      setSelectedItems(new Set(selectable.map(item => item.id)));
+      // All items in batchItems are valid for the selected operation
+      setSelectedItems(new Set(batchItems.map(item => item.id)));
       setCreateLog(false);
       setBustCache(false);
       setProgress({ current: 0, total: 0 });
@@ -230,8 +281,7 @@ export function BatchOperationsModal({
   };
 
   const handleSelectAll = () => {
-    const selectable = batchItems.filter(item => !item.reason);
-    setSelectedItems(new Set(selectable.map(item => item.id)));
+    setSelectedItems(new Set(batchItems.map(item => item.id)));
   };
 
   const handleDeselectAll = () => {
@@ -621,16 +671,8 @@ export function BatchOperationsModal({
 
   if (!isOpen) return null;
 
-  const operationTitle = {
-    'get-from-files': 'Get all for current slice from Files',
-    'get-from-sources': 'Get all for current slice from Sources',
-    'get-from-sources-direct': 'Get all for current slice from Sources (direct)',
-    'put-to-files': 'Put all for current slice to Files'
-  }[operationType];
-
   const selectedCount = selectedItems.size;
   const totalCount = batchItems.length;
-  const skippedCount = batchItems.filter(item => item.reason).length;
 
   const buttonText = isProcessing 
     ? 'Processing...' 
@@ -644,9 +686,9 @@ export function BatchOperationsModal({
 
   const modalContent = (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+      <div className="modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '80vw', width: 'auto' }}>
         <div className="modal-header">
-          <h2 className="modal-title">{operationTitle}</h2>
+          <h2 className="modal-title">Batch Data Operations</h2>
           <button className="modal-close-btn" onClick={onClose}>×</button>
         </div>
 
@@ -669,13 +711,39 @@ export function BatchOperationsModal({
             </div>
           ) : (
             <>
+              {/* Operation Type Selector */}
+              <div style={{ marginBottom: '20px' }}>
+                <label className="modal-label" style={{ display: 'block', marginBottom: '8px' }}>Operation</label>
+                <select
+                  value={selectedOperationType}
+                  onChange={(e) => {
+                    setSelectedOperationType(e.target.value as BatchOperationType);
+                    setSelectedItems(new Set()); // Reset selection when changing operation
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    fontSize: '14px',
+                    border: '1px solid #ddd',
+                    borderRadius: '6px',
+                    backgroundColor: 'white',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="get-from-sources">Get from Sources (versioned)</option>
+                  <option value="get-from-sources-direct">Get from Sources (direct)</option>
+                  <option value="get-from-files">Get from Files</option>
+                  <option value="put-to-files">Put to Files</option>
+                </select>
+              </div>
+
               {/* Summary */}
               <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '6px' }}>
                 <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>
-                  Found {totalCount} item{totalCount !== 1 ? 's' : ''}
+                  {totalCount} item{totalCount !== 1 ? 's' : ''} available for this operation
                 </div>
                 <div style={{ fontSize: '13px', color: '#666' }}>
-                  {selectedCount} selected, {skippedCount} skipped ({batchItems.filter(item => item.reason).map(i => i.reason).filter((v, i, a) => a.indexOf(v) === i).join(', ')})
+                  {selectedCount} selected
                 </div>
               </div>
 
@@ -724,7 +792,7 @@ export function BatchOperationsModal({
                 }}>
                   {batchItems.length === 0 ? (
                     <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-                      No items found in graph
+                      No items available for this operation
                     </div>
                   ) : (
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
@@ -733,7 +801,7 @@ export function BatchOperationsModal({
                           <th style={{ padding: '8px', textAlign: 'left', width: '30px' }}>
                             <input
                               type="checkbox"
-                              checked={selectedItems.size > 0 && selectedItems.size === batchItems.filter(item => !item.reason).length}
+                              checked={selectedItems.size > 0 && selectedItems.size === batchItems.length}
                               onChange={(e) => {
                                 if (e.target.checked) {
                                   handleSelectAll();
@@ -744,17 +812,9 @@ export function BatchOperationsModal({
                               style={{ cursor: 'pointer' }}
                             />
                           </th>
-                          <th style={{ padding: '8px', textAlign: 'left', fontWeight: '500' }}>Parameter/Object</th>
-                          {batchItems.some(item => item.type === 'parameter') && (
-                            <>
-                              <th style={{ padding: '8px', textAlign: 'left', fontWeight: '500' }}>Edge</th>
-                              <th style={{ padding: '8px', textAlign: 'left', fontWeight: '500' }}>From → To</th>
-                            </>
-                          )}
-                          {(batchItems.some(item => item.type === 'case') || batchItems.some(item => item.type === 'node')) && (
-                            <th style={{ padding: '8px', textAlign: 'left', fontWeight: '500' }}>Node</th>
-                          )}
-                          <th style={{ padding: '8px', textAlign: 'left', fontWeight: '500', color: '#999' }}>Status</th>
+                          <th style={{ padding: '8px', textAlign: 'left', fontWeight: '500' }}>Path</th>
+                          <th style={{ padding: '8px', textAlign: 'left', fontWeight: '500' }}>From → To</th>
+                          <th style={{ padding: '8px', textAlign: 'left', fontWeight: '500' }}>Source</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -765,15 +825,12 @@ export function BatchOperationsModal({
                               key={item.id}
                               style={{
                                 borderBottom: '1px solid #f0f0f0',
-                                cursor: item.reason ? 'not-allowed' : 'pointer',
-                                opacity: item.reason ? 0.6 : 1,
+                                cursor: 'pointer',
                                 backgroundColor: isSelected ? '#f0f7ff' : 'transparent'
                               }}
-                              onClick={() => !item.reason && handleItemToggle(item.id)}
+                              onClick={() => handleItemToggle(item.id)}
                               onMouseEnter={(e) => {
-                                if (!item.reason) {
-                                  e.currentTarget.style.backgroundColor = isSelected ? '#e6f2ff' : '#f9f9f9';
-                                }
+                                e.currentTarget.style.backgroundColor = isSelected ? '#e6f2ff' : '#f9f9f9';
                               }}
                               onMouseLeave={(e) => {
                                 e.currentTarget.style.backgroundColor = isSelected ? '#f0f7ff' : 'transparent';
@@ -784,42 +841,18 @@ export function BatchOperationsModal({
                                   type="checkbox"
                                   checked={isSelected}
                                   onChange={() => handleItemToggle(item.id)}
-                                  disabled={!!item.reason}
                                   onClick={(e) => e.stopPropagation()}
-                                  style={{ cursor: item.reason ? 'not-allowed' : 'pointer' }}
+                                  style={{ cursor: 'pointer' }}
                                 />
                               </td>
-                              <td style={{ padding: '8px' }}>
-                                <div style={{ fontWeight: '500' }}>{item.name}</div>
-                                {item.paramSlot && (
-                                  <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>
-                                    Slot: {item.paramSlot}
-                                  </div>
-                                )}
+                              <td style={{ padding: '8px', fontFamily: 'monospace', fontSize: '12px' }}>
+                                {item.path}
                               </td>
-                              {batchItems.some(i => i.type === 'parameter') && (
-                                <>
-                                  <td style={{ padding: '8px', color: '#666' }}>
-                                    {item.edgeId || '-'}
-                                  </td>
-                                  <td style={{ padding: '8px', color: '#666', fontFamily: 'monospace', fontSize: '12px' }}>
-                                    {item.edgeFrom && item.edgeTo ? `${item.edgeFrom} → ${item.edgeTo}` : '-'}
-                                  </td>
-                                </>
-                              )}
-                              {(batchItems.some(i => i.type === 'case') || batchItems.some(i => i.type === 'node')) && (
-                                <td style={{ padding: '8px', color: '#666' }}>
-                                  {item.nodeLabel || '-'}
-                                </td>
-                              )}
-                              <td style={{ padding: '8px' }}>
-                                {item.reason ? (
-                                  <span style={{ fontSize: '11px', color: '#999', fontStyle: 'italic' }}>
-                                    {item.reason}
-                                  </span>
-                                ) : (
-                                  <span style={{ fontSize: '11px', color: '#10b981' }}>Ready</span>
-                                )}
+                              <td style={{ padding: '8px', color: '#666', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                                {item.edgeFrom && item.edgeTo ? `${item.edgeFrom} → ${item.edgeTo}` : item.nodeLabel || '-'}
+                              </td>
+                              <td style={{ padding: '8px', color: '#666', fontFamily: 'monospace', fontSize: '12px' }}>
+                                {item.source || '-'}
                               </td>
                             </tr>
                           );

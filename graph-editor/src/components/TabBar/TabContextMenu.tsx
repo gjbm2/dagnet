@@ -1,6 +1,8 @@
 import React from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useTabContext } from '../../contexts/TabContext';
+import { usePullFile } from '../../hooks/usePullFile';
+import { usePullAll } from '../../hooks/usePullAll';
 import './TabBar.css';
 
 /**
@@ -26,6 +28,10 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
   const { tabs, operations } = useTabContext();
   const tab = tabs.find(t => t.id === tabId);
   const tabIndex = tabs.findIndex(t => t.id === tabId);
+  
+  // Pull hooks - all logic including conflict modal is in the hook
+  const { canPull, pullFile } = usePullFile(tab?.fileId);
+  const { pullAll, conflictModal: pullAllConflictModal } = usePullAll();
 
   if (!tab) return <>{children}</>;
 
@@ -121,6 +127,22 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
             Save
           </DropdownMenu.Item>
 
+          {canPull && (
+            <DropdownMenu.Item 
+              className="tab-context-item" 
+              onSelect={pullFile}
+            >
+              Pull Latest
+            </DropdownMenu.Item>
+          )}
+
+          <DropdownMenu.Item 
+            className="tab-context-item" 
+            onSelect={pullAll}
+          >
+            Pull All Latest
+          </DropdownMenu.Item>
+
           <DropdownMenu.Item 
             className="tab-context-item" 
             onSelect={handleRevert}
@@ -177,6 +199,8 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
+      {/* Pull all conflict modal - managed by usePullAll hook */}
+      {pullAllConflictModal}
     </DropdownMenu.Root>
   );
 }
