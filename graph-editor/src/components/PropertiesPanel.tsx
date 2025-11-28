@@ -142,6 +142,8 @@ export default function PropertiesPanel({
 
   // Local state for edge query (to prevent eager updates during editing)
   const [localEdgeQuery, setLocalEdgeQuery] = useState<string>('');
+  // Local state for edge n_query (optional explicit n denominator query)
+  const [localEdgeNQuery, setLocalEdgeNQuery] = useState<string>('');
 
   // Helper to open a file by type and ID (reuse existing tab if open)
   const openFileById = useCallback((type: 'case' | 'node' | 'parameter' | 'context' | 'event', id: string) => {
@@ -343,8 +345,10 @@ export default function PropertiesPanel({
             query: (edge as any).query || ''
           });
           const edgeQuery = (edge as any).query || '';
-          console.log('PropertiesPanel: Setting localEdgeQuery to:', edgeQuery);
+          const edgeNQuery = (edge as any).n_query || '';
+          console.log('PropertiesPanel: Setting localEdgeQuery to:', edgeQuery, 'n_query:', edgeNQuery);
           setLocalEdgeQuery(edgeQuery);
+          setLocalEdgeNQuery(edgeNQuery);
           setLocalConditionalP(edge.conditional_p || []);
           lastLoadedEdgeRef.current = selectedEdgeId;
         }
@@ -384,9 +388,12 @@ export default function PropertiesPanel({
           return updates;
         });
         
-        // Also update the separate localEdgeQuery state for the query editor
+        // Also update the separate localEdgeQuery and localEdgeNQuery states for the query editors
         if (edge.query !== undefined) {
           setLocalEdgeQuery(edge.query);
+        }
+        if ((edge as any).n_query !== undefined) {
+          setLocalEdgeNQuery((edge as any).n_query);
         }
         
         // Sync conditional probabilities when graph changes
@@ -2489,6 +2496,57 @@ export default function PropertiesPanel({
                         height="60px"
                       />
                     </AutomatableField>
+                    
+                    {/* Optional N Query (for denominator when it differs from k query) */}
+                    <div style={{ marginTop: '16px' }}>
+                      <label style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '6px',
+                        fontSize: '13px', 
+                        fontWeight: 500, 
+                        color: '#374151',
+                        marginBottom: '6px'
+                      }}>
+                        N Query (optional)
+                        <span title="Explicit query for n (denominator) when it differs from the main query. Use when the 'from' node shares an event with other nodes and n can't be derived by stripping conditions.">
+                          <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
+                        </span>
+                      </label>
+                      <QueryExpressionEditor
+                        value={localEdgeNQuery}
+                        onChange={(newNQuery) => {
+                          setLocalEdgeNQuery(newNQuery);
+                        }}
+                        onBlur={(currentValue) => {
+                          const currentEdgeNQuery = (selectedEdge as any)?.n_query || '';
+                          if (currentValue !== currentEdgeNQuery) {
+                            if (!graph || !selectedEdgeId) return;
+                            const next = structuredClone(graph);
+                            const edgeIndex = next.edges.findIndex((e: any) => 
+                              e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                            );
+                            if (edgeIndex >= 0) {
+                              // Set n_query or remove if empty
+                              if (currentValue.trim()) {
+                                (next.edges[edgeIndex] as any).n_query = currentValue;
+                              } else {
+                                delete (next.edges[edgeIndex] as any).n_query;
+                              }
+                              if (next.metadata) {
+                                next.metadata.updated_at = new Date().toISOString();
+                              }
+                              setGraph(next);
+                              saveHistoryState(`Update edge n_query`, undefined, selectedEdgeId || undefined);
+                            }
+                          }
+                        }}
+                        graph={graph}
+                        edgeId={selectedEdgeId || undefined}
+                        placeholder="from(A).to(B) — leave empty to auto-derive"
+                        height="60px"
+                      />
+                    </div>
                             </div>
                 </CollapsibleSection>
 
