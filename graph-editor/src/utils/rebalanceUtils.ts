@@ -8,13 +8,13 @@
  * 
  * @param items - Array of items with probability values
  * @param getProbability - Function to extract probability from item
- * @param tolerance - Tolerance for sum check (default 0.01)
+ * @param tolerance - Tolerance for sum check (default 0.0001 = 4 decimal places)
  * @returns true if unbalanced (sum differs from 1.0 by more than tolerance)
  */
 export function isProbabilityMassUnbalanced(
   items: any[],
   getProbability: (item: any) => number | undefined,
-  tolerance: number = 0.001  // Allow 0.001 imprecision (e.g., 0.999 or 1.001 is balanced)
+  tolerance: number = 0.0001  // 4 d.p. tolerance (0.01%) - handles floating point precision
 ): boolean {
   if (items.length <= 1) return false; // Need at least 2 items to be unbalanced
   
@@ -23,7 +23,10 @@ export function isProbabilityMassUnbalanced(
     return sum + (prob || 0);
   }, 0);
   
-  const diff = Math.abs(total - 1);
+  // Round to 4 decimal places to avoid floating-point precision issues
+  // e.g., 0.333 + 0.333 + 0.334 might give 0.9999999999999999 instead of 1.0
+  const roundedTotal = Math.round(total * 10000) / 10000;
+  const diff = Math.abs(roundedTotal - 1);
   return diff > tolerance;
 }
 
@@ -37,14 +40,14 @@ export function isProbabilityMassUnbalanced(
  * @param graph - The graph object
  * @param selectedEdge - The edge being edited
  * @param localConditionalP - Local state of conditional probabilities (for immediate feedback)
- * @param tolerance - Tolerance for sum check (default 0.01)
+ * @param tolerance - Tolerance for sum check (default 0.0001 = 4 decimal places)
  * @returns Map<conditionIndex, isUnbalanced>
  */
 export function getConditionalProbabilityUnbalancedMap(
   graph: any,
   selectedEdge: any,
   localConditionalP: any[],
-  tolerance: number = 0.001  // Allow 0.001 imprecision (e.g., 0.999 or 1.001 is balanced)
+  tolerance: number = 0.0001  // 4 d.p. tolerance (0.01%) - handles floating point precision
 ): Map<number, boolean> {
   // Use localConditionalP if available (for immediate feedback), otherwise use selectedEdge.conditional_p
   const conditionalProbs = localConditionalP.length > 0 ? localConditionalP : (selectedEdge?.conditional_p || []);
