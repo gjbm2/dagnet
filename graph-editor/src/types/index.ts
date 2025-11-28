@@ -576,6 +576,7 @@ export interface GraphEdge {
   display?: EdgeDisplay;
   query?: string; // Query expression for data retrieval (e.g., path constraints)
   query_overridden?: boolean; // If true, query was manually edited
+  n_query?: string; // Optional: explicit query for n (denominator) when it differs from k query
 }
 
 export interface Policies {

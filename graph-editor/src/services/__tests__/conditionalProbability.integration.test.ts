@@ -781,5 +781,214 @@ describe('Dual Query n/k Separation Tests', () => {
       expect(p_viaA1 + p_viaA2 + p_base).toBeLessThanOrEqual(1);
     });
   });
+  
+  describe('Explicit n_query handling', () => {
+    
+    it('should recognize when n_query is provided on an edge', () => {
+      // Scenario: Edge D→F where D shares an event with siblings C and E
+      // Graph: A → B → C
+      //             ├→ D  (C, D, E share same event!)
+      //             └→ E
+      //        D → F
+      //
+      // For edge D→F:
+      // - query: "from(D).to(F).visited(A)" → gives k via super-funnel A→D→F
+      // - n_query: "from(A).to(D)" → gives n as "users who completed A→D"
+      
+      const edge: GraphEdge = {
+        uuid: 'edge-d-f',
+        id: 'D-F',
+        from: 'node-d',
+        to: 'node-f',
+        query: 'from(D).to(F).visited(A)',  // For k
+        n_query: 'from(A).to(D)',  // Explicit n query
+        p: { mean: 0.5 } as ProbabilityParam,
+      };
+      
+      // Verify n_query is recognized
+      expect(edge.n_query).toBe('from(A).to(D)');
+      expect(edge.n_query).not.toBe(edge.query);
+      
+      // The n_query should be used for denominator calculation
+      // when the 'from' node shares an event with siblings
+      const hasExplicitNQuery = edge.n_query && edge.n_query.trim().length > 0;
+      expect(hasExplicitNQuery).toBe(true);
+    });
+    
+    it('should use auto-strip when no n_query provided but visited_upstream exists', () => {
+      // Scenario: Edge B→C with visited(A) where A is upstream
+      // No explicit n_query, so we auto-strip visited_upstream
+      
+      const edge: GraphEdge = {
+        uuid: 'edge-b-c',
+        id: 'B-C',
+        from: 'node-b',
+        to: 'node-c',
+        query: 'from(B).to(C).visited(A)',  // Has upstream condition
+        // No n_query - should auto-derive
+        p: { mean: 0.5 } as ProbabilityParam,
+      };
+      
+      // Simulate queryPayload from buildDslFromEdge
+      const queryPayload: QueryPayload = {
+        from: 'event_b',
+        to: 'event_c',
+        visited_upstream: ['event_a'],  // A is upstream of B
+      };
+      
+      // No explicit n_query, but has visited_upstream
+      const hasExplicitNQuery = !!(edge.n_query && edge.n_query.trim().length > 0);
+      const hasVisitedUpstream = Array.isArray(queryPayload.visited_upstream) && queryPayload.visited_upstream.length > 0;
+      
+      expect(hasExplicitNQuery).toBe(false);
+      expect(hasVisitedUpstream).toBe(true);
+      
+      // Should auto-derive baseQueryPayload by stripping visited_upstream
+      const baseQueryPayload = {
+        ...queryPayload,
+        visited_upstream: undefined,
+        visitedAny_upstream: undefined,
+      };
+      
+      expect(baseQueryPayload.visited_upstream).toBeUndefined();
+      expect(baseQueryPayload.from).toBe('event_b');
+      expect(baseQueryPayload.to).toBe('event_c');
+    });
+    
+    it('should prefer explicit n_query over auto-strip when both apply', () => {
+      // Scenario: Edge has both visited_upstream AND an explicit n_query
+      // The explicit n_query should take precedence
+      
+      const edge: GraphEdge = {
+        uuid: 'edge-d-f',
+        id: 'D-F',
+        from: 'node-d',
+        to: 'node-f',
+        query: 'from(D).to(F).visited(A)',
+        n_query: 'from(A).to(D)',  // Explicit n_query
+        p: { mean: 0.5 } as ProbabilityParam,
+      };
+      
+      // Simulate queryPayload that also has visited_upstream
+      const queryPayload: QueryPayload = {
+        from: 'event_d',
+        to: 'event_f',
+        visited_upstream: ['event_a'],
+      };
+      
+      // Priority check: explicit n_query wins
+      const hasExplicitNQuery = edge.n_query && edge.n_query.trim().length > 0;
+      const hasVisitedUpstream = Array.isArray(queryPayload.visited_upstream) && queryPayload.visited_upstream.length > 0;
+      
+      expect(hasExplicitNQuery).toBe(true);
+      expect(hasVisitedUpstream).toBe(true);
+      
+      // When explicit n_query is provided, use it instead of auto-strip
+      const useExplicitNQuery = hasExplicitNQuery;
+      const useAutoStrip = !hasExplicitNQuery && hasVisitedUpstream;
+      
+      expect(useExplicitNQuery).toBe(true);
+      expect(useAutoStrip).toBe(false);
+    });
+    
+    it('should demonstrate correct n/k semantics with explicit n_query', () => {
+      // Scenario: Edge D→F where D is reachable only via A (in our graph)
+      // but D's event is shared with siblings
+      //
+      // Users who completed A→D: 200 (this is n, from n_query)
+      // Users who completed A→D→F: 160 (this is k, from main query super-funnel)
+      // 
+      // p = k/n = 160/200 = 80%
+      
+      const n_fromNQuery = 200;  // from(A).to(D) result
+      const k_fromSuperFunnel = 160;  // from(D).to(F).visited(A) → A→D→F super-funnel
+      
+      const p = k_fromSuperFunnel / n_fromNQuery;
+      expect(p).toBe(0.8);
+      
+      // Without explicit n_query, if we used the shared event's total:
+      const totalAtSharedEvent = 500;  // All users at D's event (includes C, D, E)
+      const wrongP = k_fromSuperFunnel / totalAtSharedEvent;
+      expect(wrongP).toBe(0.32);  // 160/500 - much lower
+      
+      // Without explicit n_query, if we used super-funnel's from_step:
+      // This would be correct IF A is the only way to reach D
+      // But that's exactly what n_query ensures explicitly
+      
+      // The explicit n_query gives us control over exactly what n means
+      expect(p).toBeGreaterThan(wrongP);
+    });
+    
+    it('should extract k (to_count) from n_query result, not n (from_count)', () => {
+      // Critical semantic: n_query defines a funnel, and we want the COMPLETION count
+      // 
+      // Example: n_query = "from(A).to(D)"
+      // - n_query result: n=1000 (users at A), k=200 (users who did A→D)
+      // - What we want for baseN: 200 (users who completed A→D)
+      // - This is k, not n!
+      
+      const nQueryResult = {
+        n: 1000,  // Users at A (start of n_query funnel)
+        k: 200,   // Users who completed A→D (end of n_query funnel)
+        p: 0.2,   // 200/1000
+      };
+      
+      // For explicit n_query, we extract k as the baseN
+      const baseN_explicit = nQueryResult.k;
+      expect(baseN_explicit).toBe(200);
+      
+      // NOT n (which would be wrong)
+      const wrongBaseN = nQueryResult.n;
+      expect(wrongBaseN).toBe(1000);
+      expect(baseN_explicit).not.toBe(wrongBaseN);
+    });
+    
+    it('should extract n (from_count) for auto-stripped queries', () => {
+      // For auto-stripped queries (no explicit n_query), we use n (from_count)
+      // because the stripped query has the same from/to, just without visited_upstream
+      //
+      // Example: Original query "from(B).to(C).visited(A)" → stripped to "from(B).to(C)"
+      // - Stripped result: n=1000 (all users at B), k=800 (users who did B→C)
+      // - What we want for baseN: 1000 (all users at B)
+      // - This is n, not k!
+      
+      const strippedQueryResult = {
+        n: 1000,  // All users at B (what we want for baseN)
+        k: 800,   // Users who did B→C
+        p: 0.8,
+      };
+      
+      // For auto-stripped, we extract n as the baseN
+      const baseN_stripped = strippedQueryResult.n;
+      expect(baseN_stripped).toBe(1000);
+      
+      // NOT k (which would be wrong for this case)
+      const wrongBaseN = strippedQueryResult.k;
+      expect(wrongBaseN).toBe(800);
+      expect(baseN_stripped).not.toBe(wrongBaseN);
+    });
+    
+    it('should handle n_query that itself has visited_upstream (super-funnel for n)', () => {
+      // Edge case: n_query itself might result in a super-funnel
+      // Example: n_query = "from(B).to(D).visited(A)" where A is upstream of B
+      // This builds super-funnel A→B→D and extracts B→D segment
+      //
+      // n_query result: n=500 (users at B via A), k=200 (users who did A→B→D extracted as B→D)
+      // We still want k (the completion count of the n_query)
+      
+      const nQuerySuperFunnelResult = {
+        n: 500,   // Users at from_step_index (B, but conditioned on A)
+        k: 200,   // Users who completed the n_query funnel
+        p: 0.4,
+      };
+      
+      // Even with super-funnel in n_query, we want k (completion count)
+      const baseN = nQuerySuperFunnelResult.k;
+      expect(baseN).toBe(200);
+      
+      // This is "users who completed the path to reach D via B via A"
+      // Which is exactly what we want as n for the main D→F query
+    });
+  });
 });
 

@@ -591,13 +591,78 @@ Composite queries with upstream conditions ALSO need dual-query handling. The ba
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Explicit n_query Override
+
+In some complex graph topologies, the auto-strip approach doesn't give the correct `n` value. This happens when:
+
+1. **Nodes share events with siblings**: The 'from' node's event is also used by sibling nodes
+2. **n requires a specific path**: You need "users who completed a specific path to reach 'from'", not just "all users with 'from' event"
+
+**Example:** Consider this graph where nodes C, D, E share the same event:
+
+```
+Graph:  A → B → C
+             ├→ D  (C, D, E share same event_id!)
+             └→ E
+        
+        D → F
+```
+
+For edge D→F with `visited(A)`:
+- **k query**: `from(D).to(F).visited(A)` → Super-funnel A→D→F works correctly
+- **n problem**: Auto-stripping gives `from(D).to(F)` which counts ALL users at D's event (including C and E)
+- **n solution**: Explicit `n_query: from(A).to(D)` → Users who completed A→D (the specific path to D)
+
+**Edge Configuration:**
+
+```yaml
+edges:
+  - from: D
+    to: F
+    query: "from(D).to(F).visited(A)"  # For k: A→D→F super-funnel
+    n_query: "from(A).to(D)"            # For n: users who completed A→D
+```
+
+**Critical Semantic: What gets extracted from n_query?**
+
+The `n_query` result has two values:
+- `n` (from_count): users at the START of the n_query funnel
+- `k` (to_count): users who COMPLETED the n_query funnel
+
+**For explicit n_query, we extract `k` (to_count)** — the completion count. This is because:
+- `n_query: "from(A).to(D)"` means "funnel from A to D"
+- We want "users who reached D via A" = those who completed A→D = k
+
+**For auto-stripped queries, we extract `n` (from_count)** — the entry count. This is because:
+- Stripping `from(B).to(C).visited(A)` gives `from(B).to(C)`
+- We want "all users at B" = the from_count = n
+
+**This distinction matters when n_query itself is a super-funnel:**
+
+If `n_query: "from(B).to(D).visited(A)"` where A is upstream of B:
+- Result builds super-funnel A→B→D
+- `n` = users at B (who came via A)
+- `k` = users who completed A→B→D (extracted as B→D)
+- We use `k` (200) not `n` (500)
+
+**UI:**
+
+In the Edge Properties panel, under "Data Retrieval Query", there's an optional "N Query" field. Leave it empty to use auto-derivation, or fill it in when you need explicit control over the denominator.
+
+**Priority Order:**
+
+1. **Explicit n_query** on edge → Use `k` (to_count) from n_query result
+2. **Auto-strip** if query has `visited_upstream` → Use `n` (from_count) from stripped query
+3. **Single query** for both n and k → Simple funnels
+
 ### Query Processing Summary
 
 | Query Type | n Source | k Source |
 |------------|----------|----------|
 | Simple (no upstream) | Single query | Single query |
 | Upstream visited | Base query (stripped) | Super-funnel query |
-| Composite (minus/plus) | Base query (stripped) | Composite executor |
+| **Explicit n_query** | **n_query** | Main query/super-funnel |
+| Composite (minus/plus) | Base query (stripped or n_query) | Composite executor |
 
 ### Semantic Correctness
 
@@ -623,6 +688,7 @@ The first interpretation is correct for flow partitioning: it tells you what **f
 6. **Monitor API Limits**: Be aware of rate limits and quota restrictions for external APIs
 7. **Document Custom Adapters**: Add comments in `connections.yaml` explaining adapter-specific logic
 8. **Understand Flow Partitioning**: For upstream-conditioned queries, remember that n comes from the base query (all users at 'from'), not from the conditioned super-funnel
+9. **Use Explicit n_query for Shared Events**: When your 'from' node shares an event with sibling nodes and you need n to represent a specific path, use the explicit `n_query` field
 
 ## Further Reading
 

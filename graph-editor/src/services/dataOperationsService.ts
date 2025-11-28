@@ -2362,16 +2362,132 @@ class DataOperationsService {
         }
       }
       
-      // 4b. Detect upstream conditions and prepare base query for n
-      // When a query has visited_upstream (or exclude with upstream nodes),
-      // we need TWO queries:
-      // - Conditioned query (super-funnel) → gives k
-      // - Base query (strip upstream conditions) → gives n
+      // 4b. Detect upstream conditions OR explicit n_query, and prepare base query for n
+      // When a query has visited_upstream (or exclude with upstream nodes), OR when user has
+      // explicitly provided an n_query (for complex topologies), we need TWO queries:
+      // - Conditioned query (super-funnel or main query) → gives k
+      // - Base query (explicit n_query or strip upstream conditions) → gives n
       // This is because n should be ALL users at the 'from' node, not just those who came via a specific path
       let baseQueryPayload: any = null;
       let needsDualQuery = false;
+      let explicitNQuery: string | undefined = undefined;
       
-      if (queryPayload.visited_upstream && Array.isArray(queryPayload.visited_upstream) && queryPayload.visited_upstream.length > 0) {
+      // Check for explicit n_query on edge (used when 'from' node shares an event with siblings
+      // and n can't be derived by simply stripping upstream conditions)
+      const nQueryEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
+      let nQueryString: string | undefined = undefined;  // Keep the original n_query string for excludes/composite processing
+      let nQueryIsComposite = false;  // Track if n_query needs composite execution
+      
+      if (nQueryEdge?.n_query && typeof nQueryEdge.n_query === 'string' && nQueryEdge.n_query.trim()) {
+        explicitNQuery = nQueryEdge.n_query.trim();
+        nQueryString = explicitNQuery;
+        needsDualQuery = true;
+        console.log('[DataOps:DUAL_QUERY] Detected explicit n_query on edge:', explicitNQuery);
+        
+        // Check if n_query has excludes() that need compilation (same as main query)
+        const nQueryHasExcludes = /\.excludes?\(/.test(nQueryString);
+        const nQueryIsAlreadyComposite = /\.(minus|plus)\(/.test(nQueryString);
+        
+        if (nQueryHasExcludes && !nQueryIsAlreadyComposite && connectionName?.includes('amplitude')) {
+          console.log('[DataOps:DUAL_QUERY:EXCLUDE] n_query has excludes, compiling to minus/plus for Amplitude');
+          try {
+            const compiledNQuery = await compileExcludeQuery(nQueryString, graph);
+            if (compiledNQuery && compiledNQuery !== nQueryString) {
+              console.log('[DataOps:DUAL_QUERY:EXCLUDE] Compiled n_query:', compiledNQuery);
+              nQueryString = compiledNQuery;
+              nQueryIsComposite = true;
+            }
+          } catch (error) {
+            console.error('[DataOps:DUAL_QUERY:EXCLUDE] Failed to compile n_query excludes:', error);
+            toast.error('Failed to compile n_query excludes - excludes will be ignored');
+          }
+        } else if (nQueryIsAlreadyComposite) {
+          nQueryIsComposite = true;
+        }
+      }
+      
+      if (explicitNQuery) {
+        // User provided explicit n_query - build DSL from it
+        // This is used when the 'from' node shares an event with other nodes (siblings)
+        // and we need a specific query to get the correct n value
+        try {
+          console.log('[DataOps:DUAL_QUERY] Building DSL from explicit n_query');
+          
+          // Import buildDslFromEdge for n_query processing
+          const { buildDslFromEdge: buildDslFromEdgeForNQuery } = await import('../lib/das/buildDslFromEdge');
+          
+          // Build an edge-like object with the n_query as its query
+          // Use the potentially-compiled nQueryString (with minus/plus if excludes were compiled)
+          const nQueryEdgeData = {
+            ...nQueryEdge,
+            query: nQueryString || explicitNQuery,  // Use compiled version if available
+          };
+          
+          // Determine connection provider for event name mapping
+          const connectionProvider = connectionName?.includes('amplitude') 
+            ? 'amplitude' 
+            : connectionName?.includes('sheets') 
+              ? 'sheets' 
+              : connectionName?.includes('statsig') 
+                ? 'statsig' 
+                : undefined;
+          
+          // Load events for n_query
+          const eventLoader = async (eventId: string) => {
+            const fileId = `event-${eventId}`;
+            const file = fileRegistry.getFile(fileId);
+            if (file && file.data) {
+              return file.data;
+            }
+            return { id: eventId, name: eventId, provider_event_names: {} };
+          };
+          
+          // Parse constraints for n_query (same as main query)
+          let nQueryConstraints;
+          try {
+            const { parseConstraints } = await import('../lib/queryDSL');
+            const graphConstraints = graph?.currentQueryDSL ? parseConstraints(graph.currentQueryDSL) : null;
+            const nQueryEdgeConstraints = parseConstraints(explicitNQuery);
+            
+            nQueryConstraints = {
+              context: [...(graphConstraints?.context || []), ...(nQueryEdgeConstraints?.context || [])],
+              contextAny: [...(graphConstraints?.contextAny || []), ...(nQueryEdgeConstraints?.contextAny || [])],
+              window: nQueryEdgeConstraints?.window || graphConstraints?.window || null,
+              visited: nQueryEdgeConstraints?.visited || [],
+              visitedAny: nQueryEdgeConstraints?.visitedAny || []
+            };
+          } catch (error) {
+            console.warn('[DataOps:DUAL_QUERY] Failed to parse n_query constraints:', error);
+          }
+          
+          // Build DSL from n_query
+          const nQueryResult = await buildDslFromEdgeForNQuery(
+            nQueryEdgeData,
+            graph,
+            connectionProvider,
+            eventLoader,
+            nQueryConstraints
+          );
+          
+          baseQueryPayload = nQueryResult.queryPayload;
+          console.log('[DataOps:DUAL_QUERY] Built n_query payload:', {
+            from: baseQueryPayload.from,
+            to: baseQueryPayload.to,
+            visited: baseQueryPayload.visited,
+            visited_upstream: baseQueryPayload.visited_upstream,
+            isComposite: nQueryIsComposite,
+          });
+        } catch (error) {
+          console.error('[DataOps:DUAL_QUERY] Failed to build DSL from explicit n_query:', error);
+          // Fall back to auto-strip if n_query parsing fails
+          explicitNQuery = undefined;
+          nQueryIsComposite = false;
+          needsDualQuery = queryPayload.visited_upstream?.length > 0;
+        }
+      }
+      
+      // If no explicit n_query but we have visited_upstream, auto-derive by stripping
+      if (!explicitNQuery && queryPayload.visited_upstream && Array.isArray(queryPayload.visited_upstream) && queryPayload.visited_upstream.length > 0) {
         needsDualQuery = true;
         console.log('[DataOps:DUAL_QUERY] Detected visited_upstream, will run dual queries for n and k');
         console.log('[DataOps:DUAL_QUERY] Conditioned query has visited_upstream:', queryPayload.visited_upstream);
@@ -2388,7 +2504,7 @@ class DataOperationsService {
           // Note: Keep 'visited' (between from and to) if present - that's part of the path
         };
         
-        console.log('[DataOps:DUAL_QUERY] Base query (for n):', {
+        console.log('[DataOps:DUAL_QUERY] Base query (for n, auto-stripped):', {
           from: baseQueryPayload.from,
           to: baseQueryPayload.to,
           visited: baseQueryPayload.visited,
@@ -2671,33 +2787,103 @@ class DataOperationsService {
         if (needsDualQuery && baseQueryPayload) {
           console.log('[DataOps:DUAL_QUERY] Running base query for n (upstream of k queries)...');
           
-          const baseResult = await runner.execute(connectionName, baseQueryPayload, {
-            connection_string: connectionString,
-            window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
-            context: { mode: contextMode },
-            edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
-            eventDefinitions,
-          });
+          let baseRaw: any;
           
-          if (!baseResult.success) {
-            console.error('[DataOps:DUAL_QUERY] Base query failed:', baseResult.error);
-            toast.error(`Base query failed: ${baseResult.error}`, { id: 'das-fetch' });
-            sessionLogService.endOperation(logOpId, 'error', `Base query failed: ${baseResult.error}`);
-            return;
+          // Check if n_query is composite (has minus/plus from excludes compilation)
+          if (nQueryIsComposite && nQueryString) {
+            // n_query is composite - run through composite executor
+            console.log('[DataOps:DUAL_QUERY:COMPOSITE] n_query is composite, using inclusion-exclusion executor');
+            
+            const { executeCompositeQuery } = await import('../lib/das/compositeQueryExecutor');
+            
+            try {
+              const nQueryCombined = await executeCompositeQuery(
+                nQueryString,
+                { ...baseQueryPayload, window: fetchWindow, mode: contextMode },
+                connectionName,
+                runner,
+                graph
+              );
+              
+              // executeCompositeQuery returns { n, k, p_mean, evidence }
+              baseRaw = {
+                n: nQueryCombined.n,
+                k: nQueryCombined.k,
+                p: nQueryCombined.p_mean,
+                time_series: nQueryCombined.evidence?.time_series,
+              };
+              
+              console.log('[DataOps:DUAL_QUERY:COMPOSITE] n_query composite result:', {
+                n: baseRaw.n,
+                k: baseRaw.k,
+                p: baseRaw.p,
+              });
+            } catch (error) {
+              console.error('[DataOps:DUAL_QUERY:COMPOSITE] n_query composite execution failed:', error);
+              toast.error(`n_query composite query failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: 'das-fetch' });
+              sessionLogService.endOperation(logOpId, 'error', `n_query composite query failed: ${error}`);
+              return;
+            }
+          } else {
+            // Simple n_query - direct execution
+            const baseResult = await runner.execute(connectionName, baseQueryPayload, {
+              connection_string: connectionString,
+              window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+              context: { mode: contextMode },
+              edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
+              eventDefinitions,
+            });
+            
+            if (!baseResult.success) {
+              console.error('[DataOps:DUAL_QUERY] Base query failed:', baseResult.error);
+              toast.error(`Base query failed: ${baseResult.error}`, { id: 'das-fetch' });
+              sessionLogService.endOperation(logOpId, 'error', `Base query failed: ${baseResult.error}`);
+              return;
+            }
+            
+            baseRaw = baseResult.raw as any;
           }
           
-          const baseRaw = baseResult.raw as any;
-          baseN = baseRaw?.n ?? 0;
-          baseTimeSeries = Array.isArray(baseRaw?.time_series) ? baseRaw.time_series : undefined;
+          // CRITICAL: Different extraction depending on n_query type:
+          // - Explicit n_query (e.g., "from(A).to(D)"): we want the COMPLETION count (k/to_count)
+          //   because n_query defines a funnel, and we want "users who completed that funnel"
+          // - Auto-stripped query: we want the FROM count (n/from_count)
+          //   because we stripped visited_upstream but kept from/to, so n = all users at 'from'
+          if (explicitNQuery) {
+            // Explicit n_query: use k (to_count) = users who completed the n_query funnel
+            baseN = baseRaw?.k ?? 0;
+            console.log('[DataOps:DUAL_QUERY] Explicit n_query: using k (to_count) as baseN:', baseN);
+          } else {
+            // Auto-stripped: use n (from_count) = all users at 'from'
+            baseN = baseRaw?.n ?? 0;
+            console.log('[DataOps:DUAL_QUERY] Auto-stripped: using n (from_count) as baseN:', baseN);
+          }
+          
+          // For time series: same logic - use k values for explicit n_query, n values for auto-stripped
+          if (Array.isArray(baseRaw?.time_series)) {
+            if (explicitNQuery) {
+              // For explicit n_query, the "n" for the main query is the "k" of the n_query
+              baseTimeSeries = baseRaw.time_series.map((day: any) => ({
+                date: day.date,
+                n: day.k,  // Use k as n
+                k: day.k,  // (k is the same for reference)
+                p: day.p
+              }));
+            } else {
+              baseTimeSeries = baseRaw.time_series;
+            }
+          }
           
           console.log('[DataOps:DUAL_QUERY] Base query result (for n):', {
             n: baseN,
+            usedExplicitNQuery: !!explicitNQuery,
+            isComposite: nQueryIsComposite,
             hasTimeSeries: !!baseTimeSeries,
             timeSeriesLength: baseTimeSeries?.length ?? 0,
           });
           
           sessionLogService.addChild(logOpId, 'info', 'DUAL_QUERY_BASE',
-            `Base query for n: n=${baseN} (all users at 'from')`,
+            `Base query for n: n=${baseN} (${explicitNQuery ? 'completion count of n_query' : 'all users at from'}${nQueryIsComposite ? ', composite' : ''})`,
             `This is the denominator for upstream-conditioned queries`
           );
         }
