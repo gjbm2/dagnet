@@ -517,7 +517,7 @@ class FileOperationsService {
     // 4. Confirmation dialog with appropriate message
     if (!skipConfirm && this.dialogOps) {
       const message = isCommitted
-        ? `Delete "${file.name || fileId}" from local workspace AND remote repository?`
+        ? `Delete "${file.name || fileId}"?\n\nThis will remove it from your local workspace. The deletion will be pushed to the remote repository when you commit.`
         : `Delete "${file.name || fileId}" from local workspace?`;
 
       const confirm = await this.dialogOps.showConfirm({
@@ -532,29 +532,36 @@ class FileOperationsService {
     }
 
     // 5. Handle deletion with staging (no immediate Git changes)
+    // Node and graph files need special handling for image GC
     const isNodeFile = type === 'node';
+    const isGraphFile = type === 'graph';
     
     if (isNodeFile) {
       // Use deleteOperationsService for smart image GC
       const { deleteOperationsService } = await import('./deleteOperationsService');
       const nodeId = fileId.replace(/^node-/, '');
       await deleteOperationsService.deleteNodeFile(nodeId);
+    } else if (isGraphFile) {
+      // Use deleteOperationsService for smart image GC (graphs can also have images)
+      const { deleteOperationsService } = await import('./deleteOperationsService');
+      const graphId = fileId.replace(/^graph-/, '');
+      await deleteOperationsService.deleteGraphFile(graphId);
     } else {
-      // For all file types: stage deletion (don't delete from Git immediately)
-    if (isCommitted && file.path) {
+      // For all other file types: stage deletion (no image GC needed)
+      if (isCommitted && file.path) {
         fileRegistry.registerFileDeletion(fileId, file.path, type);
         console.log(`FileOperationsService: Staged file deletion for Git commit: ${fileId}`);
-    }
+      }
 
       // AUTO-REMOVE from index file (before deleting file itself)
-    await this.removeFromIndexFile(file);
+      await this.removeFromIndexFile(file);
 
       // Delete from local FileRegistry
-    try {
-      await fileRegistry.deleteFile(fileId);
-    } catch (error) {
-      console.error(`FileOperationsService: Failed to delete ${fileId}:`, error);
-      return false;
+      try {
+        await fileRegistry.deleteFile(fileId);
+      } catch (error) {
+        console.error(`FileOperationsService: Failed to delete ${fileId}:`, error);
+        return false;
       }
     }
 
@@ -601,33 +608,363 @@ class FileOperationsService {
   /**
    * Rename file
    * Handles:
-   * - Updating FileState
-   * - Updating index
+   * - Updating FileState (fileId, path, name)
+   * - Updating id in file data (for non-graph files)
+   * - Updating all references in other files (for non-graph files)
+   * - Updating index file
    * - Updating all open tabs
    * - Updating Navigator
+   * 
+   * Git behavior:
+   * - Old file is staged for deletion
+   * - New file is created and marked dirty
+   * - Reference files are marked dirty
+   * - On commit: DELETE old + CREATE new + UPDATE refs
+   * 
+   * TODO: Use Git Data API for atomic commits so GitHub shows this as a proper
+   * rename in file history. Currently creates multiple commits via Contents API.
+   * See: https://docs.github.com/en/rest/git/trees
    */
   async renameFile(
     fileId: string,
-    newName: string
-  ): Promise<boolean> {
+    newName: string,
+    callbacks?: {
+      showProgress?: (message: string) => void;
+    }
+  ): Promise<{ success: boolean; updatedReferences: number; error?: string }> {
     console.log(`FileOperationsService: Renaming ${fileId} → ${newName}`);
+    const showProgress = callbacks?.showProgress || ((msg: string) => console.log(msg));
 
     const file = fileRegistry.getFile(fileId);
     if (!file) {
       console.error(`FileOperationsService: File ${fileId} not found`);
-      return false;
+      return { success: false, updatedReferences: 0, error: 'File not found' };
     }
 
-    // TODO: Implement rename logic
-    // This is complex because it affects:
-    // - FileRegistry (fileId changes)
-    // - IndexedDB (need to move record)
-    // - Index files (need to update path)
-    // - Open tabs (need to update references)
-    // For now, recommend duplicate + delete workflow
+    const [type, ...nameParts] = fileId.split('-');
+    const oldName = nameParts.join('-');
 
-    console.warn('FileOperationsService: Rename not fully implemented yet. Use duplicate + delete.');
-    return false;
+    if (newName === oldName) {
+      return { success: true, updatedReferences: 0 };
+    }
+
+    // Validate new name (no special characters that would break fileId)
+    if (!/^[a-zA-Z0-9_-]+$/.test(newName)) {
+      return { success: false, updatedReferences: 0, error: 'Name can only contain letters, numbers, hyphens, and underscores' };
+    }
+
+    const newFileId = `${type}-${newName}`;
+    
+    // Check if target already exists
+    const existingFile = fileRegistry.getFile(newFileId);
+    if (existingFile) {
+      return { success: false, updatedReferences: 0, error: `A file named "${newName}" already exists` };
+    }
+
+    let updatedReferences = 0;
+
+    try {
+      showProgress(`Renaming ${oldName} to ${newName}...`);
+
+      // For non-graph files, update references in other files first
+      if (type !== 'graph') {
+        showProgress('Scanning for references...');
+        updatedReferences = await this.updateReferencesForRename(type, oldName, newName, showProgress);
+      }
+
+      // Get workspace info
+      const workspace = this.getWorkspaceState ? this.getWorkspaceState() : { repo: 'local', branch: 'main' };
+
+      // 1. Create new file with updated data
+      const newData = structuredClone(file.data);
+      
+      // Update id in data if it matches old name (for non-graph files)
+      if (type !== 'graph' && newData.id === oldName) {
+        newData.id = newName;
+      }
+      if (newData.name === oldName) {
+        newData.name = newName;
+      }
+      if (newData.metadata) {
+        newData.metadata.updated_at = new Date().toISOString();
+      }
+
+      // Calculate new path
+      const extension = type === 'graph' ? 'json' : 'yaml';
+      const newPath = `${type}s/${newName}.${extension}`;
+
+      showProgress('Creating new file record...');
+      
+      // Create new file state with ORIGINAL file's originalData
+      // This ensures the new file is marked as dirty (new content vs old original)
+      const newFile = await fileRegistry.getOrCreateFile(
+        newFileId,
+        type as ObjectType,
+        { 
+          repository: file.source?.repository || workspace.repo,
+          path: newPath,
+          branch: file.source?.branch || workspace.branch
+        },
+        newData
+      );
+
+      // Mark the new file as dirty by setting originalData to differ from data
+      // The file is a local change that needs to be committed
+      newFile.originalData = file.originalData || null;
+      newFile.isDirty = true;
+      newFile.isLocal = !file.sha; // Local if original wasn't committed
+      await db.files.put(newFile);
+
+      // 2. Update index file to point to new file
+      if (['parameter', 'context', 'case', 'node', 'event'].includes(type)) {
+        showProgress('Updating index...');
+        await this.updateIndexForRename(file, type as ObjectType, oldName, newName);
+      }
+
+      // 3. Close all tabs for old file and reopen for new file
+      if (file.viewTabs && file.viewTabs.length > 0 && this.tabOps) {
+        showProgress('Updating tabs...');
+        const tabsToReopen: { viewMode: string }[] = [];
+        
+        // Remember which tabs were open with what view modes
+        for (const tabId of [...file.viewTabs]) {
+          // Get tab info before closing
+          const tabInfo = this.tabOps.getTab?.(tabId);
+          if (tabInfo) {
+            tabsToReopen.push({ viewMode: tabInfo.viewMode || 'interactive' });
+          }
+          await this.tabOps.closeTab(tabId, true); // force close
+        }
+
+        // Reopen tabs for new file
+        const newItem = {
+          id: newName,
+          name: `${newName}.${extension}`,
+          path: newPath,
+          type: type as ObjectType,
+          isLocal: file.isLocal
+        };
+
+        for (const tab of tabsToReopen) {
+          await this.tabOps.openTab(newItem, tab.viewMode);
+        }
+      }
+
+      // 4. Stage old file for deletion if it was committed
+      if (file.sha && file.path) {
+        showProgress('Staging old file for deletion...');
+        fileRegistry.registerFileDeletion(fileId, file.path, type);
+      }
+
+      // 5. Delete old file from FileRegistry
+      showProgress('Cleaning up...');
+      await fileRegistry.deleteFile(fileId);
+
+      // 6. Refresh Navigator
+      if (this.navigatorOps) {
+        await this.navigatorOps.refreshItems();
+      }
+
+      console.log(`FileOperationsService: Renamed ${fileId} → ${newFileId} successfully`);
+      sessionLogService.success('file', 'FILE_RENAME_SUCCESS', 
+        `Renamed ${type}: ${oldName} → ${newName}`,
+        updatedReferences > 0 ? `Updated ${updatedReferences} references` : undefined,
+        { fileId: newFileId, fileType: type });
+
+      return { success: true, updatedReferences };
+
+    } catch (error) {
+      console.error(`FileOperationsService: Failed to rename ${fileId}:`, error);
+      return { 
+        success: false, 
+        updatedReferences: 0, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  }
+
+  /**
+   * Update all references to a renamed file across the workspace
+   * Returns the number of references updated
+   */
+  private async updateReferencesForRename(
+    type: string,
+    oldId: string,
+    newId: string,
+    showProgress: (message: string) => void
+  ): Promise<number> {
+    let updatedCount = 0;
+    const allFiles = fileRegistry.getAllFiles();
+
+    for (const file of allFiles) {
+      // Skip index files and the file being renamed itself
+      if (file.fileId.endsWith('-index')) continue;
+      if (file.fileId === `${type}-${oldId}`) continue;
+
+      let fileUpdated = false;
+      const data = structuredClone(file.data);
+
+      // Update references based on file type
+      if (file.type === 'graph' && data.nodes && data.edges) {
+        // Update references in graph files
+        fileUpdated = this.updateGraphReferences(data, type, oldId, newId);
+      } else if (['parameter', 'case', 'context', 'event', 'node'].includes(file.type)) {
+        // Update references in parameter files (they can reference other params)
+        fileUpdated = this.updateParameterFileReferences(data, type, oldId, newId);
+      }
+
+      if (fileUpdated) {
+        showProgress(`Updating references in ${file.fileId}...`);
+        if (data.metadata) {
+          data.metadata.updated_at = new Date().toISOString();
+        }
+        await fileRegistry.updateFile(file.fileId, data);
+        updatedCount++;
+      }
+    }
+
+    return updatedCount;
+  }
+
+  /**
+   * Update references in a graph file
+   * Returns true if any references were updated
+   */
+  private updateGraphReferences(
+    data: any,
+    refType: string,
+    oldId: string,
+    newId: string
+  ): boolean {
+    let updated = false;
+
+    // Update edge references
+    if (data.edges) {
+      for (const edge of data.edges) {
+        // Update case_id references
+        if (refType === 'case' && edge.case_id === oldId) {
+          edge.case_id = newId;
+          updated = true;
+        }
+
+        // Update parameter references in probability
+        if (refType === 'parameter') {
+          if (edge.p?.id === oldId) {
+            edge.p.id = newId;
+            updated = true;
+          }
+          if (edge.cost_gbp?.id === oldId) {
+            edge.cost_gbp.id = newId;
+            updated = true;
+          }
+          if (edge.cost_time?.id === oldId) {
+            edge.cost_time.id = newId;
+            updated = true;
+          }
+          
+          // Update conditional probability references
+          if (edge.conditional_p) {
+            for (const cond of edge.conditional_p) {
+              if (cond.p?.id === oldId) {
+                cond.p.id = newId;
+                updated = true;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Update node references
+    if (data.nodes) {
+      for (const node of data.nodes) {
+        // Update event_id references
+        if (refType === 'event' && node.event_id === oldId) {
+          node.event_id = newId;
+          updated = true;
+        }
+
+        // Update case references in nodes
+        if (refType === 'case' && node.case?.id === oldId) {
+          node.case.id = newId;
+          updated = true;
+        }
+      }
+    }
+
+    return updated;
+  }
+
+  /**
+   * Update references in a parameter-type file
+   * Returns true if any references were updated
+   */
+  private updateParameterFileReferences(
+    data: any,
+    refType: string,
+    oldId: string,
+    newId: string
+  ): boolean {
+    let updated = false;
+
+    // Context files can reference other contexts
+    if (refType === 'context' && data.parent_context === oldId) {
+      data.parent_context = newId;
+      updated = true;
+    }
+
+    // Parameter files can have source references
+    if (refType === 'parameter' && data.source_param === oldId) {
+      data.source_param = newId;
+      updated = true;
+    }
+
+    // Event files can reference contexts
+    if (refType === 'context' && data.context_id === oldId) {
+      data.context_id = newId;
+      updated = true;
+    }
+
+    return updated;
+  }
+
+  /**
+   * Update index file for a renamed file
+   */
+  private async updateIndexForRename(
+    file: import('@/types').FileState,
+    type: ObjectType,
+    oldId: string,
+    newId: string
+  ): Promise<void> {
+    const indexFileId = `${type}-index`;
+    const pluralKey = `${type}s`;
+
+    const indexFile = fileRegistry.getFile(indexFileId);
+    if (!indexFile) {
+      console.warn(`FileOperationsService: Index file ${indexFileId} not found for rename`);
+      return;
+    }
+
+    const index = structuredClone(indexFile.data);
+    const entries = index[pluralKey] || [];
+
+    // Find and update the entry
+    const entryIdx = entries.findIndex((e: any) => e.id === oldId);
+    if (entryIdx >= 0) {
+      const entry = entries[entryIdx];
+      entry.id = newId;
+      entry.file_path = `${pluralKey}/${newId}.yaml`;
+      entry.updated_at = new Date().toISOString();
+      
+      // Re-sort entries by id
+      entries.sort((a: any, b: any) => a.id.localeCompare(b.id));
+      
+      index[pluralKey] = entries;
+      index.updated_at = new Date().toISOString();
+
+      await fileRegistry.updateFile(indexFileId, index);
+    }
   }
 
   /**

@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { ChevronRight, Database, DatabaseZap, Folders, TrendingUpDown, X } from 'lucide-react';
+import { ChevronRight, Database, DatabaseZap, Folders, TrendingUpDown, X, Trash2 } from 'lucide-react';
 import type { DataOperationSection } from './DataOperationsSections';
 
 interface DataSectionSubmenuProps {
@@ -21,6 +21,7 @@ interface DataSectionSubmenuProps {
   onGetFromSource: (section: DataOperationSection) => void;
   onGetFromSourceDirect: (section: DataOperationSection) => void;
   onClearCache: (section: DataOperationSection) => void;
+  onClearDataFile: (section: DataOperationSection) => void;
 }
 
 export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
@@ -35,6 +36,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
   onGetFromSource,
   onGetFromSourceDirect,
   onClearCache,
+  onClearDataFile,
 }) => {
   return (
     <div
@@ -207,6 +209,28 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             >
               <span>Unsign file cache</span>
               <X size={12} style={{ color: '#666' }} />
+            </div>
+          )}
+          
+          {/* Clear data file - only show for parameters and cases with files */}
+          {section.operations.clearDataFile && (
+            <div
+              onClick={() => onClearDataFile(section)}
+              style={{
+                padding: '6px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                borderRadius: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '16px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              <span>Clear data file</span>
+              <Trash2 size={12} style={{ color: '#666' }} />
             </div>
           )}
         </div>

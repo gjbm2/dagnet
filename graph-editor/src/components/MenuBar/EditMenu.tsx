@@ -269,28 +269,25 @@ export function EditMenu() {
 
           <Menubar.Item 
             className="menubar-item" 
-            onSelect={handleCut}
-            disabled={!activeTab}
+            disabled={true}
           >
-            Cut
+            Cut (coming soon)
             <div className="menubar-right-slot">⌘X</div>
           </Menubar.Item>
 
           <Menubar.Item 
             className="menubar-item" 
-            onSelect={handleCopy}
-            disabled={!activeTab}
+            disabled={true}
           >
-            Copy
+            Copy (coming soon)
             <div className="menubar-right-slot">⌘C</div>
           </Menubar.Item>
 
           <Menubar.Item 
             className="menubar-item" 
-            onSelect={handlePaste}
-            disabled={!activeTab}
+            disabled={true}
           >
-            Paste
+            Paste (coming soon)
             <div className="menubar-right-slot">⌘V</div>
           </Menubar.Item>
 
@@ -314,17 +311,17 @@ export function EditMenu() {
 
               <Menubar.Item 
                 className="menubar-item" 
-                onSelect={handleFind}
+                disabled={true}
               >
-                Find
+                Find (coming soon)
                 <div className="menubar-right-slot">⌘F</div>
               </Menubar.Item>
 
               <Menubar.Item 
                 className="menubar-item" 
-                onSelect={handleReplace}
+                disabled={true}
               >
-                Replace
+                Replace (coming soon)
                 <div className="menubar-right-slot">⌘⌥F</div>
               </Menubar.Item>
             </>

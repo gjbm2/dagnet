@@ -81,11 +81,6 @@
 **Estimated Effort:** 20-24 hours
 
 
-
-## Other
-
-- Added n_query logic to accommodate complex non-discriminaable parent node situations -- check that appropriately generalisable
-
 ## Current query DSL
 
 - This query string is now a natural candidate for what to use to populate the name of newly created scenarios, poss. along with timestamp.
@@ -143,7 +138,7 @@
 - add moving arrow effect, speed of animation scale on log lag
 
 ### Medium 
-- Hooks for every menu item...
+- Hooks for every menu item; clear up menus in general, they're a mess....
 - Session / tab state not reliably persisting on reload (annoying)
 - let's add a 'Create [x] scenarios' on right click context menu on context chips in window component AND within context drop-down which: creates one scenario for each value in the key clicked  -- e.g. if I had browser-type, it would create one scenario [snapshot all mode] for each of the values in browser-type. As always, ensure the logic for this is NOT expressed in the menu file, but in a generalised location
 - Orphaned rc windows at times

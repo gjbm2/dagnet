@@ -928,6 +928,68 @@ class RepositoryOperationsService {
       throw error;
     }
   }
+
+  /**
+   * Rollback repository to a specific commit
+   * 
+   * This fetches ALL files from the specified commit and replaces local versions.
+   * Uses the same efficient parallel fetching as pullLatest.
+   * All changed files are marked dirty so user can review and commit, or pull to revert.
+   * 
+   * @param repository - Repository name
+   * @param branch - Current branch  
+   * @param commitSha - The commit SHA to rollback to
+   */
+  async rollbackToCommit(
+    repository: string, 
+    branch: string, 
+    commitSha: string
+  ): Promise<{ success: boolean; filesChanged: number }> {
+    console.log(`🔄 RepositoryOperationsService: Rolling back ${repository}/${branch} to commit ${commitSha.substring(0, 7)}`);
+    sessionLogService.info('git', 'GIT_ROLLBACK', `Rolling back to commit ${commitSha.substring(0, 7)}`, undefined,
+      { repository, branch, commitSha });
+
+    // Get git credentials
+    const credsResult = await credentialsManager.loadCredentials();
+    if (!credsResult.success) {
+      sessionLogService.error('git', 'GIT_ROLLBACK_ERROR', 'Rollback failed: No credentials available');
+      throw new Error('No credentials available');
+    }
+
+    const gitCreds = credsResult.credentials?.git?.find(
+      (repo: any) => repo.name === repository
+    );
+
+    if (!gitCreds) {
+      sessionLogService.error('git', 'GIT_ROLLBACK_ERROR', `Rollback failed: Repository "${repository}" not found in credentials`);
+      throw new Error(`Repository "${repository}" not found in credentials`);
+    }
+
+    try {
+      // Use workspaceService.pullAtCommit for efficient parallel fetching
+      const result = await workspaceService.pullAtCommit(repository, branch, commitSha, gitCreds);
+      
+      const filesChanged = result.filesUpdated + result.filesCreated;
+
+      // Invalidate cache and refresh navigator
+      this.invalidateCommittableFilesCache();
+      if (this.navigatorOps) {
+        await this.navigatorOps.refreshItems();
+      }
+
+      console.log(`✅ RepositoryOperationsService: Rolled back to ${commitSha.substring(0, 7)}, ${filesChanged} files changed`);
+      sessionLogService.success('git', 'GIT_ROLLBACK_SUCCESS', 
+        `Rolled back to ${commitSha.substring(0, 7)}`,
+        `${result.filesUpdated} updated, ${result.filesCreated} created`,
+        { repository, branch, commitSha, filesChanged });
+
+      return { success: true, filesChanged };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sessionLogService.error('git', 'GIT_ROLLBACK_ERROR', `Rollback failed: ${message}`);
+      throw error;
+    }
+  }
 }
 
 // Export singleton instance

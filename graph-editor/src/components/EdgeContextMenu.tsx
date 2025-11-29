@@ -14,11 +14,13 @@ import { ParameterEditor } from './ParameterEditor';
 import { DataOperationsMenu } from './DataOperationsMenu';
 import { ChevronRight, Copy } from 'lucide-react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
+import { RemoveOverridesMenuItem } from './RemoveOverridesMenuItem';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils';
 import { getAllDataSections, type DataOperationSection } from './DataOperationsSections';
 import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
+import { useClearDataFile } from '../hooks/useClearDataFile';
 import toast from 'react-hot-toast';
 
 interface EdgeContextMenuProps {
@@ -232,6 +234,21 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     import('../services/dataOperationsService').then(({ dataOperationsService }) => {
       dataOperationsService.clearCache(section.objectType as 'parameter' | 'case' | 'node', section.objectId);
     });
+    onClose();
+  };
+  
+  // Clear data file hook
+  const { clearDataFile } = useClearDataFile();
+  
+  const handleSectionClearDataFile = async (section: DataOperationSection) => {
+    if (section.objectType !== 'parameter' && section.objectType !== 'case') {
+      // Only parameters and cases have data to clear
+      return;
+    }
+    const fileId = section.objectType === 'parameter' 
+      ? `parameter-${section.objectId}` 
+      : `case-${section.objectId}`;
+    await clearDataFile(fileId);
     onClose();
   };
   
@@ -600,6 +617,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onGetFromSource={handleSectionGetFromSource}
               onGetFromSourceDirect={handleSectionGetFromSourceDirect}
               onClearCache={handleSectionClearCache}
+              onClearDataFile={handleSectionClearDataFile}
             />
           ))}
         </>
@@ -753,6 +771,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         <Copy size={14} />
         <span>Copy vars{isMultiSelect ? ` (${selectedEdges.length} edges)` : ''}</span>
       </div>
+
+      <RemoveOverridesMenuItem graph={graph} onUpdateGraph={onUpdateGraph} edgeId={edgeId} onClose={onClose} />
 
       <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
 

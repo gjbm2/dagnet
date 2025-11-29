@@ -3,6 +3,10 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useTabContext } from '../../contexts/TabContext';
 import { usePullFile } from '../../hooks/usePullFile';
 import { usePullAll } from '../../hooks/usePullAll';
+import { useRenameFile } from '../../hooks/useRenameFile';
+import { useViewHistory } from '../../hooks/useViewHistory';
+import { RenameModal } from '../RenameModal';
+import { HistoryModal } from '../modals/HistoryModal';
 import './TabBar.css';
 
 /**
@@ -32,6 +36,34 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
   // Pull hooks - all logic including conflict modal is in the hook
   const { canPull, pullFile } = usePullFile(tab?.fileId);
   const { pullAll, conflictModal: pullAllConflictModal } = usePullAll();
+  
+  // Rename hook
+  const { 
+    canRename, 
+    showRenameModal, 
+    hideRenameModal, 
+    isRenameModalOpen, 
+    renameFile, 
+    currentName: renameCurrentName,
+    fileType: renameFileType,
+    isRenaming 
+  } = useRenameFile(tab?.fileId);
+  
+  // History hook
+  const {
+    canViewHistory,
+    showHistoryModal,
+    hideHistoryModal,
+    isHistoryModalOpen,
+    loadHistory,
+    getContentAtCommit,
+    rollbackToCommit,
+    fileName: historyFileName,
+    filePath: historyFilePath,
+    isLoading: isHistoryLoading,
+    history,
+    currentContent
+  } = useViewHistory(tab?.fileId);
 
   if (!tab) return <>{children}</>;
 
@@ -127,6 +159,14 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
             Save
           </DropdownMenu.Item>
 
+          <DropdownMenu.Item 
+            className="tab-context-item" 
+            onSelect={showRenameModal}
+            disabled={!canRename}
+          >
+            Rename...
+          </DropdownMenu.Item>
+
           {canPull && (
             <DropdownMenu.Item 
               className="tab-context-item" 
@@ -149,6 +189,15 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
           >
             Revert
           </DropdownMenu.Item>
+
+          {canViewHistory && (
+            <DropdownMenu.Item 
+              className="tab-context-item" 
+              onSelect={showHistoryModal}
+            >
+              View History
+            </DropdownMenu.Item>
+          )}
 
           <DropdownMenu.Separator className="tab-context-separator" />
 
@@ -199,6 +248,31 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
+      
+      {/* Rename Modal */}
+      <RenameModal
+        isOpen={isRenameModalOpen}
+        onClose={hideRenameModal}
+        onRename={renameFile}
+        currentName={renameCurrentName}
+        fileType={renameFileType}
+        isRenaming={isRenaming}
+      />
+      
+      {/* History Modal */}
+      <HistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={hideHistoryModal}
+        fileName={historyFileName}
+        filePath={historyFilePath}
+        isLoading={isHistoryLoading}
+        history={history}
+        currentContent={currentContent}
+        onLoadHistory={loadHistory}
+        onGetContentAtCommit={getContentAtCommit}
+        onRollback={rollbackToCommit}
+      />
+      
       {/* Pull all conflict modal - managed by usePullAll hook */}
       {pullAllConflictModal}
     </DropdownMenu.Root>

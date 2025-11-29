@@ -5,8 +5,10 @@ import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useCommitHandler } from '../../hooks/useCommitHandler';
 import { usePullAll } from '../../hooks/usePullAll';
+import { useRollbackRepository } from '../../hooks/useRollbackRepository';
 import { SwitchRepositoryModal } from '../modals/SwitchRepositoryModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
+import { RepositoryHistoryModal } from '../modals/RepositoryHistoryModal';
 // MergeConflictModal is handled by usePullAll hook
 import { CommitModal } from '../CommitModal';
 import { repositoryOperationsService } from '../../services/repositoryOperationsService';
@@ -42,6 +44,19 @@ export function RepositoryMenu() {
   
   // Pull all hook - manages everything including conflict modal
   const { isPulling, pullAll, conflictModal: pullAllConflictModal } = usePullAll();
+  
+  // Repository history/rollback hook
+  const {
+    showModal: showRepoHistoryModal,
+    hideModal: hideRepoHistoryModal,
+    isModalOpen: isRepoHistoryModalOpen,
+    loadHistory: loadRepoHistory,
+    rollbackToCommit,
+    isLoading: isRepoHistoryLoading,
+    history: repoHistory,
+    repoName,
+    branch: repoBranch
+  } = useRollbackRepository();
 
   const dirtyTabs = operations.getDirtyTabs();
   const [dirtyFiles, setDirtyFiles] = React.useState<any[]>([]);
@@ -196,6 +211,13 @@ export function RepositoryMenu() {
               {hasDirtyFiles && <div className="menubar-right-slot">{dirtyFiles.length}</div>}
             </Menubar.Item>
 
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={showRepoHistoryModal}
+            >
+              View Repository History...
+            </Menubar.Item>
+
             <Menubar.Separator className="menubar-separator" />
 
             <Menubar.Item 
@@ -243,6 +265,16 @@ export function RepositoryMenu() {
         onClose={() => setIsCommitModalOpen(false)}
         onCommit={handleCommitFiles}
         preselectedFiles={[]}
+      />
+      <RepositoryHistoryModal
+        isOpen={isRepoHistoryModalOpen}
+        onClose={hideRepoHistoryModal}
+        repoName={repoName}
+        branch={repoBranch}
+        isLoading={isRepoHistoryLoading}
+        history={repoHistory}
+        onLoadHistory={loadRepoHistory}
+        onRollback={rollbackToCommit}
       />
     </>
   );

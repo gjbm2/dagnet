@@ -34,6 +34,7 @@ export interface DataOperationSection {
     getFromSourceDirect: boolean; // hasConnection
     putToFile: boolean;          // canPutToFile
     clearCache: boolean;         // hasFile && objectType === 'parameter'
+    clearDataFile: boolean;      // hasFile && (objectType === 'parameter' || objectType === 'case')
   };
 }
 
@@ -70,6 +71,7 @@ export function getNodeDataSections(
         getFromSourceDirect: false,
         putToFile: true,
         clearCache: false, // Nodes don't have cached data
+        clearDataFile: false, // Nodes don't have data files to clear
       },
     });
   }
@@ -101,6 +103,7 @@ export function getNodeDataSections(
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
         clearCache: hasFile, // Cases have schedules cache
+        clearDataFile: hasFile, // Cases have schedule data to clear
       },
     });
   }
@@ -147,6 +150,7 @@ export function getEdgeDataSections(
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
         clearCache: hasFile, // Parameters have time-series cache
+        clearDataFile: hasFile, // Parameters have values data to clear
       },
     });
   }
@@ -221,6 +225,7 @@ export function getEdgeDataSections(
             getFromSourceDirect: hasAnyConnection,
             putToFile: canPutToFile,
             clearCache: hasFile, // Parameters have time-series cache
+            clearDataFile: hasFile, // Parameters have values data to clear
           },
         });
       } else {
@@ -259,6 +264,7 @@ export function getEdgeDataSections(
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
         clearCache: hasFile, // Parameters have time-series cache
+        clearDataFile: hasFile, // Parameters have values data to clear
       },
     });
   }
@@ -290,6 +296,7 @@ export function getEdgeDataSections(
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
         clearCache: hasFile, // Parameters have time-series cache
+        clearDataFile: hasFile, // Parameters have values data to clear
       },
     });
   }

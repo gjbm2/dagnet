@@ -9,7 +9,8 @@ import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
 import { getObjectTypeTheme } from '@/theme/objectTypeTheme';
 import { fileRegistry } from '@/contexts/TabContext';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, ZapOff } from 'lucide-react';
+import { countNodeOverrides } from '../../hooks/useRemoveOverrides';
 import { ImageStackIndicator } from '../ImageStackIndicator';
 import { ImageHoverPreview } from '../ImageHoverPreview';
 import { ImageLoupeView } from '../ImageLoupeView';
@@ -152,6 +153,13 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const isCaseNode = data.type === 'case';
   const isStartNode = data.entry?.is_start || false;
   const isTerminalNode = data.absorbing || false;
+  
+  // Count overrides on this node to show indicator
+  const nodeOverrideCount = useMemo(() => {
+    if (!graph) return 0;
+    const graphNode = graph.nodes.find(n => n.uuid === data.uuid || n.id === data.id);
+    return graphNode ? countNodeOverrides(graphNode) : 0;
+  }, [graph, data.uuid, data.id]);
   
   // For case nodes, check PMF for each variant
   const getCaseVariantProbabilityMass = useCallback(() => {
@@ -714,7 +722,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       {/* Content wrapper */}
       <div style={{
         position: 'relative',
-        zIndex: 1,
+        zIndex: 10, // Above images (z-index 5) so PMF warnings show on top
         width: '100%',
         height: '100%',
         display: 'flex',
@@ -739,16 +747,26 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             paddingLeft: '12px',
             paddingRight: '12px',
             textAlign: 'center',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '3px',
             pointerEvents: 'auto' // Re-enable pointer events for interactive content
           }}
           onDoubleClick={handleDoubleClick}
           title="Double-click to edit in properties panel"
         >
-          <span>{data.label}</span>
+          {data.label}
+          {nodeOverrideCount > 0 && (
+            <span title={`${nodeOverrideCount} override${nodeOverrideCount > 1 ? 's' : ''} (auto-sync disabled)`}>
+              <ZapOff 
+                size={10} 
+                strokeWidth={2}
+                color="#000000"
+                style={{ 
+                  display: 'inline-block',
+                  verticalAlign: 'middle',
+                  marginLeft: '3px'
+                }}
+              />
+            </span>
+          )}
         </div>
         
         {data.absorbing && !isCaseNode && !data.outcome_type && (
@@ -908,7 +926,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           display: 'flex',
           gap: 4,
           alignItems: 'center',
-          pointerEvents: 'auto'
+          pointerEvents: 'auto',
+          zIndex: 5 // Below PMF warning (z-index 10) and case status indicator (z-index 15)
         }}
       >
         {/* URL icon (left of images) */}

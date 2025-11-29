@@ -24,10 +24,16 @@ export class LogFileService {
     const lines = content.split('\n');
     const markdownLines: string[] = [];
     
-    // Add title header
-    const logTitle = title || 'Batch Operation Log';
-    markdownLines.push(`# ${logTitle}`);
-    markdownLines.push('');
+    // Check if content already starts with a markdown header
+    const firstLine = lines[0]?.trim() || '';
+    const alreadyHasHeader = firstLine.startsWith('# ');
+    
+    // Add title header only if content doesn't already have one
+    if (!alreadyHasHeader) {
+      const logTitle = title || 'Batch Operation Log';
+      markdownLines.push(`# ${logTitle}`);
+      markdownLines.push('');
+    }
     
     // Process content lines
     let inResults = false;

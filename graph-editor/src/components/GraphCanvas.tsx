@@ -1221,8 +1221,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     // Update edge ID if source/target changed (not just handles)
+    // Use "-" instead of "->" to avoid invalid characters in IDs
     if (edge.from !== originalFrom || edge.to !== originalTo) {
-      const newEdgeId = `${edge.from}->${edge.to}`;
+      const newEdgeId = `${edge.from}-${edge.to}`;
       edge.id = newEdgeId;
     }
     
@@ -1507,6 +1508,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           if (!graphEdge) return prevEdge;
           
           // Update edge data while preserving component identity
+          // IMPORTANT: Create new calculateWidth function to use updated probability
+          const newProbability = graphEdge.p?.mean ?? 0.5;
+          const newCalculateWidth = () => {
+            // Simple width calculation based on probability
+            // (mirrors logic from buildScenarioRenderEdges but without scenario complexity)
+            const minWidth = MIN_WIDTH;
+            const maxWidth = MAX_WIDTH;
+            return minWidth + newProbability * (maxWidth - minWidth);
+          };
+          
           return {
             ...prevEdge,
             sourceHandle: graphEdge.fromHandle || prevEdge.sourceHandle,
@@ -1514,17 +1525,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             data: {
               ...prevEdge.data,
               id: graphEdge.id,
-              probability: graphEdge.p?.mean ?? 0.5,
+              probability: newProbability,
               stdev: graphEdge.p?.stdev,
               locked: graphEdge.p?.locked,
+              p: graphEdge.p, // Full p object with override flags
               description: graphEdge.description,
+              description_overridden: graphEdge.description_overridden,
+              query_overridden: graphEdge.query_overridden,
+              conditional_p: graphEdge.conditional_p, // Include conditional_p with override flags
               cost_gbp: (graphEdge as any).cost_gbp, // New flat cost structure
               cost_time: (graphEdge as any).cost_time, // New flat cost structure
               costs: graphEdge.costs, // Legacy field (for backward compat)
               weight_default: graphEdge.weight_default,
               case_variant: graphEdge.case_variant,
               case_id: graphEdge.case_id,
-              useSankeyView: useSankeyView
+              useSankeyView: useSankeyView,
+              // Update calculateWidth to use new probability
+              calculateWidth: newCalculateWidth
             }
           };
         });
@@ -2552,7 +2569,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         setTimeout(() => { visualWhatIfUpdateRef.current = false; }, 0);
       }
     });
-  }, [overridesVersion, setEdges, nodes, edges.length]);
+  }, [overridesVersion, setEdges, nodes, edges.length, graph?.metadata?.updated_at]);
 
   useEffect(() => {
     // Log when overridesVersion propagates into canvas and compute latency
@@ -4363,6 +4380,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Replaces the old base/overlay split with a single scenario-based approach
   const renderEdges = React.useMemo(() => {
     try {
+      // Debug: Log edge probabilities to verify updates
+      const edgeProbs = graph?.edges?.map((e: any) => `${e.id || e.uuid}: p=${e.p?.mean}`).join(', ');
+      console.log(`[renderEdges] Graph edge probabilities: ${edgeProbs}`);
+      
       if (!scenariosContext) {
         // Fallback: no scenarios, return base edges
         return edges;

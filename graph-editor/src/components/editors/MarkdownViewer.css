@@ -112,6 +112,21 @@
   border-bottom-color: var(--link-color);
 }
 
+/* Internal file links */
+.markdown-link.internal-link {
+  color: var(--accent-color, #6366f1);
+  cursor: pointer;
+  background: rgba(99, 102, 241, 0.1);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  border-bottom: none;
+}
+
+.markdown-link.internal-link:hover {
+  background: rgba(99, 102, 241, 0.2);
+  text-decoration: none;
+}
+
 /* Lists */
 .markdown-content ul,
 .markdown-content ol {

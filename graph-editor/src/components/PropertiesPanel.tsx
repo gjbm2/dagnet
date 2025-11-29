@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
@@ -33,6 +33,46 @@ import { generateIdFromLabel as generateIdFromLabelUtil } from '@/lib/idUtils';
 import './PropertiesPanel.css';
 import type { Evidence } from '../types';
 import { useDialog } from '../contexts/DialogContext';
+
+// ID validation pattern (matches schema: letters, numbers, hyphens, underscores)
+const VALID_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+/**
+ * Validate an ID against schema rules
+ * Returns error message if invalid, undefined if valid
+ */
+function validateId(id: string | undefined): string | undefined {
+  if (!id) return undefined; // Empty is allowed during editing
+  if (id.length > 128) return 'ID too long (max 128 characters)';
+  if (!VALID_ID_PATTERN.test(id)) {
+    if (/ /.test(id)) return 'Spaces not allowed in ID';
+    if (/>/.test(id)) return '">" not allowed in ID';
+    return 'Only letters, numbers, hyphens, underscores allowed';
+  }
+  return undefined;
+}
+
+/**
+ * Check if a node ID is unique within the graph
+ * Returns error message if duplicate, undefined if unique
+ */
+function checkNodeIdUnique(id: string | undefined, graph: any, currentNodeUuid: string): string | undefined {
+  if (!id || !graph?.nodes) return undefined;
+  const duplicate = graph.nodes.find((n: any) => n.id === id && n.uuid !== currentNodeUuid);
+  if (duplicate) return `ID "${id}" already used by another node`;
+  return undefined;
+}
+
+/**
+ * Check if an edge ID is unique within the graph
+ * Returns error message if duplicate, undefined if unique
+ */
+function checkEdgeIdUnique(id: string | undefined, graph: any, currentEdgeUuid: string): string | undefined {
+  if (!id || !graph?.edges) return undefined;
+  const duplicate = graph.edges.find((e: any) => e.id === id && e.uuid !== currentEdgeUuid);
+  if (duplicate) return `ID "${id}" already used by another edge`;
+  return undefined;
+}
 
 /**
  * Format evidence data for tooltip display
@@ -2094,21 +2134,44 @@ export default function PropertiesPanel({
                   {/* ID */}
                   <div style={{ marginBottom: '16px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>ID</label>
-                  <input
-                    data-field="id"
-                    value={localEdgeData.id || ''}
-                    onChange={(e) => setLocalEdgeData({...localEdgeData, id: e.target.value})}
-                    onBlur={() => updateEdge('id', localEdgeData.id)}
-                    onKeyDown={(e) => e.key === 'Enter' && updateEdge('id', localEdgeData.id)}
-                    placeholder="edge-id"
-                    style={{ 
-                      width: '100%', 
-                      padding: '8px', 
-                      border: '1px solid #ddd', 
-                      borderRadius: '4px',
-                      boxSizing: 'border-box'
-                    }}
-                  />
+                  {(() => {
+                    const formatError = validateId(localEdgeData.id);
+                    const uniqueError = checkEdgeIdUnique(localEdgeData.id, graph, selectedEdge?.uuid || '');
+                    const idError = formatError || uniqueError;
+                    return (
+                      <>
+                        <input
+                          data-field="id"
+                          value={localEdgeData.id || ''}
+                          onChange={(e) => setLocalEdgeData({...localEdgeData, id: e.target.value})}
+                          onBlur={() => {
+                            if (!formatError && !uniqueError) {
+                              updateEdge('id', localEdgeData.id);
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !formatError && !uniqueError) {
+                              updateEdge('id', localEdgeData.id);
+                            }
+                          }}
+                          placeholder="edge-id"
+                          style={{ 
+                            width: '100%', 
+                            padding: '8px', 
+                            border: idError ? '1px solid #e53e3e' : '1px solid #ddd', 
+                            borderRadius: '4px',
+                            boxSizing: 'border-box',
+                            backgroundColor: idError ? '#fff5f5' : undefined
+                          }}
+                        />
+                        {idError && (
+                          <div style={{ color: '#e53e3e', fontSize: '12px', marginTop: '4px' }}>
+                            ⚠️ {idError}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
                   {/* Description */}
