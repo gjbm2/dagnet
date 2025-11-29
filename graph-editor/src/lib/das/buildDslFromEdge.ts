@@ -16,6 +16,7 @@
 import { parseDSL, type ParsedConstraints } from '../queryDSL';
 import { contextRegistry } from '../../services/contextRegistry';
 import { querySignatureService } from '../../services/querySignatureService';
+import { parseUKDate } from '../dateFormat';
 
 export interface EventFilter {
   property: string;
@@ -367,7 +368,21 @@ export async function buildDslFromEdge(
   // Add window/date range if constraints provided
   if (constraints && constraints.window) {
     try {
+      // DEBUG: Log input to resolveWindowDates
+      console.log('[buildQueryPayload] Input window strings:', constraints.window);
+      
       const { startDate, endDate } = resolveWindowDates(constraints.window);
+      
+      // DEBUG: Log the Date objects before toISOString
+      console.log('[buildQueryPayload] Resolved Date objects:', {
+        startDate: startDate ? startDate.toString() : null,
+        startDateUTC: startDate ? startDate.toUTCString() : null,
+        startDateISO: startDate ? startDate.toISOString() : null,
+        endDate: endDate ? endDate.toString() : null,
+        endDateUTC: endDate ? endDate.toUTCString() : null,
+        endDateISO: endDate ? endDate.toISOString() : null
+      });
+      
       if (startDate) {
         queryPayload.start = startDate.toISOString();
       }
@@ -810,16 +825,23 @@ async function buildComputedOtherFilter(
 function resolveWindowDates(window: { start?: string; end?: string }): { startDate?: Date; endDate?: Date } {
   const now = new Date();
   
+  // DEBUG: Log input
+  console.log('[resolveWindowDates] Input:', window);
+  
   let startDate: Date | undefined;
   if (!window.start) {
     // No start specified - beginning of time (or undefined for fully open)
+    console.log('[resolveWindowDates] No start specified');
     startDate = undefined;
   } else if (window.start.match(/^-?\d+[dwmy]$/)) {
     // Relative offset
+    console.log('[resolveWindowDates] Start is relative offset:', window.start);
     startDate = applyRelativeOffset(now, window.start);
   } else {
     // Absolute date in d-MMM-yy format
+    console.log('[resolveWindowDates] Start is absolute date:', window.start);
     startDate = parseUKDate(window.start);
+    console.log('[resolveWindowDates] parseUKDate returned:', startDate?.toISOString());
   }
   
   let endDate: Date | undefined;
@@ -870,39 +892,7 @@ function applyRelativeOffset(base: Date, offset: string): Date {
   return result;
 }
 
-/**
- * Parse UK date format (d-MMM-yy) to Date object.
- * 
- * @param dateStr - Date string in d-MMM-yy format (e.g., "1-Jan-25")
- * @returns Date object
- */
-function parseUKDate(dateStr: string): Date {
-  // Parse d-MMM-yy format (e.g., "1-Jan-25")
-  const parts = dateStr.split('-');
-  if (parts.length !== 3) {
-    throw new Error(`Invalid date format: ${dateStr}. Expected d-MMM-yy (e.g., "1-Jan-25")`);
-  }
-  
-  const day = parseInt(parts[0]);
-  const monthStr = parts[1];
-  const yearStr = parts[2];
-  
-  // Map month abbreviations to numbers
-  const months: Record<string, number> = {
-    Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-    Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11
-  };
-  
-  const month = months[monthStr];
-  if (month === undefined) {
-    throw new Error(`Invalid month: ${monthStr}. Expected 3-letter abbreviation (e.g., "Jan")`);
-  }
-  
-  // Parse 2-digit year (e.g., "25" → 2025)
-  const year = parseInt(yearStr) + 2000;
-  
-  return new Date(year, month, day);
-}
+// parseUKDate is imported from ../dateFormat (uses Date.UTC for timezone safety)
 
 /**
  * Check if targetNodeId is upstream of sourceNodeId in the graph.
