@@ -114,20 +114,20 @@ export const BEAD_FONT_SIZE = 10;
 export const CHEVRON_SPACING = 120;
 
 /** Chevron travel speed along edge (pixels per second) */
-export const CHEVRON_SPEED = 20;
+export const CHEVRON_SPEED = 10;
 
 /** Chevron angle ratio - controls how pointy the chevron is (0.3 = shallow, 1.0 = steep) */
-export const CHEVRON_ANGLE_RATIO = 0.4;
+export const CHEVRON_ANGLE_RATIO = 0.6;
 
 /** Chevron length as multiple of edge width (1.0 = same as edge width, 2.0 = twice as long) */
-export const CHEVRON_LENGTH_RATIO = 1;
+export const CHEVRON_LENGTH_RATIO = .4;
 
 /** Chevron opacity (0-1) */
-export const CHEVRON_OPACITY = 0.05;
+export const CHEVRON_OPACITY = 0.1;
 
 /** Fade-in duration as fraction of total animation (0-1) - how quickly chevrons appear at start */
 export const CHEVRON_FADE_IN_FRACTION = 0.1;
 
 /** Blur amount for chevron edges (pixels) - 0 = sharp, 1-3 = soft glow */
-export const CHEVRON_BLUR = 4;
+export const CHEVRON_BLUR = 5;
 
