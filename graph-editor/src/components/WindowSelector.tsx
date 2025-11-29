@@ -470,9 +470,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       setIsCheckingCoverage(true);
       
       // Phase 3: Check cache first
+      // CRITICAL: Cache key must include DSL (context) - not just window!
+      // Otherwise changing context reuses wrong cached data
       const windowKey = getWindowKey(normalizedWindow);
       const currentGraphHash = getGraphHash(currentGraph);
-      const cacheKey = `${windowKey}|${currentGraphHash}`;
+      const dslKey = dslFromState || ''; // Include context in cache key
+      const cacheKey = `${windowKey}|${currentGraphHash}|${dslKey}`;
       const cachedResult = coverageCache.get(cacheKey);
       
       // If cache hit and graph hash matches, use cached result
@@ -961,6 +964,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         
         try {
           if (item.type === 'parameter') {
+            const effectiveDSL = graph?.currentQueryDSL || '';
             await dataOperationsService.getFromSource({
               objectType: 'parameter',
               objectId: item.objectId,
@@ -970,7 +974,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 if (g) setGraph(g);
               },
               paramSlot: item.paramSlot,
-              targetSlice: graph?.currentQueryDSL || ''
+              currentDSL: effectiveDSL,  // CRITICAL: Pass DSL so fetch uses correct window
+              targetSlice: effectiveDSL  // CRITICAL: Pass DSL so file loading uses correct slice
             });
             successCount++;
           } else if (item.type === 'case') {
@@ -982,6 +987,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               setGraph: (g) => {
                 if (g) setGraph(g);
               },
+              currentDSL: graph?.currentQueryDSL || '',  // CRITICAL: Pass DSL for cases too
             });
             successCount++;
           }

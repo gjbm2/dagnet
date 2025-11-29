@@ -69,6 +69,7 @@ export interface ParameterValue {
     query?: any; // Query configuration object
     full_query?: string; // Complete DSL query string
     debug_trace?: string; // Complete execution trace as JSON string
+    no_data?: boolean; // True if API confirmed no data exists for this slice/window
   };
 }
 

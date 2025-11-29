@@ -45,7 +45,7 @@ import { statisticalEnhancementService } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
-import { isolateSlice } from './sliceIsolation';
+import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
 import { sessionLogService } from './sessionLogService';
 
 /**
@@ -551,10 +551,56 @@ class DataOperationsService {
       });
       
       // If window is provided, aggregate daily data from parameter file
+      // CRITICAL: Ensure 'type' is set for UpdateManager mapping conditions
+      // Legacy files may not have this field, so we infer it from the edge
       let aggregatedData = paramFile.data;
-      if (window && paramFile.data?.values) {
-        // Collect ALL value entries with daily data
-        const allValuesWithDaily = (paramFile.data.values as ParameterValue[])
+      if (!aggregatedData.type && !aggregatedData.parameter_type) {
+        // Infer type from which slot on the edge references this parameter
+        let inferredType: 'probability' | 'cost_gbp' | 'cost_time' = 'probability';
+        if (targetEdge.cost_gbp?.id === paramId) {
+          inferredType = 'cost_gbp';
+        } else if (targetEdge.cost_time?.id === paramId) {
+          inferredType = 'cost_time';
+        }
+        aggregatedData = { ...aggregatedData, type: inferredType };
+        console.log('[DataOperationsService] Inferred missing parameter type:', inferredType);
+      }
+      
+      // CRITICAL: Filter values by target slice for regular updates too
+      // Without this, values[latest] picks from ANY context when falling back
+      if (targetSlice && paramFile.data?.values) {
+        try {
+          const allValues = paramFile.data.values as ParameterValue[];
+          const sliceFilteredValues = isolateSlice(allValues, targetSlice);
+          if (sliceFilteredValues.length > 0) {
+            aggregatedData = { ...aggregatedData, values: sliceFilteredValues };
+            console.log('[DataOperationsService] Filtered to slice:', {
+              targetSlice,
+              originalCount: allValues.length,
+              filteredCount: sliceFilteredValues.length
+            });
+          } else if (allValues.some(v => v.sliceDSL && v.sliceDSL !== '')) {
+            // File has contexted data but NONE for this specific slice
+            // Don't show stale data from other contexts - return early
+            console.warn('[DataOperationsService] No data found for context slice:', targetSlice);
+            toast(`No cached data for ${targetSlice}. Fetch from source to populate.`, {
+              icon: '⚠️',
+              duration: 3000,
+            });
+            sessionLogService.endOperation(logOpId, 'warning', `No cached data for slice: ${targetSlice}`);
+            return; // Return early - don't update graph with wrong context data
+          }
+        } catch (error) {
+          // isolateSlice may throw for safety checks - log and continue
+          console.warn('[DataOperationsService] Slice isolation failed:', error);
+        }
+      }
+      
+      if (window && aggregatedData?.values) {
+        // Collect value entries with daily data FROM SLICE-FILTERED aggregatedData
+        // CRITICAL: Use aggregatedData.values (which has been filtered by isolateSlice above)
+        // NOT paramFile.data.values (which contains ALL contexts)
+        const allValuesWithDaily = (aggregatedData.values as ParameterValue[])
           .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
         
         // CRITICAL: Isolate to target slice to prevent cross-slice aggregation
@@ -872,8 +918,10 @@ class DataOperationsService {
             };
             
             // Create a modified parameter file data with aggregated value
+            // CRITICAL: Preserve the inferred type from earlier (if paramFile.data lacked it)
             aggregatedData = {
               ...paramFile.data,
+              type: aggregatedData.type || paramFile.data.type,  // Preserve inferred type
               values: [aggregatedValue], // Replace with single aggregated value
             };
             
@@ -2698,11 +2746,13 @@ class DataOperationsService {
           
           // Calculate incremental fetch (pass bustCache flag)
           // Use filtered data so we only consider dates from matching signature
+          // CRITICAL: Pass targetSlice (currentDSL) to isolate by context slice
           const incrementalResult = calculateIncrementalFetch(
             filteredParamData,
             requestedWindow,
             querySignature,
-            bustCache || false
+            bustCache || false,
+            currentDSL || targetSlice || ''  // Filter by context slice
           );
           
           console.log('[DataOperationsService] Incremental fetch analysis:', {
@@ -3400,43 +3450,94 @@ class DataOperationsService {
       }
       
       // 6a. If dailyMode is true, write data to files
-      // For parameters: write time-series data
-      if (dailyMode && allTimeSeriesData.length > 0 && objectType === 'parameter' && objectId) {
+      // For parameters: write time-series data (or "no data" marker if API returned empty)
+      if (dailyMode && objectType === 'parameter' && objectId) {
         try {
           // Get parameter file (re-read to get latest state)
           let paramFile = fileRegistry.getFile(`parameter-${objectId}`);
           if (paramFile) {
             let existingValues = (paramFile.data.values || []) as ParameterValue[];
+            const sliceDSL = extractSliceDimensions(currentDSL || '');
             
-            // Store each gap as a separate value entry
-            for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
-              const fetchWindow = actualFetchWindows[gapIndex];
-              
-              // Filter time-series data for this specific gap
-              const gapTimeSeries = allTimeSeriesData.filter(point => {
-                const pointDate = normalizeDate(point.date);
-                return isDateInRange(pointDate, fetchWindow);
-              });
-              
-              if (gapTimeSeries.length > 0) {
-                // Append new time-series as a separate value entry for this gap
-                existingValues = mergeTimeSeriesIntoParameter(
-                  existingValues,
-                  gapTimeSeries,
-                  fetchWindow,
-                  querySignature,
-                  queryParamsForStorage,
-                  fullQueryForStorage,
-                  dataSourceType
-                );
+            if (allTimeSeriesData.length > 0) {
+              // API returned data - store each gap as a separate value entry
+              for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
+                const fetchWindow = actualFetchWindows[gapIndex];
                 
-                console.log(`[DataOperationsService] Prepared daily time-series data for gap ${gapIndex + 1}:`, {
+                // Filter time-series data for this specific gap
+                const gapTimeSeries = allTimeSeriesData.filter(point => {
+                  const pointDate = normalizeDate(point.date);
+                  return isDateInRange(pointDate, fetchWindow);
+                });
+                
+                if (gapTimeSeries.length > 0) {
+                  // Append new time-series as a separate value entry for this gap
+                  existingValues = mergeTimeSeriesIntoParameter(
+                    existingValues,
+                    gapTimeSeries,
+                    fetchWindow,
+                    querySignature,
+                    queryParamsForStorage,
+                    fullQueryForStorage,
+                    dataSourceType,
+                    sliceDSL // CRITICAL: Pass context slice for isolateSlice matching
+                  );
+                  
+                  console.log(`[DataOperationsService] Prepared daily time-series data for gap ${gapIndex + 1}:`, {
+                    paramId: objectId,
+                    newDays: gapTimeSeries.length,
+                    fetchWindow,
+                    querySignature,
+                    sliceDSL, // Log for debugging
+                  });
+                }
+              }
+              
+              toast.success(`✓ Added ${allTimeSeriesData.length} new days across ${actualFetchWindows.length} gap${actualFetchWindows.length > 1 ? 's' : ''}`, { duration: 2000 });
+            } else {
+              // API returned NO DATA - write a "no data" marker so we can cache this result
+              // Without this, switching to this slice later would show fetch button again
+              for (const fetchWindow of actualFetchWindows) {
+                // Generate all dates in the window
+                const startD = parseDate(normalizeDate(fetchWindow.start));
+                const endD = parseDate(normalizeDate(fetchWindow.end));
+                const dates: string[] = [];
+                const currentD = new Date(startD);
+                while (currentD <= endD) {
+                  dates.push(normalizeDate(currentD.toISOString()));
+                  currentD.setDate(currentD.getDate() + 1);
+                }
+                
+                // Create "no data" entry with zero values for each date
+                const noDataEntry: ParameterValue = {
+                  mean: 0,
+                  n: 0,
+                  k: 0,
+                  dates,
+                  n_daily: dates.map(() => 0),
+                  k_daily: dates.map(() => 0),
+                  window_from: fetchWindow.start,
+                  window_to: fetchWindow.end,
+                  sliceDSL, // CRITICAL: Tag with context so isolateSlice finds it
+                  data_source: {
+                    type: 'amplitude',
+                    retrieved_at: new Date().toISOString(),
+                    full_query: fullQueryForStorage,
+                    no_data: true, // Flag to indicate this was a confirmed "no data" from API
+                  },
+                  query_signature: querySignature,
+                };
+                existingValues.push(noDataEntry);
+                
+                console.log(`[DataOperationsService] Cached "no data" marker for slice:`, {
                   paramId: objectId,
-                  newDays: gapTimeSeries.length,
+                  sliceDSL,
                   fetchWindow,
-                  querySignature,
+                  dates,
                 });
               }
+              
+              toast(`No data from source for ${sliceDSL || 'base context'}`, { icon: 'ℹ️', duration: 2000 });
             }
             
             // Update file once with all new value entries
@@ -3455,31 +3556,11 @@ class DataOperationsService {
             
             await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);
             
-            toast.success(`✓ Added ${allTimeSeriesData.length} new days across ${actualFetchWindows.length} gap${actualFetchWindows.length > 1 ? 's' : ''}`, { duration: 2000 });
-            
             // Log file update
             sessionLogService.addChild(logOpId, 'success', 'FILE_UPDATED',
               `Updated parameter file: ${objectId}`,
-              `Added ${allTimeSeriesData.length} days of time-series data`,
+              `Added ${allTimeSeriesData.length > 0 ? allTimeSeriesData.length + ' days of data' : '"no data" marker'}`,
               { fileId: `parameter-${objectId}`, rowCount: allTimeSeriesData.length });
-            
-            // CRITICAL: After writing daily time-series to file, load it back into the graph
-            // This is the "versioned path" that applies File→Graph (see comment at line ~2909)
-            if (graph && setGraph && targetId) {
-              console.log('[DataOperationsService] Loading newly written parameter data from file into graph', {
-                currentDSL,
-                targetSliceToPass: currentDSL || '',
-                requestedWindow
-              });
-              await this.getParameterFromFile({
-                paramId: objectId,
-                edgeId: targetId,
-                graph,
-                setGraph,
-                window: requestedWindow, // Aggregate across the full requested window
-                targetSlice: currentDSL || '' // Pass the DSL to ensure correct constraints
-              });
-            }
           } else {
             console.warn('[DataOperationsService] Parameter file not found, skipping time-series storage');
           }
@@ -3487,6 +3568,26 @@ class DataOperationsService {
           console.error('[DataOperationsService] Failed to append time-series data:', error);
           // Don't fail the whole operation, just log the error
         }
+      }
+      
+      // 6a-cont. ALWAYS load from file after fetch attempt (even if no new data)
+      // This ensures the graph shows cached data for the requested window/context
+      // even when the API returns empty results for this specific slice/date
+      if (dailyMode && objectType === 'parameter' && objectId && graph && setGraph && targetId) {
+        console.log('[DataOperationsService] Loading parameter data from file into graph (post-fetch)', {
+          currentDSL,
+          targetSliceToPass: currentDSL || '',
+          requestedWindow,
+          hadNewData: allTimeSeriesData.length > 0
+        });
+        await this.getParameterFromFile({
+          paramId: objectId,
+          edgeId: targetId,
+          graph,
+          setGraph,
+          window: requestedWindow, // Aggregate across the full requested window
+          targetSlice: currentDSL || '' // Pass the DSL to ensure correct constraints
+        });
       }
       
       // 6b. For versioned case fetches: write schedule entry to case file
