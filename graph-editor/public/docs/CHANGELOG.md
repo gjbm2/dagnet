@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.98.6b
+**Released:** November 29, 2025
+
+Many fixes of fetching behaviour which was buggy af
+
+---
+
 ## Version 0.98.2b
 **Released:** November 28, 2025
 
