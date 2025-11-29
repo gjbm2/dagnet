@@ -48,10 +48,16 @@ export function AllSlicesModal({
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ currentSlice: 0, totalSlices: 0, currentItem: 0, totalItems: 0 });
+  const [bustCache, setBustCache] = useState(false);
+  const [createLog, setCreateLog] = useState(false);
+  const [logContent, setLogContent] = useState<string>('');
   
   // CRITICAL: Use ref to track latest graph state during batch operations
   // Without this, rebalancing doesn't work because each iteration uses stale graph
   const graphRef = useRef(graph);
+  
+  // Abort ref for cancelling in-progress operations
+  const abortRef = useRef(false);
   const [currentSliceName, setCurrentSliceName] = useState('');
 
   // Load slices when modal opens
@@ -116,6 +122,7 @@ export function AllSlicesModal({
     if (!graph || selectedSlices.length === 0) return;
 
     setIsProcessing(true);
+    setLogContent(''); // Reset log content
     const totalSlices = selectedSlices.length;
     setProgress({ currentSlice: 0, totalSlices, currentItem: 0, totalItems: 0 });
 
@@ -139,6 +146,9 @@ export function AllSlicesModal({
     let totalSuccess = 0;
     let totalErrors = 0;
     
+    // Reset abort flag at start
+    abortRef.current = false;
+    
     // CRITICAL: Wrap setGraph to also update graphRef
     // This ensures rebalancing works correctly across iterations
     const setGraphWithRef = (newGraph: GraphData | null) => {
@@ -148,6 +158,13 @@ export function AllSlicesModal({
 
     try {
       for (let sliceIdx = 0; sliceIdx < selectedSlices.length; sliceIdx++) {
+        // Check for abort request
+        if (abortRef.current) {
+          toast.dismiss(progressToastId);
+          toast('Operation cancelled', { icon: '⏹️' });
+          break;
+        }
+        
         const slice = selectedSlices[sliceIdx];
         setProgress(prev => ({ ...prev, currentSlice: sliceIdx + 1 }));
         setCurrentSliceName(slice.dsl);
@@ -171,6 +188,9 @@ export function AllSlicesModal({
 
           // Process each parameter/case for this slice
           for (let itemIdx = 0; itemIdx < batchItems.length; itemIdx++) {
+            // Check for abort request
+            if (abortRef.current) break;
+            
             const item = batchItems[itemIdx];
             setProgress(prev => ({ ...prev, currentItem: itemIdx + 1 }));
 
@@ -185,10 +205,20 @@ export function AllSlicesModal({
                   graph: graphRef.current,
                   setGraph: setGraphWithRef,
                   paramSlot: item.paramSlot,
-                  bustCache: false, // Respect incremental fetching
+                  bustCache, // Pass through bust cache setting
                   currentDSL: slice.dsl, // Use the slice's DSL for window/context
                   targetSlice: slice.dsl
                 });
+                
+                // Append to log if enabled
+                if (createLog) {
+                  const edge = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+                  const param = edge?.[item.paramSlot || 'p'];
+                  if (param?.evidence) {
+                    const evidence = param.evidence;
+                    setLogContent(prev => prev + `[${slice.dsl}] ${item.name}: n=${evidence.n}, k=${evidence.k}\n`);
+                  }
+                }
                 sliceSuccess++;
               } else if (item.type === 'case') {
                 await dataOperationsService.getFromSource({
@@ -197,8 +227,13 @@ export function AllSlicesModal({
                   targetId: item.targetId,
                   graph: graphRef.current,
                   setGraph: setGraphWithRef,
+                  bustCache, // Pass through bust cache setting
                   currentDSL: slice.dsl, // Use the slice's DSL for window/context
                 });
+                
+                if (createLog) {
+                  setLogContent(prev => prev + `[${slice.dsl}] ${item.name}: fetched\n`);
+                }
                 sliceSuccess++;
               }
             } catch (err) {
@@ -262,6 +297,20 @@ export function AllSlicesModal({
       } else {
         toast.success(`All ${totalSuccess} operations completed successfully`);
       }
+      
+      // Download log file if enabled
+      if (createLog && logContent) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const blob = new Blob([logContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `all-slices-fetch-${timestamp}.log`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -286,7 +335,13 @@ export function AllSlicesModal({
       <div className="modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
         <div className="modal-header">
           <h2 className="modal-title">Retrieve All Slices</h2>
-          <button className="modal-close-btn" onClick={onClose} disabled={isProcessing}>×</button>
+          <button className="modal-close-btn" onClick={() => {
+            if (isProcessing) {
+              abortRef.current = true;
+            } else {
+              onClose();
+            }
+          }}>×</button>
         </div>
 
         <div className="modal-body">
@@ -416,9 +471,34 @@ export function AllSlicesModal({
                 </div>
               </div>
 
+              {/* Options */}
+              <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={createLog}
+                    onChange={(e) => setCreateLog(e.target.checked)}
+                    style={{ marginRight: '8px' }}
+                  />
+                  <span style={{ fontSize: '14px' }}>Create log file</span>
+                </label>
+                
+                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={bustCache}
+                    onChange={(e) => setBustCache(e.target.checked)}
+                    style={{ marginRight: '8px' }}
+                  />
+                  <span style={{ fontSize: '14px' }}>
+                    Bust cache (re-fetch all dates, ignore existing data)
+                  </span>
+                </label>
+              </div>
+
               <div style={{ padding: '12px', backgroundColor: '#E0F2FE', borderRadius: '6px', fontSize: '12px', color: '#0369A1' }}>
                 <strong>Note:</strong> This uses incremental fetching - if you ran this yesterday with a 30-day window,
-                today's run will only fetch the 1 new day of data.
+                today's run will only fetch the 1 new day of data. Enable "Bust cache" to re-fetch everything.
               </div>
             </>
           )}
@@ -427,10 +507,15 @@ export function AllSlicesModal({
         <div className="modal-footer">
           <button
             className="modal-btn modal-btn-secondary"
-            onClick={onClose}
-            disabled={isProcessing}
+            onClick={() => {
+              if (isProcessing) {
+                abortRef.current = true;
+              } else {
+                onClose();
+              }
+            }}
           >
-            Cancel
+            {isProcessing ? 'Stop' : 'Cancel'}
           </button>
           <button
             className="modal-btn modal-btn-primary"

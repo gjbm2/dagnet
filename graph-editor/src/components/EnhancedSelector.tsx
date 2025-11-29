@@ -361,7 +361,8 @@ export function EnhancedSelector({
               edgeId: targetInstanceUuid, // UUID → finds which edge instance to update
               graph: graph as any,
               setGraph: setGraph as any,
-              setAutoUpdating: setAutoUpdating
+              setAutoUpdating: setAutoUpdating,
+              targetSlice: (graph as any)?.currentQueryDSL || '', // Match context from WindowSelector
             });
           } else if (type === 'case') {
             await dataOperationsService.getCaseFromFile({

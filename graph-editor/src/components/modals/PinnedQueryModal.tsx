@@ -2,9 +2,11 @@
  * Pinned Query Modal
  * 
  * Modal for editing graph.dataInterestsDSL with live preview of implied slices.
+ * Uses React Portal to render at document root (escapes parent stacking context).
  */
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { explodeDSL } from '../../lib/dslExplosion';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
@@ -60,7 +62,9 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
     onClose();
   };
   
-  return (
+  // Use portal to escape parent stacking context (WindowSelector has z-index: 55)
+  // This ensures modal appears above sidebar (z-index: 100)
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
         <div className="modal-header">
@@ -129,7 +133,8 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

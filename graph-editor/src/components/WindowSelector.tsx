@@ -6,7 +6,7 @@
  * Shows "Fetch data" button if data is missing for connected parameters/cases.
  */
 
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import type { DateRange } from '../types';
 import { dataOperationsService } from '../services/dataOperationsService';
@@ -62,7 +62,10 @@ interface WindowSelectorProps {
 }
 
 export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
-  const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow } = useGraphStore();
+  const graphStore = useGraphStore();
+  const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow } = graphStore;
+  // Use getState() in callbacks to avoid stale closure issues
+  const getLatestGraph = () => (graphStore as any).getState?.()?.graph ?? graph;
   const { tabs, operations } = useTabContext();
   const [needsFetch, setNeedsFetch] = useState(false);
   const [isCheckingCoverage, setIsCheckingCoverage] = useState(false);
@@ -141,7 +144,30 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     return undefined;
   }, [graph?.currentQueryDSL]);
   
-  // Update CSS variable for scenario legend positioning when height changes
+  // Build DSL from AUTHORITATIVE sources: window state + context from UI
+  // NEVER use graph.currentQueryDSL directly for queries - it's just a record
+  const buildDSLFromState = useCallback((windowState: DateRange): string => {
+    // Get context from graph.currentQueryDSL (this IS where user's selection is stored)
+    const parsed = parseConstraints(graph?.currentQueryDSL || '');
+    
+    const contextParts: string[] = [];
+    for (const ctx of parsed.context) {
+      contextParts.push(`context(${ctx.key}:${ctx.value})`);
+    }
+    for (const ctxAny of parsed.contextAny) {
+      const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
+      contextParts.push(`contextAny(${pairs})`);
+    }
+    
+    // Build window from AUTHORITATIVE window state (not from graph.currentQueryDSL)
+    const windowPart = `window(${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`;
+    
+    return contextParts.length > 0 
+      ? `${contextParts.join('.')}.${windowPart}` 
+      : windowPart;
+  }, [graph?.currentQueryDSL]);
+  
+    // Update CSS variable for scenario legend positioning when height changes
   // Set on the container element (not document root) so it's scoped to this tab
   useEffect(() => {
     const updatePosition = () => {
@@ -260,6 +286,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const isInitialMountRef = useRef(true);
   const isAggregatingRef = useRef(false); // Track if we're currently aggregating to prevent loops
   const lastAggregatedWindowRef = useRef<DateRange | null>(null); // Track lastAggregatedWindow to avoid dependency loop
+  const lastAggregatedDSLRef = useRef<string | null>(null); // Track lastAggregatedDSL (context+window) to detect context changes
   const graphRef = useRef<typeof graph>(graph); // Track graph to avoid dependency loop
   const prevWindowRef = useRef<string | null>(null); // Track previous window for shimmer trigger
   
@@ -296,6 +323,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       lastAggregatedWindowRef.current = normalized;
     } else {
       lastAggregatedWindowRef.current = null;
+      lastAggregatedDSLRef.current = null;
     }
   }, [lastAggregatedWindow]);
   
@@ -385,8 +413,15 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       return; // Already aggregating, skip
     }
     
+    // CRITICAL: Build DSL from AUTHORITATIVE sources NOW, before async runs.
+    // - window: from graphStore (authoritative date range)
+    // - context: extracted from graph.currentQueryDSL (where user's selection is stored)
+    // We NEVER use graph.currentQueryDSL directly as the query - it's just a record.
+    const currentWindowState = window;
+    const dslFromState = currentWindowState ? buildDSLFromState(currentWindowState) : '';
+    
     const checkDataCoverageAndAggregate = async () => {
-      // Use ref for graph to avoid dependency on graph changes
+      // Use ref for graph structure but DSL from closure (which is fresh)
       const currentGraph = graphRef.current;
       if (!currentGraph || !window) {
         setNeedsFetch(false);
@@ -412,11 +447,23 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       
       // Use ref value for comparison (avoids dependency loop)
       const normalizedLastAggregated: DateRange | null = lastAggregatedWindowRef.current;
+      // Use DSL built from authoritative state (window + context)
+      const currentDSL = dslFromState;
+      const lastDSL = lastAggregatedDSLRef.current || '';
       
-      // If current window matches last aggregated window, no action needed
-      if (windowsMatch(normalizedWindow, normalizedLastAggregated)) {
+      // If current window matches last aggregated window AND DSL matches, no action needed
+      // (Context change should trigger re-aggregation even if window is the same)
+      if (windowsMatch(normalizedWindow, normalizedLastAggregated) && currentDSL === lastDSL) {
         setNeedsFetch(false);
         return;
+      }
+      
+      // Log when context changed but window didn't
+      if (windowsMatch(normalizedWindow, normalizedLastAggregated) && currentDSL !== lastDSL) {
+        console.log('[WindowSelector] Context changed (window same), triggering coverage check:', {
+          currentDSL,
+          lastDSL
+        });
       }
       
       // Window differs from last aggregated - check coverage
@@ -438,6 +485,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           // Reuse aggregation logic from below
           isAggregatingRef.current = true;
           lastAggregatedWindowRef.current = normalizedWindow;
+          lastAggregatedDSLRef.current = dslFromState;
           
           try {
             let updatedGraph = currentGraph;
@@ -449,6 +497,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   graph: updatedGraph,
                   setGraph: (g) => { if (g) updatedGraph = g; },
                   window: normalizedWindow,
+                  targetSlice: dslFromState, // Pass context filter to isolateSlice
                 });
               } catch (error) {
                 console.error(`[WindowSelector] Failed to aggregate param ${paramId}:`, error);
@@ -467,6 +516,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           } catch (error) {
             isAggregatingRef.current = false;
             lastAggregatedWindowRef.current = null;
+            lastAggregatedDSLRef.current = null;
             throw error;
           }
         } else {
@@ -598,8 +648,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           // Set flag to prevent re-triggering during aggregation
           isAggregatingRef.current = true;
           
-          // Update ref IMMEDIATELY to prevent any re-triggering from setGraph calls
+          // Update refs IMMEDIATELY to prevent any re-triggering from setGraph calls
           lastAggregatedWindowRef.current = normalizedWindow;
+          lastAggregatedDSLRef.current = dslFromState;
           
           try {
             // Batch all graph updates - collect them and apply once at the end
@@ -616,6 +667,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                     if (g) updatedGraph = g;
                   },
                   window: normalizedWindow,
+                  targetSlice: dslFromState, // Pass context filter to isolateSlice
                 });
               } catch (error) {
                 console.error(`[WindowSelector] Failed to aggregate param ${paramId}:`, error);
@@ -636,8 +688,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
             }, 0);
           } catch (error) {
             isAggregatingRef.current = false;
-            // Reset ref on error
+            // Reset refs on error
             lastAggregatedWindowRef.current = null;
+            lastAggregatedDSLRef.current = null;
             throw error;
           }
         } else {
@@ -661,9 +714,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const updateWindowAndDSL = (start: string, end: string) => {
     setWindow({ start, end });
     
+    // Use getLatestGraph() to avoid stale closure
+    const currentGraph = getLatestGraph();
+    
     // Update currentQueryDSL with new window
-    if (setGraph && graph) {
-      const parsed = parseConstraints(graph.currentQueryDSL || '');
+    if (setGraph && currentGraph) {
+      const parsed = parseConstraints(currentGraph.currentQueryDSL || '');
       
       // Build context part
       const contextParts: string[] = [];
@@ -683,7 +739,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         ? `${contextParts.join('.')}.${windowPart}`
         : windowPart;
       
-      setGraph({ ...graph, currentQueryDSL: newDSL });
+      setGraph({ ...currentGraph, currentQueryDSL: newDSL });
     }
   };
   
@@ -1037,11 +1093,13 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               <QueryExpressionEditor
                 value={contextOnlyDSL}
                 onChange={(newContextDSL) => {
-                  if (!setGraph || !graph) return;
+                  // Use getLatestGraph() to avoid stale closure
+                  const currentGraph = getLatestGraph();
+                  if (!setGraph || !currentGraph) return;
                   
                   // Parse to get new contexts
                   const newParsed = parseConstraints(newContextDSL);
-                  const oldParsed = parseConstraints(graph.currentQueryDSL || '');
+                  const oldParsed = parseConstraints(currentGraph.currentQueryDSL || '');
                   
                   // Rebuild DSL with new contexts + old window
                   const newContextParts: string[] = [];
@@ -1062,7 +1120,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   }
                   
                   const fullDSL = [newContextParts.join('.'), windowPart].filter(p => p).join('.');
-                  setGraph({ ...graph, currentQueryDSL: fullDSL || undefined });
+                  setGraph({ ...currentGraph, currentQueryDSL: fullDSL || undefined });
                 }}
                 graph={graph}
                 height="32px"
@@ -1119,10 +1177,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   setShowContextDropdown(false);
                   setShowingAllContexts(false); // Reset for next open
                   
-                  if (!setGraph || !graph) return;
+                  // Use getLatestGraph() to avoid stale closure
+                  const currentGraph = getLatestGraph();
+                  if (!setGraph || !currentGraph) return;
                   
                   // Parse existing DSL to preserve window
-                  const parsed = parseConstraints(graph.currentQueryDSL || '');
+                  const parsed = parseConstraints(currentGraph.currentQueryDSL || '');
                   const existingWindow = parsed.window;
                   
                   // Check if all values selected AND key is MECE (should remove context)
@@ -1153,7 +1213,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   // Combine
                   const newDSL = [contextPart, windowPart].filter(p => p).join('.');
                   
-                  setGraph({ ...graph, currentQueryDSL: newDSL || undefined });
+                  setGraph({ ...currentGraph, currentQueryDSL: newDSL || undefined });
                   
                   if (allSelected && isMECE) {
                     toast.success('All values selected = no filter', { duration: 2000 });

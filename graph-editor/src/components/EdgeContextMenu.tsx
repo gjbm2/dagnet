@@ -177,6 +177,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         edgeId: section.targetId,
         graph,
         setGraph,
+        targetSlice: graph?.currentQueryDSL || '', // Match context from WindowSelector
       });
     });
   };

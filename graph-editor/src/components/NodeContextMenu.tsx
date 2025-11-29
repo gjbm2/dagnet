@@ -205,7 +205,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       targetId: nodeId,
       graph,
       setGraph,
-      dailyMode: false
+      dailyMode: false,
+      currentDSL: graph?.currentQueryDSL || '' // Pass context from WindowSelector
     });
     onClose();
   };
@@ -222,7 +223,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       objectId: nodeData.case.id,
       targetId: nodeId,
       graph,
-      setGraph
+      setGraph,
+      currentDSL: graph?.currentQueryDSL || '' // Pass context from WindowSelector
     });
     onClose();
   };
