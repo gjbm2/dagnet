@@ -94,12 +94,10 @@ export const dockGroups = {
   // Main content tabs (graphs, parameters, etc.)
   'main-content': {
     floatable: true,
-    maximizable: true,  // Show maximize button on app tabs
+    maximizable: false,  // HIDE maximize button (causes issues in current implementation)
     tabLocked: false,
     animated: true,
     newWindow: false,
-    // NOTE: No panelExtra - we position Navigator button separately in AppShell
-    // panelExtra would hide the rc-dock maximize button
     // Enable built-in tab context menu
     // This will show rc-dock's default context menu on right-click
     // We can customize with TabComponent if needed

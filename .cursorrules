@@ -44,19 +44,25 @@ export function usePullFile(fileId: string | undefined) {
 const { canPull, pullFile } = usePullFile(fileId);
 ```
 
-### 2. FIND EXISTING CODE PATHS FIRST
-Before creating new functionality:
+### 2. NEVER CREATE DUPLICATE CODE PATHS
+**CRITICAL**: Multiple code paths to achieve the same thing cause GRAVE HARM.
 
-1. **Search for existing implementations** - Use `grep` or `codebase_search` to find similar functionality
-2. **Reuse and extend** - Modify existing services rather than creating duplicate code
-3. **Check all call sites** - If updating a service method, check ALL places it's called
-4. **Trace the full path** - Understand the complete flow from UI → Service → Storage
+Before creating ANY new functionality:
+
+1. **TRIPLE CHECK** for existing implementations - Use `grep` or `codebase_search` exhaustively
+2. **Favor generalizing existing code** over creating new paths - Ask user if unsure
+3. **If similar functionality exists**, extend it rather than duplicate
+4. **Check all call sites** - If updating a service method, check ALL places it's called
+5. **Trace the full path** - Understand the complete flow from UI → Service → Storage
 
 **Required checks before writing new code**:
-- [ ] Searched codebase for similar functionality
+- [ ] TRIPLE-searched codebase for similar functionality
 - [ ] Checked if a service already handles this operation
 - [ ] Identified all existing call sites
 - [ ] Verified no duplicate implementations exist
+- [ ] If plausible existing path exists, generalized it instead of creating new
+
+**If in doubt**: ASK THE USER before creating a new code path. Duplicate paths are the Devil's work.
 
 ### 3. CENTRALIZE SHARED CODE
 **Services are the single source of truth** for business logic:
@@ -95,6 +101,40 @@ Test files are in:
 - Must sync with IndexedDB
 
 **Critical**: Always use `db.getDirtyFiles()` for git operations, NOT `fileRegistry.getDirtyFiles()`.
+
+### 6. SESSION LOGGING FOR EXTERNAL/DATA OPERATIONS
+**CRITICAL**: All operations interacting with external systems or data must have session logging.
+
+Operations requiring session logging:
+- **Git operations**: clone, pull, push, commit, rollback, fetch history
+- **File operations**: create, delete, rename, duplicate, rollback
+- **Data operations**: get from source, put to file, clear data, sync
+- **Workspace operations**: clone, load, rollback, sync
+
+Use `sessionLogService` from `services/sessionLogService.ts`:
+
+```typescript
+import { sessionLogService } from '../services/sessionLogService';
+
+// Info - operation starting
+sessionLogService.info('git', 'GIT_PULL', `Pulling latest from ${repo}/${branch}`, undefined, { repo, branch });
+
+// Success - operation completed
+sessionLogService.success('git', 'GIT_PULL_SUCCESS', `Pulled ${filesChanged} files`, detail, { repo, branch });
+
+// Error - operation failed
+sessionLogService.error('git', 'GIT_PULL_ERROR', `Pull failed: ${message}`, undefined, { repo, branch });
+
+// Warning - operation completed with issues
+sessionLogService.warning('git', 'GIT_PULL_CONFLICTS', `Pull completed with ${count} conflicts`, detail, metadata);
+
+// Hierarchical logging for complex operations
+const logOpId = sessionLogService.startOperation('info', 'git', 'GIT_COMMIT', `Committing to ${repo}`);
+sessionLogService.addChild(logOpId, 'info', 'COMMIT_FILE', `Updated: ${path}`);
+sessionLogService.endOperation(logOpId, 'success', 'Committed N files');
+```
+
+Operation types: `'session' | 'git' | 'file' | 'workspace' | 'msmdc' | 'data-fetch' | 'data-update' | 'graph' | 'index' | 'merge' | 'integrity'`
 
 ## Architecture Patterns
 

@@ -14,8 +14,8 @@ properties:
   # Canonical case identifier (single source of truth for cases)
   id:
     type: string
-    pattern: '^[a-z0-9-]+$'
-    description: Unique identifier for the case (used in graphs, registry and filenames)
+    pattern: '^[a-zA-Z0-9_-]+$'
+    description: Unique identifier for the case (letters, numbers, hyphens, underscores)
   
   parameter_type:
     type: string

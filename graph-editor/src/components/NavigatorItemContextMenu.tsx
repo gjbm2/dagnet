@@ -10,12 +10,17 @@ import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { CommitModal } from './CommitModal';
 import { DeleteModal } from './DeleteModal';
 import { NewFileModal } from './NewFileModal';
+import { RenameModal } from './RenameModal';
 import { gitService } from '../services/gitService';
 import { fileRegistry } from '../contexts/TabContext';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import { usePullFile } from '../hooks/usePullFile';
 import { usePullAll } from '../hooks/usePullAll';
+import { useRenameFile } from '../hooks/useRenameFile';
+import { useViewHistory } from '../hooks/useViewHistory';
+import { useClearDataFile } from '../hooks/useClearDataFile';
+import { HistoryModal } from './modals/HistoryModal';
 
 interface NavigatorItemContextMenuProps {
   item: RepositoryItem;
@@ -40,6 +45,39 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   // Pull hooks - all logic including conflict modal is in the hook
   const { canPull, pullFile } = usePullFile(fileId);
   const { pullAll, conflictModal: pullAllConflictModal } = usePullAll();
+  
+  // Rename hook
+  const { 
+    canRename, 
+    showRenameModal, 
+    hideRenameModal, 
+    isRenameModalOpen, 
+    renameFile, 
+    currentName: renameCurrentName,
+    fileType: renameFileType,
+    isRenaming 
+  } = useRenameFile(fileId);
+  
+  // History hook
+  const {
+    canViewHistory,
+    showHistoryModal,
+    hideHistoryModal,
+    isHistoryModalOpen,
+    loadHistory,
+    getContentAtCommit,
+    rollbackToCommit,
+    fileName: historyFileName,
+    filePath: historyFilePath,
+    isLoading: isHistoryLoading,
+    history,
+    currentContent
+  } = useViewHistory(fileId);
+
+  // Clear data file hook
+  const { clearDataFile, canClearData } = useClearDataFile();
+  const hasDataToClear = fileId ? canClearData(fileId) : false;
+  const isDataFile = item.type === 'parameter' || item.type === 'case';
 
   // Commit modal state
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
@@ -138,6 +176,14 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     
     // File operations
     items.push({
+      label: 'Rename...',
+      onClick: () => {
+        showRenameModal();
+      },
+      keepMenuOpen: true,
+      disabled: !canRename
+    });
+    items.push({
       label: 'Duplicate...',
       onClick: () => {
         setIsDuplicateModalOpen(true);
@@ -167,13 +213,30 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
       },
       keepMenuOpen: true // Keep menu open so modal can render
     });
-    items.push({
-      label: 'View History',
-      onClick: () => {
-        // TODO: Open history view for this file
-        console.log('View history for:', item.name);
-      }
-    });
+    if (canViewHistory) {
+      items.push({
+        label: 'View History',
+        onClick: () => {
+          showHistoryModal();
+        },
+        keepMenuOpen: true
+      });
+    }
+    
+    // Clear data file (only for parameter/case files with data)
+    if (isDataFile) {
+      items.push({
+        label: 'Clear data file',
+        onClick: async () => {
+          if (fileId) {
+            await clearDataFile(fileId);
+          }
+          onClose();
+        },
+        disabled: !hasDataToClear
+      });
+    }
+    
     items.push({ label: '', onClick: () => {}, divider: true });
     
     // Pull Latest - fetch latest version from remote (uses usePullFile hook)
@@ -246,7 +309,7 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     });
     
     return items;
-  }, [item, openTabs, operations]);
+  }, [item, openTabs, operations, canRename, showRenameModal, canPull, pullFile, pullAll, fileId, canViewHistory, showHistoryModal, isDataFile, hasDataToClear, clearDataFile]);
 
   const handleCreateFile = async (name: string, type: ObjectType) => {
     await fileOperationsService.createFile(name, type, {
@@ -315,6 +378,36 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
         onCreate={handleDuplicate}
         fileType={item.type as ObjectType}
         defaultName={`${originalName}-copy`}
+      />
+      
+      {/* Rename Modal */}
+      <RenameModal
+        isOpen={isRenameModalOpen}
+        onClose={() => {
+          hideRenameModal();
+          onClose();
+        }}
+        onRename={renameFile}
+        currentName={renameCurrentName}
+        fileType={renameFileType}
+        isRenaming={isRenaming}
+      />
+      
+      {/* History Modal */}
+      <HistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={() => {
+          hideHistoryModal();
+          onClose();
+        }}
+        fileName={historyFileName}
+        filePath={historyFilePath}
+        isLoading={isHistoryLoading}
+        history={history}
+        currentContent={currentContent}
+        onLoadHistory={loadHistory}
+        onGetContentAtCommit={getContentAtCommit}
+        onRollback={rollbackToCommit}
       />
       
       {/* Pull all conflict modal - managed by usePullAll hook */}

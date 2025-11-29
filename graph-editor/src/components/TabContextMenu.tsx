@@ -3,8 +3,10 @@ import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { NewFileModal } from './NewFileModal';
+import { HistoryModal } from './modals/HistoryModal';
 import { ObjectType } from '../types';
 import { fileOperationsService } from '../services/fileOperationsService';
+import { useViewHistory } from '../hooks/useViewHistory';
 
 interface TabContextMenuProps {
   tabId: string;
@@ -24,6 +26,22 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
   const tab = tabs.find(t => t.id === tabId);
   
   const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+  
+  // History hook
+  const {
+    canViewHistory,
+    showHistoryModal,
+    hideHistoryModal,
+    isHistoryModalOpen,
+    loadHistory,
+    getContentAtCommit,
+    rollbackToCommit,
+    fileName: historyFileName,
+    filePath: historyFilePath,
+    isLoading: isHistoryLoading,
+    history,
+    currentContent
+  } = useViewHistory(tab?.fileId);
 
   const menuItems: ContextMenuItem[] = useMemo(() => {
     if (!tab) return [];
@@ -110,13 +128,15 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
         onRequestCommit([]);
       }
     });
-    items.push({
-      label: 'View History',
-      onClick: () => {
-        // TODO: Open history view for this file
-        console.log('View history for:', tab.fileId);
-      }
-    });
+    if (canViewHistory) {
+      items.push({
+        label: 'View History',
+        onClick: () => {
+          showHistoryModal();
+        },
+        keepMenuOpen: true
+      });
+    }
     items.push({ label: '', onClick: () => {}, divider: true });
     
     // Danger actions
@@ -164,7 +184,7 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     });
     
     return items;
-  }, [tab, tabId, tabs, operations]);
+  }, [tab, tabId, tabs, operations, canViewHistory, showHistoryModal]);
   
   const handleDuplicate = async (name: string, type: ObjectType) => {
     if (!tab) return;
@@ -199,6 +219,23 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
           defaultName={`${originalName}-copy`}
         />
       )}
+      
+      {/* History Modal */}
+      <HistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={() => {
+          hideHistoryModal();
+          onClose();
+        }}
+        fileName={historyFileName}
+        filePath={historyFilePath}
+        isLoading={isHistoryLoading}
+        history={history}
+        currentContent={currentContent}
+        onLoadHistory={loadHistory}
+        onGetContentAtCommit={getContentAtCommit}
+        onRollback={rollbackToCommit}
+      />
     </>
   );
 }

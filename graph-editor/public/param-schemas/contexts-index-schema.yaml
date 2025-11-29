@@ -32,7 +32,7 @@ properties:
       properties:
         id:
           type: string
-          pattern: '^[a-z_][a-z0-9_]*$'
+          pattern: '^[a-zA-Z_][a-zA-Z0-9_-]*$'
           description: "Unique context identifier"
         
         file_path:

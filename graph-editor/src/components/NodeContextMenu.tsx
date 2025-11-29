@@ -9,6 +9,7 @@ import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
 import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy } from 'lucide-react';
+import { RemoveOverridesMenuItem } from './RemoveOverridesMenuItem';
 import { fileRegistry } from '../contexts/TabContext';
 import VariantWeightInput from './VariantWeightInput';
 import { AutomatableField } from './AutomatableField';
@@ -17,6 +18,7 @@ import toast from 'react-hot-toast';
 import { getAllDataSections, type DataOperationSection } from './DataOperationsSections';
 import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
+import { useClearDataFile } from '../hooks/useClearDataFile';
 
 interface NodeContextMenuProps {
   x: number;
@@ -269,6 +271,21 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
     onClose();
   };
   
+  // Clear data file hook
+  const { clearDataFile } = useClearDataFile();
+  
+  const handleSectionClearDataFile = async (section: DataOperationSection) => {
+    if (section.objectType !== 'parameter' && section.objectType !== 'case') {
+      // Only parameters and cases have data to clear
+      return;
+    }
+    const fileId = section.objectType === 'parameter' 
+      ? `parameter-${section.objectId}` 
+      : `case-${section.objectId}`;
+    await clearDataFile(fileId);
+    onClose();
+  };
+  
   const handleShowInNewGraph = async () => {
     try {
       // Get selected node UUIDs (ReactFlow uses 'id' field which contains the UUID)
@@ -496,6 +513,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
               onGetFromSource={handleSectionGetFromSource}
               onGetFromSourceDirect={handleSectionGetFromSourceDirect}
               onClearCache={handleSectionClearCache}
+              onClearDataFile={handleSectionClearDataFile}
             />
           ))}
         </>
@@ -523,6 +541,13 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
         <Copy size={14} />
         <span>Copy vars{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
       </div>
+
+      <RemoveOverridesMenuItem 
+        graph={graph} 
+        onUpdateGraph={(g, historyLabel) => setGraph(g)} 
+        nodeId={nodeId} 
+        onClose={onClose} 
+      />
 
       {/* Show in new graph (multi-select only) */}
       {isMultiSelect && (

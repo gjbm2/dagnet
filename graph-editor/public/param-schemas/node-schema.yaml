@@ -11,8 +11,8 @@ required:
 properties:
   id:
     type: string
-    pattern: ^[a-z0-9-]+$
-    description: Unique identifier for the node (matches node IDs in graphs)
+    pattern: ^[a-zA-Z0-9_-]+$
+    description: Unique identifier for the node (letters, numbers, hyphens, underscores)
     
   name:
     type: string
@@ -25,7 +25,7 @@ properties:
   
   event_id:
     type: string
-    pattern: ^[a-z0-9_]+$
+    pattern: ^[a-zA-Z0-9_]+$
     description: |
       Reference to event in events registry (allows underscore for production event names).
       Links this node to an analytics event for data retrieval.
@@ -77,7 +77,7 @@ properties:
       properties:
         image_id:
           type: string
-          pattern: ^[a-z0-9-]+$
+          pattern: ^[a-zA-Z0-9_-]+$
           description: Unique identifier for the image (used as filename)
         caption:
           type: string

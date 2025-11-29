@@ -399,5 +399,623 @@ describe('File Operations Integration Tests', () => {
       });
     });
   });
+
+  describe('File Rename Operations', () => {
+    beforeEach(() => {
+      // Set workspace state for rename operations
+      fileOperationsService.setWorkspaceStateGetter(() => ({ repo: 'test-repo', branch: 'main' }));
+    });
+
+    it('should rename a graph file (simple rename, no reference updates)', async () => {
+      // Create a graph file
+      const graphFile = {
+        fileId: 'graph-old-name',
+        type: 'graph' as const,
+        name: 'old-name.json',
+        data: { 
+          nodes: [{ uuid: '1', id: 'start', label: 'Start' }], 
+          edges: [],
+          metadata: { name: 'old-name' }
+        },
+        originalData: { nodes: [], edges: [] },
+        isDirty: false,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: {
+          repository: 'test-repo',
+          branch: 'main',
+          path: 'graphs/old-name.json'
+        }
+      };
+
+      (fileRegistry as any).files.set('graph-old-name', graphFile);
+
+      const result = await fileOperationsService.renameFile('graph-old-name', 'new-name');
+
+      expect(result.success).toBe(true);
+      expect(result.updatedReferences).toBe(0); // Graphs don't have references to update
+
+      // Old file should be gone
+      expect(fileRegistry.getFile('graph-old-name')).toBeUndefined();
+
+      // New file should exist
+      const newFile = fileRegistry.getFile('graph-new-name');
+      expect(newFile).toBeTruthy();
+      expect(newFile?.source?.path).toBe('graphs/new-name.json');
+    });
+
+    it('should rename a parameter file and update its id', async () => {
+      // Create a parameter file
+      const paramFile = {
+        fileId: 'parameter-old-param',
+        type: 'parameter' as const,
+        name: 'old-param.yaml',
+        data: { 
+          id: 'old-param', 
+          name: 'old-param',
+          type: 'probability',
+          values: [{ mean: 0.5 }],
+          metadata: { updated_at: '2024-01-01' }
+        },
+        originalData: { id: 'old-param', values: [{ mean: 0.5 }] },
+        isDirty: false,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: {
+          repository: 'test-repo',
+          branch: 'main',
+          path: 'parameters/old-param.yaml'
+        }
+      };
+
+      (fileRegistry as any).files.set('parameter-old-param', paramFile);
+
+      const result = await fileOperationsService.renameFile('parameter-old-param', 'new-param');
+
+      expect(result.success).toBe(true);
+
+      // Old file should be gone
+      expect(fileRegistry.getFile('parameter-old-param')).toBeUndefined();
+
+      // New file should exist with updated id
+      const newFile = fileRegistry.getFile('parameter-new-param');
+      expect(newFile).toBeTruthy();
+      expect(newFile?.data.id).toBe('new-param');
+      expect(newFile?.data.name).toBe('new-param');
+      expect(newFile?.source?.path).toBe('parameters/new-param.yaml');
+    });
+
+    it('should update references in graph files when renaming a parameter', async () => {
+      // Create a parameter file
+      const paramFile = {
+        fileId: 'parameter-checkout-rate',
+        type: 'parameter' as const,
+        name: 'checkout-rate.yaml',
+        data: { 
+          id: 'checkout-rate', 
+          name: 'checkout-rate',
+          type: 'probability',
+          values: [{ mean: 0.5 }]
+        },
+        originalData: { id: 'checkout-rate' },
+        isDirty: false,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: {
+          repository: 'test-repo',
+          branch: 'main',
+          path: 'parameters/checkout-rate.yaml'
+        }
+      };
+
+      // Create a graph file that references this parameter
+      const graphFile = {
+        fileId: 'graph-funnel',
+        type: 'graph' as const,
+        name: 'funnel.json',
+        data: { 
+          nodes: [
+            { uuid: '1', id: 'cart', label: 'Cart' },
+            { uuid: '2', id: 'checkout', label: 'Checkout' }
+          ], 
+          edges: [
+            { 
+              uuid: 'e1', 
+              id: 'cart-to-checkout',
+              from: '1', 
+              to: '2', 
+              p: { 
+                mean: 0.5,
+                id: 'checkout-rate' // Reference to parameter
+              }
+            }
+          ],
+          metadata: { name: 'funnel' }
+        },
+        originalData: { nodes: [], edges: [] },
+        isDirty: false,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: {
+          repository: 'test-repo',
+          branch: 'main',
+          path: 'graphs/funnel.json'
+        }
+      };
+
+      (fileRegistry as any).files.set('parameter-checkout-rate', paramFile);
+      (fileRegistry as any).files.set('graph-funnel', graphFile);
+
+      const result = await fileOperationsService.renameFile('parameter-checkout-rate', 'conversion-rate');
+
+      expect(result.success).toBe(true);
+      expect(result.updatedReferences).toBe(1); // One graph was updated
+
+      // Check graph was updated with new reference
+      const updatedGraph = fileRegistry.getFile('graph-funnel');
+      expect(updatedGraph?.data.edges[0].p.id).toBe('conversion-rate');
+    });
+
+    it('should update case references in graphs when renaming a case', async () => {
+      // Create a case file
+      const caseFile = {
+        fileId: 'case-old-experiment',
+        type: 'case' as const,
+        name: 'old-experiment.yaml',
+        data: { 
+          id: 'old-experiment', 
+          name: 'old-experiment',
+          parameter_type: 'case',
+          case: {
+            status: 'active',
+            variants: [
+              { name: 'control', weight: 0.5 },
+              { name: 'treatment', weight: 0.5 }
+            ]
+          }
+        },
+        originalData: { id: 'old-experiment' },
+        isDirty: false,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: {
+          repository: 'test-repo',
+          branch: 'main',
+          path: 'cases/old-experiment.yaml'
+        }
+      };
+
+      // Create a graph with case references
+      const graphFile = {
+        fileId: 'graph-ab-test',
+        type: 'graph' as const,
+        name: 'ab-test.json',
+        data: { 
+          nodes: [
+            { 
+              uuid: '1', 
+              id: 'gate', 
+              label: 'AB Test Gate',
+              case: { id: 'old-experiment', status: 'active', variants: [] }
+            }
+          ], 
+          edges: [
+            { 
+              uuid: 'e1',
+              from: '1', 
+              to: '2',
+              case_id: 'old-experiment',
+              case_variant: 'treatment'
+            }
+          ],
+          metadata: { name: 'ab-test' }
+        },
+        originalData: { nodes: [], edges: [] },
+        isDirty: false,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: {
+          repository: 'test-repo',
+          branch: 'main',
+          path: 'graphs/ab-test.json'
+        }
+      };
+
+      (fileRegistry as any).files.set('case-old-experiment', caseFile);
+      (fileRegistry as any).files.set('graph-ab-test', graphFile);
+
+      const result = await fileOperationsService.renameFile('case-old-experiment', 'new-experiment');
+
+      expect(result.success).toBe(true);
+      expect(result.updatedReferences).toBe(1);
+
+      // Check graph was updated with new case references
+      const updatedGraph = fileRegistry.getFile('graph-ab-test');
+      expect(updatedGraph?.data.nodes[0].case.id).toBe('new-experiment');
+      expect(updatedGraph?.data.edges[0].case_id).toBe('new-experiment');
+    });
+
+    it('should update event_id references in graphs when renaming an event', async () => {
+      // Create an event file
+      const eventFile = {
+        fileId: 'event-old-click',
+        type: 'event' as const,
+        name: 'old-click.yaml',
+        data: { 
+          id: 'old-click', 
+          name: 'old-click',
+          event_type: 'interaction'
+        },
+        originalData: { id: 'old-click' },
+        isDirty: false,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: {
+          repository: 'test-repo',
+          branch: 'main',
+          path: 'events/old-click.yaml'
+        }
+      };
+
+      // Create a graph with event_id reference
+      const graphFile = {
+        fileId: 'graph-events',
+        type: 'graph' as const,
+        name: 'events.json',
+        data: { 
+          nodes: [
+            { 
+              uuid: '1', 
+              id: 'button', 
+              label: 'Button Click',
+              event_id: 'old-click'
+            }
+          ], 
+          edges: [],
+          metadata: { name: 'events' }
+        },
+        originalData: { nodes: [], edges: [] },
+        isDirty: false,
+        isLoaded: true,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: {
+          repository: 'test-repo',
+          branch: 'main',
+          path: 'graphs/events.json'
+        }
+      };
+
+      (fileRegistry as any).files.set('event-old-click', eventFile);
+      (fileRegistry as any).files.set('graph-events', graphFile);
+
+      const result = await fileOperationsService.renameFile('event-old-click', 'new-click');
+
+      expect(result.success).toBe(true);
+      expect(result.updatedReferences).toBe(1);
+
+      // Check graph was updated with new event reference
+      const updatedGraph = fileRegistry.getFile('graph-events');
+      expect(updatedGraph?.data.nodes[0].event_id).toBe('new-click');
+    });
+
+    it('should fail to rename if target name already exists', async () => {
+      // Create two files
+      const file1 = {
+        fileId: 'parameter-source',
+        type: 'parameter' as const,
+        data: { id: 'source' },
+        isDirty: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/source.yaml' }
+      };
+
+      const file2 = {
+        fileId: 'parameter-target',
+        type: 'parameter' as const,
+        data: { id: 'target' },
+        isDirty: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/target.yaml' }
+      };
+
+      (fileRegistry as any).files.set('parameter-source', file1);
+      (fileRegistry as any).files.set('parameter-target', file2);
+
+      const result = await fileOperationsService.renameFile('parameter-source', 'target');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('already exists');
+    });
+
+    it('should fail to rename if file does not exist', async () => {
+      const result = await fileOperationsService.renameFile('parameter-nonexistent', 'new-name');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('File not found');
+    });
+
+    it('should fail to rename with invalid characters', async () => {
+      const file = {
+        fileId: 'parameter-valid',
+        type: 'parameter' as const,
+        data: { id: 'valid' },
+        isDirty: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/valid.yaml' }
+      };
+
+      (fileRegistry as any).files.set('parameter-valid', file);
+
+      const result = await fileOperationsService.renameFile('parameter-valid', 'invalid name!');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('letters, numbers, hyphens, and underscores');
+    });
+
+    it('should succeed with no-op when renaming to same name', async () => {
+      const file = {
+        fileId: 'parameter-same',
+        type: 'parameter' as const,
+        data: { id: 'same' },
+        isDirty: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/same.yaml' }
+      };
+
+      (fileRegistry as any).files.set('parameter-same', file);
+
+      const result = await fileOperationsService.renameFile('parameter-same', 'same');
+
+      expect(result.success).toBe(true);
+      expect(result.updatedReferences).toBe(0);
+      
+      // Original file should still exist
+      expect(fileRegistry.getFile('parameter-same')).toBeTruthy();
+    });
+
+    it('should update cost parameter references', async () => {
+      // Create a parameter used as a cost
+      const costParam = {
+        fileId: 'parameter-shipping-cost',
+        type: 'parameter' as const,
+        data: { id: 'shipping-cost', type: 'cost_gbp' },
+        isDirty: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/shipping-cost.yaml' }
+      };
+
+      // Create a graph with cost references
+      const graphFile = {
+        fileId: 'graph-costs',
+        type: 'graph' as const,
+        data: { 
+          nodes: [],
+          edges: [
+            { 
+              uuid: 'e1',
+              from: '1',
+              to: '2',
+              cost_gbp: { mean: 10, id: 'shipping-cost' },
+              cost_time: { mean: 2, id: 'shipping-cost' }
+            }
+          ],
+          metadata: { name: 'costs' }
+        },
+        isDirty: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'graphs/costs.json' }
+      };
+
+      (fileRegistry as any).files.set('parameter-shipping-cost', costParam);
+      (fileRegistry as any).files.set('graph-costs', graphFile);
+
+      const result = await fileOperationsService.renameFile('parameter-shipping-cost', 'delivery-cost');
+
+      expect(result.success).toBe(true);
+      expect(result.updatedReferences).toBe(1);
+
+      const updatedGraph = fileRegistry.getFile('graph-costs');
+      expect(updatedGraph?.data.edges[0].cost_gbp.id).toBe('delivery-cost');
+      expect(updatedGraph?.data.edges[0].cost_time.id).toBe('delivery-cost');
+    });
+
+    it('should update conditional probability references', async () => {
+      // Create a parameter
+      const param = {
+        fileId: 'parameter-conditional-rate',
+        type: 'parameter' as const,
+        data: { id: 'conditional-rate', type: 'probability' },
+        isDirty: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/conditional-rate.yaml' }
+      };
+
+      // Create a graph with conditional probability references
+      const graphFile = {
+        fileId: 'graph-conditional',
+        type: 'graph' as const,
+        data: { 
+          nodes: [],
+          edges: [
+            { 
+              uuid: 'e1',
+              from: '1',
+              to: '2',
+              p: { mean: 0.3 },
+              conditional_p: [
+                {
+                  condition: 'visited(promo)',
+                  p: { mean: 0.7, id: 'conditional-rate' }
+                }
+              ]
+            }
+          ],
+          metadata: { name: 'conditional' }
+        },
+        isDirty: false,
+        viewTabs: [],
+        lastModified: Date.now(),
+        source: { repository: 'test-repo', branch: 'main', path: 'graphs/conditional.json' }
+      };
+
+      (fileRegistry as any).files.set('parameter-conditional-rate', param);
+      (fileRegistry as any).files.set('graph-conditional', graphFile);
+
+      const result = await fileOperationsService.renameFile('parameter-conditional-rate', 'promo-rate');
+
+      expect(result.success).toBe(true);
+      expect(result.updatedReferences).toBe(1);
+
+      const updatedGraph = fileRegistry.getFile('graph-conditional');
+      expect(updatedGraph?.data.edges[0].conditional_p[0].p.id).toBe('promo-rate');
+    });
+
+    describe('Git Integration', () => {
+      it('should stage old file for deletion when renaming a committed file', async () => {
+        // Clear any pending deletions first
+        (fileRegistry as any).pendingFileDeletions = [];
+
+        // Create a committed file (has SHA)
+        const committedFile = {
+          fileId: 'parameter-committed',
+          type: 'parameter' as const,
+          name: 'committed.yaml',
+          data: { id: 'committed', type: 'probability' },
+          originalData: { id: 'committed' },
+          isDirty: false,
+          viewTabs: [],
+          lastModified: Date.now(),
+          sha: 'abc123def456', // Has SHA = committed to Git
+          path: 'parameters/committed.yaml',
+          source: { 
+            repository: 'test-repo', 
+            branch: 'main', 
+            path: 'parameters/committed.yaml' 
+          }
+        };
+
+        (fileRegistry as any).files.set('parameter-committed', committedFile);
+
+        const result = await fileOperationsService.renameFile('parameter-committed', 'renamed');
+
+        expect(result.success).toBe(true);
+
+        // Old file should be staged for deletion
+        const pendingDeletions = fileRegistry.getPendingDeletions();
+        expect(pendingDeletions.length).toBe(1);
+        expect(pendingDeletions[0].path).toBe('parameters/committed.yaml');
+        expect(pendingDeletions[0].fileId).toBe('parameter-committed');
+      });
+
+      it('should mark new file as dirty after rename', async () => {
+        const file = {
+          fileId: 'parameter-to-rename',
+          type: 'parameter' as const,
+          data: { id: 'to-rename' },
+          originalData: { id: 'to-rename' },
+          isDirty: false,
+          viewTabs: [],
+          lastModified: Date.now(),
+          source: { repository: 'test-repo', branch: 'main', path: 'parameters/to-rename.yaml' }
+        };
+
+        (fileRegistry as any).files.set('parameter-to-rename', file);
+
+        await fileOperationsService.renameFile('parameter-to-rename', 'renamed');
+
+        // New file should be marked dirty (ready for commit)
+        const newFile = fileRegistry.getFile('parameter-renamed');
+        expect(newFile).toBeTruthy();
+        expect(newFile?.isDirty).toBe(true);
+      });
+
+      it('should mark files with updated references as dirty', async () => {
+        // Create a parameter
+        const param = {
+          fileId: 'parameter-ref-target',
+          type: 'parameter' as const,
+          data: { id: 'ref-target' },
+          originalData: { id: 'ref-target' },
+          isDirty: false,
+          viewTabs: [],
+          lastModified: Date.now(),
+          source: { repository: 'test-repo', branch: 'main', path: 'parameters/ref-target.yaml' }
+        };
+
+        // Create a graph that references it (starts clean)
+        const graph = {
+          fileId: 'graph-referencing',
+          type: 'graph' as const,
+          data: { 
+            nodes: [],
+            edges: [{ uuid: 'e1', from: '1', to: '2', p: { mean: 0.5, id: 'ref-target' } }],
+            metadata: {}
+          },
+          originalData: { 
+            nodes: [],
+            edges: [{ uuid: 'e1', from: '1', to: '2', p: { mean: 0.5, id: 'ref-target' } }],
+            metadata: {}
+          },
+          isDirty: false,
+          viewTabs: [],
+          lastModified: Date.now(),
+          source: { repository: 'test-repo', branch: 'main', path: 'graphs/referencing.json' }
+        };
+
+        (fileRegistry as any).files.set('parameter-ref-target', param);
+        (fileRegistry as any).files.set('graph-referencing', graph);
+
+        const result = await fileOperationsService.renameFile('parameter-ref-target', 'new-target');
+
+        expect(result.success).toBe(true);
+        expect(result.updatedReferences).toBe(1);
+
+        // Graph should now be dirty because its references were updated
+        const updatedGraph = fileRegistry.getFile('graph-referencing');
+        expect(updatedGraph?.isDirty).toBe(true);
+      });
+
+      it('should NOT stage deletion for local-only files (no SHA)', async () => {
+        (fileRegistry as any).pendingFileDeletions = [];
+
+        // Create a local-only file (no SHA = never committed)
+        const localFile = {
+          fileId: 'parameter-local-only',
+          type: 'parameter' as const,
+          data: { id: 'local-only' },
+          originalData: { id: 'local-only' },
+          isDirty: false,
+          isLocal: true,
+          viewTabs: [],
+          lastModified: Date.now(),
+          // No SHA - never committed
+          source: { repository: 'local', branch: 'main', path: 'parameters/local-only.yaml' }
+        };
+
+        (fileRegistry as any).files.set('parameter-local-only', localFile);
+
+        await fileOperationsService.renameFile('parameter-local-only', 'renamed-local');
+
+        // Should NOT stage any deletions (file was never on Git)
+        const pendingDeletions = fileRegistry.getPendingDeletions();
+        expect(pendingDeletions.length).toBe(0);
+      });
+    });
+  });
 });
 
