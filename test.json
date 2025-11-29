@@ -13,6 +13,11 @@ nodes:
     label_overridden: true
     event_id: household-created
     event_id_overridden: true
+    images:
+      - image_id: household-created-img
+        caption: Dagnet time
+        file_extension: png
+        caption_overridden: false
   - uuid: addb99b6-5773-482c-a437-4661c8433ff7
     id: abandonned-before-delegation
     label: abandonned-before-delegation
@@ -120,7 +125,7 @@ nodes:
     label: Switch success
     absorbing: true
     layout:
-      x: 1435
+      x: 1434
       'y': -624
     event_id: switch-success
     event_id_overridden: true
@@ -146,32 +151,13 @@ nodes:
     layout:
       x: 1430
       'y': -475
-  - uuid: 80ada9d5-cf10-43c6-bbc2-e39e55fe4b16
-    id: delegated-energy
-    label: Delegated energy
-    absorbing: false
-    layout:
-      x: -334
-      'y': -477
-    event_id: delegated-energy
-    images: []
-  - uuid: 34c6b3a0-a7ae-4883-bf3e-8a254d866f0b
-    id: delegated-not-energy
-    label: Delegated not energy
-    absorbing: false
-    layout:
-      x: -338
-      'y': -242
-    event_id: delegated-not-energy
-    images: []
-    event_id_overridden: true
   - uuid: b9194789-0714-4273-b1c0-9fd2aa8b97fa
     id: recommendation-retention
     label: Recommendation retention
     absorbing: false
     layout:
-      x: 962
-      'y': -145
+      x: 1006
+      'y': -166
     event_id: recommendation-offered-retention
     images: []
     event_id_overridden: true
@@ -183,34 +169,23 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.549
+      mean: 0.565
       evidence:
-        'n': 9229
-        k: 5069
-        window_from: '2025-11-21T00:00:00Z'
-        window_to: '2025-11-30T23:59:59Z'
-        retrieved_at: '2025-11-27T11:21:50.171Z'
+        'n': 370
+        k: 209
+        window_from: '2025-09-30T23:00:00.000Z'
+        window_to: '2025-09-30T23:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:46.241Z'
         source: amplitude
         full_query: from(household-created).to(household-delegated)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:25:41.926Z'
-        query:
-          from: household-created
-          to: household-delegated
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"household-created","to":"household-delegated","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        retrieved_at: '2025-11-28T23:25:46.241Z'
+        query: from(household-created).to(household-delegated)
+        full_query: from(household-created).to(household-delegated)
       connection: amplitude-prod
       id: household-delegation-rate
-      stdev: 0.005
+      stdev: 0.025773179019219897
     query: from(household-created).to(household-delegated)
     description: ''
   - uuid: af23535c-192b-48d1-8386-132b0f5079f3
@@ -220,8 +195,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.24
-      mean_overridden: true
+      mean: 0.507
     query: from(saw-wa-details-page).to(dropped-out-without-bds).minus(viewed-coffee-screen)
     description: ''
     query_overridden: false
@@ -242,85 +216,28 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.436
+      mean: 1.119
       id: dashboard-to-rec-from-non-bdos
       connection: amplitude-prod
       connection_overridden: true
-      stdev: 0.007
+      stdev: .nan
       evidence:
-        window_from: '2025-11-24T18:08:27.476Z'
+        window_from: '2025-10-28T00:00:00.000Z'
         source: amplitude
-        'n': 4786
-        k: 1726
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-25T18:23:00.570Z'
-        full_query: >-
-          {"from":"User sees dashboard","to":"Blueprint CheckpointReached","context":[],"case":[],"event_filters":{"User
-          sees dashboard":[],"Blueprint
-          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        'n': 3491
+        k: 3906
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:10.571Z'
+        full_query: from(viewed-dashboard).to(recommendation-calling-for-bds)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:41:50.689Z'
-        query:
-          from: viewed-dashboard
-          to: recommendation-offered-no-bdos
-          visited_upstream:
-            - delegated-not-energy
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22does%20not%20contain%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 1
-          to_step_index: 2
-        full_query: >-
-          {"from":"viewed-dashboard","to":"recommendation-offered-no-bdos","visited_upstream":["delegated-not-energy"],"context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22does%20not%20contain%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":1,"to_step_index":2}
-    query: from(viewed-dashboard).to(recommendation-calling-for-bds).visited(delegated-not-energy)
+        retrieved_at: '2025-11-28T23:25:10.571Z'
+        query: from(viewed-dashboard).to(recommendation-calling-for-bds)
+        full_query: from(viewed-dashboard).to(recommendation-calling-for-bds)
+    query: from(viewed-dashboard).to(recommendation-calling-for-bds)
     description: ''
     query_overridden: true
-  - uuid: 370dce1d-3a36-4109-9711-204c301478c8
-    id: switch-registered-to-switch-success
-    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    to: 30aabc44-e448-4359-b0d0-338a231edb92
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.772
-      stdev: 0.016
-      id: registration-to-success
-      evidence:
-        window_from: '2025-11-24T16:38:31.493Z'
-        source: amplitude
-        'n': 675
-        k: 521
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-25T18:23:03.237Z'
-        full_query: >-
-          {"from":"Blueprint CheckpointReached","to":"Blueprint
-          SwitchSuccess","context":[],"case":[],"event_filters":{"Blueprint
-          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["SwitchRegistered"]}],"Blueprint
-          SwitchSuccess":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20SwitchSuccess%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-27T17:25:45.588Z'
-        query:
-          from: switch-registered
-          to: switch-success
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20SwitchSuccess%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"switch-registered","to":"switch-success","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20SwitchSuccess%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-      connection: amplitude-prod
-      connection_overridden: true
-    query: from(switch-registered).to(switch-success)
-    description: ''
+    n_query: from(household-created).to(viewed-dashboard)
   - uuid: d7bf4100-18db-4afa-b0c8-2e8c5d72a1f1
     id: viewed-coffee-screen-to-gave-bds-in-onboarding-after-onboarding
     from: 5788d308-a7a9-49ce-a755-07491315a603
@@ -328,37 +245,22 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.044
-      stdev: 0.005
+      mean: 0
+      stdev: 0
       id: gave-bds-after-onboarding
       evidence:
-        window_from: '2025-11-24T16:29:07.917Z'
+        window_from: '2025-10-28T00:00:00.000Z'
         source: amplitude
-        'n': 1930
-        k: 84
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-25T17:06:38.737Z'
-        full_query: >-
-          {"from":"Viewed Coffee Promotion Page /onboarding/coffee Page","to":"BankAccount
-          DetailsEntrySaved","context":[],"case":[],"event_filters":{"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[],"BankAccount DetailsEntrySaved":[{"property":"context","operator":"is
-          not","values":["ONBOARDING"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntrySaved%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        'n': 1189
+        k: 0
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:12.140Z'
+        full_query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:25:47.221Z'
-        query:
-          from: viewed-coffee-screen
-          to: gave-bds-after-onboarding
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntrySaved%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"viewed-coffee-screen","to":"gave-bds-after-onboarding","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntrySaved%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        retrieved_at: '2025-11-28T23:25:12.140Z'
+        query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
+        full_query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
       connection: amplitude-prod
       connection_overridden: true
     query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
@@ -370,45 +272,24 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.019
+      mean: 0
       id: gave-bds-after-wa
       connection: amplitude-prod
       connection_overridden: true
       evidence:
-        window_from: '2025-11-24T16:32:42.451Z'
+        window_from: '2025-10-28T00:00:00.000Z'
         source: amplitude
-        'n': 5171
-        k: 97
-        window_to: '2025-10-31T00:00:00.000Z'
-        retrieved_at: '2025-11-25T16:36:23.797Z'
-        full_query: >-
-          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"BankAccount
-          DetailsEntrySaved","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
-          /onboarding/whatsApp-details Page":[],"BankAccount DetailsEntrySaved":[{"property":"context","operator":"is
-          not","values":["ONBOARDING"]}]},"start":"2025-10-23T23:00:00.000Z","end":"2025-11-23T00:00:00.000Z"}
+        'n': 2889
+        k: 0
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:21.656Z'
+        full_query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-25T16:36:23.797Z'
-        query:
-          from: Viewed WhatsApp details /onboarding/whatsApp-details Page
-          to: BankAccount DetailsEntrySaved
-          context: []
-          case: []
-          start: '2025-10-23T23:00:00.000Z'
-          end: '2025-11-23T00:00:00.000Z'
-          event_filters:
-            Viewed WhatsApp details /onboarding/whatsApp-details Page: []
-            BankAccount DetailsEntrySaved:
-              - property: context
-                operator: is not
-                values:
-                  - ONBOARDING
-        full_query: >-
-          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"BankAccount
-          DetailsEntrySaved","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
-          /onboarding/whatsApp-details Page":[],"BankAccount DetailsEntrySaved":[{"property":"context","operator":"is
-          not","values":["ONBOARDING"]}]},"start":"2025-10-23T23:00:00.000Z","end":"2025-11-23T00:00:00.000Z"}
-      stdev: 0.002
+        retrieved_at: '2025-11-28T23:25:21.656Z'
+        query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
+        full_query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
+      stdev: 0
     description: ''
     query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
   - uuid: 2e25fd40-2c84-4b14-af19-6a61220ddbcd
@@ -418,7 +299,7 @@ edges:
     fromHandle: bottom-out
     toHandle: top
     p:
-      mean: 0.143
+      mean: 0
     query: from(viewed-dashboard).to(not-sent-recommendation)
     description: ''
   - uuid: df61ee70-5722-4198-8a2d-d03686e4af0c
@@ -428,7 +309,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.676
+      mean: 0.217
     query: from(gave-bds-after-onboarding).to(not-sent-recommendation)
     description: ''
   - uuid: 2a2f9f24-9bf5-4e77-9061-ab677b7ab5d7
@@ -438,7 +319,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.863
+      mean: 1
     query: from(recommendation-calling-for-bds).to(post-recommendation-failure)
     description: ''
   - uuid: 532a304a-c435-4ea5-aa6a-44714b40adab
@@ -448,7 +329,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.228
+      mean: 0.071
     query: from(switch-registered).to(post-registration-failure)
     description: ''
   - uuid: c4c63403-5e62-4a22-b84c-8b55f06290f9
@@ -458,19 +339,19 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.412
-      stdev: 0
+      mean: 0.373
+      stdev: 0.008997345864555736
       evidence:
-        'n': 364
-        k: 150
-        window_from: '2025-11-22T00:00:00Z'
-        retrieved_at: '2025-11-27T11:21:58.754Z'
+        'n': 2889
+        k: 1078
+        window_from: '2025-10-28T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:25.257Z'
         source: amplitude
         full_query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
-        window_to: '2025-11-30T23:59:59Z'
+        window_to: '2025-11-14T00:00:00.000Z'
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T11:21:58.754Z'
+        retrieved_at: '2025-11-28T23:25:25.257Z'
         query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
         full_query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
       connection: amplitude-prod
@@ -485,30 +366,24 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.477
-      stdev: 0.011
+      mean: 0.472
+      stdev: 0.014477615330869551
       id: coffee-to-bds
       connection: amplitude-prod
       connection_overridden: true
       evidence:
-        'n': 1930
-        k: 921
+        'n': 1189
+        k: 561
+        window_from: '2025-10-28T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:26.896Z'
+        source: amplitude
+        full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:35:09.515Z'
-        query:
-          from: viewed-coffee-screen
-          to: gave-bds
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"viewed-coffee-screen","to":"gave-bds","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        retrieved_at: '2025-11-28T23:25:26.896Z'
+        query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
+        full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
     query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
     description: ''
   - uuid: bb6380f3-6e5f-4734-aa90-99a8a7ec3444
@@ -518,43 +393,24 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.029
+      mean: 0
       id: bdos-to-recommendation
       evidence:
-        window_from: '2025-11-24T16:12:20.961Z'
+        window_from: '2025-10-28T00:00:00.000Z'
         source: amplitude
-        'n': 889
-        k: 26
-        window_to: '2025-10-31T00:00:00.000Z'
-        retrieved_at: '2025-11-25T17:39:00.277Z'
-        full_query: >-
-          {"from":"BankAccount DetailsEntryConfirmed","to":"Blueprint
-          CheckpointReached","context":[],"case":[],"event_filters":{"BankAccount DetailsEntryConfirmed":[],"Blueprint
-          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z"}
+        'n': 584
+        k: 0
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:28.566Z'
+        full_query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-25T17:39:00.277Z'
-        query:
-          from: BankAccount DetailsEntryConfirmed
-          to: Blueprint CheckpointReached
-          context: []
-          case: []
-          start: '2025-09-30T23:00:00.000Z'
-          end: '2025-10-31T00:00:00.000Z'
-          event_filters:
-            BankAccount DetailsEntryConfirmed: []
-            Blueprint CheckpointReached:
-              - property: checkpoint
-                operator: is
-                values:
-                  - RecommendationOffered
-        full_query: >-
-          {"from":"BankAccount DetailsEntryConfirmed","to":"Blueprint
-          CheckpointReached","context":[],"case":[],"event_filters":{"BankAccount DetailsEntryConfirmed":[],"Blueprint
-          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z"}
+        retrieved_at: '2025-11-28T23:25:28.566Z'
+        query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
+        full_query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
       connection: amplitude-prod
       connection_overridden: true
-      stdev: 0.006
+      stdev: 0
     query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
     description: ''
     query_overridden: false
@@ -565,37 +421,22 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.381
+      mean: 0
       id: wa-to-coffee
-      stdev: 0.007
+      stdev: 0
       evidence:
-        'n': 5023
-        k: 1912
-        window_from: '2025-11-20T18:58:06.435Z'
-        retrieved_at: '2025-11-20T18:32:51.222Z'
+        'n': 174
+        k: 0
+        window_from: '2025-09-30T23:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:55.606Z'
         source: amplitude
-        full_query: >-
-          {"from":"Viewed WhatsApp details /onboarding/whatsApp-details Page","to":"Viewed Coffee Promotion Page
-          /onboarding/coffee Page","context":[],"case":[],"event_filters":{"Viewed WhatsApp details
-          /onboarding/whatsApp-details Page":[],"Viewed Coffee Promotion Page /onboarding/coffee
-          Page":[]},"query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251113&end=20251120&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-        window_to: '2025-11-18T00:00:00.000Z'
+        full_query: from(saw-wa-details-page).to(viewed-coffee-screen)
+        window_to: '2025-09-30T23:00:00.000Z'
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:25:51.388Z'
-        query:
-          from: saw-wa-details-page
-          to: viewed-coffee-screen
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"saw-wa-details-page","to":"viewed-coffee-screen","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        retrieved_at: '2025-11-28T23:25:55.606Z'
+        query: from(saw-wa-details-page).to(viewed-coffee-screen)
+        full_query: from(saw-wa-details-page).to(viewed-coffee-screen)
       connection: amplitude-prod
     query: from(saw-wa-details-page).to(viewed-coffee-screen)
     description: ''
@@ -607,8 +448,8 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.451
-    query: from(household-created).to(abandonned-before-delegation)
+      mean: 0.435
+    query: from(household-created).to(abandonned-before-delegation).minus(household-delegated)
     description: ''
   - uuid: 7f41cc52-1d06-4d99-9e13-30aa643ce0b9
     id: 5788d308-a7a9-49ce-a755-07491315a603->dab4f352-b997-4f58-a24f-6fae0b8c82d3
@@ -617,7 +458,7 @@ edges:
     fromHandle: bottom-out
     toHandle: top
     p:
-      mean: 0.479
+      mean: 0.528
     query: from(viewed-coffee-screen).to(dropped-out-without-bds)
     description: ''
   - uuid: 41b26675-c962-4cb6-be4d-55804d22b480
@@ -627,35 +468,24 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.932
-      stdev: 0.008
+      mean: 1
+      stdev: 0
       id: bdos-to-dashboard
       connection: amplitude-prod
       connection_overridden: true
       evidence:
-        'n': 998
-        k: 930
-        window_from: '2025-11-25T18:17:22.358Z'
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-27T17:16:05.544Z'
-        source: manual
+        'n': 52
+        k: 52
+        window_from: '2025-09-30T23:00:00.000Z'
+        window_to: '2025-09-30T23:00:00.000Z'
+        retrieved_at: '2025-11-28T23:25:56.375Z'
+        source: amplitude
         full_query: from(gave-bds-in-onboarding).to(viewed-dashboard)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:38:35.274Z'
-        query:
-          from: gave-bds-in-onboarding
-          to: viewed-dashboard
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"gave-bds-in-onboarding","to":"viewed-dashboard","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        retrieved_at: '2025-11-28T23:25:56.375Z'
+        query: from(gave-bds-in-onboarding).to(viewed-dashboard)
+        full_query: from(gave-bds-in-onboarding).to(viewed-dashboard)
     query: from(gave-bds-in-onboarding).to(viewed-dashboard)
     description: ''
   - uuid: 25ab4406-51d2-4852-a373-5d656c4a295f
@@ -665,236 +495,27 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.137
+      mean: 0
       id: calling-for-bds-to-registration
       connection: amplitude-prod
       connection_overridden: true
-      stdev: 0.005
+      stdev: 0
       evidence:
-        window_from: '2025-11-24T16:25:20.910Z'
+        window_from: '2025-09-30T23:00:00.000Z'
         source: amplitude
-        'n': 4933
-        k: 678
-        retrieved_at: '2025-11-25T17:06:36.634Z'
-        full_query: >-
-          {"from":"Blueprint CheckpointReached","to":"Blueprint
-          CheckpointReached","context":[],"case":[],"event_filters":{"Blueprint
-          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["SwitchRegistered"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-        window_to: '2025-11-18T00:00:00.000Z'
+        'n': 14
+        k: 0
+        retrieved_at: '2025-11-28T23:25:57.268Z'
+        full_query: from(recommendation-calling-for-bds).to(switch-registered)
+        window_to: '2025-09-30T23:00:00.000Z'
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:34:42.439Z'
-        query:
-          from: recommendation-offered-no-bdos
-          to: switch-registered
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"recommendation-offered-no-bdos","to":"switch-registered","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        retrieved_at: '2025-11-28T23:25:57.268Z'
+        query: from(recommendation-calling-for-bds).to(switch-registered)
+        full_query: from(recommendation-calling-for-bds).to(switch-registered)
     query: from(recommendation-calling-for-bds).to(switch-registered)
     description: ''
-  - uuid: e9c55e1b-f854-4cf8-a8ef-32591a4f9676
-    id: household-delegated-to-delegated-energy
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: 80ada9d5-cf10-43c6-bbc2-e39e55fe4b16
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.957
-      id: delegated-energy
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.003
-      evidence:
-        'n': 5358
-        k: 5129
-        window_from: '2025-11-26T10:12:51.576Z'
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-26T09:07:27.515Z'
-        source: amplitude
-        full_query: >-
-          {"from":"Household DelegationStatusChanged","to":"ServiceLineManagement
-          Confirmed","context":[],"case":[],"event_filters":{"Household
-          DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any
-          of","values":["ON"]}],"ServiceLineManagement
-          Confirmed":[{"property":"categoriesOn","operator":"contains","values":["Energy"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22contains%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-27T17:25:54.562Z'
-        query:
-          from: household-delegated
-          to: delegated-energy
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22contains%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"household-delegated","to":"delegated-energy","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22contains%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(household-delegated).to(delegated-energy)
-    description: ''
-  - uuid: a9660940-9d1e-48c7-bd2f-78c29ceed9b3
-    id: delegated-not-energy-to-saw-wa-details-page
-    from: 34c6b3a0-a7ae-4883-bf3e-8a254d866f0b
-    to: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.958
-      connection: amplitude-prod
-      connection_overridden: true
-      id: delegated-not-energy-to-wa
-      stdev: 0.003
-      evidence:
-        'n': 5109
-        k: 4894
-        window_from: '2025-11-26T10:12:53.758Z'
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-26T09:10:13.712Z'
-        source: amplitude
-        full_query: >-
-          {"from":"ServiceLineManagement Confirmed","to":"Viewed WhatsApp details /onboarding/whatsApp-details
-          Page","context":[],"case":[],"event_filters":{"ServiceLineManagement
-          Confirmed":[{"property":"categoriesOn","operator":"does not contain","values":["Energy"]}],"Viewed WhatsApp
-          details /onboarding/whatsApp-details
-          Page":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22does%20not%20contain%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-27T17:25:55.569Z'
-        query:
-          from: delegated-not-energy
-          to: saw-wa-details-page
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22does%20not%20contain%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"delegated-not-energy","to":"saw-wa-details-page","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22does%20not%20contain%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(delegated-not-energy).to(saw-wa-details-page)
-    description: ''
-  - uuid: 22b3bc39-57d7-464d-bf67-c2b3aa924ef3
-    id: delegated-energy-to-saw-wa-details-page
-    from: 80ada9d5-cf10-43c6-bbc2-e39e55fe4b16
-    to: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.959
-      id: delegated-energy-to-wa
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.003
-      evidence:
-        'n': 5202
-        k: 4987
-        window_from: '2025-11-26T10:12:54.221Z'
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-26T09:10:18.529Z'
-        source: amplitude
-        full_query: >-
-          {"from":"ServiceLineManagement Confirmed","to":"Viewed WhatsApp details /onboarding/whatsApp-details
-          Page","context":[],"case":[],"event_filters":{"ServiceLineManagement
-          Confirmed":[{"property":"categoriesOn","operator":"contains","values":["Energy"]}],"Viewed WhatsApp details
-          /onboarding/whatsApp-details
-          Page":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22contains%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-27T17:25:57.319Z'
-        query:
-          from: delegated-energy
-          to: saw-wa-details-page
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22contains%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"delegated-energy","to":"saw-wa-details-page","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22contains%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(delegated-energy).to(saw-wa-details-page)
-    description: ''
-  - uuid: 0d4199e7-7cb4-4a4a-8436-10faf8c78132
-    id: delegated-not-energy-to-dropped-out-without-bds
-    from: 34c6b3a0-a7ae-4883-bf3e-8a254d866f0b
-    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.08
-    query: from(delegated-not-energy).to(dropped-out-without-bds).minus(saw-wa-details-page)
-    description: ''
-  - uuid: 0061f482-58ad-4669-a345-b255330bb2a5
-    id: delegated-energy-to-dropped-out-without-bds
-    from: 80ada9d5-cf10-43c6-bbc2-e39e55fe4b16
-    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.08
-    query: from(delegated-energy).to(dropped-out-without-bds).minus(saw-wa-details-page)
-    description: ''
-  - uuid: d15a689d-b801-471b-b9ab-366da85870be
-    id: household-delegated-to-delegated-not-energy
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: 34c6b3a0-a7ae-4883-bf3e-8a254d866f0b
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.04
-      id: delegated-not-energy
-      connection_overridden: true
-      stdev: 0.003
-      evidence:
-        'n': 6466
-        k: 6111
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-27T09:43:21.061Z'
-        query:
-          from: Household DelegationStatusChanged
-          to: ServiceLineManagement Confirmed
-          context: []
-          case: []
-          event_filters:
-            Household DelegationStatusChanged:
-              - property: newDelegationStatus
-                operator: is any of
-                values:
-                  - 'ON'
-            ServiceLineManagement Confirmed:
-              - property: categoriesOn
-                operator: does not contain
-                values:
-                  - Energy
-          start: '2025-09-30T23:00:00.000Z'
-          end: '2025-10-31T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22does%20not%20contain%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"Household DelegationStatusChanged","to":"ServiceLineManagement
-          Confirmed","context":[],"case":[],"event_filters":{"Household
-          DelegationStatusChanged":[{"property":"newDelegationStatus","operator":"is any
-          of","values":["ON"]}],"ServiceLineManagement Confirmed":[{"property":"categoriesOn","operator":"does not
-          contain","values":["Energy"]}]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22ServiceLineManagement%20Confirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22categoriesOn%22%2C%22subprop_op%22%3A%22does%20not%20contain%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(household-delegated).to(delegated-not-energy)
-    description: ''
+    query_overridden: true
   - uuid: bfcf78e2-53b5-458c-885b-655cb5daeda6
     id: viewed-dashboard-to-recommendation-retention
     from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
@@ -902,38 +523,28 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.121
+      mean: 0.384
       connection: amplitude-prod
       connection_overridden: true
       id: retention-recommendations-from-dashboard
-      stdev: 0.007
+      stdev: 0.008120640410034347
       evidence:
-        'n': 4786
-        k: 1983
-        window_from: '2025-10-18T23:00:00.000Z'
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-27T17:16:09.591Z'
+        'n': 3587
+        k: 1377
+        window_from: '2025-10-28T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:22:54.880Z'
         source: amplitude
-        full_query: from(viewed-dashboard).to(recommendation-retention)
+        full_query: from(viewed-dashboard).to(recommendation-retention).exclude(viewed-coffee-screen)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:42:41.209Z'
-        query:
-          from: viewed-dashboard
-          to: recommendation-offered-retention
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"viewed-dashboard","to":"recommendation-offered-retention","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(viewed-dashboard).to(recommendation-retention).visited(delegated-energy).minus(viewed-coffee-screen)
+        retrieved_at: '2025-11-28T23:22:54.880Z'
+        query: from(viewed-dashboard).to(recommendation-retention).exclude(viewed-coffee-screen)
+        full_query: from(viewed-dashboard).to(recommendation-retention).exclude(viewed-coffee-screen)
+    query: from(viewed-dashboard).to(recommendation-retention).exclude(viewed-coffee-screen)
     query_overridden: true
     description: ''
+    n_query: from(household-created).to(viewed-dashboard)
   - uuid: f50c3a38-9369-4da1-8221-27cf65b6cabc
     id: recommendation-retention-to-switch-registered
     from: b9194789-0714-4273-b1c0-9fd2aa8b97fa
@@ -941,36 +552,29 @@ edges:
     fromHandle: top-out
     toHandle: bottom
     p:
-      mean: 0.5
+      mean: 1.345
       id: retention-rec-to-registration
       connection: amplitude-prod
       connection_overridden: true
-      stdev: 0.005
+      stdev: .nan
       evidence:
-        'n': 4933
-        k: 678
-        window_from: '2025-11-26T10:14:52.054Z'
-        source: manual
+        'n': 1400
+        k: 1883
+        window_from: '2025-10-28T00:00:00.000Z'
+        source: amplitude
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:22:56.596Z'
+        full_query: from(recommendation-retention).to(switch-registered)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:25:59.036Z'
-        query:
-          from: recommendation-offered
-          to: switch-registered
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"recommendation-offered","to":"switch-registered","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-      mean_overridden: true
+        retrieved_at: '2025-11-28T23:22:56.596Z'
+        query: from(recommendation-retention).to(switch-registered)
+        full_query: from(recommendation-retention).to(switch-registered)
+      mean_overridden: false
     query: from(recommendation-retention).to(switch-registered)
     description: ''
     query_overridden: true
+    n_query: from(viewed-dashboard).to(recommendation-retention).exclude(viewed-coffee-screen)
   - uuid: c95cbd37-c1f6-4f91-a66c-f7b2410c0dd2
     id: recommendation-retention-to-post-recommendation-failure
     from: b9194789-0714-4273-b1c0-9fd2aa8b97fa
@@ -978,7 +582,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.5
+      mean: 0.844
     query: from(recommendation-retention).to(post-recommendation-failure)
     description: ''
   - uuid: 153e467f-754c-4fcd-96ef-d25edcee6716
@@ -992,37 +596,25 @@ edges:
       id: dashboard-to-rec-from-bdos
       connection: amplitude-prod
       connection_overridden: true
-      stdev: 0.005
+      stdev: 0.00811663993784868
       evidence:
-        'n': 4388
-        k: 740
-        window_from: '2025-09-30T23:00:00.000Z'
-        window_to: '2025-10-31T00:00:00.000Z'
-        retrieved_at: '2025-11-27T17:12:09.301Z'
+        'n': 3587
+        k: 1374
+        window_from: '2025-10-28T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-11-28T23:22:58.805Z'
         source: amplitude
-        full_query: from(viewed-dashboard).to(recommendation-with-BDOs)
+        full_query: from(viewed-dashboard).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:14:19.147Z'
-        query:
-          from: viewed-dashboard
-          to: recommendation-offered
-          visited_upstream:
-            - gave-bds
-          context: []
-          case: []
-          start: '2025-09-30T23:00:00.000Z'
-          end: '2025-10-31T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 1
-          to_step_index: 2
-        full_query: >-
-          {"from":"viewed-dashboard","to":"recommendation-offered","visited_upstream":["gave-bds"],"context":[],"case":[],"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":1,"to_step_index":2}
+        retrieved_at: '2025-11-28T23:22:58.805Z'
+        query: from(viewed-dashboard).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
+        full_query: from(viewed-dashboard).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
       mean_overridden: true
-    query: from(viewed-dashboard).to(recommendation-with-BDOs)
+    query: from(viewed-dashboard).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
     description: ''
     query_overridden: true
+    n_query: from(household-created).to(viewed-dashboard)
   - uuid: edfc1ffc-8e03-4996-8f61-00f78b2ed3bb
     id: gave-bds-in-onboarding-to-not-sent-recommendation
     from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
@@ -1030,7 +622,7 @@ edges:
     fromHandle: bottom-out
     toHandle: top
     p:
-      mean: 0.039
+      mean: 0
     query: from(gave-bds-in-onboarding).to(not-sent-recommendation).minus(viewed-dashboard)
     description: ''
   - uuid: c38b4315-7815-47b7-8aae-a87d1506490e
@@ -1040,35 +632,24 @@ edges:
     fromHandle: top-out
     toHandle: bottom
     p:
-      mean: 0.324
+      mean: 0.783
       connection: amplitude-prod
       connection_overridden: true
       id: post-onboarding-bds-to-rec
-      stdev: 0.025
+      stdev: 0.05321512942763552
       evidence:
-        'n': 349
-        k: 113
-        window_from: '2025-11-27T11:35:26.679Z'
-        window_to: '2025-11-18T00:00:00.000Z'
-        retrieved_at: '2025-11-27T17:16:06.732Z'
-        source: manual
+        'n': 60
+        k: 47
+        window_from: '2025-09-30T23:00:00.000Z'
+        window_to: '2025-09-30T23:00:00.000Z'
+        retrieved_at: '2025-11-28T23:26:02.692Z'
+        source: amplitude
         full_query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:17:44.860Z'
-        query:
-          from: gave-bds-after-onboarding
-          to: recommendation-offered
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntrySaved%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"gave-bds-after-onboarding","to":"recommendation-offered","context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntrySaved%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+        retrieved_at: '2025-11-28T23:26:02.692Z'
+        query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
+        full_query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
     query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
     description: ''
     query_overridden: true
@@ -1079,7 +660,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.6
+      mean: 0
     query: from(recommendation-with-BDOs).to(post-recommendation-failure)
     description: ''
   - uuid: f575cbcc-b1d3-4e20-8fa3-bb19b706a496
@@ -1089,52 +670,106 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.4
-      id: gave-bds-in-onboarding
+      mean: 2.14
+      id: rec-with-bdos-to-registration
       connection: amplitude-prod
       connection_overridden: true
-      stdev: 0.005
+      stdev: .nan
       evidence:
-        window_from: '2025-11-25T17:34:56.136Z'
+        window_from: '2025-10-28T00:00:00.000Z'
         source: amplitude
-        'n': 4933
-        k: 678
-        retrieved_at: '2025-11-25T17:34:54.426Z'
-        full_query: >-
-          {"from":"User sees dashboard","to":"Blueprint CheckpointReached","visited":["BankAccount
-          DetailsEntryConfirmed"],"context":[],"case":[],"event_filters":{"User sees dashboard":[],"Blueprint
-          CheckpointReached":[{"property":"checkpoint","operator":"is","values":["RecommendationOffered"]}],"BankAccount
-          DetailsEntryConfirmed":[]},"start":"2025-09-30T23:00:00.000Z","end":"2025-10-31T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22User%20sees%20dashboard%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&start=20250930&end=20251031&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":2}
-        window_to: '2025-10-31T00:00:00.000Z'
+        'n': 494
+        k: 1057
+        retrieved_at: '2025-11-28T23:23:02.762Z'
+        full_query: from(recommendation-with-BDOs).to(switch-registered)
+        window_to: '2025-11-14T00:00:00.000Z'
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-27T17:40:42.030Z'
-        query:
-          from: recommendation-offered-bds
-          to: switch-registered
-          visited_upstream:
-            - gave-bds-in-onboarding
-          context: []
-          case: []
-          start: '2025-10-18T23:00:00.000Z'
-          end: '2025-11-18T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 1
-          to_step_index: 2
-        full_query: >-
-          {"from":"recommendation-offered-bds","to":"switch-registered","visited_upstream":["gave-bds-in-onboarding"],"context":[],"case":[],"start":"2025-10-18T23:00:00.000Z","end":"2025-11-18T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251018&end=20251118&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":1,"to_step_index":2}
+        retrieved_at: '2025-11-28T23:23:02.762Z'
+        query: from(recommendation-with-BDOs).to(switch-registered)
+        full_query: from(recommendation-with-BDOs).to(switch-registered)
       mean_overridden: false
     query: from(recommendation-with-BDOs).to(switch-registered)
     description: ''
     query_overridden: true
+    n_query: from(household-created).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
+  - uuid: bef7823b-2daa-4dd5-977d-b08e57993e44
+    id: household-delegated-to-saw-wa-details-page
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: 2810b6a8-7a7a-477d-b504-8714a8f22b68
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.932
+      id: delegation-to-wa-details
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.005
+      evidence:
+        'n': 3066
+        k: 2856
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-28T20:21:39.816Z'
+        query:
+          from: household-delegated
+          to: saw-wa-details-page
+          context: []
+          case: []
+          start: '2025-10-28T00:00:00.000Z'
+          end: '2025-11-14T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251028&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 1
+        full_query: >-
+          {"from":"household-delegated","to":"saw-wa-details-page","context":[],"case":[],"start":"2025-10-28T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251028&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+    query: from(household-delegated).to(saw-wa-details-page)
+    description: ''
+  - uuid: b42d2d10-e1dc-4933-809b-d26f0d77d491
+    id: household-delegated-to-abandonned-before-delegation
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: addb99b6-5773-482c-a437-4661c8433ff7
+    fromHandle: bottom-out
+    toHandle: top
+    p:
+      mean: 0.068
+    query: from(household-delegated).to(abandonned-before-delegation)
+    description: ''
+  - uuid: 370dce1d-3a36-4109-9711-204c301478c8
+    id: switch-registered-to-switch-success
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 30aabc44-e448-4359-b0d0-338a231edb92
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.929
+      stdev: 0.06863932650352231
+      id: registration-to-success
+      evidence:
+        window_from: '2025-09-30T23:00:00.000Z'
+        source: amplitude
+        'n': 14
+        k: 13
+        window_to: '2025-09-30T23:00:00.000Z'
+        retrieved_at: '2025-11-28T23:26:06.360Z'
+        full_query: from(switch-registered).to(switch-success)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-28T23:26:06.360Z'
+        query: from(switch-registered).to(switch-success)
+        full_query: from(switch-registered).to(switch-success)
+      connection: amplitude-prod
+      connection_overridden: true
+    query: from(switch-registered).to(switch-success)
+    description: ''
 policies:
   default_outcome: success
 metadata:
   name: conversion-flow-v0-ezra
   description: ''
   created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-11-28T09:06:44.542Z'
+  updated_at: '2025-11-28T23:26:06.382Z'
   version: 1.0.0
   updated: '2025-11-25T18:25:17.542Z'
-currentQueryDSL: window(19-Oct-25:18-Nov-25)
+currentQueryDSL: window(28-Oct-25:14-Nov-25)

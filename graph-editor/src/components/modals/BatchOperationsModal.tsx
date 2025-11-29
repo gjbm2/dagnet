@@ -68,7 +68,7 @@ export function BatchOperationsModal({
   operationType: initialOperationType,
   graph,
   setGraph,
-  window
+  window: windowProp
 }: BatchOperationsModalProps) {
   const { operations } = useTabContext();
   const [selectedOperationType, setSelectedOperationType] = useState<BatchOperationType>(
@@ -82,9 +82,64 @@ export function BatchOperationsModal({
   const [results, setResults] = useState<OperationResult[]>([]);
   const [logContent, setLogContent] = useState<string>('');
   
+  // IMPORTANT: Fall back to graph's window if prop not provided
+  // This handles cases where the DataMenu's graphStore is stale (e.g., wrong active tab)
+  const window = windowProp || (graph as any)?.window || null;
+  
+  // DEBUG: Log what we received
+  console.log('[BatchOperationsModal] Window props:', {
+    windowProp,
+    graphWindow: (graph as any)?.window,
+    resolvedWindow: window,
+    graphCurrentQueryDSL: graph?.currentQueryDSL
+  });
+  
+  // Build effective DSL with window - ensures fetch operations use the WindowSelector dates
+  // ALWAYS prefer the window prop from WindowSelector over stale graph.currentQueryDSL
+  const getEffectiveDSL = () => {
+    // Format date to d-MMM-yy for DSL
+    const formatDate = (dateStr: string) => {
+      const d = new Date(dateStr);
+      const day = d.getDate();
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const month = months[d.getMonth()];
+      const year = String(d.getFullYear()).slice(-2);
+      return `${day}-${month}-${year}`;
+    };
+    
+    // PRIORITY 1: Use window prop from WindowSelector (most current source of truth)
+    if (window?.start && window?.end) {
+      // CRITICAL: Use COLON separator, not comma - matches parseConstraints regex
+      const windowDSL = `window(${formatDate(window.start)}:${formatDate(window.end)})`;
+      console.log('[BatchOperationsModal] Using window prop for DSL:', windowDSL, 'window:', window);
+      
+      // Check if graph.currentQueryDSL has OTHER constraints (context, etc.) we should preserve
+      const graphDSL = graphRef.current?.currentQueryDSL || '';
+      if (graphDSL) {
+        // Extract non-window parts from graphDSL (context, etc.)
+        const nonWindowParts = graphDSL.split('.').filter(part => !part.startsWith('window('));
+        if (nonWindowParts.length > 0) {
+          const combined = [...nonWindowParts, windowDSL].join('.');
+          console.log('[BatchOperationsModal] Combined DSL with context:', combined);
+          return combined;
+        }
+      }
+      
+      return windowDSL;
+    }
+    
+    // FALLBACK: Use graph's currentQueryDSL if window prop not available
+    const graphDSL = graphRef.current?.currentQueryDSL || '';
+    console.log('[BatchOperationsModal] Using graph DSL (no window prop):', graphDSL);
+    return graphDSL;
+  };
+  
   // CRITICAL: Use ref to track latest graph state during batch operations
   // Without this, rebalancing doesn't work because each iteration uses stale graph
   const graphRef = useRef(graph);
+  
+  // Abort ref for cancelling in-progress operations
+  const abortRef = useRef(false);
 
   // Update selected operation type when prop changes
   useEffect(() => {
@@ -343,6 +398,9 @@ export function BatchOperationsModal({
       );
     }
     
+    // Reset abort flag at start
+    abortRef.current = false;
+    
     // CRITICAL: Wrap setGraph to also update graphRef
     // This ensures rebalancing works correctly across iterations
     const setGraphWithRef = (newGraph: GraphData | null) => {
@@ -351,6 +409,13 @@ export function BatchOperationsModal({
     };
 
     for (let i = 0; i < selectedBatchItems.length; i++) {
+      // Check for abort request
+      if (abortRef.current) {
+        toast.dismiss(progressToastId);
+        toast('Operation cancelled', { icon: '⏹️' });
+        break;
+      }
+      
       const item = selectedBatchItems[i];
       setProgress({ current: i + 1, total: selectedBatchItems.length });
 
@@ -379,7 +444,8 @@ export function BatchOperationsModal({
               edgeId: item.targetId,
               graph: graphRef.current,
               setGraph: setGraphWithRef,
-              window: window || undefined
+              window: window || undefined,
+              targetSlice: graphRef.current?.currentQueryDSL || '' // Match context from WindowSelector
             });
             
             // Get edge after operation to extract details
@@ -433,7 +499,7 @@ export function BatchOperationsModal({
               setGraph: setGraphWithRef,
               paramSlot: item.paramSlot,
               bustCache,
-              currentDSL: graphRef.current?.currentQueryDSL || ''
+              currentDSL: getEffectiveDSL()
             });
             
             // Get edge after operation to extract details
@@ -464,7 +530,7 @@ export function BatchOperationsModal({
               targetId: item.targetId,
               graph: graphRef.current,
               setGraph: setGraphWithRef,
-              currentDSL: graphRef.current?.currentQueryDSL || ''
+              currentDSL: getEffectiveDSL()
             });
             success = true;
           }
@@ -483,7 +549,7 @@ export function BatchOperationsModal({
               paramSlot: item.paramSlot,
               dailyMode: false,
               bustCache,
-              currentDSL: graphRef.current?.currentQueryDSL || ''
+              currentDSL: getEffectiveDSL()
             });
             
             // Get edge after operation to extract details
@@ -916,10 +982,15 @@ export function BatchOperationsModal({
         <div className="modal-footer">
           <button
             className="modal-btn modal-btn-secondary"
-            onClick={onClose}
-            disabled={isProcessing}
+            onClick={() => {
+              if (isProcessing) {
+                abortRef.current = true;
+              } else {
+                onClose();
+              }
+            }}
           >
-            Cancel
+            {isProcessing ? 'Stop' : 'Cancel'}
           </button>
           <button
             className="modal-btn modal-btn-primary"

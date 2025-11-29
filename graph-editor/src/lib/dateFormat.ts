@@ -27,10 +27,13 @@ export function formatDateUK(date: Date | string): string {
 }
 
 /**
- * Parse d-MMM-yy date to Date object
+ * Parse d-MMM-yy date to Date object (in UTC)
+ * 
+ * IMPORTANT: Returns a UTC date to avoid timezone issues when converting to ISO string.
+ * For "1-Oct-25", this returns 2025-10-01T00:00:00.000Z regardless of local timezone.
  * 
  * @param dateStr - Date in d-MMM-yy format (e.g., "1-Jan-25")
- * @returns Date object
+ * @returns Date object (UTC midnight)
  */
 export function parseUKDate(dateStr: string): Date {
   // Format: d-MMM-yy (e.g., "1-Jan-25", "15-Mar-25")
@@ -53,6 +56,8 @@ export function parseUKDate(dateStr: string): Date {
   // Assume 2000s for years 00-50, 1900s for 51-99
   const year = yearShort < 50 ? 2000 + yearShort : 1900 + yearShort;
   
-  return new Date(year, month, day);
+  // CRITICAL: Use Date.UTC to create UTC midnight, not local midnight
+  // This ensures "1-Oct-25" → "2025-10-01T00:00:00.000Z" regardless of user's timezone
+  return new Date(Date.UTC(year, month, day));
 }
 

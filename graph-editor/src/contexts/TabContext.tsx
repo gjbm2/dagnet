@@ -920,10 +920,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       await db.saveAppState({ activeTabId: tab.id });
     };
     
+    // Listen for tab switch requests (e.g., from session log service when tab already exists)
+    const handleSwitchToTab = async (event: CustomEvent<{ tabId: string }>) => {
+      const { tabId } = event.detail;
+      console.log(`[TabContext] dagnet:switchToTab event received for ${tabId}`);
+      setActiveTabId(tabId);
+      await db.saveAppState({ activeTabId: tabId });
+    };
+    
     window.addEventListener('dagnet:openTemporaryTab', handleTemporaryTab as unknown as EventListener);
+    window.addEventListener('dagnet:switchToTab', handleSwitchToTab as unknown as EventListener);
     
     return () => {
       window.removeEventListener('dagnet:openTemporaryTab', handleTemporaryTab as unknown as EventListener);
+      window.removeEventListener('dagnet:switchToTab', handleSwitchToTab as unknown as EventListener);
     };
   }, []);
 

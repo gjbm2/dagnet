@@ -724,7 +724,8 @@ export default function PropertiesPanel({
       paramId,
       edgeId: selectedEdgeId,
       graph,
-      setGraph: setGraph as (graph: any) => void
+      setGraph: setGraph as (graph: any) => void,
+      targetSlice: graph?.currentQueryDSL || '', // Match context from WindowSelector
     });
   }, [selectedEdge, selectedEdgeId, graph, setGraph]);
 
