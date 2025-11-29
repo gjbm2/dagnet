@@ -4380,10 +4380,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Replaces the old base/overlay split with a single scenario-based approach
   const renderEdges = React.useMemo(() => {
     try {
-      // Debug: Log edge probabilities to verify updates
-      const edgeProbs = graph?.edges?.map((e: any) => `${e.id || e.uuid}: p=${e.p?.mean}`).join(', ');
-      console.log(`[renderEdges] Graph edge probabilities: ${edgeProbs}`);
-      
       if (!scenariosContext) {
         // Fallback: no scenarios, return base edges
         return edges;

@@ -46,11 +46,13 @@ export default function ToolsPanel({
     autoReroute,
     useSankeyView,
     confidenceIntervalLevel,
+    animateFlow,
     setUseUniformScaling,
     setMassGenerosity,
     setAutoReroute,
     setUseSankeyView,
-    setConfidenceIntervalLevel
+    setConfidenceIntervalLevel,
+    setAnimateFlow
   } = viewPrefs;
   return (
     <div className="tools-panel">
@@ -70,6 +72,15 @@ export default function ToolsPanel({
               onChange={(e) => setUseSankeyView(e.target.checked)}
             />
             <span>Sankey View</span>
+          </label>
+          
+          <label className="tool-checkbox">
+            <input
+              type="checkbox"
+              checked={animateFlow}
+              onChange={(e) => setAnimateFlow(e.target.checked)}
+            />
+            <span>Animate Flow</span>
           </label>
           
           {useSankeyView ? (

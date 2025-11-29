@@ -137,6 +137,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     }
   };
   
+  const handleToggleAnimateFlow = () => {
+    if (viewPrefs) {
+      viewPrefs.setAnimateFlow(!viewPrefs.animateFlow);
+    }
+  };
+  
   // Find the edge in the graph - recalculate when graph changes to ensure rebalance button updates
   const edge = React.useMemo(() => {
     return graph?.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
@@ -746,6 +752,23 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
             </div>
           </div>
         )}
+      </div>
+
+      {/* Animate Flow toggle */}
+      <div
+        onClick={() => {
+          handleToggleAnimateFlow();
+        }}
+        style={{
+          padding: '8px 12px',
+          cursor: 'pointer',
+          fontSize: '13px',
+          borderRadius: '2px',
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+      >
+        {(viewPrefs?.animateFlow ?? true) ? '✓ ' : ''}Animate Flow
       </div>
 
       <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
