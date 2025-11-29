@@ -498,6 +498,15 @@ class DataOperationsService {
   }): Promise<void> {
     const { paramId, edgeId, graph, setGraph, setAutoUpdating, window, targetSlice = '' } = options;
     
+    // Start session log
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'data-fetch',
+      'GET_FROM_FILE',
+      `Get parameter from file: ${paramId}`,
+      { fileId: `parameter-${paramId}`, fileType: 'parameter', targetId: edgeId }
+    );
+    
     // Set auto-updating flag to enable animations
     if (setAutoUpdating) {
       setAutoUpdating(true);
@@ -509,11 +518,13 @@ class DataOperationsService {
       // Validate inputs
       if (!graph) {
         toast.error('No graph loaded');
+        sessionLogService.endOperation(logOpId, 'error', 'No graph loaded');
         return;
       }
       
       if (!edgeId) {
         toast.error('No edge selected');
+        sessionLogService.endOperation(logOpId, 'error', 'No edge selected');
         return;
       }
       
@@ -521,6 +532,7 @@ class DataOperationsService {
       const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
       if (!paramFile) {
         toast.error(`Parameter file not found: ${paramId}`);
+        sessionLogService.endOperation(logOpId, 'error', `Parameter file not found: ${paramId}`);
         return;
       }
       
@@ -528,6 +540,7 @@ class DataOperationsService {
       const targetEdge = graph.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
       if (!targetEdge) {
         toast.error(`Edge not found in graph`);
+        sessionLogService.endOperation(logOpId, 'error', 'Edge not found in graph');
         return;
       }
       
@@ -596,26 +609,31 @@ class DataOperationsService {
                 };
                 
                 // Parse and merge constraints from graph-level and edge-specific queries
+                // CRITICAL: Use targetSlice (passed DSL) instead of graph.currentQueryDSL
+                // This ensures we use the window that was specified when calling getParameterFromFile,
+                // not the stale graph.currentQueryDSL which may not have been updated
                 let constraints;
                 try {
                   const { parseConstraints } = await import('../lib/queryDSL');
                   
-                  // Parse graph-level constraints (from WindowSelector)
-                  const graphConstraints = graph?.currentQueryDSL ? parseConstraints(graph.currentQueryDSL) : null;
+                  // Parse constraints from targetSlice (the DSL passed to this function)
+                  // This is the source of truth for window - NOT graph.currentQueryDSL
+                  const sliceConstraints = targetSlice ? parseConstraints(targetSlice) : null;
                   
                   // Parse edge-specific constraints
                   const edgeConstraints = targetEdge.query ? parseConstraints(targetEdge.query) : null;
                   
-                  // Merge: edge-specific overrides graph-level
+                  // Merge: edge-specific overrides slice-level
                   constraints = {
-                    context: [...(graphConstraints?.context || []), ...(edgeConstraints?.context || [])],
-                    contextAny: [...(graphConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
-                    window: edgeConstraints?.window || graphConstraints?.window || null,
+                    context: [...(sliceConstraints?.context || []), ...(edgeConstraints?.context || [])],
+                    contextAny: [...(sliceConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
+                    window: edgeConstraints?.window || sliceConstraints?.window || null,
                     visited: edgeConstraints?.visited || [],
                     visitedAny: edgeConstraints?.visitedAny || []
                   };
                   
-                  console.log('[DataOps:getDataSnapshot] Merged constraints:', {
+                  console.log('[DataOps:getParameterFromFile] Merged constraints:', {
+                    targetSlice,
                     graphDSL: graph?.currentQueryDSL,
                     edgeQuery: targetEdge.query,
                     merged: constraints
@@ -1049,14 +1067,17 @@ class DataOperationsService {
         const hadRebalance = finalGraph !== nextGraph;
         if (hadRebalance) {
           toast.success(`✓ Updated from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
+          sessionLogService.endOperation(logOpId, 'success', `Updated from ${paramId}.yaml + siblings rebalanced`);
         } else {
           toast.success(`✓ Updated from ${paramId}.yaml`, { duration: 2000 });
+          sessionLogService.endOperation(logOpId, 'success', `Updated from ${paramId}.yaml`);
         }
       }
       
     } catch (error) {
       console.error('[DataOperationsService] Failed to get parameter from file:', error);
       toast.error('Failed to get data from file');
+      sessionLogService.endOperation(logOpId, 'error', `Failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   
@@ -1254,6 +1275,15 @@ class DataOperationsService {
   }): Promise<void> {
     const { caseId, nodeId, graph, setGraph, setAutoUpdating, window } = options;
     
+    // Start session log
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'data-fetch',
+      'GET_FROM_FILE',
+      `Get case from file: ${caseId}`,
+      { fileId: `case-${caseId}`, fileType: 'case', targetId: nodeId }
+    );
+    
     // Set auto-updating flag to enable animations
     if (setAutoUpdating) {
       setAutoUpdating(true);
@@ -1263,18 +1293,21 @@ class DataOperationsService {
     try {
       if (!graph || !nodeId) {
         toast.error('No graph or node selected');
+        sessionLogService.endOperation(logOpId, 'error', 'No graph or node selected');
         return;
       }
       
       const caseFile = fileRegistry.getFile(`case-${caseId}`);
       if (!caseFile) {
         toast.error(`Case file not found: ${caseId}`);
+        sessionLogService.endOperation(logOpId, 'error', `Case file not found: ${caseId}`);
         return;
       }
       
       const targetNode = graph.nodes?.find((n: any) => n.uuid === nodeId || n.id === nodeId);
       if (!targetNode) {
         toast.error(`Node not found in graph`);
+        sessionLogService.endOperation(logOpId, 'error', 'Node not found in graph');
         return;
       }
       
@@ -1406,6 +1439,9 @@ class DataOperationsService {
           }
           
           toast.success(`✓ Updated from ${caseId}.yaml`, { duration: 2000 });
+          sessionLogService.endOperation(logOpId, 'success', `Updated from ${caseId}.yaml`);
+        } else {
+          sessionLogService.endOperation(logOpId, 'warning', `Node not found for case update`);
         }
       } else {
         // Apply windowed aggregation results
@@ -1444,11 +1480,15 @@ class DataOperationsService {
           }
           setGraph(nextGraph);
           toast.success(`✓ Updated from ${caseId}.yaml (windowed)`, { duration: 2000 });
+          sessionLogService.endOperation(logOpId, 'success', `Updated from ${caseId}.yaml (windowed)`);
+        } else {
+          sessionLogService.endOperation(logOpId, 'warning', `Node not found for windowed case update`);
         }
       }
     } catch (error) {
       console.error('[DataOperationsService] Failed to get case from file:', error);
       toast.error('Failed to get case from file');
+      sessionLogService.endOperation(logOpId, 'error', `Failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   
@@ -1584,6 +1624,15 @@ class DataOperationsService {
   }): Promise<void> {
     const { nodeId, graph, setGraph, targetNodeUuid, setAutoUpdating } = options;
     
+    // Start session log
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'data-fetch',
+      'GET_FROM_FILE',
+      `Get node from file: ${nodeId}`,
+      { fileId: `node-${nodeId}`, fileType: 'node', targetId: targetNodeUuid || nodeId }
+    );
+    
     // Set auto-updating flag to enable animations
     if (setAutoUpdating) {
       setAutoUpdating(true);
@@ -1593,12 +1642,14 @@ class DataOperationsService {
     try {
       if (!graph) {
         toast.error('No graph loaded');
+        sessionLogService.endOperation(logOpId, 'error', 'No graph loaded');
         return;
       }
       
       const nodeFile = fileRegistry.getFile(`node-${nodeId}`);
       if (!nodeFile) {
         toast.error(`Node file not found: ${nodeId}`);
+        sessionLogService.endOperation(logOpId, 'error', `Node file not found: ${nodeId}`);
         return;
       }
       
@@ -1609,6 +1660,7 @@ class DataOperationsService {
       
       if (!targetNode) {
         toast.error(`Node not found in graph`);
+        sessionLogService.endOperation(logOpId, 'error', 'Node not found in graph');
         return;
       }
       
@@ -1645,10 +1697,14 @@ class DataOperationsService {
         }
         setGraph(nextGraph);
         toast.success(`✓ Updated from ${nodeId}.yaml`, { duration: 2000 });
+        sessionLogService.endOperation(logOpId, 'success', `Updated from ${nodeId}.yaml`);
+      } else {
+        sessionLogService.endOperation(logOpId, 'warning', 'Node index not found after lookup');
       }
     } catch (error) {
       console.error('[DataOperationsService] Failed to get node from file:', error);
       toast.error('Failed to get node from file');
+      sessionLogService.endOperation(logOpId, 'error', `Failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   
@@ -1738,8 +1794,11 @@ class DataOperationsService {
     try {
       if (objectType === 'parameter') {
         // Parameters: fetch daily data, append to values[], update graph
-        // 1. Fetch from source using getFromSourceDirect with dailyMode=true
-        // This will fetch data and store it in the parameter file
+        // getFromSourceDirect with dailyMode=true handles the full flow:
+        // - Fetches data from source OR skips if cached
+        // - Writes time-series to parameter file
+        // - Calls getParameterFromFile internally to update graph
+        // No need to call getParameterFromFile again here - that would cause double updates!
         await this.getFromSourceDirect({
           objectType: 'parameter',
           objectId, // Parameter file ID
@@ -1754,16 +1813,8 @@ class DataOperationsService {
           targetSlice,
         });
         
-        // 2. Update graph from file (standard file-to-graph flow)
-        // Use currentGraph which was updated by step 1's setGraph call
-        if (targetId && currentGraph && trackingSetGraph) {
-          await this.getParameterFromFile({
-            paramId: objectId,
-            edgeId: targetId,
-            graph: currentGraph,
-            setGraph: trackingSetGraph
-          });
-        }
+        // NOTE: getFromSourceDirect already calls getParameterFromFile internally
+        // (both for cache hits and after writing new data), so no second call needed
         
         toast.success('Fetched from source and updated graph from file');
         
@@ -2325,12 +2376,14 @@ class DataOperationsService {
               };
               
               // Parse and merge constraints from graph-level and edge-specific queries (fallback path)
+              // Use currentDSL if provided, otherwise fall back to graph.currentQueryDSL
               let constraints;
               try {
                 const { parseConstraints } = await import('../lib/queryDSL');
                 
-                // Parse graph-level constraints (from WindowSelector)
-                const graphConstraints = graph?.currentQueryDSL ? parseConstraints(graph.currentQueryDSL) : null;
+                // Use explicit currentDSL if provided (priority), otherwise graph.currentQueryDSL
+                const effectiveDSL = currentDSL || graph?.currentQueryDSL || '';
+                const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
                 
                 // Parse edge-specific constraints
                 const edgeConstraints = targetEdge.query ? parseConstraints(targetEdge.query) : null;
@@ -2345,7 +2398,9 @@ class DataOperationsService {
                 };
                 
                 console.log('[DataOps] Merged constraints (fallback):', {
+                  currentDSL,
                   graphDSL: graph?.currentQueryDSL,
+                  effectiveDSL,
                   edgeQuery: targetEdge.query,
                   merged: constraints
                 });
@@ -2453,10 +2508,12 @@ class DataOperationsService {
           };
           
           // Parse constraints for n_query (same as main query)
+          // Use currentDSL if provided, otherwise fall back to graph.currentQueryDSL
           let nQueryConstraints;
           try {
             const { parseConstraints } = await import('../lib/queryDSL');
-            const graphConstraints = graph?.currentQueryDSL ? parseConstraints(graph.currentQueryDSL) : null;
+            const effectiveDSL = currentDSL || graph?.currentQueryDSL || '';
+            const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
             const nQueryEdgeConstraints = parseConstraints(explicitNQuery);
             
             nQueryConstraints = {
@@ -2699,12 +2756,14 @@ class DataOperationsService {
       // If all dates are cached, skip fetching and use existing data
       if (shouldSkipFetch && objectType === 'parameter' && objectId && targetId && graph && setGraph) {
         // Use existing data from file
+        // CRITICAL: Pass currentDSL as targetSlice to ensure correct window is used
         await this.getParameterFromFile({
           paramId: objectId,
           edgeId: targetId,
           graph,
           setGraph,
           window: requestedWindow,
+          targetSlice: currentDSL || '' // Pass the DSL to ensure correct constraints
         });
         return;
       }
@@ -3407,13 +3466,18 @@ class DataOperationsService {
             // CRITICAL: After writing daily time-series to file, load it back into the graph
             // This is the "versioned path" that applies File→Graph (see comment at line ~2909)
             if (graph && setGraph && targetId) {
-              console.log('[DataOperationsService] Loading newly written parameter data from file into graph');
+              console.log('[DataOperationsService] Loading newly written parameter data from file into graph', {
+                currentDSL,
+                targetSliceToPass: currentDSL || '',
+                requestedWindow
+              });
               await this.getParameterFromFile({
                 paramId: objectId,
                 edgeId: targetId,
                 graph,
                 setGraph,
-                window: requestedWindow // Aggregate across the full requested window
+                window: requestedWindow, // Aggregate across the full requested window
+                targetSlice: currentDSL || '' // Pass the DSL to ensure correct constraints
               });
             }
           } else {

@@ -228,6 +228,7 @@ export function DataMenu() {
         edgeId: section.targetId,
         graph,
         setGraph: handleSetGraph,
+        targetSlice: graph.currentQueryDSL || '', // Match context from WindowSelector
       });
     } else if (section.objectType === 'case') {
       dataOperationsService.getCaseFromFile({

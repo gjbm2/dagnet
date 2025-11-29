@@ -122,6 +122,25 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
     sessionLogService.clear();
   }, []);
 
+  const handleCopyAll = useCallback(async () => {
+    try {
+      const allEntries = sessionLogService.getEntries();
+      // Create a clean copy without circular references
+      const cleanEntries = JSON.parse(JSON.stringify(allEntries, (key, value) => {
+        if (value instanceof Date) {
+          return value.toISOString();
+        }
+        return value;
+      }));
+      
+      await navigator.clipboard.writeText(JSON.stringify(cleanEntries, null, 2));
+      // Brief visual feedback - the button text could flash or we could use a toast
+      // Keeping it simple without toast dependency
+    } catch (err) {
+      console.error('Failed to copy all logs:', err);
+    }
+  }, []);
+
   // Close context menu when clicking outside
   useEffect(() => {
     if (contextMenu) {
@@ -143,6 +162,9 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
         />
         
         <div className="log-toolbar-actions">
+          <button onClick={handleCopyAll} className="log-btn" title="Copy all logs to clipboard">
+            📋
+          </button>
           <button onClick={handleClearLogs} className="log-btn" title="Clear all logs">
             🗑
           </button>

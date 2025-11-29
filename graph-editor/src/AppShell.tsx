@@ -49,11 +49,13 @@ function AppShellContent() {
   const navOperationsRef = useRef(navOperations);
   const tabOperationsRef = useRef(tabOperations);
   const dialogOpsRef = useRef(dialogOps);
+  const activeTabIdRef = useRef(activeTabId); // Track activeTabId for callbacks to avoid stale closures
   
   useEffect(() => { navStateRef.current = navState; }, [navState]);
   useEffect(() => { navOperationsRef.current = navOperations; }, [navOperations]);
   useEffect(() => { tabOperationsRef.current = tabOperations; }, [tabOperations]);
   useEffect(() => { dialogOpsRef.current = dialogOps; }, [dialogOps]);
+  useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
 
   // Warn when logical IDs inside registry-backed files are changed
   useEffect(() => {
@@ -1034,7 +1036,9 @@ function AppShellContent() {
 
   // Save layout to IndexedDB when it changes
   const handleLayoutChange = React.useCallback((newLayout: LayoutData, currentTabId?: string) => {
-    console.log(`[${new Date().toISOString()}] [AppShell] onLayoutChange called, currentTabId:`, currentTabId);
+    // Use ref to get latest activeTabId to avoid stale closure issues
+    const latestActiveTabId = activeTabIdRef.current;
+    console.log(`[${new Date().toISOString()}] [AppShell] onLayoutChange called, currentTabId:`, currentTabId, 'latestActiveTabId:', latestActiveTabId);
     console.log(`[${new Date().toISOString()}] [AppShell] isProgrammaticSwitch:`, isProgrammaticSwitchRef.current);
     
     // Update visible tabs tracking (Phase 1: Visibility optimization)
@@ -1048,12 +1052,12 @@ function AppShellContent() {
     
     // Update active tab when rc-dock changes active tab (when user clicks tabs)
     // BUT don't do this if we're in the middle of updating tabs (prevents infinite loop)
-    if (currentTabId && currentTabId !== activeTabId && !isUpdatingTabsRef.current) {
+    if (currentTabId && currentTabId !== latestActiveTabId && !isUpdatingTabsRef.current) {
       console.log(`[${new Date().toISOString()}] [AppShell] rc-dock switched active tab to:`, currentTabId);
       tabOperations.switchTab(currentTabId);
     } else if (isUpdatingTabsRef.current) {
       console.log(`[${new Date().toISOString()}] [AppShell] Ignoring layout change during tab update (preventing loop)`);
-    } else if (currentTabId === activeTabId) {
+    } else if (currentTabId === latestActiveTabId) {
       console.log(`[${new Date().toISOString()}] [AppShell] Ignoring: currentTabId ${currentTabId} already matches activeTabId`);
     }
 
@@ -1101,7 +1105,7 @@ function AppShellContent() {
     // Mark top-left docked panel for Navigator button padding
     // Delay slightly to let DOM update after layout change
     setTimeout(markTopLeftDockedPanel, 100);
-  }, [extractTabIds, tabOperations, activeTabId, markTopLeftDockedPanel, updateFromLayout]);
+  }, [extractTabIds, tabOperations, markTopLeftDockedPanel, updateFromLayout]); // activeTabId now accessed via ref to avoid stale closures
   
   // Run markTopLeftDockedPanel after layout changes, nav state changes, and on resize
   React.useEffect(() => {
