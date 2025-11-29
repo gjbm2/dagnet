@@ -7,6 +7,7 @@ export interface ViewPreferencesState {
   autoReroute: boolean;
   useSankeyView: boolean;
   confidenceIntervalLevel: 'none' | '80' | '90' | '95' | '99';
+  animateFlow: boolean;
 }
 
 interface ViewPreferencesContextValue extends ViewPreferencesState {
@@ -15,6 +16,7 @@ interface ViewPreferencesContextValue extends ViewPreferencesState {
   setAutoReroute: (value: boolean) => void;
   setUseSankeyView: (value: boolean) => void;
   setConfidenceIntervalLevel: (value: 'none' | '80' | '90' | '95' | '99') => void;
+  setAnimateFlow: (value: boolean) => void;
 }
 
 const ViewPreferencesContext = createContext<ViewPreferencesContextValue | null>(null);
@@ -37,6 +39,7 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   const [confidenceIntervalLevel, setConfidenceIntervalLevelLocal] = useState<'none' | '80' | '90' | '95' | '99'>(
     (editorState.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99') ?? 'none'
   );
+  const [animateFlow, setAnimateFlowLocal] = useState<boolean>(editorState.animateFlow ?? true);
 
   // Sync FROM tab state when it changes externally (tab switch/restore)
   useEffect(() => {
@@ -56,6 +59,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
       setConfidenceIntervalLevelLocal(editorState.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99');
     }
   }, [editorState.confidenceIntervalLevel]);
+  useEffect(() => {
+    if (editorState.animateFlow !== undefined) setAnimateFlowLocal(editorState.animateFlow);
+  }, [editorState.animateFlow]);
 
   // Setters: update local immediately, persist to tab state asynchronously
   const setUseUniformScaling = (value: boolean) => {
@@ -78,6 +84,10 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setConfidenceIntervalLevelLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { confidenceIntervalLevel: value });
   };
+  const setAnimateFlow = (value: boolean) => {
+    setAnimateFlowLocal(value);
+    if (tabId) tabOps.updateTabState(tabId, { animateFlow: value });
+  };
 
   const value = useMemo<ViewPreferencesContextValue>(() => ({
     useUniformScaling,
@@ -85,12 +95,14 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     autoReroute,
     useSankeyView,
     confidenceIntervalLevel,
+    animateFlow,
     setUseUniformScaling,
     setMassGenerosity,
     setAutoReroute,
     setUseSankeyView,
-    setConfidenceIntervalLevel
-  }), [useUniformScaling, massGenerosity, autoReroute, useSankeyView, confidenceIntervalLevel]);
+    setConfidenceIntervalLevel,
+    setAnimateFlow
+  }), [useUniformScaling, massGenerosity, autoReroute, useSankeyView, confidenceIntervalLevel, animateFlow]);
 
   return (
     <ViewPreferencesContext.Provider value={value}>

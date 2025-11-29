@@ -32,6 +32,7 @@ export function ViewMenu() {
   const autoReroute = viewPrefsCtx?.autoReroute ?? (activeTab?.editorState?.autoReroute ?? true);
   const useSankeyView = viewPrefsCtx?.useSankeyView ?? (activeTab?.editorState?.useSankeyView ?? false);
   const confidenceIntervalLevel = viewPrefsCtx?.confidenceIntervalLevel ?? (activeTab?.editorState?.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99' ?? 'none');
+  const animateFlow = viewPrefsCtx?.animateFlow ?? (activeTab?.editorState?.animateFlow ?? true);
   
   // Debug: Log when menu is checked
   React.useEffect(() => {
@@ -94,6 +95,15 @@ export function ViewMenu() {
       viewPrefsCtx.setConfidenceIntervalLevel(level);
     } else if (activeTabId) {
       operations.updateTabState(activeTabId, { confidenceIntervalLevel: level });
+    }
+  };
+
+  const handleToggleAnimateFlow = () => {
+    const newValue = !animateFlow;
+    if (viewPrefsCtx) {
+      viewPrefsCtx.setAnimateFlow(newValue);
+    } else if (activeTabId) {
+      operations.updateTabState(activeTabId, { animateFlow: newValue });
     }
   };
 
@@ -200,6 +210,13 @@ export function ViewMenu() {
                 onSelect={handleToggleSankeyView}
               >
                 {useSankeyView ? '✓ ' : ''}Sankey View
+              </Menubar.Item>
+
+              <Menubar.Item 
+                className="menubar-item" 
+                onSelect={handleToggleAnimateFlow}
+              >
+                {animateFlow ? '✓ ' : ''}Animate Flow
               </Menubar.Item>
 
               <Menubar.Separator className="menubar-separator" />

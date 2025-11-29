@@ -12,7 +12,22 @@ import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 import { useDecorationVisibility } from '../GraphCanvas';
-import { EDGE_INSET, EDGE_INITIAL_OFFSET, CONVEX_DEPTH, CONCAVE_DEPTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, EDGE_LABEL_FONT_SIZE } from '@/lib/nodeEdgeConstants';
+import { 
+  EDGE_INSET, 
+  EDGE_INITIAL_OFFSET, 
+  CONVEX_DEPTH, 
+  CONCAVE_DEPTH, 
+  DEFAULT_NODE_WIDTH, 
+  DEFAULT_NODE_HEIGHT, 
+  EDGE_LABEL_FONT_SIZE,
+  CHEVRON_SPACING,
+  CHEVRON_SPEED,
+  CHEVRON_ANGLE_RATIO,
+  CHEVRON_LENGTH_RATIO,
+  CHEVRON_OPACITY,
+  CHEVRON_FADE_IN_FRACTION,
+  CHEVRON_BLUR
+} from '@/lib/nodeEdgeConstants';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -811,9 +826,6 @@ export default function ConversionEdge({
 
       const path = `M ${adjustedSourceX},${adjustedSourceY} C ${c1x},${c1y} ${c2x},${c2y} ${adjustedTargetX},${adjustedTargetY}`;
       
-      // Debug: log path calculation
-      console.log(`[ConversionEdge path] adjustedSourceY=${adjustedSourceY?.toFixed(1)}, path starts at y=${path.match(/M [^,]+,([^ ]+)/)?.[1]}`);
-      
       // Calculate label position at t=0.5 on the bezier curve (not the straight line!)
       const t = 0.5;
       const mt = 1 - t;
@@ -1007,177 +1019,15 @@ export default function ConversionEdge({
     return limitedLines;
   }, [data?.description, offsetPath, textPathRef.current]);
 
-  // Helper function to get point on Bézier curve at parameter t (for label positioning)
-  const getBezierPoint = (t: number, sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number) => {
-    const mt = 1 - t;
-    const mt2 = mt * mt;
-    const mt3 = mt2 * mt;
-    const t2 = t * t;
-    const t3 = t2 * t;
-    
-    return {
-      x: mt3 * sx + 3 * mt2 * t * c1x + 3 * mt * t2 * c2x + t3 * ex,
-      y: mt3 * sy + 3 * mt2 * t * c1y + 3 * mt * t2 * c2y + t3 * ey
-    };
-  };
-
-  // Helper function to calculate arc length of a cubic Bézier curve up to parameter tMax
-  const calculateBezierLengthToT = (sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number, tMax: number): number => {
-    const steps = 100;
-    let length = 0;
-    const actualSteps = Math.floor(steps * tMax);
-    
-    for (let i = 0; i < actualSteps; i++) {
-      const t1 = i / steps;
-      const t2 = (i + 1) / steps;
-      
-      const p1 = getBezierPoint(t1, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
-      const p2 = getBezierPoint(t2, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
-      
-      length += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
-    }
-    
-    return length;
-  };
-
-  // Helper function to calculate arc length of a cubic Bézier curve (full length)
-  const calculateBezierLength = (sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number): number => {
-    return calculateBezierLengthToT(sx, sy, c1x, c1y, c2x, c2y, ex, ey, 1.0);
-  };
-
-  // Calculate arrow positions along the path
-  const arrowPositions = React.useMemo(() => {
-    if (!data?.calculateWidth) return [];
-    
+  // Calculate midpoint chevron for direction indication
+  const midpointChevron = React.useMemo(() => {
     try {
       // Extract first 8 numbers from the path: M sx,sy C c1x,c1y c2x,c2y ex,ey
       const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
-      if (!nums || nums.length < 8) return [];
+      if (!nums || nums.length < 8) return null;
       const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
 
-      const lerp = (a: number, b: number, tt: number) => a + (b - a) * tt;
-
-      // Calculate multiple positions along the curve using correct algorithmic approach
-      const positions: { x: number; y: number; angle: number }[] = [];
-      
-      // Calculate actual arc length of the Bézier curve (not just Euclidean distance)
-      const pathLength = calculateBezierLength(sx, sy, c1x, c1y, c2x, c2y, ex, ey);
-      
-      // Algorithm: Place arrows at L/2 +/- nY (while avoiding first X and last X pixels)
-      const excludePixels = 14; // Exclude 14 pixels from each end (20 * 0.7)
-      const arrowSpacing = 28; // Y = spacing between arrows (40 * 0.7)
-      const L = pathLength;
-      const L_half = L / 2;
-      
-      // Arrow calculation
-      
-      // Helper function to find t value for a given arc length distance
-      const findTForArcLength = (targetLength: number): number => {
-        if (targetLength <= 0) return 0;
-        if (targetLength >= L) return 1;
-        
-        // Binary search for the t value that gives us the target arc length
-        let t = targetLength / L; // Initial guess (linear approximation)
-        let low = 0;
-        let high = 1;
-        
-        for (let i = 0; i < 20; i++) { // 20 iterations should be enough
-          const currentLength = calculateBezierLengthToT(sx, sy, c1x, c1y, c2x, c2y, ex, ey, t);
-          
-          if (Math.abs(currentLength - targetLength) < 0.1) {
-            return t; // Close enough
-          }
-          
-          if (currentLength < targetLength) {
-            low = t;
-            t = (t + high) / 2;
-          } else {
-            high = t;
-            t = (low + t) / 2;
-          }
-        }
-        
-        return t;
-      };
-      
-      // Place arrows at L/2 +/- nY, but only if they're within valid range
-      let n = 0;
-      while (true) {
-        // Calculate positions: L/2 + nY and L/2 - nY
-        const pos1 = L_half + (n * arrowSpacing);
-        const pos2 = L_half - (n * arrowSpacing);
-        
-        // Check if positions are valid (not in excluded areas)
-        const pos1Valid = pos1 >= excludePixels && pos1 <= (L - excludePixels);
-        const pos2Valid = pos2 >= excludePixels && pos2 <= (L - excludePixels);
-        
-        // If neither position is valid, we're done
-        if (!pos1Valid && !pos2Valid) break;
-        
-        // Add valid positions
-        if (pos1Valid) {
-          const t1 = findTForArcLength(pos1);
-          const point1 = calculatePointOnCurve(t1, sx, sy, c1x, c1y, c2x, c2y, ex, ey, lerp);
-          if (point1) positions.push(point1);
-        }
-        
-        if (pos2Valid && n > 0) { // Don't duplicate the center arrow
-          const t2 = findTForArcLength(pos2);
-          const point2 = calculatePointOnCurve(t2, sx, sy, c1x, c1y, c2x, c2y, ex, ey, lerp);
-          if (point2) positions.push(point2);
-        }
-        
-        n++;
-      }
-      
-      // Arrow placement complete
-      
-      // Helper function to calculate point and angle on curve
-      function calculatePointOnCurve(t: number, sx: number, sy: number, c1x: number, c1y: number, c2x: number, c2y: number, ex: number, ey: number, lerp: (a: number, b: number, tt: number) => number) {
-        // De Casteljau to get point and tangent at t
-        const p0x = sx, p0y = sy;
-        const p1x = c1x, p1y = c1y;
-        const p2x = c2x, p2y = c2y;
-        const p3x = ex, p3y = ey;
-
-        const p01x = lerp(p0x, p1x, t);
-        const p01y = lerp(p0y, p1y, t);
-        const p12x = lerp(p1x, p2x, t);
-        const p12y = lerp(p1y, p2y, t);
-        const p23x = lerp(p2x, p3x, t);
-        const p23y = lerp(p2y, p3y, t);
-
-        const p012x = lerp(p01x, p12x, t);
-        const p012y = lerp(p01y, p12y, t);
-        const p123x = lerp(p12x, p23x, t);
-        const p123y = lerp(p12y, p23y, t);
-
-        const p0123x = lerp(p012x, p123x, t);
-        const p0123y = lerp(p012y, p123y, t);
-
-        // Calculate tangent for arrow direction
-        const tangentX = p123x - p012x;
-        const tangentY = p123y - p012y;
-        const angle = Math.atan2(tangentY, tangentX) * (180 / Math.PI);
-
-        return { x: p0123x, y: p0123y, angle };
-      }
-      
-      return positions;
-    } catch {
-      return [];
-    }
-  }, [edgePath, adjustedTargetX, adjustedTargetY, data?.calculateWidth]);
-
-  // Calculate the arrow position at 75% along the path (for single arrow mode)
-  const arrowPosition = React.useMemo(() => {
-    try {
-      // Extract first 8 numbers from the path: M sx,sy C c1x,c1y c2x,c2y ex,ey
-      const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
-      if (!nums || nums.length < 8) return { x: adjustedTargetX, y: adjustedTargetY, angle: 0 };
-      const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
-
-      const t = 0.75; // position arrow at 75% of the curve
+      const t = 0.5; // midpoint of the curve
 
       const lerp = (a: number, b: number, tt: number) => a + (b - a) * tt;
 
@@ -1202,16 +1052,73 @@ export default function ConversionEdge({
       const p0123x = lerp(p012x, p123x, t);
       const p0123y = lerp(p012y, p123y, t);
 
-      // Calculate tangent for arrow direction
+      // Calculate tangent for chevron direction
       const tangentX = p123x - p012x;
       const tangentY = p123y - p012y;
-      const angle = Math.atan2(tangentY, tangentX) * (180 / Math.PI);
+      const angle = Math.atan2(tangentY, tangentX);
 
-      return { x: p0123x, y: p0123y, angle };
+      // Calculate perpendicular (normal) direction
+      const normalX = -Math.sin(angle);
+      const normalY = Math.cos(angle);
+
+      // Chevron dimensions - scale with edge width to maintain consistent angle
+      const halfEdgeWidth = strokeWidth / 2; // half the edge width for perpendicular extent
+      // Use proportional depths so the chevron angle stays consistent regardless of edge width
+      // A ratio of 1.0 gives 45-degree angles, 0.5 gives shallower angles
+      const angleRatio = 0.5; // Controls how pointy the chevron is
+      const backIndentDepth = halfEdgeWidth * angleRatio; // scales with edge width
+      const frontPointDepth = halfEdgeWidth * angleRatio; // scales with edge width
+      const chevronLength = halfEdgeWidth * 1; // total length also scales
+
+      // Direction vectors (pointing from source to target)
+      const dirX = Math.cos(angle);
+      const dirY = Math.sin(angle);
+
+      // Chevron center point
+      const cx = p0123x;
+      const cy = p0123y;
+
+      // Back of chevron (upstream side - toward source)
+      const backCenterX = cx - (chevronLength / 2) * dirX;
+      const backCenterY = cy - (chevronLength / 2) * dirY;
+      
+      // Front of chevron (downstream side - toward target)
+      const frontCenterX = cx + (chevronLength / 2) * dirX;
+      const frontCenterY = cy + (chevronLength / 2) * dirY;
+
+      // Back corners (at edge width)
+      const backLeftX = backCenterX + halfEdgeWidth * normalX;
+      const backLeftY = backCenterY + halfEdgeWidth * normalY;
+      const backRightX = backCenterX - halfEdgeWidth * normalX;
+      const backRightY = backCenterY - halfEdgeWidth * normalY;
+      
+      // Back indent point (the V notch pointing backward toward source)
+      const backIndentX = backCenterX + backIndentDepth * dirX;
+      const backIndentY = backCenterY + backIndentDepth * dirY;
+
+      // Front corners (at edge width)
+      const frontLeftX = frontCenterX + halfEdgeWidth * normalX;
+      const frontLeftY = frontCenterY + halfEdgeWidth * normalY;
+      const frontRightX = frontCenterX - halfEdgeWidth * normalX;
+      const frontRightY = frontCenterY - halfEdgeWidth * normalY;
+      
+      // Front point (tip pointing forward toward target)
+      const frontPointX = frontCenterX + frontPointDepth * dirX;
+      const frontPointY = frontCenterY + frontPointDepth * dirY;
+
+      // Create filled chevron polygon pointing in direction of travel:
+      // Pointy at both ends - V notch at back, point at front
+      return {
+        x: p0123x,
+        y: p0123y,
+        angle: angle * (180 / Math.PI),
+        // Filled chevron: back left -> back indent (V) -> back right -> front right -> front point -> front left -> close
+        path: `M ${backLeftX},${backLeftY} L ${backIndentX},${backIndentY} L ${backRightX},${backRightY} L ${frontRightX},${frontRightY} L ${frontPointX},${frontPointY} L ${frontLeftX},${frontLeftY} Z`
+      };
     } catch {
-      return { x: adjustedTargetX, y: adjustedTargetY, angle: 0 };
+      return null;
     }
-  }, [edgePath, adjustedTargetX, adjustedTargetY]);
+  }, [edgePath, strokeWidth]);
 
 
 
@@ -1505,35 +1412,6 @@ export default function ConversionEdge({
   return (
     <>
       <defs>
-        <marker
-          id={`arrow-${id}`}
-          markerWidth="15"
-          markerHeight="15"
-          refX="13.5"
-          refY="4.5"
-          orient="auto"
-          markerUnits="strokeWidth"
-        >
-          <path
-            d="M0,0 L0,9 L13.5,4.5 z"
-            fill={getEdgeColour()}
-          />
-        </marker>
-        {/* Fallback marker: fixed size, independent of stroke width */}
-        <marker
-          id={`arrow-fallback-${id}`}
-          markerWidth="15"
-          markerHeight="15"
-          refX="13.5"
-          refY="4.5"
-          orient="auto"
-          markerUnits="userSpaceOnUse"
-        >
-          <path
-            d="M0,0 L0,9 L13.5,4.5 z"
-            fill={getEdgeColour()}
-          />
-        </marker>
         {/* Diagonal stripe pattern for hidden current layer */}
         {isHiddenCurrent && (
           <pattern
@@ -1708,6 +1586,71 @@ export default function ConversionEdge({
             </>
           )}
           
+          {/* Animated chevrons flowing along the edge - works in normal and CI mode (not Sankey) */}
+          {(viewPrefs?.animateFlow ?? true) && edgePath && pathRef.current && !data?.useSankeyView && !ribbonPath && (() => {
+            // Calculate path length to determine number of chevrons
+            const pathLength = pathRef.current.getTotalLength?.() || 100;
+            const numChevrons = Math.max(1, Math.floor(pathLength / CHEVRON_SPACING));
+            const animationDuration = pathLength / CHEVRON_SPEED;
+            const staggerDelay = animationDuration / numChevrons;
+            
+            // Create chevron shape - use middle CI width if in CI mode, otherwise normal strokeWidth
+            const chevronWidth = (shouldShowConfidenceIntervals && confidenceData) 
+              ? confidenceData.widths.middle 
+              : strokeWidth;
+            const halfWidth = chevronWidth / 2;
+            const length = chevronWidth * CHEVRON_LENGTH_RATIO;
+            const indent = halfWidth * CHEVRON_ANGLE_RATIO;
+            const point = halfWidth * CHEVRON_ANGLE_RATIO;
+            const chevronShapePath = `M ${-length/2},${-halfWidth} L ${-length/2 + indent},0 L ${-length/2},${halfWidth} L ${length/2},${halfWidth} L ${length/2 + point},0 L ${length/2},${-halfWidth} Z`;
+            
+            // Build keyTimes for fade-in animation
+            const fadeInEnd = CHEVRON_FADE_IN_FRACTION;
+            const opacityValues = `0;${CHEVRON_OPACITY};${CHEVRON_OPACITY};${CHEVRON_OPACITY}`;
+            const keyTimesValues = `0;${fadeInEnd};0.95;1`;
+            
+            return (
+              <g style={{ pointerEvents: 'none' }}>
+                <defs>
+                  <path id={`chevron-shape-${id}`} d={chevronShapePath} />
+                  {CHEVRON_BLUR > 0 && (
+                    <filter id={`chevron-blur-${id}`}>
+                      <feGaussianBlur stdDeviation={CHEVRON_BLUR} />
+                    </filter>
+                  )}
+                </defs>
+                {Array.from({ length: numChevrons }, (_, i) => {
+                  // Use negative begin time so chevrons start already distributed along path
+                  const startOffset = -i * staggerDelay;
+                  // Boost opacity in CI mode since middle layer has ~0.55 opacity
+                  const effectiveOpacity = (shouldShowConfidenceIntervals && confidenceData) 
+                    ? Math.min(1, CHEVRON_OPACITY * 2.5) // Boost to compensate for CI layer transparency
+                    : CHEVRON_OPACITY;
+                  return (
+                    <use
+                      key={i}
+                      href={`#chevron-shape-${id}`}
+                      fill="white"
+                      fillOpacity={effectiveOpacity}
+                      style={{ mixBlendMode: 'overlay' }}
+                      filter={CHEVRON_BLUR > 0 ? `url(#chevron-blur-${id})` : undefined}
+                    >
+                      {/* Motion along the path - negative begin = already in progress */}
+                      <animateMotion
+                        dur={`${animationDuration}s`}
+                        repeatCount="indefinite"
+                        rotate="auto"
+                        begin={`${startOffset}s`}
+                        calcMode="linear"
+                        path={edgePath}
+                      />
+                    </use>
+                  );
+                })}
+              </g>
+            );
+          })()}
+          
           {/* Edge Beads - SVG elements rendered directly in edge SVG */}
           {/* Only render beads if path ref is stable and edge data is available */}
           {/* DIAGNOSTIC: Skip beads if ?nobeads param set */}
@@ -1728,8 +1671,6 @@ export default function ConversionEdge({
             // For perpendicular edges: path distance ≈ perpendicular distance
             let visibleStartOffset = totalInset;
             
-            // Debug: log what data ConversionEdge is receiving
-            console.log(`[ConversionEdge ${id}] data offsets: offX=${data?.sourceOffsetX?.toFixed(1)}, offY=${data?.sourceOffsetY?.toFixed(1)}, scaledWidth=${data?.scaledWidth?.toFixed(1)}`);
             
             if (!data?.useSankeyView && data?.sourceFace) {
               const nodes = getNodes();
@@ -1779,13 +1720,13 @@ export default function ConversionEdge({
             
             // Use offsets in key to force re-render when edge positions change
             const offsetKey = `${data?.sourceOffsetX?.toFixed(1) || 0}-${data?.sourceOffsetY?.toFixed(1) || 0}-${data?.scaledWidth?.toFixed(1) || 0}`;
-            console.log(`[ConversionEdge ${id}] rendering EdgeBeadsRenderer with key=${offsetKey}, visibleStartOffset=${visibleStartOffset.toFixed(1)}`);
             return (
               <EdgeBeadsRenderer
                 key={`beads-${id}-${fullEdge.uuid || fullEdge.id}-${offsetKey}`}
                 edgeId={id}
                 edge={fullEdge}
                 path={pathRef.current}
+                pathD={edgePath}
                 graph={graph}
                 scenarioOrder={scenarioOrder}
                 visibleScenarioIds={visibleScenarioIds}

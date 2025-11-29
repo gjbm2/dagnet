@@ -420,12 +420,6 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     // Compute offsets using the same logic as base
     const overlayWithOffsets = calculateEdgeOffsets(draftOverlayEdges, rfNodes, effectiveMaxWidth);
 
-    // Debug: log edge widths and offsets
-    const edgeInfo = overlayWithOffsets.map(e => 
-      `${e.id}: w=${e.scaledWidth?.toFixed(1)}, offX=${e.sourceOffsetX?.toFixed(1)}, offY=${e.sourceOffsetY?.toFixed(1)}`
-    ).join(' | ');
-    console.log(`[buildScenarioRenderEdges] ${scenarioId}: ${edgeInfo}`);
-
     // Attach offset data
     overlayWithOffsets.forEach(oe => {
       renderEdges.push({
