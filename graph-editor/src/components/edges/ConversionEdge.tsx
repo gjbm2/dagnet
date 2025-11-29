@@ -1586,8 +1586,8 @@ export default function ConversionEdge({
             </>
           )}
           
-          {/* Animated chevrons flowing along the edge - works in normal and CI mode (not Sankey) */}
-          {(viewPrefs?.animateFlow ?? true) && edgePath && pathRef.current && !data?.useSankeyView && !ribbonPath && (() => {
+          {/* Animated chevrons flowing along the edge - only on current layer, not Sankey or overlays */}
+          {(viewPrefs?.animateFlow ?? true) && edgePath && pathRef.current && !data?.useSankeyView && !ribbonPath && !data?.scenarioOverlay && (() => {
             // Calculate path length to determine number of chevrons
             const pathLength = pathRef.current.getTotalLength?.() || 100;
             const numChevrons = Math.max(1, Math.floor(pathLength / CHEVRON_SPACING));
