@@ -50,6 +50,7 @@ interface EdgeBeadsProps {
   edgeId: string;
   edge: GraphEdge;
   path: SVGPathElement | null;
+  pathD?: string; // Path d attribute - use this instead of reading from DOM (avoids stale data)
   graph: Graph | null;
   scenarioOrder: string[];
   visibleScenarioIds: string[];
@@ -72,6 +73,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   const {
     edge,
     path,
+    pathD,
     graph,
     scenarioOrder,
     visibleScenarioIds,
@@ -84,6 +86,19 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     useSankeyView = false,
     edgeWidth = 0
   } = props;
+  
+  // Create a memoized path element from pathD for accurate position calculations
+  // This avoids reading from the DOM ref which may have stale data during render
+  const computePath = useMemo(() => {
+    if (pathD) {
+      // Create a temporary SVG path element with the current pathD
+      const svgNs = 'http://www.w3.org/2000/svg';
+      const tempPath = document.createElementNS(svgNs, 'path');
+      tempPath.setAttribute('d', pathD);
+      return tempPath;
+    }
+    return path;
+  }, [pathD, path]);
   
   // Bead expansion state (per-edge, per-bead type)
   const [beadStates, setBeadStates] = useState<Map<string, BeadState>>(new Map());
@@ -166,7 +181,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     });
   }, [edge.uuid, edge.id, getBeadExpanded]);
   
-  if (!path) {
+  if (!computePath) {
     console.log('[EdgeBeads] No path element');
     return { svg: null, html: null };
   }
@@ -176,7 +191,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     return { svg: null, html: null };
   }
   
-  const pathLength = path.getTotalLength();
+  const pathLength = computePath.getTotalLength();
   if (!pathLength || pathLength <= 0) {
     console.log('[EdgeBeads] Invalid path length:', pathLength);
     return { svg: null, html: null };
@@ -184,7 +199,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   
   // Get path ID for textPath reference (must be unique per edge)
   const pathId = `bead-path-${edge.uuid || edge.id}`;
-  const pathD = path.getAttribute('d') || '';
+  // Use pathD prop if provided, otherwise read from DOM element
+  const pathDAttr = pathD || computePath.getAttribute('d') || '';
   
   // In Sankey view, beads follow the top edge spline of the ribbon
   // Apply a small inward offset to position beads just below the top line
@@ -209,7 +225,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     
     // Position this bead at current distance along spline
     const distance = Math.min(currentDistance, pathLength * 0.9); // Clamp to path
-    const point = path.getPointAtLength(distance);
+    const point = computePath.getPointAtLength(distance);
     
     if (!point || isNaN(point.x) || isNaN(point.y)) {
       console.warn('[EdgeBeads] Invalid point at distance', distance, 'for bead', bead.type);
@@ -223,8 +239,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       const delta = 1;
       const prevDist = Math.max(0, distance - delta);
       const nextDist = Math.min(pathLength, distance + delta);
-      const prevPoint = path.getPointAtLength(prevDist);
-      const nextPoint = path.getPointAtLength(nextDist);
+      const prevPoint = computePath.getPointAtLength(prevDist);
+      const nextPoint = computePath.getPointAtLength(nextDist);
       
       const dx = nextPoint.x - prevPoint.x;
       const dy = nextPoint.y - prevPoint.y;
@@ -274,19 +290,19 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       
       // Calculate plug icon position (after text + gap)
       const plugIconDistance = strokeStartDistance + LOZENGE_PADDING + measuredTextWidth + TEXT_TO_ICON_GAP;
-      const plugIconPoint = path.getPointAtLength(Math.min(plugIconDistance, pathLength * 0.9));
+      const plugIconPoint = computePath.getPointAtLength(Math.min(plugIconDistance, pathLength * 0.9));
       
       // Calculate tangent angle for icon rotation
       const iconAngle = plugIconPoint ? (() => {
-        const beforePoint = path.getPointAtLength(Math.max(0, plugIconDistance - 1));
-        const afterPoint = path.getPointAtLength(Math.min(pathLength, plugIconDistance + 1));
+        const beforePoint = computePath.getPointAtLength(Math.max(0, plugIconDistance - 1));
+        const afterPoint = computePath.getPointAtLength(Math.min(pathLength, plugIconDistance + 1));
         return Math.atan2(afterPoint.y - beforePoint.y, afterPoint.x - beforePoint.x) * 180 / Math.PI;
       })() : 0;
       
       // Calculate text angle at start position to determine if text would be upside down
       const textAngle = (() => {
-        const beforePoint = path.getPointAtLength(Math.max(0, textStartDistance - 1));
-        const afterPoint = path.getPointAtLength(Math.min(pathLength, textStartDistance + 1));
+        const beforePoint = computePath.getPointAtLength(Math.max(0, textStartDistance - 1));
+        const afterPoint = computePath.getPointAtLength(Math.min(pathLength, textStartDistance + 1));
         const angle = Math.atan2(afterPoint.y - beforePoint.y, afterPoint.x - beforePoint.x) * 180 / Math.PI;
         // Normalize to -180 to 180 range
         return angle;
@@ -466,7 +482,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           }}
         >
           <defs>
-            <path id={beadPathId} d={pathD} />
+            <path id={beadPathId} d={pathDAttr} />
           </defs>
           
           {/* Background lozenge - rounded edges along path */}
@@ -490,7 +506,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           {(() => {
             // Get the midpoint of the text for rotation anchor
             const textMidDistance = (textStartDistance + textEndDistance) / 2;
-            const textCenterPoint = path.getPointAtLength(Math.min(textMidDistance, pathLength * 0.9));
+            const textCenterPoint = computePath.getPointAtLength(Math.min(textMidDistance, pathLength * 0.9));
             
             return (
               <g transform={isTextUpsideDown ? `rotate(180, ${textCenterPoint.x}, ${textCenterPoint.y})` : ''}>
@@ -554,12 +570,12 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             const zapOffDistance = hasPlug 
               ? plugIconDistance + plugIconWidth 
               : plugIconDistance;
-            const zapOffPoint = path.getPointAtLength(Math.min(zapOffDistance, pathLength * 0.9));
+            const zapOffPoint = computePath.getPointAtLength(Math.min(zapOffDistance, pathLength * 0.9));
             
             // Calculate tangent angle for icon rotation
             const zapOffAngle = zapOffPoint ? (() => {
-              const beforePoint = path.getPointAtLength(Math.max(0, zapOffDistance - 1));
-              const afterPoint = path.getPointAtLength(Math.min(pathLength, zapOffDistance + 1));
+              const beforePoint = computePath.getPointAtLength(Math.max(0, zapOffDistance - 1));
+              const afterPoint = computePath.getPointAtLength(Math.min(pathLength, zapOffDistance + 1));
               return Math.atan2(afterPoint.y - beforePoint.y, afterPoint.x - beforePoint.x) * 180 / Math.PI;
             })() : 0;
             
@@ -630,7 +646,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           }}
         >
           <defs>
-            <path id={beadPathId} d={pathD} />
+            <path id={beadPathId} d={pathDAttr} />
           </defs>
           
           {/* Collapsed bead: short lozenge segment with same stroke geometry as expanded ones */}
@@ -660,7 +676,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     svg: svgBeads.length > 0 ? (
       <g className="edge-beads-svg">
         <defs>
-          <path id={pathId} d={pathD} pointerEvents="none" />
+          <path id={pathId} d={pathDAttr} pointerEvents="none" />
         </defs>
         {svgBeads}
       </g>
@@ -673,12 +689,13 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
 // Memoize to prevent re-renders when props haven't changed
 // ATOMIC RESTORATION: Now uses shouldSuppress flag (from context) instead of edge.data
 export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: EdgeBeadsProps & { visibleStartOffset?: number }) {
-  const { path, visibleStartOffset = 0, ...restProps } = props;
+  const { path, pathD, visibleStartOffset = 0, ...restProps } = props;
   
   // Memoize the hook result to prevent unnecessary recalculations
   const beadsResult = useEdgeBeads({
     ...restProps,
     path,
+    pathD,
     visibleStartOffset
   });
   
@@ -718,7 +735,9 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.graph?.metadata?.updated_at === nextProps.graph?.metadata?.updated_at &&
     // Bead positioning props (change with probability/edge width)
     prevProps.visibleStartOffset === nextProps.visibleStartOffset &&
-    prevProps.edgeWidth === nextProps.edgeWidth
+    prevProps.edgeWidth === nextProps.edgeWidth &&
+    // CRITICAL: pathD determines bead positions - must re-render when path changes
+    prevProps.pathD === nextProps.pathD
   );
 });
 

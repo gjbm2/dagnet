@@ -193,39 +193,7 @@ await fetchParameter({ ..., mode: 'direct' });     // fetch → graph
 await fetchParameter({ ..., mode: 'file-only' });  // file → graph
 ```
 
-### 4. Background Fetches (No Graph Update)
-
-A key design goal is supporting **background data retrieval** that writes to files without touching the graph. This is enabled by making `setGraph` optional:
-
-**Use cases:**
-- Pre-fetching data for adjacent time windows
-- Speculative fetches based on predicted user navigation
-- Nightly runner batch operations
-- Deferred batch updates (fetch many, apply once)
-
-**Pattern:**
-```typescript
-// Background fetch - data goes to file only
-const result = await dataFetchService.fetchParameter({
-  paramId: 'my-param',
-  edgeId: 'edge-123',
-  graph,                    // Needed for context
-  currentDSL: 'window(1-Nov-25:30-Nov-25)',
-  mode: 'versioned',
-  // setGraph OMITTED - no graph mutation
-});
-
-// Later, when user navigates to that window:
-await dataFetchService.fetchParameter({
-  ...sameOptions,
-  setGraph,                 // Now provided - pulls from file → graph
-  mode: 'file-only',        // Just apply cached data
-});
-```
-
-### 5. Hooks for UI Components
-
-Hooks are the primary interface for UI components. They always update the graph.
+### 4. Hooks for UI Components
 
 **Current (Bad)**:
 ```typescript
@@ -301,13 +269,10 @@ const handleFetchData = () => fetchMissing({ bustCache: false });
 interface FetchParameterOptions {
   paramId: string;
   edgeId: string;
-  graph: Graph;                    // REQUIRED - provides context (edges, params, DSL)
-  currentDSL: string;              // REQUIRED - no fallback to graph state
+  graph: Graph;
+  setGraph: (g: Graph) => void;
   mode: 'versioned' | 'direct' | 'file-only';
-  
-  // Graph mutation is OPTIONAL - omit for background/speculative fetches
-  setGraph?: (g: Graph) => void;   // If omitted, fetches to file only (graph unchanged)
-  
+  currentDSL: string;  // REQUIRED
   bustCache?: boolean;
   paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
   conditionalIndex?: number;
@@ -316,8 +281,7 @@ interface FetchParameterOptions {
 
 interface FetchResult {
   success: boolean;
-  changes: Change[];               // Always returned - what WOULD be applied to graph
-  fetchedData?: ParameterValue;    // The actual data retrieved (for inspection)
+  changes: Change[];
   source: 'api' | 'cache' | 'file';
   window?: { start: string; end: string };
   error?: Error;
@@ -326,15 +290,7 @@ interface FetchResult {
 async function fetchParameter(options: FetchParameterOptions): Promise<FetchResult>
 ```
 
-**Behavior:**
-- If `setGraph` provided → fetches data, writes to file, updates graph
-- If `setGraph` omitted → fetches data, writes to file, returns changes without applying
-
-This enables background pre-fetching, speculative fetches, and deferred graph updates.
-
 ### useFetchParameter
-
-Hooks always update the graph (they get `graph`/`setGraph` from context). For background fetches that don't update the graph, call `dataFetchService.fetchParameter()` directly without `setGraph`.
 
 ```typescript
 interface UseFetchParameterOptions {
