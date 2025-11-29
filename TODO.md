@@ -1,5 +1,7 @@
 # TODO
 
+- /home/reg/dev/dagnet/docs/current/data-fetch-refactoring-proposal.md
+
 ## What-If Compositing Centralization (REFACTOR)
 
 **Problem:** What-If DSL compositing logic is duplicated across multiple files:

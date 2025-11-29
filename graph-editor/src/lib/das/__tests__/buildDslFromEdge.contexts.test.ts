@@ -367,6 +367,34 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       expect(endDate.getDate()).toBe(31);
     });
 
+    // CRITICAL: Test that catches timezone bugs (regression test for local vs UTC date parsing)
+    it('should produce UTC midnight dates, NOT local timezone shifted dates', async () => {
+      const edge = { id: 'test-edge', from: 'a', to: 'b', p: { mean: 0.5 }, query: 'from(a).to(b)' };
+      const graph = {
+        nodes: [
+          { id: 'a', label: 'A', event_id: 'event_a' },
+          { id: 'b', label: 'B', event_id: 'event_b' }
+        ],
+        edges: [edge]
+      };
+      
+      // Test with 1-Oct-25 - this was the exact date that caused the timezone bug
+      const constraints = parseConstraints('window(1-Oct-25:1-Oct-25)');
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+      
+      // CRITICAL: Verify ISO string starts with 2025-10-01, NOT 2025-09-30
+      // The bug was: new Date(2025, 9, 1) → local midnight → 2025-09-30T23:00:00Z in UTC+1
+      // The fix: new Date(Date.UTC(2025, 9, 1)) → UTC midnight → 2025-10-01T00:00:00.000Z
+      expect(result.start).toBe('2025-10-01T00:00:00.000Z');
+      expect(result.end).toBe('2025-10-01T00:00:00.000Z');
+      
+      // Double-check using getUTC* methods (not local getDate())
+      const startDate = new Date(result.start!);
+      expect(startDate.getUTCFullYear()).toBe(2025);
+      expect(startDate.getUTCMonth()).toBe(9); // October = 9
+      expect(startDate.getUTCDate()).toBe(1);  // First of the month in UTC, not local
+    });
+
     it('should handle open-ended future: :-30d (from past to 30 days ago)', async () => {
       const edge = { id: 'test-edge', from: 'a', to: 'b', p: { mean: 0.5 }, query: 'from(a).to(b)' };
       const graph = {

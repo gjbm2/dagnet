@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseUKDate, formatDateUK } from '../../lib/dateFormat';
 import { parseConstraints } from '../../lib/queryDSL';
+import { calculateIncrementalFetch } from '../windowAggregationService';
 
 // ============================================================================
 // UNIT TESTS: parseUKDate (Timezone handling)
@@ -326,6 +327,96 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
         targetSlice: dslForDirect || '',
       };
       expect(getParameterFromFileOptions.targetSlice).toBe(currentDSL);
+    });
+  });
+
+  describe('Bug: calculateIncrementalFetch not filtering by context slice', () => {
+    // This bug caused: data exists for context(channel:facebook), but we're querying
+    // context(channel:google). Without targetSlice filtering, system incorrectly
+    // says "all dates exist" and skips API call.
+    
+    it('should only count dates from the correct context slice', () => {
+      
+      // Simulate param file with data for multiple contexts
+      const paramFileData = {
+        values: [
+          {
+            sliceDSL: 'context(channel:facebook)',
+            dates: ['2025-10-01', '2025-10-02', '2025-10-03'],
+            n_daily: [100, 100, 100],
+            k_daily: [50, 50, 50],
+            mean: 0.5, n: 300, k: 150,
+          },
+          {
+            sliceDSL: 'context(channel:google)',
+            dates: ['2025-10-02'], // Only has Oct 2, missing Oct 1 and Oct 3
+            n_daily: [200],
+            k_daily: [100],
+            mean: 0.5, n: 200, k: 100,
+          }
+        ]
+      };
+      
+      const requestedWindow = { start: '2025-10-01', end: '2025-10-03' };
+      
+      // BUG TEST: If we DON'T pass targetSlice with contexted data, it throws
+      // This is the correct behavior - you can't query uncontexted when data has contexts
+      expect(() => calculateIncrementalFetch(
+        paramFileData, 
+        requestedWindow, 
+        undefined, 
+        false,
+        '' // Empty targetSlice - should throw when file has contexts
+      )).toThrow('Slice isolation error');
+      
+      // CORRECT TEST: With targetSlice='context(channel:google)', only Oct 2 exists
+      const resultWithSlice = calculateIncrementalFetch(
+        paramFileData, 
+        requestedWindow, 
+        undefined, 
+        false,
+        'context(channel:google)'
+      );
+      
+      // Should need fetch for Oct 1 and Oct 3
+      expect(resultWithSlice.needsFetch).toBe(true);
+      expect(resultWithSlice.missingDates).toContain('2025-10-01');
+      expect(resultWithSlice.missingDates).toContain('2025-10-03');
+      expect(resultWithSlice.missingDates).not.toContain('2025-10-02'); // Oct 2 exists
+    });
+    
+    it('should NOT count dates from other contexts as existing', () => {
+      // This tests the exact bug: data exists for facebook but we query google
+      const paramFileData = {
+        values: [
+          {
+            sliceDSL: 'context(channel:facebook)',
+            dates: ['2025-10-01', '2025-10-02', '2025-10-03'],
+            n_daily: [100, 100, 100],
+            k_daily: [50, 50, 50],
+            mean: 0.5, n: 300, k: 150,
+          },
+          // No google data at all!
+        ]
+      };
+      
+      const requestedWindow = { start: '2025-10-01', end: '2025-10-03' };
+      
+      // Query for google - should show ALL dates as missing (not find facebook data)
+      const result = calculateIncrementalFetch(
+        paramFileData, 
+        requestedWindow, 
+        undefined, 
+        false,
+        'context(channel:google)' // Looking for google data
+      );
+      
+      // ALL dates should be missing (because there's no google data)
+      expect(result.needsFetch).toBe(true);
+      expect(result.daysAvailable).toBe(0);
+      expect(result.missingDates).toContain('2025-10-01');
+      expect(result.missingDates).toContain('2025-10-02');
+      expect(result.missingDates).toContain('2025-10-03');
     });
   });
 });

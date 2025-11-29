@@ -92,7 +92,7 @@ export function AllSlicesModal({
   useEffect(() => {
     graphRef.current = graph;
   }, [graph]);
-  
+
   // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {

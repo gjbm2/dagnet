@@ -774,7 +774,8 @@ export function mergeTimeSeriesIntoParameter(
   newQuerySignature?: string,
   queryParams?: any,
   fullQuery?: string,
-  dataSourceType?: string
+  dataSourceType?: string,
+  sliceDSL?: string // CRITICAL: Context slice (e.g., 'context(channel:other)') for isolateSlice matching
 ): ParameterValue[] {
   if (newTimeSeries.length === 0) {
     return existingValues;
@@ -802,6 +803,9 @@ export function mergeTimeSeriesIntoParameter(
     window_from: newWindow.start,
     window_to: newWindow.end,
     query_signature: newQuerySignature,
+    // CRITICAL: sliceDSL enables isolateSlice to find this value entry
+    // Without this, contexted data would be invisible to queries!
+    sliceDSL: sliceDSL || '',
     data_source: {
       type: dataSourceType || 'api',
       retrieved_at: new Date().toISOString(),

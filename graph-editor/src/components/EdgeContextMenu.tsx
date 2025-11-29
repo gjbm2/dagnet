@@ -219,6 +219,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         setGraph,
         paramSlot: section.paramSlot,
         conditionalIndex: section.conditionalIndex,
+        currentDSL: graph?.currentQueryDSL || '', // Pass DSL for correct window/context
       });
     });
   };
