@@ -13,11 +13,11 @@ additionalProperties: false
 properties:
   id:
     type: string
-    pattern: '^[a-z0-9-]+$'
-    minLength: 3
+    pattern: '^[a-zA-Z0-9_-]+$'
+    minLength: 1
     maxLength: 64
-    description: "Unique parameter identifier"
-    examples: ["conversion-rate-baseline", "email-campaign-cost", "checkout-duration"]
+    description: "Unique parameter identifier (letters, numbers, hyphens, underscores)"
+    examples: ["conversion-rate-baseline", "Email_Campaign_Cost", "checkout-duration"]
   
   name:
     type: string
@@ -33,7 +33,7 @@ properties:
   
   query:
     type: string
-    pattern: '^from\([a-z0-9-]+\)\.to\([a-z0-9-]+\)'
+    pattern: '^from\([a-zA-Z0-9_-]+\)\.to\([a-zA-Z0-9_-]+\)'
     description: "Query expression for data retrieval using DSL syntax"
     examples:
       - "from(checkout).to(purchase)"
@@ -126,7 +126,7 @@ properties:
         
         context_id:
           type: string
-          pattern: '^[a-z0-9-]+$'
+          pattern: '^[a-zA-Z0-9_-]+$'
           description: "Optional context ID from contexts registry"
         
         data_source:
@@ -211,7 +211,7 @@ properties:
         type: array
         items:
           type: string
-          pattern: '^[a-z0-9-]+$'
+          pattern: '^[a-zA-Z0-9_-]+$'
         uniqueItems: true
         maxItems: 10
         description: "Tags for categorization and search"
@@ -249,7 +249,7 @@ properties:
         type: array
         items:
           type: string
-          pattern: '^[a-z0-9-]+$'
+          pattern: '^[a-zA-Z0-9_-]+$'
         uniqueItems: true
         description: "Alternative identifiers for this parameter"
       

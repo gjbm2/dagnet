@@ -73,7 +73,10 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       stdev: e.p?.stdev,
       locked: e.p?.locked,
       description: e.description,
+      description_overridden: e.description_overridden, // Override flag for auto-sync
+      query_overridden: e.query_overridden, // Override flag for query auto-regeneration
       p: e.p, // Full probability parameter object (includes connection, connection_string, query, evidence, conditional_ps)
+      conditional_p: e.conditional_p, // Conditional probability array (includes override flags)
       cost_gbp: e.cost_gbp, // Full cost_gbp parameter object (includes connection, connection_string, query, evidence)
       cost_time: e.cost_time, // Full cost_time parameter object (includes connection, connection_string, query, evidence)
       weight_default: e.weight_default,

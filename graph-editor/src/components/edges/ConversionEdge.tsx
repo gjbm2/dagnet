@@ -337,7 +337,9 @@ export default function ConversionEdge({
       e.id === lookupId ||             // Human-readable ID
       `${e.from}->${e.to}` === lookupId  // Fallback format
     );
-  }, [graph, lookupId, graph?.edges?.map(e => `${e.uuid}-${JSON.stringify(e.conditional_p)}`).join(',')]);
+  }, [graph, lookupId, 
+    // Use updated_at to catch ALL graph changes (rebalance, overrides, etc.)
+    graph?.metadata?.updated_at]);
   
   // Get variant weights string for dependency tracking (for case edges)
   // This must be calculated directly from graph, not from fullEdge, to ensure it updates
@@ -808,6 +810,9 @@ export default function ConversionEdge({
       }
 
       const path = `M ${adjustedSourceX},${adjustedSourceY} C ${c1x},${c1y} ${c2x},${c2y} ${adjustedTargetX},${adjustedTargetY}`;
+      
+      // Debug: log path calculation
+      console.log(`[ConversionEdge path] adjustedSourceY=${adjustedSourceY?.toFixed(1)}, path starts at y=${path.match(/M [^,]+,([^ ]+)/)?.[1]}`);
       
       // Calculate label position at t=0.5 on the bezier curve (not the straight line!)
       const t = 0.5;
@@ -1723,7 +1728,8 @@ export default function ConversionEdge({
             // For perpendicular edges: path distance ≈ perpendicular distance
             let visibleStartOffset = totalInset;
             
-            // console.log('[Bead offset] Initial:', { totalInset, edgeId: id });
+            // Debug: log what data ConversionEdge is receiving
+            console.log(`[ConversionEdge ${id}] data offsets: offX=${data?.sourceOffsetX?.toFixed(1)}, offY=${data?.sourceOffsetY?.toFixed(1)}, scaledWidth=${data?.scaledWidth?.toFixed(1)}`);
             
             if (!data?.useSankeyView && data?.sourceFace) {
               const nodes = getNodes();
@@ -1771,9 +1777,12 @@ export default function ConversionEdge({
               visibleStartOffset = basePerpDistance;
             }
             
+            // Use offsets in key to force re-render when edge positions change
+            const offsetKey = `${data?.sourceOffsetX?.toFixed(1) || 0}-${data?.sourceOffsetY?.toFixed(1) || 0}-${data?.scaledWidth?.toFixed(1) || 0}`;
+            console.log(`[ConversionEdge ${id}] rendering EdgeBeadsRenderer with key=${offsetKey}, visibleStartOffset=${visibleStartOffset.toFixed(1)}`);
             return (
               <EdgeBeadsRenderer
-                key={`beads-${id}-${fullEdge.uuid || fullEdge.id}`}
+                key={`beads-${id}-${fullEdge.uuid || fullEdge.id}-${offsetKey}`}
                 edgeId={id}
                 edge={fullEdge}
                 path={pathRef.current}

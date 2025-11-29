@@ -120,10 +120,14 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge.uuid || edge.id, // Stable edge identifier
     edge.p?.mean, // Probability value
     edge.p?.stdev, // Standard deviation
+    edge.p?.mean_overridden, // Override flag for probability
     edge.cost_gbp?.mean, // GBP cost
+    edge.cost_gbp?.mean_overridden, // Override flag for GBP cost
     edge.cost_time?.mean, // Time cost
+    edge.cost_time?.mean_overridden, // Override flag for time cost
     edge.case_variant, // Case variant name
     edge.conditional_p?.length, // Conditional probabilities count
+    edge.query_overridden, // Override flag for query
     graph?.nodes?.length, // Graph structure indicator
     graph?.metadata?.updated_at, // Bump when graph data (e.g. case variants) changes
     // scenariosContext changes reference frequently - use stable indicators instead
@@ -701,12 +705,20 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.edge?.uuid === nextProps.edge?.uuid &&
     prevProps.edge?.p?.mean === nextProps.edge?.p?.mean &&
     prevProps.edge?.p?.stdev === nextProps.edge?.p?.stdev &&
+    prevProps.edge?.p?.mean_overridden === nextProps.edge?.p?.mean_overridden &&
+    prevProps.edge?.query_overridden === nextProps.edge?.query_overridden &&
     prevProps.edge?.cost_gbp?.mean === nextProps.edge?.cost_gbp?.mean &&
+    prevProps.edge?.cost_gbp?.mean_overridden === nextProps.edge?.cost_gbp?.mean_overridden &&
     prevProps.edge?.cost_time?.mean === nextProps.edge?.cost_time?.mean &&
+    prevProps.edge?.cost_time?.mean_overridden === nextProps.edge?.cost_time?.mean_overridden &&
     prevProps.edge?.case_variant === nextProps.edge?.case_variant &&
     prevProps.edge?.conditional_p?.length === nextProps.edge?.conditional_p?.length &&
-    // Graph structure indicator
-    prevProps.graph?.nodes?.length === nextProps.graph?.nodes?.length
+    // Graph structure and update timestamp - catches ALL graph changes
+    prevProps.graph?.nodes?.length === nextProps.graph?.nodes?.length &&
+    prevProps.graph?.metadata?.updated_at === nextProps.graph?.metadata?.updated_at &&
+    // Bead positioning props (change with probability/edge width)
+    prevProps.visibleStartOffset === nextProps.visibleStartOffset &&
+    prevProps.edgeWidth === nextProps.edgeWidth
   );
 });
 

@@ -6,10 +6,15 @@ import { useDialog } from '../../contexts/DialogContext';
 import { useCommitHandler } from '../../hooks/useCommitHandler';
 import { usePullFile } from '../../hooks/usePullFile';
 import { usePullAll } from '../../hooks/usePullAll';
+import { useRenameFile } from '../../hooks/useRenameFile';
+import { useViewHistory } from '../../hooks/useViewHistory';
+import { useIntegrityCheck } from '../../hooks/useIntegrityCheck';
+import { HistoryModal } from '../modals/HistoryModal';
 import { db } from '../../db/appDatabase';
 import { encodeStateToUrl } from '../../lib/shareUrl';
 import { CommitModal } from '../CommitModal';
 import { NewFileModal } from '../NewFileModal';
+import { RenameModal } from '../RenameModal';
 // MergeConflictModal is handled by usePullAll hook
 import { gitService } from '../../services/gitService';
 import { gitConfig } from '../../config/gitConfig';
@@ -45,6 +50,37 @@ export function FileMenu() {
   // Pull hooks - all logic is in the hooks, we just call and render
   const { canPull: canPullLatest, pullFile: handlePullLatest } = usePullFile(activeTab?.fileId);
   const { pullAll: handlePullAllLatest, conflictModal: pullAllConflictModal } = usePullAll();
+  
+  // Rename hook
+  const { 
+    canRename, 
+    showRenameModal, 
+    hideRenameModal, 
+    isRenameModalOpen, 
+    renameFile, 
+    currentName: renameCurrentName,
+    fileType: renameFileType,
+    isRenaming 
+  } = useRenameFile(activeTab?.fileId);
+  
+  // History hook
+  const {
+    canViewHistory,
+    showHistoryModal,
+    hideHistoryModal,
+    isHistoryModalOpen,
+    loadHistory,
+    getContentAtCommit,
+    rollbackToCommit,
+    fileName: historyFileName,
+    filePath: historyFilePath,
+    isLoading: isHistoryLoading,
+    history,
+    currentContent
+  } = useViewHistory(activeTab?.fileId);
+  
+  // Integrity check hook
+  const { runCheck: runIntegrityCheck, isChecking: isIntegrityChecking } = useIntegrityCheck();
   
   // Get isDirty state for active tab
   const activeFile = activeTab ? fileRegistry.getFile(activeTab.fileId) : null;
@@ -154,8 +190,9 @@ export function FileMenu() {
   };
 
   const handleViewHistory = () => {
-    // TODO: Open history view for current file
-    console.log('View history');
+    if (canViewHistory) {
+      showHistoryModal();
+    }
   };
 
   const handleRevert = () => {
@@ -481,6 +518,14 @@ export function FileMenu() {
 
             <Menubar.Item 
               className="menubar-item" 
+              onSelect={showRenameModal}
+              disabled={!canRename}
+            >
+              Rename...
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
               onSelect={async () => {
                 if (activeTab) {
                   await fileOperationsService.deleteFile(activeTab.fileId);
@@ -529,7 +574,7 @@ export function FileMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handleViewHistory}
-              disabled={!activeTab}
+              disabled={!canViewHistory}
             >
               View History
               <div className="menubar-right-slot">⌘H</div>
@@ -575,6 +620,14 @@ export function FileMenu() {
 
             <Menubar.Item 
               className="menubar-item" 
+              onSelect={runIntegrityCheck}
+              disabled={isIntegrityChecking}
+            >
+              {isIntegrityChecking ? 'Checking...' : 'Check Integrity...'}
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
               onSelect={handleRebuildIndexes}
             >
               Rebuild Indexes...
@@ -613,6 +666,30 @@ export function FileMenu() {
         onClose={() => setIsNewFileModalOpen(false)}
         onCreate={handleCreateFile}
         fileType={newFileType}
+      />
+
+      {/* Rename Modal */}
+      <RenameModal
+        isOpen={isRenameModalOpen}
+        onClose={hideRenameModal}
+        onRename={renameFile}
+        currentName={renameCurrentName}
+        fileType={renameFileType}
+        isRenaming={isRenaming}
+      />
+
+      {/* History Modal */}
+      <HistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={hideHistoryModal}
+        fileName={historyFileName}
+        filePath={historyFilePath}
+        isLoading={isHistoryLoading}
+        history={history}
+        currentContent={currentContent}
+        onLoadHistory={loadHistory}
+        onGetContentAtCommit={getContentAtCommit}
+        onRollback={rollbackToCommit}
       />
 
       {/* Merge Conflict Modal */}

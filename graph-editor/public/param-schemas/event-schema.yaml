@@ -13,13 +13,13 @@ additionalProperties: false
 properties:
   id:
     type: string
-    pattern: '^[a-z0-9_-]+$'
+    pattern: '^[a-zA-Z0-9_-]+$'
     minLength: 2
     maxLength: 128
     description: |
-      Canonical event ID (used throughout app, likely matches production event names).
-      Allows underscores and hyphens for production event naming conventions.
-    examples: ["checkout_started", "purchase_completed", "page_view", "add_to_cart"]
+      Canonical event ID (letters, numbers, hyphens, underscores).
+      Allows underscores for production event naming conventions.
+    examples: ["checkout_started", "Purchase_Completed", "page_view", "Add_to_Cart"]
   
   name:
     type: string
@@ -46,7 +46,7 @@ properties:
     type: array
     items:
       type: string
-      pattern: '^[a-z0-9-]+$'
+      pattern: '^[a-zA-Z0-9_-]+$'
     uniqueItems: true
     maxItems: 10
     description: "Tags for filtering, search, and categorization"

@@ -22,7 +22,13 @@
   },
   "$defs": {
     "UUID": { "type": "string", "format": "uuid" },
-    "Id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "Id": { 
+      "type": "string", 
+      "minLength": 1, 
+      "maxLength": 128,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "description": "Human-readable identifier (letters, numbers, hyphens, underscores - no spaces or special chars)"
+    },
 
     "Node": {
       "type": "object",
@@ -37,15 +43,15 @@
         "description_overridden": { "type": "boolean", "default": false, "description": "If true, description was manually edited and should not be auto-updated" },
         "event_id": {
           "type": "string",
-          "pattern": "^[a-z0-9_-]+$",
-          "description": "Direct event ID for DAS queries (allows underscore and hyphen for production event names)"
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Direct event ID for DAS queries (letters, numbers, hyphens, underscores)"
         },
         "event": {
           "type": "object",
           "description": "Event reference for this node (optional)",
           "additionalProperties": false,
           "properties": {
-            "id": { "type": "string", "pattern": "^[a-z0-9_-]+$", "description": "Reference to event in events registry (allows underscore and hyphen for production event names)" },
+            "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "Reference to event in events registry (letters, numbers, hyphens, underscores)" },
             "id_overridden": { "type": "boolean", "default": false, "description": "If true, event ID was manually edited and should not be auto-updated" }
           },
           "required": ["id"]
@@ -161,7 +167,7 @@
             "required": ["image_id", "caption"],
             "additionalProperties": false,
             "properties": {
-              "image_id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+              "image_id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
               "caption": { "type": "string", "maxLength": 256 },
               "caption_overridden": { 
                 "type": "boolean", 

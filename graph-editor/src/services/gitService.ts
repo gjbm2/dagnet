@@ -89,7 +89,7 @@ class GitService {
       ? this.credentials.git.find(repo => repo.name === defaultRepo) || this.credentials.git[0]
       : this.credentials.git[0];
     
-    console.log(`GitService.setCurrentRepo: Set to ${this.currentRepo?.name} (defaultGitRepo was: ${defaultRepo}, owner: ${this.currentRepo?.owner}, repo: ${this.currentRepo?.repo}, basePath: ${this.currentRepo?.basePath})`);
+    console.log(`GitService.setCurrentRepo: Set to ${this.currentRepo?.owner}/${this.currentRepo?.name} (branch: ${this.currentRepo?.branch || 'default'}, basePath: ${this.currentRepo?.basePath || 'none'})`);
   }
 
   /**
@@ -414,9 +414,36 @@ class GitService {
     return btoa(result);
   }
 
+  // Get commit history for the entire repository
+  // GitHub API max is 100 per page; for more, would need pagination
+  async getRepositoryCommits(branch: string = this.config.branch, perPage: number = 100): Promise<GitOperationResult> {
+    try {
+      console.log(`🔵 GitService.getRepositoryCommits: Fetching commits for branch ${branch}, repo: ${this.currentRepo?.owner}/${this.currentRepo?.name}`);
+      const response = await this.makeRequest(`/commits?sha=${branch}&per_page=${perPage}`);
+      const commits: GitCommit[] = await response.json();
+      
+      if (this.config.debugGitOperations) {
+        console.log(`Repository commits:`, commits.length, 'commits');
+      }
+
+      return {
+        success: true,
+        data: commits,
+        message: `Found ${commits.length} commits`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to fetch repository commits'
+      };
+    }
+  }
+
   // Get commit history for a file
   async getFileHistory(path: string, branch: string = this.config.branch): Promise<GitOperationResult> {
     try {
+      console.log(`🔵 GitService.getFileHistory: Fetching history for ${path} from branch ${branch}, repo: ${this.currentRepo?.owner}/${this.currentRepo?.name}`);
       const response = await this.makeRequest(`/commits?path=${path}&sha=${branch}`);
       const commits: GitCommit[] = await response.json();
       
@@ -438,7 +465,15 @@ class GitService {
     }
   }
 
-  // Commit and push multiple files
+  /**
+   * Commit and push multiple files in a SINGLE atomic commit
+   * 
+   * Uses Git Data API (trees/blobs/commits) for:
+   * - Single atomic commit (all-or-nothing)
+   * - Proper rename detection by GitHub
+   * - Better performance (fewer API calls)
+   * - Consistent with how pull uses Git Data API
+   */
   async commitAndPushFiles(
     files: Array<{
       path: string;
@@ -460,102 +495,126 @@ class GitService {
         };
       }
 
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      console.log(`🔵 GitService.commitAndPushFiles: Atomic commit of ${files.length} files to ${owner}/${repo}@${branch}`);
+      
       if (this.config.debugGitOperations) {
-        console.log(`Committing ${files.length} files with message: ${message}`);
+        files.forEach(f => console.log(`   ${f.delete ? 'DELETE' : 'UPSERT'}: ${f.path}`));
       }
 
-      const results: GitOperationResult[] = [];
-      
+      // Step 1: Get current branch HEAD commit
+      const refResponse = await this.octokit.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`
+      });
+      const baseCommitSha = refResponse.data.object.sha;
+      console.log(`🔵 GitService: Base commit: ${baseCommitSha.substring(0, 8)}`);
+
+      // Step 2: Get base tree SHA from commit
+      const commitResponse = await this.octokit.git.getCommit({
+        owner,
+        repo,
+        commit_sha: baseCommitSha
+      });
+      const baseTreeSha = commitResponse.data.tree.sha;
+      console.log(`🔵 GitService: Base tree: ${baseTreeSha.substring(0, 8)}`);
+
+      // Step 3: Build tree entries for all file changes
+      const treeEntries: Array<{
+        path: string;
+        mode: '100644' | '100755' | '040000' | '160000' | '120000';
+        type: 'blob' | 'tree' | 'commit';
+        sha?: string | null;
+        content?: string;
+      }> = [];
+
       for (const file of files) {
-        // Handle deletions
         if (file.delete) {
-          console.log(`🔵 GitService.commitAndPushFiles: Deleting ${file.path}`);
-          const result = await this.deleteFile(file.path, message, branch);
-          
-          // If file doesn't exist, that's OK - it's already deleted
-          if (!result.success && result.error !== 'File not found') {
-            return {
-              success: false,
-              error: result.error,
-              message: `Failed to delete file ${file.path}: ${result.error}`
-            };
+          // Deletion: set sha to null to remove from tree
+          // Note: GitHub API requires we omit deleted files from tree creation
+          // We handle this by creating tree with base_tree and only including changes
+          treeEntries.push({
+            path: file.path,
+            mode: '100644',
+            type: 'blob',
+            sha: null // null SHA = delete
+          });
+          console.log(`🔵 GitService: Staging DELETE: ${file.path}`);
+        } else {
+          // Create/Update: create blob first, then reference it
+          let blobContent: string;
+          let blobEncoding: 'utf-8' | 'base64' = 'utf-8';
+
+          if (file.binaryContent) {
+            blobContent = this.uint8ArrayToBase64(file.binaryContent);
+            blobEncoding = 'base64';
+          } else {
+            blobContent = file.content!;
           }
-          
-          if (!result.success) {
-            console.log(`🔵 GitService.commitAndPushFiles: File ${file.path} already deleted (not found)`);
-          }
-          
-          results.push(result);
-          continue;
-        }
-        
-        // Handle create/update
-        // Always fetch the current file SHA from GitHub to ensure we have the latest
-        // This prevents 409 conflicts from stale SHAs
-        let fileSha: string | undefined = undefined;
-        
-        try {
-          const fileInfoResponse = await this.makeRequest(`/contents/${file.path}?ref=${branch}`, {
-            method: 'GET'
+
+          // Create blob
+          const blobResponse = await this.octokit.git.createBlob({
+            owner,
+            repo,
+            content: blobContent,
+            encoding: blobEncoding
           });
           
-          if (fileInfoResponse.ok) {
-            const fileInfo = await fileInfoResponse.json();
-            fileSha = fileInfo.sha;
-            
-            if (this.config.debugGitOperations) {
-              console.log(`Fetched current SHA for ${file.path}: ${fileSha}`);
-            }
-          }
-        } catch (error) {
-          // File doesn't exist yet, which is fine for new files
-          if (this.config.debugGitOperations) {
-            console.log(`File ${file.path} doesn't exist yet, will create it`);
-          }
+          treeEntries.push({
+            path: file.path,
+            mode: '100644',
+            type: 'blob',
+            sha: blobResponse.data.sha
+          });
+          console.log(`🔵 GitService: Staging UPSERT: ${file.path} (blob: ${blobResponse.data.sha.substring(0, 8)})`);
         }
-        
-        // Prepare content
-        let contentToCommit: string;
-        let encoding: 'utf-8' | 'base64' = file.encoding || 'utf-8';
-        
-        if (file.binaryContent) {
-          // Binary data - convert Uint8Array to base64
-          // Note: Can't use spread operator for large arrays (hits JS argument limit)
-          contentToCommit = this.uint8ArrayToBase64(file.binaryContent);
-          encoding = 'base64';
-        } else {
-          contentToCommit = file.content!;
-        }
-        
-        console.log(`🔵 GitService.commitAndPushFiles: Committing ${file.path}, content length: ${contentToCommit.length}, encoding: ${encoding}, SHA: ${fileSha?.substring(0, 8) || 'new file'}`);
-        
-        const result = await this.createOrUpdateFile(
-          file.path,
-          contentToCommit,
-          message,
-          branch,
-          fileSha,
-          encoding
-        );
-        
-        if (!result.success) {
-          return {
-            success: false,
-            error: result.error,
-            message: `Failed to commit file ${file.path}: ${result.error}`
-          };
-        }
-        
-        console.log(`🔵 GitService.commitAndPushFiles: Successfully committed ${file.path}, new SHA: ${result.data?.content?.sha?.substring(0, 8)}`);
-        results.push(result);
       }
+
+      // Step 4: Create new tree with all changes
+      // base_tree ensures we keep all unchanged files
+      const treeResponse = await this.octokit.git.createTree({
+        owner,
+        repo,
+        base_tree: baseTreeSha,
+        tree: treeEntries as any // Type assertion needed due to null sha for deletions
+      });
+      const newTreeSha = treeResponse.data.sha;
+      console.log(`🔵 GitService: New tree: ${newTreeSha.substring(0, 8)}`);
+
+      // Step 5: Create commit pointing to new tree
+      const newCommitResponse = await this.octokit.git.createCommit({
+        owner,
+        repo,
+        message,
+        tree: newTreeSha,
+        parents: [baseCommitSha]
+      });
+      const newCommitSha = newCommitResponse.data.sha;
+      console.log(`🔵 GitService: New commit: ${newCommitSha.substring(0, 8)}`);
+
+      // Step 6: Update branch ref to point to new commit
+      await this.octokit.git.updateRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+        sha: newCommitSha
+      });
+      console.log(`🔵 GitService: Updated ${branch} to ${newCommitSha.substring(0, 8)}`);
 
       return {
         success: true,
-        data: results,
-        message: `Successfully committed ${files.length} files`
+        data: {
+          commitSha: newCommitSha,
+          treeSha: newTreeSha,
+          filesCommitted: files.length
+        },
+        message: `Successfully committed ${files.length} files in single atomic commit`
       };
     } catch (error) {
+      console.error('❌ GitService.commitAndPushFiles: Error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -641,26 +700,42 @@ class GitService {
    * Get repository tree recursively (all files at once)
    * This is much more efficient than listing directories one by one
    */
+  /**
+   * Get repository tree recursively (all files at once)
+   * This is much more efficient than listing directories one by one
+   * 
+   * @param branchOrCommit - Branch name (e.g., 'main') or commit SHA (40 hex chars)
+   * @param recursive - Whether to fetch all files recursively
+   */
   async getRepositoryTree(
-    branch: string = this.config.branch,
+    branchOrCommit: string = this.config.branch,
     recursive: boolean = true
   ): Promise<GitOperationResult> {
     try {
       const owner = this.currentRepo?.owner || this.config.repoOwner;
       const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
 
-      console.log(`📦 GitService.getRepositoryTree: Fetching tree for ${owner}/${repo}@${branch} (recursive: ${recursive})`);
+      // Detect if branchOrCommit is a commit SHA (40 hex chars) or a branch name
+      const isCommitSha = /^[0-9a-f]{40}$/i.test(branchOrCommit);
+      let commitSha: string;
 
-      // 1. Get branch reference
-      const refResponse = await this.octokit.git.getRef({
-        owner,
-        repo,
-        ref: `heads/${branch}`
-      });
-      const commitSha = refResponse.data.object.sha;
-      console.log(`📦 GitService.getRepositoryTree: Branch HEAD at commit ${commitSha.substring(0, 8)}`);
+      if (isCommitSha) {
+        // Direct commit SHA provided
+        commitSha = branchOrCommit;
+        console.log(`📦 GitService.getRepositoryTree: Using commit SHA directly: ${commitSha.substring(0, 8)}`);
+      } else {
+        // Branch name - resolve to commit SHA
+        console.log(`📦 GitService.getRepositoryTree: Fetching tree for ${owner}/${repo}@${branchOrCommit} (recursive: ${recursive})`);
+        const refResponse = await this.octokit.git.getRef({
+          owner,
+          repo,
+          ref: `heads/${branchOrCommit}`
+        });
+        commitSha = refResponse.data.object.sha;
+        console.log(`📦 GitService.getRepositoryTree: Branch HEAD at commit ${commitSha.substring(0, 8)}`);
+      }
 
-      // 2. Get commit to find tree SHA
+      // Get commit to find tree SHA
       const commitResponse = await this.octokit.git.getCommit({
         owner,
         repo,
@@ -669,7 +744,7 @@ class GitService {
       const treeSha = commitResponse.data.tree.sha;
       console.log(`📦 GitService.getRepositoryTree: Tree SHA: ${treeSha.substring(0, 8)}`);
 
-      // 3. Get entire tree in ONE API call
+      // Get entire tree in ONE API call
       const treeResponse = await this.octokit.git.getTree({
         owner,
         repo,
@@ -722,13 +797,15 @@ class GitService {
 
   /**
    * Get blob content by SHA (more efficient than fetching by path)
+   * @param sha - The blob SHA
+   * @param binary - If true, returns raw base64 content (for images/binary files). Default false.
    */
-  async getBlobContent(sha: string): Promise<GitOperationResult> {
+  async getBlobContent(sha: string, binary: boolean = false): Promise<GitOperationResult> {
     try {
       const owner = this.currentRepo?.owner || this.config.repoOwner;
       const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
 
-      console.log(`📦 GitService.getBlobContent: Fetching blob ${sha.substring(0, 8)} for ${owner}/${repo}`);
+      console.log(`📦 GitService.getBlobContent: Fetching blob ${sha.substring(0, 8)} for ${owner}/${repo} (binary: ${binary})`);
 
       const blobResponse = await this.octokit.git.getBlob({
         owner,
@@ -736,14 +813,30 @@ class GitService {
         file_sha: sha
       });
 
-      // Decode base64 content (atob works in browser, Buffer is Node.js)
-      const content = atob(blobResponse.data.content);
+      let content: string;
+      
+      if (binary) {
+        // For binary files, return raw base64 content (caller will decode)
+        content = blobResponse.data.content;
+      } else {
+        // For text files, decode base64 to string
+        // Use fetch with data URL to properly decode (atob corrupts binary/UTF-8)
+        const base64 = blobResponse.data.content.replace(/[\s\r\n]/g, '');
+        try {
+          const response = await fetch(`data:text/plain;base64,${base64}`);
+          content = await response.text();
+        } catch {
+          // Fallback to atob for simple ASCII
+          content = atob(blobResponse.data.content);
+        }
+      }
 
       return {
         success: true,
         data: {
           sha,
           content,
+          encoding: binary ? 'base64' : 'utf-8',
           size: blobResponse.data.size
         },
         message: 'Successfully fetched blob'

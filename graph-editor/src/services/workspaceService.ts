@@ -460,14 +460,15 @@ class WorkspaceService {
       const images = await this.fetchAllImagesFromGit(repository, branch, gitCreds);
       
       for (const image of images) {
-        const imageId = image.name.replace(/\.(png|jpg|jpeg)$/i, '');
-        const ext = image.name.match(/\.(png|jpg|jpeg)$/i)?.[1].toLowerCase() as 'png' | 'jpg' | 'jpeg';
+        const imageId = image.name.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
+        const ext = image.name.match(/\.(png|jpg|jpeg|gif|webp)$/i)?.[1].toLowerCase() as 'png' | 'jpg' | 'jpeg';
+        const imagePath = `${image.sourcePath}/${image.name}`;
         
         const imageFileState: FileState = {
           fileId: `image-${imageId}`,
           type: 'image',
           name: image.name,
-          path: `nodes/images/${image.name}`,
+          path: imagePath,
           data: {
             image_id: imageId,
             file_extension: ext,
@@ -477,7 +478,7 @@ class WorkspaceService {
           isDirty: false,
           source: {
             repository,
-            path: `nodes/images/${image.name}`,
+            path: imagePath,
             branch,
             commitHash: commitSha
           },
@@ -504,7 +505,7 @@ class WorkspaceService {
           'success',
           'CLONE_IMAGES',
           `Cloned ${images.length} image(s)`,
-          images.map(img => img.name).join(', '),
+          images.map(img => `${img.sourcePath}/${img.name}`).join(', '),
           { fileType: 'image', filesAffected: images.map(img => img.name) }
         );
       }
@@ -829,10 +830,52 @@ class WorkspaceService {
         toDelete.forEach(path => console.log(`   - ${path}`));
       }
 
-      // STEP 5: If no changes, we're done!
+      // STEP 5: If no text file changes, still check for images then return
       if (toFetch.length === 0 && toDelete.length === 0) {
+        // Still fetch images even if no text file changes
+        console.log(`🖼️ WorkspaceService: No text file changes, but checking for images...`);
+        const images = await this.fetchAllImagesFromGit(repository, branch, gitCreds);
+        
+        for (const image of images) {
+          const imageId = image.name.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
+          const ext = image.name.match(/\.(png|jpg|jpeg|gif|webp)$/i)?.[1].toLowerCase() as 'png' | 'jpg' | 'jpeg';
+          const imagePath = `${image.sourcePath}/${image.name}`;
+          
+          const imageFileState: FileState = {
+            fileId: `image-${imageId}`,
+            type: 'image',
+            name: image.name,
+            path: imagePath,
+            data: {
+              image_id: imageId,
+              file_extension: ext,
+              binaryData: image.binaryData
+            },
+            originalData: null,
+            isDirty: false,
+            source: {
+              repository,
+              path: imagePath,
+              branch,
+              commitHash: commitSha
+            },
+            isLoaded: true,
+            isLocal: false,
+            viewTabs: [],
+            lastModified: Date.now(),
+            lastSynced: Date.now()
+          };
+          
+          await db.files.put(imageFileState);
+          (fileRegistry as any).files.set(imageFileState.fileId, imageFileState);
+        }
+        
+        if (images.length > 0) {
+          console.log(`✅ WorkspaceService: Stored ${images.length} images`);
+        }
+        
         const elapsed = Date.now() - startTime;
-        console.log(`⚡ WorkspaceService: Pull complete in ${elapsed}ms - no changes!`);
+        console.log(`⚡ WorkspaceService: Pull complete in ${elapsed}ms - no text changes, ${images.length} images synced`);
         workspace.lastSynced = Date.now();
         await db.workspaces.put(workspace);
         return { success: true, conflicts: [], filesUpdated: 0, filesDeleted: 0, newFiles: [], changedFiles: [], deletedFiles: [] };
@@ -1041,14 +1084,15 @@ class WorkspaceService {
       const images = await this.fetchAllImagesFromGit(repository, branch, gitCreds);
       
       for (const image of images) {
-        const imageId = image.name.replace(/\.(png|jpg|jpeg)$/i, '');
-        const ext = image.name.match(/\.(png|jpg|jpeg)$/i)?.[1].toLowerCase() as 'png' | 'jpg' | 'jpeg';
+        const imageId = image.name.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
+        const ext = image.name.match(/\.(png|jpg|jpeg|gif|webp)$/i)?.[1].toLowerCase() as 'png' | 'jpg' | 'jpeg';
+        const imagePath = `${image.sourcePath}/${image.name}`;
         
         const imageFileState: FileState = {
           fileId: `image-${imageId}`,
           type: 'image',
           name: image.name,
-          path: `nodes/images/${image.name}`,
+          path: imagePath,
           data: {
             image_id: imageId,
             file_extension: ext,
@@ -1058,7 +1102,7 @@ class WorkspaceService {
           isDirty: false,
           source: {
             repository,
-            path: `nodes/images/${image.name}`,
+            path: imagePath,
             branch,
             commitHash: commitSha
           },
@@ -1198,50 +1242,73 @@ class WorkspaceService {
     repository: string,
     branch: string,
     gitCreds: any
-  ): Promise<Array<{ name: string; binaryData: Uint8Array }>> {
+  ): Promise<Array<{ name: string; binaryData: Uint8Array; sourcePath: string }>> {
+    const allImages: Array<{ name: string; binaryData: Uint8Array; sourcePath: string }> = [];
+    const basePath = gitCreds.basePath || '';
+    
+    // Images are stored in nodes/images/
+    const imagesPath = basePath ? `${basePath}/nodes/images` : 'nodes/images';
+    
+    console.log(`🖼️ WorkspaceService.fetchAllImagesFromGit: Checking ${imagesPath} (branch: ${branch})`);
+    
     try {
-      const basePath = gitCreds.basePath || '';
-      const imagesPath = basePath ? `${basePath}/nodes/images` : 'nodes/images';
-      
-      // List all files in nodes/images/
+      // List all files in directory
       const response = await gitService.getDirectoryContents(imagesPath, branch);
       
       if (!response.success || !response.data) {
-        console.log(`WorkspaceService: No images directory found at ${imagesPath}`);
-        return [];
-      }
-      
-      const files = response.data.filter((item: any) =>
-        item.type === 'file' && /\.(png|jpg|jpeg)$/i.test(item.name)
-      );
-      
-      console.log(`WorkspaceService: Found ${files.length} images to fetch`);
-      
-      // Fetch each image
-      const results = await Promise.all(
-        files.map(async (file: any) => {
-          try {
-            const fileResponse = await fetch(file.download_url);
-            if (!fileResponse.ok) {
-              throw new Error(`Failed to fetch ${file.name}`);
+        console.log(`🖼️ WorkspaceService: No images directory found at ${imagesPath}`);
+      } else {
+        const files = response.data.filter((item: any) =>
+          item.type === 'file' && /\.(png|jpg|jpeg|gif|webp)$/i.test(item.name)
+        );
+        
+        console.log(`🖼️ WorkspaceService: Found ${files.length} image files at ${imagesPath}`);
+        
+        // Fetch each image using blob API (works for private repos)
+        const results = await Promise.all(
+          files.map(async (file: any) => {
+            try {
+              // Use blob API - pass binary=true to get raw base64 content
+              const blobResult = await gitService.getBlobContent(file.sha, true);
+              if (!blobResult.success || !blobResult.data) {
+                throw new Error(`Failed to fetch blob for ${file.name}`);
+              }
+              
+              const blob = blobResult.data;
+              let bytes: Uint8Array;
+              
+              if (blob.encoding === 'base64') {
+                // Decode base64 properly using fetch (handles binary correctly)
+                const base64Content = blob.content.replace(/[\s\r\n]/g, '');
+                const fetchResponse = await fetch(`data:application/octet-stream;base64,${base64Content}`);
+                const arrayBuffer = await fetchResponse.arrayBuffer();
+                bytes = new Uint8Array(arrayBuffer);
+              } else {
+                const encoder = new TextEncoder();
+                bytes = encoder.encode(blob.content);
+              }
+              
+              console.log(`✅ WorkspaceService: Fetched image ${file.name} (${bytes.length} bytes)`);
+              return {
+                name: file.name,
+                binaryData: bytes,
+                sourcePath: imagesPath
+              };
+            } catch (error) {
+              console.error(`Failed to fetch image ${file.name}:`, error);
+              return null;
             }
-            const arrayBuffer = await fileResponse.arrayBuffer();
-            return {
-              name: file.name,
-              binaryData: new Uint8Array(arrayBuffer)
-            };
-          } catch (error) {
-            console.error(`Failed to fetch image ${file.name}:`, error);
-            return null;
-          }
-        })
-      );
-      
-      return results.filter((r): r is { name: string; binaryData: Uint8Array } => r !== null);
+          })
+        );
+        
+        allImages.push(...results.filter((r): r is { name: string; binaryData: Uint8Array; sourcePath: string } => r !== null));
+      }
     } catch (error) {
-      console.error('Failed to fetch images from Git:', error);
-      return [];
+      console.log(`WorkspaceService: Error fetching images:`, error);
     }
+    
+    console.log(`🖼️ WorkspaceService: Total images found: ${allImages.length}`);
+    return allImages;
   }
   
   /**
@@ -1281,6 +1348,159 @@ class WorkspaceService {
     return imageFiles
       .map(f => f.data?.image_id)
       .filter((id): id is string => typeof id === 'string');
+  }
+
+  /**
+   * Pull repository state at a specific commit (for rollback)
+   * 
+   * Unlike pullLatest, this:
+   * - Forces all files to the exact state at the commit (no merge)
+   * - Marks all changed files as dirty (user must commit to persist)
+   * - Fetches ALL files in parallel for efficiency
+   * 
+   * @param repository - Repository name
+   * @param branch - Branch name (for workspace identification)
+   * @param commitSha - The commit SHA to pull from
+   * @param gitCreds - Git credentials
+   */
+  async pullAtCommit(
+    repository: string,
+    branch: string,
+    commitSha: string,
+    gitCreds: any
+  ): Promise<{ success: boolean; filesUpdated: number; filesCreated: number }> {
+    const workspaceId = `${repository}-${branch}`;
+    console.log(`🔄 WorkspaceService: Pulling state at commit ${commitSha.substring(0, 8)} for ${workspaceId}...`);
+
+    // Configure git service
+    const fullCredentials = {
+      version: '1.0.0',
+      defaultGitRepo: gitCreds.name,
+      git: [gitCreds]
+    };
+    gitService.setCredentials(fullCredentials);
+
+    const startTime = Date.now();
+
+    // STEP 1: Get repository tree at the specified commit (ONE API call)
+    console.log(`📦 WorkspaceService: Fetching tree at commit ${commitSha.substring(0, 8)}...`);
+    const treeResult = await gitService.getRepositoryTree(commitSha, true);
+    if (!treeResult.success || !treeResult.data) {
+      throw new Error('Failed to fetch repository tree at commit');
+    }
+
+    const { tree } = treeResult.data;
+    console.log(`📦 WorkspaceService: Got ${tree.length} items from tree`);
+
+    // STEP 2: Filter relevant files
+    const basePath = gitCreds.basePath || '';
+    const directories = [
+      { path: gitCreds.graphsPath || 'graphs', type: 'graph' as ObjectType, extension: 'json' },
+      { path: gitCreds.paramsPath || 'parameters', type: 'parameter' as ObjectType, extension: 'yaml' },
+      { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
+      { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
+      { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' },
+      { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' }
+    ];
+
+    const filesToFetch: Array<{ treeItem: any; dirConfig: any }> = [];
+
+    for (const dir of directories) {
+      const fullPath = basePath ? `${basePath}/${dir.path}` : dir.path;
+      const matchingFiles = tree.filter((item: any) => {
+        if (item.type !== 'blob') return false;
+        if (!item.path.startsWith(fullPath + '/')) return false;
+        if (!item.path.endsWith(`.${dir.extension}`)) return false;
+        const relativePath = item.path.substring((fullPath + '/').length);
+        return !relativePath.includes('/');
+      });
+      
+      for (const file of matchingFiles) {
+        filesToFetch.push({ treeItem: file, dirConfig: dir });
+      }
+    }
+
+    // Add index files
+    const indexFiles = [
+      { fileName: 'parameters-index.yaml', type: 'parameter' as ObjectType },
+      { fileName: 'contexts-index.yaml', type: 'context' as ObjectType },
+      { fileName: 'cases-index.yaml', type: 'case' as ObjectType },
+      { fileName: 'nodes-index.yaml', type: 'node' as ObjectType },
+      { fileName: 'events-index.yaml', type: 'event' as ObjectType }
+    ];
+
+    for (const indexFile of indexFiles) {
+      const fullPath = basePath ? `${basePath}/${indexFile.fileName}` : indexFile.fileName;
+      const indexTreeItem = tree.find((item: any) => item.path === fullPath && item.type === 'blob');
+      if (indexTreeItem) {
+        filesToFetch.push({ 
+          treeItem: indexTreeItem, 
+          dirConfig: { type: indexFile.type, extension: 'yaml', isIndex: true } 
+        });
+      }
+    }
+
+    console.log(`📦 WorkspaceService: Fetching ${filesToFetch.length} files in parallel...`);
+
+    // STEP 3: Fetch all blobs in parallel
+    let filesUpdated = 0;
+    let filesCreated = 0;
+
+    const fetchPromises = filesToFetch.map(async ({ treeItem, dirConfig }) => {
+      try {
+        const blobResult = await gitService.getBlobContent(treeItem.sha);
+        if (!blobResult.success || !blobResult.data) {
+          console.warn(`⚠️ WorkspaceService: Failed to fetch blob for ${treeItem.path}`);
+          return;
+        }
+
+        const contentStr = blobResult.data.content;
+        let data: any;
+        if (dirConfig.type === 'graph') {
+          data = JSON.parse(contentStr);
+        } else {
+          data = YAML.parse(contentStr);
+        }
+
+        const fileName = treeItem.path.split('/').pop() || '';
+        const fileNameWithoutExt = fileName.replace(/\.(yaml|yml|json)$/, '');
+        const fileId = dirConfig.isIndex 
+          ? `${dirConfig.type}-index`
+          : `${dirConfig.type}-${fileNameWithoutExt}`;
+
+        // Update or create file in registry
+        const existingFile = fileRegistry.getFile(fileId);
+        if (existingFile) {
+          // Update existing file (marks dirty automatically)
+          await fileRegistry.updateFile(fileId, data);
+          filesUpdated++;
+        } else {
+          // Create new file
+          await fileRegistry.getOrCreateFile(
+            fileId,
+            dirConfig.type,
+            { repository, path: treeItem.path, branch, commitHash: treeItem.sha },
+            data
+          );
+          // Mark it dirty since it's a rollback (content differs from "original" which was HEAD)
+          const file = fileRegistry.getFile(fileId);
+          if (file) {
+            file.isDirty = true;
+            await db.files.put(file);
+          }
+          filesCreated++;
+        }
+      } catch (error) {
+        console.warn(`⚠️ WorkspaceService: Error processing ${treeItem.path}:`, error);
+      }
+    });
+
+    await Promise.all(fetchPromises);
+
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ WorkspaceService: Rollback complete in ${elapsed}ms - ${filesUpdated} updated, ${filesCreated} created`);
+
+    return { success: true, filesUpdated, filesCreated };
   }
 }
 

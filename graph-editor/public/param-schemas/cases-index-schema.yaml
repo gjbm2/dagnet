@@ -31,7 +31,7 @@ properties:
       properties:
         id:
           type: string
-          pattern: '^case-[a-z0-9-]+$'
+          pattern: '^case-[a-zA-Z0-9_-]+$'
           description: "Unique case identifier"
         
         file_path:

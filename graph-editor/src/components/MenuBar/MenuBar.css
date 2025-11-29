@@ -11,6 +11,38 @@
   user-select: none;
 }
 
+/* Dagnet Brand */
+.dagnet-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 14px;
+  color: #333;
+  padding: 4px 12px;
+  margin-right: 4px;
+  background: linear-gradient(135deg, #f0f0f0 0%, #e8e8e8 100%);
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dagnet-logo {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.dagnet-brand:hover {
+  background: linear-gradient(135deg, #e8e8e8 0%, #e0e0e0 100%);
+  border-color: #ccc;
+}
+
+.dagnet-brand:active {
+  background: linear-gradient(135deg, #e0e0e0 0%, #d8d8d8 100%);
+}
+
 /* Menubar Root */
 .menubar-root {
   display: flex;
@@ -140,6 +172,21 @@
   .menu-bar {
     background-color: #2d2d2d;
     border-bottom-color: #404040;
+  }
+
+  .dagnet-brand {
+    color: #e0e0e0;
+    background: linear-gradient(135deg, #3d3d3d 0%, #333 100%);
+    border-color: #555;
+  }
+
+  .dagnet-brand:hover {
+    background: linear-gradient(135deg, #454545 0%, #3d3d3d 100%);
+    border-color: #666;
+  }
+
+  .dagnet-brand:active {
+    background: linear-gradient(135deg, #3d3d3d 0%, #353535 100%);
   }
 
   .menubar-trigger {

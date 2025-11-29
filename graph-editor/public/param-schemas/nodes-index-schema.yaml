@@ -33,7 +33,7 @@ properties:
       properties:
         id:
           type: string
-          pattern: ^[a-z0-9-]+$
+          pattern: ^[a-zA-Z0-9_-]+$
           description: Unique node identifier
           
         file_path:

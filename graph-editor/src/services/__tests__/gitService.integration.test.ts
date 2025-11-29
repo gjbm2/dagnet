@@ -24,6 +24,10 @@ describe('GitService Integration Tests', () => {
         getCommit: vi.fn(),
         getTree: vi.fn(),
         getBlob: vi.fn(),
+        createBlob: vi.fn(),
+        createTree: vi.fn(),
+        createCommit: vi.fn(),
+        updateRef: vi.fn(),
       },
       repos: {
         getContent: vi.fn(),
@@ -110,10 +114,110 @@ describe('GitService Integration Tests', () => {
     });
   });
 
-  describe('File Commit Operations (Push)', () => {
-    it('should commit a single file to GitHub', async () => {
+  describe('File Commit Operations (Push) - Atomic Commits via Git Data API', () => {
+    beforeEach(() => {
+      // Setup default Octokit mocks for atomic commit flow
+      octokitMock.git.getRef.mockResolvedValue({
+        data: { object: { sha: 'base-commit-sha' } }
+      });
+      octokitMock.git.getCommit.mockResolvedValue({
+        data: { tree: { sha: 'base-tree-sha' } }
+      });
+      octokitMock.git.createBlob.mockResolvedValue({
+        data: { sha: 'new-blob-sha' }
+      });
+      octokitMock.git.createTree.mockResolvedValue({
+        data: { sha: 'new-tree-sha' }
+      });
+      octokitMock.git.createCommit.mockResolvedValue({
+        data: { sha: 'new-commit-sha' }
+      });
+      octokitMock.git.updateRef.mockResolvedValue({
+        data: { object: { sha: 'new-commit-sha' } }
+      });
+    });
+
+    it('should commit multiple files in ONE atomic commit', async () => {
+      const files = [
+        { path: 'graphs/graph1.json', content: '{"nodes":[]}' },
+        { path: 'parameters-index.yaml', content: 'version: 1.0.0' },
+      ];
+
+      const result = await gitService.commitAndPushFiles(files, 'Test commit', 'main');
+
+      expect(result.success).toBe(true);
+      expect(result.data?.filesCommitted).toBe(2);
+      
+      // Verify atomic flow: getRef -> getCommit -> createBlob(s) -> createTree -> createCommit -> updateRef
+      expect(octokitMock.git.getRef).toHaveBeenCalledTimes(1);
+      expect(octokitMock.git.getCommit).toHaveBeenCalledTimes(1);
+      expect(octokitMock.git.createBlob).toHaveBeenCalledTimes(2); // One per file
+      expect(octokitMock.git.createTree).toHaveBeenCalledTimes(1); // Single tree with all changes
+      expect(octokitMock.git.createCommit).toHaveBeenCalledTimes(1); // Single commit
+      expect(octokitMock.git.updateRef).toHaveBeenCalledTimes(1); // Single ref update
+    });
+
+    it('should handle file deletions in atomic commit', async () => {
+      const files = [
+        { path: 'parameters/old-param.yaml', delete: true },
+        { path: 'parameters/new-param.yaml', content: 'id: new-param' },
+      ];
+
+      const result = await gitService.commitAndPushFiles(files, 'Rename parameter', 'main');
+
+      expect(result.success).toBe(true);
+      
+      // Verify tree was created with both delete and add
+      expect(octokitMock.git.createTree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          base_tree: 'base-tree-sha',
+          tree: expect.arrayContaining([
+            expect.objectContaining({ path: 'parameters/old-param.yaml', sha: null }), // Delete
+            expect.objectContaining({ path: 'parameters/new-param.yaml', sha: 'new-blob-sha' }), // Add
+          ])
+        })
+      );
+    });
+
+    it('should handle binary files (images) in atomic commit', async () => {
+      const binaryData = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]); // PNG header
+      const files = [
+        {
+          path: 'nodes/images/test.png',
+          binaryContent: binaryData,
+          encoding: 'base64' as const,
+        },
+      ];
+
+      const result = await gitService.commitAndPushFiles(files, 'Add image', 'main');
+
+      expect(result.success).toBe(true);
+      
+      // Verify blob was created with base64 encoding
+      expect(octokitMock.git.createBlob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          encoding: 'base64',
+        })
+      );
+    });
+
+    it('should fail gracefully if API call fails', async () => {
+      octokitMock.git.createTree.mockRejectedValue(new Error('Tree creation failed'));
+
+      const files = [
+        { path: 'graphs/test.json', content: '{}' },
+      ];
+
+      const result = await gitService.commitAndPushFiles(files, 'Test', 'main');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Tree creation failed');
+    });
+  });
+
+  describe('Single File Operations (Contents API)', () => {
+    it('should commit a single file to GitHub via Contents API', async () => {
       fetchMock
-        // Commit file (with SHA provided, no need to fetch)
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
@@ -134,66 +238,6 @@ describe('GitService Integration Tests', () => {
 
       expect(result.success).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(1);
-    });
-
-    it('should commit multiple files sequentially', async () => {
-      // Mock fetches for 2 files (2 GETs + 2 PUTs)
-      fetchMock
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ sha: 'sha1' }),
-          json: async () => ({ sha: 'sha1' }) 
-        })
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ content: { sha: 'new-sha1' } }),
-          json: async () => ({ content: { sha: 'new-sha1' } }) 
-        })
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ sha: 'sha2' }),
-          json: async () => ({ sha: 'sha2' }) 
-        })
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ content: { sha: 'new-sha2' } }),
-          json: async () => ({ content: { sha: 'new-sha2' } }) 
-        });
-
-      const files = [
-        { path: 'graphs/graph1.json', content: '{"nodes":[]}' },
-        { path: 'parameters-index.yaml', content: 'version: 1.0.0' },
-      ];
-
-      const result = await gitService.commitAndPushFiles(files, 'Test commit', 'main');
-
-      expect(result.success).toBe(true);
-      expect(fetchMock).toHaveBeenCalledTimes(4);
-    });
-
-    it('should handle new file creation (no existing SHA)', async () => {
-      fetchMock
-        // Create new file (no SHA means new file, no 404 check needed)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 201,
-          text: async () => JSON.stringify({ content: { sha: 'new-file-sha' } }),
-          json: async () => ({ content: { sha: 'new-file-sha' } })
-        });
-
-      const result = await gitService.createOrUpdateFile(
-        'parameters/new-param.yaml',
-        'id: new-param\np: {mean: 0.5}',
-        'Add new parameter',
-        'main'
-        // No SHA = new file
-      );
-
-      expect(result.success).toBe(true);
     });
 
     it('should handle 409 conflict errors gracefully', async () => {
@@ -218,95 +262,59 @@ describe('GitService Integration Tests', () => {
   });
 
   describe('Index File Path Handling', () => {
-    it('should commit index files to root with plural names', async () => {
-      fetchMock
-        .mockResolvedValueOnce({ 
-          ok: false, 
-          status: 404,
-          text: async () => JSON.stringify({ message: 'Not Found' }),
-        }) // File doesn't exist
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ content: { sha: 'new' } }),
-          json: async () => ({ content: { sha: 'new' } }) 
-        });
+    beforeEach(() => {
+      // Setup Octokit mocks
+      octokitMock.git.getRef.mockResolvedValue({
+        data: { object: { sha: 'base-commit' } }
+      });
+      octokitMock.git.getCommit.mockResolvedValue({
+        data: { tree: { sha: 'base-tree' } }
+      });
+      octokitMock.git.createBlob.mockResolvedValue({
+        data: { sha: 'blob-sha' }
+      });
+      octokitMock.git.createTree.mockResolvedValue({
+        data: { sha: 'new-tree' }
+      });
+      octokitMock.git.createCommit.mockResolvedValue({
+        data: { sha: 'new-commit' }
+      });
+      octokitMock.git.updateRef.mockResolvedValue({
+        data: { object: { sha: 'new-commit' } }
+      });
+    });
 
+    it('should commit index files to root with plural names', async () => {
       const files = [
         { path: 'parameters-index.yaml', content: 'version: 1.0.0\nparameters: []' },
       ];
 
       await gitService.commitAndPushFiles(files, 'Create index', 'main');
 
-      // Verify the PUT request has correct path
-      const putCall = fetchMock.mock.calls.find((call: any) => 
-        call[1]?.method === 'PUT'
+      // Verify tree entry has correct path
+      expect(octokitMock.git.createTree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tree: expect.arrayContaining([
+            expect.objectContaining({ path: 'parameters-index.yaml' })
+          ])
+        })
       );
-      expect(putCall[0]).toContain('parameters-index.yaml');
-      expect(putCall[0]).not.toContain('parameter-index.yaml'); // Not singular
-      expect(putCall[0]).not.toContain('parameters/parameters-index'); // Not nested
     });
 
     it('should handle graph files in graphs directory', async () => {
-      fetchMock
-        .mockResolvedValueOnce({ 
-          ok: false, 
-          status: 404,
-          text: async () => JSON.stringify({ message: 'Not Found' }),
-        })
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ content: { sha: 'new' } }),
-          json: async () => ({ content: { sha: 'new' } }) 
-        });
-
       const files = [
         { path: 'graphs/my-graph.json', content: '{"nodes":[],"edges":[]}' },
       ];
 
       await gitService.commitAndPushFiles(files, 'Add graph', 'main');
 
-      const putCall = fetchMock.mock.calls.find((call: any) => call[1]?.method === 'PUT');
-      expect(putCall[0]).toContain('graphs/my-graph.json');
-    });
-  });
-
-  describe('Binary Content Handling', () => {
-    it('should handle binary files (images)', async () => {
-      fetchMock
-        .mockResolvedValueOnce({ 
-          ok: false, 
-          status: 404,
-          text: async () => JSON.stringify({ message: 'Not Found' }),
+      expect(octokitMock.git.createTree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tree: expect.arrayContaining([
+            expect.objectContaining({ path: 'graphs/my-graph.json' })
+          ])
         })
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ content: { sha: 'img-sha' } }),
-          json: async () => ({ content: { sha: 'img-sha' } }) 
-        });
-
-      const binaryData = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]); // PNG header
-      const files = [
-        {
-          path: 'nodes/images/test.png',
-          binaryContent: binaryData,
-          encoding: 'base64' as const,
-        },
-      ];
-
-      const result = await gitService.commitAndPushFiles(files, 'Add image', 'main');
-
-      expect(result.success).toBe(true);
-      
-      // Verify base64 encoding was used
-      const putCall = fetchMock.mock.calls.find((call: any) => call[1]?.method === 'PUT');
-      if (putCall) {
-        const body = JSON.parse(putCall[1].body);
-        expect(body.content).toBeTruthy();
-        // Note: encoding field may not be in body for binary - implementation detail
-      }
+      );
     });
   });
 
@@ -336,37 +344,73 @@ describe('GitService Integration Tests', () => {
     });
   });
 
-  describe('SHA Tracking', () => {
-    it('should always fetch current SHA before committing', async () => {
-      fetchMock
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ sha: 'current-sha' }),
-          json: async () => ({ sha: 'current-sha' }) 
-        })
-        .mockResolvedValueOnce({ 
-          ok: true, 
-          status: 200,
-          text: async () => JSON.stringify({ content: { sha: 'new-sha' } }),
-          json: async () => ({ content: { sha: 'new-sha' } }) 
-        });
+  describe('Atomic Commit Flow', () => {
+    beforeEach(() => {
+      octokitMock.git.getRef.mockResolvedValue({
+        data: { object: { sha: 'base-commit' } }
+      });
+      octokitMock.git.getCommit.mockResolvedValue({
+        data: { tree: { sha: 'base-tree' } }
+      });
+      octokitMock.git.createBlob.mockResolvedValue({
+        data: { sha: 'blob-sha' }
+      });
+      octokitMock.git.createTree.mockResolvedValue({
+        data: { sha: 'new-tree' }
+      });
+      octokitMock.git.createCommit.mockResolvedValue({
+        data: { sha: 'new-commit' }
+      });
+      octokitMock.git.updateRef.mockResolvedValue({
+        data: { object: { sha: 'new-commit' } }
+      });
+    });
 
+    it('should use base_tree for incremental changes', async () => {
       const files = [
-        { 
-          path: 'graphs/test.json',
-          content: '{}',
-          sha: 'stale-sha', // Stale SHA provided
-        },
+        { path: 'graphs/test.json', content: '{}' },
       ];
 
       await gitService.commitAndPushFiles(files, 'Update', 'main');
 
-      // Verify it fetched current SHA
-      const getCall = fetchMock.mock.calls.find((call: any) => 
-        call[0].includes('?ref=') && (!call[1] || call[1].method === 'GET')
+      // Verify createTree was called with base_tree
+      expect(octokitMock.git.createTree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          base_tree: 'base-tree'
+        })
       );
-      expect(getCall).toBeTruthy();
+    });
+
+    it('should create proper parent reference for new commit', async () => {
+      const files = [
+        { path: 'graphs/test.json', content: '{}' },
+      ];
+
+      await gitService.commitAndPushFiles(files, 'Update', 'main');
+
+      // Verify createCommit was called with parent reference
+      expect(octokitMock.git.createCommit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parents: ['base-commit'],
+          tree: 'new-tree'
+        })
+      );
+    });
+
+    it('should update branch ref to new commit', async () => {
+      const files = [
+        { path: 'graphs/test.json', content: '{}' },
+      ];
+
+      await gitService.commitAndPushFiles(files, 'Update', 'main');
+
+      // Verify updateRef was called
+      expect(octokitMock.git.updateRef).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: 'heads/main',
+          sha: 'new-commit'
+        })
+      );
     });
   });
 

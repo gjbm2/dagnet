@@ -13,10 +13,10 @@ additionalProperties: false
 properties:
   id:
     type: string
-    pattern: '^[a-z_][a-z0-9_]*$'
+    pattern: '^[a-zA-Z_][a-zA-Z0-9_-]*$'
     minLength: 2
     maxLength: 32
-    description: "Context identifier (snake_case) - lowercase, alphanumeric, underscores"
+    description: "Context identifier (letters, numbers, underscores, hyphens)"
     examples: ["channel", "device", "utm_source", "geo_country"]
   
   name:
@@ -62,7 +62,7 @@ properties:
       properties:
         id:
           type: string
-          pattern: '^[a-z0-9_-]+$'
+          pattern: '^[a-zA-Z0-9_-]+$'
           minLength: 1
           maxLength: 32
           description: "Value identifier (kebab-case or snake_case)"
@@ -89,7 +89,7 @@ properties:
           type: array
           items:
             type: string
-            pattern: '^[a-z0-9_-]+$'
+            pattern: '^[a-zA-Z0-9_-]+$'
           uniqueItems: true
           description: "Alternative identifiers for this value"
         

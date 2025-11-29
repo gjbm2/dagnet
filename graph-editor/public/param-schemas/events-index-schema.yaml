@@ -17,7 +17,7 @@ properties:
       properties:
         id:
           type: string
-          pattern: '^[a-z0-9_]+$'
+          pattern: '^[a-zA-Z0-9_]+$'
           description: "Event ID (must match event file id)"
         
         name:

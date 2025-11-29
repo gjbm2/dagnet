@@ -105,16 +105,6 @@ export function ViewMenu() {
     window.dispatchEvent(new CustomEvent('dagnet:sankeyLayout'));
   };
 
-  const handleTogglePropertiesPanel = () => {
-    // TODO: Implement sidebar panel toggles
-    console.log('Toggle Properties Panel');
-  };
-
-  const handleToggleWhatIfPanel = () => {
-    // TODO: Implement sidebar panel toggles
-    console.log('Toggle What-If Analysis');
-  };
-
   const handleOpenSessionLogs = async () => {
     await sessionLogService.openLogTab();
   };
@@ -301,22 +291,6 @@ export function ViewMenu() {
                   Sankey Layout
                 </Menubar.Item>
               )}
-
-              <Menubar.Separator className="menubar-separator" />
-
-              <Menubar.Item 
-                className="menubar-item" 
-                onSelect={handleTogglePropertiesPanel}
-              >
-                Properties Panel
-              </Menubar.Item>
-
-              <Menubar.Item 
-                className="menubar-item" 
-                onSelect={handleToggleWhatIfPanel}
-              >
-                What-If Analysis
-              </Menubar.Item>
 
               <Menubar.Separator className="menubar-separator" />
 

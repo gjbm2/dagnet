@@ -9,7 +9,9 @@ import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import type { BatchOperationType } from '../modals/BatchOperationsModal';
 import { getAllDataSections, type DataOperationSection } from '../DataOperationsSections';
-import { Database, DatabaseZap, Folders, TrendingUpDown } from 'lucide-react';
+import { Database, DatabaseZap, Folders, TrendingUpDown, Trash2 } from 'lucide-react';
+import { RemoveOverridesMenubarItem } from '../RemoveOverridesMenuItem';
+import { useClearDataFile } from '../../hooks/useClearDataFile';
 
 /**
  * Data Menu
@@ -309,8 +311,89 @@ export function DataMenu() {
     dataOperationsService.clearCache(section.objectType as 'parameter' | 'case' | 'node', section.objectId);
   };
   
+  // Clear data file hook
+  const { clearDataFile, clearDataFiles, canClearData } = useClearDataFile();
+  
+  const handleSectionClearDataFile = async (section: DataOperationSection) => {
+    if (section.objectType !== 'parameter' && section.objectType !== 'case') {
+      // Only parameters and cases have data to clear
+      return;
+    }
+    const fileId = section.objectType === 'parameter' 
+      ? `parameter-${section.objectId}` 
+      : `case-${section.objectId}`;
+    await clearDataFile(fileId);
+  };
+  
   // Get all data operation sections using single source of truth
+  // For single selection context menus:
   const dataOperationSections = getAllDataSections(selectedNodeId, selectedEdgeId, graph);
+  
+  // For batch operations: gather sections from ALL edges in the graph (not just selected)
+  // This enables "Clear all data files" to work on the entire graph
+  const allGraphSections = React.useMemo(() => {
+    if (!graph) return [];
+    const sections: DataOperationSection[] = [];
+    const seenIds = new Set<string>(); // Dedupe by file ID
+    
+    // Get sections from all edges
+    for (const edge of (graph.edges || [])) {
+      const edgeId = edge.uuid || edge.id;
+      if (!edgeId) continue;
+      const edgeSections = getAllDataSections(null, edgeId, graph);
+      for (const section of edgeSections) {
+        const fileId = section.objectType === 'parameter' 
+          ? `parameter-${section.objectId}` 
+          : section.objectType === 'case' 
+            ? `case-${section.objectId}`
+            : null;
+        if (fileId && !seenIds.has(fileId)) {
+          seenIds.add(fileId);
+          sections.push(section);
+        }
+      }
+    }
+    
+    // Get sections from all nodes (for case data)
+    for (const node of (graph.nodes || [])) {
+      const nodeId = node.uuid || node.id;
+      if (!nodeId) continue;
+      const nodeSections = getAllDataSections(nodeId, null, graph);
+      for (const section of nodeSections) {
+        const fileId = section.objectType === 'parameter' 
+          ? `parameter-${section.objectId}` 
+          : section.objectType === 'case' 
+            ? `case-${section.objectId}`
+            : null;
+        if (fileId && !seenIds.has(fileId)) {
+          seenIds.add(fileId);
+          sections.push(section);
+        }
+      }
+    }
+    
+    return sections;
+  }, [graph]);
+  
+  // Check if ANY section in the entire graph has data that can be cleared (for batch operation)
+  const sectionsWithClearableData = allGraphSections.filter(section => {
+    if (section.objectType !== 'parameter' && section.objectType !== 'case') return false;
+    const fileId = section.objectType === 'parameter' 
+      ? `parameter-${section.objectId}` 
+      : `case-${section.objectId}`;
+    return section.operations.clearDataFile && canClearData(fileId);
+  });
+  const canClearAnyData = sectionsWithClearableData.length > 0;
+  
+  // Handler for batch clear all data files
+  const handleClearAllDataFiles = async () => {
+    const fileIds = sectionsWithClearableData.map(section => 
+      section.objectType === 'parameter' 
+        ? `parameter-${section.objectId}` 
+        : `case-${section.objectId}`
+    );
+    await clearDataFiles(fileIds);
+  };
   
   // Determine if context-dependent items should be enabled
   const hasSelection = selectedEdgeId !== null || selectedNodeId !== null;
@@ -373,6 +456,17 @@ export function DataMenu() {
             onSelect={handlePutAllToFiles}
           >
             Put all for current slice to Files...
+          </Menubar.Item>
+          
+          <Menubar.Separator className="menubar-separator" />
+          
+          {/* Clear all data files - batch operation */}
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={handleClearAllDataFiles}
+            disabled={!canClearAnyData}
+          >
+            Clear all data files...
           </Menubar.Item>
           
           <Menubar.Separator className="menubar-separator" />
@@ -491,6 +585,21 @@ export function DataMenu() {
                       </Menubar.Item>
                     </>
                   )}
+                  {section.operations.clearDataFile && (
+                    <Menubar.Item 
+                      className="menubar-item" 
+                      onSelect={() => handleSectionClearDataFile(section)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                    >
+                      <span>Clear data file</span>
+                      <Trash2 size={12} style={{ color: '#666' }} />
+                    </Menubar.Item>
+                  )}
                 </Menubar.SubContent>
               </Menubar.Sub>
             ))
@@ -502,6 +611,13 @@ export function DataMenu() {
               Select edge or node...
           </Menubar.Item>
           )}
+          
+          <RemoveOverridesMenubarItem 
+            graph={graph} 
+            onUpdateGraph={(g, historyLabel) => handleSetGraph(g)} 
+            nodeId={selectedNodeId} 
+            edgeId={selectedEdgeId} 
+          />
           
           <Menubar.Separator className="menubar-separator" />
           
