@@ -38,7 +38,6 @@ export function ScenarioLegend({
   onDelete,
   onNewScenario
 }: ScenarioLegendProps) {
-  const [isHoveringNew, setIsHoveringNew] = useState(false);
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
   
   // Count visible scenarios (user scenarios + current/base if visible)
@@ -215,20 +214,26 @@ export function ScenarioLegend({
         </div>
       )}
       
-      {/* New Scenario button - always visible, expands on hover */}
+      {/* New Scenario button - wrapper reserves expanded width, chip visually expands on hover */}
       {onNewScenario && (
-        <button
-          className="scenario-legend-chip scenario-legend-new"
-          onClick={onNewScenario}
-          onMouseEnter={() => setIsHoveringNew(true)}
-          onMouseLeave={() => setIsHoveringNew(false)}
-          title={scenarios.length >= 15 ? 'Maximum scenarios reached' : 'New scenario'}
-          disabled={scenarios.length >= 15}
-          style={{ opacity: scenarios.length >= 15 ? 0.5 : 1 }}
-        >
-          <Plus size={16} />
-          {isHoveringNew && <span className="scenario-legend-new-text">New scenario</span>}
-        </button>
+        <span className="scenario-legend-new-wrapper">
+          {/* Invisible spacer to reserve full expanded width */}
+          <span className="scenario-legend-new-spacer" aria-hidden="true">
+            <Plus size={16} />
+            <span>New scenario</span>
+          </span>
+          {/* Actual visible button */}
+          <button
+            className="scenario-legend-chip scenario-legend-new"
+            onClick={onNewScenario}
+            title={scenarios.length >= 15 ? 'Maximum scenarios reached' : 'New scenario'}
+            disabled={scenarios.length >= 15}
+            style={{ opacity: scenarios.length >= 15 ? 0.5 : 1 }}
+          >
+            <Plus size={16} />
+            <span className="scenario-legend-new-text">New scenario</span>
+          </button>
+        </span>
       )}
     </div>
   );

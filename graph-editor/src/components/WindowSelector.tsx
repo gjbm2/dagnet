@@ -13,7 +13,7 @@ import { dataOperationsService } from '../services/dataOperationsService';
 import { calculateIncrementalFetch } from '../services/windowAggregationService';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
-import { FileText, ArrowDownNarrowWide, ArrowUpNarrowWide } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { parseConstraints } from '../lib/queryDSL';
 import { formatDateUK, parseUKDate } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
@@ -1029,6 +1029,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   
   return (
     <div ref={windowSelectorRef} className={`window-selector ${!needsFetch ? 'window-selector-compact' : ''}`}>
+      {/* Main area (left side) */}
+      <div className="window-selector-main">
       <div className="window-selector-content">
         <div className="window-selector-presets">
           <button
@@ -1071,6 +1073,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           maxDate={new Date().toISOString().split('T')[0]}
         />
         
+        {/* Context area: chips + add button - wrapped together to prevent line break between them */}
+        <div className="window-selector-context-group">
         {/* Context chips area using QueryExpressionEditor - CONTEXTS ONLY (window shown in unrolled state) */}
         {(() => {
           const parsed = parseConstraints(graph?.currentQueryDSL || '');
@@ -1091,7 +1095,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           
           return (
             <div className="window-selector-context-chips" style={{ 
-              marginLeft: '12px', 
               minWidth: '120px',
               width: 'auto',
               maxWidth: 'min(450px, 40vw)'
@@ -1147,7 +1150,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           >
             <span>+</span>
             <FileText size={14} />
-            {!graph?.currentQueryDSL && <span>Context</span>}
+            {(() => {
+              // Show "Context" label when no contexts are selected
+              const parsed = parseConstraints(graph?.currentQueryDSL || '');
+              const hasContexts = parsed.context.length > 0 || parsed.contextAny.length > 0;
+              return !hasContexts ? <span>Context</span> : null;
+            })()}
           </button>
           
           {showContextDropdown && availableKeySections.length > 0 && (
@@ -1242,35 +1250,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
             </div>
           )}
         </div>
-        
-        {/* Unroll button */}
-        <button
-          className="window-selector-preset"
-          onClick={() => setIsUnrolled(!isUnrolled)}
-          title={isUnrolled ? "Hide full query" : "Show full query DSL"}
-          style={{ marginLeft: '4px', display: 'flex', alignItems: 'center' }}
-        >
-          {isUnrolled ? <ArrowUpNarrowWide size={14} /> : <ArrowDownNarrowWide size={14} />}
-        </button>
-        
-        {/* Fetch button - positioned at far right */}
-        {showButton && (
-          <button
-            onClick={handleFetchData}
-            disabled={isCheckingCoverage || isFetching || batchItemsToFetch.length === 0}
-            className={`window-selector-button ${showShimmer ? 'shimmer' : ''}`}
-            style={{ marginLeft: '8px' }}
-            title={
-              isCheckingCoverage
-                ? "Checking data coverage..."
-                : isFetching
-                  ? "Fetching data..."
-                  : `Fetch ${batchItemsToFetch.length} item${batchItemsToFetch.length > 1 ? 's' : ''} from external sources`
-            }
-          >
-            {isCheckingCoverage ? 'Checking...' : isFetching ? 'Fetching...' : 'Fetch data'}
-          </button>
-        )}
+        </div>{/* End context group */}
       </div>
       
       {/* Unrolled state - shows full DSL and pinned query access */}
@@ -1352,6 +1332,34 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           </button>
         </div>
       )}
+      </div>{/* End window-selector-main */}
+      
+      {/* Fetch button column (right side) - spans full height */}
+      {showButton && (
+        <div className="window-selector-fetch-column">
+          <button
+            onClick={handleFetchData}
+            disabled={isCheckingCoverage || isFetching || batchItemsToFetch.length === 0}
+            className={`window-selector-button ${showShimmer ? 'shimmer' : ''}`}
+            title={
+              isCheckingCoverage
+                ? "Checking data coverage..."
+                : isFetching
+                  ? "Fetching data..."
+                  : `Fetch ${batchItemsToFetch.length} item${batchItemsToFetch.length > 1 ? 's' : ''} from external sources`
+            }
+          >
+            {isCheckingCoverage ? 'Checking...' : isFetching ? 'Fetching...' : 'Fetch data'}
+          </button>
+        </div>
+      )}
+      
+      {/* Unroll toggle - triangle corner */}
+      <button
+        className={`window-selector-unroll-toggle ${isUnrolled ? 'expanded' : ''}`}
+        onClick={() => setIsUnrolled(!isUnrolled)}
+        title={isUnrolled ? "Hide full query" : "Show full query DSL"}
+      />
       
       {/* Pinned Query Modal */}
       <PinnedQueryModal
