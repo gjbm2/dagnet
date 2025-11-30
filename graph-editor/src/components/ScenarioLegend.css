@@ -11,11 +11,11 @@
   display: flex;
   flex-wrap: wrap; /* Allow chips to wrap to new row */
   gap: 8px;
-  /* max-width set dynamically based on visible canvas width */
+  /* Use parent width (canvas panel) minus margins - no JavaScript calculation needed */
+  max-width: calc(100% - 60px); /* 20px left + 40px right margin */
   z-index: 56; /* Above WindowSelector (z-index: 55), below sidebar (z-index: 100+) */
   pointer-events: auto;
   width: auto; /* Allow natural width */
-  max-width: 100%; /* Fallback - will be overridden by inline style */
   transition: top 0.2s ease-out; /* Smooth movement when WindowSelector resizes */
 }
 
