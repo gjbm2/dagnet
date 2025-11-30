@@ -2,16 +2,114 @@
   position: absolute;
   top: 16px;
   left: 16px;
+  right: 40px; /* Constrain to canvas width with margin */
+  max-width: fit-content; /* Don't stretch beyond content */
   z-index: 55; /* Above scenario legend chips (z-index: 50) but below sidebar (z-index: 100) */
   pointer-events: auto;
   background: white;
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   border: 1px solid #e0e0e0;
+  display: flex;
+  flex-direction: row;
+}
+
+/* Main area (left side) */
+.window-selector-main {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+/* Fetch button column (right side) - spans full height */
+.window-selector-fetch-column {
+  display: flex;
+  align-items: stretch;
+  border-left: 1px solid #e0e0e0;
+  border-radius: 0 6px 6px 0;
+  overflow: hidden;
+}
+
+.window-selector-fetch-column .window-selector-button {
+  margin: 0;
+  border: none;
+  border-radius: 0 6px 6px 0;
+  padding: 8px 14px;
+  height: auto;
+  align-self: stretch;
+  /* Subtle off-white styling */
+  background: linear-gradient(to bottom, #fafafa, #f0f0f0);
+  color: #1976d2;
+  font-weight: 600;
+}
+
+.window-selector-fetch-column .window-selector-button:hover:not(:disabled) {
+  background: linear-gradient(to bottom, #e3f2fd, #bbdefb);
+  color: #1565c0;
+}
+
+.window-selector-fetch-column .window-selector-button:disabled {
+  color: #9ca3af;
+  background: #f5f5f5;
+}
+
+/* Unroll toggle - triangle in bottom right corner of entire component */
+.window-selector-unroll-toggle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  z-index: 1; /* Above fetch column */
+  overflow: hidden;
+}
+
+/* Triangle background */
+.window-selector-unroll-toggle::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-left: 20px solid transparent;
+  border-bottom: 20px solid #d1d5db;
+  border-radius: 0 0 5px 0;
+  transition: border-color 0.15s ease;
+}
+
+/* + or - symbol */
+.window-selector-unroll-toggle::after {
+  content: '+';
+  position: absolute;
+  bottom: 1px;
+  right: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #6b7280;
+  line-height: 1;
+  transition: color 0.15s ease;
+}
+
+.window-selector-unroll-toggle.expanded::after {
+  content: '−'; /* minus sign */
+}
+
+.window-selector-unroll-toggle:hover::before {
+  border-bottom-color: #9ca3af;
+}
+
+.window-selector-unroll-toggle:hover::after {
+  color: #374151;
 }
 
 .window-selector-content {
   display: flex;
+  flex-wrap: wrap; /* Allow wrapping on narrow canvas */
   align-items: center;
   gap: 8px; /* Constant gap - never changes */
   padding: 8px 12px;
@@ -92,9 +190,16 @@
   margin: 0 4px;
 }
 
+/* Context group - keeps chips and dropdown together, no wrap */
+.window-selector-context-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
 .window-selector-button {
   padding: 4px 16px; /* Match preset button padding (4px vertical) */
-  margin-left: 8px;
   border: 1px solid #1976d2;
   border-radius: 4px;
   background: #1976d2;
@@ -102,13 +207,12 @@
   font-size: 12px; /* Match preset button font size */
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.2s, border-color 0.2s, opacity 0.2s ease, width 0.3s ease, margin-left 0.3s ease, padding 0.3s ease;
+  transition: background-color 0.2s, border-color 0.2s, opacity 0.2s ease;
   white-space: nowrap;
   opacity: 0; /* Start hidden */
   animation: fadeInButton 0.3s ease forwards;
   position: relative;
   overflow: hidden;
-  height: auto; /* Let it match content height */
   line-height: 1.4; /* Match preset button line-height */
   display: flex;
   align-items: center;
@@ -129,7 +233,7 @@
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(255, 255, 255, 0.6),
+    rgba(25, 118, 210, 0.25),
     transparent
   );
   animation: shimmer 0.6s ease-in-out;
@@ -272,7 +376,7 @@
   border: 1px solid #e0e0e0;
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  z-index: 60; /* Above parent (z-index: 55) and scenario legend chips (z-index: 50) but below sidebar (z-index: 100) */
+  z-index: 100; /* Above scenario legend chips (z-index: 56), below modals (z-index: 1000+) */
   overflow: hidden;
 }
 
@@ -282,6 +386,8 @@
 
 .window-selector-dropdown.context-dropdown {
   min-width: 200px;
+  left: auto;
+  right: 0; /* Align to right edge of context button */
 }
 
 .window-selector-dropdown .dropdown-header {
