@@ -13,7 +13,7 @@
   gap: 8px;
   /* Use parent width (canvas panel) minus margins - no JavaScript calculation needed */
   max-width: calc(100% - 60px); /* 20px left + 40px right margin */
-  z-index: 56; /* Above WindowSelector (z-index: 55), below sidebar (z-index: 100+) */
+  z-index: 50; /* Below WindowSelector (z-index: 55) and its dropdowns, below sidebar (z-index: 100+) */
   pointer-events: auto;
   width: auto; /* Allow natural width */
   transition: top 0.2s ease-out; /* Smooth movement when WindowSelector resizes */
@@ -114,8 +114,30 @@
   user-select: none;
 }
 
-/* New Scenario button */
+/* New Scenario button wrapper - reserves expanded width for stable wrapping */
+.scenario-legend-new-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Invisible spacer - reserves the full expanded width */
+.scenario-legend-new-spacer {
+  visibility: hidden;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* New Scenario button - positioned over the spacer */
 .scenario-legend-new {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
   background: #E5E7EB !important; /* Light grey background */
   border: none;
   color: #374151 !important; /* Dark grey/black icon */
@@ -123,14 +145,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 12px;
-  transition: all 0.2s ease, width 0.2s ease;
+  gap: 0; /* Override inherited gap - no gap when collapsed */
+  padding: 6px 10px; /* Equal padding around icon */
+  transition: all 0.2s ease;
   opacity: 1 !important; /* Always opaque */
   overflow: hidden;
   white-space: nowrap;
 }
 
 .scenario-legend-new:hover {
+  gap: 4px; /* Add gap when text appears */
   background: #D1D5DB !important; /* Darker grey on hover */
   transform: translateY(-1px) !important;
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3) !important;
@@ -140,19 +164,15 @@
   font-size: 13px;
   font-weight: 500;
   color: #374151;
-  margin-left: 4px;
-  animation: slideInText 0.2s ease;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width 0.2s ease, opacity 0.15s ease;
 }
 
-@keyframes slideInText {
-  from {
-    opacity: 0;
-    transform: translateX(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+.scenario-legend-new:hover .scenario-legend-new-text {
+  max-width: 100px;
+  opacity: 1;
 }
 
 /* Dark mode support */

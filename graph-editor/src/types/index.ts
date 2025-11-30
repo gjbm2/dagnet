@@ -106,6 +106,7 @@ export interface TabState {
     autoReroute?: boolean;
     useSankeyView?: boolean;
     confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';
+    animateFlow?: boolean;
     sidebarOpen?: boolean;
     whatIfOpen?: boolean;
     propertiesOpen?: boolean;
