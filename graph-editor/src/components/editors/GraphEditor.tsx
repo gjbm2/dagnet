@@ -889,6 +889,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   
   // Canvas component - recreate when edge scaling props change so GraphCanvas receives updates
   // Phase 1: Only render GraphCanvas when tab is visible
+  // NOTE: WindowSelector and ScenarioLegend are rendered inside here so they're naturally constrained by canvas panel width
   const CanvasHost: React.FC = () => {
     // Gate heavy rendering based on visibility
     // Re-read isVisible from context to ensure we have the latest value
@@ -909,19 +910,25 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     
     console.log(`[CanvasHost ${fileId}] Rendering GraphCanvas (tab is visible)`);
     return (
-      <GraphCanvas
-        tabId={tabId}
-        activeTabId={activeTabId}
-        onSelectedNodeChange={handleNodeSelection}
-        onSelectedEdgeChange={handleEdgeSelection}
-        onAddNodeRef={addNodeRef}
-        onDeleteSelectedRef={deleteSelectedRef}
-        onAutoLayoutRef={autoLayoutRef}
-        onSankeyLayoutRef={sankeyLayoutRef}
-        onForceRerouteRef={forceRerouteRef}
-        onHideUnselectedRef={hideUnselectedRef}
-        whatIfDSL={whatIfDSL}
-      />
+      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        <GraphCanvas
+          tabId={tabId}
+          activeTabId={activeTabId}
+          onSelectedNodeChange={handleNodeSelection}
+          onSelectedEdgeChange={handleEdgeSelection}
+          onAddNodeRef={addNodeRef}
+          onDeleteSelectedRef={deleteSelectedRef}
+          onAutoLayoutRef={autoLayoutRef}
+          onSankeyLayoutRef={sankeyLayoutRef}
+          onForceRerouteRef={forceRerouteRef}
+          onHideUnselectedRef={hideUnselectedRef}
+          whatIfDSL={whatIfDSL}
+        />
+        {/* WindowSelector inside canvas panel - naturally constrained by canvas width */}
+        <WindowSelector tabId={tabId} />
+        {/* ScenarioLegend inside canvas panel - positioned below WindowSelector */}
+        {tabId && <ScenarioLegendWrapper tabId={tabId} />}
+      </div>
     );
   };
   
@@ -1963,12 +1970,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
             }}
           />
         )}
-
-        {/* Window Selector with integrated What-If & Context buttons - rendered after DockLayout */}
-        <WindowSelector tabId={tabId} />
-        
-        {/* Scenario Legend - shows when >1 scenario exists (excluding Base) */}
-        {tabId && <ScenarioLegendWrapper tabId={tabId} />}
 
         {/* Icon Bar - when minimized */}
         {sidebarState.mode === 'minimized' && (
