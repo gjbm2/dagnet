@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.0b
+**Released:** November 30, 2025
+
+Menu clear up, various fetch fixes (some still outtanding), chevron-a-go-go
+
+---
+
 ## Version 0.98.6b
 **Released:** November 29, 2025
 
