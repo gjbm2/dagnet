@@ -586,7 +586,29 @@ class DataOperationsService {
       if (targetSlice && paramFile.data?.values) {
         try {
           const allValues = paramFile.data.values as ParameterValue[];
-          const sliceFilteredValues = isolateSlice(allValues, targetSlice);
+          
+          // Check if this is an uncontexted query on contexted data (MECE aggregation scenario)
+          // IMPORTANT: contextAny queries are NOT uncontexted - they explicitly specify which slices to use
+          const { hasContextAny } = await import('./sliceIsolation');
+          const targetSliceDimensions = extractSliceDimensions(targetSlice);
+          const isUncontextedQuery = targetSliceDimensions === '' && !hasContextAny(targetSlice);
+          const hasContextedData = allValues.some(v => v.sliceDSL && v.sliceDSL !== '');
+          
+          let sliceFilteredValues: ParameterValue[];
+          
+          if (isUncontextedQuery && hasContextedData) {
+            // MECE aggregation: return ALL values (they'll be summed later)
+            // For uncontexted queries on contexted data, we want ALL context slices
+            sliceFilteredValues = allValues;
+            console.log('[DataOperationsService] MECE aggregation path: returning ALL values for uncontexted query on contexted data', {
+              targetSlice,
+              valueCount: allValues.length,
+            });
+          } else {
+            // Standard path: use isolateSlice (handles contextAny and specific context queries)
+            sliceFilteredValues = isolateSlice(allValues, targetSlice);
+          }
+          
           if (sliceFilteredValues.length > 0) {
             aggregatedData = { ...aggregatedData, values: sliceFilteredValues };
             console.log('[DataOperationsService] Filtered to slice:', {
@@ -594,7 +616,7 @@ class DataOperationsService {
               originalCount: allValues.length,
               filteredCount: sliceFilteredValues.length
             });
-          } else if (allValues.some(v => v.sliceDSL && v.sliceDSL !== '')) {
+          } else if (hasContextedData) {
             // File has contexted data but NONE for this specific slice
             // Don't show stale data from other contexts - return early
             console.warn('[DataOperationsService] No data found for context slice:', targetSlice);
@@ -613,13 +635,24 @@ class DataOperationsService {
       
       if (window && aggregatedData?.values) {
         // Collect value entries with daily data FROM SLICE-FILTERED aggregatedData
-        // CRITICAL: Use aggregatedData.values (which has been filtered by isolateSlice above)
+        // CRITICAL: Use aggregatedData.values (which has been filtered above)
         // NOT paramFile.data.values (which contains ALL contexts)
         const allValuesWithDaily = (aggregatedData.values as ParameterValue[])
           .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
         
-        // CRITICAL: Isolate to target slice to prevent cross-slice aggregation
-        const valuesWithDaily = isolateSlice(allValuesWithDaily, targetSlice);
+        // Check if we're in MECE aggregation mode (uncontexted query on contexted data)
+        // IMPORTANT: contextAny queries are NOT uncontexted - they explicitly specify which slices to use
+        const { hasContextAny } = await import('./sliceIsolation');
+        const targetSliceDimensions = extractSliceDimensions(targetSlice);
+        const isUncontextedQuery = targetSliceDimensions === '' && !hasContextAny(targetSlice);
+        const hasContextedData = allValuesWithDaily.some(v => v.sliceDSL && v.sliceDSL !== '');
+        const isMECEAggregation = isUncontextedQuery && hasContextedData;
+        
+        // For MECE aggregation, use ALL values (already filtered above)
+        // For contextAny/specific slice queries, isolate to target slice
+        const valuesWithDaily = isMECEAggregation 
+          ? allValuesWithDaily  // MECE: use all values, they'll be summed
+          : isolateSlice(allValuesWithDaily, targetSlice);  // contextAny or specific slice
         
         if (valuesWithDaily.length > 0) {
           try {

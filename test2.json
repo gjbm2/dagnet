@@ -1,138 +1,241 @@
-nodes:
-  - uuid: 86469c9f-2f83-49ca-a154-589231be5511
-    id: household-created
-    label: Household created
-    absorbing: false
-    entry:
-      is_start: true
-      entry_weight: 1
-    layout:
-      x: -804
-      'y': -204
-    description: ''
-    label_overridden: true
-    event_id: household-created
-    event_id_overridden: true
-    images:
-      - image_id: household-created-img
-        caption: Dagnet time
-        file_extension: png
-        caption_overridden: false
-  - uuid: addb99b6-5773-482c-a437-4661c8433ff7
-    id: abandonned-before-delegation
-    label: abandonned-before-delegation
-    absorbing: false
-    layout:
-      x: -302
-      'y': -47
-    description: ''
-  - uuid: 16974652-b532-41ee-b4d5-a3ef5381591d
-    id: household-delegated
-    label: household-delegated
-    absorbing: false
-    layout:
-      x: -524
-      'y': -351
-    description: ''
-    event_id: household-delegated
-    event_id_overridden: true
-  - uuid: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    id: saw-wa-details-page
-    label: Saw wa details page
-    absorbing: false
-    layout:
-      x: -11
-      'y': -339
-    event_id: saw-wa-details-page
-    event_id_overridden: true
-edges:
-  - uuid: household-created-to-household-delegated
-    id: household-created-to-household-delegated
-    from: 86469c9f-2f83-49ca-a154-589231be5511
-    to: 16974652-b532-41ee-b4d5-a3ef5381591d
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.505
-      evidence:
-        'n': 996
-        k: 503
-        window_from: '2025-11-21T00:00:00Z'
-        window_to: '2025-11-30T23:59:59Z'
-        retrieved_at: '2025-11-27T11:21:50.171Z'
-        source: amplitude
-        full_query: from(household-created).to(household-delegated)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-27T11:21:50.171Z'
-        query: from(household-created).to(household-delegated)
-        full_query: from(household-created).to(household-delegated)
-      connection: amplitude-prod
-      id: household-delegation-rate
-      stdev: 0.030745851638816397
-    query: from(household-created).to(household-delegated)
-    description: ''
-  - uuid: household-created-to-abandonned-before-delegation
-    id: 86469c9f-2f83-49ca-a154-589231be5511->addb99b6-5773-482c-a437-4661c8433ff7
-    from: 86469c9f-2f83-49ca-a154-589231be5511
-    to: addb99b6-5773-482c-a437-4661c8433ff7
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.495
-    query: from(household-created).to(abandonned-before-delegation).minus(household-delegated)
-    description: ''
-  - uuid: bef7823b-2daa-4dd5-977d-b08e57993e44
-    id: household-delegated-to-saw-wa-details-page
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.932
-      id: delegation-to-wa-details
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.005
-      evidence:
-        'n': 3066
-        k: 2856
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-28T20:21:39.816Z'
-        query:
-          from: household-delegated
-          to: saw-wa-details-page
-          context: []
-          case: []
-          start: '2025-10-28T00:00:00.000Z'
-          end: '2025-11-14T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251028&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"household-delegated","to":"saw-wa-details-page","context":[],"case":[],"start":"2025-10-28T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251028&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(household-delegated).to(saw-wa-details-page)
-    description: ''
-  - uuid: b42d2d10-e1dc-4933-809b-d26f0d77d491
-    id: household-delegated-to-abandonned-before-delegation
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: addb99b6-5773-482c-a437-4661c8433ff7
-    fromHandle: bottom-out
-    toHandle: top
-    p:
-      mean: 0.068
-    query: from(household-delegated).to(abandonned-before-delegation)
-    description: ''
-policies:
-  default_outcome: success
+id: household-delegation-rate
+name: household-delegation-rate
+type: probability
+query: from(household-created).to(household-delegated)
+query_overridden: false
+n_query_overridden: false
+connection: amplitude-prod
+values:
+  - mean: 0.5
+    n_daily: []
+    k_daily: []
+    dates: []
+  - mean: 0.648
+    'n': 125
+    k: 81
+    n_daily:
+      - 20
+      - 23
+      - 10
+      - 16
+      - 19
+      - 24
+      - 13
+    k_daily:
+      - 9
+      - 12
+      - 8
+      - 12
+      - 12
+      - 17
+      - 11
+    dates:
+      - 24-Nov-25
+      - 25-Nov-25
+      - 26-Nov-25
+      - 27-Nov-25
+      - 28-Nov-25
+      - 29-Nov-25
+      - 30-Nov-25
+    window_from: 24-Nov-25
+    window_to: 30-Nov-25
+    query_signature: 9b3e5afc596e8bee74b9d31662896fd2f27de03dc2d341b84e76d5c77738304b
+    sliceDSL: context(channel:google)
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T17:19:42.652Z'
+      query: from(household-created).to(household-delegated)
+      full_query: from(household-created).to(household-delegated)
+  - mean: 0.521
+    'n': 1566
+    k: 816
+    n_daily:
+      - 143
+      - 64
+      - 43
+      - 201
+      - 553
+      - 537
+      - 25
+    k_daily:
+      - 68
+      - 40
+      - 20
+      - 117
+      - 270
+      - 286
+      - 15
+    dates:
+      - 24-Nov-25
+      - 25-Nov-25
+      - 26-Nov-25
+      - 27-Nov-25
+      - 28-Nov-25
+      - 29-Nov-25
+      - 30-Nov-25
+    window_from: 24-Nov-25
+    window_to: 30-Nov-25
+    query_signature: 9b3e5afc596e8bee74b9d31662896fd2f27de03dc2d341b84e76d5c77738304b
+    sliceDSL: context(channel:influencer)
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T17:19:46.206Z'
+      query: from(household-created).to(household-delegated)
+      full_query: from(household-created).to(household-delegated)
+  - mean: 0.543
+    'n': 116
+    k: 63
+    n_daily:
+      - 15
+      - 1
+      - 3
+      - 13
+      - 23
+      - 38
+      - 23
+    k_daily:
+      - 6
+      - 1
+      - 2
+      - 8
+      - 13
+      - 19
+      - 14
+    dates:
+      - 24-Nov-25
+      - 25-Nov-25
+      - 26-Nov-25
+      - 27-Nov-25
+      - 28-Nov-25
+      - 29-Nov-25
+      - 30-Nov-25
+    window_from: 24-Nov-25
+    window_to: 30-Nov-25
+    query_signature: 9b3e5afc596e8bee74b9d31662896fd2f27de03dc2d341b84e76d5c77738304b
+    sliceDSL: context(channel:paid-social)
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T17:19:49.879Z'
+      query: from(household-created).to(household-delegated)
+      full_query: from(household-created).to(household-delegated)
+  - mean: 0.5
+    'n': 2
+    k: 1
+    n_daily:
+      - 1
+      - 0
+      - 1
+      - 0
+      - 0
+      - 0
+      - 0
+    k_daily:
+      - 0
+      - 0
+      - 1
+      - 0
+      - 0
+      - 0
+      - 0
+    dates:
+      - 24-Nov-25
+      - 25-Nov-25
+      - 26-Nov-25
+      - 27-Nov-25
+      - 28-Nov-25
+      - 29-Nov-25
+      - 30-Nov-25
+    window_from: 24-Nov-25
+    window_to: 30-Nov-25
+    query_signature: 9b3e5afc596e8bee74b9d31662896fd2f27de03dc2d341b84e76d5c77738304b
+    sliceDSL: context(channel:referral)
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T17:19:55.005Z'
+      query: from(household-created).to(household-delegated)
+      full_query: from(household-created).to(household-delegated)
+  - mean: 0
+    'n': 0
+    k: 0
+    dates:
+      - 24-Nov-25
+      - 25-Nov-25
+      - 26-Nov-25
+      - 27-Nov-25
+      - 28-Nov-25
+      - 29-Nov-25
+      - 30-Nov-25
+    n_daily:
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+    k_daily:
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+    window_from: 24-Nov-25
+    window_to: 30-Nov-25
+    sliceDSL: context(channel:pr)
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T17:20:00.540Z'
+      full_query: from(household-created).to(household-delegated)
+      no_data: true
+    query_signature: 9b3e5afc596e8bee74b9d31662896fd2f27de03dc2d341b84e76d5c77738304b
+  - mean: 0.522
+    'n': 381
+    k: 199
+    n_daily:
+      - 40
+      - 16
+      - 135
+      - 50
+      - 45
+      - 63
+      - 32
+    k_daily:
+      - 20
+      - 10
+      - 60
+      - 27
+      - 27
+      - 34
+      - 21
+    dates:
+      - 24-Nov-25
+      - 25-Nov-25
+      - 26-Nov-25
+      - 27-Nov-25
+      - 28-Nov-25
+      - 29-Nov-25
+      - 30-Nov-25
+    window_from: 24-Nov-25
+    window_to: 30-Nov-25
+    query_signature: 9b3e5afc596e8bee74b9d31662896fd2f27de03dc2d341b84e76d5c77738304b
+    sliceDSL: context(channel:other)
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T17:20:08.848Z'
+      query: from(household-created).to(household-delegated)
+      full_query: from(household-created).to(household-delegated)
 metadata:
-  name: conversion-flow-v0-ezra
-  description: ''
-  created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-11-29T10:21:21.410Z'
+  description: old description
+  description_overridden: false
+  constraints:
+    discrete: false
+  tags: []
+  created_at: '2025-11-20T01:46:28.642Z'
+  updated_at: '2025-11-25T18:25:43.801Z'
+  author: user
   version: 1.0.0
-  updated: '2025-11-25T18:25:17.542Z'
-currentQueryDSL: context(channel:google).window(1-Oct-25:1-Oct-25)
-dataInterestsDSL: window(1-oct-25:1-oct-25).context(channel)
+  status: active
+  aliases: []
+  references: []

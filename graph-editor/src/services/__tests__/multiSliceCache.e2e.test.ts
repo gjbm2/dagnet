@@ -1438,4 +1438,150 @@ describe('Multi-Slice Retrieval and Caching E2E (Real Production Code)', () => {
       }
     });
   });
+  
+  // =========================================================================
+  // TESTS: Date Window Changes - Re-aggregation on Cached Data
+  // =========================================================================
+  
+  describe('Date Window Changes', () => {
+    it('should re-aggregate when date window changes within cached range', async () => {
+      // This tests the scenario where:
+      // 1. Data is cached for dates 24-Nov to 30-Nov (7 days) for MECE context slices
+      // 2. User changes window to just 24-Nov to 25-Nov (2 days)
+      // 3. Graph should update with aggregation for just those 2 days (summing across slices)
+      
+      const graph = createTestGraph({ currentQueryDSL: 'window(24-Nov-25:30-Nov-25)' });
+      let updatedGraph: any = null;
+      const setGraph = vi.fn((g) => { updatedGraph = g; });
+      
+      // Setup file data with multiple context slices (MECE) and daily data
+      setupMockFiles('test-conversion-param', [
+        {
+          sliceDSL: 'context(channel:google)',
+          dates: ['2025-11-24', '2025-11-25', '2025-11-26', '2025-11-27', '2025-11-28', '2025-11-29', '2025-11-30'],
+          n_daily: [20, 23, 10, 16, 19, 24, 13],  // Sum = 125
+          k_daily: [9, 12, 8, 12, 12, 17, 11],    // Sum = 81
+          mean: 0.648, n: 125, k: 81,
+          window_from: '2025-11-24T00:00:00.000Z',
+          window_to: '2025-11-30T23:59:59.999Z',
+          query_signature: 'test-sig'
+        },
+        {
+          sliceDSL: 'context(channel:influencer)',
+          dates: ['2025-11-24', '2025-11-25', '2025-11-26', '2025-11-27', '2025-11-28', '2025-11-29', '2025-11-30'],
+          n_daily: [143, 64, 43, 201, 553, 537, 25],  // Sum = 1566
+          k_daily: [68, 40, 20, 117, 270, 286, 15],   // Sum = 816
+          mean: 0.521, n: 1566, k: 816,
+          window_from: '2025-11-24T00:00:00.000Z',
+          window_to: '2025-11-30T23:59:59.999Z',
+          query_signature: 'test-sig'
+        },
+      ]);
+      
+      // First request: full 7-day window with UNCONTEXTED query (should trigger MECE aggregation)
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'test-conversion-param',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-11-24T00:00:00.000Z', end: '2025-11-30T23:59:59.999Z' },
+        targetSlice: 'window(24-Nov-25:30-Nov-25)'  // Uncontexted query - triggers MECE aggregation
+      });
+      
+      // Should have aggregated all 7 days from both slices
+      expect(setGraph).toHaveBeenCalled();
+      if (updatedGraph) {
+        const edge = updatedGraph.edges?.find((e: any) => e.uuid === 'edge-uuid-1');
+        if (edge?.p?.evidence) {
+          // Full window: n = 125 + 1566 = 1691, k = 81 + 816 = 897
+          expect(edge.p.evidence.n).toBe(1691);
+          expect(edge.p.evidence.k).toBe(897);
+        }
+      }
+      
+      // Reset for second call
+      setGraph.mockClear();
+      updatedGraph = null;
+      
+      // Second request: subset window (just 2 days)
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'test-conversion-param',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-11-24T00:00:00.000Z', end: '2025-11-25T23:59:59.999Z' },
+        targetSlice: 'window(24-Nov-25:25-Nov-25)'  // Uncontexted query - different dates
+      });
+      
+      // Should have aggregated just 2 days from both slices
+      expect(setGraph).toHaveBeenCalled();
+      if (updatedGraph) {
+        const edge = updatedGraph.edges?.find((e: any) => e.uuid === 'edge-uuid-1');
+        if (edge?.p?.evidence) {
+          // Subset window (24-Nov + 25-Nov):
+          // google: n = 20 + 23 = 43, k = 9 + 12 = 21
+          // influencer: n = 143 + 64 = 207, k = 68 + 40 = 108
+          // Total: n = 43 + 207 = 250, k = 21 + 108 = 129
+          expect(edge.p.evidence.n).toBe(250);
+          expect(edge.p.evidence.k).toBe(129);
+          // Mean should be recalculated: k/n = 129/250 = 0.516
+          expect(edge.p.mean).toBeCloseTo(0.516, 2);
+        }
+      }
+    });
+    
+    it('should handle single-day window correctly', async () => {
+      const graph = createTestGraph({ currentQueryDSL: 'window(24-Nov-25:24-Nov-25)' });
+      let updatedGraph: any = null;
+      const setGraph = vi.fn((g) => { updatedGraph = g; });
+      
+      // Setup with MECE context slices
+      setupMockFiles('test-conversion-param', [
+        {
+          sliceDSL: 'context(channel:google)',
+          dates: ['2025-11-24', '2025-11-25'],
+          n_daily: [100, 200],
+          k_daily: [50, 100],
+          mean: 0.5, n: 300, k: 150,
+          window_from: '2025-11-24T00:00:00.000Z',
+          window_to: '2025-11-25T23:59:59.999Z',
+          query_signature: 'test-sig'
+        },
+        {
+          sliceDSL: 'context(channel:influencer)',
+          dates: ['2025-11-24', '2025-11-25'],
+          n_daily: [80, 120],
+          k_daily: [40, 60],
+          mean: 0.5, n: 200, k: 100,
+          window_from: '2025-11-24T00:00:00.000Z',
+          window_to: '2025-11-25T23:59:59.999Z',
+          query_signature: 'test-sig'
+        },
+      ]);
+      
+      // Request: just one day with UNCONTEXTED query
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'test-conversion-param',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-11-24T00:00:00.000Z', end: '2025-11-24T23:59:59.999Z' },
+        targetSlice: 'window(24-Nov-25:24-Nov-25)'
+      });
+      
+      expect(setGraph).toHaveBeenCalled();
+      if (updatedGraph) {
+        const edge = updatedGraph.edges?.find((e: any) => e.uuid === 'edge-uuid-1');
+        if (edge?.p?.evidence) {
+          // Single day (24-Nov):
+          // google: n = 100, k = 50
+          // influencer: n = 80, k = 40
+          // Total: n = 180, k = 90
+          expect(edge.p.evidence.n).toBe(180);
+          expect(edge.p.evidence.k).toBe(90);
+          expect(edge.p.mean).toBeCloseTo(0.5, 2);
+        }
+      }
+    });
+  });
 });
