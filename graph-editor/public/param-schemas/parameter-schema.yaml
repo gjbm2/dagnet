@@ -46,6 +46,19 @@ properties:
     default: false
     description: "If true, query was manually edited and should not be auto-regenerated"
   
+  n_query:
+    type: string
+    pattern: '^from\([a-zA-Z0-9_-]+\)\.to\([a-zA-Z0-9_-]+\)'
+    description: "Optional explicit query for n (denominator) when it differs from k query. Used when 'from' node shares an event with siblings and n can't be derived by stripping upstream conditions."
+    examples:
+      - "from(landing).to(feature-view)"
+      - "from(checkout).to(cart-confirm)"
+  
+  n_query_overridden:
+    type: boolean
+    default: false
+    description: "If true, n_query was manually edited and should not be auto-regenerated"
+  
   connection:
     type: string
     description: "Connection name from connections.yaml"
@@ -235,7 +248,7 @@ properties:
       
       version:
         type: string
-        pattern: '^\\d+\\.\\d+\\.\\d+$'
+        pattern: '^\d+\.\d+\.\d+$'
         description: "Semantic version of this parameter definition"
         examples: ["1.0.0", "1.2.3", "2.0.0"]
       

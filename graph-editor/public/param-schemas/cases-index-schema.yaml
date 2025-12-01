@@ -8,7 +8,7 @@ additionalProperties: false
 properties:
   version:
     type: string
-    pattern: '^\\d+\\.\\d+\\.\\d+$'
+    pattern: '^\d+\.\d+\.\d+$'
     description: "Semantic version of the cases index"
   
   created_at:
@@ -57,6 +57,6 @@ properties:
         
         version:
           type: string
-          pattern: '^\\d+\\.\\d+\\.\\d+$'
+          pattern: '^\d+\.\d+\.\d+$'
           description: "Version of the case definition"
 

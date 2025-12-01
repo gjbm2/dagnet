@@ -19,6 +19,7 @@ import { getAllDataSections, type DataOperationSection } from './DataOperationsS
 import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
 import { useClearDataFile } from '../hooks/useClearDataFile';
+import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 
 interface NodeContextMenuProps {
   x: number;
@@ -137,13 +138,17 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   const dataOperationSections = getAllDataSections(nodeId, null, graph);
   const hasAnyFile = dataOperationSections.length > 0;
 
+  // Centralized fetch hook - all fetch operations go through this
+  const { fetchItem } = useFetchData({
+    graph,
+    setGraph,
+    currentDSL: graph?.currentQueryDSL || '',
+  });
+
   const handleGetNodeFromFile = () => {
     if (nodeData?.id) {
-      dataOperationsService.getNodeFromFile({ 
-        nodeId: nodeData.id,
-        graph,
-        setGraph
-      });
+      const item = createFetchItem('node', nodeData.id, nodeId);
+      fetchItem(item, { mode: 'from-file' });
     }
     onClose();
   };
@@ -161,12 +166,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
 
   const handleGetCaseFromFile = () => {
     if (nodeData?.case?.id) {
-      dataOperationsService.getCaseFromFile({ 
-        caseId: nodeData.case.id, 
-        nodeId,
-        graph,
-        setGraph
-      });
+      const item = createFetchItem('case', nodeData.case.id, nodeId);
+      fetchItem(item, { mode: 'from-file' });
     }
     onClose();
   };
@@ -200,16 +201,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       return;
     }
     
-    // Call getFromSourceDirect - fetches and writes directly to graph (no file versioning)
-    dataOperationsService.getFromSourceDirect({
-      objectType: 'case',
-      objectId: nodeData.case.id,
-      targetId: nodeId,
-      graph,
-      setGraph,
-      dailyMode: false,
-      currentDSL: graph?.currentQueryDSL || '' // Pass context from WindowSelector
-    });
+    const item = createFetchItem('case', nodeData.case.id, nodeId);
+    fetchItem(item, { mode: 'direct' });
     onClose();
   };
 
@@ -219,15 +212,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       return;
     }
     
-    // Call getFromSource (versioned) - fetches to file then updates graph
-    dataOperationsService.getFromSource({
-      objectType: 'case',
-      objectId: nodeData.case.id,
-      targetId: nodeId,
-      graph,
-      setGraph,
-      currentDSL: graph?.currentQueryDSL || '' // Pass context from WindowSelector
-    });
+    const item = createFetchItem('case', nodeData.case.id, nodeId);
+    fetchItem(item, { mode: 'versioned' });
     onClose();
   };
 

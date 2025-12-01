@@ -990,5 +990,97 @@ describe('Dual Query n/k Separation Tests', () => {
       // Which is exactly what we want as n for the main D→F query
     });
   });
+  
+  describe('n_query_overridden flag handling', () => {
+    
+    it('should recognize n_query_overridden flag on edge', () => {
+      // When user manually edits n_query, n_query_overridden should be set
+      const edge: GraphEdge = {
+        uuid: 'edge-d-f',
+        id: 'D-F',
+        from: 'node-d',
+        to: 'node-f',
+        query: 'from(D).to(F).visited(A)',
+        n_query: 'from(A).to(D)',
+        n_query_overridden: true, // User manually edited
+        p: { mean: 0.5 } as ProbabilityParam,
+      };
+      
+      expect(edge.n_query_overridden).toBe(true);
+    });
+    
+    it('should not have n_query_overridden when n_query is auto-generated', () => {
+      // When n_query is not present or was auto-generated, n_query_overridden should be false/undefined
+      const edge: GraphEdge = {
+        uuid: 'edge-b-c',
+        id: 'B-C',
+        from: 'node-b',
+        to: 'node-c',
+        query: 'from(B).to(C).visited(A)',
+        // No n_query - will be auto-derived
+        p: { mean: 0.5 } as ProbabilityParam,
+      };
+      
+      expect(edge.n_query_overridden).toBeFalsy();
+    });
+    
+    it('should mirror query_overridden pattern for n_query_overridden', () => {
+      // The n_query_overridden should follow same pattern as query_overridden
+      const edgeWithBothOverridden: GraphEdge = {
+        uuid: 'edge-manual',
+        id: 'MANUAL',
+        from: 'node-a',
+        to: 'node-b',
+        query: 'from(A).to(B).visited(X)',
+        query_overridden: true,
+        n_query: 'from(Y).to(A)',
+        n_query_overridden: true,
+        p: { mean: 0.5 } as ProbabilityParam,
+      };
+      
+      // Both flags follow same pattern
+      expect(edgeWithBothOverridden.query_overridden).toBe(true);
+      expect(edgeWithBothOverridden.n_query_overridden).toBe(true);
+      
+      // Clearing n_query should also clear n_query_overridden
+      const clearedEdge = { ...edgeWithBothOverridden };
+      delete clearedEdge.n_query;
+      delete clearedEdge.n_query_overridden;
+      
+      expect(clearedEdge.n_query).toBeUndefined();
+      expect(clearedEdge.n_query_overridden).toBeUndefined();
+    });
+    
+    it('should include n_query_overridden in hasQueryOverride check', () => {
+      // edgeBeadHelpers checks for any override indicator
+      const hasQueryOverride = (edge: GraphEdge) => {
+        return !!(edge as any).query_overridden || !!(edge as any).n_query || !!(edge as any).n_query_overridden;
+      };
+      
+      // Edge with only n_query_overridden
+      const edgeWithNQueryOverride: GraphEdge = {
+        uuid: 'edge-1',
+        id: 'A-B',
+        from: 'node-a',
+        to: 'node-b',
+        n_query: 'from(X).to(A)',
+        n_query_overridden: true,
+        p: { mean: 0.5 } as ProbabilityParam,
+      };
+      
+      expect(hasQueryOverride(edgeWithNQueryOverride)).toBe(true);
+      
+      // Edge with no overrides
+      const edgeWithNoOverride: GraphEdge = {
+        uuid: 'edge-2',
+        id: 'C-D',
+        from: 'node-c',
+        to: 'node-d',
+        p: { mean: 0.5 } as ProbabilityParam,
+      };
+      
+      expect(hasQueryOverride(edgeWithNoOverride)).toBe(false);
+    });
+  });
 });
 

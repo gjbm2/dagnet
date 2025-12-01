@@ -1,4 +1,8 @@
 {
+  "ui:order": ["version", "connections"],
+  "version": {
+    "ui:description": "Schema version"
+  },
   "connections": {
     "ui:options": {
       "orderable": true,
@@ -166,18 +170,22 @@
           "ui:options": {
             "accordion": true
           },
-          "mappings": {
+          "mode": {
+            "ui:widget": "radio",
+            "ui:help": "Update mode: merge or replace"
+          },
+          "writes": {
             "ui:options": {
               "orderable": true,
-              "tabField": "from"
+              "tabField": "target"
             },
             "items": {
               "ui:title": " ",
-              "from": {
-                "ui:help": "Variable name from transform phase"
+              "target": {
+                "ui:help": "JSON Pointer template to target location (e.g., /edges/{{edgeId}}/p/mean)"
               },
-              "to": {
-                "ui:help": "JSON Pointer to target location in graph (e.g., /edges/{{edgeId}}/p/mean)"
+              "value": {
+                "ui:help": "Value template or literal to write"
               }
             }
           }

@@ -243,8 +243,9 @@ describe('WindowAggregationService', () => {
 
       const result = windowAggregationService.aggregateWindow(timeSeries, window);
 
-      expect(result.window.start).toBe('2024-11-01');
-      expect(result.window.end).toBe('2024-11-02');
+      // Window dates now returned in UK format (d-MMM-yy)
+      expect(result.window.start).toBe('1-Nov-24');
+      expect(result.window.end).toBe('2-Nov-24');
       expect(result.days_included).toBe(2);
     });
 

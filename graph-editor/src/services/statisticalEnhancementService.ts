@@ -135,16 +135,22 @@ export class InverseVarianceEnhancer implements StatisticalEnhancer {
     
     let weightedSum = 0;
     let weightSum = 0;
-    const epsilon = 1e-10; // Guard against p=0 or p=1 (infinite weight)
+    
+    // Use a larger epsilon to prevent extreme weights when p≈0 or p≈1
+    // A variance floor of 0.01 (equivalent to p=0.1 or p=0.9) prevents any single
+    // point from dominating the weighted average too much
+    const minVariance = 0.01;
 
     for (const point of raw.raw_data) {
       if (point.n > 0) {
         const p_i = point.p;
         
-        // Guard against p = 0 or p = 1 (would give infinite weight)
-        const variance = Math.max(p_i * (1 - p_i), epsilon);
+        // Clamp variance to prevent extreme weights for p≈0 or p≈1
+        // Raw variance = p(1-p), clamped to at least minVariance
+        const variance = Math.max(p_i * (1 - p_i), minVariance);
         
         // Weight = precision = n / variance = n / (p(1-p))
+        // Now capped at n / 0.01 = 100×n maximum
         const weight = point.n / variance;
         
         weightedSum += weight * p_i;
@@ -154,6 +160,18 @@ export class InverseVarianceEnhancer implements StatisticalEnhancer {
 
     // Weighted mean probability, rounded to 3 decimal places
     const weightedMean = weightSum > 0 ? Math.round((weightedSum / weightSum) * 1000) / 1000 : raw.mean;
+    
+    // Debug: check if weighted mean differs significantly from simple mean
+    if (Math.abs(weightedMean - raw.mean) > 0.1) {
+      console.warn('[InverseVarianceEnhancer] Weighted mean differs from simple mean by >10%:', {
+        simpleMean: raw.mean,
+        weightedMean,
+        totalN: raw.n,
+        totalK: raw.k,
+        dataPoints: raw.raw_data?.length,
+        extremePoints: raw.raw_data?.filter(p => p.p < 0.05 || p.p > 0.95).length || 0,
+      });
+    }
     
     // Recompute k from weighted mean and total n
     // This preserves the relationship k = p × n

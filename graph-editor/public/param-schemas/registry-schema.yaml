@@ -9,7 +9,7 @@ additionalProperties: false
 properties:
   version:
     type: string
-    pattern: '^\\d+\\.\\d+\\.\\d+$'
+    pattern: '^\d+\.\d+\.\d+$'
     description: "Semantic version of the registry schema"
     examples: ["1.0.0", "1.2.3", "2.0.0"]
   
@@ -94,7 +94,7 @@ properties:
         
         version:
           type: string
-          pattern: '^\\d+\\.\\d+\\.\\d+$'
+          pattern: '^\d+\.\d+\.\d+$'
           description: "Version of the parameter definition"
         
         usage_count:

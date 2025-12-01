@@ -182,6 +182,8 @@ class Edge(BaseModel):
     description_overridden: bool = Field(False, description="If true, description was manually edited")
     query: Optional[str] = Field(None, description="Query expression for data retrieval")
     query_overridden: bool = Field(False, description="If true, query was manually edited")
+    n_query: Optional[str] = Field(None, description="Explicit query for n (denominator) when it differs from k query")
+    n_query_overridden: bool = Field(False, description="If true, n_query was manually edited")
     p: ProbabilityParam = Field(..., description="Base probability (fallback when no conditionals match)")
     conditional_p: Optional[List[ConditionalProbability]] = Field(None, description="Conditional probabilities (first match wins)")
     weight_default: Optional[float] = Field(None, ge=0, description="Weight for distributing residual probability")

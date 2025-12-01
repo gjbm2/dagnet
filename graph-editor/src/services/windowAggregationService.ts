@@ -12,7 +12,9 @@
 
 import type { TimeSeriesPoint, DateRange } from '../types';
 import type { ParameterValue } from './paramRegistryService';
-import { isolateSlice } from './sliceIsolation';
+import { isolateSlice, hasContextAny, expandContextAny, extractSliceDimensions } from './sliceIsolation';
+import { parseConstraints } from '../lib/queryDSL';
+import { normalizeToUK, isUKDate, parseUKDate } from '../lib/dateFormat';
 
 export interface RawAggregation {
   method: 'naive';
@@ -44,7 +46,7 @@ export interface RawAggregation {
  * Case schedule entry (from case file schema)
  */
 export interface CaseSchedule {
-  window_from: string;  // ISO timestamp or YYYY-MM-DD
+  window_from: string;  // UK format (d-MMM-yy)
   window_to?: string | null;  // ISO timestamp or YYYY-MM-DD, or null if ongoing
   variants: Array<{
     name: string;
@@ -131,9 +133,18 @@ export function parameterToTimeSeries(
 }
 
 /**
- * Parse date string (YYYY-MM-DD or ISO 8601) to Date for comparison
+ * Parse date string (YYYY-MM-DD, ISO 8601, or UK format) to Date for comparison
+ * Handles hybrid formats like "1-Dec-25T00:00:00Z" (UK date with ISO time suffix)
  */
 export function parseDate(dateStr: string): Date {
+  // Strip time portion for UK format detection (handles hybrid like "1-Dec-25T00:00:00Z")
+  const datePart = dateStr.split('T')[0];
+  
+  // Handle UK format (d-MMM-yy) first
+  if (isUKDate(datePart)) {
+    return parseUKDate(datePart);
+  }
+  
   // Handle ISO 8601 (with time) or YYYY-MM-DD
   const date = new Date(dateStr);
   if (isNaN(date.getTime())) {
@@ -145,9 +156,17 @@ export function parseDate(dateStr: string): Date {
 /**
  * Normalize date string to YYYY-MM-DD format
  */
+/**
+ * Normalize a date string to a consistent format for comparisons.
+ * Returns UK format (d-MMM-yy) for all inputs.
+ * 
+ * @param dateStr - Date in any recognized format (ISO, UK, etc.)
+ * @returns Normalized date string in UK format
+ */
 export function normalizeDate(dateStr: string): string {
   const date = parseDate(dateStr);
-  return date.toISOString().split('T')[0];
+  // Return UK format for consistent storage and display
+  return normalizeToUK(date.toISOString().split('T')[0]);
 }
 
 /**
@@ -626,39 +645,148 @@ export function calculateIncrementalFetch(
     end: normalizeDate(requestedWindow.end),
   };
 
-  // Extract all existing dates from parameter file values
-  const existingDates = new Set<string>();
-  
-  // If bustCache is true, skip checking existing dates
-  if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
-    // CRITICAL: Isolate to target slice first
-    const sliceValues = isolateSlice(paramFileData.values, targetSlice);
-    
-    for (const value of sliceValues) {
-      // Extract dates from this value entry
-      if (value.dates && Array.isArray(value.dates)) {
-        for (const date of value.dates) {
-          const normalizedDate = normalizeDate(date);
-          existingDates.add(normalizedDate);
-        }
-      }
-    }
-  }
-
-  // Generate all dates in requested window
+  // Generate all dates in requested window (needed for both paths)
   const startDate = parseDate(normalizedWindow.start);
   const endDate = parseDate(normalizedWindow.end);
   const allDatesInWindow: string[] = [];
   
-  const currentDate = new Date(startDate);
-  while (currentDate <= endDate) {
-    const dateStr = normalizeDate(currentDate.toISOString());
+  const currentDateIter = new Date(startDate);
+  while (currentDateIter <= endDate) {
+    const dateStr = normalizeDate(currentDateIter.toISOString());
     allDatesInWindow.push(dateStr);
-    currentDate.setDate(currentDate.getDate() + 1);
+    currentDateIter.setDate(currentDateIter.getDate() + 1);
+  }
+
+  // Extract all existing dates from parameter file values
+  const existingDates = new Set<string>();
+  let missingDates: string[];
+  
+  // If bustCache is true, skip checking existing dates
+  if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
+    // Check for contextAny: need to verify ALL component slices have data
+    if (hasContextAny(targetSlice)) {
+      const parsed = parseConstraints(targetSlice);
+      const expandedSlices = expandContextAny(parsed);
+      
+      // For contextAny, a date is "existing" only if it exists in ALL component slices
+      // (i.e., we need complete coverage across all slices)
+      const datesPerSlice: Map<string, Set<string>> = new Map();
+      
+      for (const sliceId of expandedSlices) {
+        const sliceDates = new Set<string>();
+        // Filter values matching this specific slice
+        const sliceValues = paramFileData.values.filter(v => {
+          const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
+          return valueSlice === sliceId;
+        });
+        
+        for (const value of sliceValues) {
+          if (value.dates && Array.isArray(value.dates)) {
+            for (const date of value.dates) {
+              sliceDates.add(normalizeDate(date));
+            }
+          }
+        }
+        datesPerSlice.set(sliceId, sliceDates);
+      }
+      
+      // A date exists only if ALL slices have it
+      for (const date of allDatesInWindow) {
+        const allSlicesHaveDate = expandedSlices.every(sliceId => {
+          const sliceDates = datesPerSlice.get(sliceId);
+          return sliceDates && sliceDates.has(date);
+        });
+        if (allSlicesHaveDate) {
+          existingDates.add(date);
+        }
+      }
+      
+      console.log(`[calculateIncrementalFetch] contextAny expansion:`, {
+        targetSlice,
+        expandedSlices,
+        sliceCoverage: Object.fromEntries(
+          expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
+        ),
+        datesWithFullCoverage: existingDates.size,
+        totalDatesRequested: allDatesInWindow.length,
+      });
+    } else {
+      // Standard path: single slice
+      // BUT first check if query has no context but file has contexted data
+      // In that case, we need MECE aggregation across all slices
+      const normalizedTarget = extractSliceDimensions(targetSlice);
+      const hasContextedData = paramFileData.values.some(v => v.sliceDSL && v.sliceDSL !== '');
+      
+      if (normalizedTarget === '' && hasContextedData) {
+        // Query has no context, but file has contexted data
+        // Extract all unique slices from the file and check ALL have data (MECE aggregation)
+        const uniqueSlices = new Set<string>();
+        for (const value of paramFileData.values) {
+          const sliceDSL = extractSliceDimensions(value.sliceDSL ?? '');
+          if (sliceDSL) uniqueSlices.add(sliceDSL);
+        }
+        
+        const expandedSlices = Array.from(uniqueSlices).sort();
+        
+        // For MECE, a date is "existing" only if it exists in ALL slices
+        const datesPerSlice: Map<string, Set<string>> = new Map();
+        
+        for (const sliceId of expandedSlices) {
+          const sliceDates = new Set<string>();
+          const sliceValues = paramFileData.values.filter(v => {
+            const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
+            return valueSlice === sliceId;
+          });
+          
+          for (const value of sliceValues) {
+            if (value.dates && Array.isArray(value.dates)) {
+              for (const date of value.dates) {
+                sliceDates.add(normalizeDate(date));
+              }
+            }
+          }
+          datesPerSlice.set(sliceId, sliceDates);
+        }
+        
+        // A date exists only if ALL slices have it
+        for (const date of allDatesInWindow) {
+          const allSlicesHaveDate = expandedSlices.every(sliceId => {
+            const sliceDates = datesPerSlice.get(sliceId);
+            return sliceDates && sliceDates.has(date);
+          });
+          if (allSlicesHaveDate) {
+            existingDates.add(date);
+          }
+        }
+        
+        console.log(`[calculateIncrementalFetch] MECE aggregation (uncontexted query with contexted data):`, {
+          targetSlice,
+          expandedSlices,
+          sliceCoverage: Object.fromEntries(
+            expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
+          ),
+          datesWithFullCoverage: existingDates.size,
+          totalDatesRequested: allDatesInWindow.length,
+        });
+      } else {
+        // CRITICAL: Isolate to target slice first
+        const sliceValues = isolateSlice(paramFileData.values, targetSlice);
+        
+        for (const value of sliceValues) {
+          // Extract dates from this value entry
+          if (value.dates && Array.isArray(value.dates)) {
+            for (const date of value.dates) {
+              const normalizedDate = normalizeDate(date);
+              existingDates.add(normalizedDate);
+            }
+          }
+        }
+      }
+    }
   }
   
   // Find missing dates (dates in requested window that don't exist)
-  const missingDates = allDatesInWindow.filter(date => !existingDates.has(date));
+  missingDates = allDatesInWindow.filter(date => !existingDates.has(date));
   
   // Debug logging for date comparison
   if (allDatesInWindow.length <= 7) {
@@ -782,7 +910,8 @@ export function mergeTimeSeriesIntoParameter(
   }
 
   // Extract dates, n_daily, k_daily from new time-series
-  const dates = newTimeSeries.map(point => point.date);
+  // CRITICAL: Normalize dates to UK format (d-mmm-yy) for consistent storage
+  const dates = newTimeSeries.map(point => normalizeToUK(point.date));
   const n_daily = newTimeSeries.map(point => point.n);
   const k_daily = newTimeSeries.map(point => point.k);
 
@@ -793,6 +922,7 @@ export function mergeTimeSeriesIntoParameter(
   const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
 
   // Create NEW value entry with only the new days
+  // Window dates also normalized to UK format
   const newValue: ParameterValue = {
     mean,
     n: totalN,
@@ -800,8 +930,8 @@ export function mergeTimeSeriesIntoParameter(
     n_daily,
     k_daily,
     dates,
-    window_from: newWindow.start,
-    window_to: newWindow.end,
+    window_from: normalizeToUK(newWindow.start),
+    window_to: normalizeToUK(newWindow.end),
     query_signature: newQuerySignature,
     // CRITICAL: sliceDSL enables isolateSlice to find this value entry
     // Without this, contexted data would be invisible to queries!

@@ -61,3 +61,106 @@ export function parseUKDate(dateStr: string): Date {
   return new Date(Date.UTC(year, month, day));
 }
 
+/**
+ * Check if a string is in ISO date format (YYYY-MM-DD)
+ */
+export function isISODate(dateStr: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}/.test(dateStr);
+}
+
+/**
+ * Check if a string is in UK date format (d-MMM-yy)
+ */
+export function isUKDate(dateStr: string): boolean {
+  return /^\d{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2}$/.test(dateStr);
+}
+
+/**
+ * Convert UK date (d-MMM-yy) to ISO date (YYYY-MM-DD) for API calls
+ * 
+ * @param ukDate - Date in d-MMM-yy format (e.g., "1-Dec-25")
+ * @returns ISO date string (e.g., "2025-12-01")
+ */
+export function toISO(ukDate: string): string {
+  if (isISODate(ukDate)) {
+    return ukDate.split('T')[0]; // Already ISO, just strip time if present
+  }
+  const d = parseUKDate(ukDate);
+  return d.toISOString().split('T')[0];
+}
+
+/**
+ * Convert ISO date (YYYY-MM-DD) to UK date (d-MMM-yy) from API responses
+ * 
+ * @param isoDate - ISO date string (e.g., "2025-12-01")
+ * @returns UK date string (e.g., "1-Dec-25")
+ */
+export function fromISO(isoDate: string): string {
+  if (isUKDate(isoDate)) {
+    return isoDate; // Already UK format
+  }
+  return formatDateUK(isoDate);
+}
+
+/**
+ * Normalize any date format to UK format (d-MMM-yy)
+ * Accepts either ISO (YYYY-MM-DD) or UK (d-MMM-yy) and returns UK format.
+ * Also handles hybrid formats like "1-Dec-25T00:00:00Z".
+ * 
+ * @param date - Date in either ISO or UK format
+ * @returns UK date string (e.g., "1-Dec-25")
+ */
+export function normalizeToUK(date: string): string {
+  if (!date) return date;
+  
+  // Strip time portion for UK format detection (handles hybrid like "1-Dec-25T00:00:00Z")
+  const datePart = date.split('T')[0];
+  
+  if (isUKDate(datePart)) {
+    return datePart; // Return just the UK date part
+  }
+  if (isISODate(datePart)) {
+    return fromISO(datePart);
+  }
+  // Try to parse as date and convert
+  try {
+    return formatDateUK(date);
+  } catch {
+    // Return as-is if can't parse
+    return date;
+  }
+}
+
+/**
+ * Normalize a date to ISO format for internal comparisons
+ * Accepts either ISO (YYYY-MM-DD) or UK (d-MMM-yy) and returns ISO format.
+ * Also handles hybrid formats like "1-Dec-25T00:00:00Z".
+ * 
+ * @param date - Date in either ISO or UK format
+ * @returns ISO date string (e.g., "2025-12-01")
+ */
+export function normalizeToISO(date: string): string {
+  if (!date) return date;
+  
+  // Strip time portion first
+  const datePart = date.split('T')[0];
+  
+  if (isISODate(datePart)) {
+    return datePart; // Already ISO date format
+  }
+  if (isUKDate(datePart)) {
+    return toISO(datePart);
+  }
+  // Try to parse as date and convert
+  try {
+    const d = new Date(date);
+    if (!isNaN(d.getTime())) {
+      return d.toISOString().split('T')[0];
+    }
+  } catch {
+    // Fall through
+  }
+  // Return as-is if can't parse
+  return date;
+}
+

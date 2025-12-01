@@ -29,6 +29,7 @@ import { generateUniqueId } from '../lib/idUtils';
 import { getSiblingEdges } from '../lib/conditionalColours';
 import { normalizeConstraintString } from '../lib/queryDSL';
 import { sessionLogService } from './sessionLogService';
+import { normalizeToUK } from '../lib/dateFormat';
 
 // ============================================================
 // TYPES & INTERFACES
@@ -1146,7 +1147,7 @@ export class UpdateManager {
           distribution: source.p.distribution,
           n: source.p.evidence?.n,
           k: source.p.evidence?.k,
-          window_from: source.p.evidence?.window_from || new Date().toISOString(),
+          window_from: source.p.evidence?.window_from || normalizeToUK(new Date().toISOString()),
           window_to: source.p.evidence?.window_to
         })
       },
@@ -1158,7 +1159,7 @@ export class UpdateManager {
           mean: value,
           stdev: source.cost_gbp.stdev,
           distribution: source.cost_gbp.distribution,
-          window_from: source.cost_gbp.evidence?.window_from || new Date().toISOString(),
+          window_from: source.cost_gbp.evidence?.window_from || normalizeToUK(new Date().toISOString()),
           window_to: source.cost_gbp.evidence?.window_to
         })
       },
@@ -1170,7 +1171,7 @@ export class UpdateManager {
           mean: value,
           stdev: source.cost_time.stdev,
           distribution: source.cost_time.distribution,
-          window_from: source.cost_time.evidence?.window_from || new Date().toISOString(),
+          window_from: source.cost_time.evidence?.window_from || normalizeToUK(new Date().toISOString()),
           window_to: source.cost_time.evidence?.window_to
         })
       }
@@ -3660,6 +3661,15 @@ export class UpdateManager {
           }
         }
         
+        // Update n_query strings (same pattern as query)
+        if (param.n_query && typeof param.n_query === 'string') {
+          const updated = this.replaceNodeToken(param.n_query, token, newId);
+          if (updated !== param.n_query) {
+            param.n_query = updated;
+            queriesUpdated++;
+          }
+        }
+        
         // Update conditional probabilities
         if (Array.isArray(param.conditional_probabilities)) {
           param.conditional_probabilities.forEach((cond: any) => {
@@ -3736,6 +3746,15 @@ export class UpdateManager {
               const updatedEdgeQuery = this.replaceNodeToken(edge.query, token, newId);
               if (updatedEdgeQuery !== edge.query) {
                 edge.query = updatedEdgeQuery;
+                queriesUpdated++;
+              }
+            }
+            
+            // Edge-level n_query string (same pattern as query)
+            if (edge.n_query && typeof edge.n_query === 'string') {
+              const updatedNQuery = this.replaceNodeToken(edge.n_query, token, newId);
+              if (updatedNQuery !== edge.n_query) {
+                edge.n_query = updatedNQuery;
                 queriesUpdated++;
               }
             }

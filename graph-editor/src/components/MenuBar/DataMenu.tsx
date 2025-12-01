@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
@@ -12,6 +12,9 @@ import { getAllDataSections, type DataOperationSection } from '../DataOperations
 import { Database, DatabaseZap, Folders, TrendingUpDown, Trash2 } from 'lucide-react';
 import { RemoveOverridesMenubarItem } from '../RemoveOverridesMenuItem';
 import { useClearDataFile } from '../../hooks/useClearDataFile';
+import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
+import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
+import { PinnedQueryModal } from '../modals/PinnedQueryModal';
 
 /**
  * Data Menu
@@ -34,21 +37,49 @@ export function DataMenu() {
   
   // Get graph store for window state and setGraph
   const graphStore = activeTab && isGraphTab ? getGraphStore(activeTab.fileId) : null;
-  const graphFromStore = graphStore?.getState().graph || null;
   const windowState = graphStore?.getState().window || null;
+  
+  // Subscribe to graph store changes so we get updates when dataInterestsDSL changes
+  const [graphFromStore, setGraphFromStore] = useState<GraphData | null>(
+    graphStore?.getState().graph || null
+  );
+  
+  useEffect(() => {
+    if (!graphStore) {
+      setGraphFromStore(null);
+      return;
+    }
+    
+    // Get initial value
+    setGraphFromStore(graphStore.getState().graph);
+    
+    // Subscribe to changes
+    const unsubscribe = graphStore.subscribe((state) => {
+      setGraphFromStore(state.graph);
+    });
+    
+    return unsubscribe;
+  }, [graphStore]);
   
   // Prefer graph from store (more up-to-date), fallback to fileRegistry
   const graph = graphFromStore || graphFromFile;
   
   // Helper to update graph
-  const handleSetGraph = (newGraph: GraphData | null) => {
+  const handleSetGraph = useCallback((newGraph: GraphData | null) => {
     if (!graphStore || !newGraph) return;
     graphStore.getState().setGraph(newGraph);
     // Also update fileRegistry
     if (activeTab) {
       fileRegistry.updateFile(activeTab.fileId, newGraph);
     }
-  };
+  }, [graphStore, activeTab]);
+  
+  // Centralized fetch hook - all fetch operations go through this
+  const { fetchItem } = useFetchData({
+    graph: graph as any,
+    setGraph: handleSetGraph as any,
+    currentDSL: graph?.currentQueryDSL || '',
+  });
   
   // Track selection state (will be wired up later)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -162,17 +193,16 @@ export function DataMenu() {
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchOperationType, setBatchOperationType] = useState<BatchOperationType | null>(null);
   
-  // All slices modal state
-  const [allSlicesModalOpen, setAllSlicesModalOpen] = useState(false);
-  
-  // All Slices handler
-  const handleRetrieveAllSlices = () => {
-    if (!graph?.dataInterestsDSL) {
-      toast.error('No pinned data interests DSL defined. Set one via the Window Selector.');
-      return;
-    }
-    setAllSlicesModalOpen(true);
-  };
+  // All slices flow - uses hook to handle pinned query requirement
+  const {
+    showAllSlicesModal,
+    initiateRetrieveAllSlices,
+    closeAllSlicesModal,
+    pinnedQueryModalProps,
+  } = useRetrieveAllSlices({
+    graph: graph as GraphData | null,
+    setGraph: handleSetGraph,
+  });
   
   // Batch operations handlers
   const handleGetAllFromFiles = () => {
@@ -224,28 +254,14 @@ export function DataMenu() {
   // Section-based handlers for data operations
   const handleSectionGetFromFile = (section: DataOperationSection) => {
     if (!graph) return;
-    if (section.objectType === 'parameter') {
-      dataOperationsService.getParameterFromFile({
-        paramId: section.objectId,
-        edgeId: section.targetId,
-        graph,
-        setGraph: handleSetGraph,
-        targetSlice: graph.currentQueryDSL || '', // Match context from WindowSelector
-      });
-    } else if (section.objectType === 'case') {
-      dataOperationsService.getCaseFromFile({
-        caseId: section.objectId,
-        nodeId: section.targetId,
-        graph,
-        setGraph: handleSetGraph,
-      });
-    } else if (section.objectType === 'node') {
-      dataOperationsService.getNodeFromFile({
-        nodeId: section.objectId,
-        graph,
-        setGraph: handleSetGraph,
-        targetNodeUuid: section.targetId,
-      });
+    if (section.objectType === 'parameter' || section.objectType === 'case' || section.objectType === 'node') {
+      const item = createFetchItem(
+        section.objectType,
+        section.objectId,
+        section.targetId,
+        { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
+      );
+      fetchItem(item, { mode: 'from-file' });
     }
   };
 
@@ -276,31 +292,30 @@ export function DataMenu() {
 
   const handleSectionGetFromSourceDirect = (section: DataOperationSection) => {
     if (!graph) return;
-    dataOperationsService.getFromSourceDirect({
-      objectType: section.objectType as 'parameter' | 'case' | 'node',
-      objectId: section.objectId,
-      targetId: section.targetId,
-      graph,
-      setGraph: handleSetGraph,
-      paramSlot: section.paramSlot,
-      conditionalIndex: section.conditionalIndex,
-      dailyMode: false,
-      currentDSL: graph.currentQueryDSL || '',
-    });
+    if (section.objectType === 'parameter' || section.objectType === 'case') {
+      const item = createFetchItem(
+        section.objectType,
+        section.objectId,
+        section.targetId,
+        { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
+      );
+      fetchItem(item, { mode: 'direct' });
+    }
+    // Note: 'node' type doesn't support direct fetch from source
   };
 
   const handleSectionGetFromSource = (section: DataOperationSection) => {
     if (!graph) return;
-    dataOperationsService.getFromSource({
-      objectType: section.objectType as 'parameter' | 'case' | 'node',
-      objectId: section.objectId,
-      targetId: section.targetId,
-      graph,
-      setGraph: handleSetGraph,
-      paramSlot: section.paramSlot,
-      conditionalIndex: section.conditionalIndex,
-      currentDSL: graph.currentQueryDSL || '',
-    });
+    if (section.objectType === 'parameter' || section.objectType === 'case') {
+      const item = createFetchItem(
+        section.objectType,
+        section.objectId,
+        section.targetId,
+        { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
+      );
+      fetchItem(item, { mode: 'versioned' });
+    }
+    // Note: 'node' type doesn't support versioned fetch from source
   };
   
   const handleSectionClearCache = (section: DataOperationSection) => {
@@ -421,7 +436,7 @@ export function DataMenu() {
           {/* Retrieve All Slices - at top */}
           <Menubar.Item 
             className="menubar-item" 
-            onSelect={handleRetrieveAllSlices}
+            onSelect={initiateRetrieveAllSlices}
             disabled={!isGraphTab}
           >
             Retrieve All Slices...
@@ -656,15 +671,18 @@ export function DataMenu() {
     )}
     
     {/* All Slices Modal - only render when open */}
-    {allSlicesModalOpen && (
+    {showAllSlicesModal && (
       <AllSlicesModal
-        isOpen={allSlicesModalOpen}
-        onClose={() => setAllSlicesModalOpen(false)}
+        isOpen={showAllSlicesModal}
+        onClose={closeAllSlicesModal}
         graph={graph || null}
         setGraph={handleSetGraph}
         window={windowState}
       />
     )}
+    
+    {/* Pinned Query Modal - shown if user tries to retrieve all slices without a pinned query */}
+    <PinnedQueryModal {...pinnedQueryModalProps} />
   </>
   );
 }
