@@ -141,9 +141,10 @@ describe('Context Roundtrip Integration Tests', () => {
       expect(metaIsolated[0].n).toBe(200);
     });
 
-    it('CRITICAL: overlapping dates should be DEDUPLICATED (new data wins)', () => {
-      // BUG: Old implementation APPENDED data, causing double-counting
-      // FIX: New implementation MERGES by date, with new data overwriting old
+    it('CRITICAL: each fetch creates a SEPARATE entry (append-only for audit trail)', () => {
+      // NEW DESIGN: mergeTimeSeriesIntoParameter APPENDS entries, doesn't merge
+      // Deduplication of overlapping dates happens at AGGREGATION time (in dataOperationsService)
+      // Benefits: audit trail, rollback capability, k may vary over time
       
       // 1. Initial data: Oct 1-2 with n=100, k=15 per day
       const initialData = mergeTimeSeriesIntoParameter(
@@ -161,7 +162,7 @@ describe('Context Roundtrip Integration Tests', () => {
       expect(initialData[0].n).toBe(200); // 100 + 100
       
       // 2. Re-fetch same dates with DIFFERENT values (simulating updated API data)
-      // This should REPLACE the old values, not append
+      // This APPENDS a new entry (doesn't merge at write time)
       const updatedData = mergeTimeSeriesIntoParameter(
         initialData,
         [
@@ -173,18 +174,24 @@ describe('Context Roundtrip Integration Tests', () => {
         '' // same slice
       );
       
-      // CRITICAL: Should still be 1 value entry (merged, not appended)
-      expect(updatedData.length).toBe(1);
+      // NEW: Should have 2 entries (one per fetch, for audit trail)
+      expect(updatedData.length).toBe(2);
       
-      // Values should be the NEW values, not old + new
-      expect(updatedData[0].n).toBe(300); // 150 + 150 (new values)
-      expect(updatedData[0].k).toBe(45);  // 20 + 25 (new values)
+      // First entry: original data (preserved for audit)
+      expect(updatedData[0].n).toBe(200); // 100 + 100
+      expect(updatedData[0].k).toBe(30);  // 15 + 15
       
-      // NOT the buggy behavior:
-      // expect(updatedData[0].n).toBe(400); // 200 + 200 (old + new = WRONG!)
+      // Second entry: new data
+      expect(updatedData[1].n).toBe(300); // 150 + 150
+      expect(updatedData[1].k).toBe(45);  // 20 + 25
+      
+      // At AGGREGATION time (dataOperationsService), overlapping dates use most recent retrieved_at
     });
 
-    it('CRITICAL: partial overlap should merge correctly', () => {
+    it('CRITICAL: partial overlap creates separate entries (append-only)', () => {
+      // NEW DESIGN: Each fetch creates a separate entry for audit trail
+      // Overlapping dates are resolved at aggregation time using retrieved_at
+      
       // Existing data: Oct 1-2
       const existingData = mergeTimeSeriesIntoParameter(
         [],
@@ -197,25 +204,31 @@ describe('Context Roundtrip Integration Tests', () => {
       );
       
       // New data: Oct 2-3 (Oct 2 overlaps, Oct 3 is new)
-      const mergedData = mergeTimeSeriesIntoParameter(
+      const afterSecondFetch = mergeTimeSeriesIntoParameter(
         existingData,
         [
-          { date: '2025-10-02', n: 150, k: 20, p: 0.133 },  // Overlaps - should replace
-          { date: '2025-10-03', n: 200, k: 30, p: 0.15 },   // New - should add
+          { date: '2025-10-02', n: 150, k: 20, p: 0.133 },  // Overlaps Oct 2
+          { date: '2025-10-03', n: 200, k: 30, p: 0.15 },   // New
         ],
         { start: '2025-10-02T00:00:00.000Z', end: '2025-10-03T23:59:59.000Z' },
         'sig2', {}, 'q1', 'amplitude', ''
       );
       
-      // Should have 1 merged entry with 3 dates
-      expect(mergedData.length).toBe(1);
-      expect(mergedData[0].dates?.length).toBe(3);
+      // NEW: Should have 2 entries (append-only for audit trail)
+      expect(afterSecondFetch.length).toBe(2);
       
-      // n values: Oct 1 (old: 100) + Oct 2 (new: 150) + Oct 3 (new: 200) = 450
-      expect(mergedData[0].n).toBe(450);
+      // First entry: Oct 1-2 (original, preserved)
+      expect(afterSecondFetch[0].dates?.length).toBe(2);
+      expect(afterSecondFetch[0].n).toBe(200); // 100 + 100
+      expect(afterSecondFetch[0].k).toBe(20);  // 10 + 10
       
-      // k values: Oct 1 (old: 10) + Oct 2 (new: 20) + Oct 3 (new: 30) = 60
-      expect(mergedData[0].k).toBe(60);
+      // Second entry: Oct 2-3 (new fetch)
+      expect(afterSecondFetch[1].dates?.length).toBe(2);
+      expect(afterSecondFetch[1].n).toBe(350); // 150 + 200
+      expect(afterSecondFetch[1].k).toBe(50);  // 20 + 30
+      
+      // At aggregation time: Oct 1 from entry 1, Oct 2 from entry 2 (newer), Oct 3 from entry 2
+      // Total would be: n = 100 + 150 + 200 = 450, k = 10 + 20 + 30 = 60
     });
   });
 

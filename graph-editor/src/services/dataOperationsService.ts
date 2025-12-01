@@ -520,8 +520,9 @@ class DataOperationsService {
     setAutoUpdating?: (updating: boolean) => void;
     window?: DateRange; // DEPRECATED: Window is now parsed from targetSlice DSL
     targetSlice?: string; // DSL containing window and context (e.g., "window(1-Dec-25:7-Dec-25).context(geo=UK)")
+    suppressSignatureWarning?: boolean; // If true, don't show warning about different query signatures (e.g., after bust cache)
   }): Promise<void> {
-    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '' } = options;
+    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '', suppressSignatureWarning = false } = options;
     
     // Parse window from targetSlice DSL if not explicitly provided
     // This ensures single source of truth - DSL contains both window and context
@@ -820,18 +821,22 @@ class DataOperationsService {
                     signatureToUse,
                     mismatchedEntries,
                     totalEntries: valuesWithDaily.length,
+                    suppressWarning: suppressSignatureWarning,
                   });
                   
-                  if (latestQuerySignature && latestQuerySignature !== expectedQuerySignature) {
-                    toast(`⚠ Using latest query signature (event definitions may have changed). Filtering to matching entries only.`, {
-                      icon: '⚠️',
-                      duration: 5000,
-                    });
-                  } else {
-                  toast(`⚠ Aggregating data with different query signatures (${mismatchedEntries.length} entry/entries)`, {
-                    icon: '⚠️',
-                    duration: 5000,
-                  });
+                  // Only show warning toast if not suppressed (e.g., not a bust-cache scenario)
+                  if (!suppressSignatureWarning) {
+                    if (latestQuerySignature && latestQuerySignature !== expectedQuerySignature) {
+                      toast(`⚠ Using latest query signature (event definitions may have changed). Filtering to matching entries only.`, {
+                        icon: '⚠️',
+                        duration: 5000,
+                      });
+                    } else {
+                      toast(`⚠ Aggregating data with different query signatures (${mismatchedEntries.length} entry/entries)`, {
+                        icon: '⚠️',
+                        duration: 5000,
+                      });
+                    }
                   }
                 }
                 
@@ -3863,7 +3868,8 @@ class DataOperationsService {
           currentDSL,
           targetSliceToPass: currentDSL || '',
           requestedWindow,
-          hadNewData: allTimeSeriesData.length > 0
+          hadNewData: allTimeSeriesData.length > 0,
+          bustCache,
         });
         await this.getParameterFromFile({
           paramId: objectId,
@@ -3871,7 +3877,8 @@ class DataOperationsService {
           graph,
           setGraph,
           window: requestedWindow, // Aggregate across the full requested window
-          targetSlice: currentDSL || '' // Pass the DSL to ensure correct constraints
+          targetSlice: currentDSL || '', // Pass the DSL to ensure correct constraints
+          suppressSignatureWarning: bustCache, // Don't warn about signature mismatch when busting cache
         });
       }
       

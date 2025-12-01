@@ -894,19 +894,29 @@ export function calculateIncrementalFetch(
 }
 
 /**
- * Merge new time-series data with existing parameter file data
+ * Append new time-series data to a parameter's values array.
  * 
- * Appends a NEW value entry with only the new time-series data.
- * The window aggregator will aggregate across multiple value entries
- * when calculating statistics for a given window.
+ * IMPORTANT: This function APPENDS a new entry, it does NOT merge with existing entries.
+ * This preserves the audit trail of when each piece of data was fetched.
+ * 
+ * At aggregation time (in dataOperationsService.getParameterFromFile), overlapping
+ * dates are resolved by using the most recent `retrieved_at` timestamp.
+ * 
+ * Benefits of append-only:
+ * 1. Audit trail: Know when each piece of data was fetched
+ * 2. Data integrity: Bad fetches don't overwrite good data
+ * 3. Rollback: Can discard bad entries without losing prior data
+ * 4. Completeness tracking: k may vary over time as events complete
  * 
  * @param existingValues Existing values[] array from parameter file
  * @param newTimeSeries New time-series data to append
- * @param newWindow Window for the new data (should be the fetch window, not the full requested window)
+ * @param newWindow Window for the new data (the actual fetch window)
  * @param newQuerySignature Query signature for the new data
  * @param queryParams Optional query parameters (DSL object) for debugging
  * @param fullQuery Optional full query string for debugging
- * @returns Values array with new entry appended
+ * @param dataSourceType Type of data source (e.g., 'amplitude', 'api')
+ * @param sliceDSL Context slice (e.g., 'context(channel:google)') for isolateSlice matching
+ * @returns Values array with new entry APPENDED (existing entries preserved)
  */
 export function mergeTimeSeriesIntoParameter(
   existingValues: ParameterValue[],
@@ -924,78 +934,31 @@ export function mergeTimeSeriesIntoParameter(
 
   const normalizedSlice = sliceDSL || '';
   
-  // Separate existing values: same slice (to be merged) vs other slices (preserved as-is)
-  const sameSliceValues = existingValues.filter(v => (v.sliceDSL || '') === normalizedSlice);
-  const otherSliceValues = existingValues.filter(v => (v.sliceDSL || '') !== normalizedSlice);
+  // Convert new time series to arrays, sorted chronologically
+  const sortedTimeSeries = [...newTimeSeries].sort((a, b) => 
+    parseDate(a.date).getTime() - parseDate(b.date).getTime()
+  );
   
-  // Extract existing daily data for the SAME slice
-  const existingDailyData: Array<{ date: string; n: number; k: number }> = [];
-  for (const v of sameSliceValues) {
-    if (v.dates && v.n_daily && v.k_daily) {
-      for (let i = 0; i < v.dates.length; i++) {
-        existingDailyData.push({
-          date: normalizeToUK(v.dates[i]),
-          n: v.n_daily[i] ?? 0,
-          k: v.k_daily[i] ?? 0,
-        });
-      }
-    }
-  }
+  const dates = sortedTimeSeries.map(p => normalizeToUK(p.date));
+  const n_daily = sortedTimeSeries.map(p => p.n);
+  const k_daily = sortedTimeSeries.map(p => p.k);
   
-  // Merge with new data: use a Map so new data OVERWRITES existing for same date
-  const dateMap = new Map<string, { n: number; k: number }>();
-  
-  // Add existing data first
-  for (const point of existingDailyData) {
-    dateMap.set(point.date, { n: point.n, k: point.k });
-  }
-  
-  // Add new data (OVERWRITES existing for same date)
-  for (const point of newTimeSeries) {
-    const normalizedDate = normalizeToUK(point.date);
-    dateMap.set(normalizedDate, { n: point.n, k: point.k });
-  }
-  
-  // Convert back to arrays, sorted chronologically
-  const mergedEntries = Array.from(dateMap.entries())
-    .sort((a, b) => parseDate(a[0]).getTime() - parseDate(b[0]).getTime());
-  
-  const dates = mergedEntries.map(([d]) => d);
-  const n_daily = mergedEntries.map(([, v]) => v.n);
-  const k_daily = mergedEntries.map(([, v]) => v.k);
-  
-  // Calculate aggregate totals for merged data
+  // Calculate aggregate totals for THIS fetch only
   const totalN = n_daily.reduce((sum, n) => sum + n, 0);
   const totalK = k_daily.reduce((sum, k) => sum + k, 0);
   // Round mean to 3 decimal places
   const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
-  
-  // Determine window: union of existing and new windows
-  const allWindowStarts = [
-    ...sameSliceValues.filter(v => v.window_from).map(v => parseDate(v.window_from!)),
-    parseDate(newWindow.start)
-  ];
-  const allWindowEnds = [
-    ...sameSliceValues.filter(v => v.window_to).map(v => parseDate(v.window_to!)),
-    parseDate(newWindow.end)
-  ];
-  const mergedWindowFrom = allWindowStarts.length > 0 
-    ? normalizeToUK(new Date(Math.min(...allWindowStarts.map(d => d.getTime()))).toISOString())
-    : normalizeToUK(newWindow.start);
-  const mergedWindowTo = allWindowEnds.length > 0
-    ? normalizeToUK(new Date(Math.max(...allWindowEnds.map(d => d.getTime()))).toISOString())
-    : normalizeToUK(newWindow.end);
 
-  // Create SINGLE merged value entry (replaces all previous entries for this slice)
-  const mergedValue: ParameterValue = {
+  // Create NEW value entry for this fetch (does NOT replace existing entries)
+  const newValue: ParameterValue = {
     mean,
     n: totalN,
     k: totalK,
     n_daily,
     k_daily,
     dates,
-    window_from: mergedWindowFrom,
-    window_to: mergedWindowTo,
+    window_from: normalizeToUK(newWindow.start),
+    window_to: normalizeToUK(newWindow.end),
     query_signature: newQuerySignature,
     // CRITICAL: sliceDSL enables isolateSlice to find this value entry
     // Without this, contexted data would be invisible to queries!
@@ -1008,7 +971,8 @@ export function mergeTimeSeriesIntoParameter(
     },
   };
 
-  // Return: other slices preserved + single merged entry for this slice
-  return [...otherSliceValues, mergedValue];
+  // APPEND new entry, preserving ALL existing entries
+  // Aggregation logic will handle overlapping dates by using most recent retrieved_at
+  return [...existingValues, newValue];
 }
 
